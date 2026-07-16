@@ -1,12 +1,12 @@
-//! `rimz reload` — pick up a freshly-installed build, restore every running
-//! sidebar to a healthy state, and refresh held stats dashboards.
+//! `rimz reload` — stage a freshly-installed build and move every running
+//! sidebar onto it without changing panes; `--repair` also repairs structure.
 //!
 //! User-scoped and cwd-independent (it runs from anywhere, even outside a rimz
 //! session): the orchestration lives in [`rimz::reload`]. For each workspace with
 //! a live mux session it re-execs the live sidebars onto the current binary,
-//! reconciles to one live sidebar per working view — closing duplicates and
-//! unresponsive panes, reaping orphaned processes — and adds one to any working
-//! view left without. Held `rimz stats --refresh` dashboards re-exec in place
+//! preserves every terminal pane during the upgrade. The explicit repair pass
+//! closes duplicates and replaces wedged renderers add-before-close. Held
+//! `rimz stats --refresh` dashboards re-exec in place
 //! before room enumeration. Workspaces whose session is gone have their
 //! leftovers swept. Every step is best-effort and run-once.
 
@@ -18,13 +18,18 @@ use crate::cli::render;
 use rimz::reload::{ReloadOutcome, reload_user_sidebars};
 
 #[derive(Debug, Args)]
-pub struct ReloadArgs {}
-
-pub fn run(_args: ReloadArgs, _globals: &GlobalFlags) -> Result<()> {
-    report(&reload_user_sidebars())
+pub struct ReloadArgs {
+    /// Repair missing, duplicate, or wedged sidebar panes after the upgrade.
+    #[arg(long)]
+    repair: bool,
 }
 
-fn report(outcome: &ReloadOutcome) -> Result<()> {
+pub fn run(args: ReloadArgs, _globals: &GlobalFlags) -> Result<()> {
+    let outcome = reload_user_sidebars(args.repair)?;
+    report(&outcome, args.repair)
+}
+
+fn report(outcome: &ReloadOutcome, repair: bool) -> Result<()> {
     use std::io::Write;
     let mut out = render::out();
     // Each tally reads at a glance: the count carries the accent, the verb stays plain.
@@ -65,12 +70,20 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             n(outcome.already_current, "sidebar"),
         )?;
     }
-    if outcome.restarted > 0 {
-        writeln!(
-            out,
-            "Restarted {} that could not reload in place.",
-            n(outcome.restarted, "sidebar"),
-        )?;
+    if outcome.unconverged > 0 {
+        if repair {
+            writeln!(
+                out,
+                "{} did not reload in place; the repair pass handled structural recovery.",
+                n(outcome.unconverged, "sidebar"),
+            )?;
+        } else {
+            writeln!(
+                out,
+                "{} did not reload in place. Run `rimz reload --repair` to recover them without close-before-replace.",
+                n(outcome.unconverged, "sidebar"),
+            )?;
+        }
     }
     if outcome.unverified > 0 {
         writeln!(
@@ -120,14 +133,14 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
     if outcome.deferred > 0 {
         writeln!(
             out,
-            "Deferred {} (no attached client); attach and re-run `rimz reload`.",
+            "Deferred {} (no attached client); attach and re-run `rimz reload --repair`.",
             n(outcome.deferred, "sidebar repair"),
         )?;
     }
     if outcome.failed > 0 {
         writeln!(
             out,
-            "{} could not be repaired; attach and re-run `rimz reload`.",
+            "{} could not be repaired; attach and re-run `rimz reload --repair`.",
             n(outcome.failed, "sidebar"),
         )?;
     }

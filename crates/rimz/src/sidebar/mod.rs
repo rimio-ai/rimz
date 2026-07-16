@@ -189,13 +189,26 @@ fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
 /// seconds after the one that added it.
 pub const FRESH_PANE_GRACE: Duration = SIDEBAR_HEARTBEAT_TTL.saturating_mul(2);
 
-/// The live sidebars for one workspace runtime: every pane a fresh,
-/// current-protocol heartbeat claims, plus whether any fresh heartbeat is
-/// unlocated (no pane id). `rimz reload` folds this into the reconcile planner so
-/// it keeps each view's live sidebar and replaces the wedged or duplicate ones.
-pub fn sidebar_liveness(rt: &RuntimePaths) -> SidebarLiveness {
+/// The live sidebars for one mux session and executable generation: every pane
+/// a fresh, current-protocol heartbeat for `build` claims, plus whether any
+/// matching heartbeat is unlocated (no pane id). Attach folds this into the
+/// reconcile planner so an older generation is replaced
+/// add-before-close instead of protected as healthy.
+pub fn sidebar_liveness(
+    rt: &RuntimePaths,
+    build: &str,
+    mux: MuxName,
+    session_name: &str,
+) -> SidebarLiveness {
     let mut live = SidebarLiveness::default();
-    for heartbeat in fresh_sidebar_heartbeats(rt) {
+    for heartbeat in fresh_sidebar_heartbeats(rt)
+        .into_iter()
+        .filter(|heartbeat| {
+            heartbeat.build.as_deref() == Some(build)
+                && heartbeat.mux == mux
+                && heartbeat.session_name == session_name
+        })
+    {
         match heartbeat.pane_id {
             Some(pane) => {
                 live.claimed_panes.insert(pane);
@@ -204,6 +217,33 @@ pub fn sidebar_liveness(rt: &RuntimePaths) -> SidebarLiveness {
         }
     }
     live
+}
+
+/// Pane-attributed sidebar processes still inside the first-heartbeat grace.
+/// Repair keeps these panes tentatively so an attach cannot replace a worker
+/// that has mounted but not published yet.
+pub(crate) fn young_sidebar_panes(
+    mux: MuxName,
+    workspace_id: &str,
+    session_name: &str,
+    now: jiff::Timestamp,
+) -> HashSet<PaneId> {
+    crate::proc::list_processes()
+        .iter()
+        .filter(|proc| {
+            crate::mux::recovery::is_sidebar_serve(&proc.cmdline, workspace_id, session_name)
+        })
+        .filter(|proc| {
+            crate::proc::process_start(proc.pid)
+                .is_some_and(|start| born_recently(start, now, FRESH_PANE_GRACE))
+        })
+        .filter_map(|proc| crate::mux::recovery::attributed_pane(proc.pid, mux))
+        .collect()
+}
+
+pub(crate) fn born_recently(start: jiff::Timestamp, now: jiff::Timestamp, grace: Duration) -> bool {
+    let grace = i64::try_from(grace.as_secs()).unwrap_or(0);
+    now.as_second().saturating_sub(start.as_second()) <= grace
 }
 
 pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
@@ -535,7 +575,24 @@ fn ensure_session_view(
     runtime: &RuntimePaths,
     opts: &SidebarPaneOptions,
 ) {
-    let live = sidebar_liveness(runtime);
+    let build = match crate::build_id::of_file(&opts.rimz_bin) {
+        Ok(build) => build,
+        Err(err) => {
+            tracing::warn!(
+                path = %opts.rimz_bin.display(),
+                error = %err,
+                "ensuring the session sidebar view skipped; room build is unreadable",
+            );
+            return;
+        }
+    };
+    let mut live = sidebar_liveness(runtime, &build, backend.name(), &opts.session_name);
+    live.young_panes = young_sidebar_panes(
+        backend.name(),
+        opts.workspace_id.as_str(),
+        &opts.session_name,
+        jiff::Timestamp::now(),
+    );
     match backend.reconcile_sidebars(opts, &live) {
         Ok(_) => {}
         Err(crate::mux::MuxErr::SessionNotFound { session }) => tracing::debug!(
@@ -670,7 +727,7 @@ mod tests {
             pane_id: Option<crate::ids::PaneId>,
         ) -> std::path::PathBuf {
             self.ensure_runtime();
-            let heartbeat = SidebarHeartbeat::new(
+            let mut heartbeat = SidebarHeartbeat::new(
                 self.workspace_id.clone(),
                 id.clone(),
                 MuxName::Tmux,
@@ -680,6 +737,7 @@ mod tests {
                     .join(format!("sidebar.{}.sock", id.short())),
                 pane_id,
             );
+            heartbeat.build = Some("current".to_owned());
             let path = self.runtime.sidebar_heartbeat_path(id);
             std::fs::write(&path, serde_json::to_vec(&heartbeat).expect("json"))
                 .expect("write heartbeat");
@@ -741,7 +799,7 @@ mod tests {
             h.write_sidebar_with_pane(&stale, Some(PaneId::from_parts(MuxName::Tmux, "%9")));
         make_stale(&stale_path);
 
-        let live = sidebar_liveness(&h.runtime);
+        let live = sidebar_liveness(&h.runtime, "current", MuxName::Tmux, "session");
         assert!(
             live.claimed_panes
                 .contains(&PaneId::from_parts(MuxName::Tmux, "%7")),

@@ -260,6 +260,7 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             root_class: crate::workspace::RootClass::Repo,
             rimz_bin: None,
+            rimz_build: None,
             updated_at: jiff::Timestamp::now(),
         };
         fs::write(

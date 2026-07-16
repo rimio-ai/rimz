@@ -23,6 +23,9 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, StatePaths};
 
 const TOPOLOGY_CONFLICT_DIAG_MS: u64 = 60_000;
+/// Private `rimz sidebar wake` status consumed by the Zellij plugin. Three
+/// consecutive publishes rejected with this code retire the losing writer.
+pub const STALE_WRITER_EXIT_CODE: i32 = 73;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZellijWakeReason {

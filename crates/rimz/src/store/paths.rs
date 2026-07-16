@@ -132,6 +132,15 @@ pub fn workspaces_dir_under(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join("workspaces")
 }
 
+/// User-scoped immutable RimZ builds used by long-lived room processes.
+pub fn builds_dir() -> PathBuf {
+    builds_dir_under(&state_home())
+}
+
+pub fn builds_dir_under(state_root: &Path) -> PathBuf {
+    state_root.join("rimz").join("builds")
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimePaths {
     pub workspace_id: WorkspaceId,

@@ -49,7 +49,20 @@ pub struct PruneOutcome {
 /// encoding; JSON callers prefer [`write_temp_then_rename`].
 #[must_use = "durability barrier; check the result"]
 pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
-    replace_whole_file(path, Fsync::Durable, false, |writer, tmp| {
+    replace_whole_file(path, Fsync::Durable, None, |writer, tmp| {
+        writer.write_all(bytes).map_err(|source| AtomicErr::Io {
+            path: tmp.to_path_buf(),
+            source,
+        })
+    })
+}
+
+/// Write executable bytes through a mode-0755 temp file and atomically rename
+/// it into place. The executable mode is present as soon as the destination
+/// becomes visible.
+#[must_use = "durability barrier; check the result"]
+pub fn write_executable_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    replace_whole_file(path, Fsync::Durable, Some(0o755), |writer, tmp| {
         writer.write_all(bytes).map_err(|source| AtomicErr::Io {
             path: tmp.to_path_buf(),
             source,
@@ -99,14 +112,14 @@ impl Drop for TempFileGuard {
 /// the rename. Caller has already created `path.parent()`.
 #[must_use = "durability barrier; check the result"]
 pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty, false)
+    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty, None)
 }
 
 /// Like [`write_temp_then_rename`], but the temp file is created and renamed
 /// with mode 0600. Used for plaintext secret caches.
 #[must_use = "durability barrier; check the result"]
 pub fn write_private_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty, true)
+    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty, Some(0o600))
 }
 
 /// Like [`write_temp_then_rename`] but skips the temp-file and parent-dir
@@ -118,13 +131,13 @@ pub fn write_private_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> R
 /// files "survives a power cut" buys nothing — the rename is still atomic,
 /// so a reader never sees a torn file.
 pub fn write_temp_then_rename_cache<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Pretty, false)
+    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Pretty, None)
 }
 
 /// Like [`write_temp_then_rename_cache`] but emits compact JSON. Use for large
 /// rebuilt caches where human-readable formatting materially affects size.
 pub fn write_temp_then_rename_cache_compact<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Compact, false)
+    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Compact, None)
 }
 
 #[derive(Clone, Copy)]
@@ -138,9 +151,9 @@ fn write_temp_then_rename_with<T: Serialize>(
     value: &T,
     fsync: Fsync,
     style: JsonStyle,
-    private: bool,
+    mode: Option<u32>,
 ) -> Result<()> {
-    replace_whole_file(path, fsync, private, |writer, tmp| {
+    replace_whole_file(path, fsync, mode, |writer, tmp| {
         match style {
             JsonStyle::Pretty => serde_json::to_writer_pretty(&mut *writer, value)?,
             JsonStyle::Compact => serde_json::to_writer(&mut *writer, value)?,
@@ -155,7 +168,7 @@ fn write_temp_then_rename_with<T: Serialize>(
 fn replace_whole_file(
     path: &Path,
     fsync: Fsync,
-    private: bool,
+    mode: Option<u32>,
     encode: impl FnOnce(&mut BufWriter<File>, &Path) -> Result<()>,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -167,7 +180,7 @@ fn replace_whole_file(
     let tmp = temp_sibling(path);
     let mut temp_guard = TempFileGuard::new(tmp.clone());
     {
-        let file = create_temp_file(&tmp, private).map_err(|e| AtomicErr::Io {
+        let file = create_temp_file(&tmp, mode).map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
             source: e,
         })?;
@@ -196,17 +209,17 @@ fn replace_whole_file(
     Ok(())
 }
 
-fn create_temp_file(path: &Path, private: bool) -> io::Result<File> {
+fn create_temp_file(path: &Path, mode: Option<u32>) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
-    if private {
-        options.mode(0o600);
+    if let Some(mode) = mode {
+        options.mode(mode);
     }
     let file = options.open(path)?;
     #[cfg(unix)]
-    if private {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    if let Some(mode) = mode {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
     }
     Ok(file)
 }

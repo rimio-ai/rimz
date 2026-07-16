@@ -316,6 +316,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         diag.emit_unlimited(DiagEvent::RendererExit { cause });
     }
     state.clear_pixel(&mut terminal);
+    if state.exit_cause == Some(crate::diag::record::RendererExitCause::DegradedGaveUp) {
+        drop(_socket_cleanup);
+        drop(_heartbeat_cleanup);
+        std::process::exit(crate::sidebar_pane::supervise::RESPAWN_EXIT_CODE);
+    }
     if state.reload_requested {
         // Keep raw mode and mouse capture alive across the supervisor re-exec:
         // the replacement worker re-enables the same modes, and disabling them

@@ -28,6 +28,19 @@ pub const DUMP_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
 /// writer. Older plugin instances retire by generation.
 pub const RETIRE_PIPE: &str = "rimz:retire";
 
+/// Private exit status from `rimz sidebar wake`: this plugin's topology writer
+/// generation lost the durable CAS. Repeated rejections retire the instance.
+pub const STALE_WRITER_EXIT_CODE: i32 = 73;
+
+/// Run-command context key marking a topology-publishing wake. Zellij returns
+/// this context with `RunCommandResult`, so unrelated command results cannot
+/// reset the consecutive stale-writer rejection counter.
+pub const TOPOLOGY_PUBLISH_CONTEXT: &str = "rimz_topology_publish";
+
+pub fn publishes_topology(argv: &[String]) -> bool {
+    argv.iter().any(|arg| arg == "--topology")
+}
+
 pub fn retire_generation(payload: Option<&str>) -> Option<policy::TopologyWriter> {
     serde_json::from_str(payload?).ok()
 }

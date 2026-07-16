@@ -285,7 +285,7 @@ pub const SIDEBAR_HEARTBEAT_TTL: Duration = Duration::from_secs(5);
 pub const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How long `rimz reload` waits for signaled renderers to publish a heartbeat
-/// stamped with the on-disk build before falling back to close-and-readd.
+/// stamped with the staged build before reporting them unconverged.
 pub const RELOAD_CONVERGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Per-call bound for reload's best-effort convergence pane/layout reads.
@@ -306,11 +306,11 @@ pub const SELF_CLOSE_WATCHDOG: Duration = Duration::from_secs(2);
 pub const RESIZE_PAINT_HOLD_CEILING: Duration = Duration::from_secs(2);
 
 /// How long the refresh loop may stay continuously degraded before the renderer
-/// gives up and exits. Generous so a transient mux hiccup or the sub-second gap
-/// while `cargo install` swaps `rimz` never closes a healthy sidebar; short
-/// enough that a genuinely broken renderer (deleted store, dead mux, or an old
-/// build past the current runtime contract) heals on the next reload/attach
-/// instead of lingering for minutes.
+/// gives up and asks its supervisor to respawn it in place. Generous so a
+/// transient mux hiccup or the sub-second gap while `cargo install` swaps
+/// `rimz` does not churn the worker; short enough that a genuinely broken
+/// renderer (deleted store, dead mux, or an old build past the current runtime
+/// contract) enters bounded retry instead of lingering on stale data.
 pub const GIVE_UP_AFTER_DEGRADED: Duration = Duration::from_secs(30);
 
 /// Consecutive regression-gate holds before the escape hatch accepts the

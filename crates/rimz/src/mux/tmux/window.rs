@@ -58,9 +58,16 @@ impl TmuxBackend {
         &self,
         opts: &SidebarPaneOptions,
         window_id: &str,
-    ) -> Result<()> {
+    ) -> Result<PaneId> {
         let size = opts.birth_size.cols.to_string();
-        let mut args = vec!["split-window".to_owned(), "-d".to_owned(), "-h".to_owned()];
+        let mut args = vec![
+            "split-window".to_owned(),
+            "-d".to_owned(),
+            "-h".to_owned(),
+            "-P".to_owned(),
+            "-F".to_owned(),
+            "#{pane_id}".to_owned(),
+        ];
         if let Some(pane) = self.leftmost_full_height_pane(window_id) {
             args.extend([
                 "-b".to_owned(),
@@ -79,11 +86,19 @@ impl TmuxBackend {
                 window_id.to_owned(),
             ]);
         }
-        self.cmd()
+        let output = self
+            .cmd()
             .args(args)
             .args(sidebar_serve_command(opts))
-            .run()
-            .map(|_| ())
+            .run()?;
+        let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if !raw.starts_with('%') {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: format!("split-window returned invalid sidebar pane id `{raw}`"),
+            });
+        }
+        Ok(PaneId::from_parts(MuxName::Tmux, raw))
     }
 
     /// The live column width of `window_id`, when tmux can report it.

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -39,7 +40,10 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         session_name: name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
         project_root: cwd.to_path_buf(),
-        extra_env: Default::default(),
+        extra_env: BTreeMap::from([(
+            "RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT".to_owned(),
+            "1".to_owned(),
+        )]),
         cwd: cwd.to_path_buf(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),

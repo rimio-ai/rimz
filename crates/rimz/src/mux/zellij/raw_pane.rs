@@ -61,14 +61,6 @@ pub(super) fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
     views
 }
 
-pub(super) fn tabs_with_sidebars(panes: &[RawPane]) -> HashSet<String> {
-    views_with_sidebars(panes)
-        .into_iter()
-        .filter(|view| !view.sidebar_panes.is_empty())
-        .map(|view| view.view)
-        .collect()
-}
-
 pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_position: u64) -> Option<u64> {
     panes
         .iter()
@@ -328,6 +320,32 @@ pub(super) fn mounted_sidebar_pane(
         return Some(raw);
     }
     ids.into_iter().filter(|id| !before.contains(id)).min()
+}
+
+/// A newly-mounted sidebar outside `tab_position`. Prefer the stdout hint when
+/// it identifies a candidate; otherwise accept exactly one new candidate so a
+/// missing or cross-talked hint still lets repair clean up the wrong-tab mount.
+pub(super) fn wrong_tab_mounted_sidebar_pane(
+    panes: &[RawPane],
+    tab_position: u64,
+    before: &HashSet<u64>,
+    hint: Option<u64>,
+) -> Option<u64> {
+    let candidates: Vec<u64> = panes
+        .iter()
+        .filter(|pane| {
+            pane.tab_position != tab_position
+                && pane.is_live_terminal()
+                && is_sidebar_pane(pane)
+                && !before.contains(&pane.id)
+        })
+        .map(|pane| pane.id)
+        .collect();
+    hint.filter(|hint| candidates.contains(hint)).or_else(|| {
+        (candidates.len() == 1)
+            .then(|| candidates.first().copied())
+            .flatten()
+    })
 }
 
 /// Pane fields published by the presence plugin topology cache.

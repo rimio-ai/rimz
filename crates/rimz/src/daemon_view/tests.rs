@@ -455,6 +455,7 @@ fn daemon_workspace_inputs_ignore_fields_that_do_not_shape_the_view() {
         session_name: "rimz-demo".to_owned(),
         root_class: crate::workspace::RootClass::Repo,
         rimz_bin: Some(PathBuf::from("/usr/bin/rimz")),
+        rimz_build: Some("build".to_owned()),
         updated_at: jiff::Timestamp::from_second(1_750_000_000).unwrap(),
     };
     let inputs = DaemonWorkspaceInputs::from_record(&record);

@@ -1,73 +1,40 @@
-//! The cross-backend sidebar reconcile planner: one healthy sidebar per
-//! working view. Each backend collects its views into [`ViewSidebars`] and
-//! executes the [`ReconcilePlan`]; the rule itself lives here, in one place,
-//! unit-tested without a mux.
+//! The cross-backend sidebar repair planner: one healthy sidebar per working
+//! view. Each backend collects [`ViewSidebars`] and executes the resulting view
+//! transactions serially; the policy stays pure and backend-neutral.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
-use crate::ids::PaneId;
+use crate::ids::{MuxName, PaneId};
+use crate::mux::SidebarPaneOptions;
 
-/// Tally of one in-place sidebar reconcile pass
-/// ([`MuxBackend::reconcile_sidebars`](super::MuxBackend::reconcile_sidebars)).
+/// Tally of one in-place sidebar repair pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SidebarRecovery {
-    /// Views (Zellij tabs / tmux windows) that gained a sidebar this pass —
-    /// because they had none, or their only sidebar was unresponsive and was
-    /// closed first.
+    /// Views that gained a verified sidebar, including add-before-close replacements.
     pub recovered: usize,
-    /// Views whose stale-build sidebar was closed and successfully re-added.
-    pub restarted: usize,
-    /// Stale-build sidebar panes closed as part of reload fallback. Kept out of
-    /// `closed` so the user-facing duplicate/unresponsive bucket stays honest.
-    pub stale_closed: usize,
-    /// Duplicate or unresponsive sidebar panes closed so each view keeps exactly
-    /// one live sidebar.
+    /// Duplicate, orphaned, or replaced sidebar panes closed.
     pub closed: usize,
-    /// Views whose sidebar add or repair could not complete this pass — logged
-    /// and left for a later reconcile.
+    /// Views whose transaction could not complete; the executor stops at the first.
     pub failed: usize,
-    /// Views whose in-place add or geometry repair was deferred for want of an
-    /// attached client — Zellij drops pane mounts and relayouts without a screen
-    /// thread, so the next reconcile on an attached session performs them.
+    /// Views deferred because their backend cannot mount into a detached session.
     pub deferred: usize,
-    /// Kept sidebar panes whose geometry was repaired in place — moved to the
-    /// left column and/or resized toward its view's live width target —
-    /// renderer untouched.
+    /// Kept sidebar panes whose geometry was repaired in place.
     pub redocked: usize,
-    /// Working sidebar panes that remain outside the verified full-height left
-    /// dock after the bounded repair path. The renderer is kept so the view
-    /// still has a sidebar, and the user-facing reload report surfaces the
-    /// geometry failure.
+    /// Working sidebar panes that remain outside the verified dock.
     pub misdocked: usize,
 }
 
-/// The live sidebars the runtime knows about when a reconcile runs: the panes a
-/// fresh, current-protocol heartbeat claims, and whether any fresh heartbeat is
-/// *unlocated* (carries no pane id — an old/edge renderer with no per-pane env).
-/// An unlocated live sidebar is a wildcard for the last physical sidebar in a
-/// view: reconcile keeps one possible owner, while duplicate panes still close
-/// so one view never carries multiple sidebars.
+/// Fresh renderer claims plus panes inside the first-heartbeat grace window.
 #[derive(Clone, Debug, Default)]
 pub struct SidebarLiveness {
     pub claimed_panes: HashSet<PaneId>,
     pub has_unlocated: bool,
-    /// Panes known to be live sidebars on the wrong build after the reload
-    /// convergence wait. Even an unlocated current-build heartbeat must not
-    /// protect these panes from replacement.
-    pub stale_panes: HashSet<PaneId>,
-    /// Panes whose sidebar serve process was born within
-    /// [`crate::sidebar::FRESH_PANE_GRACE`] — too young for a first heartbeat,
-    /// so the planner reads "unclaimed" as "still starting", never "wedged".
-    /// Keeps back-to-back reloads from closing the sidebar the previous run
-    /// just added.
     pub young_panes: HashSet<PaneId>,
 }
 
-/// One view's sidebar panes (in mux order) and how it is otherwise occupied: a
-/// user-working pane (neither a sidebar nor daemon-dashboard infrastructure),
-/// and/or daemon-dashboard infrastructure. A view with neither is sidebar-only
-/// — an orphan to collapse; one with daemon infrastructure is the intentional
-/// `rimzd` view.
+/// One view's sidebar panes in mux order and whether the view contains work or
+/// managed daemon hosts. A view with neither is an orphan sidebar-only view.
 pub(crate) struct ViewSidebars {
     pub view: String,
     pub sidebar_panes: Vec<PaneId>,
@@ -75,154 +42,157 @@ pub(crate) struct ViewSidebars {
     pub has_daemon_host: bool,
 }
 
-/// What a reconcile must do to converge one session to a single live sidebar per
-/// working view: close these sidebar panes (duplicates + unclaimed/unresponsive),
-/// then add a sidebar to these views (none survived, or none existed).
+/// One serialized repair transaction. Replacement keeps `old` alive until a
+/// new pane mounts in the intended view and publishes a heartbeat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ViewVerdict {
+    CloseDuplicates {
+        view: String,
+        close: Vec<PaneId>,
+    },
+    Add {
+        view: String,
+    },
+    Replace {
+        view: String,
+        old: PaneId,
+        close: Vec<PaneId>,
+    },
+}
+
+impl ViewVerdict {
+    pub(crate) fn view(&self) -> &str {
+        match self {
+            Self::CloseDuplicates { view, .. }
+            | Self::Add { view }
+            | Self::Replace { view, .. } => view,
+        }
+    }
+
+    pub(crate) fn closes(&self) -> &[PaneId] {
+        match self {
+            Self::CloseDuplicates { close, .. } | Self::Replace { close, .. } => close,
+            Self::Add { .. } => &[],
+        }
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct ReconcilePlan {
-    pub close: Vec<PaneId>,
-    pub add: Vec<String>,
-    pub restart_add: HashSet<String>,
-    pub stale_close_views: HashMap<PaneId, String>,
+    pub verdicts: Vec<ViewVerdict>,
 }
 
-/// Outcome of one sidebar add attempt, as the backend's add closure reports it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AddOutcome {
-    Added,
-    /// Added but the dock could not be verified (Zellij); counts the view as
-    /// recovered/restarted *and* increments `misdocked`.
-    AddedMisdocked,
-    /// Nothing was added (spawn failed, pre-add verification refused, …); the
-    /// closure has already logged why.
-    Failed,
-}
-
-/// Close every planned pane via `close`, count `stale_closed`/`closed`, and
-/// return views whose stale close failed so their restart adds can be refused.
-/// `close` owns its own failure logging and returns whether the close
-/// succeeded.
-pub(crate) fn execute_closes(
-    plan: &ReconcilePlan,
-    live: &SidebarLiveness,
-    report: &mut SidebarRecovery,
-    mut close: impl FnMut(&PaneId) -> bool,
-) -> HashSet<String> {
-    let mut failed_stale_close_views = HashSet::new();
-    for pane in &plan.close {
-        if close(pane) {
-            if live.stale_panes.contains(pane) {
-                report.stale_closed += 1;
-            } else {
-                report.closed += 1;
-            }
-        } else if let Some(view) = plan.stale_close_views.get(pane) {
-            failed_stale_close_views.insert(view.clone());
-        }
+impl ReconcilePlan {
+    pub(crate) fn close_panes(&self) -> Vec<PaneId> {
+        self.verdicts
+            .iter()
+            .flat_map(ViewVerdict::closes)
+            .cloned()
+            .collect()
     }
-    failed_stale_close_views
-}
 
-/// Run the add phase: per view, refuse a restart whose stale close failed
-/// (`failed`), else delegate to `add` and count restarted/recovered/misdocked/
-/// failed.
-pub(crate) fn execute_adds(
-    plan: &ReconcilePlan,
-    failed_stale_close_views: &HashSet<String>,
-    report: &mut SidebarRecovery,
-    mut add: impl FnMut(&str, bool) -> AddOutcome,
-) {
-    for view in &plan.add {
-        let restart = plan.restart_add.contains(view);
-        if restart && failed_stale_close_views.contains(view) {
-            report.failed += 1;
-            continue;
-        }
-        match add(view, restart) {
-            AddOutcome::Added => {
-                if restart {
-                    report.restarted += 1;
-                } else {
-                    report.recovered += 1;
-                }
-            }
-            AddOutcome::AddedMisdocked => {
-                if restart {
-                    report.restarted += 1;
-                } else {
-                    report.recovered += 1;
-                }
-                report.misdocked += 1;
-            }
-            AddOutcome::Failed => report.failed += 1,
-        }
+    pub(crate) fn is_empty(&self) -> bool {
+        self.verdicts.is_empty()
+    }
+
+    pub(crate) fn remaining_from(&self, index: usize) -> usize {
+        self.verdicts.len().saturating_sub(index)
     }
 }
 
-/// Plan the reconcile for one session, view by view:
-/// - **Working or daemon view** — keep exactly one sidebar pane, close the
-///   rest, and add one if none survived, so duplicates collapse to one and a
-///   wedged sidebar is replaced. The keeper is the first *claimed* (live) pane;
-///   with none claimed, the first *young* pane (serve process inside the
-///   fresh-pane grace) is kept tentatively and nothing is added — its first
-///   heartbeat simply hasn't landed, and the next pass settles it either way.
-///   A young extra beside a claimed keeper still closes: that is a botched-add
-///   duplicate, not a starting renderer. The daemon view (`rimzd`) is born with
-///   a sidebar and middle-column content beside its managed hosts and earns the
-///   same convergence — but never the collapse below, since its hosts are
-///   managed, not work.
-/// - **Orphan sidebar-only view** — no working pane and no daemon host, so its
-///   working siblings all closed but the sidebar never self-closed (a wedged
-///   renderer that stopped ticking). Close every sidebar pane and let the view
-///   collapse; reload cannot rely on self-close for a renderer that is no longer
-///   ticking.
-///
-/// When a live sidebar is unlocated (a fresh heartbeat carrying no pane id), each
-/// view is handled conservatively: keep one physical sidebar as the possible
-/// owner, close duplicate panes, add only when an occupied view has none, and
-/// leave a single orphan for self-close.
-/// First-seen order; shared by both backends so the rule lives in one place and
-/// is unit-tested without a mux.
+/// Wait until the newly-mounted pane publishes a fresh heartbeat for the
+/// expected executable generation. Executors call this before committing a
+/// replacement by closing its old pane.
+pub(crate) fn wait_for_sidebar_heartbeat(
+    opts: &SidebarPaneOptions,
+    mux: MuxName,
+    pane: &PaneId,
+    build: &str,
+) -> bool {
+    #[cfg(feature = "testkit")]
+    if opts
+        .extra_env
+        .get("RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT")
+        .is_some_and(|value| value == "1")
+    {
+        return true;
+    }
+    let Ok(runtime) = crate::store::RuntimePaths::for_workspace(opts.workspace_id.clone()) else {
+        return false;
+    };
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        if crate::sidebar::fresh_sidebar_heartbeats(&runtime)
+            .into_iter()
+            .any(|heartbeat| {
+                heartbeat.mux == mux
+                    && heartbeat.session_name == opts.session_name
+                    && heartbeat.pane_id.as_ref() == Some(pane)
+                    && heartbeat.build.as_deref() == Some(build)
+            })
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Plan repair one view at a time. Claimed renderers win, then young panes.
+/// An unlocated fresh heartbeat conservatively protects one physical pane per
+/// occupied view. A wholly unclaimed occupied view uses add-before-close;
+/// orphan sidebar-only views are close-only.
 pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> ReconcilePlan {
     let mut plan = ReconcilePlan::default();
     for view in views {
-        if view.has_working || view.has_daemon_host {
+        let occupied = view.has_working || view.has_daemon_host;
+        if occupied {
             let keep = sidebar_to_keep(view, live, live.has_unlocated);
-            let close_from = plan.close.len();
-            close_unkept_sidebars(view, keep, &mut plan.close);
-            record_stale_close_views(view, live, close_from, &mut plan);
-            if keep.is_none() {
-                plan.add.push(view.view.clone());
-                if view
-                    .sidebar_panes
-                    .iter()
-                    .any(|pane| live.stale_panes.contains(pane))
-                {
-                    plan.restart_add.insert(view.view.clone());
+            match keep {
+                Some(keep) => {
+                    let close = unkept_sidebars(view, Some(keep));
+                    if !close.is_empty() {
+                        plan.verdicts.push(ViewVerdict::CloseDuplicates {
+                            view: view.view.clone(),
+                            close,
+                        });
+                    }
+                }
+                None if view.sidebar_panes.is_empty() => {
+                    plan.verdicts.push(ViewVerdict::Add {
+                        view: view.view.clone(),
+                    });
+                }
+                None => {
+                    let old = view.sidebar_panes[0].clone();
+                    plan.verdicts.push(ViewVerdict::Replace {
+                        view: view.view.clone(),
+                        old,
+                        close: view.sidebar_panes.clone(),
+                    });
                 }
             }
         } else if live.has_unlocated {
-            // Orphan sidebar-only view: keep one possible owner for self-close,
-            // but still collapse duplicates so a tab never accumulates chrome.
             let keep = sidebar_to_keep(view, live, !view.sidebar_panes.is_empty());
-            let close_from = plan.close.len();
-            close_unkept_sidebars(view, keep, &mut plan.close);
-            record_stale_close_views(view, live, close_from, &mut plan);
-        } else {
-            // Orphan sidebar-only view: close every sidebar pane so the view
-            // collapses. Without a wildcard there is no live owner to preserve.
-            let close_from = plan.close.len();
-            plan.close.extend(view.sidebar_panes.iter().cloned());
-            record_stale_close_views(view, live, close_from, &mut plan);
+            let close = unkept_sidebars(view, keep);
+            if !close.is_empty() {
+                plan.verdicts.push(ViewVerdict::CloseDuplicates {
+                    view: view.view.clone(),
+                    close,
+                });
+            }
+        } else if !view.sidebar_panes.is_empty() {
+            plan.verdicts.push(ViewVerdict::CloseDuplicates {
+                view: view.view.clone(),
+                close: view.sidebar_panes.clone(),
+            });
         }
     }
     plan
 }
 
-/// The index of the pane a view keeps, by signal strength: a claimed (live)
-/// pane wins, then a young one (heartbeat pending), then — only under
-/// `keep_unclaimed` (the unlocated wildcard, or an orphan's possible owner) —
-/// the first pane at all.
 fn sidebar_to_keep(
     view: &ViewSidebars,
     live: &SidebarLiveness,
@@ -230,43 +200,26 @@ fn sidebar_to_keep(
 ) -> Option<usize> {
     view.sidebar_panes
         .iter()
-        .position(|pane| live.claimed_panes.contains(pane) && !live.stale_panes.contains(pane))
+        .position(|pane| live.claimed_panes.contains(pane))
         .or_else(|| {
-            view.sidebar_panes.iter().position(|pane| {
-                live.young_panes.contains(pane) && !live.stale_panes.contains(pane)
-            })
+            view.sidebar_panes
+                .iter()
+                .position(|pane| live.young_panes.contains(pane))
         })
         .or_else(|| {
-            keep_unclaimed.then(|| {
-                view.sidebar_panes
-                    .iter()
-                    .position(|pane| !live.stale_panes.contains(pane))
-            })?
+            keep_unclaimed
+                .then_some(0)
+                .filter(|_| !view.sidebar_panes.is_empty())
         })
 }
 
-fn close_unkept_sidebars(view: &ViewSidebars, keep: Option<usize>, close: &mut Vec<PaneId>) {
-    close.extend(
-        view.sidebar_panes
-            .iter()
-            .enumerate()
-            .filter(|(index, _pane)| Some(*index) != keep)
-            .map(|(_index, pane)| pane.clone()),
-    );
-}
-
-fn record_stale_close_views(
-    view: &ViewSidebars,
-    live: &SidebarLiveness,
-    close_from: usize,
-    plan: &mut ReconcilePlan,
-) {
-    for pane in &plan.close[close_from..] {
-        if live.stale_panes.contains(pane) {
-            plan.stale_close_views
-                .insert(pane.clone(), view.view.clone());
-        }
-    }
+fn unkept_sidebars(view: &ViewSidebars, keep: Option<usize>) -> Vec<PaneId> {
+    view.sidebar_panes
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != keep)
+        .map(|(_, pane)| pane.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -294,313 +247,83 @@ mod tests {
         }
     }
 
-    fn live_with_young(claimed: &[&str], young: &[&str]) -> SidebarLiveness {
-        SidebarLiveness {
-            claimed_panes: claimed.iter().map(|raw| pane(raw)).collect(),
-            young_panes: young.iter().map(|raw| pane(raw)).collect(),
-            ..SidebarLiveness::default()
-        }
-    }
-
-    fn unlocated() -> SidebarLiveness {
-        SidebarLiveness {
-            has_unlocated: true,
-            ..SidebarLiveness::default()
-        }
-    }
-
-    fn unlocated_with_stale(stale: &[&str]) -> SidebarLiveness {
-        SidebarLiveness {
-            has_unlocated: true,
-            stale_panes: stale.iter().map(|raw| pane(raw)).collect(),
-            ..SidebarLiveness::default()
-        }
-    }
-
-    fn daemon_view(sidebars: &[&str]) -> ViewSidebars {
-        ViewSidebars {
-            view: "0".to_owned(),
-            sidebar_panes: sidebars.iter().map(|raw| pane(raw)).collect(),
-            has_working: false,
-            has_daemon_host: true,
-        }
-    }
-
-    fn panes(raws: &[&str]) -> Vec<PaneId> {
-        raws.iter().map(|raw| pane(raw)).collect()
-    }
-
-    fn strings(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    }
-
-    fn assert_plan(
-        label: &str,
-        views: Vec<ViewSidebars>,
-        live: SidebarLiveness,
-        close: &[&str],
-        add: &[&str],
-    ) -> ReconcilePlan {
-        let plan = plan_reconcile(&views, &live);
-        assert_eq!(plan.close, panes(close), "{label}: close");
-        assert_eq!(plan.add, strings(add), "{label}: add");
-        plan
-    }
-
     #[test]
-    fn executors_count_close_and_add_outcomes_in_order() {
-        let stale = pane("terminal_1");
-        let duplicate = pane("terminal_2");
-        let failed_stale = pane("terminal_3");
-        let plan = ReconcilePlan {
-            close: vec![stale.clone(), duplicate.clone(), failed_stale.clone()],
-            add: strings(&["blocked", "new", "bad", "misdock"]),
-            restart_add: strings(&["blocked", "misdock"]).into_iter().collect(),
-            stale_close_views: HashMap::from([
-                (stale.clone(), "stale".to_owned()),
-                (failed_stale.clone(), "blocked".to_owned()),
-            ]),
-        };
-        let live = SidebarLiveness {
-            stale_panes: [stale.clone(), failed_stale.clone()].into(),
-            ..SidebarLiveness::default()
-        };
-        let mut report = SidebarRecovery::default();
-        let mut calls = Vec::new();
-        let failed_stale_close_views = execute_closes(&plan, &live, &mut report, |closed| {
-            calls.push(format!("close:{}", closed.raw()));
-            closed != &failed_stale
-        });
-        execute_adds(
-            &plan,
-            &failed_stale_close_views,
-            &mut report,
-            |view, restart| {
-                calls.push(format!("add:{view}:{restart}"));
-                match view {
-                    "new" => AddOutcome::Added,
-                    "misdock" => AddOutcome::AddedMisdocked,
-                    "bad" => AddOutcome::Failed,
-                    other => panic!("unexpected add call for {other}"),
-                }
-            },
-        );
-
-        assert_eq!(
-            calls,
-            [
-                "close:terminal_1",
-                "close:terminal_2",
-                "close:terminal_3",
-                "add:new:false",
-                "add:bad:false",
-                "add:misdock:true",
+    fn occupied_views_add_replace_or_close_duplicates() {
+        let plan = plan_reconcile(
+            &[
+                view("missing", &[], true),
+                view("wedged", &["terminal_1"], true),
+                view("duplicate", &["terminal_2", "terminal_3"], true),
             ],
-            "failed stale close blocks the restart add and closes run before adds",
+            &live(&["terminal_2"]),
         );
         assert_eq!(
-            failed_stale_close_views,
-            HashSet::from(["blocked".to_owned()]),
+            plan.verdicts,
+            vec![
+                ViewVerdict::Add {
+                    view: "missing".to_owned(),
+                },
+                ViewVerdict::Replace {
+                    view: "wedged".to_owned(),
+                    old: pane("terminal_1"),
+                    close: vec![pane("terminal_1")],
+                },
+                ViewVerdict::CloseDuplicates {
+                    view: "duplicate".to_owned(),
+                    close: vec![pane("terminal_3")],
+                },
+            ]
         );
-        assert_eq!(
-            report,
-            SidebarRecovery {
-                recovered: 1,
-                restarted: 1,
-                stale_closed: 1,
-                closed: 1,
-                failed: 2,
-                misdocked: 1,
-                ..SidebarRecovery::default()
-            },
-        );
     }
 
     #[test]
-    fn working_and_daemon_views_converge_to_one_sidebar() {
-        for (label, views, live, close, add) in [
-            (
-                "working missing",
-                vec![view("12", &[], true)],
-                live(&[]),
-                vec![],
-                vec!["12"],
-            ),
-            (
-                "working healthy",
-                vec![view("15", &["terminal_15"], true)],
-                live(&["terminal_15"]),
-                vec![],
-                vec![],
-            ),
-            (
-                "working duplicate",
-                vec![view("15", &["terminal_15", "terminal_99"], true)],
-                live(&["terminal_15"]),
-                vec!["terminal_99"],
-                vec![],
-            ),
-            (
-                "working wedged",
-                vec![view("15", &["terminal_15"], true)],
-                live(&[]),
-                vec!["terminal_15"],
-                vec!["15"],
-            ),
-            (
-                "daemon healthy",
-                vec![daemon_view(&["terminal_2"])],
-                live(&["terminal_2"]),
-                vec![],
-                vec![],
-            ),
-            (
-                "daemon missing",
-                vec![daemon_view(&[])],
-                live(&[]),
-                vec![],
-                vec!["0"],
-            ),
-            (
-                "daemon wedged",
-                vec![daemon_view(&["terminal_2"])],
-                live(&[]),
-                vec!["terminal_2"],
-                vec!["0"],
-            ),
-            (
-                "daemon duplicate",
-                vec![daemon_view(&["terminal_2", "terminal_3"])],
-                live(&["terminal_2"]),
-                vec!["terminal_3"],
-                vec![],
-            ),
-        ] {
-            let plan = assert_plan(label, views, live, &close, &add);
-            assert!(plan.restart_add.is_empty(), "{label}: restart_add");
-            assert!(plan.stale_close_views.is_empty(), "{label}: stale map");
-        }
-    }
-
-    #[test]
-    fn orphan_views_collapse_unless_an_unlocated_heartbeat_may_own_one() {
-        for (label, live, sidebars, close) in [
-            (
-                "located orphan",
-                live(&["terminal_16"]),
-                vec!["terminal_16", "terminal_17"],
-                vec!["terminal_16", "terminal_17"],
-            ),
-            (
-                "wildcard lone orphan",
-                unlocated(),
-                vec!["terminal_16"],
-                vec![],
-            ),
-            (
-                "wildcard duplicate orphan",
-                unlocated(),
-                vec!["terminal_16", "terminal_17"],
-                vec!["terminal_17"],
-            ),
-        ] {
-            let plan = assert_plan(label, vec![view("16", &sidebars, false)], live, &close, &[]);
-            assert!(plan.restart_add.is_empty(), "{label}: restart_add");
-        }
-    }
-
-    #[test]
-    fn young_panes_are_tentative_until_a_claimed_signal_wins() {
-        for (label, live, sidebars, close) in [
-            (
-                "young lone",
-                live_with_young(&[], &["terminal_15"]),
-                vec!["terminal_15"],
-                vec![],
-            ),
-            (
-                "young duplicate",
-                live_with_young(&[], &["terminal_15", "terminal_16"]),
-                vec!["terminal_15", "terminal_16"],
-                vec!["terminal_16"],
-            ),
-            (
-                "young extra beside claimed",
-                live_with_young(&["terminal_15"], &["terminal_99"]),
-                vec!["terminal_15", "terminal_99"],
-                vec!["terminal_99"],
-            ),
-            (
-                "claimed beats earlier young",
-                live_with_young(&["terminal_15"], &["terminal_14"]),
-                vec!["terminal_14", "terminal_15"],
-                vec!["terminal_14"],
-            ),
-        ] {
-            assert_plan(label, vec![view("15", &sidebars, true)], live, &close, &[]);
-        }
-    }
-
-    #[test]
-    fn unlocated_wildcard_keeps_a_possible_owner_but_not_duplicates() {
-        let wildcard_with_claim = SidebarLiveness {
-            claimed_panes: [pane("terminal_99")].into(),
+    fn young_and_unlocated_panes_are_kept_conservatively() {
+        let live = SidebarLiveness {
             has_unlocated: true,
+            young_panes: [pane("terminal_2")].into(),
             ..SidebarLiveness::default()
         };
-        for (label, views, live, close, add) in [
-            (
-                "working duplicate",
-                vec![view("15", &["terminal_15", "terminal_99"], true)],
-                unlocated(),
-                vec!["terminal_99"],
-                vec![],
-            ),
-            (
-                "claimed preferred",
-                vec![view("15", &["terminal_15", "terminal_99"], true)],
-                wildcard_with_claim,
-                vec!["terminal_15"],
-                vec![],
-            ),
-            (
-                "empty working view still recovers",
-                vec![view("15", &["terminal_15"], true), view("12", &[], true)],
-                unlocated(),
-                vec![],
-                vec!["12"],
-            ),
-        ] {
-            assert_plan(label, views, live, &close, &add);
-        }
+        let plan = plan_reconcile(
+            &[
+                view("young", &["terminal_1", "terminal_2"], true),
+                view("wildcard", &["terminal_3", "terminal_4"], true),
+            ],
+            &live,
+        );
+        assert_eq!(
+            plan.close_panes(),
+            vec![pane("terminal_1"), pane("terminal_4")]
+        );
     }
 
     #[test]
-    fn stale_panes_are_replaced_even_under_an_unlocated_wildcard() {
-        let replaced = assert_plan(
-            "stale only",
-            vec![view("15", &["terminal_15"], true)],
-            unlocated_with_stale(&["terminal_15"]),
-            &["terminal_15"],
-            &["15"],
+    fn orphan_views_close_without_adding() {
+        let plan = plan_reconcile(
+            &[view("orphan", &["terminal_1", "terminal_2"], false)],
+            &SidebarLiveness::default(),
         );
-        assert!(replaced.restart_add.contains("15"));
         assert_eq!(
-            replaced.stale_close_views.get(&pane("terminal_15")),
-            Some(&"15".to_owned()),
+            plan.verdicts,
+            vec![ViewVerdict::CloseDuplicates {
+                view: "orphan".to_owned(),
+                close: vec![pane("terminal_1"), pane("terminal_2")],
+            }]
         );
+    }
 
-        let kept_candidate = assert_plan(
-            "stale beside possible owner",
-            vec![view("15", &["terminal_15", "terminal_16"], true)],
-            unlocated_with_stale(&["terminal_15"]),
-            &["terminal_15"],
-            &[],
+    #[test]
+    fn replacement_closes_every_old_pane_only_after_add_verification() {
+        let plan = plan_reconcile(
+            &[view("view", &["terminal_1", "terminal_2"], true)],
+            &SidebarLiveness::default(),
         );
-        assert!(kept_candidate.restart_add.is_empty());
         assert_eq!(
-            kept_candidate.stale_close_views.get(&pane("terminal_15")),
-            Some(&"15".to_owned()),
+            plan.verdicts,
+            vec![ViewVerdict::Replace {
+                view: "view".to_owned(),
+                old: pane("terminal_1"),
+                close: vec![pane("terminal_1"), pane("terminal_2")],
+            }]
         );
     }
 }

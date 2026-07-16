@@ -166,7 +166,7 @@ fn version_twelve_tombstone_cache_refolds_ended_row_from_live_log() {
 }
 
 #[test]
-fn rollup_parse_cache_hits_on_identity_and_misses_on_republish() {
+fn rollup_parse_cache_hits_on_same_identity_and_misses_when_republish_changes_identity() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollup.json");
     let cache_with = |id: &str| RollupCache {
@@ -204,13 +204,13 @@ fn rollup_parse_cache_hits_on_identity_and_misses_on_republish() {
         "identical identity serves the cached parse"
     );
 
-    // A republish renames a fresh temp file over the path (new mtime), so the
-    // identity changes and the read re-parses.
-    write_rollup_cache(&path, &cache_with("cccc")).unwrap();
+    // A different-length republish changes the identity even when both writes
+    // land in one filesystem mtime tick, so the read re-parses.
+    write_rollup_cache(&path, &cache_with("cccc-longer")).unwrap();
     let miss = read_rollup_cache(&path).unwrap();
     assert_eq!(
-        miss.raw_agents[0].agent_id, "cccc",
-        "a republish changes the identity; the read re-parses"
+        miss.raw_agents[0].agent_id, "cccc-longer",
+        "a changed identity makes the read re-parse"
     );
 }
 

@@ -203,14 +203,14 @@ impl RoomContext {
 
     /// Claim this room for the running RimZ binary and durably record it.
     pub fn claim_owner(&mut self) -> Result<()> {
-        let rimz_bin = crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
+        let staged = crate::reload::stage_current_build().context("staging room binary")?;
         let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
             .context("preparing store paths")?;
         let store = Store::open(paths, self.runtime.clone()).context("opening store")?;
         store
-            .record_room_bin(&self.workspace, rimz_bin.clone())
+            .record_room_bin(&self.workspace, staged.path.clone(), staged.build.clone())
             .context("recording room binary")?;
-        self.rimz_bin = rimz_bin;
+        self.rimz_bin = staged.path;
         Ok(())
     }
 
@@ -499,6 +499,7 @@ mod tests {
             session_name: "rimz-rimz".to_owned(),
             root_class: RootClass::Marker,
             rimz_bin: None,
+            rimz_build: None,
             updated_at: jiff::Timestamp::now(),
         };
         let workspace = RoomContext::workspace_from_record(&record, MuxName::Tmux);

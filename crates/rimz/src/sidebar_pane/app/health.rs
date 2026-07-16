@@ -1,5 +1,5 @@
 //! Debounced, sticky health of the refresh loop, and the give-up rule that
-//! exits a renderer degraded past rescue.
+//! respawns a renderer degraded past rescue in its existing pane.
 
 use jiff::Timestamp;
 

@@ -263,6 +263,10 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
+    #[cfg(feature = "testkit")]
+    if std::env::var_os("RIMZ_TEST_SKIP_STATS_RELOAD").is_some() {
+        return Vec::new();
+    }
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
     let my_uid = current_uid();

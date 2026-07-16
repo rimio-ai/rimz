@@ -95,7 +95,7 @@ fn named_attach_preserves_recorded_room_owner() {
     let recorded_owner = PathBuf::from("/previous/rimz");
     let store = env.store();
     store
-        .record_room_bin(&workspace, recorded_owner.clone())
+        .record_room_bin(&workspace, recorded_owner.clone(), "recorded".to_owned())
         .expect("record room owner");
     let shim = FakeZellij::new().with_tmux();
 

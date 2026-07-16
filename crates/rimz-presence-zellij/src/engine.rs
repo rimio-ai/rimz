@@ -95,9 +95,11 @@ pub struct Engine {
     prior_focused_by_tab: BTreeMap<usize, u32>,
     retired: bool,
     wake_fork_failures: u32,
+    stale_writer_rejections: u32,
 }
 
 const WAKE_FORK_FALLBACK_THRESHOLD: u32 = 3;
+const STALE_WRITER_RETIRE_THRESHOLD: u32 = 3;
 
 impl Engine {
     pub fn new(now: u64, config: EngineConfig) -> Self {
@@ -130,6 +132,7 @@ impl Engine {
             prior_focused_by_tab: BTreeMap::new(),
             retired: false,
             wake_fork_failures: 0,
+            stale_writer_rejections: 0,
         }
     }
 
@@ -492,15 +495,30 @@ impl Engine {
     pub fn on_run_command_result(
         &mut self,
         exit_code: Option<i32>,
+        published_topology: bool,
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
         if self.retired {
             return Vec::new();
         }
+        if published_topology && exit_code == Some(wire::STALE_WRITER_EXIT_CODE) {
+            self.stale_writer_rejections = self.stale_writer_rejections.saturating_add(1);
+            if self.stale_writer_rejections >= STALE_WRITER_RETIRE_THRESHOLD {
+                self.retired = true;
+                return vec![Effect::Unsubscribe, Effect::CloseSelf];
+            }
+            return Vec::new();
+        }
         if exit_code == Some(0) {
             self.wake_fork_failures = 0;
+            if published_topology {
+                self.stale_writer_rejections = 0;
+            }
             return Vec::new();
+        }
+        if published_topology {
+            self.stale_writer_rejections = 0;
         }
         self.wake_fork_failures = self.wake_fork_failures.saturating_add(1);
         if self.wake_fork_failures < WAKE_FORK_FALLBACK_THRESHOLD || self.rimz_bin.is_none() {

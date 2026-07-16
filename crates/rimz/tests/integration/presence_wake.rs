@@ -632,9 +632,10 @@ fn stale_topology_writer_rejects_the_whole_poke_and_throttles_diagnostics() {
         "42",
     ];
     let output = env.wake_with("panes-changed", true, &stale_args);
-    assert!(
-        output.status.success(),
-        "stale writer wake must return success"
+    assert_eq!(
+        output.status.code(),
+        Some(rimz::sidebar::presence::STALE_WRITER_EXIT_CODE),
+        "stale writer wake reports the private retirement status",
     );
 
     assert_eq!(
@@ -654,9 +655,10 @@ fn stale_topology_writer_rejects_the_whole_poke_and_throttles_diagnostics() {
     assert_eq!(conflict.rejected_count, 1);
 
     let output = env.wake_with("panes-changed", true, &stale_args);
-    assert!(
-        output.status.success(),
-        "repeated stale writer wake succeeds"
+    assert_eq!(
+        output.status.code(),
+        Some(rimz::sidebar::presence::STALE_WRITER_EXIT_CODE),
+        "repeated stale writer wake keeps reporting retirement status",
     );
     assert_no_datagram(&recv, "a repeated stale writer poke");
     let conflict = read_topology_writer_conflict(&env.runtime).expect("updated conflict sidecar");

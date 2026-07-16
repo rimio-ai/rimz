@@ -415,7 +415,7 @@ impl LoopState {
 
     fn handle_reload(&mut self, config: &ServeConfig, fetch: &mut FetchDispatcher) -> LoopFlow {
         fetch.clear_deferred();
-        if reload_or_refetch(&config.session_name, fetch) {
+        if reload_or_refetch(&config.workspace_id, &config.session_name, fetch) {
             self.reload_requested = true;
             return LoopFlow::Exit;
         }
@@ -1272,17 +1272,15 @@ impl LoopState {
     }
 
     fn exit_verdict(&mut self, config: &ServeConfig, rejected: bool) -> ApplyOutcome {
-        // A renderer degraded this long is non-functional and, with a now-stale
-        // heartbeat, unreachable by `rimz reload` — so it gives up rather than
-        // lingering as a zombie showing a frozen frame. Exiting closes its
-        // `close_on_exit` pane; reload/attach recovery then rebuilds a current
-        // sidebar against the live panes.
+        // A renderer degraded this long is non-functional. Ask the pane-resident
+        // supervisor to respawn the worker in place; the pane remains stable
+        // while a transient mux/store outage clears.
         if degraded_too_long(&self.health, Timestamp::now()) {
             warn!(
                 target: SIDEBAR_HEALTH_TARGET,
                 session = %config.session_name,
                 reason = self.health.alert.as_ref().map(|alert| alert.reason.as_str()),
-                "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
+                "sidebar degraded too long; respawning the renderer in place",
             );
             return ApplyOutcome {
                 should_exit: true,
@@ -1663,8 +1661,12 @@ impl LoopState {
 /// binary. A byte-identical or missing binary skips reload but still honours
 /// the intent with an immediate producing refetch, so a reload always pulls
 /// live data and un-sticks a tab whose producer has stalled.
-fn reload_or_refetch(session_name: &str, fetch: &mut FetchDispatcher) -> bool {
-    match reload_action() {
+fn reload_or_refetch(
+    workspace_id: &crate::ids::WorkspaceId,
+    session_name: &str,
+    fetch: &mut FetchDispatcher,
+) -> bool {
+    match reload_action(workspace_id) {
         ReloadAction::Reexec(target) => {
             debug!(
                 session = %session_name,

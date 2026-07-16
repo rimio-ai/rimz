@@ -4,20 +4,20 @@
 
 #[cfg(target_os = "linux")]
 use std::path::Path;
+use std::process::Stdio;
 #[cfg(target_os = "linux")]
-use std::process::{Child, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus};
 #[cfg(target_os = "linux")]
 use std::thread;
 use std::time::Duration;
-#[cfg(target_os = "linux")]
 use std::time::Instant;
 
 use rimz::diag::record::{DiagEnvelope, DiagEvent};
 
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::Env;
 
 #[test]
-fn sidebar_supervisor_records_worker_abort() {
+fn sidebar_supervisor_records_worker_abort_and_respawns() {
     let env = Env::new();
     let mut cmd = env.rimz();
     cmd.args([
@@ -30,20 +30,9 @@ fn sidebar_supervisor_records_worker_abort() {
         "--session-name",
         "rimz-test",
     ])
-    .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "abort");
-
-    let output = cmd
-        .bounded_output_within(Duration::from_secs(10))
-        .expect("sidebar serve returns");
-
-    assert!(
-        !output.status.success(),
-        "worker abort should make supervisor exit non-zero"
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("rimz test sidebar worker abort"),
-        "supervisor should tee worker stderr"
-    );
+    .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "abort")
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped());
 
     let diag_path = rimz::diag::DiagSink::under(
         env.state_path_for(&env.project_root).root,
@@ -53,14 +42,34 @@ fn sidebar_supervisor_records_worker_abort() {
     )
     .log_path()
     .unwrap();
-    let text = std::fs::read_to_string(&diag_path)
-        .unwrap_or_else(|err| panic!("read {}: {err}", diag_path.display()));
-    let record: DiagEnvelope = text
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("diag record"))
-        .find(|record: &DiagEnvelope| matches!(record.event, DiagEvent::RendererSignalDeath { .. }))
-        .expect("renderer signal death diag");
+    let mut child = cmd.spawn().expect("spawn sidebar supervisor");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let record = loop {
+        let record = std::fs::read_to_string(&diag_path).ok().and_then(|text| {
+            text.lines()
+                .filter(|line| !line.trim().is_empty())
+                .filter_map(|line| serde_json::from_str::<DiagEnvelope>(line).ok())
+                .find(|record| matches!(record.event, DiagEvent::RendererSignalDeath { .. }))
+        });
+        if let Some(record) = record {
+            break record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "renderer signal death diag timed out"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert!(
+        child.try_wait().expect("poll supervisor").is_none(),
+        "worker abort must leave the pane-resident supervisor running",
+    );
+    child.kill().expect("stop respawning supervisor");
+    let output = child.wait_with_output().expect("collect supervisor output");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("rimz test sidebar worker abort"),
+        "supervisor should tee worker stderr",
+    );
 
     match record.event {
         DiagEvent::RendererSignalDeath {

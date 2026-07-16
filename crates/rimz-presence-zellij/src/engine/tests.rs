@@ -794,12 +794,28 @@ fn repeated_command_failures_fall_back_to_path_once_and_success_resets_the_strea
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 1, &host);
 
-    assert!(engine.on_run_command_result(None, 10, &host).is_empty());
-    assert!(engine.on_run_command_result(Some(0), 20, &host).is_empty());
-    assert!(engine.on_run_command_result(Some(1), 30, &host).is_empty());
-    assert!(engine.on_run_command_result(None, 40, &host).is_empty());
+    assert!(
+        engine
+            .on_run_command_result(None, false, 10, &host)
+            .is_empty()
+    );
+    assert!(
+        engine
+            .on_run_command_result(Some(0), false, 20, &host)
+            .is_empty()
+    );
+    assert!(
+        engine
+            .on_run_command_result(Some(1), false, 30, &host)
+            .is_empty()
+    );
+    assert!(
+        engine
+            .on_run_command_result(None, false, 40, &host)
+            .is_empty()
+    );
 
-    let effects = engine.on_run_command_result(Some(1), 50, &host);
+    let effects = engine.on_run_command_result(Some(1), false, 50, &host);
     assert_eq!(reasons(&effects), vec!["alive"]);
     assert_eq!(run_commands(&effects).len(), 1);
     assert_eq!(
@@ -807,11 +823,68 @@ fn repeated_command_failures_fall_back_to_path_once_and_success_resets_the_strea
         Some("rimz")
     );
 
-    assert!(engine.on_run_command_result(None, 60, &host).is_empty());
-    assert!(engine.on_run_command_result(None, 70, &host).is_empty());
     assert!(
-        engine.on_run_command_result(None, 80, &host).is_empty(),
+        engine
+            .on_run_command_result(None, false, 60, &host)
+            .is_empty()
+    );
+    assert!(
+        engine
+            .on_run_command_result(None, false, 70, &host)
+            .is_empty()
+    );
+    assert!(
+        engine
+            .on_run_command_result(None, false, 80, &host)
+            .is_empty(),
         "PATH mode does not keep firing fallback pokes",
+    );
+}
+
+#[test]
+fn repeated_stale_writer_rejections_retire_the_losing_plugin() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+
+    assert!(
+        engine
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 10, &host)
+            .is_empty()
+    );
+    assert!(
+        engine
+            .on_run_command_result(Some(0), false, 15, &host)
+            .is_empty(),
+        "an unrelated successful command does not reset publish rejections",
+    );
+    assert!(
+        engine
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 20, &host)
+            .is_empty()
+    );
+    assert_eq!(
+        engine.on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 30, &host),
+        vec![Effect::Unsubscribe, Effect::CloseSelf]
+    );
+    assert!(engine.on_timer(40, &host).is_empty());
+
+    let mut reset = Engine::new(0, config());
+    grant(&mut reset, 1, &host);
+    assert!(
+        reset
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 10, &host)
+            .is_empty()
+    );
+    assert!(
+        reset
+            .on_run_command_result(Some(0), true, 20, &host)
+            .is_empty()
+    );
+    assert!(
+        reset
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 30, &host)
+            .is_empty()
     );
 }
 

@@ -1,6 +1,6 @@
-//! Reload (`rimz reload` or the `r` keypress): resolve the on-disk renderer
-//! binary, compare it to the running worker image, and ask the supervisor to
-//! re-exec only when the build actually changed.
+//! Reload (`rimz reload` or the `r` keypress): resolve the workspace record's
+//! digest-verified executable target, compare it to the running worker image,
+//! and ask the supervisor to re-exec only when the build actually changed.
 
 use std::io;
 use std::io::Read;
@@ -36,17 +36,17 @@ fn decide_reload(target: Option<PathBuf>, running_matches: Option<bool>) -> Relo
 
 /// Resolve this reload into an action: find the binary to load, then compare it
 /// to the running image so an unchanged build skips the re-exec.
-pub(super) fn reload_action() -> ReloadAction {
-    let target = reexec_target();
+pub(super) fn reload_action(workspace_id: &crate::ids::WorkspaceId) -> ReloadAction {
+    let target = reexec_target(workspace_id);
     let running_matches = target.as_deref().and_then(running_image_matches);
     decide_reload(target, running_matches)
 }
 
-/// Resolve the on-disk binary to re-exec for a reload, or `None` when none can
-/// be found — in which case the caller keeps serving the current build instead
-/// of vanishing.
-fn reexec_target() -> Option<PathBuf> {
-    crate::reload::current_reexec_target()
+/// Resolve the verified workspace target to re-exec for a reload, or `None`
+/// when the recorded file is absent or mismatched — in which case the caller
+/// keeps serving the current build instead of vanishing.
+fn reexec_target(workspace_id: &crate::ids::WorkspaceId) -> Option<PathBuf> {
+    crate::reload::reexec_target_for_workspace(workspace_id)
 }
 
 /// Whether the binary at `target` is byte-identical to the image this process

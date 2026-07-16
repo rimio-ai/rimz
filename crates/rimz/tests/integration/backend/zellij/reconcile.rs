@@ -1,14 +1,206 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use rimz::ids::{MuxName, PaneId, WorkspaceId};
-use rimz::mux::{SidebarLiveness, SidebarPaneOptions, SidebarWidth};
+use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
+use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarWidth};
+use rimz::sidebar::heartbeat::SidebarHeartbeat;
+use rimz::store::RuntimePaths;
 use tempfile::TempDir;
 
-use crate::common::CommandTimeoutExt;
+use crate::common::{CommandTimeoutExt, Env};
 
 use super::support::*;
+
+#[derive(Debug, PartialEq, Eq)]
+struct TerminalState {
+    tab_id: u64,
+    tab_position: Option<u64>,
+    x: u64,
+    y: u64,
+    columns: u64,
+    rows: u64,
+    focused: bool,
+    title: Option<String>,
+}
+
+fn terminal_state(snapshot: &PaneSnapshot) -> BTreeMap<u64, TerminalState> {
+    snapshot
+        .panes
+        .iter()
+        .filter(|pane| !pane.is_plugin)
+        .map(|pane| {
+            (
+                pane.id,
+                TerminalState {
+                    tab_id: pane.tab_id,
+                    tab_position: pane.tab_position,
+                    x: pane.pane_x,
+                    y: pane.pane_y,
+                    columns: pane.pane_columns,
+                    rows: pane.pane_rows,
+                    focused: pane.is_focused,
+                    title: pane.title.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// Upgrade-only reload records an unreachable target as unconverged while
+/// preserving every terminal pane, its geometry, and focus. The stale
+/// heartbeats model supervisors whose source image vanished before staging was
+/// introduced; structural replacement belongs exclusively to `--repair`.
+#[test]
+fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("reloadkeep");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let env = Env::new();
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let layout = write_kdl_layout(cwd.path(), &stub, "reload-keep.kdl", |cwd_kdl, stub_kdl| {
+        format!(
+            r#"layout {{
+    default_tab_template split_direction="vertical" {{
+        pane size="25%" name="rimz-sidebar" cwd={cwd_kdl} {{
+            command {stub_kdl}
+            close_on_exit true
+        }}
+        children
+    }}
+    tab name="one" {{
+        pane focus=true cwd={cwd_kdl} {{
+            command "sleep"
+            args "600"
+        }}
+    }}
+    tab name="two" {{
+        pane focus=true cwd={cwd_kdl} {{
+            command "sleep"
+            args "600"
+        }}
+    }}
+    tab name="three" {{
+        pane focus=true cwd={cwd_kdl} {{
+            command "sleep"
+            args "600"
+        }}
+    }}
+}}
+"#,
+        )
+    });
+    birth_kdl_session(
+        xdg.path(),
+        &name,
+        cwd.path(),
+        &layout,
+        "reload preservation",
+    );
+    let _client = AttachedClient::attach(xdg.path(), &name, 180, 50);
+    wait_for_attached_client(xdg.path(), &name);
+    wait_for_pane_count(xdg.path(), &name, 6);
+
+    let project_root = PathBuf::from(format!("/tmp/rimz-{name}"));
+    let workspace_id = WorkspaceId::from_project_root(&project_root);
+    record_known_workspace_session(&env.state_root(), &workspace_id, &project_root, &name);
+    assert!(
+        rimz::workspace::known_workspaces_under(&rimz::store::paths::workspaces_dir_under(
+            &env.state_root()
+        ),)
+        .expect("known workspaces")
+        .iter()
+        .any(|workspace| workspace.session_name == name),
+        "reload fixture workspace is discoverable",
+    );
+    assert!(
+        rimz::mux::ZellijBackend::with_runtime_dir(xdg.path())
+            .list_sessions()
+            .expect("list fixture sessions")
+            .iter()
+            .any(|session| session == &name),
+        "reload fixture session is live",
+    );
+    let runtime = RuntimePaths::under(workspace_id.clone(), xdg.path()).expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let before = expect_list_panes(xdg.path(), &name);
+    let before_terminals = terminal_state(&before);
+    let mut receivers = Vec::new();
+    for pane in before.panes.iter().filter(|pane| pane.is_sidebar()) {
+        let socket = runtime.sock_dir.join(format!("reload-{}.sock", pane.id));
+        receivers.push(UnixDatagram::bind(&socket).expect("bind stale sidebar socket"));
+        let mut heartbeat = SidebarHeartbeat::new(
+            workspace_id.clone(),
+            SidebarInstanceId::new(),
+            MuxName::Zellij,
+            name.clone(),
+            socket,
+            Some(PaneId::from_parts(
+                MuxName::Zellij,
+                format!("terminal_{}", pane.id),
+            )),
+        );
+        heartbeat.build = Some("vanished-temp-build".to_owned());
+        std::fs::write(
+            runtime
+                .heartbeat_dir
+                .join(format!("sidebar.{}.json", pane.id)),
+            serde_json::to_vec(&heartbeat).expect("serialize stale heartbeat"),
+        )
+        .expect("write stale heartbeat");
+    }
+    assert_eq!(receivers.len(), 3, "fixture has one sidebar in each tab");
+
+    let preflight = env
+        .rimz()
+        .arg("list")
+        .env("XDG_RUNTIME_DIR", xdg.path())
+        .env("ZELLIJ_SOCKET_DIR", xdg.path().join("zellij"))
+        .env("XDG_CACHE_HOME", xdg.path())
+        .env("TMPDIR", xdg.path())
+        .bounded_output_within(Duration::from_secs(10))
+        .expect("list fixture through rimz");
+    assert!(
+        String::from_utf8_lossy(&preflight.stdout).contains(&name),
+        "rimz should discover the fixture before reload; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&preflight.stdout),
+        String::from_utf8_lossy(&preflight.stderr),
+    );
+    let output = env
+        .rimz()
+        .arg("reload")
+        .env("XDG_RUNTIME_DIR", xdg.path())
+        .env("ZELLIJ_SOCKET_DIR", xdg.path().join("zellij"))
+        .env("XDG_CACHE_HOME", xdg.path())
+        .env("TMPDIR", xdg.path())
+        .env("RIMZ_TEST_SKIP_STATS_RELOAD", "1")
+        .bounded_output_within(Duration::from_secs(30))
+        .expect("run bare reload");
+    assert!(
+        output.status.success(),
+        "bare reload failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3 sidebars did not reload in place"),
+        "stale sidebars should be visible as unconverged: {stdout}",
+    );
+
+    let after = expect_list_panes(xdg.path(), &name);
+    assert_eq!(
+        terminal_state(&after),
+        before_terminals,
+        "bare reload must preserve terminal ids, tabs, geometry, and focus",
+    );
+}
 
 /// An in-place add on a *detached* session is deferred, never attempted:
 /// Zellij's screen thread drops a `new-pane` mount when no client is attached
@@ -627,7 +819,10 @@ fn reconcile_opts(
         session_name: name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new(workspace_root)),
         project_root: project_root.to_path_buf(),
-        extra_env: Default::default(),
+        extra_env: BTreeMap::from([(
+            "RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT".to_owned(),
+            "1".to_owned(),
+        )]),
         cwd: cwd.to_path_buf(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),

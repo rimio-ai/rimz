@@ -65,6 +65,18 @@ pub fn of_file(path: &Path) -> io::Result<String> {
     hash_file(&mut file)
 }
 
+/// Read a build identity from an already-captured executable image. Staging
+/// uses this so the identity and copied bytes come from one source snapshot.
+pub(crate) fn of_bytes(image: &[u8]) -> String {
+    build_id_from_image(image)
+        .filter(|desc| desc.len() >= BUILD_ID_BYTES)
+        .map(|desc| hex::encode(&desc[..BUILD_ID_BYTES]))
+        .unwrap_or_else(|| {
+            let digest = Sha256::digest(image);
+            hex::encode(&digest[..BUILD_ID_BYTES])
+        })
+}
+
 fn linked_build_id(file: &mut std::fs::File) -> io::Result<Option<String>> {
     let mut buf = vec![0_u8; IMAGE_PREFIX_LEN];
     let n = read_up_to(file, &mut buf)?;

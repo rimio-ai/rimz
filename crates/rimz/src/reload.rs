@@ -1,11 +1,10 @@
-//! `rimz reload` — pick up a freshly-installed build, converge every running
-//! sidebar to a healthy set, and refresh held stats dashboards.
+//! `rimz reload` — stage a freshly-installed build, converge every running
+//! sidebar in place, and optionally repair sidebar structure.
 //!
 //! User-scoped and cwd-independent: it enumerates every known workspace
 //! ([`crate::workspace::known_workspaces`]), finds which have a live mux session,
-//! and reconciles live sessions concurrently in place — one live sidebar per
-//! working view, running the current binary — closing duplicate or unresponsive
-//! sidebar panes and reaping orphaned sidebar processes whose pane is gone. Held
+//! and upgrades live sessions concurrently without changing terminal panes.
+//! Structural close/add recovery is an explicit repair pass. Held
 //! `rimz stats --refresh` dashboards are signalled to re-exec in place before
 //! workspace enumeration, so
 //! standalone dashboards reload even when no rooms exist. `rimz reload` is the
@@ -15,6 +14,10 @@
 //! on one workspace is logged and never blocks the rest.
 
 use std::collections::HashSet;
+use std::fs;
+use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -31,6 +34,150 @@ use crate::sidebar::timing::{
 };
 use crate::store::{RuntimePaths, StatePaths, wakeup, workspace_record};
 use crate::workspace::{self, KnownWorkspace};
+
+/// Immutable executable generation shared by every long-lived process in a room.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StagedBuild {
+    pub path: PathBuf,
+    pub build: String,
+}
+
+const STAGED_BUILD_GC_GRACE: Duration = Duration::from_secs(60);
+
+#[derive(Debug, thiserror::Error)]
+pub enum StageBuildErr {
+    #[error("the running RimZ executable has no readable on-disk source to stage")]
+    MissingSource,
+    #[error("cannot stage RimZ build at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(transparent)]
+    Atomic(#[from] crate::store::atomic::AtomicErr),
+}
+
+/// Copy the invoking build into the durable user-scoped build store.
+pub fn stage_current_build() -> Result<StagedBuild, StageBuildErr> {
+    let source = current_reexec_target().ok_or(StageBuildErr::MissingSource)?;
+    stage_build_under(&source, &crate::store::paths::state_home())
+}
+
+fn stage_build_under(source: &Path, state_root: &Path) -> Result<StagedBuild, StageBuildErr> {
+    let bytes = fs::read(source).map_err(|source_err| StageBuildErr::Io {
+        path: source.to_path_buf(),
+        source: source_err,
+    })?;
+    let build = crate::build_id::of_bytes(&bytes);
+    let builds_dir = crate::store::paths::builds_dir_under(state_root);
+    let path = builds_dir.join(&build).join("rimz");
+    let reusable = path.is_file()
+        && crate::build_id::of_file(&path).is_ok_and(|staged_build| staged_build == build);
+    if !reusable {
+        crate::store::atomic::write_executable_bytes_atomically(&path, &bytes)?;
+    }
+    #[cfg(unix)]
+    if reusable {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).map_err(|source_err| {
+            StageBuildErr::Io {
+                path: path.clone(),
+                source: source_err,
+            }
+        })?;
+    }
+    sweep_unreferenced_builds(state_root, &builds_dir, &build);
+    Ok(StagedBuild { path, build })
+}
+
+fn sweep_unreferenced_builds(state_root: &Path, builds_dir: &Path, keep: &str) {
+    let mut referenced = HashSet::from([keep.to_owned()]);
+    let workspaces = crate::store::paths::workspaces_dir_under(state_root);
+    if let Ok(entries) = fs::read_dir(workspaces) {
+        for entry in entries.flatten() {
+            let record_path = entry.path().join("workspace.json");
+            if let Ok(record) = workspace_record::read(&record_path)
+                && let Some(build) = record.rimz_build
+            {
+                referenced.insert(build);
+            }
+        }
+    }
+    let Ok(entries) = fs::read_dir(builds_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if referenced.contains(name) {
+            continue;
+        }
+        // ponytail: a short age lease bridges staging and the workspace-record
+        // commit; replace it with explicit build leases if registration can
+        // ever spend a minute between those two operations.
+        if fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .and_then(|modified| modified.elapsed().map_err(io::Error::other))
+            .is_ok_and(|age| age < STAGED_BUILD_GC_GRACE)
+        {
+            continue;
+        }
+        if let Err(err) = fs::remove_dir_all(&path) {
+            tracing::debug!(path = %path.display(), error = %err, "staged build sweep failed");
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum WorkspaceReexecTarget {
+    Absent,
+    Verified(StagedBuild),
+    Invalid,
+}
+
+pub(crate) fn recorded_reexec_target(
+    workspace_id: &crate::ids::WorkspaceId,
+) -> WorkspaceReexecTarget {
+    let Ok(paths) = StatePaths::for_workspace(workspace_id.clone()) else {
+        return WorkspaceReexecTarget::Invalid;
+    };
+    let record = match workspace_record::read(&paths.workspace_record) {
+        Ok(record) => record,
+        Err(workspace_record::WorkspaceRecordErr::Io { source, .. })
+            if source.kind() == io::ErrorKind::NotFound =>
+        {
+            return WorkspaceReexecTarget::Absent;
+        }
+        Err(_) => return WorkspaceReexecTarget::Invalid,
+    };
+    resolve_recorded_target(record.rimz_bin, record.rimz_build)
+}
+
+fn resolve_recorded_target(path: Option<PathBuf>, build: Option<String>) -> WorkspaceReexecTarget {
+    let (path, build) = match (path, build) {
+        (Some(path), Some(build)) => (path, build),
+        (_, None) => return WorkspaceReexecTarget::Absent,
+        (None, Some(_)) => return WorkspaceReexecTarget::Invalid,
+    };
+    match crate::build_id::of_file(&path) {
+        Ok(actual) if actual == build => {
+            WorkspaceReexecTarget::Verified(StagedBuild { path, build })
+        }
+        Ok(_) | Err(_) => WorkspaceReexecTarget::Invalid,
+    }
+}
+
+pub(crate) fn reexec_target_for_workspace(
+    workspace_id: &crate::ids::WorkspaceId,
+) -> Option<PathBuf> {
+    match recorded_reexec_target(workspace_id) {
+        WorkspaceReexecTarget::Verified(target) => Some(target.path),
+        WorkspaceReexecTarget::Absent => current_reexec_target(),
+        WorkspaceReexecTarget::Invalid => None,
+    }
+}
 
 /// Resolve the on-disk binary that should be executed after the current image
 /// may have been replaced by an atomic install.
@@ -61,8 +208,8 @@ pub struct ReloadOutcome {
     pub already_current: usize,
     /// Located sidebars that published the on-disk build after the reload signal.
     pub reexeced: usize,
-    /// Sidebars closed and re-added because they did not reload in place.
-    pub restarted: usize,
+    /// Located sidebars that did not publish the staged build before timeout.
+    pub unconverged: usize,
     /// Live sidebars whose build could not be verified.
     pub unverified: usize,
     /// Sidebars added (a view had none, or its only one was unresponsive).
@@ -94,7 +241,7 @@ impl ReloadOutcome {
             presence_dead,
             already_current,
             reexeced,
-            restarted,
+            unconverged,
             unverified,
             recovered,
             closed,
@@ -110,7 +257,7 @@ impl ReloadOutcome {
         self.presence_dead += presence_dead;
         self.already_current += already_current;
         self.reexeced += reexeced;
-        self.restarted += restarted;
+        self.unconverged += unconverged;
         self.unverified += unverified;
         self.recovered += recovered;
         self.closed += closed;
@@ -126,7 +273,8 @@ impl ReloadOutcome {
 
 /// Reload and reconcile every running sidebar across all of this user's
 /// workspaces. Returns the aggregate outcome.
-pub fn reload_user_sidebars() -> ReloadOutcome {
+pub fn reload_user_sidebars(repair: bool) -> Result<ReloadOutcome, StageBuildErr> {
+    let staged = stage_current_build()?;
     let mut outcome = ReloadOutcome {
         stats_reloaded: recovery::reload_stats_dashboards().len(),
         ..ReloadOutcome::default()
@@ -139,14 +287,13 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
                 error = &err as &dyn std::error::Error,
                 "reload: cannot enumerate workspaces",
             );
-            return outcome;
+            return Ok(outcome);
         }
     };
     if workspaces.is_empty() {
-        return outcome;
+        return Ok(outcome);
     }
 
-    let rimz_bin = current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
     let machine_config = MachineConfig::load_lenient();
     let live = LiveSessions::probe();
     let mut reconciled_sessions: HashSet<(MuxName, String)> = HashSet::new();
@@ -215,9 +362,11 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
         let handles: Vec<_> = live_targets
             .iter()
             .map(|(mux, ws, runtime)| {
-                let rimz_bin = &rimz_bin;
+                let staged = &staged;
                 let machine_config = &machine_config;
-                scope.spawn(move || reconcile_live(*mux, ws, runtime, rimz_bin, machine_config))
+                scope.spawn(move || {
+                    reconcile_live(*mux, ws, runtime, staged, machine_config, repair)
+                })
             })
             .collect();
         for handle in handles {
@@ -228,7 +377,7 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
         }
     });
 
-    outcome
+    Ok(outcome)
 }
 
 fn claim_live_session(
@@ -239,24 +388,23 @@ fn claim_live_session(
     seen.insert((mux, session_name.to_owned()))
 }
 
-/// Converge one live session: re-exec its live sidebars onto the current binary,
-/// reconcile panes to one live sidebar per working view, then reap orphan
-/// sidebar processes the mux could not close.
+/// Upgrade one live session in place, optionally run its structural repair,
+/// then reap orphan sidebar processes whose panes are already gone.
 fn reconcile_live(
     mux: MuxName,
     ws: &KnownWorkspace,
     runtime: &RuntimePaths,
-    rimz_bin: &Path,
+    staged: &StagedBuild,
     machine_config: &MachineConfig,
+    repair: bool,
 ) -> ReloadOutcome {
     let mut outcome = ReloadOutcome {
         sessions: 1,
         ..ReloadOutcome::default()
     };
     let backend = backend_for(mux);
-    record_live_room_bin(ws, rimz_bin);
+    record_live_room_bin(ws, staged);
     let before_signal = session_heartbeats(runtime, mux, &ws.session_name);
-    let on_disk_build = on_disk_build(rimz_bin);
 
     // 1. Signal live sidebars to re-exec onto the freshly-installed binary.
     match wakeup::reload_sidebars(runtime) {
@@ -271,26 +419,19 @@ fn reconcile_live(
         }
     }
 
-    let liveness = match on_disk_build.as_deref() {
-        Some(build) => {
-            outcome.already_current += current_located_count(&before_signal, build);
-            let awaiting = awaiting_panes(&before_signal, build);
-            outcome.unverified += unlocated_unverified_count(&before_signal, build);
-            let post_wait = if awaiting.is_empty() {
-                before_signal
-            } else {
-                wait_for_convergence(runtime, mux, &ws.session_name, &awaiting, build)
-            };
-            let current = current_build_claims(&post_wait, build);
-            outcome.reexeced += awaiting.intersection(&current).count();
-            let stale_panes = awaiting.difference(&current).cloned().collect();
-            current_build_liveness(&post_wait, build, stale_panes)
-        }
-        None => {
-            outcome.unverified += before_signal.len();
-            heartbeat_liveness(&before_signal)
-        }
+    let build = staged.build.as_str();
+    outcome.already_current += current_located_count(&before_signal, build);
+    let awaiting = awaiting_panes(&before_signal, build);
+    outcome.unverified += unlocated_unverified_count(&before_signal, build);
+    let post_wait = if awaiting.is_empty() {
+        before_signal
+    } else {
+        wait_for_convergence(runtime, mux, &ws.session_name, &awaiting, build)
     };
+    let current = current_build_claims(&post_wait, build);
+    outcome.reexeced += awaiting.intersection(&current).count();
+    outcome.unconverged += awaiting.difference(&current).count();
+    let liveness = current_build_liveness(&post_wait, build);
 
     // 2. Converge the session's presence plugin onto the current wasm — reload
     //    is the explicit upgrade verb. Stale instances retire only after the
@@ -304,7 +445,7 @@ fn reconcile_live(
             session_name: ws.session_name.clone(),
             workspace_id: ws.workspace_id.clone(),
             wasm,
-            rimz_bin: rimz_bin.to_path_buf(),
+            rimz_bin: staged.path.clone(),
             converge: true,
             seed_permissions: machine_config.web.enabled,
             focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
@@ -321,56 +462,58 @@ fn reconcile_live(
         }
     }
 
-    // 3. A Zellij reconcile depends on topology from this channel. Require a
+    // 3. A Zellij repair depends on topology from this channel. Require a
     // post-converge publication rather than accepting a merely-young frozen
     // cache from a plugin whose host forks have stopped.
-    if !presence_channel_is_live(mux, runtime, &ws.session_name, presence_floor_ms) {
+    if repair && !presence_channel_is_live(mux, runtime, &ws.session_name, presence_floor_ms) {
         outcome.presence_dead += 1;
         crate::sidebar::sweep_orphan_runtime(runtime);
         return outcome;
     }
 
-    // 4. Reconcile panes: keep each view's live sidebar, close duplicates and
-    //    unresponsive ones, add to any working view left without one.
-    let width = SidebarWidth::from_config(&machine_config.theme);
-    let opts = SidebarPaneOptions {
-        session_name: ws.session_name.clone(),
-        workspace_id: ws.workspace_id.clone(),
-        project_root: ws.project_root.clone(),
-        extra_env: crate::agents::registry::room_env(runtime),
-        cwd: ws.project_root.clone(),
-        width,
-        // A reload can run from a terminal unrelated to the session's clients,
-        // so the bare cap only seeds a pane whose view geometry is unavailable.
-        birth_size: width.birth_size(None),
-        detected_view_size: None,
-        width_override: crate::sidebar::width_override::load(runtime),
-        rimz_bin: rimz_bin.to_path_buf(),
-        replace_existing: false,
-        pristine_birth: false,
-        config: mux_config.clone(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-    let mut liveness = liveness;
-    liveness.young_panes = young_sidebar_panes(mux, ws, jiff::Timestamp::now());
-    match backend.reconcile_sidebars(&opts, &liveness) {
-        Ok(report) => {
-            outcome.restarted += report.restarted;
-            outcome.recovered += report.recovered;
-            outcome.closed += report.closed;
-            outcome.failed += report.failed;
-            outcome.deferred += report.deferred;
-            outcome.redocked += report.redocked;
-            outcome.misdocked += report.misdocked;
-        }
-        Err(err) => {
-            tracing::warn!(
-                session = %ws.session_name,
-                tags.operation = "reload.reconcile",
-                error = &err as &dyn std::error::Error,
-                "reload: reconcile pass failed",
-            );
+    if repair {
+        let width = SidebarWidth::from_config(&machine_config.theme);
+        let opts = SidebarPaneOptions {
+            session_name: ws.session_name.clone(),
+            workspace_id: ws.workspace_id.clone(),
+            project_root: ws.project_root.clone(),
+            extra_env: crate::agents::registry::room_env(runtime),
+            cwd: ws.project_root.clone(),
+            width,
+            birth_size: width.birth_size(None),
+            detected_view_size: None,
+            width_override: crate::sidebar::width_override::load(runtime),
+            rimz_bin: staged.path.clone(),
+            replace_existing: false,
+            pristine_birth: false,
+            config: mux_config.clone(),
+            resume_tabs: Vec::new(),
+            refresh_ms: None,
+        };
+        let mut liveness = liveness;
+        liveness.young_panes = crate::sidebar::young_sidebar_panes(
+            mux,
+            ws.workspace_id.as_str(),
+            &ws.session_name,
+            jiff::Timestamp::now(),
+        );
+        match backend.reconcile_sidebars(&opts, &liveness) {
+            Ok(report) => {
+                outcome.recovered += report.recovered;
+                outcome.closed += report.closed;
+                outcome.failed += report.failed;
+                outcome.deferred += report.deferred;
+                outcome.redocked += report.redocked;
+                outcome.misdocked += report.misdocked;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    session = %ws.session_name,
+                    tags.operation = "reload.reconcile",
+                    error = &err as &dyn std::error::Error,
+                    "reload: repair pass failed",
+                );
+            }
         }
     }
 
@@ -418,14 +561,19 @@ fn presence_channel_is_live(
     }
 }
 
-fn record_live_room_bin(ws: &KnownWorkspace, rimz_bin: &Path) {
+fn record_live_room_bin(ws: &KnownWorkspace, staged: &StagedBuild) {
     let Ok(paths) = StatePaths::for_workspace(ws.workspace_id.clone()) else {
+        return;
+    };
+    let Ok(_guard) = crate::store::lock::WorkspaceLock::acquire(&paths.workspace_lock) else {
+        tracing::debug!(workspace = %ws.workspace_id, "reload: locking room record failed");
         return;
     };
     let Ok(mut record) = workspace_record::read(&paths.workspace_record) else {
         return;
     };
-    record.rimz_bin = Some(rimz_bin.to_path_buf());
+    record.rimz_bin = Some(staged.path.clone());
+    record.rimz_build = Some(staged.build.clone());
     record.updated_at = jiff::Timestamp::now();
     if let Err(err) = workspace_record::write_path(&paths.workspace_record, &record) {
         tracing::debug!(
@@ -433,22 +581,6 @@ fn record_live_room_bin(ws: &KnownWorkspace, rimz_bin: &Path) {
             error = %err,
             "reload: recording room binary failed",
         );
-    }
-}
-
-fn on_disk_build(rimz_bin: &Path) -> Option<String> {
-    let binary = crate::build_id::resolve_on_disk_binary(rimz_bin)?;
-    match crate::build_id::of_file(&binary) {
-        Ok(build) => Some(build),
-        Err(err) => {
-            tracing::warn!(
-                path = %binary.display(),
-                tags.operation = "reload.digest_binary",
-                error = &err as &dyn std::error::Error,
-                "reload: cannot digest on-disk binary; convergence is unverified",
-            );
-            None
-        }
     }
 }
 
@@ -525,18 +657,12 @@ fn current_build_claims(heartbeats: &[SidebarHeartbeat], build: &str) -> HashSet
         .collect()
 }
 
-fn current_build_liveness(
-    heartbeats: &[SidebarHeartbeat],
-    build: &str,
-    stale_panes: HashSet<PaneId>,
-) -> SidebarLiveness {
-    let mut live = heartbeat_liveness(
+fn current_build_liveness(heartbeats: &[SidebarHeartbeat], build: &str) -> SidebarLiveness {
+    heartbeat_liveness(
         heartbeats
             .iter()
             .filter(|hb| hb.build.as_deref() == Some(build)),
-    );
-    live.stale_panes = stale_panes;
-    live
+    )
 }
 
 fn heartbeat_liveness<'a>(
@@ -593,8 +719,9 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
             recovery::is_sidebar_serve(&proc.cmdline, ws.workspace_id.as_str(), &ws.session_name)
         })
         .filter(|proc| {
-            !crate::proc::process_start(proc.pid)
-                .is_some_and(|start| born_recently(start, now, crate::sidebar::FRESH_PANE_GRACE))
+            !crate::proc::process_start(proc.pid).is_some_and(|start| {
+                crate::sidebar::born_recently(start, now, crate::sidebar::FRESH_PANE_GRACE)
+            })
         })
         .filter(|proc| match recovery::attributed_pane(proc.pid, mux) {
             Some(pane) => !live_panes.contains(&pane),
@@ -603,36 +730,6 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         .map(|proc| proc.pid)
         .collect();
     recovery::kill_pids(&orphans, recovery::SWEEP_GRACE).len()
-}
-
-/// The panes whose sidebar serve process for `ws` was born within
-/// [`crate::sidebar::FRESH_PANE_GRACE`]: a just-added sidebar's first heartbeat
-/// may not have landed yet, so the reconcile planner treats its unclaimed pane
-/// as still starting rather than wedged. Attribution mirrors
-/// [`reap_orphan_sidebars`] (cmdline scope + inherited mux pane env).
-/// `/proc`-backed; empty elsewhere, where the planner just falls back to
-/// close-and-readd.
-fn young_sidebar_panes(mux: MuxName, ws: &KnownWorkspace, now: jiff::Timestamp) -> HashSet<PaneId> {
-    crate::proc::list_processes()
-        .iter()
-        .filter(|proc| {
-            recovery::is_sidebar_serve(&proc.cmdline, ws.workspace_id.as_str(), &ws.session_name)
-        })
-        .filter(|proc| {
-            crate::proc::process_start(proc.pid)
-                .is_some_and(|start| born_recently(start, now, crate::sidebar::FRESH_PANE_GRACE))
-        })
-        .filter_map(|proc| recovery::attributed_pane(proc.pid, mux))
-        .collect()
-}
-
-/// Whether a process born at `start` is still within `grace` of `now` — the
-/// youth predicate behind the fresh-pane grace, pure so the boundary is tested
-/// without `/proc`. A start *after* `now` (clock fuzz on a just-spawned
-/// process) reads as young.
-fn born_recently(start: jiff::Timestamp, now: jiff::Timestamp, grace: Duration) -> bool {
-    let grace = i64::try_from(grace.as_secs()).unwrap_or(0);
-    now.as_second().saturating_sub(start.as_second()) <= grace
 }
 
 #[cfg(test)]
@@ -660,22 +757,107 @@ mod tests {
     }
 
     #[test]
+    fn staging_is_idempotent_and_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source-rimz");
+        std::fs::write(&source, b"one immutable build").unwrap();
+
+        let first = stage_build_under(&source, dir.path()).unwrap();
+        let second = stage_build_under(&source, dir.path()).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(std::fs::read(&first.path).unwrap(), b"one immutable build");
+        assert_eq!(crate::build_id::of_file(&first.path).unwrap(), first.build);
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&first.path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+
+    #[test]
+    fn staging_sweeps_only_unreferenced_builds() {
+        let dir = tempfile::tempdir().unwrap();
+        let first_source = dir.path().join("first");
+        let second_source = dir.path().join("second");
+        std::fs::write(&first_source, b"first build").unwrap();
+        std::fs::write(&second_source, b"second build").unwrap();
+        let first = stage_build_under(&first_source, dir.path()).unwrap();
+
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let workspace = crate::workspace::WorkspaceResolver::resolve(&project, None).unwrap();
+        let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let mut record = crate::store::WorkspaceRecord::from_resolved(&workspace);
+        record.rimz_bin = Some(first.path.clone());
+        record.rimz_build = Some(first.build.clone());
+        workspace_record::write(&paths, &record).unwrap();
+
+        let unreferenced = crate::store::paths::builds_dir_under(dir.path()).join("unused");
+        std::fs::create_dir_all(&unreferenced).unwrap();
+        std::fs::write(unreferenced.join("rimz"), b"unused").unwrap();
+        std::fs::File::open(&unreferenced)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::now() - STAGED_BUILD_GC_GRACE - Duration::from_secs(1),
+            )
+            .unwrap();
+        let second = stage_build_under(&second_source, dir.path()).unwrap();
+
+        assert!(first.path.is_file(), "recorded build remains staged");
+        assert!(second.path.is_file(), "new build remains staged");
+        assert!(!unreferenced.exists(), "unreferenced build is swept");
+    }
+
+    #[test]
+    fn recorded_target_requires_the_recorded_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rimz");
+        std::fs::write(&path, b"verified build").unwrap();
+        let build = crate::build_id::of_file(&path).unwrap();
+
+        assert_eq!(
+            resolve_recorded_target(Some(path.clone()), Some(build.clone())),
+            WorkspaceReexecTarget::Verified(StagedBuild {
+                path: path.clone(),
+                build,
+            })
+        );
+        assert_eq!(
+            resolve_recorded_target(Some(path.clone()), Some("wrong".to_owned())),
+            WorkspaceReexecTarget::Invalid
+        );
+        assert_eq!(
+            resolve_recorded_target(Some(path), None),
+            WorkspaceReexecTarget::Absent
+        );
+        assert_eq!(
+            resolve_recorded_target(None, Some("orphan".to_owned())),
+            WorkspaceReexecTarget::Invalid
+        );
+    }
+
+    #[test]
     fn born_recently_holds_inside_the_grace_and_for_clock_fuzz() {
         let now = jiff::Timestamp::from_second(1_000_000).unwrap();
         let grace = crate::sidebar::FRESH_PANE_GRACE;
         let at = |secs_ago: i64| jiff::Timestamp::from_second(1_000_000 - secs_ago).unwrap();
-        assert!(born_recently(at(0), now, grace));
-        assert!(born_recently(
+        assert!(crate::sidebar::born_recently(at(0), now, grace));
+        assert!(crate::sidebar::born_recently(
             at(i64::try_from(grace.as_secs()).unwrap()),
             now,
             grace
         ));
         assert!(
-            !born_recently(at(i64::try_from(grace.as_secs()).unwrap() + 1), now, grace),
+            !crate::sidebar::born_recently(
+                at(i64::try_from(grace.as_secs()).unwrap() + 1),
+                now,
+                grace,
+            ),
             "one second past the grace is old",
         );
         assert!(
-            born_recently(at(-3), now, grace),
+            crate::sidebar::born_recently(at(-3), now, grace),
             "a start after `now` is a just-spawned process under clock fuzz",
         );
     }
@@ -706,7 +888,7 @@ mod tests {
             presence_dead: 2,
             already_current: 3,
             reexeced: 4,
-            restarted: 5,
+            unconverged: 5,
             unverified: 6,
             recovered: 7,
             closed: 8,
@@ -723,7 +905,7 @@ mod tests {
             presence_dead: 17,
             already_current: 18,
             reexeced: 19,
-            restarted: 20,
+            unconverged: 20,
             unverified: 21,
             recovered: 22,
             closed: 23,
@@ -743,7 +925,7 @@ mod tests {
                 presence_dead: 19,
                 already_current: 21,
                 reexeced: 23,
-                restarted: 25,
+                unconverged: 25,
                 unverified: 27,
                 recovered: 29,
                 closed: 31,
@@ -818,8 +1000,7 @@ mod tests {
             heartbeat("%3", None),
         ];
 
-        let stale = [PaneId::from_parts(MuxName::Tmux, "%2")].into();
-        let live = current_build_liveness(&heartbeats, "current", stale);
+        let live = current_build_liveness(&heartbeats, "current");
         assert!(
             live.claimed_panes
                 .contains(&PaneId::from_parts(MuxName::Tmux, "%1"))
@@ -834,27 +1015,17 @@ mod tests {
                 .claimed_panes
                 .contains(&PaneId::from_parts(MuxName::Tmux, "%3"))
         );
-        assert!(
-            live.stale_panes
-                .contains(&PaneId::from_parts(MuxName::Tmux, "%2"))
-        );
     }
 
     #[test]
-    fn current_build_liveness_keeps_unlocated_current_but_marks_stale_panes() {
+    fn current_build_liveness_keeps_unlocated_current() {
         let heartbeats = vec![
             unlocated_heartbeat(Some("current")),
             heartbeat("%2", Some("old")),
         ];
-        let stale = [PaneId::from_parts(MuxName::Tmux, "%2")].into();
-
-        let live = current_build_liveness(&heartbeats, "current", stale);
+        let live = current_build_liveness(&heartbeats, "current");
 
         assert!(live.has_unlocated);
-        assert!(
-            live.stale_panes
-                .contains(&PaneId::from_parts(MuxName::Tmux, "%2"))
-        );
     }
 
     #[test]

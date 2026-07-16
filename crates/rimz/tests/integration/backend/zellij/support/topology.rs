@@ -140,6 +140,7 @@ pub(in crate::backend::zellij) fn record_known_workspace_session(
         session_name: session.to_owned(),
         root_class: rimz::workspace::RootClass::Directory,
         rimz_bin: None,
+        rimz_build: None,
         updated_at: jiff::Timestamp::now(),
     };
     rimz::store::workspace_record::write(&state, &record).expect("workspace record");

@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::diag::record::DiagEvent;
 use crate::ids::SidebarInstanceId;
@@ -34,6 +34,10 @@ const STDERR_TAIL_BYTES: usize = 8 * 1024;
 const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub const RELOAD_EXIT_CODE: i32 = 100;
 const PANIC_EXIT_CODE: i32 = 101;
+pub const RESPAWN_EXIT_CODE: i32 = 102;
+const RESPAWN_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
+const RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
+const RESPAWN_STABLE_RUN: Duration = Duration::from_secs(60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SidebarSuperviseErr {
@@ -45,13 +49,6 @@ pub enum SidebarSuperviseErr {
     },
     #[error("waiting for sidebar render worker: {0}")]
     Wait(#[source] io::Error),
-    #[error(
-        "sidebar render worker terminated abnormally (signal {signal:?}, exit code {exit_code:?})"
-    )]
-    WorkerTerminated {
-        signal: Option<i32>,
-        exit_code: Option<i32>,
-    },
 }
 
 pub type Result<T> = std::result::Result<T, SidebarSuperviseErr>;
@@ -74,8 +71,28 @@ pub fn run_worker(config: ServeConfig) -> crate::sidebar_pane::app::Result<()> {
 
 pub fn run(config: ServeConfig) -> Result<()> {
     let args = env::args_os().skip(1).collect::<Vec<_>>();
+    if let crate::reload::WorkspaceReexecTarget::Verified(target) =
+        crate::reload::recorded_reexec_target(&config.workspace_id)
+        && crate::build_id::current() != Some(target.build.as_str())
+    {
+        debug!(
+            target = %target.path.display(),
+            instance = %config.instance_id,
+            "re-execing stale sidebar supervisor onto the recorded room build",
+        );
+        return exec_supervisor(&target.path, &args, &config);
+    }
+    let mut backoff = RESPAWN_BACKOFF_INITIAL;
     loop {
-        let exe = crate::proc::rimz_exe();
+        // Spawn from the durable room target even when its bytes match this
+        // supervisor. The supervisor may still occupy an unlinked temp image;
+        // `RIMZ_BIN` and `current_exe()` would make its next respawn fail.
+        let current = env::current_exe().unwrap_or_else(|_| crate::proc::rimz_exe());
+        let exe = worker_executable(
+            crate::reload::recorded_reexec_target(&config.workspace_id),
+            current,
+        );
+        let started = Instant::now();
         let mut child = spawn_worker(&exe, &args, &config)?;
         let worker_pid = worker_pid(&child);
         spawn_test_stray_if_requested();
@@ -94,7 +111,8 @@ pub fn run(config: ServeConfig) -> Result<()> {
 
         match supervise_action(worker.exit_code, worker.signal) {
             SuperviseAction::ReloadReexec => {
-                let Some(target) = crate::reload::current_reexec_target() else {
+                let Some(target) = crate::reload::reexec_target_for_workspace(&config.workspace_id)
+                else {
                     debug!("reload: supervisor replacement binary missing; respawning worker");
                     continue;
                 };
@@ -105,21 +123,35 @@ pub fn run(config: ServeConfig) -> Result<()> {
                 );
                 return exec_supervisor(&target, &args, &config);
             }
-            SuperviseAction::Panic => std::process::exit(PANIC_EXIT_CODE),
             SuperviseAction::Done => return Ok(()),
-            SuperviseAction::Death => {
+            SuperviseAction::Respawn => {
                 let stderr_excerpt = stderr_tail
                     .lock()
                     .map(|tail| tail.excerpt())
                     .unwrap_or_default();
                 restore_terminal(MouseCapture::Stdout, Screen::Main);
                 record_signal_death(&config, worker.signal, worker.exit_code, stderr_excerpt);
-                return Err(SidebarSuperviseErr::WorkerTerminated {
-                    signal: worker.signal,
-                    exit_code: worker.exit_code,
-                });
+                let (delay, next) = respawn_backoff(backoff, started.elapsed());
+                debug!(
+                    delay_ms = delay.as_millis(),
+                    instance = %config.instance_id,
+                    "respawning sidebar worker after abnormal termination",
+                );
+                thread::sleep(delay);
+                backoff = next;
             }
         }
+    }
+}
+
+fn worker_executable(
+    target: crate::reload::WorkspaceReexecTarget,
+    current: std::path::PathBuf,
+) -> std::path::PathBuf {
+    match target {
+        crate::reload::WorkspaceReexecTarget::Verified(target) => target.path,
+        crate::reload::WorkspaceReexecTarget::Absent
+        | crate::reload::WorkspaceReexecTarget::Invalid => current,
     }
 }
 
@@ -153,18 +185,29 @@ fn exec_supervisor(exe: &Path, args: &[OsString], config: &ServeConfig) -> Resul
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SuperviseAction {
     ReloadReexec,
-    Panic,
     Done,
-    Death,
+    Respawn,
 }
 
 fn supervise_action(exit_code: Option<i32>, signal: Option<i32>) -> SuperviseAction {
     match (exit_code, signal) {
         (Some(RELOAD_EXIT_CODE), None) => SuperviseAction::ReloadReexec,
-        (Some(PANIC_EXIT_CODE), None) => SuperviseAction::Panic,
         (Some(0), None) => SuperviseAction::Done,
-        _ => SuperviseAction::Death,
+        (Some(PANIC_EXIT_CODE), None)
+        | (Some(RESPAWN_EXIT_CODE), None)
+        | (None, Some(_))
+        | (Some(_), None) => SuperviseAction::Respawn,
+        _ => SuperviseAction::Respawn,
     }
+}
+
+fn respawn_backoff(current: Duration, run_duration: Duration) -> (Duration, Duration) {
+    let delay = if run_duration >= RESPAWN_STABLE_RUN {
+        RESPAWN_BACKOFF_INITIAL
+    } else {
+        current
+    };
+    (delay, delay.saturating_mul(2).min(RESPAWN_BACKOFF_MAX))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -440,10 +483,46 @@ mod tests {
         );
         assert_eq!(
             supervise_action(Some(PANIC_EXIT_CODE), None),
-            SuperviseAction::Panic
+            SuperviseAction::Respawn
+        );
+        assert_eq!(
+            supervise_action(Some(RESPAWN_EXIT_CODE), None),
+            SuperviseAction::Respawn
         );
         assert_eq!(supervise_action(Some(0), None), SuperviseAction::Done);
-        assert_eq!(supervise_action(None, Some(9)), SuperviseAction::Death);
-        assert_eq!(supervise_action(Some(1), None), SuperviseAction::Death);
+        assert_eq!(supervise_action(None, Some(9)), SuperviseAction::Respawn);
+        assert_eq!(supervise_action(Some(1), None), SuperviseAction::Respawn);
+    }
+
+    #[test]
+    fn respawn_backoff_doubles_caps_and_resets_after_a_stable_run() {
+        assert_eq!(
+            respawn_backoff(Duration::from_secs(1), Duration::from_secs(2)),
+            (Duration::from_secs(1), Duration::from_secs(2))
+        );
+        assert_eq!(
+            respawn_backoff(Duration::from_secs(60), Duration::from_secs(2)),
+            (Duration::from_secs(60), Duration::from_secs(60))
+        );
+        assert_eq!(
+            respawn_backoff(Duration::from_secs(32), RESPAWN_STABLE_RUN),
+            (Duration::from_secs(1), Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn worker_spawn_prefers_the_durable_target_even_for_matching_bytes() {
+        let durable = std::path::PathBuf::from("/state/rimz/builds/same/rimz");
+        let ephemeral = std::path::PathBuf::from("/tmp/build/rimz (deleted)");
+        assert_eq!(
+            worker_executable(
+                crate::reload::WorkspaceReexecTarget::Verified(crate::reload::StagedBuild {
+                    path: durable.clone(),
+                    build: "same".to_owned(),
+                }),
+                ephemeral,
+            ),
+            durable,
+        );
     }
 }

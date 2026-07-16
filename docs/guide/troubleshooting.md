@@ -150,10 +150,11 @@ rimz config set theme.pets.enabled true   # an animated companion on the dashboa
 When the running RimZ build drifts from an agent's tested version range, reporting fidelity degrades rather than a pane freezing outright: `rimz doctor` warns, and blocking prompts still route to the agent's own UI. After upgrading the binary, reconcile the running sidebars onto the new build:
 
 ```sh
-rimz reload    # re-exec sidebars onto the current build, repair geometry, close duplicates
+rimz reload             # re-exec sidebars in place; every pane stays unchanged
+rimz reload --repair    # then repair missing, duplicate, mis-docked, or wedged sidebars
 ```
 
-`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the fix for that mixed-build state too.
+`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the pane-preserving fix for that mixed-build state. If it reports sidebars that did not converge, run `rimz reload --repair`; replacement mounts and proves a current-build heartbeat before the old pane closes.
 
 After an upgrade, `rimz start` and `rimz attach` also warn when a live room still runs a different sidebar build and point to `rimz reload`.
 

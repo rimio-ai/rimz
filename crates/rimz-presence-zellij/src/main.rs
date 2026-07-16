@@ -93,7 +93,7 @@ mod shell {
 
         fn update(&mut self, event: Event) -> bool {
             let now = now_ms();
-            if let Event::RunCommandResult(exit_code, ..) = event {
+            if let Event::RunCommandResult(exit_code, _, _, context) = event {
                 self.commands_completed = self.commands_completed.saturating_add(1);
                 if exit_code != Some(0) {
                     self.commands_failed = self.commands_failed.saturating_add(1);
@@ -105,7 +105,10 @@ mod shell {
                     commands_completed: self.commands_completed,
                     commands_failed: self.commands_failed,
                 };
-                execute(engine.on_run_command_result(exit_code, now, &host));
+                let published_topology = context
+                    .get(wire::TOPOLOGY_PUBLISH_CONTEXT)
+                    .is_some_and(|value| value == "1");
+                execute(engine.on_run_command_result(exit_code, published_topology, now, &host));
                 return false;
             }
             let Some(engine) = self.engine.as_mut() else {
@@ -207,11 +210,15 @@ mod shell {
             match effect {
                 Effect::RunCommand(argv) => {
                     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+                    let mut context = BTreeMap::new();
+                    if wire::publishes_topology(&argv) {
+                        context.insert(wire::TOPOLOGY_PUBLISH_CONTEXT.to_owned(), "1".to_owned());
+                    }
                     run_command_with_env_variables_and_cwd(
                         &refs,
                         BTreeMap::new(),
                         PathBuf::from("/"),
-                        BTreeMap::new(),
+                        context,
                     );
                 }
                 Effect::HideSelf => hide_self(),

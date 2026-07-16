@@ -26,7 +26,7 @@ These repair or clean an installation without changing your configuration.
 
 ```sh
 rimz update [--version <TAG>]
-rimz reload
+rimz reload [--repair]
 rimz reset [--yes] [--no-start] [--hard] [PATH]
 rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
@@ -34,7 +34,7 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 
 `update` follows the current installation method: Homebrew delegates to `brew upgrade rimz`, Cargo delegates to `cargo install --locked rimz`, and script or manual prebuilt installs download, checksum, smoke-test, and atomically replace the current binary. `--version` selects a numbered release tag for Cargo or any release tag, including `latest-main`, for a standalone install; Homebrew keeps formula version selection. A changed binary automatically launches the new build's `reload` command. Unsupported prebuilt targets report the exact `cargo install --locked rimz` fallback, and a protected standalone destination reports the `sudo rimz update` retry.
 
-`reload` runs from anywhere and reconciles running sidebars onto the current RimZ build: it re-execs sidebars where possible, restarts those that cannot reload in place, closes duplicates and unresponsive ones, repairs geometry, restarts `rimz stats --refresh` dashboards, and leaves stopped sessions stopped. It touches sidebar processes only, not agents. Sidebar reload behavior is in [sidebar.md](../../internals/sidebar/sidebar.md).
+`reload` runs from anywhere, stages the invoking RimZ build durably, and re-execs running sidebars in place while preserving every pane. Sidebars that cannot prove convergence stay on their old working build and are reported; bare reload never creates or closes panes. `--repair` follows the upgrade with serialized structural recovery for missing, duplicate, mis-docked, or wedged sidebars, using add-before-close and heartbeat verification for replacements. Both forms reload `rimz stats --refresh` dashboards, leave stopped sessions stopped, and touch no agent process. Sidebar reload behavior is in [sidebar.md](../../internals/sidebar/sidebar.md).
 
 `reset` is the escape hatch for a wedged room. It resolves `PATH` as the cwd, tears down the session, purges the resurrection cache, archives records, clears coordination state, sweeps orphaned processes, then rebuilds and reattaches by default. Durable history is archived, not deleted, so a reset room comes up empty but its records survive. `--yes` skips the prompt (required off a TTY), `--no-start` stops after teardown and prints the rerun hint, and `--hard` also removes the agent carryover (a plain reset keeps it for history but still starts empty).
 

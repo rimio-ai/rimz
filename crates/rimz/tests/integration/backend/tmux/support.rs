@@ -38,7 +38,10 @@ pub(super) fn sidebar_opts(
         session_name: session.to_owned(),
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
         project_root: std::env::temp_dir(),
-        extra_env: Default::default(),
+        extra_env: BTreeMap::from([(
+            "RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT".to_owned(),
+            "1".to_owned(),
+        )]),
         cwd: std::env::temp_dir(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(detected_cols),

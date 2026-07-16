@@ -513,6 +513,7 @@ mod tests {
             session_name: session_name.to_owned(),
             root_class: crate::workspace::RootClass::Repo,
             rimz_bin: None,
+            rimz_build: None,
             updated_at: jiff::Timestamp::now(),
         };
         workspace_record::write(&paths, &record).unwrap();

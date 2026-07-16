@@ -779,7 +779,9 @@ fn wake(globals: &GlobalFlags, workspace_id: Option<String>, wake: ZellijWake) -
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
     match ingest_zellij_wake(&state, &runtime, &wake) {
-        ZellijWakeOutcome::RejectedStaleWriter => return Ok(()),
+        ZellijWakeOutcome::RejectedStaleWriter => {
+            std::process::exit(rimz::sidebar::presence::STALE_WRITER_EXIT_CODE)
+        }
         ZellijWakeOutcome::Accepted(Some(event)) => {
             broadcast_wake_event(&runtime, wake.session_name.as_deref(), event);
         }

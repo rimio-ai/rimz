@@ -130,7 +130,7 @@ impl SidebarHarness {
             birth_size: width.birth_size(None),
             detected_view_size: None,
             width_override: None,
-            rimz_bin: PathBuf::from("rimz"),
+            rimz_bin: std::env::current_exe().expect("test executable"),
             replace_existing: false,
             pristine_birth: false,
             config: rimz::config::MultiplexerConfig::default(),
@@ -154,6 +154,7 @@ impl SidebarHarness {
             None,
         );
         heartbeat.protocol_version = protocol_version.to_owned();
+        heartbeat.build = rimz::build_id::current().map(str::to_owned);
         let path = self.runtime.heartbeat_dir.join("sidebar.fresh.json");
         std::fs::write(&path, serde_json::to_vec(&heartbeat).expect("json"))
             .expect("write heartbeat");

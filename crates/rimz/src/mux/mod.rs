@@ -23,10 +23,8 @@ pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use focus_key::{FocusChord, FocusKeyBinding};
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
-pub(crate) use reconcile::{
-    AddOutcome, ViewSidebars, execute_adds, execute_closes, plan_reconcile,
-};
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
+pub(crate) use reconcile::{ViewSidebars, ViewVerdict, plan_reconcile, wait_for_sidebar_heartbeat};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
 pub use width::{

@@ -17,12 +17,12 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
 use crate::mux::{
-    AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
-    BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend,
-    MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
-    TabOptions, WidthAdjust, WidthSyncOptions, ensure_pane_backend, execute_adds, execute_closes,
-    memoized_version,
+    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
+    ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey,
+    PaneCapture, PaneListOptions, PaneListing, Result, SessionOptions, SidebarLiveness,
+    SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, TabOptions, ViewVerdict,
+    WidthAdjust, WidthSyncOptions, ensure_pane_backend, memoized_version,
+    wait_for_sidebar_heartbeat,
 };
 
 /// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
@@ -584,26 +584,13 @@ impl MuxBackend for TmuxBackend {
         let views = tmux_views_with_sidebars(&panes.panes, &opts.session_name);
         let plan = super::super::plan_reconcile(&views, live);
         let mut report = SidebarRecovery::default();
-        let failed_stale_close_views = execute_closes(&plan, live, &mut report, |pane| match self
-            .kill_pane(pane)
-        {
-            Ok(()) => true,
-            Err(err) => {
-                tracing::warn!(
-                    session = %opts.session_name,
-                    pane = %pane.as_str(),
-                    tags.operation = "tmux.reconcile.close_stray",
-                    error = &err as &dyn std::error::Error,
-                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
-                );
-                false
-            }
-        });
-        execute_adds(
-            &plan,
-            &failed_stale_close_views,
-            &mut report,
-            |window, _restart| {
+        let mut repair_aborted = false;
+        let build = crate::build_id::of_file(&opts.rimz_bin).map_err(|err| MuxErr::Output {
+            program: opts.rimz_bin.display().to_string(),
+            reason: format!("cannot verify sidebar repair build: {err}"),
+        })?;
+        for (index, verdict) in plan.verdicts.iter().enumerate() {
+            let add = |window: &str| -> Result<PaneId> {
                 let mut add_opts = opts.clone();
                 if view_cols.is_some()
                     && let Some(window_cols) = self.window_width(window)
@@ -611,31 +598,76 @@ impl MuxBackend for TmuxBackend {
                     add_opts.birth_size.cols =
                         live_cols_u16(opts.width, opts.width_override, window_cols);
                 }
-                match self.add_sidebar_to_window(&add_opts, window) {
-                    Ok(()) => AddOutcome::Added,
-                    Err(err) => {
-                        tracing::warn!(
-                            session = %opts.session_name,
-                            window = %window,
-                            tags.operation = "tmux.reconcile.add",
-                            error = &err as &dyn std::error::Error,
-                            "sidebar reconcile: in-place add failed; leaving the window without a sidebar",
-                        );
-                        AddOutcome::Failed
-                    }
+                let pane = self.add_sidebar_to_window(&add_opts, window)?;
+                if wait_for_sidebar_heartbeat(opts, MuxName::Tmux, &pane, &build) {
+                    Ok(pane)
+                } else {
+                    let _ = self.kill_pane(&pane);
+                    Err(MuxErr::Output {
+                        program: "tmux".to_owned(),
+                        reason: format!(
+                            "sidebar pane `{pane}` mounted in window `{window}` without a current-build heartbeat"
+                        ),
+                    })
                 }
-            },
-        );
+            };
+            let result = match verdict {
+                ViewVerdict::CloseDuplicates { close, .. } => {
+                    (|| -> Result<()> {
+                        for pane in close {
+                            self.kill_pane(pane)?;
+                            report.closed += 1;
+                        }
+                        Ok(())
+                    })()
+                }
+                ViewVerdict::Add { view } => add(view).map(|_| {
+                    report.recovered += 1;
+                }),
+                ViewVerdict::Replace { view, old, close } => add(view).and_then(|_| {
+                    tracing::debug!(window = %view, pane = %old, "sidebar replacement verified; closing old pane");
+                    for pane in close {
+                        self.kill_pane(pane)?;
+                        report.closed += 1;
+                    }
+                    report.recovered += 1;
+                    Ok(())
+                }),
+            };
+            if let Err(err) = result {
+                report.failed += plan.remaining_from(index);
+                tracing::warn!(
+                    session = %opts.session_name,
+                    view = %verdict.view(),
+                    tags.operation = "tmux.reconcile.transaction",
+                    error = &err as &dyn std::error::Error,
+                    "sidebar repair aborted; leaving remaining views unchanged",
+                );
+                repair_aborted = true;
+                break;
+            }
+        }
+        let planned_closes = plan.close_panes();
+        let mutated_views: HashSet<&str> = plan
+            .verdicts
+            .iter()
+            .filter_map(|verdict| match verdict {
+                ViewVerdict::Add { view } | ViewVerdict::Replace { view, .. } => {
+                    Some(view.as_str())
+                }
+                ViewVerdict::CloseDuplicates { .. } => None,
+            })
+            .collect();
         let kept: HashSet<String> = views
             .iter()
             .filter(|view| view.sidebar_panes.len() == 1)
-            .filter(|view| !plan.add.contains(&view.view))
+            .filter(|view| !mutated_views.contains(view.view.as_str()))
             .filter_map(|view| {
                 let pane = view.sidebar_panes.first()?;
-                (!plan.close.contains(pane)).then(|| pane.raw().to_owned())
+                (!planned_closes.contains(pane)).then(|| pane.raw().to_owned())
             })
             .collect();
-        if view_cols.is_some() && !kept.is_empty() {
+        if !repair_aborted && view_cols.is_some() && !kept.is_empty() {
             match self.session_pane_geometries(&opts.session_name) {
                 Ok(geometries) => {
                     let sync = WidthSyncOptions {

@@ -81,6 +81,7 @@ shared persistent   ~/.local/state/rimz/shared/
   provider-spending.json · spending.json · pricing-cache.json
 
 user-global persistent   ~/.local/state/rimz/
+  builds/<build_id>/rimz                              immutable room executable generations
   loop-instances.json · loop-runs.log.jsonl
 
 shared runtime      $XDG_RUNTIME_DIR/rimz/shared/

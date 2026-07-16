@@ -372,7 +372,7 @@ fn record_workspace_preserves_existing_room_bin() {
     let owner = dir.path().join("bin").join("rimz");
 
     store
-        .record_room_bin(&workspace, owner.clone())
+        .record_room_bin(&workspace, owner.clone(), "build-1".to_owned())
         .expect("record owner bin");
     store
         .record_workspace(&workspace)
@@ -380,6 +380,7 @@ fn record_workspace_preserves_existing_room_bin() {
 
     let record = workspace_record::read(&paths.workspace_record).expect("read record");
     assert_eq!(record.rimz_bin.as_deref(), Some(owner.as_path()));
+    assert_eq!(record.rimz_build.as_deref(), Some("build-1"));
 }
 
 #[test]

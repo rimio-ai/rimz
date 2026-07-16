@@ -168,7 +168,7 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
         self.commit(|txn| {
-            let record = workspace_record_preserving_rimz_bin(txn.paths, workspace, None);
+            let record = workspace_record_preserving_rimz_target(txn.paths, workspace, None);
             workspace_record::write(txn.paths, &record)?;
             Ok(())
         })
@@ -177,9 +177,18 @@ impl Store {
     /// Persist the room-owning RimZ binary for session-local helpers. Generic
     /// re-records preserve this value; only room owner flows update it.
     #[must_use = "durability barrier; check the result"]
-    pub fn record_room_bin(&self, workspace: &ResolvedWorkspace, rimz_bin: PathBuf) -> Result<()> {
+    pub fn record_room_bin(
+        &self,
+        workspace: &ResolvedWorkspace,
+        rimz_bin: PathBuf,
+        rimz_build: String,
+    ) -> Result<()> {
         self.commit(|txn| {
-            let record = workspace_record_preserving_rimz_bin(txn.paths, workspace, Some(rimz_bin));
+            let record = workspace_record_preserving_rimz_target(
+                txn.paths,
+                workspace,
+                Some((rimz_bin, rimz_build)),
+            );
             workspace_record::write(txn.paths, &record)?;
             Ok(())
         })
@@ -218,7 +227,8 @@ impl Store {
             }
             event_log::replace_all(&self.inner.paths.events_log, &events)?;
 
-            let record = workspace_record_preserving_rimz_bin(&self.inner.paths, workspace, None);
+            let record =
+                workspace_record_preserving_rimz_target(&self.inner.paths, workspace, None);
             workspace_record::write(&self.inner.paths, &record)?;
             // The log was wholesale-replaced; reseed fold caches before rebuilding.
             invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Reseed)?;
@@ -523,17 +533,24 @@ impl Store {
     }
 }
 
-fn workspace_record_preserving_rimz_bin(
+fn workspace_record_preserving_rimz_target(
     paths: &StatePaths,
     workspace: &ResolvedWorkspace,
-    rimz_bin: Option<PathBuf>,
+    rimz_target: Option<(PathBuf, String)>,
 ) -> workspace_record::WorkspaceRecord {
     let mut record = workspace_record::WorkspaceRecord::from_resolved(workspace);
-    record.rimz_bin = rimz_bin.or_else(|| {
-        workspace_record::read(&paths.workspace_record)
-            .ok()
-            .and_then(|prior| prior.rimz_bin)
-    });
+    match rimz_target {
+        Some((rimz_bin, rimz_build)) => {
+            record.rimz_bin = Some(rimz_bin);
+            record.rimz_build = Some(rimz_build);
+        }
+        None => {
+            if let Ok(prior) = workspace_record::read(&paths.workspace_record) {
+                record.rimz_bin = prior.rimz_bin;
+                record.rimz_build = prior.rimz_build;
+            }
+        }
+    }
     record
 }
 

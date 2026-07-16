@@ -56,6 +56,10 @@ pub struct WorkspaceRecord {
     /// (`start`, cwd-based `attach`, `reload`) set it explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rimz_bin: Option<PathBuf>,
+    /// Digest of [`Self::rimz_bin`]. The pair is the verified executable target
+    /// for long-lived room processes; legacy records omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rimz_build: Option<String>,
     pub updated_at: Timestamp,
 }
 
@@ -72,6 +76,7 @@ impl WorkspaceRecord {
             session_name: workspace.session_name.clone(),
             root_class: workspace.root_class,
             rimz_bin: None,
+            rimz_build: None,
             updated_at: Timestamp::now(),
         }
     }
@@ -113,7 +118,9 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         let workspace = WorkspaceResolver::resolve(&project, None).unwrap();
         let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
-        let record = WorkspaceRecord::from_resolved(&workspace);
+        let mut record = WorkspaceRecord::from_resolved(&workspace);
+        record.rimz_bin = Some(dir.path().join("builds/build/rimz"));
+        record.rimz_build = Some("build".to_owned());
 
         write(&paths, &record).unwrap();
         let loaded = read(&paths.workspace_record).unwrap();
@@ -125,6 +132,8 @@ mod tests {
             Some(&workspace.worktree_root)
         );
         assert_eq!(loaded.session_name, workspace.session_name);
+        assert_eq!(loaded.rimz_bin, record.rimz_bin);
+        assert_eq!(loaded.rimz_build, record.rimz_build);
     }
 
     #[test]
@@ -141,6 +150,7 @@ mod tests {
         .expect("legacy record parses");
 
         assert_eq!(record.rimz_bin, None);
+        assert_eq!(record.rimz_build, None);
         assert_eq!(record.worktree_root, None);
     }
 }

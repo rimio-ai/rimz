@@ -746,7 +746,8 @@ case " $* " in
   *" action list-panes --all --json "*)
     count=$(cat "$state" 2>/dev/null || printf 0)
     if [ "$count" -ge 2 ]; then printf '[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]\n';
-    else printf '[{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]\n'; fi
+    elif [ "$count" -ge 1 ]; then printf '[{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]\n';
+    else printf '[{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":120}}]\n'; fi
     exit 0 ;;
   *" action new-pane "*) count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; printf 'terminal_7\n'; exit 0 ;;
 esac
@@ -768,16 +769,15 @@ exit 0
         .collect();
     assert_eq!(adds.len(), 2, "first misdock must retry:\n{log}");
     assert!(
-        adds.iter()
-            .all(|line| line.contains("new-pane --direction right")
-                && line.contains("--borderless true")
-                && !line.contains("--near-current-pane")
-                && !line.contains("--tab-id")),
+        adds.iter().all(|line| line.contains("new-pane --tab-id 1")
+            && line.contains("--borderless true")
+            && !line.contains("--near-current-pane")
+            && !line.contains("--direction")),
         "{log}"
     );
     assert!(
-        log.contains("action go-to-tab 2"),
-        "tab position 1 maps to CLI tab 2:\n{log}"
+        !log.contains("action go-to-tab") && !log.contains("action focus-pane-id"),
+        "stable tab targeting must not mutate global focus:\n{log}"
     );
     assert!(
         log.contains("close-pane --pane-id terminal_8"),

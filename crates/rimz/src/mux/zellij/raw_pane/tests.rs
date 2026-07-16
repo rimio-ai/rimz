@@ -626,3 +626,42 @@ fn mounted_sidebar_discovery_prefers_hint_then_new_sidebar() {
         "the tab's only sidebar pane predates the add",
     );
 }
+
+#[test]
+fn wrong_tab_mount_discovery_handles_missing_and_cross_talked_hints() {
+    let panes: Vec<RawPane> = serde_json::from_str(
+        r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh"},
+          {"id": 7, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"}
+        ]"#,
+    )
+    .unwrap();
+    let before: HashSet<u64> = [1].into();
+
+    assert_eq!(
+        wrong_tab_mounted_sidebar_pane(&panes, 0, &before, Some(7)),
+        Some(7)
+    );
+    assert_eq!(
+        wrong_tab_mounted_sidebar_pane(&panes, 0, &before, None),
+        Some(7),
+        "one fresh wrong-tab sidebar is attributable without stdout",
+    );
+    assert_eq!(
+        wrong_tab_mounted_sidebar_pane(&panes, 0, &before, Some(42)),
+        Some(7),
+        "a cross-talked hint does not hide one attributable wrong-tab mount",
+    );
+    let ambiguous: Vec<RawPane> = serde_json::from_str(
+        r#"[
+          {"id": 7, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"},
+          {"id": 8, "is_plugin": false, "tab_id": 2, "title": "rimz-sidebar"}
+        ]"#,
+    )
+    .unwrap();
+    assert_eq!(
+        wrong_tab_mounted_sidebar_pane(&ambiguous, 0, &HashSet::new(), None),
+        None,
+        "ambiguous concurrent mounts are never closed by guesswork",
+    );
+}
