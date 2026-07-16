@@ -597,7 +597,7 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        let snapshot = snapshot_with_panels(workspace, vec![provider_panel("copilot", Vec::new())]);
+        let snapshot = snapshot_with_panels(workspace, vec![provider_panel("cursor", Vec::new())]);
         let mut spawn_attempts = 0;
         refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
             spawn_attempts += 1;
@@ -607,7 +607,7 @@ mod tests {
         assert!(
             !super::super::credits::read_credits_cache(&runtime.shared_credits_path())
                 .entries
-                .contains_key("copilot")
+                .contains_key("cursor")
         );
     }
 
