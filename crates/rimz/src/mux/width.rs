@@ -206,9 +206,10 @@ pub(crate) fn zellij_resize_step_cols(view_cols: u64) -> u64 {
     (view_cols / 20).max(1)
 }
 
-/// The invoking terminal's `(cols, rows)`, when stdout is attached to one.
-/// Probed by the command that can birth the session; the width feeds
-/// [`SidebarWidth::birth_size`] and the pair sizes a detached tmux birth.
+/// The invoking terminal's `(cols, rows)`, when any standard stream is
+/// attached to one (stdout, then stderr, then stdin). Probed by the command
+/// that can birth the session; the width feeds [`SidebarWidth::birth_size`]
+/// and the pair sizes a detached tmux birth.
 pub fn detect_terminal_size() -> Option<(u16, u16)> {
     terminal_size::terminal_size().map(|(width, height)| (width.0, height.0))
 }
