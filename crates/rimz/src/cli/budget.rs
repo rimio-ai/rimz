@@ -10,9 +10,7 @@ use jiff::Timestamp;
 use super::GlobalFlags;
 use rimz::config::{DayCap, MachineConfig};
 use rimz::harness::budget::{
-    BudgetSpec, BudgetWindow, account_day_spend_usd, fleet_day_spend_usd, read_account_ledger,
-    read_fleet_ledger, read_scope_state, scope_interrupted, write_account_ledger,
-    write_fleet_ledger,
+    BudgetSpec, BudgetWindow, DailyBudgetScope, read_scope_state, scope_interrupted,
 };
 use rimz::ids::AgentKind;
 use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
@@ -45,39 +43,28 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let store = crate::cli::open_store(&workspace)?;
     let now = Timestamp::now();
-    let fleet_spend = account
-        .is_none()
+    let scope = account.map_or(DailyBudgetScope::Fleet, DailyBudgetScope::Account);
+    let fleet_spend = matches!(scope, DailyBudgetScope::Fleet)
         .then(|| live_fleet_spend(&workspace, &store, globals, &config, now));
     if args.value.is_none() {
-        return inspect(
-            store.runtime_paths(),
-            &config,
-            account.as_ref(),
-            now,
-            fleet_spend,
-        );
+        return inspect(store.runtime_paths(), &config, &scope, now, fleet_spend);
     }
 
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let scope_state = read_scope_state(store.runtime_paths());
-    let was_parked = if let Some(kind) = account.as_ref() {
-        mutate_account(
-            store.runtime_paths(),
-            kind,
-            &config,
-            args.value.as_deref().expect("value checked"),
-        )?
-    } else {
-        mutate_fleet(
-            store.runtime_paths(),
-            &config,
-            args.value.as_deref().expect("value checked"),
-        )?
-    };
+    let was_parked = mutate_scope(
+        store.runtime_paths(),
+        &scope,
+        &config,
+        args.value.as_deref().expect("value checked"),
+    )?;
     let affected = snapshot.root_agents().filter(|agent| {
         !agent.agent_id.is_empty()
             && !agent.agent_id.is_provisional()
-            && account.as_ref().is_none_or(|kind| agent.kind == *kind)
+            && match &scope {
+                DailyBudgetScope::Fleet => true,
+                DailyBudgetScope::Account(kind) => agent.kind == *kind,
+            }
     });
     let continue_text = config.resume.auto_continue_text.trim();
     for agent in affected {
@@ -106,13 +93,7 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
 
-    inspect(
-        store.runtime_paths(),
-        &config,
-        account.as_ref(),
-        now,
-        fleet_spend,
-    )
+    inspect(store.runtime_paths(), &config, &scope, now, fleet_spend)
 }
 
 fn live_fleet_spend(
@@ -155,45 +136,13 @@ fn parse_raise(raw: &str) -> Result<f64> {
     Ok(delta.cap_usd)
 }
 
-fn mutate_fleet(runtime: &rimz::RuntimePaths, config: &MachineConfig, raw: &str) -> Result<bool> {
-    let mut ledger = read_fleet_ledger(runtime);
-    let was_parked = ledger.parked.is_some();
-    match raw.trim() {
-        "clear" | "off" => {
-            ledger.disabled = true;
-            ledger.raised_cap_usd = None;
-        }
-        raw if raw.starts_with('+') => {
-            let current = ledger.effective_cap_usd(config).context(
-                "cannot raise a cleared or unset fleet budget; set an absolute `/day` cap first",
-            )?;
-            ledger.raised_cap_usd = Some(checked_raise(current, parse_raise(raw)?)?);
-            ledger.disabled = false;
-        }
-        raw => {
-            if config.harness.budget.is_none() {
-                bail!(
-                    "no fleet budget is configured; turn it on with `rimz config set harness.budget 50/day`"
-                );
-            }
-            let cap = parse_day_cap(raw)?;
-            ledger.override_spec = Some(cap.as_spec());
-            ledger.raised_cap_usd = None;
-            ledger.disabled = false;
-        }
-    }
-    ledger.parked = None;
-    write_fleet_ledger(runtime, &ledger).context("writing fleet budget ledger")?;
-    Ok(was_parked)
-}
-
-fn mutate_account(
+fn mutate_scope(
     runtime: &rimz::RuntimePaths,
-    kind: &AgentKind,
+    scope: &DailyBudgetScope,
     config: &MachineConfig,
     raw: &str,
 ) -> Result<bool> {
-    let mut ledger = read_account_ledger(runtime, kind);
+    let mut ledger = scope.read_ledger(runtime);
     let was_parked = ledger.parked.is_some();
     match raw.trim() {
         "clear" | "off" => {
@@ -201,26 +150,23 @@ fn mutate_account(
             ledger.raised_cap_usd = None;
         }
         raw if raw.starts_with('+') => {
-            let current = ledger.effective_cap_usd(kind, config).with_context(|| {
-                format!(
-                    "cannot raise a cleared or unset {kind} account budget; set an absolute `/day` cap first"
-                )
-            })?;
+            let current = scope
+                .effective_cap_usd(&ledger, config)
+                .with_context(|| scope.raise_unavailable_message())?;
             ledger.raised_cap_usd = Some(checked_raise(current, parse_raise(raw)?)?);
             ledger.disabled = false;
         }
         raw => {
-            if config.accounts.budget(kind.as_str()).is_none() {
-                bail!(
-                    "no {kind} account budget is configured; turn it on with `rimz config set accounts.budget.{kind} 100/day`"
-                );
-            }
-            ledger.raised_cap_usd = Some(parse_day_cap(raw)?.as_usd());
-            ledger.disabled = false;
+            scope
+                .require_configured(config)
+                .map_err(anyhow::Error::msg)?;
+            scope.apply_absolute(&mut ledger, parse_day_cap(raw)?.as_spec());
         }
     }
     ledger.parked = None;
-    write_account_ledger(runtime, kind, &ledger).context("writing account budget ledger")?;
+    scope
+        .write_ledger(runtime, &ledger)
+        .with_context(|| format!("writing {}", scope.ledger_label()))?;
     Ok(was_parked)
 }
 
@@ -235,29 +181,35 @@ fn parse_day_cap(raw: &str) -> Result<DayCap> {
 fn inspect(
     runtime: &rimz::RuntimePaths,
     config: &MachineConfig,
-    account: Option<&AgentKind>,
+    scope: &DailyBudgetScope,
     now: Timestamp,
     fleet_spend: Option<f64>,
 ) -> Result<()> {
-    if let Some(kind) = account {
-        return render_account(runtime, kind, config, now);
-    }
-    let ledger = read_fleet_ledger(runtime);
+    let provider_needed = matches!(scope, DailyBudgetScope::Account(_))
+        || (matches!(scope, DailyBudgetScope::Fleet) && !config.accounts.budget.is_empty());
+    let provider = provider_needed.then(|| {
+        rimz::agents::spending::read_provider_spending_cache(
+            &runtime.shared_provider_spending_path(),
+        )
+    });
+    let ledger = scope.read_ledger(runtime);
     let mut kv = crate::cli::render::KeyVals::new();
-    kv.push("scope", crate::cli::render::cell("fleet"));
+    kv.push("scope", crate::cli::render::cell(scope.label()));
     kv.push(
         "cap",
-        crate::cli::render::cell(cap_label(ledger.effective_cap_usd(config))),
+        crate::cli::render::cell(cap_label(scope.effective_cap_usd(&ledger, config))),
     );
     kv.push(
         "source",
-        crate::cli::render::cell(ledger.cap_source(config).to_string()),
+        crate::cli::render::cell(scope.cap_source(&ledger, config).to_string()),
     );
     kv.push(
         "spend",
         crate::cli::render::cell(format!(
             "${:.2} today",
-            fleet_spend.unwrap_or_else(|| fleet_day_spend_usd(runtime, config, now))
+            fleet_spend.unwrap_or_else(|| {
+                scope.day_spend_usd(runtime, config, now, provider.as_ref())
+            })
         )),
     );
     kv.push(
@@ -267,20 +219,26 @@ fn inspect(
     let mut out = crate::cli::render::out();
     kv.render(&mut out)?;
 
-    if !config.accounts.budget.is_empty() {
+    if matches!(scope, DailyBudgetScope::Fleet) && !config.accounts.budget.is_empty() {
         writeln!(out)?;
         let mut table =
             crate::cli::render::Table::new(["ACCOUNT", "CAP", "SOURCE", "SPEND", "PARKED"]);
         for kind in config.accounts.budget.keys() {
             let kind = AgentKind::new_unchecked(kind);
-            let account = read_account_ledger(runtime, &kind);
+            let scope = DailyBudgetScope::Account(kind);
+            let account = scope.read_ledger(runtime);
             table.row([
-                crate::cli::render::cell(kind.to_string()),
-                crate::cli::render::cell(cap_label(account.effective_cap_usd(&kind, config))),
-                crate::cli::render::cell(account.cap_source(&kind, config).to_string()),
+                crate::cli::render::cell(
+                    scope
+                        .account_kind()
+                        .expect("account table contains account scopes")
+                        .to_string(),
+                ),
+                crate::cli::render::cell(cap_label(scope.effective_cap_usd(&account, config))),
+                crate::cli::render::cell(scope.cap_source(&account, config).to_string()),
                 crate::cli::render::cell(format!(
                     "${:.2}",
-                    account_day_spend_usd(runtime, &kind, config, now)
+                    scope.day_spend_usd(runtime, config, now, provider.as_ref())
                 )),
                 crate::cli::render::cell(if account.parked.is_some() {
                     "yes"
@@ -292,37 +250,6 @@ fn inspect(
         table.render(&mut out)?;
     }
     Ok(())
-}
-
-fn render_account(
-    runtime: &rimz::RuntimePaths,
-    kind: &AgentKind,
-    config: &MachineConfig,
-    now: Timestamp,
-) -> Result<()> {
-    let ledger = read_account_ledger(runtime, kind);
-    let mut kv = crate::cli::render::KeyVals::new();
-    kv.push("scope", crate::cli::render::cell(format!("{kind} account")));
-    kv.push(
-        "cap",
-        crate::cli::render::cell(cap_label(ledger.effective_cap_usd(kind, config))),
-    );
-    kv.push(
-        "source",
-        crate::cli::render::cell(ledger.cap_source(kind, config).to_string()),
-    );
-    kv.push(
-        "spend",
-        crate::cli::render::cell(format!(
-            "${:.2} today",
-            account_day_spend_usd(runtime, kind, config, now)
-        )),
-    );
-    kv.push(
-        "parked",
-        crate::cli::render::cell(if ledger.parked.is_some() { "yes" } else { "no" }),
-    );
-    crate::cli::render::finish(kv.render(&mut crate::cli::render::out()))
 }
 
 fn cap_label(cap: Option<f64>) -> String {

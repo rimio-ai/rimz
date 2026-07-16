@@ -229,17 +229,18 @@ fn fleet_park_projects_only_live_or_interrupted_agents() {
     let config: MachineConfig =
         toml::from_str("timezone = \"UTC\"\n[harness]\nbudget = \"5/day\"\n").expect("config");
     let now = Timestamp::from_second(200).expect("timestamp");
-    write_fleet_ledger(
-        &runtime,
-        &FleetBudgetLedger {
-            parked: Some(BudgetParkStamp {
-                at_cost: 6.0,
-                at: now,
-            }),
-            ..Default::default()
-        },
-    )
-    .expect("fleet ledger");
+    DailyBudgetScope::Fleet
+        .write_ledger(
+            &runtime,
+            &DailyBudgetLedger {
+                parked: Some(BudgetParkStamp {
+                    at_cost: 6.0,
+                    at: now,
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("fleet ledger");
 
     let state = |id: &str, status| {
         let mut state = agent(0.0, status, Some(now));
@@ -479,7 +480,7 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     )
     .expect("runtime");
     runtime.ensure_dirs().expect("dirs");
-    let fleet = FleetBudgetLedger {
+    let fleet = DailyBudgetLedger {
         override_spec: Some("20/day".parse().expect("spec")),
         raised_cap_usd: Some(25.0),
         disabled: false,
@@ -488,19 +489,26 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
             at: Timestamp::from_second(100).expect("timestamp"),
         }),
     };
-    let legacy_fleet: FleetBudgetLedger = serde_json::from_str(
+    let legacy_fleet: DailyBudgetLedger = serde_json::from_str(
         r#"{"override_spec":{"cap_usd":20.0,"window":"day"},"raised_cap_usd":25.0,"parked":{"at_cost":25.5,"at":"1970-01-01T00:01:40Z"}}"#,
     )
     .expect("legacy fleet ledger");
     assert_eq!(legacy_fleet, fleet);
-    write_fleet_ledger(&runtime, &fleet).expect("fleet write");
-    assert_eq!(read_fleet_ledger(&runtime), fleet);
-    fleet_scope_file(&runtime)
-        .merge_park::<FleetBudgetLedger>(None)
+    let fleet_scope = DailyBudgetScope::Fleet;
+    assert_eq!(
+        fleet_scope.ledger_path(&runtime),
+        runtime.root.join("budget.fleet.json")
+    );
+    fleet_scope
+        .write_ledger(&runtime, &fleet)
+        .expect("fleet write");
+    assert_eq!(fleet_scope.read_ledger(&runtime), fleet);
+    fleet_scope
+        .merge_park(&runtime, None)
         .expect("merge fleet park");
     assert_eq!(
-        read_fleet_ledger(&runtime),
-        FleetBudgetLedger {
+        fleet_scope.read_ledger(&runtime),
+        DailyBudgetLedger {
             parked: None,
             ..fleet.clone()
         },
@@ -508,12 +516,13 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     );
 
     let kind = AgentKind::new_unchecked("claude");
-    let account = AccountBudgetLedger {
+    let account = DailyBudgetLedger {
+        override_spec: None,
         raised_cap_usd: Some(100.0),
         disabled: false,
         parked: fleet.parked.clone(),
     };
-    let legacy_account: AccountBudgetLedger = serde_json::from_str(
+    let legacy_account: DailyBudgetLedger = serde_json::from_str(
         r#"{"raised_cap_usd":100.0,"parked":{"at_cost":25.5,"at":"1970-01-01T00:01:40Z"}}"#,
     )
     .expect("legacy account ledger");
@@ -526,14 +535,28 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
             .contains_key("override_spec"),
         "account ledgers do not invent a fleet override"
     );
-    write_account_ledger(&runtime, &kind, &account).expect("account write");
-    assert_eq!(read_account_ledger(&runtime, &kind), account);
-    account_scope_file(&runtime, &kind)
-        .merge_park::<AccountBudgetLedger>(None)
+    let account_scope = DailyBudgetScope::Account(kind.clone());
+    assert_eq!(
+        account_scope.ledger_path(&runtime),
+        runtime
+            .persistent_shared_root
+            .join("budget.account.claude.json")
+    );
+    account_scope
+        .write_ledger(&runtime, &account)
+        .expect("account write");
+    assert!(
+        !std::fs::read_to_string(account_scope.ledger_path(&runtime))
+            .expect("account ledger json")
+            .contains("override_spec")
+    );
+    assert_eq!(account_scope.read_ledger(&runtime), account);
+    account_scope
+        .merge_park(&runtime, None)
         .expect("merge account park");
     assert_eq!(
-        read_account_ledger(&runtime, &kind),
-        AccountBudgetLedger {
+        account_scope.read_ledger(&runtime),
+        DailyBudgetLedger {
             parked: None,
             ..account.clone()
         },
@@ -564,29 +587,46 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
 #[test]
 fn scope_ledgers_require_config_to_arm_runtime_caps() {
     let kind = AgentKind::new_unchecked("claude");
-    let fleet = FleetBudgetLedger {
+    let fleet = DailyBudgetLedger {
         override_spec: Some("20/day".parse().expect("spec")),
         raised_cap_usd: Some(25.0),
         ..Default::default()
     };
-    let account = AccountBudgetLedger {
+    let account = DailyBudgetLedger {
         raised_cap_usd: Some(100.0),
         ..Default::default()
     };
     let unarmed = MachineConfig::default();
 
-    assert_eq!(fleet.effective_cap_usd(&unarmed), None);
-    assert_eq!(fleet.cap_source(&unarmed), BudgetCapSource::None);
-    assert_eq!(account.effective_cap_usd(&kind, &unarmed), None);
-    assert_eq!(account.cap_source(&kind, &unarmed), BudgetCapSource::None);
+    let fleet_scope = DailyBudgetScope::Fleet;
+    let account_scope = DailyBudgetScope::Account(kind.clone());
+    assert_eq!(fleet_scope.effective_cap_usd(&fleet, &unarmed), None);
+    assert_eq!(
+        fleet_scope.cap_source(&fleet, &unarmed),
+        BudgetCapSource::None
+    );
+    assert_eq!(account_scope.effective_cap_usd(&account, &unarmed), None);
+    assert_eq!(
+        account_scope.cap_source(&account, &unarmed),
+        BudgetCapSource::None
+    );
 
     let armed: MachineConfig =
         toml::from_str("[harness]\nbudget = \"10/day\"\n[accounts.budget]\nclaude = \"50/day\"\n")
             .expect("config");
-    assert_eq!(fleet.effective_cap_usd(&armed), Some(25.0));
-    assert_eq!(fleet.cap_source(&armed), BudgetCapSource::Raised);
-    assert_eq!(account.effective_cap_usd(&kind, &armed), Some(100.0));
-    assert_eq!(account.cap_source(&kind, &armed), BudgetCapSource::Raised);
+    assert_eq!(fleet_scope.effective_cap_usd(&fleet, &armed), Some(25.0));
+    assert_eq!(
+        fleet_scope.cap_source(&fleet, &armed),
+        BudgetCapSource::Raised
+    );
+    assert_eq!(
+        account_scope.effective_cap_usd(&account, &armed),
+        Some(100.0)
+    );
+    assert_eq!(
+        account_scope.cap_source(&account, &armed),
+        BudgetCapSource::Raised
+    );
 }
 
 #[test]
@@ -594,7 +634,7 @@ fn unsupported_account_budget_is_ignored_by_projection_and_enforcement() {
     let kind = AgentKind::new_unchecked("antigravity");
     let config: MachineConfig =
         toml::from_str("[accounts.budget]\nantigravity = \"50/day\"\n").expect("config");
-    let ledger = AccountBudgetLedger {
+    let ledger = DailyBudgetLedger {
         raised_cap_usd: Some(100.0),
         parked: Some(BudgetParkStamp {
             at_cost: 150.0,
@@ -602,8 +642,9 @@ fn unsupported_account_budget_is_ignored_by_projection_and_enforcement() {
         }),
         ..Default::default()
     };
-    assert_eq!(ledger.effective_cap_usd(&kind, &config), None);
-    assert_eq!(ledger.cap_source(&kind, &config), BudgetCapSource::None);
+    let scope = DailyBudgetScope::Account(kind);
+    assert_eq!(scope.effective_cap_usd(&ledger, &config), None);
+    assert_eq!(scope.cap_source(&ledger, &config), BudgetCapSource::None);
 }
 
 #[test]
@@ -627,23 +668,24 @@ fn park_projection_uses_agent_then_fleet_then_account_precedence() {
     agent_ledger.parked = Some(parked.clone());
     agent_ledger.last_interrupt_at = Some(now);
     write_ledger(&runtime, &state.kind, &state.agent_id, &agent_ledger).expect("agent ledger");
-    write_fleet_ledger(
-        &runtime,
-        &FleetBudgetLedger {
-            parked: Some(parked.clone()),
-            ..Default::default()
-        },
-    )
-    .expect("fleet ledger");
-    write_account_ledger(
-        &runtime,
-        &state.kind,
-        &AccountBudgetLedger {
-            parked: Some(parked),
-            ..Default::default()
-        },
-    )
-    .expect("account ledger");
+    DailyBudgetScope::Fleet
+        .write_ledger(
+            &runtime,
+            &DailyBudgetLedger {
+                parked: Some(parked.clone()),
+                ..Default::default()
+            },
+        )
+        .expect("fleet ledger");
+    DailyBudgetScope::Account(state.kind.clone())
+        .write_ledger(
+            &runtime,
+            &DailyBudgetLedger {
+                parked: Some(parked),
+                ..Default::default()
+            },
+        )
+        .expect("account ledger");
     write_scope_state(
         &runtime,
         &BudgetScopeState {
@@ -668,9 +710,11 @@ fn park_projection_uses_agent_then_fleet_then_account_precedence() {
         .expect("remove agent ledger");
     assert_eq!(projected_scope(&state), Some(BudgetScope::Fleet));
 
-    let mut fleet = read_fleet_ledger(&runtime);
+    let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime);
     fleet.disabled = true;
-    write_fleet_ledger(&runtime, &fleet).expect("disable fleet");
+    DailyBudgetScope::Fleet
+        .write_ledger(&runtime, &fleet)
+        .expect("disable fleet");
     assert_eq!(projected_scope(&state), Some(BudgetScope::Account));
 }
 
@@ -709,9 +753,11 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
             .is_some_and(|reason| reason.contains("fleet budget exhausted"))
     );
 
-    let mut fleet = read_fleet_ledger(&runtime);
+    let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime);
     fleet.disabled = true;
-    write_fleet_ledger(&runtime, &fleet).expect("disable fleet");
+    DailyBudgetScope::Fleet
+        .write_ledger(&runtime, &fleet)
+        .expect("disable fleet");
     let spending = crate::agents::spending::Spending::default();
     let provider_day = BTreeMap::from([(
         "claude".to_owned(),

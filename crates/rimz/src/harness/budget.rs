@@ -154,9 +154,16 @@ impl BudgetPark {
     }
 }
 
-/// Runtime overrides and park state for one workspace's daily fleet cap.
+/// One workspace-fleet or provider-login daily budget scope.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DailyBudgetScope {
+    Fleet,
+    Account(AgentKind),
+}
+
+/// Runtime override and park state shared by daily budget scopes.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct FleetBudgetLedger {
+pub struct DailyBudgetLedger {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub override_spec: Option<BudgetSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,41 +174,203 @@ pub struct FleetBudgetLedger {
     pub parked: Option<BudgetParkStamp>,
 }
 
-impl FleetBudgetLedger {
-    pub fn effective_cap_usd(&self, config: &MachineConfig) -> Option<f64> {
-        config.harness.budget?;
-        if self.disabled {
+impl DailyBudgetScope {
+    pub fn effective_cap_usd(
+        &self,
+        ledger: &DailyBudgetLedger,
+        config: &MachineConfig,
+    ) -> Option<f64> {
+        let configured = self.configured_cap_usd(config)?;
+        if ledger.disabled {
             return None;
         }
-        self.raised_cap_usd
-            .or_else(|| self.override_spec.map(|spec| spec.cap_usd))
-            .or_else(|| config.harness.budget.map(|cap| cap.as_usd()))
+        ledger.raised_cap_usd.or(match self {
+            Self::Fleet => ledger
+                .override_spec
+                .map(|spec| spec.cap_usd)
+                .or(Some(configured)),
+            Self::Account(_) => Some(configured),
+        })
     }
 
-    pub fn cap_source(&self, config: &MachineConfig) -> BudgetCapSource {
-        if config.harness.budget.is_none() {
+    pub fn cap_source(
+        &self,
+        ledger: &DailyBudgetLedger,
+        config: &MachineConfig,
+    ) -> BudgetCapSource {
+        if self.configured_cap_usd(config).is_none() {
             BudgetCapSource::None
-        } else if self.disabled {
+        } else if ledger.disabled {
             BudgetCapSource::Cleared
-        } else if self.raised_cap_usd.is_some() {
+        } else if ledger.raised_cap_usd.is_some() {
             BudgetCapSource::Raised
-        } else if self.override_spec.is_some() {
+        } else if matches!(self, Self::Fleet) && ledger.override_spec.is_some() {
             BudgetCapSource::Override
         } else {
             BudgetCapSource::Config
         }
     }
-}
 
-/// Machine-shared runtime state for one provider login's daily cap.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct AccountBudgetLedger {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raised_cap_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub disabled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parked: Option<BudgetParkStamp>,
+    fn configured_cap_usd(&self, config: &MachineConfig) -> Option<f64> {
+        match self {
+            Self::Fleet => config.harness.budget.map(|cap| cap.as_usd()),
+            Self::Account(kind) => {
+                crate::agents::descriptor_by_kind(kind.as_str())?
+                    .has_authoritative_account_spend()
+                    .then_some(())?;
+                config
+                    .accounts
+                    .budget(kind.as_str())
+                    .map(|cap| cap.as_usd())
+            }
+        }
+    }
+
+    pub fn apply_absolute(&self, ledger: &mut DailyBudgetLedger, cap: BudgetSpec) {
+        match self {
+            Self::Fleet => {
+                ledger.override_spec = Some(cap);
+                ledger.raised_cap_usd = None;
+            }
+            Self::Account(_) => {
+                ledger.override_spec = None;
+                ledger.raised_cap_usd = Some(cap.cap_usd);
+            }
+        }
+        ledger.disabled = false;
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Fleet => "fleet".to_owned(),
+            Self::Account(kind) => format!("{kind} account"),
+        }
+    }
+
+    pub fn account_kind(&self) -> Option<&AgentKind> {
+        match self {
+            Self::Fleet => None,
+            Self::Account(kind) => Some(kind),
+        }
+    }
+
+    pub fn ledger_label(&self) -> &'static str {
+        match self {
+            Self::Fleet => "fleet budget ledger",
+            Self::Account(_) => "account budget ledger",
+        }
+    }
+
+    pub fn require_configured(&self, config: &MachineConfig) -> Result<(), String> {
+        if self.configured_cap_usd(config).is_some() {
+            return Ok(());
+        }
+        Err(match self {
+            Self::Fleet => {
+                "no fleet budget is configured; turn it on with `rimz config set harness.budget 50/day`"
+                    .to_owned()
+            }
+            Self::Account(kind) => format!(
+                "no {kind} account budget is configured; turn it on with `rimz config set accounts.budget.{kind} 100/day`"
+            ),
+        })
+    }
+
+    pub fn raise_unavailable_message(&self) -> String {
+        match self {
+            Self::Fleet => {
+                "cannot raise a cleared or unset fleet budget; set an absolute `/day` cap first"
+                    .to_owned()
+            }
+            Self::Account(kind) => format!(
+                "cannot raise a cleared or unset {kind} account budget; set an absolute `/day` cap first"
+            ),
+        }
+    }
+
+    fn exhausted_reason(&self, spend_usd: f64, cap_usd: f64) -> String {
+        let spend = fmt_spend(spend_usd, cap_usd, BudgetWindow::Day);
+        match self {
+            Self::Fleet => {
+                format!("fleet budget exhausted ({spend}); use `rimz budget` to raise or clear it")
+            }
+            Self::Account(kind) => format!(
+                "{kind} account budget exhausted ({spend}); use `rimz budget --account {kind}` to raise or clear it"
+            ),
+        }
+    }
+
+    pub fn ledger_path(&self, runtime: &RuntimePaths) -> PathBuf {
+        self.file(runtime).path
+    }
+
+    pub fn day_spend_usd(
+        &self,
+        runtime: &RuntimePaths,
+        config: &MachineConfig,
+        now: Timestamp,
+        provider: Option<&crate::agents::spending::ProviderSpendingCache>,
+    ) -> f64 {
+        let cutoff = local_day_cutoff_secs(now, &config.time_zone());
+        match self {
+            Self::Fleet => current_workspace_day(runtime, cutoff).unwrap_or_default(),
+            Self::Account(kind) => provider
+                .and_then(|provider| provider_day_usd(provider, cutoff, kind.as_str()))
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn read_ledger(&self, runtime: &RuntimePaths) -> DailyBudgetLedger {
+        let mut ledger: DailyBudgetLedger = self.file(runtime).read();
+        if matches!(self, Self::Account(_)) {
+            ledger.override_spec = None;
+        }
+        ledger
+    }
+
+    pub fn write_ledger(
+        &self,
+        runtime: &RuntimePaths,
+        ledger: &DailyBudgetLedger,
+    ) -> Result<(), ScopeLedgerWriteError> {
+        let file = self.file(runtime);
+        match self {
+            Self::Fleet => file.write(ledger),
+            Self::Account(_) => {
+                let mut account = ledger.clone();
+                account.override_spec = None;
+                file.write(&account)
+            }
+        }
+    }
+
+    fn merge_park(
+        &self,
+        runtime: &RuntimePaths,
+        parked: Option<BudgetParkStamp>,
+    ) -> Result<(), ScopeLedgerWriteError> {
+        self.file(runtime).merge_park(self, parked)
+    }
+
+    fn file(&self, runtime: &RuntimePaths) -> ScopeLedgerFile {
+        match self {
+            Self::Fleet => ScopeLedgerFile {
+                path: runtime.root.join("budget.fleet.json"),
+                lock_path: runtime.root.join("budget.fleet.lock"),
+            },
+            Self::Account(kind) => {
+                let component = account_ledger_component(kind);
+                ScopeLedgerFile {
+                    path: runtime
+                        .persistent_shared_root
+                        .join(format!("budget.account.{component}.json")),
+                    lock_path: runtime
+                        .shared_root
+                        .join(format!("budget.account.{component}.lock")),
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -210,39 +379,6 @@ pub enum ScopeLedgerWriteError {
     Lock(#[from] crate::store::lock::LockErr),
     #[error(transparent)]
     Write(#[from] crate::store::atomic::AtomicErr),
-}
-
-impl AccountBudgetLedger {
-    pub fn effective_cap_usd(&self, kind: &AgentKind, config: &MachineConfig) -> Option<f64> {
-        crate::agents::descriptor_by_kind(kind.as_str())?
-            .has_authoritative_account_spend()
-            .then_some(())?;
-        config.accounts.budget(kind.as_str())?;
-        if self.disabled {
-            return None;
-        }
-        self.raised_cap_usd.or_else(|| {
-            config
-                .accounts
-                .budget(kind.as_str())
-                .map(|cap| cap.as_usd())
-        })
-    }
-
-    pub fn cap_source(&self, kind: &AgentKind, config: &MachineConfig) -> BudgetCapSource {
-        if !crate::agents::descriptor_by_kind(kind.as_str()).is_some_and(
-            crate::agents::descriptor::AgentDescriptor::has_authoritative_account_spend,
-        ) || config.accounts.budget(kind.as_str()).is_none()
-        {
-            BudgetCapSource::None
-        } else if self.disabled {
-            BudgetCapSource::Cleared
-        } else if self.raised_cap_usd.is_some() {
-            BudgetCapSource::Raised
-        } else {
-            BudgetCapSource::Config
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -492,8 +628,8 @@ pub fn project_parks(
 ) {
     let now = snapshot.now;
     let zone = config.time_zone();
-    let fleet = read_fleet_ledger(runtime);
-    let fleet_cap = fleet.effective_cap_usd(config);
+    let fleet_scope = DailyBudgetScope::Fleet;
+    let fleet = fleet_scope.read_ledger(runtime);
     let scope_state = read_scope_state(runtime);
     let provider = crate::agents::spending::read_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
@@ -509,16 +645,26 @@ pub fn project_parks(
         if !pause_applies(agent, scope_interrupted(&scope_state, agent)) {
             continue;
         }
-        if let Some(park) = fleet_scope_park(&fleet, fleet_cap, runtime, day_cutoff, now, &zone) {
+        if let Some(park) = daily_scope_park(
+            &fleet_scope,
+            &fleet,
+            runtime,
+            config,
+            &provider,
+            day_cutoff,
+            now,
+            &zone,
+        ) {
             agent.budget_park = Some(park);
             continue;
         }
         let account = accounts
             .entry(agent.kind.clone())
-            .or_insert_with(|| read_account_ledger(runtime, &agent.kind));
-        agent.budget_park = account_scope_park(
+            .or_insert_with(|| DailyBudgetScope::Account(agent.kind.clone()).read_ledger(runtime));
+        agent.budget_park = daily_scope_park(
+            &DailyBudgetScope::Account(agent.kind.clone()),
             account,
-            &agent.kind,
+            runtime,
             config,
             &provider,
             day_cutoff,
@@ -555,49 +701,38 @@ fn agent_scope_park(
     })
 }
 
-fn fleet_scope_park(
-    fleet: &FleetBudgetLedger,
-    fleet_cap: Option<f64>,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one daily-scope projection boundary"
+)]
+fn daily_scope_park(
+    scope: &DailyBudgetScope,
+    ledger: &DailyBudgetLedger,
     runtime: &RuntimePaths,
-    day_cutoff: Option<u64>,
-    now: Timestamp,
-    zone: &TimeZone,
-) -> Option<BudgetPark> {
-    let parked = fleet.parked.as_ref()?;
-    let cap_usd = fleet_cap?;
-    let spend_usd = current_workspace_day(runtime, day_cutoff)
-        .map_or(parked.at_cost, |spend| spend.max(parked.at_cost));
-    Some(BudgetPark {
-        cap_usd,
-        spend_usd,
-        window: BudgetWindow::Day,
-        at: parked.at,
-        scope: BudgetScope::Fleet,
-        account_kind: None,
-        resets_at: next_day_start(now, zone),
-    })
-}
-
-fn account_scope_park(
-    account: &AccountBudgetLedger,
-    kind: &AgentKind,
     config: &MachineConfig,
     provider: &crate::agents::spending::ProviderSpendingCache,
     day_cutoff: Option<u64>,
     now: Timestamp,
     zone: &TimeZone,
 ) -> Option<BudgetPark> {
-    let parked = account.parked.as_ref()?;
-    let cap_usd = account.effective_cap_usd(kind, config)?;
-    let spend_usd = provider_day_usd(provider, day_cutoff, kind.as_str())
-        .map_or(parked.at_cost, |spend| spend.max(parked.at_cost));
+    let parked = ledger.parked.as_ref()?;
+    let cap_usd = scope.effective_cap_usd(ledger, config)?;
+    let spend = match scope {
+        DailyBudgetScope::Fleet => current_workspace_day(runtime, day_cutoff),
+        DailyBudgetScope::Account(kind) => provider_day_usd(provider, day_cutoff, kind.as_str()),
+    };
+    let spend_usd = spend.map_or(parked.at_cost, |spend| spend.max(parked.at_cost));
+    let (park_scope, account_kind) = match scope {
+        DailyBudgetScope::Fleet => (BudgetScope::Fleet, None),
+        DailyBudgetScope::Account(kind) => (BudgetScope::Account, Some(kind.clone())),
+    };
     Some(BudgetPark {
         cap_usd,
         spend_usd,
         window: BudgetWindow::Day,
         at: parked.at,
-        scope: BudgetScope::Account,
-        account_kind: Some(kind.clone()),
+        scope: park_scope,
+        account_kind,
         resets_at: next_day_start(now, zone),
     })
 }
@@ -632,18 +767,11 @@ pub fn enforce(
         }
     }
 
-    if scopes.fleet.parked != scopes.fleet_parked_before
-        && let Err(err) =
-            fleet_scope_file(runtime).merge_park::<FleetBudgetLedger>(scopes.fleet.parked)
-    {
-        warn_write("fleet budget ledger", err);
-    }
-    for (kind, account) in scopes.accounts {
-        if account.ledger.parked != account.parked_before
-            && let Err(err) = account_scope_file(runtime, &kind)
-                .merge_park::<AccountBudgetLedger>(account.ledger.parked)
+    for daily in scopes.daily {
+        if daily.ledger.parked != daily.parked_before
+            && let Err(err) = daily.scope.merge_park(runtime, daily.ledger.parked.clone())
         {
-            warn_write("account budget ledger", err);
+            warn_write(&format!("{} budget ledger", daily.scope.label()), err);
         }
     }
     if scope_state != scope_before
@@ -653,17 +781,15 @@ pub fn enforce(
     }
 }
 
-struct AccountScopeVerdict {
-    ledger: AccountBudgetLedger,
+struct DailyScopeVerdict {
+    scope: DailyBudgetScope,
+    ledger: DailyBudgetLedger,
     parked_before: Option<BudgetParkStamp>,
     verdict: BudgetVerdict,
 }
 
 struct ScopeVerdicts {
-    fleet: FleetBudgetLedger,
-    fleet_parked_before: Option<BudgetParkStamp>,
-    fleet_verdict: BudgetVerdict,
-    accounts: BTreeMap<AgentKind, AccountScopeVerdict>,
+    daily: Vec<DailyScopeVerdict>,
 }
 
 fn evaluate_scopes(
@@ -678,9 +804,10 @@ fn evaluate_scopes(
     } else {
         current_workspace_day(runtime, day_cutoff).unwrap_or_default()
     };
-    let mut fleet = read_fleet_ledger(runtime);
+    let fleet_scope = DailyBudgetScope::Fleet;
+    let mut fleet = fleet_scope.read_ledger(runtime);
     let fleet_parked_before = fleet.parked.clone();
-    let fleet_cap = fleet.effective_cap_usd(config);
+    let fleet_cap = fleet_scope.effective_cap_usd(&fleet, config);
     let fleet_verdict = evaluate_daily_scope(&mut fleet.parked, fleet_cap, fleet_spend, now);
 
     let provider = crate::agents::spending::read_provider_spending_cache(
@@ -690,29 +817,28 @@ fn evaluate_scopes(
         .root_agents()
         .map(|agent| agent.kind.clone())
         .collect::<BTreeSet<_>>();
-    let mut accounts = BTreeMap::new();
+    let mut daily = vec![DailyScopeVerdict {
+        scope: fleet_scope,
+        ledger: fleet,
+        parked_before: fleet_parked_before,
+        verdict: fleet_verdict,
+    }];
     for kind in root_kinds {
-        let mut ledger = read_account_ledger(runtime, &kind);
+        let scope = DailyBudgetScope::Account(kind.clone());
+        let mut ledger = scope.read_ledger(runtime);
         let parked_before = ledger.parked.clone();
-        let cap = ledger.effective_cap_usd(&kind, config);
+        let cap = scope.effective_cap_usd(&ledger, config);
         let spend = provider_day_usd(&provider, day_cutoff, kind.as_str()).unwrap_or_default();
         let verdict = evaluate_daily_scope(&mut ledger.parked, cap, spend, now);
-        accounts.insert(
-            kind,
-            AccountScopeVerdict {
-                ledger,
-                parked_before,
-                verdict,
-            },
-        );
+        daily.push(DailyScopeVerdict {
+            scope,
+            ledger,
+            parked_before,
+            verdict,
+        });
     }
 
-    ScopeVerdicts {
-        fleet,
-        fleet_parked_before,
-        fleet_verdict,
-        accounts,
-    }
+    ScopeVerdicts { daily }
 }
 
 struct EnforceCtx<'a> {
@@ -933,15 +1059,13 @@ fn evaluate_scope_waiver(
 }
 
 fn binding_scope_park(scopes: &ScopeVerdicts, kind: &AgentKind) -> Option<Timestamp> {
-    let fleet = matches!(scopes.fleet_verdict, BudgetVerdict::Park { .. })
-        .then(|| scopes.fleet.parked.as_ref().map(|park| park.at))
-        .flatten();
-    let account = scopes.accounts.get(kind).and_then(|account| {
-        matches!(account.verdict, BudgetVerdict::Park { .. })
-            .then(|| account.ledger.parked.as_ref().map(|park| park.at))
+    scopes.daily.iter().find_map(|daily| {
+        let applies = matches!(daily.scope, DailyBudgetScope::Fleet)
+            || matches!(&daily.scope, DailyBudgetScope::Account(account) if account == kind);
+        (applies && matches!(daily.verdict, BudgetVerdict::Park { .. }))
+            .then(|| daily.ledger.parked.as_ref().map(|park| park.at))
             .flatten()
-    });
-    fleet.or(account)
+    })
 }
 
 fn active_waiver(agent: &AgentState, waived: Option<Timestamp>) -> bool {
@@ -1091,24 +1215,6 @@ pub fn workspace_day_cache(
     current_workspace_day_cache(runtime, cutoff).unwrap_or_default()
 }
 
-pub fn fleet_day_spend_usd(runtime: &RuntimePaths, config: &MachineConfig, now: Timestamp) -> f64 {
-    let cutoff = local_day_cutoff_secs(now, &config.time_zone());
-    current_workspace_day(runtime, cutoff).unwrap_or_default()
-}
-
-pub fn account_day_spend_usd(
-    runtime: &RuntimePaths,
-    kind: &AgentKind,
-    config: &MachineConfig,
-    now: Timestamp,
-) -> f64 {
-    let cutoff = local_day_cutoff_secs(now, &config.time_zone());
-    let provider = crate::agents::spending::read_provider_spending_cache(
-        &runtime.shared_provider_spending_path(),
-    );
-    provider_day_usd(&provider, cutoff, kind.as_str()).unwrap_or_default()
-}
-
 /// Attach daily-cap summaries after the spending overlay has stamped the
 /// room's live local-day figure.
 pub fn project_budget_views(
@@ -1119,19 +1225,23 @@ pub fn project_budget_views(
 ) {
     let now = snapshot.now;
     let cutoff = local_day_cutoff_secs(now, &config.time_zone());
-    let fleet = read_fleet_ledger(runtime);
-    snapshot.fleet_budget = fleet.effective_cap_usd(config).map(|cap_usd| {
-        let spend_usd = snapshot.fleet_day_spend_usd.unwrap_or_default();
-        crate::DailyBudgetView {
-            cap_usd,
-            spend_usd,
-            parked: fleet.parked.is_some() && spend_usd >= cap_usd,
-        }
-    });
+    let fleet_scope = DailyBudgetScope::Fleet;
+    let fleet = fleet_scope.read_ledger(runtime);
+    snapshot.fleet_budget = fleet_scope
+        .effective_cap_usd(&fleet, config)
+        .map(|cap_usd| {
+            let spend_usd = snapshot.fleet_day_spend_usd.unwrap_or_default();
+            crate::DailyBudgetView {
+                cap_usd,
+                spend_usd,
+                parked: fleet.parked.is_some() && spend_usd >= cap_usd,
+            }
+        });
     for panel in &mut snapshot.providers {
         let kind = AgentKind::new_unchecked(panel.kind.clone());
-        let ledger = read_account_ledger(runtime, &kind);
-        panel.day_budget = ledger.effective_cap_usd(&kind, config).map(|cap_usd| {
+        let scope = DailyBudgetScope::Account(kind);
+        let ledger = scope.read_ledger(runtime);
+        panel.day_budget = scope.effective_cap_usd(&ledger, config).map(|cap_usd| {
             let spend_usd = provider_day_usd(provider, cutoff, &panel.kind).unwrap_or_default();
             crate::DailyBudgetView {
                 cap_usd,
@@ -1154,37 +1264,33 @@ pub fn scope_gate(
     let cutoff = local_day_start(now, &zone)?;
     let cutoff_secs = local_day_cutoff_secs(now, &zone)?;
 
-    let fleet = read_fleet_ledger(runtime);
-    if let Some(cap) = fleet.effective_cap_usd(config) {
-        let mut spend = current_workspace_day(runtime, Some(cutoff_secs)).unwrap_or_default();
-        if let Some(parked) = fleet.parked.as_ref().filter(|parked| parked.at >= cutoff) {
+    let mut provider = None;
+    for scope in [
+        DailyBudgetScope::Fleet,
+        DailyBudgetScope::Account(kind.clone()),
+    ] {
+        let ledger = scope.read_ledger(runtime);
+        let Some(cap) = scope.effective_cap_usd(&ledger, config) else {
+            continue;
+        };
+        let mut spend = match &scope {
+            DailyBudgetScope::Fleet => {
+                current_workspace_day(runtime, Some(cutoff_secs)).unwrap_or_default()
+            }
+            DailyBudgetScope::Account(kind) => {
+                let provider = provider.get_or_insert_with(|| {
+                    crate::agents::spending::read_provider_spending_cache(
+                        &runtime.shared_provider_spending_path(),
+                    )
+                });
+                provider_day_usd(provider, Some(cutoff_secs), kind.as_str()).unwrap_or_default()
+            }
+        };
+        if let Some(parked) = ledger.parked.as_ref().filter(|parked| parked.at >= cutoff) {
             spend = spend.max(parked.at_cost);
         }
         if spend >= cap {
-            return Some(format!(
-                "fleet budget exhausted ({}); use `rimz budget` to raise or clear it",
-                fmt_spend(spend, cap, BudgetWindow::Day)
-            ));
-        }
-    }
-
-    let account = read_account_ledger(runtime, kind);
-    if let Some(cap) = account.effective_cap_usd(kind, config) {
-        let provider = crate::agents::spending::read_provider_spending_cache(
-            &runtime.shared_provider_spending_path(),
-        );
-        let mut spend =
-            provider_day_usd(&provider, Some(cutoff_secs), kind.as_str()).unwrap_or_default();
-        if let Some(parked) = account.parked.as_ref().filter(|parked| parked.at >= cutoff) {
-            spend = spend.max(parked.at_cost);
-        }
-        if spend >= cap {
-            return Some(format!(
-                "{} account budget exhausted ({}); use `rimz budget --account {}` to raise or clear it",
-                kind,
-                fmt_spend(spend, cap, BudgetWindow::Day),
-                kind
-            ));
+            return Some(scope.exhausted_reason(spend, cap));
         }
     }
     None
@@ -1289,44 +1395,6 @@ pub fn write_ledger(
     write_temp_then_rename_cache(&path, ledger)
 }
 
-pub fn fleet_ledger_path(runtime: &RuntimePaths) -> PathBuf {
-    fleet_scope_file(runtime).path
-}
-
-fn fleet_scope_file(runtime: &RuntimePaths) -> ScopeLedgerFile {
-    ScopeLedgerFile {
-        path: runtime.root.join("budget.fleet.json"),
-        lock_path: runtime.root.join("budget.fleet.lock"),
-    }
-}
-
-pub fn read_fleet_ledger(runtime: &RuntimePaths) -> FleetBudgetLedger {
-    fleet_scope_file(runtime).read()
-}
-
-pub fn write_fleet_ledger(
-    runtime: &RuntimePaths,
-    ledger: &FleetBudgetLedger,
-) -> Result<(), ScopeLedgerWriteError> {
-    fleet_scope_file(runtime).write(ledger)
-}
-
-pub fn account_ledger_path(runtime: &RuntimePaths, kind: &AgentKind) -> PathBuf {
-    account_scope_file(runtime, kind).path
-}
-
-fn account_scope_file(runtime: &RuntimePaths, kind: &AgentKind) -> ScopeLedgerFile {
-    let component = account_ledger_component(kind);
-    ScopeLedgerFile {
-        path: runtime
-            .persistent_shared_root
-            .join(format!("budget.account.{component}.json")),
-        lock_path: runtime
-            .shared_root
-            .join(format!("budget.account.{component}.lock")),
-    }
-}
-
 fn account_ledger_component(kind: &AgentKind) -> String {
     if kind
         .as_str()
@@ -1339,18 +1407,6 @@ fn account_ledger_component(kind: &AgentKind) -> String {
         hasher.update(kind.as_str().as_bytes());
         format!("kind-{}", &hex::encode(hasher.finalize())[..16])
     }
-}
-
-pub fn read_account_ledger(runtime: &RuntimePaths, kind: &AgentKind) -> AccountBudgetLedger {
-    account_scope_file(runtime, kind).read()
-}
-
-pub fn write_account_ledger(
-    runtime: &RuntimePaths,
-    kind: &AgentKind,
-    ledger: &AccountBudgetLedger,
-) -> Result<(), ScopeLedgerWriteError> {
-    account_scope_file(runtime, kind).write(ledger)
 }
 
 struct ScopeLedgerFile {
@@ -1372,35 +1428,23 @@ impl ScopeLedgerFile {
         Ok(())
     }
 
-    fn merge_park<T>(&self, parked: Option<BudgetParkStamp>) -> Result<(), ScopeLedgerWriteError>
-    where
-        T: DeserializeOwned + Default + Serialize + HasParked,
-    {
+    fn merge_park(
+        &self,
+        scope: &DailyBudgetScope,
+        parked: Option<BudgetParkStamp>,
+    ) -> Result<(), ScopeLedgerWriteError> {
         let _guard = crate::store::lock::WorkspaceLock::acquire(&self.lock_path)?;
-        let mut current: T = self.read();
-        current.set_parked(parked);
+        let mut current: DailyBudgetLedger = self.read();
+        if matches!(scope, DailyBudgetScope::Account(_)) {
+            current.override_spec = None;
+        }
+        current.parked = parked;
         self.write_unlocked(&current)?;
         Ok(())
     }
 
     fn write_unlocked<T: Serialize>(&self, value: &T) -> crate::store::atomic::Result<()> {
         write_temp_then_rename_cache(&self.path, value)
-    }
-}
-
-trait HasParked {
-    fn set_parked(&mut self, parked: Option<BudgetParkStamp>);
-}
-
-impl HasParked for FleetBudgetLedger {
-    fn set_parked(&mut self, parked: Option<BudgetParkStamp>) {
-        self.parked = parked;
-    }
-}
-
-impl HasParked for AccountBudgetLedger {
-    fn set_parked(&mut self, parked: Option<BudgetParkStamp>) {
-        self.parked = parked;
     }
 }
 

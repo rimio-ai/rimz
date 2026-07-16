@@ -94,7 +94,8 @@ fn unsupported_account_caps_leave_config_and_ledger_untouched() {
     );
 
     let cursor = AgentKind::new_unchecked("cursor");
-    let ledger = rimz::harness::budget::account_ledger_path(&env.runtime_paths(), &cursor);
+    let ledger =
+        rimz::harness::budget::DailyBudgetScope::Account(cursor).ledger_path(&env.runtime_paths());
     env.rimz()
         .args(["budget", "--account", "cursor", "100/day", "--no-continue"])
         .assert()
