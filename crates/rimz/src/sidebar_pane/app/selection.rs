@@ -360,14 +360,19 @@ fn toggle_group_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, group_key
     if !ui.expanded_groups.remove(&group_key) {
         ui.expanded_groups.insert(group_key);
     }
-    ui.manual_scroll = None;
     anchor_selection(ui, snapshot);
+    // A toggle reshapes the body below the clicked line, so hold the viewport
+    // instead of snapping back to the selected card. Capture the post-toggle
+    // selection because collapsing a selected group can clear it.
+    ui.manual_scroll = Some(ManualScroll {
+        selection_at_start: ui.selected_pane.clone(),
+    });
 }
 
 /// Flip the make-up filter a bucket click asked for: the active bucket clears
 /// back to show-all, any other becomes the pick. A pure toggle — no captured
 /// baseline, unlike [`DashboardTab`], because there is no derived default to
-/// fall back to. The body reshapes, so the explicit pick ends any wheel pin
+/// fall back to. The body reshapes, so the explicit pick ends any viewport pin
 /// (the [`select_row`] discipline) and the selection re-anchors at once: a
 /// highlight whose row the filter hides drops to a clamped index, re-seated by
 /// the held baseline when the filter clears.
@@ -435,7 +440,7 @@ fn select_adjacent_worktree(
 /// (`selected_pane`) plus its derived render index. A pure positioner for the
 /// arrow-key browse; the jump actions resolve their target through
 /// the active roster instead and never move the highlight. An explicit pick ends
-/// any wheel pin, so the viewport snaps back to following the selection.
+/// any viewport pin, so the viewport snaps back to following the selection.
 fn select_row_in(ui: &mut UiState, roster: &VisibleRoster<'_>, index: usize) {
     ui.selected_index = index;
     ui.selected_pane = roster.pane_at_ordinal(index);

@@ -123,6 +123,7 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(ui.expanded_groups.contains(&group_key));
+    assert!(ui.manual_scroll.is_some(), "the toggle pins the viewport");
     assert_eq!(
         roster_len(&snapshot, None, &ui.expanded_groups),
         9,
@@ -145,6 +146,118 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     let outcome = handle_mouse_click(0, less_line, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(!ui.expanded_groups.contains(&group_key));
+}
+
+#[test]
+fn group_toggle_preserves_a_wheel_pin_and_offset() {
+    let ws = workspace();
+    let selected = PaneId::from_parts(MuxName::Zellij, "terminal_0");
+    let panes = (0..9)
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .collect::<Vec<_>>();
+    let snapshot = snapshot_with_panes(&ws, panes);
+    let group_key = snapshot.worktree_groups[0].key.clone();
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+    let theme = ui.theme(&snapshot.theme);
+    ui.interactions =
+        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
+    handle_scroll(true, &mut ui);
+    let offset = ui.scroll_offset;
+    let (_, more_line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
+        .expect("more hit");
+
+    handle_mouse_click(0, more_line, &mut ui, &snapshot);
+
+    assert!(ui.expanded_groups.contains(&group_key));
+    assert_eq!(ui.scroll_offset, offset);
+    assert_eq!(
+        ui.manual_scroll,
+        Some(ManualScroll {
+            selection_at_start: Some(selected),
+        })
+    );
+}
+
+#[test]
+fn group_toggle_installs_a_pin_that_ends_on_selection_change() {
+    let ws = workspace();
+    let selected = PaneId::from_parts(MuxName::Zellij, "terminal_0");
+    let next = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let panes = (0..9)
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .collect::<Vec<_>>();
+    let snapshot = snapshot_with_panes(&ws, panes);
+    let group_key = snapshot.worktree_groups[0].key.clone();
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+    let theme = ui.theme(&snapshot.theme);
+    ui.interactions =
+        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
+    let (_, more_line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleGroup(group_key))
+        .expect("more hit");
+
+    handle_mouse_click(0, more_line, &mut ui, &snapshot);
+
+    assert_eq!(
+        ui.manual_scroll,
+        Some(ManualScroll {
+            selection_at_start: Some(selected),
+        })
+    );
+    reconcile_selection(&mut ui, &snapshot, Some(next));
+    assert_eq!(ui.manual_scroll, None);
+}
+
+#[test]
+fn collapsing_the_selected_group_pins_on_the_cleared_selection() {
+    let ws = workspace();
+    let selected = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let mut snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_0", "tab_0", false),
+            pane("terminal_1", "tab_0", false),
+        ],
+    );
+    snapshot.worktree_groups[0].finished = true;
+    let group_key = snapshot.worktree_groups[0].key.clone();
+    let mut ui = UiState {
+        baseline_pane: Some(selected.clone()),
+        browse: Some(browse(&selected, Some(&selected))),
+        expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
+        ..Default::default()
+    };
+    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+    assert_eq!(ui.selected_pane, Some(selected.clone()));
+    let theme = ui.theme(&snapshot.theme);
+    ui.interactions =
+        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
+    let (_, header_line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
+        .expect("finished group header hit");
+
+    handle_mouse_click(0, header_line, &mut ui, &snapshot);
+
+    assert!(!ui.expanded_groups.contains(&group_key));
+    assert_eq!(ui.selected_pane, None);
+    assert_eq!(
+        ui.manual_scroll,
+        Some(ManualScroll {
+            selection_at_start: None,
+        })
+    );
+    reconcile_selection(&mut ui, &snapshot, Some(selected));
+    assert_eq!(ui.selected_pane, None);
+    assert!(
+        ui.manual_scroll.is_some(),
+        "the fold keeps the viewport pin"
+    );
 }
 
 #[test]

@@ -83,7 +83,7 @@ pub struct UiState {
     /// then consumes the flag. A sidebar-initiated jump clears it in
     /// `apply_focus_anchor`, because the fresh anchor freezes the clicked row.
     pub(crate) focus_group_reveal: bool,
-    /// The transient wheel-scroll pin riding above the auto-follow, or `None`
+    /// The transient viewport pin riding above the auto-follow, or `None`
     /// while the viewport follows the selection (see [`ManualScroll`]).
     pub(crate) manual_scroll: Option<ManualScroll>,
     /// The row id a manual mark-unread just reopened while it is the focused
@@ -228,11 +228,11 @@ pub(crate) struct Browse {
     pub(crate) baseline_at_start: Option<PaneId>,
 }
 
-/// Wheel scroll: pins the viewport offset WITHOUT moving the selection, so the
-/// user can peek at cards beyond the fold. Holds until the selection genuinely
-/// changes from `selection_at_start` — the value captured when the scroll began
-/// — then the viewport snaps back to following the selected card. The browse
-/// twin, one layer down: browse pins *which card*, this pins *which window*.
+/// Holds the viewport window against selection auto-follow, anchored on the
+/// selection at pin time. Wheel scroll, an unread-banner jump, and a group
+/// toggle write the pin; a genuine selection change ends it and resumes
+/// following the selected card. The browse twin, one layer down: browse pins
+/// *which card*, this pins *which window*.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ManualScroll {
     pub(crate) selection_at_start: Option<PaneId>,
