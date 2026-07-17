@@ -425,7 +425,7 @@ impl AgentAdapter for AmpAdapter {
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         let mut argv = vec!["amp".to_owned()];
         argv.extend(extra_args.iter().cloned());
-        if let Some(prompt) = prompt {
+        if let Some(prompt) = prompt.filter(|prompt| !prompt.is_empty()) {
             argv.extend([
                 "-x".to_owned(),
                 prompt.to_owned(),

@@ -12,6 +12,10 @@ fn launch_resume_and_preset_commands_match_amp_cli() {
         Some(vec!["amp".to_owned()])
     );
     assert_eq!(
+        AmpAdapter.launch_command(&[], Some("")),
+        Some(vec!["amp".to_owned()])
+    );
+    assert_eq!(
         AmpAdapter.launch_command(&["--mode".to_owned(), "high".to_owned()], Some("fix auth")),
         Some(vec![
             "amp".to_owned(),
