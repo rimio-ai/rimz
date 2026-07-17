@@ -38,6 +38,12 @@ pub struct TopologyWriter {
     pub loaded_at_ms: u64,
 }
 
+impl TopologyWriter {
+    pub fn generation(&self) -> (u64, u32) {
+        (self.loaded_at_ms, self.plugin_id)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneTopologyPane {
     pub id: u64,

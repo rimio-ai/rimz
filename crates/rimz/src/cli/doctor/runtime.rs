@@ -553,6 +553,9 @@ fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::Topolo
                 rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name)
                     .and_then(|cache| cache.writer);
             rimz::sidebar::presence::read_topology_writer_conflict(&runtime).and_then(|conflict| {
+                if topology_conflict_superseded(cache_writer, conflict.accepted_writer) {
+                    return None;
+                }
                 let age_ms = now_ms.saturating_sub(conflict.last_ms);
                 (age_ms <= CONFLICT_FRESH_MS).then(|| model::TopologyWriterConflict {
                     stale: conflict.stale_writer.map(topology_writer_id),
@@ -570,6 +573,16 @@ fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::Topolo
         recorded_bin,
         conflict,
     })
+}
+
+fn topology_conflict_superseded(
+    cache_writer: Option<rimz::mux::zellij::pane_topology::TopologyWriter>,
+    accepted_writer: Option<rimz::mux::zellij::pane_topology::TopologyWriter>,
+) -> bool {
+    let generation = |writer: Option<rimz::mux::zellij::pane_topology::TopologyWriter>| {
+        writer.map_or((0, 0), |writer| writer.generation())
+    };
+    generation(cache_writer) > generation(accepted_writer)
 }
 
 fn topology_writer_id(
@@ -1030,6 +1043,16 @@ mod tests {
         )
     }
 
+    fn topology_writer(
+        plugin_id: u32,
+        loaded_at_ms: u64,
+    ) -> rimz::mux::zellij::pane_topology::TopologyWriter {
+        rimz::mux::zellij::pane_topology::TopologyWriter {
+            plugin_id,
+            loaded_at_ms,
+        }
+    }
+
     fn tick_breach(since_ms: u64, recovered_after_ms: Option<u64>, over_ticks: u32) -> DiagEvent {
         DiagEvent::TickBudgetBreach {
             tick_loop: TickLoop::Fetch,
@@ -1105,6 +1128,18 @@ mod tests {
             }
             other => panic!("expected poll verdict, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn newer_cache_writer_supersedes_only_older_conflicts() {
+        let older = Some(topology_writer(1, 100));
+        let newer = Some(topology_writer(2, 200));
+
+        assert!(topology_conflict_superseded(older, None));
+        assert!(topology_conflict_superseded(newer, older));
+        assert!(!topology_conflict_superseded(older, older));
+        assert!(!topology_conflict_superseded(older, newer));
+        assert!(!topology_conflict_superseded(None, None));
     }
 
     #[test]

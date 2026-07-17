@@ -81,6 +81,9 @@ pub fn ingest_zellij_wake(
             }
             return ZellijWakeOutcome::RejectedStaleWriter;
         }
+        let writer_changed = existing
+            .as_ref()
+            .is_none_or(|existing| incoming.writer != existing.writer);
         if let Some(existing) = existing.as_ref()
             && incoming.writer != existing.writer
         {
@@ -93,8 +96,12 @@ pub fn ingest_zellij_wake(
         }
         let mut cache = incoming.clone();
         sanitize_topology_cache(&mut cache);
-        if let Err(err) = write_pane_topology_cache(runtime, &cache) {
-            tracing::debug!(error = %err, "presence poke: topology cache write failed");
+        match write_pane_topology_cache(runtime, &cache) {
+            Ok(()) if writer_changed => clear_superseded_conflict(runtime, incoming.writer),
+            Ok(()) => {}
+            Err(err) => {
+                tracing::debug!(error = %err, "presence poke: topology cache write failed");
+            }
         }
     }
 
@@ -129,7 +136,7 @@ fn topology_decision(
 }
 
 fn writer_generation(writer: Option<TopologyWriter>) -> (u64, u32) {
-    writer.map_or((0, 0), |writer| (writer.loaded_at_ms, writer.plugin_id))
+    writer.map_or((0, 0), |writer| writer.generation())
 }
 
 fn emit_topology_writer_changed(
@@ -162,6 +169,9 @@ fn record_topology_write_rejected(
     now_ms: u64,
 ) {
     let mut conflict = read_topology_writer_conflict(runtime).unwrap_or_default();
+    if conflict.stale_writer != incoming.writer || conflict.accepted_writer != existing.writer {
+        conflict.rejected_count = 0;
+    }
     conflict.stale_writer = incoming.writer;
     conflict.accepted_writer = existing.writer;
     conflict.rejected_count = conflict.rejected_count.saturating_add(1);
@@ -189,6 +199,23 @@ fn record_topology_write_rejected(
             accepted_loaded_at_ms,
             rejected_count: conflict.rejected_count,
         });
+    }
+}
+
+fn clear_superseded_conflict(runtime: &RuntimePaths, writer: Option<TopologyWriter>) {
+    let Some(conflict) = read_topology_writer_conflict(runtime) else {
+        return;
+    };
+    if writer_generation(writer) <= writer_generation(conflict.accepted_writer) {
+        return;
+    }
+    let path = topology_writer_conflict_path(runtime);
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            tracing::debug!(path = %path.display(), error = %err, "presence poke: superseded topology writer conflict removal failed");
+        }
     }
 }
 
@@ -366,6 +393,16 @@ mod tests {
         PaneId::from_parts(MuxName::Zellij, raw)
     }
 
+    fn paths() -> (tempfile::TempDir, StatePaths, RuntimePaths) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = crate::WorkspaceId::from_project_root(dir.path());
+        let state = StatePaths::under(workspace.clone(), dir.path()).expect("state paths");
+        let runtime = RuntimePaths::under(workspace, dir.path()).expect("runtime paths");
+        state.ensure_dirs().expect("state dirs");
+        runtime.ensure_dirs().expect("runtime dirs");
+        (dir, state, runtime)
+    }
+
     #[test]
     fn generation_classification_fences_only_fresh_older_writers() {
         let now_ms = crate::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 100_000;
@@ -401,6 +438,85 @@ mod tests {
             TopologyDecision::Accept,
         );
         assert_eq!(writer_generation(None), (0, 0));
+    }
+
+    #[test]
+    fn writer_conflict_count_restarts_when_the_incident_changes() {
+        let (_dir, state, runtime) = paths();
+        write_topology_writer_conflict(
+            &runtime,
+            &TopologyWriterConflict {
+                stale_writer: Some(writer(1, 100)),
+                accepted_writer: Some(writer(2, 200)),
+                rejected_count: 7,
+                last_ms: 800,
+                last_diag_ms: 500,
+            },
+        )
+        .expect("seed writer conflict");
+        let incoming = topology(900, Some(writer(3, 300)));
+        let existing = topology(900, Some(writer(4, 400)));
+
+        record_topology_write_rejected(&state, &runtime, &incoming, &existing, 1_000);
+        let conflict = read_topology_writer_conflict(&runtime).expect("updated conflict");
+        assert_eq!(conflict.rejected_count, 1);
+        assert_eq!(
+            conflict.last_diag_ms, 500,
+            "diagnostic throttle spans incidents"
+        );
+
+        record_topology_write_rejected(&state, &runtime, &incoming, &existing, 1_001);
+        assert_eq!(
+            read_topology_writer_conflict(&runtime)
+                .expect("updated conflict")
+                .rejected_count,
+            2,
+        );
+    }
+
+    #[test]
+    fn newer_accepted_writer_clears_a_superseded_conflict() {
+        let (_dir, state, runtime) = paths();
+        let produced_at_ms = unix_now_ms();
+        let existing = topology(produced_at_ms, Some(writer(2, 200)));
+        write_pane_topology_cache(&runtime, &existing).expect("seed topology cache");
+        write_topology_writer_conflict(
+            &runtime,
+            &TopologyWriterConflict {
+                stale_writer: Some(writer(1, 100)),
+                accepted_writer: existing.writer,
+                rejected_count: 3,
+                last_ms: produced_at_ms,
+                last_diag_ms: produced_at_ms,
+            },
+        )
+        .expect("seed writer conflict");
+        let mut accepted = wake(ZellijWakeReason::Alive);
+        accepted.topology = Some(topology(produced_at_ms, Some(writer(3, 300))));
+
+        assert_eq!(
+            ingest_zellij_wake(&state, &runtime, &accepted),
+            ZellijWakeOutcome::Accepted(None),
+        );
+        assert!(read_topology_writer_conflict(&runtime).is_none());
+    }
+
+    #[test]
+    fn equal_or_older_writer_keeps_the_conflict_sidecar() {
+        let (_dir, _state, runtime) = paths();
+        let conflict = TopologyWriterConflict {
+            stale_writer: Some(writer(1, 100)),
+            accepted_writer: Some(writer(2, 200)),
+            rejected_count: 3,
+            last_ms: 300,
+            last_diag_ms: 300,
+        };
+        write_topology_writer_conflict(&runtime, &conflict).expect("seed writer conflict");
+
+        clear_superseded_conflict(&runtime, Some(writer(2, 200)));
+        assert!(read_topology_writer_conflict(&runtime).is_some());
+        clear_superseded_conflict(&runtime, Some(writer(9, 100)));
+        assert!(read_topology_writer_conflict(&runtime).is_some());
     }
 
     #[test]
