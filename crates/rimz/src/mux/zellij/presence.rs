@@ -811,9 +811,9 @@ fi
         let cases = [
             Case {
                 session: "rimz-test",
-                rimz_bin: "/state/rimz/workspaces/ws_0123456789abcdef01234567/bin/current",
+                rimz_bin: "/state/rimz/workspaces/ws_0123456789abcdef01234567/rimz",
                 mutate: |_| {},
-                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/state/rimz/workspaces/ws_0123456789abcdef01234567/bin/current,focus_follows_mouse=false,mouse_click_through=true",
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/state/rimz/workspaces/ws_0123456789abcdef01234567/rimz,focus_follows_mouse=false,mouse_click_through=true",
             },
             Case {
                 session: "rimz-test",

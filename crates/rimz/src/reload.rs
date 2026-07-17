@@ -426,8 +426,7 @@ fn upgrade_live(
         ..ReloadOutcome::default()
     };
     let backend = backend_for(*mux);
-    let room_bin =
-        record_live_room_bin(ws, runtime, staged).unwrap_or_else(|| staged.path.clone());
+    let room_bin = record_live_room_bin(ws, runtime, staged).unwrap_or_else(|| staged.path.clone());
     let before_signal = session_heartbeats(runtime, *mux, &ws.session_name);
 
     // 1. Signal live sidebars to re-exec onto the freshly-installed binary.
