@@ -774,7 +774,8 @@ fn render_remote_control(
             agents,
             refusals,
             skipped,
-        } => render_remote_on(w, agents, refusals, skipped, tally),
+            advisories,
+        } => render_remote_on(w, agents, refusals, skipped, advisories, tally),
     }
 }
 
@@ -783,6 +784,7 @@ fn render_remote_on(
     agents: &[RemoteAgent],
     refusals: &[String],
     skipped: &[String],
+    advisories: &[String],
     tally: &mut Tally,
 ) -> io::Result<()> {
     let mut kv = KeyVals::new().indent(2);
@@ -809,6 +811,17 @@ fn render_remote_on(
             "enabled but not installed — skipped (the room still starts):",
         )?;
         for line in skip.lines() {
+            detail(w, palette::MUTED, line)?;
+        }
+    }
+    for advisory in advisories {
+        note(
+            tally,
+            w,
+            Health::Warn,
+            "provider daemon advisory (no start impact):",
+        )?;
+        for line in advisory.lines() {
             detail(w, palette::MUTED, line)?;
         }
     }
@@ -1669,6 +1682,10 @@ mod tests {
                     }],
                     refusals: vec!["disableRemoteControl: true".to_owned()],
                     skipped: vec!["managed standalone Codex install is missing".to_owned()],
+                    advisories: vec![
+                        "Codex remote-control updater version skew:\n    codex remote-control stop; sleep 3; codex remote-control start"
+                            .to_owned(),
+                    ],
                 },
                 &mut tally,
             )
@@ -1684,6 +1701,12 @@ mod tests {
         );
         assert!(
             out.contains("managed standalone Codex install is missing"),
+            "{out}"
+        );
+        assert!(
+            out.contains("provider daemon advisory (no start impact)")
+                && out.contains("Codex remote-control updater version skew")
+                && out.contains("sleep 3"),
             "{out}"
         );
     }

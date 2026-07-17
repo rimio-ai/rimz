@@ -611,6 +611,7 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
     }
 
     let readiness = rimz::remote_control::ReadinessSnapshot::probe(&config);
+    let advisories = rimz::remote_control::advisories(&config);
     let mut agents = Vec::new();
     if config.claude {
         let (detail, ready) = match readiness
@@ -660,6 +661,7 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
         agents,
         refusals,
         skipped,
+        advisories,
     }
 }
 

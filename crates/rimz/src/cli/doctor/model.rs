@@ -384,6 +384,8 @@ pub(super) enum RemoteControl {
         refusals: Vec<String>,
         /// Enabled hosts whose agent is not installed — `rimz start` skips them.
         skipped: Vec<String>,
+        /// Provider daemon findings that have no effect on `rimz start`.
+        advisories: Vec<String>,
     },
 }
 

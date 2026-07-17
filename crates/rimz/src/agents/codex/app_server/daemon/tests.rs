@@ -24,11 +24,81 @@ fn missing_standalone_guidance_uses_official_install_command() {
 }
 
 #[test]
+fn updater_skew_guidance_names_risk_and_deliberate_recycle() {
+    let skew = UpdaterSkew {
+        updater_pid: 42,
+        updater_exe: "/home/u/.codex/packages/standalone/releases/0.144.4/bin/codex".into(),
+        managed_exe: "/home/u/.codex/packages/standalone/releases/0.144.5/bin/codex".into(),
+        updater_exe_deleted: false,
+    };
+
+    insta::assert_snapshot!(skew.to_string(), @r###"
+    Codex remote-control updater version skew:
+    updater (pid 42): /home/u/.codex/packages/standalone/releases/0.144.4/bin/codex
+    managed install:  /home/u/.codex/packages/standalone/releases/0.144.5/bin/codex
+    The next hourly update tick can restart the shared app-server and disconnect every daemon-backed Codex session.
+
+    Schedule one deliberate recycle while no valuable Codex turns are running:
+        codex remote-control stop; sleep 3; codex remote-control start
+    (a start immediately after stop races the daemon teardown and fails with "connection is errored"). This disconnects daemon-backed Codex sessions once; resume them afterwards.
+    "###);
+}
+
+#[test]
 fn ensure_requires_toggle_and_standalone() {
     assert!(!should_ensure(false, false));
     assert!(!should_ensure(false, true));
     assert!(!should_ensure(true, false));
     assert!(should_ensure(true, true));
+}
+
+#[test]
+fn updater_skew_requires_different_or_deleted_executable_identities() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let managed = temp.path().join("managed-codex");
+    let updater = temp.path().join("old-codex");
+    std::fs::write(&managed, b"managed").expect("write managed executable");
+    std::fs::write(&updater, b"old").expect("write updater executable");
+    let managed = std::fs::canonicalize(managed).expect("canonical managed executable");
+
+    assert_eq!(
+        classify_updater_skew(42, managed.clone(), managed.clone(), false),
+        None
+    );
+    assert_eq!(
+        classify_updater_skew(42, updater.clone(), managed.clone(), false),
+        Some(UpdaterSkew {
+            updater_pid: 42,
+            updater_exe: updater,
+            managed_exe: managed.clone(),
+            updater_exe_deleted: false,
+        })
+    );
+    assert_eq!(
+        classify_updater_skew(42, managed.clone(), managed.clone(), true),
+        Some(UpdaterSkew {
+            updater_pid: 42,
+            updater_exe: managed.clone(),
+            managed_exe: managed,
+            updater_exe_deleted: true,
+        })
+    );
+}
+
+#[test]
+fn updater_skew_requires_control_socket_and_valid_pid_record() {
+    let home = tempfile::tempdir().expect("tempdir");
+    assert_eq!(updater_skew_under(home.path()), None);
+
+    let control = home.path().join("app-server-control");
+    std::fs::create_dir_all(&control).expect("control directory");
+    std::fs::write(control.join("app-server-control.sock"), b"").expect("socket marker");
+    assert_eq!(updater_skew_under(home.path()), None);
+
+    let daemon = home.path().join("app-server-daemon");
+    std::fs::create_dir_all(&daemon).expect("daemon directory");
+    std::fs::write(daemon.join("app-server-updater.pid"), b"not json").expect("invalid pid record");
+    assert_eq!(updater_skew_under(home.path()), None);
 }
 
 #[test]
@@ -52,6 +122,23 @@ fn toggle_uses_symmetric_start_and_stop_commands() {
     );
     assert_eq!(action(true), "start");
     assert_eq!(action(false), "stop");
+}
+
+#[test]
+fn failed_commands_retry_recovery_first_and_settle_only_for_start() {
+    assert_eq!(
+        failed_command_retry(true, true),
+        FailedCommandRetry::AfterStaleRecovery
+    );
+    assert_eq!(
+        failed_command_retry(false, true),
+        FailedCommandRetry::AfterStaleRecovery
+    );
+    assert_eq!(
+        failed_command_retry(true, false),
+        FailedCommandRetry::AfterStartSettle
+    );
+    assert_eq!(failed_command_retry(false, false), FailedCommandRetry::None);
 }
 
 #[test]

@@ -124,6 +124,10 @@ If a card stops updating after you hand-edited an agent's config, the RimZ-manag
 
 If a directly-launched Copilot card has lifecycle but no resolved model or token composition, first rebirth a room created before the current RimZ build. RimZ preserves `COPILOT_OTEL_FILE_EXPORTER_PATH`; that file must remain readable to the room. An `OTEL_EXPORTER_OTLP_ENDPOINT` or non-`file` `COPILOT_OTEL_EXPORTER_TYPE` selects the user's OTLP pipeline instead of RimZ's local cache, so set an explicit `COPILOT_OTEL_FILE_EXPORTER_PATH` when you also want file enrichment.
 
+### Codex sessions drop with a WebSocket reset about hourly
+
+`WebSocket protocol error: Connection reset without closing handshake` can mean Codex's updater is running a different executable from its managed standalone install and restarting the shared app-server on each hourly update tick. Check the REMOTE CONTROL section of `rimz doctor`; when it reports the provider daemon advisory, schedule `codex remote-control stop; sleep 3; codex remote-control start` while no valuable Codex turns are running, then resume the sessions this deliberate recycle disconnects.
+
 ### Zellij pane discovery stopped
 
 On Zellij, RimZ loads a small presence plugin so the sidebar learns which panes exist and where. Its permission grant is seeded for you on the first attach. Revoking that grant in Zellij's plugin manager stops pane discovery until you restore it, and `rimz doctor` names the fix in the `presence` row. Re-grant the plugin's permissions in Zellij, then run `rimz reload`. The grant lives in Zellij's own permission store, and the plugin ships no pane content anywhere; the full picture is in [security and trust](./security.md#the-zellij-presence-plugin).

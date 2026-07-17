@@ -19,9 +19,11 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const PID_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RECOVERY_POLL: Duration = Duration::from_millis(25);
+const START_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 /// Official managed-standalone installer surfaced by readiness guidance.
 const INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
+const RECYCLE_COMMAND: &str = "codex remote-control stop; sleep 3; codex remote-control start";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Readiness {
@@ -33,6 +35,17 @@ pub enum Readiness {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Issue {
     StandaloneMissing,
+}
+
+/// A live managed updater still executes a different standalone release from
+/// the current managed binary. Codex's update loop can restart the shared
+/// app-server while this skew persists, disconnecting every attached client.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdaterSkew {
+    pub updater_pid: u32,
+    pub updater_exe: PathBuf,
+    pub managed_exe: PathBuf,
+    pub updater_exe_deleted: bool,
 }
 
 impl std::fmt::Display for Issue {
@@ -56,6 +69,33 @@ impl std::fmt::Display for Issue {
 
 impl std::error::Error for Issue {}
 
+impl std::fmt::Display for UpdaterSkew {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let deleted = if self.updater_exe_deleted {
+            " (deleted)"
+        } else {
+            ""
+        };
+        write!(
+            f,
+            "Codex remote-control updater version skew:\n\
+                 updater (pid {}): {}{}\n\
+                 managed install:  {}\n\
+             The next hourly update tick can restart the shared app-server and disconnect every \
+             daemon-backed Codex session.\n\n\
+             Schedule one deliberate recycle while no valuable Codex turns are running:\n    \
+             {RECYCLE_COMMAND}\n\
+             (a start immediately after stop races the daemon teardown and fails with \
+             \"connection is errored\"). This disconnects daemon-backed Codex sessions once; \
+             resume them afterwards.",
+            self.updater_pid,
+            self.updater_exe.display(),
+            deleted,
+            self.managed_exe.display(),
+        )
+    }
+}
+
 pub fn readiness(enabled: bool) -> Readiness {
     if !enabled {
         Readiness::Disabled
@@ -64,6 +104,67 @@ pub fn readiness(enabled: bool) -> Readiness {
     } else {
         Readiness::Uninstalled(Issue::StandaloneMissing)
     }
+}
+
+/// Report a fully identified live updater whose executable differs from the
+/// managed standalone target while the daemon control socket is present.
+///
+/// This is diagnostic only. A healthy but skewed daemon keeps serving until
+/// the user schedules a provider-owned recycle; RimZ does not replace it and
+/// reproduce the session loss this warning exists to explain.
+pub fn updater_skew() -> Option<UpdaterSkew> {
+    let home = codex_home()?;
+    updater_skew_under(&home)
+}
+
+fn updater_skew_under(home: &Path) -> Option<UpdaterSkew> {
+    if !home
+        .join("app-server-control")
+        .join("app-server-control.sock")
+        .exists()
+    {
+        return None;
+    }
+    let updater = read_pid_record(
+        &home
+            .join("app-server-daemon")
+            .join("app-server-updater.pid"),
+    )?;
+    if !pid_record_matches(&updater) {
+        return None;
+    }
+    let metrics = crate::proc::stat_metrics(updater.pid)?;
+    if matches!(metrics.state, 'Z' | 'X')
+        || crate::proc::real_uid(updater.pid)? != crate::proc::own_uid()?
+    {
+        return None;
+    }
+    let (updater_executable, deleted) = crate::proc::exe_path(updater.pid)?;
+    if !managed_executable(home, &updater_executable) {
+        return None;
+    }
+    let argv = crate::proc::argv(updater.pid)?;
+    if !updater_argv(home, &argv) {
+        return None;
+    }
+    let managed_executable = std::fs::canonicalize(standalone_bin_under(home)?).ok()?;
+    classify_updater_skew(updater.pid, updater_executable, managed_executable, deleted)
+}
+
+fn classify_updater_skew(
+    updater_pid: u32,
+    updater_exe: PathBuf,
+    managed_exe: PathBuf,
+    updater_exe_deleted: bool,
+) -> Option<UpdaterSkew> {
+    let resolved_updater =
+        std::fs::canonicalize(&updater_exe).unwrap_or_else(|_| updater_exe.clone());
+    (updater_exe_deleted || resolved_updater != managed_exe).then_some(UpdaterSkew {
+        updater_pid,
+        updater_exe,
+        managed_exe,
+        updater_exe_deleted,
+    })
 }
 
 /// Ensure the enabled per-user daemon once the managed standalone resolves.
@@ -85,7 +186,8 @@ pub fn ensure(enabled: bool) {
 }
 
 /// Apply one synchronous start/stop transition, retrying once after a fully
-/// verified stale-updater recovery.
+/// verified stale-updater recovery or, for start, after a provider teardown
+/// settle delay.
 pub fn reconcile(enabled: bool) -> Result<(), ControlError> {
     let Some(home) = codex_home() else {
         return Ok(());
@@ -94,15 +196,46 @@ pub fn reconcile(enabled: bool) -> Result<(), ControlError> {
         return Ok(());
     };
     let argv = command(&bin, enabled);
-    let first = run_command(&argv, enabled, &home);
-    if first.is_err() && recover_stale(&home) {
-        tracing::warn!(
-            action = action(enabled),
-            "recovered a stale Codex daemon updater after its app-server became a zombie",
-        );
-        return run_command(&argv, enabled, &home);
+    let Err(first_error) = run_command(&argv, enabled, &home) else {
+        return Ok(());
+    };
+    match failed_command_retry(enabled, recover_stale(&home)) {
+        FailedCommandRetry::AfterStaleRecovery => {
+            tracing::warn!(
+                action = action(enabled),
+                "recovered a stale Codex daemon updater after its app-server became a zombie",
+            );
+            run_command(&argv, enabled, &home)
+        }
+        FailedCommandRetry::AfterStartSettle => {
+            tracing::warn!(
+                action = action(enabled),
+                error = %first_error,
+                retry_delay_secs = START_RETRY_DELAY.as_secs(),
+                "Codex remote-control start failed during daemon teardown; retrying after settle delay",
+            );
+            std::thread::sleep(START_RETRY_DELAY);
+            run_command(&argv, enabled, &home)
+        }
+        FailedCommandRetry::None => Err(first_error),
     }
-    first
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailedCommandRetry {
+    AfterStaleRecovery,
+    AfterStartSettle,
+    None,
+}
+
+fn failed_command_retry(enabled: bool, recovered_stale: bool) -> FailedCommandRetry {
+    if recovered_stale {
+        FailedCommandRetry::AfterStaleRecovery
+    } else if enabled {
+        FailedCommandRetry::AfterStartSettle
+    } else {
+        FailedCommandRetry::None
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

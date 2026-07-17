@@ -118,6 +118,17 @@ fn probe_codex(enabled: bool) -> HostState {
     }
 }
 
+/// Advisory-only provider daemon findings. These never gate `rimz start`.
+pub fn advisories(config: &RemoteControlConfig) -> Vec<String> {
+    let mut out = Vec::new();
+    if config.codex
+        && let Some(skew) = codex::updater_skew()
+    {
+        out.push(skew.to_string());
+    }
+    out
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreflightError {
     Claude(claude::Issue),
