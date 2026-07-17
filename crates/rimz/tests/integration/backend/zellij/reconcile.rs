@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -51,7 +52,7 @@ fn terminal_state(snapshot: &PaneSnapshot) -> BTreeMap<u64, TerminalState> {
 /// Upgrade-only reload records an unreachable target as unconverged while
 /// preserving every terminal pane, its geometry, and focus. The stale
 /// heartbeats model supervisors whose source image vanished before staging was
-/// introduced; structural replacement belongs exclusively to `--repair`.
+/// introduced; structural replacement belongs exclusively to `sidebar repair`.
 #[test]
 fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     require_zellij!();
@@ -158,6 +159,22 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     }
     assert_eq!(receivers.len(), 3, "fixture has one sidebar in each tab");
 
+    let zellij_trace = TempDir::new().expect("zellij trace tempdir");
+    let zellij_log = zellij_trace.path().join("zellij.log");
+    let zellij_shim = zellij_trace.path().join("zellij");
+    let real_zellij = which::which("zellij").expect("zellij path");
+    std::fs::write(
+        &zellij_shim,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            zellij_log.display(),
+            real_zellij.display(),
+        ),
+    )
+    .expect("write zellij trace shim");
+    std::fs::set_permissions(&zellij_shim, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod zellij trace shim");
+
     let preflight = env
         .rimz()
         .arg("list")
@@ -180,6 +197,7 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
         .env("ZELLIJ_SOCKET_DIR", xdg.path().join("zellij"))
         .env("XDG_CACHE_HOME", xdg.path())
         .env("TMPDIR", xdg.path())
+        .env("RIMZ_ZELLIJ_BIN", &zellij_shim)
         .env("RIMZ_TEST_SKIP_STATS_RELOAD", "1")
         .bounded_output_within(Duration::from_secs(30))
         .expect("run bare reload");
@@ -190,9 +208,16 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("3 sidebars did not reload in place"),
+        stdout.contains("3 sidebars still converging"),
         "stale sidebars should be visible as unconverged: {stdout}",
     );
+    let mux_log = std::fs::read_to_string(&zellij_log).expect("read zellij trace log");
+    for mutation in ["action new-pane", "action close-pane", "action resize"] {
+        assert!(
+            !mux_log.contains(mutation),
+            "bare reload issued structural mutation `{mutation}`:\n{mux_log}",
+        );
+    }
 
     let after = expect_list_panes(xdg.path(), &name);
     assert_eq!(

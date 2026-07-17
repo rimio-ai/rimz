@@ -91,7 +91,7 @@ The receive path drops an event for another workspace or session before it reach
 | `StoreDelta` | optional event method and lifecycle signal | Refetch the rollup; a session start/end also requests fresh panes | store and context-sidecar writers |
 | `PaneFramePublished` | none | Fold the just-published producer pane frame from cache | producer |
 | `Notify` | `title`, `body`, target panes, `recheck_unread`, kind | Renderer action only: raise the configured desktop/bell/command notification, gated on row-unread when `recheck_unread`; never fused into rows ([notifications.md](./notifications.md)) | the notification path |
-| `Reload` | none | Re-exec or hard-refresh the renderer | `rimz reload` |
+| `Reload` | none | Accelerate the supervisor's durable workspace-record poll; the worker hands off or hard-refreshes | `rimz reload` |
 
 ### Push channels
 

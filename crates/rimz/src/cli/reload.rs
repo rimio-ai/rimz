@@ -1,11 +1,11 @@
-//! `rimz reload` — stage a freshly-installed build and move every running
-//! sidebar onto it without changing panes; `--repair` also repairs structure.
+//! `rimz reload` — publish a freshly-installed build and let every running
+//! sidebar converge onto it without changing panes.
 //!
 //! User-scoped and cwd-independent (it runs from anywhere, even outside a rimz
 //! session): the orchestration lives in [`rimz::reload`]. For each workspace with
-//! a live mux session it re-execs the live sidebars onto the current binary,
-//! preserves every terminal pane during the upgrade. The explicit repair pass
-//! closes duplicates and replaces wedged renderers add-before-close. Held
+//! a live mux session it publishes durable build intent and nudges the live
+//! supervisors; their record poll makes delivery self-healing. `--repair` then
+//! invokes the independent `rimz sidebar repair` orchestration. Held
 //! `rimz stats --refresh` dashboards re-exec in place
 //! before room enumeration. Workspaces whose session is gone have their
 //! leftovers swept. Every step is best-effort and run-once.
@@ -24,9 +24,13 @@ pub struct ReloadArgs {
     repair: bool,
 }
 
-pub fn run(args: ReloadArgs, _globals: &GlobalFlags) -> Result<()> {
-    let outcome = reload_user_sidebars(args.repair)?;
-    report(&outcome)
+pub fn run(args: ReloadArgs, globals: &GlobalFlags) -> Result<()> {
+    let outcome = reload_user_sidebars()?;
+    report(&outcome)?;
+    if args.repair {
+        super::sidebar::repair(globals)?;
+    }
+    Ok(())
 }
 
 fn report(outcome: &ReloadOutcome) -> Result<()> {
@@ -54,13 +58,6 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             out,
             "Reloaded {}.",
             n(outcome.stats_reloaded, "stats dashboard")
-        )?;
-    }
-    if outcome.presence_dead > 0 {
-        writeln!(
-            out,
-            "No live presence channel for {}; sidebar reconcile skipped. Reattach or restart the session.",
-            n(outcome.presence_dead, "session"),
         )?;
     }
     if outcome.plugin_upgraded > 0 {
@@ -98,30 +95,6 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             n(outcome.unverified, "sidebar"),
         )?;
     }
-    if outcome.recovered > 0 {
-        writeln!(
-            out,
-            "Recovered {} in place.",
-            n(outcome.recovered, "sidebar")
-        )?;
-    }
-    if outcome.closed > 0 {
-        writeln!(
-            out,
-            "Closed {}.",
-            n(outcome.closed, "duplicate or unresponsive sidebar"),
-        )?;
-    }
-    if outcome.redocked > 0 {
-        writeln!(out, "Repaired {} geometry.", n(outcome.redocked, "sidebar"))?;
-    }
-    if outcome.misdocked > 0 {
-        writeln!(
-            out,
-            "{} still working but not docked.",
-            n(outcome.misdocked, "sidebar"),
-        )?;
-    }
     if outcome.reaped > 0 {
         writeln!(
             out,
@@ -134,20 +107,6 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             out,
             "Swept {} from stopped sessions.",
             n(outcome.dead_swept, "leftover process"),
-        )?;
-    }
-    if outcome.deferred > 0 {
-        writeln!(
-            out,
-            "Deferred {} (no attached client); attach and re-run `rimz reload --repair`.",
-            n(outcome.deferred, "sidebar repair"),
-        )?;
-    }
-    if outcome.failed > 0 {
-        writeln!(
-            out,
-            "{} could not be repaired; attach and re-run `rimz reload --repair`.",
-            n(outcome.failed, "sidebar"),
         )?;
     }
     Ok(())

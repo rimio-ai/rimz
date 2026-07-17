@@ -155,11 +155,12 @@ When the running RimZ build drifts from an agent's tested version range, reporti
 
 ```sh
 rimz reload             # re-exec sidebars in place; every pane stays unchanged
-rimz reload --repair    # then repair missing, duplicate, mis-docked, or wedged sidebars
+rimz sidebar repair     # repair missing, duplicate, mis-docked, or wedged sidebars
+rimz reload --repair    # run those two independent operations in order
 rimz doctor --clear     # dismiss diagnostics and incidents from before the upgrade
 ```
 
-`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the pane-preserving fix for that mixed-build state. If it reports sidebars that did not converge, run `rimz reload --repair`; replacement mounts and proves a current-build heartbeat before the old pane closes. Once the live writers converge, `rimz doctor --clear` records a workspace watermark so pre-upgrade diagnostics, the last incident, and message failures stop appearing without deleting their evidence files.
+`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the pane-preserving fix for that mixed-build state. A sidebar that misses the command's reporting window keeps converging from the durable room record without a repair. Run `rimz sidebar repair` only for structural damage; a replacement mounts and proves a current-build heartbeat before the old pane closes. Once the live writers converge, `rimz doctor --clear` records a workspace watermark so pre-upgrade diagnostics, the last incident, and message failures stop appearing without deleting their evidence files.
 
 After an upgrade, `rimz start` and `rimz attach` also warn when a live room still runs a different sidebar build and point to `rimz reload`.
 

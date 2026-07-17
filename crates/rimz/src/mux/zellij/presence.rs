@@ -1,4 +1,8 @@
-//! Zellij presence-plugin materialization and wakeup pipe helpers.
+//! Zellij presence-plugin materialization, identity, and pipe helpers.
+//!
+//! The embedded wasm digest and build-stable room configuration travel into
+//! each plugin generation and return in topology, letting reload skip the
+//! replace-and-retire path only when a fresh writer proves both identities.
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -283,7 +287,7 @@ impl ZellijBackend {
         self.pipe_to_presence_plugin(opts, PRESENCE_SHARE_PIPE, "share")
     }
 
-    pub(super) fn dump_topology_for(
+    pub(crate) fn dump_topology_for(
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {

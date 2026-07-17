@@ -1,7 +1,4 @@
-//! Verifies `rimz reload` delivery: `reload_sidebars` posts the version-stable
-//! reload control word to every fresh sidebar's wakeup socket and skips stale
-//! ones, returning the count it signaled. The renderer decodes the control word
-//! into a re-exec.
+//! Verifies reload delivery and the independent structural-repair CLI.
 //!
 //! No live mux needed — we plant heartbeats and bound sockets directly under a
 //! `RuntimePaths::under` root and call the library function.
@@ -18,7 +15,32 @@ use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::RuntimePaths;
 use rimz::store::wakeup::reload_sidebars;
 
+use crate::common::Env;
+
 const SESSION_NAME: &str = "rimz-reload-test";
+
+#[test]
+fn standalone_sidebar_repair_does_not_stage_a_build() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(["sidebar", "repair"])
+        .output()
+        .expect("run sidebar repair");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "No running sidebars to repair.\n"
+    );
+    assert!(
+        !env.state_root().join("rimz/builds").exists(),
+        "standalone structural repair must not publish an upgrade generation",
+    );
+}
 
 #[test]
 fn reload_signals_fresh_sidebars_and_skips_stale() {

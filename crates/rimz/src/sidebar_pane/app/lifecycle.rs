@@ -1,5 +1,7 @@
-//! Exit latches: self-close when the tab empties, and the bounded grow-resize
-//! paint hold behind the full-width-flash guard.
+//! Exit-request latches and the bounded grow-resize paint hold.
+//!
+//! Cache-backed sibling counts decide when the worker requests self-close;
+//! the supervisor owns the authoritative mux confirmation and pane lifetime.
 
 use std::time::Instant;
 

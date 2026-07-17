@@ -1,4 +1,4 @@
-//! `rimz sidebar` — `snapshot` renders the view-model (producer or `--no-produce` consumer read); `serve` runs the terminal renderer loop.
+//! `rimz sidebar` — inspect, serve, and structurally repair the sidebar fleet.
 //!
 //! The snapshot arm is a thin delegate over the library produce pipeline
 //! ([`rimz::sidebar::produce`]): it resolves workspace/session/mux, calls
@@ -76,6 +76,9 @@ enum SidebarSubcmd {
         #[arg(long)]
         refresh_ms: Option<u16>,
     },
+    /// Repair missing, duplicate, wedged, or mis-docked sidebar panes without
+    /// publishing a new build.
+    Repair,
     /// Read a snapshot JSON from stdin and render one fixed frame.
     Render {
         #[arg(long, default_value_t = 80)]
@@ -236,6 +239,7 @@ impl SidebarArgs {
         match &self.command {
             SidebarSubcmd::Snapshot { .. } => "sidebar snapshot",
             SidebarSubcmd::Serve { .. } => "sidebar serve",
+            SidebarSubcmd::Repair => "sidebar repair",
             SidebarSubcmd::Render { .. } => "sidebar render",
             SidebarSubcmd::Fixture { .. } => "sidebar fixture",
             SidebarSubcmd::Gallery { .. } => "sidebar gallery",
@@ -285,6 +289,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             tick_seconds,
             refresh_ms,
         ),
+        SidebarSubcmd::Repair => repair(globals),
         SidebarSubcmd::Render { width, height } => render(width, height),
         SidebarSubcmd::Fixture {
             state,
@@ -379,6 +384,96 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             },
         ),
     }
+}
+
+/// Run the structural pass directly; `rimz reload --repair` composes this
+/// entry after its independent upgrade transaction.
+pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
+    let outcome = rimz::reload::repair_user_sidebars();
+    let mut out = render::out();
+    let n = |count: usize, noun: &str| {
+        let value = if count == 1 {
+            format!("1 {noun}")
+        } else if noun.ends_with("process") {
+            format!("{count} {noun}es")
+        } else {
+            format!("{count} {noun}s")
+        };
+        render::paint(render::palette::ACCENT, &value)
+    };
+    if outcome.sessions == 0 {
+        writeln!(out, "No running sidebars to repair.")?;
+        return Ok(());
+    }
+    if outcome.presence_dead > 0 {
+        writeln!(
+            out,
+            "No live presence channel for {}; repair skipped. Reattach or restart the session.",
+            n(outcome.presence_dead, "session"),
+        )?;
+    }
+    if outcome.recovered > 0 {
+        writeln!(
+            out,
+            "Recovered {} in place.",
+            n(outcome.recovered, "sidebar")
+        )?;
+    }
+    if outcome.closed > 0 {
+        writeln!(
+            out,
+            "Closed {}.",
+            n(outcome.closed, "duplicate or unresponsive sidebar"),
+        )?;
+    }
+    if outcome.redocked > 0 {
+        writeln!(out, "Repaired {} geometry.", n(outcome.redocked, "sidebar"))?;
+    }
+    if outcome.reaped > 0 {
+        writeln!(
+            out,
+            "Reaped {}.",
+            n(outcome.reaped, "orphaned sidebar process")
+        )?;
+    }
+    if outcome.misdocked > 0 {
+        writeln!(
+            out,
+            "{} still working but not docked.",
+            n(outcome.misdocked, "sidebar"),
+        )?;
+    }
+    if outcome.deferred > 0 {
+        writeln!(
+            out,
+            "Deferred {} (no attached client); attach and re-run `rimz sidebar repair`.",
+            n(outcome.deferred, "sidebar repair"),
+        )?;
+    }
+    if outcome.failed > 0 {
+        writeln!(
+            out,
+            "{} could not be repaired; attach and re-run `rimz sidebar repair`.",
+            n(outcome.failed, "sidebar"),
+        )?;
+    }
+    if outcome.presence_dead
+        + outcome.recovered
+        + outcome.closed
+        + outcome.redocked
+        + outcome.reaped
+        + outcome.misdocked
+        + outcome.deferred
+        + outcome.failed
+        == 0
+    {
+        writeln!(
+            out,
+            "Sidebar structure is healthy across {}.",
+            n(outcome.sessions, "session")
+        )?;
+    }
+    Ok(())
 }
 
 struct SnapshotCommand {

@@ -27,6 +27,7 @@ These repair or clean an installation without changing your configuration.
 ```sh
 rimz update [--version <TAG>]
 rimz reload [--repair]
+rimz sidebar repair
 rimz reset [--yes] [--no-start] [--hard] [PATH]
 rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
@@ -34,7 +35,9 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 
 `update` follows the current installation method: Homebrew delegates to `brew upgrade rimz`, Cargo delegates to `cargo install --locked rimz`, and script or manual prebuilt installs download, checksum, smoke-test, and atomically replace the current binary. `--version` selects a numbered release tag for Cargo or any release tag, including `latest-main`, for a standalone install; Homebrew keeps formula version selection. A changed binary automatically launches the new build's `reload` command. Unsupported prebuilt targets report the exact `cargo install --locked rimz` fallback, and a protected standalone destination reports the `sudo rimz update` retry.
 
-`reload` runs from anywhere, stages the invoking RimZ build durably, and re-execs running sidebars in place while preserving every pane. Sidebars that cannot prove convergence stay on their old working build and are reported; bare reload never creates or closes panes. `--repair` follows the upgrade with serialized structural recovery for missing, duplicate, mis-docked, or wedged sidebars, using add-before-close and heartbeat verification for replacements. Both forms reload `rimz stats --refresh` dashboards, leave stopped sessions stopped, and touch no agent process. Sidebar reload behavior is in [sidebar.md](../../internals/sidebar/sidebar.md).
+`reload` runs from anywhere, stages the invoking RimZ build durably, and publishes its verified path and digest as each live room's desired build. Supervisors poll that record and move worker-first, so the reload datagram only accelerates convergence and a bad build leaves the old supervisor and pane alive. Bare reload never creates or closes panes. A fresh Zellij topology writer whose echoed plugin build and configuration hashes match skips plugin replacement; a mismatch runs and reports the upgrade. Reload also refreshes `rimz stats --refresh` dashboards, leaves stopped sessions stopped, and touches no agent process.
+
+`sidebar repair` is the standalone structural recovery for missing, duplicate, mis-docked, or wedged sidebars, using add-before-close and heartbeat verification for replacements. Its Zellij presence-liveness gate applies only to this repair transaction and cannot block build publication. `reload --repair` is sugar that completes the upgrade transaction and then invokes this same repair path as an independent operation. Sidebar reload and repair behavior is in [sidebar.md](../../internals/sidebar/sidebar.md).
 
 `reset` is the escape hatch for a wedged room. It resolves `PATH` as the cwd, tears down the session, purges the resurrection cache, archives records, clears coordination state, sweeps orphaned processes, then rebuilds and reattaches by default. Durable history is archived, not deleted, so a reset room comes up empty but its records survive. `--yes` skips the prompt (required off a TTY), `--no-start` stops after teardown and prints the rerun hint, and `--hard` also removes the agent carryover (a plain reset keeps it for history but still starts empty).
 
