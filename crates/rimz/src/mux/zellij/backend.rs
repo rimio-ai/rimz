@@ -21,9 +21,10 @@ use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
     ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
-    NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
-    TabOptions, ViewVerdict, WidthAdjust, ensure_pane_backend, memoized_version,
+    NamedKey, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, Result,
+    SessionHealth, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
+    SplitDirection, SplitPaneOptions, TabOptions, WidthAdjust, ensure_pane_backend,
+    execute_reconcile_plan, memoized_version,
 };
 use crate::pane::PaneRef;
 use crate::store::RuntimePaths;
@@ -883,12 +884,7 @@ impl MuxBackend for ZellijBackend {
         // above are safe detached). An unanswerable probe reads detached —
         // deferring one run is recoverable, a leaked pair is not. tmux splits
         // fine detached, so the gate is Zellij-internal.
-        let needs_attached = plan.verdicts.iter().any(|verdict| {
-            matches!(
-                verdict,
-                ViewVerdict::Add { .. } | ViewVerdict::Replace { .. }
-            )
-        }) || !off_spec.is_empty();
+        let needs_attached = plan.has_adds() || !off_spec.is_empty();
         let attached = !needs_attached || self.session_has_attached_client(&opts.session_name);
         if attached {
             for (tab_position, raw_id) in &off_spec {
@@ -903,37 +899,17 @@ impl MuxBackend for ZellijBackend {
             }
         }
         if needs_attached && !attached {
-            report.deferred = plan
-                .verdicts
-                .iter()
-                .filter(|verdict| {
-                    matches!(
-                        verdict,
-                        ViewVerdict::Add { .. } | ViewVerdict::Replace { .. }
-                    )
-                })
-                .count()
-                + off_spec.len();
-            tracing::info!(
-                session = %opts.session_name,
-                deferred = report.deferred,
-                "sidebar reconcile: no attached client; deferring in-place adds and geometry repairs",
-            );
+            report.deferred += off_spec.len();
         }
         let build = crate::build_id::of_file(&opts.rimz_bin).map_err(|err| MuxErr::Output {
             program: opts.rimz_bin.display().to_string(),
             reason: format!("cannot verify sidebar repair build: {err}"),
         })?;
-        for (index, verdict) in plan.verdicts.iter().enumerate() {
-            if !attached
-                && matches!(
-                    verdict,
-                    ViewVerdict::Add { .. } | ViewVerdict::Replace { .. }
-                )
-            {
-                continue;
-            }
-            let add = |view: &str| -> Result<(u64, DockOutcome)> {
+        let failure = execute_reconcile_plan(
+            plan,
+            &mut report,
+            !attached,
+            |view| {
                 let tab_position = view.parse::<u64>().map_err(|err| MuxErr::Output {
                     program: "zellij".to_owned(),
                     reason: format!("invalid sidebar tab position `{view}`: {err}"),
@@ -963,42 +939,28 @@ impl MuxBackend for ZellijBackend {
                     tab_position,
                     &focused_in_tab,
                 );
-                Ok((tab_position, added.dock))
-            };
-            let result = match verdict {
-                ViewVerdict::CloseDuplicates { close, .. } => (|| -> Result<()> {
-                    for pane in close {
-                        self.close_pane(&opts.session_name, pane)?;
-                        report.closed += 1;
-                    }
-                    Ok(())
-                })(),
-                ViewVerdict::Add { view } => add(view).map(|(_, dock)| {
-                    report.recovered += 1;
-                    report.misdocked += usize::from(dock == DockOutcome::Misdocked);
-                }),
-                ViewVerdict::Replace { view, old, close } => add(view).and_then(|(_, dock)| {
-                    tracing::debug!(tab = %view, pane = %old, "sidebar replacement verified; closing old pane");
-                    for pane in close {
-                        self.close_pane(&opts.session_name, pane)?;
-                        report.closed += 1;
-                    }
-                    report.recovered += 1;
-                    report.misdocked += usize::from(dock == DockOutcome::Misdocked);
-                    Ok(())
-                }),
-            };
-            if let Err(err) = result {
-                report.failed += plan.remaining_from(index);
-                tracing::warn!(
-                    session = %opts.session_name,
-                    view = %verdict.view(),
-                    tags.operation = "zellij.reconcile.transaction",
-                    error = &err as &dyn std::error::Error,
-                    "sidebar repair aborted; leaving remaining views unchanged",
-                );
-                break;
-            }
+                Ok(match added.dock {
+                    DockOutcome::Docked => ReconcileAddOutcome::Verified,
+                    DockOutcome::Misdocked => ReconcileAddOutcome::VerifiedMisdocked,
+                })
+            },
+            |pane| self.close_pane(&opts.session_name, pane),
+        );
+        if needs_attached && !attached {
+            tracing::info!(
+                session = %opts.session_name,
+                deferred = report.deferred,
+                "sidebar reconcile: no attached client; deferring in-place adds and geometry repairs",
+            );
+        }
+        if let Some(failure) = failure {
+            tracing::warn!(
+                session = %opts.session_name,
+                view = %failure.view,
+                tags.operation = "zellij.reconcile.transaction",
+                error = &failure.error as &dyn std::error::Error,
+                "sidebar repair aborted; leaving remaining views unchanged",
+            );
         }
         if let Some(own) = own_zellij_pane_id() {
             let _ = self.focus_terminal(&opts.session_name, own);
