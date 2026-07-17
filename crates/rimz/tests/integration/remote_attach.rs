@@ -751,6 +751,45 @@ fn unreachable_endpoint_retries_at_the_hold_cap() {
 }
 
 #[test]
+fn reachable_endpoint_cannot_bypass_the_ssh_failure_ladder() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let (ssh_config, address) = closed_ssh_endpoint(&env);
+    let _listener = TcpListener::bind(address).expect("answer endpoint dials");
+    std::fs::write(&plan, "255\n255\n0\n").expect("write plan");
+
+    let mut child = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
+        .env("RIMZ_REMOTE_GATETIME_MS", "0")
+        .env("RIMZ_REMOTE_BACKOFF_MS", "120")
+        .env("RIMZ_REMOTE_BACKOFF_CAP_MS", "500")
+        .env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1")
+        .env("RIMZ_REMOTE_DIAL_MS", "20")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn supervised remote connect");
+
+    wait_for_main_invocations(&mut child, &log, 1, Duration::from_secs(2));
+    std::thread::sleep(Duration::from_millis(60));
+    assert_eq!(
+        main_invocation_count(&log),
+        1,
+        "a TCP-answering middlebox must not bypass the SSH failure ladder"
+    );
+
+    wait_for_main_invocations(&mut child, &log, 3, Duration::from_secs(2));
+    let out = child.wait_with_output().expect("wait for clean reattach");
+    assert!(
+        out.status.success(),
+        "ladder-paced reconnect ends cleanly\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");

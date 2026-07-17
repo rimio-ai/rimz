@@ -130,12 +130,12 @@ pub(crate) fn animation_allowed(
         && term != Some("dumb")
 }
 
-fn format_elapsed(elapsed: Duration) -> String {
+pub(crate) fn format_elapsed(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     if seconds < 60 {
         format!("{seconds}s")
     } else {
-        format!("{}m{:02}s", seconds / 60, seconds % 60)
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
     }
 }
 
@@ -172,7 +172,7 @@ mod tests {
     fn elapsed_time_uses_compact_second_and_minute_labels() {
         assert_eq!(format_elapsed(Duration::ZERO), "0s");
         assert_eq!(format_elapsed(Duration::from_secs(59)), "59s");
-        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m00s");
-        assert_eq!(format_elapsed(Duration::from_secs(125)), "2m05s");
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m 00s");
+        assert_eq!(format_elapsed(Duration::from_secs(125)), "2m 05s");
     }
 }

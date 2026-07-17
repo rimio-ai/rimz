@@ -30,6 +30,34 @@ const PROBE_RESPAWN_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
+pub(super) struct OutageState {
+    started: Instant,
+    internet_probe: Option<DialPlan>,
+    panel: RecoveryPanel,
+}
+
+impl OutageState {
+    pub(super) fn new(
+        host: &str,
+        internet_probe: Option<DialPlan>,
+        server: Option<&DialPlan>,
+    ) -> Self {
+        Self {
+            started: Instant::now(),
+            panel: RecoveryPanel::new(host, internet_probe.as_ref(), server),
+            internet_probe,
+        }
+    }
+
+    pub(super) fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    pub(super) fn note_attempt(&mut self, consecutive_failures: u32) {
+        self.panel.note_attempt(consecutive_failures);
+    }
+}
+
 pub(super) fn supervise_remote(
     plan: &SshAttachPlan,
     control_path: &Path,
@@ -46,8 +74,7 @@ pub(super) fn supervise_remote(
     let mut session_link = SessionLinkState::new(policy.gatetime, zombie_interval);
     let stop = AtomicBool::new(false);
     let mut first_attempt = true;
-    let mut outage_started = None;
-    let mut outage_waits = 0u32;
+    let mut outage = None;
     report_remote_connect(host, true);
     let guard = super::tty::TtyGuard::acquire();
     loop {
@@ -70,8 +97,7 @@ pub(super) fn supervise_remote(
         guard.restore();
         drop(probe);
         if outcome.established {
-            outage_started = None;
-            outage_waits = 0;
+            outage = None;
         }
         if outcome.killed_zombie {
             guard.reset_emulator();
@@ -80,8 +106,12 @@ pub(super) fn supervise_remote(
                 "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
             );
             reconnect.settle_zombie_kill();
-            outage_started = Some(Instant::now());
-            outage_waits = 0;
+            let ui = OutageUi::auto(host);
+            outage = Some(OutageState::new(
+                host,
+                internet_probe_for_wait(&ui),
+                dial_plan.as_ref(),
+            ));
             continue;
         }
         match reconnect.settle(outcome.status.code(), outcome.established) {
@@ -94,13 +124,14 @@ pub(super) fn supervise_remote(
                 delay: ladder_delay,
             } => {
                 guard.reset_emulator();
-                let outage_started = *outage_started.get_or_insert_with(Instant::now);
-                let outage_age = outage_started.elapsed();
-                let delay = retry_delay(&policy, dial_plan.is_some(), outage_age, ladder_delay);
-                let first_wait = outage_waits == 0;
-                outage_waits = outage_waits.saturating_add(1);
                 let consecutive_failures = reconnect.consecutive_failures();
                 let mut ui = OutageUi::auto(host);
+                let outage = outage.get_or_insert_with(|| {
+                    OutageState::new(host, internet_probe_for_wait(&ui), dial_plan.as_ref())
+                });
+                let outage_age = outage.elapsed();
+                let delay = retry_delay(&policy, dial_plan.is_some(), outage_age, ladder_delay);
+                outage.note_attempt(consecutive_failures);
                 if ui.is_plain() {
                     let _ = writeln!(
                         std::io::stderr().lock(),
@@ -111,13 +142,11 @@ pub(super) fn supervise_remote(
                 if let Some(action) = session_link.transport_lost() {
                     render_session_link_action(host, action);
                 }
-                let internet_probe = internet_probe_for_wait(&ui);
                 match wait_before_retry(
                     dial_plan.as_ref(),
-                    internet_probe.as_ref(),
                     delay,
                     policy.backoff_cap,
-                    first_wait,
+                    outage,
                     &mut ui,
                     Some(&stop),
                 )? {
@@ -300,7 +329,7 @@ pub(super) fn retry_delay(
     ladder_delay: Duration,
 ) -> Duration {
     if has_dial_plan {
-        policy.reachable_delay(outage_age)
+        policy.reachable_delay(outage_age).max(ladder_delay)
     } else {
         ladder_delay
     }
@@ -308,20 +337,21 @@ pub(super) fn retry_delay(
 
 pub(super) fn wait_before_retry(
     dial_plan: Option<&DialPlan>,
-    internet_probe: Option<&DialPlan>,
     delay: Duration,
     hold: Duration,
-    first_wait: bool,
+    outage: &mut OutageState,
     ui: &mut OutageUi,
     stop: Option<&AtomicBool>,
 ) -> Result<WaitOutcome> {
-    let host = ui.host().to_owned();
+    let outage_age = outage.elapsed();
+    let internet_probe = outage.internet_probe.as_ref();
+    let recovery = &mut outage.panel;
     let started = Instant::now();
+    recovery.begin_wait();
     let interval = dial_interval_from_env();
     let mut gate = dial_plan
         .zip(interval)
         .map(|_| DialGate::new(started, delay, hold));
-    let mut recovery = RecoveryPanel::new(&host, internet_probe, dial_plan, first_wait);
     let mut next_dial = started;
     let mut reported_unreachable = false;
     let (dial_tx, dial_rx) = mpsc::channel::<DialResult>();
@@ -352,7 +382,17 @@ pub(super) fn wait_before_retry(
             ui.release(false)?;
             return Ok(WaitOutcome::Interrupted);
         }
-        if ui.tick(&mut recovery, started.elapsed())? == UiEvent::Interrupted {
+        let deadline = gate
+            .as_ref()
+            .map_or(started + delay, DialGate::effective_deadline);
+        let wait_elapsed = started.elapsed();
+        if ui.tick(
+            recovery,
+            wait_elapsed,
+            outage_age.saturating_add(wait_elapsed),
+            Some(deadline.saturating_duration_since(now)),
+        )? == UiEvent::Interrupted
+        {
             ui.release(false)?;
             return Ok(WaitOutcome::Interrupted);
         }
@@ -373,8 +413,14 @@ pub(super) fn wait_before_retry(
             recovery.session_starting();
             let release_at = recovery.release_at(started.elapsed());
             while started.elapsed() < release_at {
+                let wait_elapsed = started.elapsed();
                 if stop.is_some_and(|stop| stop.load(Ordering::SeqCst))
-                    || ui.tick(&mut recovery, started.elapsed())? == UiEvent::Interrupted
+                    || ui.tick(
+                        recovery,
+                        wait_elapsed,
+                        outage_age.saturating_add(wait_elapsed),
+                        None,
+                    )? == UiEvent::Interrupted
                 {
                     ui.release(false)?;
                     return Ok(WaitOutcome::Interrupted);
@@ -395,7 +441,6 @@ pub(super) fn wait_before_retry(
             if let Some(plan) = internet_probe
                 && !internet_pending
             {
-                recovery.checking_internet();
                 spawn_dial(
                     DialStage::Internet,
                     plan,
@@ -407,7 +452,6 @@ pub(super) fn wait_before_retry(
             if let (Some(plan), Some(gate)) = (dial_plan, &gate)
                 && !server_pending
             {
-                recovery.checking_server();
                 let timeout = DIAL_TIMEOUT.min(
                     gate.effective_deadline()
                         .saturating_duration_since(now)

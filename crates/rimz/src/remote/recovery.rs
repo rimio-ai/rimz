@@ -16,6 +16,7 @@ pub enum StageStatus {
     Checking,
     Ok,
     Down,
+    Suspect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,24 +31,37 @@ pub struct StageFrame {
     pub stage: RecoveryStage,
     pub status: StageStatus,
     pub label: String,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveryFrame {
     pub host: String,
+    pub outage_for: Duration,
+    pub attempt: u32,
+    pub next_attempt_in: Option<Duration>,
+    pub connecting: bool,
     pub rows: Vec<StageFrame>,
 }
 
-/// Checkpoint state for one inter-attempt wait.
+#[derive(Clone)]
+struct Checkpoint {
+    endpoint_label: String,
+    result: Option<StageStatus>,
+}
+
+/// Checkpoint state for one transport outage.
 pub struct RecoveryPanel {
     host: String,
     grace: Duration,
     min_display: Duration,
-    first_wait: bool,
+    wait_started: bool,
+    grace_this_wait: bool,
     shown_at: Option<Duration>,
-    internet: Option<(String, StageStatus)>,
-    server: Option<(String, StageStatus)>,
+    internet: Option<Checkpoint>,
+    server: Option<Checkpoint>,
     session: StageStatus,
+    attempt: u32,
 }
 
 impl RecoveryPanel {
@@ -55,13 +69,11 @@ impl RecoveryPanel {
         host: impl Into<String>,
         internet: Option<&DialPlan>,
         server: Option<&DialPlan>,
-        first_wait: bool,
     ) -> Self {
         Self::with_timing(
             host,
             internet,
             server,
-            first_wait,
             recovery_grace_from_env(),
             recovery_min_display_from_env(),
         )
@@ -71,7 +83,6 @@ impl RecoveryPanel {
         host: impl Into<String>,
         internet: Option<&DialPlan>,
         server: Option<&DialPlan>,
-        first_wait: bool,
         grace: Duration,
         min_display: Duration,
     ) -> Self {
@@ -79,35 +90,37 @@ impl RecoveryPanel {
             host: host.into(),
             grace,
             min_display,
-            first_wait,
+            wait_started: false,
+            grace_this_wait: true,
             shown_at: None,
-            internet: internet.map(|plan| (endpoint_label(plan), StageStatus::Checking)),
-            server: server.map(|plan| (endpoint_label(plan), StageStatus::Checking)),
+            internet: internet.map(checkpoint),
+            server: server.map(checkpoint),
             session: StageStatus::Waiting,
+            attempt: 0,
         }
     }
 
-    pub fn checking_internet(&mut self) {
-        if let Some((_, status)) = &mut self.internet {
-            *status = StageStatus::Checking;
-        }
+    /// Reset per-wait presentation while preserving outage checkpoint results.
+    pub fn begin_wait(&mut self) {
+        self.grace_this_wait = !self.wait_started;
+        self.wait_started = true;
+        self.shown_at = None;
+        self.session = StageStatus::Waiting;
+    }
+
+    pub fn note_attempt(&mut self, consecutive_failures: u32) {
+        self.attempt = consecutive_failures;
     }
 
     pub fn note_internet(&mut self, reachable: bool) {
-        if let Some((_, status)) = &mut self.internet {
-            *status = checkpoint_status(reachable);
-        }
-    }
-
-    pub fn checking_server(&mut self) {
-        if let Some((_, status)) = &mut self.server {
-            *status = StageStatus::Checking;
+        if let Some(checkpoint) = &mut self.internet {
+            checkpoint.result = Some(checkpoint_status(reachable));
         }
     }
 
     pub fn note_server(&mut self, reachable: bool) {
-        if let Some((_, status)) = &mut self.server {
-            *status = checkpoint_status(reachable);
+        if let Some(checkpoint) = &mut self.server {
+            checkpoint.result = Some(checkpoint_status(reachable));
         }
     }
 
@@ -117,7 +130,7 @@ impl RecoveryPanel {
 
     /// Whether the recovery canvas owns the terminal at this elapsed age.
     pub fn visible(&self, elapsed: Duration) -> bool {
-        !self.first_wait || elapsed >= self.grace
+        !self.grace_this_wait || elapsed >= self.grace
     }
 
     /// Record the instant at which the renderer successfully opened the canvas.
@@ -132,32 +145,45 @@ impl RecoveryPanel {
         })
     }
 
-    pub fn frame(&self) -> RecoveryFrame {
+    pub fn frame(&self, outage_for: Duration, next_attempt_in: Option<Duration>) -> RecoveryFrame {
         let mut rows = Vec::with_capacity(3);
-        if let Some((endpoint, status)) = &self.internet {
+        if let Some(checkpoint) = &self.internet {
             rows.push(StageFrame {
                 stage: RecoveryStage::Internet,
-                status: *status,
-                label: format!("Internet  {endpoint}"),
+                status: checkpoint.result.unwrap_or(StageStatus::Checking),
+                label: "Internet".to_owned(),
+                detail: checkpoint.endpoint_label.clone(),
             });
         }
-        if let Some((endpoint, status)) = &self.server {
+        if let Some(checkpoint) = &self.server {
+            let mut status = checkpoint.result.unwrap_or(StageStatus::Checking);
+            let mut detail = checkpoint.endpoint_label.clone();
+            if status == StageStatus::Ok && self.attempt >= 2 {
+                status = StageStatus::Suspect;
+                detail.push_str(" · answers TCP · SSH failing");
+            }
             rows.push(StageFrame {
                 stage: RecoveryStage::Server,
-                status: *status,
-                label: format!("Server    {endpoint}"),
+                status,
+                label: "Server".to_owned(),
+                detail,
             });
         }
         rows.push(StageFrame {
             stage: RecoveryStage::Session,
             status: self.session,
-            label: match self.session {
-                StageStatus::Checking => "SSH session  starting…".to_owned(),
-                _ => "SSH session  waiting".to_owned(),
+            label: "SSH session".to_owned(),
+            detail: match self.session {
+                StageStatus::Checking => "starting…".to_owned(),
+                _ => "waiting".to_owned(),
             },
         });
         RecoveryFrame {
             host: self.host.clone(),
+            outage_for,
+            attempt: self.attempt,
+            next_attempt_in,
+            connecting: self.session == StageStatus::Checking,
             rows,
         }
     }
@@ -206,6 +232,13 @@ fn endpoint_label(plan: &DialPlan) -> String {
     }
 }
 
+fn checkpoint(plan: &DialPlan) -> Checkpoint {
+    Checkpoint {
+        endpoint_label: endpoint_label(plan),
+        result: None,
+    }
+}
+
 fn checkpoint_status(reachable: bool) -> StageStatus {
     if reachable {
         StageStatus::Ok
@@ -225,12 +258,11 @@ mod tests {
         }
     }
 
-    fn panel(first_wait: bool, server: Option<&DialPlan>) -> RecoveryPanel {
+    fn panel(server: Option<&DialPlan>) -> RecoveryPanel {
         RecoveryPanel::with_timing(
             "dev-box",
             Some(&plan("1.1.1.1")),
             server,
-            first_wait,
             Duration::from_millis(500),
             Duration::from_millis(1_500),
         )
@@ -238,7 +270,8 @@ mod tests {
 
     #[test]
     fn sub_grace_recovery_never_shows_or_holds() {
-        let panel = panel(true, None);
+        let mut panel = panel(None);
+        panel.begin_wait();
 
         assert!(!panel.visible(Duration::from_millis(499)));
         assert_eq!(
@@ -249,7 +282,8 @@ mod tests {
 
     #[test]
     fn shown_panel_holds_for_the_minimum_display_time() {
-        let mut panel = panel(true, None);
+        let mut panel = panel(None);
+        panel.begin_wait();
 
         assert!(panel.visible(Duration::from_millis(500)));
         panel.note_shown(Duration::from_millis(500));
@@ -265,7 +299,11 @@ mod tests {
 
     #[test]
     fn later_wait_has_no_grace() {
-        let mut panel = panel(false, None);
+        let mut panel = panel(None);
+        panel.begin_wait();
+        assert!(!panel.visible(Duration::ZERO));
+
+        panel.begin_wait();
 
         assert!(panel.visible(Duration::ZERO));
         assert_eq!(
@@ -283,31 +321,92 @@ mod tests {
     #[test]
     fn checkpoint_status_can_regress() {
         let server = plan("dev-box");
-        let mut panel = panel(true, Some(&server));
+        let mut panel = panel(Some(&server));
 
         panel.note_internet(true);
         panel.note_server(true);
         panel.note_internet(false);
         panel.note_server(false);
 
-        let frame = panel.frame();
+        let frame = panel.frame(Duration::ZERO, None);
         assert_eq!(frame.rows[0].status, StageStatus::Down);
         assert_eq!(frame.rows[1].status, StageStatus::Down);
     }
 
     #[test]
     fn proxy_target_omits_server_row() {
-        let panel = panel(true, None);
+        let panel = panel(None);
 
         assert_eq!(
             panel
-                .frame()
+                .frame(Duration::ZERO, None)
                 .rows
                 .iter()
                 .map(|row| row.stage)
                 .collect::<Vec<_>>(),
             vec![RecoveryStage::Internet, RecoveryStage::Session]
         );
+    }
+
+    #[test]
+    fn settled_checkpoints_survive_later_waits_without_spinner_flicker() {
+        let server = plan("dev-box");
+        let mut panel = panel(Some(&server));
+        assert_eq!(
+            panel.frame(Duration::ZERO, None).rows[0].status,
+            StageStatus::Checking
+        );
+
+        panel.note_internet(true);
+        panel.note_server(true);
+        panel.begin_wait();
+        panel.begin_wait();
+
+        let frame = panel.frame(Duration::from_secs(2), None);
+        assert_eq!(frame.rows[0].status, StageStatus::Ok);
+        assert_eq!(frame.rows[1].status, StageStatus::Ok);
+    }
+
+    #[test]
+    fn reachable_server_becomes_suspect_after_repeated_ssh_failures() {
+        let server = plan("dev-box");
+        let mut panel = panel(Some(&server));
+        panel.note_server(true);
+
+        panel.note_attempt(1);
+        assert_eq!(
+            panel.frame(Duration::ZERO, None).rows[1].status,
+            StageStatus::Ok
+        );
+        panel.note_attempt(2);
+        let suspect = panel.frame(Duration::ZERO, None);
+        assert_eq!(suspect.rows[1].status, StageStatus::Suspect);
+        assert!(
+            suspect.rows[1]
+                .detail
+                .ends_with("answers TCP · SSH failing")
+        );
+
+        panel.note_attempt(0);
+        assert_eq!(
+            panel.frame(Duration::ZERO, None).rows[1].status,
+            StageStatus::Ok
+        );
+    }
+
+    #[test]
+    fn frame_carries_outage_attempt_countdown_and_connecting_state() {
+        let mut panel = panel(None);
+        panel.note_attempt(7);
+
+        let frame = panel.frame(Duration::from_secs(133), Some(Duration::from_secs(12)));
+        assert_eq!(frame.outage_for, Duration::from_secs(133));
+        assert_eq!(frame.attempt, 7);
+        assert_eq!(frame.next_attempt_in, Some(Duration::from_secs(12)));
+        assert!(!frame.connecting);
+
+        panel.session_starting();
+        assert!(panel.frame(Duration::from_secs(133), None).connecting);
     }
 
     #[test]

@@ -51,6 +51,15 @@ fn direct_dial_plan_selects_outage_age_pacing() {
 
     assert_eq!(
         retry_delay(&policy, true, Duration::from_secs(30), ladder),
+        ladder
+    );
+    assert_eq!(
+        retry_delay(
+            &policy,
+            true,
+            Duration::from_secs(30),
+            Duration::from_secs(1)
+        ),
         Duration::from_secs(2)
     );
     assert_eq!(
@@ -63,14 +72,14 @@ fn direct_dial_plan_selects_outage_age_pacing() {
 fn plain_retry_wait_reports_interruption() {
     let stop = AtomicBool::new(true);
     let mut ui = OutageUi::plain_lines("dev-box");
+    let mut outage = OutageState::new("dev-box", None, None);
 
     assert_eq!(
         wait_before_retry(
             None,
-            None,
             Duration::from_secs(30),
             Duration::from_secs(30),
-            true,
+            &mut outage,
             &mut ui,
             Some(&stop),
         )
@@ -89,14 +98,14 @@ fn plain_retry_wait_omits_the_internet_checkpoint() {
 #[test]
 fn settled_retry_wait_returns_only_attach_or_interrupted() {
     let mut ui = OutageUi::plain_lines("dev-box");
+    let mut outage = OutageState::new("dev-box", None, None);
 
     assert_eq!(
         wait_before_retry(
             None,
-            None,
             Duration::ZERO,
             Duration::from_secs(30),
-            true,
+            &mut outage,
             &mut ui,
             None,
         )
