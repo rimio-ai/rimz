@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{CommandSpec, MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
+use crate::mux::{CommandSpec, HostPane, MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
 
 use super::TmuxBackend;
 use super::options::sidebar_serve_command;
@@ -19,6 +19,17 @@ pub(super) struct TmuxPaneGeometry {
     pub(super) is_sidebar: bool,
 }
 
+pub(super) struct OpenedWindow {
+    pub(super) window_id: String,
+    pub(super) first_pane: String,
+}
+
+pub(super) fn equal_row_split_size(pane_count: usize, split_index: usize) -> String {
+    debug_assert!(pane_count >= 2 && (1..pane_count).contains(&split_index));
+    let remaining = pane_count - split_index;
+    format!("{}%", 100 * remaining / (remaining + 1))
+}
+
 /// A tmux window name with its reserved separators neutralized. tmux parses a
 /// colon as the `session:window` boundary and a dot as the `window.pane`
 /// boundary in a target spec, so `new-window -n` rejects a name carrying
@@ -31,6 +42,39 @@ pub(super) fn sanitize_window_name(raw: &str) -> String {
 }
 
 impl TmuxBackend {
+    /// Open one detached named window and validate the ids printed by the same
+    /// tmux client invocation.
+    pub(super) fn open_named_window(
+        &self,
+        session: &str,
+        name: &str,
+        cwd: &Path,
+        argv: &[String],
+    ) -> Result<OpenedWindow> {
+        let output = self
+            .cmd()
+            .args([
+                "new-window".to_owned(),
+                "-d".to_owned(),
+                "-P".to_owned(),
+                "-F".to_owned(),
+                "#{window_id} #{pane_id}".to_owned(),
+                "-t".to_owned(),
+                session.to_owned(),
+                "-n".to_owned(),
+                sanitize_window_name(name),
+                "-c".to_owned(),
+                cwd.to_string_lossy().into_owned(),
+            ])
+            .args(argv.iter().cloned())
+            .run()?;
+        let (window_id, first_pane) = parse_new_window_ids(&output.stdout)?;
+        Ok(OpenedWindow {
+            window_id,
+            first_pane,
+        })
+    }
+
     /// Close a single pane by id (`kill-pane -t %N`), terminating its process.
     /// Reconcile uses this to drop a duplicate or unresponsive sidebar pane
     /// without touching the rest of the window.
@@ -528,53 +572,21 @@ impl TmuxBackend {
                 );
                 &fallback_shell
             };
-            // `-d` keeps the user on the working window; `-P -F` prints the new
-            // window id so we can land focus on the freshest channel without
-            // the `session:name` colon ambiguity a label can carry. The agent
-            // argv follows directly, run via execvp (no shell), so it needs no
-            // quoting.
-            let launched = self
-                .cmd()
-                .args([
-                    "new-window".to_owned(),
-                    "-d".to_owned(),
-                    "-P".to_owned(),
-                    "-F".to_owned(),
-                    "#{window_id} #{pane_id}".to_owned(),
-                    "-t".to_owned(),
-                    opts.session_name.clone(),
-                    "-n".to_owned(),
-                    label.clone(),
-                    "-c".to_owned(),
-                    tab.cwd.to_string_lossy().into_owned(),
-                ])
-                .args(first.iter().cloned())
-                .run();
-            match launched {
-                Ok(output) => {
-                    let (window_id, first_pane) = match parse_new_window_ids(&output.stdout) {
-                        Ok(ids) => ids,
-                        Err(err) => {
-                            tracing::warn!(
-                                session = %opts.session_name,
-                                tab = %tab.label,
-                                tags.operation = "tmux.resume.launch_window",
-                                error = &err as &dyn std::error::Error,
-                                "resume: launch window id parse failed; leaving extra panes out",
-                            );
-                            continue;
-                        }
-                    };
-                    if focus_window.is_none() && !window_id.is_empty() {
-                        focus_window = Some(window_id.clone());
+            match self.open_named_window(&opts.session_name, &tab.label, &tab.cwd, first) {
+                Ok(opened) => {
+                    if focus_window.is_none() {
+                        focus_window = Some(opened.window_id.clone());
                     }
                     // Leave tmux's window layout alone after the hook docks the
                     // sidebar: `select-layout` retiles every pane in the window,
                     // including the managed left sidebar. Additional agents split
                     // the active work area and preserve the sidebar's fixed width.
-                    if let Err(err) =
-                        self.split_layout_columns(&window_id, &first_pane, &tab.cwd, &tab.layout)
-                    {
+                    if let Err(err) = self.split_layout_columns(
+                        &opened.window_id,
+                        &opened.first_pane,
+                        &tab.cwd,
+                        &tab.layout,
+                    ) {
                         tracing::warn!(
                             session = %opts.session_name,
                             tab = %tab.label,
@@ -589,7 +601,7 @@ impl TmuxBackend {
                     tab = %tab.label,
                     tags.operation = "tmux.resume.launch_window",
                     error = &err as &dyn std::error::Error,
-                    "resume: launching the channel window failed; leaving it out",
+                    "resume: launching the channel window failed or returned invalid ids; leaving extra panes out",
                 ),
             }
         }
@@ -617,6 +629,28 @@ impl TmuxBackend {
             argv,
             "split-window did not print a pane id",
         )
+    }
+
+    pub(super) fn append_equal_host_rows<'a>(
+        &self,
+        first_pane: &str,
+        pane_count: usize,
+        rows: impl IntoIterator<Item = &'a HostPane>,
+        empty_reason: &str,
+    ) -> Result<()> {
+        let mut previous = first_pane.to_owned();
+        for (index, pane) in rows.into_iter().enumerate() {
+            let size = equal_row_split_size(pane_count, index + 1);
+            previous = self.split_printed_with_reason(
+                "-v",
+                &previous,
+                Some(&size),
+                &pane.cwd,
+                &pane.argv,
+                empty_reason,
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn split_printed_with_reason(

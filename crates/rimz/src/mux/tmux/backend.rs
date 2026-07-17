@@ -9,10 +9,8 @@ use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
     sidebar_serve_command, sidebar_width_option_set_cmd, tmux_views_with_sidebars,
 };
-use super::parse::{
-    parse_client_view, parse_floating_pane_ids, parse_new_window_ids, parse_pane_line,
-};
-use super::window::{TmuxPaneGeometry, sanitize_window_name};
+use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
+use super::window::TmuxPaneGeometry;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
@@ -28,12 +26,6 @@ use crate::mux::{
 /// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
 /// column amount — its step is Zellij's own ~5%-of-view increment.
 const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
-
-pub(super) fn equal_row_split_size(pane_count: usize, split_index: usize) -> String {
-    debug_assert!(pane_count >= 2 && (1..pane_count).contains(&split_index));
-    let remaining = pane_count - split_index;
-    format!("{}%", 100 * remaining / (remaining + 1))
-}
 
 fn live_cols_u16(
     width: crate::mux::SidebarWidth,
@@ -681,25 +673,14 @@ impl MuxBackend for TmuxBackend {
                 reason: "daemon view has no content panes".to_owned(),
             });
         };
-        let view_name = sanitize_window_name(&opts.view.name);
-        let output = self
-            .cmd()
-            .args([
-                "new-window".to_owned(),
-                "-d".to_owned(),
-                "-P".to_owned(),
-                "-F".to_owned(),
-                "#{window_id} #{pane_id}".to_owned(),
-                "-t".to_owned(),
-                session.clone(),
-                "-n".to_owned(),
-                view_name,
-                "-c".to_owned(),
-                first_content.cwd.to_string_lossy().into_owned(),
-            ])
-            .args(first_content.argv.clone())
-            .run()?;
-        let (window_id, first_content) = parse_new_window_ids(&output.stdout)?;
+        let opened = self.open_named_window(
+            session,
+            &opts.view.name,
+            &first_content.cwd,
+            &first_content.argv,
+        )?;
+        let window_id = opened.window_id;
+        let first_content = opened.first_pane;
         let mut first_daemon_pane = None;
         let runtime = opts
             .view
@@ -723,32 +704,20 @@ impl MuxBackend for TmuxBackend {
                 &first.argv,
                 "split-window did not print a daemon pane id",
             )?;
-            let mut previous = first_daemon.clone();
-            for (index, host) in rest.iter().enumerate() {
-                let size = equal_row_split_size(runtime.len(), index + 1);
-                previous = self.split_printed_with_reason(
-                    "-v",
-                    &previous,
-                    Some(&size),
-                    &host.cwd,
-                    &host.argv,
-                    "split-window did not print a daemon pane id",
-                )?;
-            }
+            self.append_equal_host_rows(
+                &first_daemon,
+                runtime.len(),
+                rest.iter().copied(),
+                "split-window did not print a daemon pane id",
+            )?;
             first_daemon_pane = Some(first_daemon);
         }
-        let mut previous_content = first_content.clone();
-        for (index, content) in rest_content.iter().enumerate() {
-            let size = equal_row_split_size(opts.view.content.len(), index + 1);
-            previous_content = self.split_printed_with_reason(
-                "-v",
-                &previous_content,
-                Some(&size),
-                &content.cwd,
-                &content.argv,
-                "split-window did not print a content pane id",
-            )?;
-        }
+        self.append_equal_host_rows(
+            &first_content,
+            opts.view.content.len(),
+            rest_content,
+            "split-window did not print a content pane id",
+        )?;
         if let Some(first_daemon) = first_daemon_pane {
             if let Err(err) = self
                 .cmd()
@@ -794,25 +763,10 @@ impl MuxBackend for TmuxBackend {
                 reason: "tab layout has an empty column".to_owned(),
             });
         };
-        let title = sanitize_window_name(&opts.title);
-        let output = self
-            .cmd()
-            .args([
-                "new-window".to_owned(),
-                "-d".to_owned(),
-                "-P".to_owned(),
-                "-F".to_owned(),
-                "#{window_id} #{pane_id}".to_owned(),
-                "-t".to_owned(),
-                opts.session_name.clone(),
-                "-n".to_owned(),
-                title,
-                "-c".to_owned(),
-                opts.cwd.to_string_lossy().into_owned(),
-            ])
-            .args(first.argv.clone())
-            .run()?;
-        let (window_id, first_pane) = parse_new_window_ids(&output.stdout)?;
+        let opened =
+            self.open_named_window(&opts.session_name, &opts.title, &opts.cwd, &first.argv)?;
+        let window_id = opened.window_id;
+        let first_pane = opened.first_pane;
 
         // A tab opened from a narrow pane (for example a half-width floating
         // pane) is born at that pane's width, so the hook-docked sidebar and

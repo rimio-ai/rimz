@@ -12,7 +12,7 @@ fn default_server_socket_path_uses_tmux_default_layout() {
 fn equal_row_splits_size_each_remaining_stack() {
     let sizes = |pane_count| {
         (1..pane_count)
-            .map(|index| backend::equal_row_split_size(pane_count, index))
+            .map(|index| window::equal_row_split_size(pane_count, index))
             .collect::<Vec<_>>()
     };
 
