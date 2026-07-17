@@ -502,13 +502,13 @@ fn upgrade_live(
     }
 
     // Reap orphan sidebar processes whose pane is gone — the mux cannot close a
-    //    pane that no longer exists, so a wedged renderer would otherwise linger.
+    // pane that no longer exists, so a wedged renderer would otherwise linger.
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), *mux, ws);
 
-    // 6. Sweep runtime files whose owner is gone — stale heartbeats and
-    //    ownerless sockets accumulate in a live session too (every SIGKILLed or
-    //    reaped renderer leaves a pair), and the sweep already spares anything
-    //    fresh or still starting.
+    // Sweep runtime files whose owner is gone — stale heartbeats and ownerless
+    // sockets accumulate in a live session too (every SIGKILLed or reaped
+    // renderer leaves a pair), and the sweep already spares anything fresh or
+    // still starting.
     crate::sidebar::sweep_orphan_runtime(runtime);
     outcome
 }
