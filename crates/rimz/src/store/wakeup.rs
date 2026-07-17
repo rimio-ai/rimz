@@ -27,7 +27,9 @@ use tracing::debug;
 
 use crate::harness::run::RunRecord;
 use crate::harness::run_wake::{WakeupFrame, run_socket_path};
-use crate::sidebar::events::{RELOAD_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope};
+use crate::sidebar::events::{
+    RELOAD_CONTROL_WORD, SUPERVISOR_HANDOFF_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope,
+};
 use crate::sidebar::heartbeat::{SidebarHeartbeat, read_current_heartbeats};
 pub use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 use crate::store::RuntimePaths;
@@ -125,6 +127,18 @@ pub fn reload_sidebars(rt: &RuntimePaths) -> Result<usize> {
         sidebars.iter().map(|hb| hb.wakeup_socket.as_path()),
     );
     Ok(signaled)
+}
+
+/// Ask one known sidebar worker to exit cleanly for a supervisor handoff.
+/// The durable workspace record remains the target truth; this datagram only
+/// bounds how long the old worker keeps serving after the supervisor notices.
+pub fn reload_sidebar(
+    rt: &RuntimePaths,
+    instance_id: &crate::ids::SidebarInstanceId,
+) -> Result<()> {
+    let target = rt.sidebar_socket_path(instance_id);
+    send_datagram(SUPERVISOR_HANDOFF_CONTROL_WORD.as_bytes(), &target);
+    Ok(())
 }
 
 /// Post one typed event envelope to every fresh, protocol-current sidebar of

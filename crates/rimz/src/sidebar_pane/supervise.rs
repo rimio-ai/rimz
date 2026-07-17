@@ -8,11 +8,11 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::diag::record::DiagEvent;
 use crate::ids::SidebarInstanceId;
@@ -36,6 +36,14 @@ const TEST_RESPAWN_BACKOFF_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_
 const TEST_PANE_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS";
 #[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE";
+#[cfg(feature = "testkit")]
+const TEST_RECORD_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_RECORD_POLL_MS";
+#[cfg(feature = "testkit")]
+const TEST_STABLE_RUN_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_STABLE_RUN_MS";
+#[cfg(feature = "testkit")]
+const TEST_HANDOFF_GRACE_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_HANDOFF_GRACE_MS";
+#[cfg(feature = "testkit")]
+const TEST_WORKER_STARTED_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_STARTED_FILE";
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
 const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PANE_PROBE_INTERVAL: Duration = Duration::from_secs(60);
@@ -47,6 +55,9 @@ pub const RESPAWN_EXIT_CODE: i32 = 102;
 const RESPAWN_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPAWN_STABLE_RUN: Duration = Duration::from_secs(60);
+const RECORD_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const WORKER_HANDOFF_GRACE: Duration = Duration::from_secs(10);
+const SUPERVISOR_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SidebarSuperviseErr {
@@ -80,31 +91,25 @@ pub fn run_worker(config: ServeConfig) -> crate::sidebar_pane::app::Result<()> {
 
 pub fn run(config: ServeConfig) -> Result<()> {
     let args = env::args_os().skip(1).collect::<Vec<_>>();
-    if let crate::reload::WorkspaceReexecTarget::Verified(target) =
-        crate::reload::recorded_reexec_target(&config.workspace_id)
-        && crate::build_id::current() != Some(target.build.as_str())
-    {
-        debug!(
-            target = %target.path.display(),
-            instance = %config.instance_id,
-            "re-execing stale sidebar supervisor onto the recorded room build",
-        );
-        return exec_supervisor(&target.path, &args, &config);
-    }
     let mut backoff = RESPAWN_BACKOFF_INITIAL;
     let mut pane_watchdog = PaneWatchdog::from_config(&config);
+    let mut record_watch = RecordWatch::new(&config.workspace_id);
+    let supervisor_build = crate::build_id::current().map(str::to_owned);
+    let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone()).ok();
+    let mut exec_state = PendingExec::default();
     loop {
         // Spawn from the durable room target even when its bytes match this
         // supervisor. The supervisor may still occupy an unlinked temp image;
         // `RIMZ_BIN` and `current_exe()` would make its next respawn fail.
+        let target = crate::reload::recorded_reexec_target(&config.workspace_id);
+        exec_state.observe(&target, supervisor_build.as_deref());
         let current = env::current_exe().unwrap_or_else(|_| crate::proc::rimz_exe());
-        let exe = worker_executable(
-            crate::reload::recorded_reexec_target(&config.workspace_id),
-            current,
-        );
+        let worker_build = worker_build(&target, supervisor_build.as_deref());
+        let exe = worker_executable(target, current);
         let started = Instant::now();
         let mut child = spawn_worker(&exe, &args, &config)?;
         let worker_pid = worker_pid(&child);
+        record_test_worker_start(&exe, child.id());
         spawn_test_stray_if_requested();
 
         let stderr_tail = Arc::new(Mutex::new(StderrTail::new(STDERR_TAIL_BYTES)));
@@ -112,7 +117,19 @@ pub fn run(config: ServeConfig) -> Result<()> {
             .stderr
             .take()
             .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
-        let worker = wait_for_worker_and_reap_strays(worker_pid, &mut pane_watchdog);
+        let worker = wait_for_worker_and_reap_strays(
+            worker_pid,
+            &mut pane_watchdog,
+            WorkerConvergence {
+                record_watch: &mut record_watch,
+                exec_state: &mut exec_state,
+                worker_build: worker_build.as_deref(),
+                supervisor_build: supervisor_build.as_deref(),
+                started,
+                runtime: runtime.as_ref(),
+                config: &config,
+            },
+        );
         drop(child);
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
@@ -126,35 +143,58 @@ pub fn run(config: ServeConfig) -> Result<()> {
             }
         };
 
-        match supervise_action(worker.exit_code, worker.signal) {
+        let action = if worker.handoff {
+            SuperviseAction::ReloadReexec
+        } else {
+            supervise_action(worker.termination.exit_code, worker.termination.signal)
+        };
+        match action {
             SuperviseAction::ReloadReexec => {
-                let Some(target) = crate::reload::reexec_target_for_workspace(&config.workspace_id)
-                else {
-                    debug!("reload: supervisor replacement binary missing; respawning worker");
-                    continue;
-                };
-                debug!(
-                    target = %target.display(),
-                    instance = %config.instance_id,
-                    "reload: re-execing sidebar supervisor",
-                );
-                return exec_supervisor(&target, &args, &config);
+                if let Some(target) = exec_state.promotable(
+                    worker_build.as_deref(),
+                    started.elapsed(),
+                    respawn_stable_run(),
+                ) {
+                    match preflight_supervisor(&target.path) {
+                        Ok(()) => {
+                            debug!(
+                                target = %target.path.display(),
+                                instance = %config.instance_id,
+                                "reload: re-execing proven sidebar supervisor",
+                            );
+                            return exec_supervisor(&target.path, &args, &config);
+                        }
+                        Err(reason) => {
+                            record_preflight_rejected(&config, &target.build, &reason);
+                            exec_state.reject(&target.build);
+                        }
+                    }
+                }
             }
-            SuperviseAction::Done => return Ok(()),
             SuperviseAction::Respawn => {
                 let stderr_excerpt = stderr_tail
                     .lock()
                     .map(|tail| tail.excerpt())
                     .unwrap_or_default();
                 restore_terminal(MouseCapture::Stdout, Screen::Main);
-                record_signal_death(&config, worker.signal, worker.exit_code, stderr_excerpt);
+                record_signal_death(
+                    &config,
+                    worker.termination.signal,
+                    worker.termination.exit_code,
+                    stderr_excerpt,
+                );
                 let (delay, next) = respawn_backoff(backoff, started.elapsed());
                 debug!(
                     delay_ms = delay.as_millis(),
                     instance = %config.instance_id,
                     "respawning sidebar worker after abnormal termination",
                 );
-                thread::sleep(respawn_delay(delay));
+                sleep_respawn_backoff(
+                    respawn_delay(delay),
+                    &mut record_watch,
+                    &mut exec_state,
+                    supervisor_build.as_deref(),
+                );
                 backoff = next;
             }
         }
@@ -202,16 +242,15 @@ fn exec_supervisor(exe: &Path, args: &[OsString], config: &ServeConfig) -> Resul
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SuperviseAction {
     ReloadReexec,
-    Done,
     Respawn,
 }
 
 fn supervise_action(exit_code: Option<i32>, signal: Option<i32>) -> SuperviseAction {
     match (exit_code, signal) {
         (Some(RELOAD_EXIT_CODE), None) => SuperviseAction::ReloadReexec,
-        (Some(0), None) => SuperviseAction::Done,
         (Some(PANIC_EXIT_CODE), None)
         | (Some(RESPAWN_EXIT_CODE), None)
+        | (Some(0), None)
         | (None, Some(_))
         | (Some(_), None) => SuperviseAction::Respawn,
         _ => SuperviseAction::Respawn,
@@ -219,7 +258,7 @@ fn supervise_action(exit_code: Option<i32>, signal: Option<i32>) -> SuperviseAct
 }
 
 fn respawn_backoff(current: Duration, run_duration: Duration) -> (Duration, Duration) {
-    let delay = if run_duration >= RESPAWN_STABLE_RUN {
+    let delay = if run_duration >= respawn_stable_run() {
         RESPAWN_BACKOFF_INITIAL
     } else {
         current
@@ -233,10 +272,141 @@ struct WorkerTermination {
     exit_code: Option<i32>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct WorkerWait {
+    termination: WorkerTermination,
+    handoff: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum WaitOutcome {
-    Worker(WorkerTermination),
+    Worker(WorkerWait),
     OrphanReaped,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PendingExec {
+    target: Option<crate::reload::StagedBuild>,
+    rejected_build: Option<String>,
+}
+
+impl PendingExec {
+    fn observe(
+        &mut self,
+        target: &crate::reload::WorkspaceReexecTarget,
+        supervisor_build: Option<&str>,
+    ) {
+        let crate::reload::WorkspaceReexecTarget::Verified(target) = target else {
+            self.target = None;
+            self.rejected_build = None;
+            return;
+        };
+        if supervisor_build == Some(target.build.as_str()) {
+            self.target = None;
+            self.rejected_build = None;
+        } else if self.rejected_build.as_deref() != Some(target.build.as_str()) {
+            self.rejected_build = None;
+            self.target = Some(target.clone());
+        }
+    }
+
+    fn promotable(
+        &self,
+        worker_build: Option<&str>,
+        run_duration: Duration,
+        stable_run: Duration,
+    ) -> Option<crate::reload::StagedBuild> {
+        self.target
+            .as_ref()
+            .filter(|target| worker_build == Some(target.build.as_str()))
+            .filter(|_| run_duration >= stable_run)
+            .cloned()
+    }
+
+    fn reject(&mut self, build: &str) {
+        self.target = None;
+        self.rejected_build = Some(build.to_owned());
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RecordChange {
+    Verified(crate::reload::StagedBuild),
+    Unavailable,
+}
+
+#[derive(Debug)]
+struct RecordWatch {
+    workspace_id: crate::ids::WorkspaceId,
+    record_path: PathBuf,
+    last_seen_mtime: Option<SystemTime>,
+    next_poll: Instant,
+}
+
+impl RecordWatch {
+    fn new(workspace_id: &crate::ids::WorkspaceId) -> Self {
+        let record_path = crate::StatePaths::for_workspace(workspace_id.clone())
+            .map(|paths| paths.workspace_record)
+            .unwrap_or_default();
+        let last_seen_mtime = record_mtime(&record_path);
+        Self {
+            workspace_id: workspace_id.clone(),
+            record_path,
+            last_seen_mtime,
+            next_poll: Instant::now() + record_poll_interval(),
+        }
+    }
+
+    fn poll_if_due(&mut self, now: Instant) -> Option<RecordChange> {
+        if now < self.next_poll {
+            return None;
+        }
+        self.next_poll = now + record_poll_interval();
+        self.poll_now()
+    }
+
+    fn poll_now(&mut self) -> Option<RecordChange> {
+        let mtime = record_mtime(&self.record_path);
+        if mtime == self.last_seen_mtime {
+            return None;
+        }
+        let target = crate::reload::recorded_reexec_target(&self.workspace_id);
+        let change = record_change(self.last_seen_mtime, mtime, target);
+        self.last_seen_mtime = mtime;
+        change
+    }
+}
+
+fn record_change(
+    prior_mtime: Option<SystemTime>,
+    mtime: Option<SystemTime>,
+    target: crate::reload::WorkspaceReexecTarget,
+) -> Option<RecordChange> {
+    if mtime == prior_mtime {
+        return None;
+    }
+    Some(match target {
+        crate::reload::WorkspaceReexecTarget::Verified(target) => RecordChange::Verified(target),
+        crate::reload::WorkspaceReexecTarget::Absent
+        | crate::reload::WorkspaceReexecTarget::Invalid => RecordChange::Unavailable,
+    })
+}
+
+fn record_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
+fn worker_build(
+    target: &crate::reload::WorkspaceReexecTarget,
+    supervisor_build: Option<&str>,
+) -> Option<String> {
+    match target {
+        crate::reload::WorkspaceReexecTarget::Verified(target) => Some(target.build.clone()),
+        crate::reload::WorkspaceReexecTarget::Absent
+        | crate::reload::WorkspaceReexecTarget::Invalid => supervisor_build.map(str::to_owned),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -334,15 +504,28 @@ fn worker_pid(child: &Child) -> nix::unistd::Pid {
 }
 
 #[cfg(unix)]
+struct WorkerConvergence<'a> {
+    record_watch: &'a mut RecordWatch,
+    exec_state: &'a mut PendingExec,
+    worker_build: Option<&'a str>,
+    supervisor_build: Option<&'a str>,
+    started: Instant,
+    runtime: Option<&'a crate::RuntimePaths>,
+    config: &'a ServeConfig,
+}
+
+#[cfg(unix)]
 fn wait_for_worker_and_reap_strays(
     worker_pid: nix::unistd::Pid,
     watchdog: &mut Option<PaneWatchdog>,
+    convergence: WorkerConvergence<'_>,
 ) -> Result<WaitOutcome> {
     use nix::sys::signal::{Signal, kill};
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
 
     let mut orphan_reap_pending = false;
+    let mut handoff_deadline = None;
     loop {
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::Exited(pid, status)) if pid == worker_pid => {
@@ -353,7 +536,10 @@ fn wait_for_worker_and_reap_strays(
                 return Ok(if orphan_reap_pending {
                     WaitOutcome::OrphanReaped
                 } else {
-                    WaitOutcome::Worker(worker)
+                    WaitOutcome::Worker(WorkerWait {
+                        termination: worker,
+                        handoff: handoff_deadline.is_some(),
+                    })
                 });
             }
             Ok(WaitStatus::Signaled(pid, signal, _)) if pid == worker_pid => {
@@ -364,7 +550,10 @@ fn wait_for_worker_and_reap_strays(
                 return Ok(if orphan_reap_pending {
                     WaitOutcome::OrphanReaped
                 } else {
-                    WaitOutcome::Worker(worker)
+                    WaitOutcome::Worker(WorkerWait {
+                        termination: worker,
+                        handoff: handoff_deadline.is_some(),
+                    })
                 });
             }
             Ok(WaitStatus::Exited(pid, status)) => {
@@ -381,10 +570,50 @@ fn wait_for_worker_and_reap_strays(
                 );
             }
             Ok(WaitStatus::StillAlive) => {
+                let now = Instant::now();
+                if let Some(change) = convergence.record_watch.poll_if_due(now) {
+                    let worker_is_stale = apply_record_change(
+                        convergence.exec_state,
+                        &change,
+                        convergence.supervisor_build,
+                        convergence.worker_build,
+                    );
+                    if worker_is_stale && handoff_deadline.is_none() {
+                        request_worker_handoff(
+                            convergence.runtime,
+                            convergence.config,
+                            convergence.exec_state.target.as_ref(),
+                        );
+                        handoff_deadline = Some(now + worker_handoff_grace());
+                    }
+                }
+                if handoff_deadline.is_none()
+                    && convergence
+                        .exec_state
+                        .promotable(
+                            convergence.worker_build,
+                            now.saturating_duration_since(convergence.started),
+                            respawn_stable_run(),
+                        )
+                        .is_some()
+                {
+                    request_worker_handoff(
+                        convergence.runtime,
+                        convergence.config,
+                        convergence.exec_state.target.as_ref(),
+                    );
+                    handoff_deadline = Some(now + worker_handoff_grace());
+                }
+                if handoff_deadline.is_some_and(|deadline| now >= deadline) {
+                    match kill(worker_pid, Signal::SIGKILL) {
+                        Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+                        Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
+                    }
+                }
                 if !orphan_reap_pending
                     && watchdog
                         .as_mut()
-                        .is_some_and(|watchdog| watchdog.probe_if_due(Instant::now()))
+                        .is_some_and(|watchdog| watchdog.probe_if_due(now))
                 {
                     match kill(worker_pid, Signal::SIGKILL) {
                         Ok(()) | Err(nix::errno::Errno::ESRCH) => orphan_reap_pending = true,
@@ -400,11 +629,72 @@ fn wait_for_worker_and_reap_strays(
                 return Ok(if orphan_reap_pending {
                     WaitOutcome::OrphanReaped
                 } else {
-                    WaitOutcome::Worker(WorkerTermination::default())
+                    WaitOutcome::Worker(WorkerWait {
+                        termination: WorkerTermination::default(),
+                        handoff: handoff_deadline.is_some(),
+                    })
                 });
             }
             Err(nix::errno::Errno::EINTR) => continue,
             Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
+        }
+    }
+}
+
+fn apply_record_change(
+    exec_state: &mut PendingExec,
+    change: &RecordChange,
+    supervisor_build: Option<&str>,
+    worker_build: Option<&str>,
+) -> bool {
+    let target = match change {
+        RecordChange::Verified(target) => {
+            crate::reload::WorkspaceReexecTarget::Verified(target.clone())
+        }
+        RecordChange::Unavailable => crate::reload::WorkspaceReexecTarget::Invalid,
+    };
+    exec_state.observe(&target, supervisor_build);
+    matches!(change, RecordChange::Verified(target) if worker_build != Some(target.build.as_str()))
+}
+
+fn request_worker_handoff(
+    runtime: Option<&crate::RuntimePaths>,
+    config: &ServeConfig,
+    target: Option<&crate::reload::StagedBuild>,
+) {
+    if let Some(runtime) = runtime
+        && let Err(err) = crate::store::wakeup::reload_sidebar(runtime, &config.instance_id)
+    {
+        debug!(error = %err, "sidebar supervisor worker handoff nudge failed");
+    }
+    if let Some(target) = target {
+        crate::diag::DiagSink::for_workspace(
+            config.workspace_id.clone(),
+            config.session_name.clone(),
+            Some(config.instance_id.clone()),
+        )
+        .emit(DiagEvent::SupervisorConvergence {
+            target_build: target.build.clone(),
+        });
+    }
+}
+
+fn sleep_respawn_backoff(
+    delay: Duration,
+    record_watch: &mut RecordWatch,
+    exec_state: &mut PendingExec,
+    supervisor_build: Option<&str>,
+) {
+    let deadline = Instant::now() + delay;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        thread::sleep(remaining.min(record_poll_interval()));
+        if let Some(change) = record_watch.poll_now() {
+            let _ = apply_record_change(exec_state, &change, supervisor_build, None);
+            return;
         }
     }
 }
@@ -446,6 +736,30 @@ fn record_orphan_reap(config: &ServeConfig, worker_pid: i32) {
             .map(ToString::to_string)
             .unwrap_or_default(),
         worker_pid,
+    });
+}
+
+fn preflight_supervisor(exe: &Path) -> std::result::Result<(), String> {
+    let output = crate::mux::CommandSpec::new(exe.to_string_lossy())
+        .arg("--version")
+        .output_raw_with_timeout(SUPERVISOR_PREFLIGHT_TIMEOUT)
+        .map_err(|err| err.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!("`--version` exited with {}", output.status))
+    }
+}
+
+fn record_preflight_rejected(config: &ServeConfig, target_build: &str, reason: &str) {
+    crate::diag::DiagSink::for_workspace(
+        config.workspace_id.clone(),
+        config.session_name.clone(),
+        Some(config.instance_id.clone()),
+    )
+    .emit(DiagEvent::SupervisorPreflightRejected {
+        target_build: target_build.to_owned(),
+        reason: reason.to_owned(),
     });
 }
 
@@ -575,6 +889,48 @@ fn respawn_delay(delay: Duration) -> Duration {
         .unwrap_or(delay)
 }
 
+#[cfg(feature = "testkit")]
+fn record_poll_interval() -> Duration {
+    env::var(TEST_RECORD_POLL_MS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(RECORD_POLL_INTERVAL)
+}
+
+#[cfg(not(feature = "testkit"))]
+fn record_poll_interval() -> Duration {
+    RECORD_POLL_INTERVAL
+}
+
+#[cfg(feature = "testkit")]
+fn respawn_stable_run() -> Duration {
+    env::var(TEST_STABLE_RUN_MS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(RESPAWN_STABLE_RUN)
+}
+
+#[cfg(not(feature = "testkit"))]
+fn respawn_stable_run() -> Duration {
+    RESPAWN_STABLE_RUN
+}
+
+#[cfg(feature = "testkit")]
+fn worker_handoff_grace() -> Duration {
+    env::var(TEST_HANDOFF_GRACE_MS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(WORKER_HANDOFF_GRACE)
+}
+
+#[cfg(not(feature = "testkit"))]
+fn worker_handoff_grace() -> Duration {
+    WORKER_HANDOFF_GRACE
+}
+
 #[cfg(not(feature = "testkit"))]
 fn respawn_delay(delay: Duration) -> Duration {
     delay
@@ -683,6 +1039,23 @@ fn spawn_test_stray_if_requested() {
 #[cfg(not(feature = "testkit"))]
 fn spawn_test_stray_if_requested() {}
 
+#[cfg(feature = "testkit")]
+fn record_test_worker_start(exe: &Path, pid: u32) {
+    use std::fs::OpenOptions;
+
+    let Some(path) = env::var_os(TEST_WORKER_STARTED_FILE_ENV).filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(file, "{pid} {}", exe.display());
+}
+
+#[cfg(not(feature = "testkit"))]
+fn record_test_worker_start(_exe: &Path, _pid: u32) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,7 +1093,7 @@ mod tests {
             supervise_action(Some(RESPAWN_EXIT_CODE), None),
             SuperviseAction::Respawn
         );
-        assert_eq!(supervise_action(Some(0), None), SuperviseAction::Done);
+        assert_eq!(supervise_action(Some(0), None), SuperviseAction::Respawn);
         assert_eq!(supervise_action(None, Some(9)), SuperviseAction::Respawn);
         assert_eq!(supervise_action(Some(1), None), SuperviseAction::Respawn);
     }
@@ -793,5 +1166,98 @@ mod tests {
             ),
             durable,
         );
+    }
+
+    #[test]
+    fn record_change_requires_a_new_mtime_and_preserves_verification() {
+        let prior = SystemTime::UNIX_EPOCH;
+        let next = prior + Duration::from_secs(1);
+        let target = crate::reload::StagedBuild {
+            path: PathBuf::from("/state/builds/next/rimz"),
+            build: "next".to_owned(),
+        };
+        assert_eq!(
+            record_change(
+                Some(prior),
+                Some(prior),
+                crate::reload::WorkspaceReexecTarget::Verified(target.clone()),
+            ),
+            None,
+        );
+        assert_eq!(
+            record_change(
+                Some(prior),
+                Some(next),
+                crate::reload::WorkspaceReexecTarget::Verified(target.clone()),
+            ),
+            Some(RecordChange::Verified(target)),
+        );
+        assert_eq!(
+            record_change(
+                Some(prior),
+                Some(next),
+                crate::reload::WorkspaceReexecTarget::Invalid,
+            ),
+            Some(RecordChange::Unavailable),
+        );
+    }
+
+    #[test]
+    fn pending_exec_waits_for_the_replacement_worker_stability_window() {
+        let target = crate::reload::StagedBuild {
+            path: PathBuf::from("/state/builds/new/rimz"),
+            build: "new".to_owned(),
+        };
+        let mut pending = PendingExec::default();
+        pending.observe(
+            &crate::reload::WorkspaceReexecTarget::Verified(target.clone()),
+            Some("old"),
+        );
+
+        assert!(
+            pending
+                .promotable(Some("old"), RESPAWN_STABLE_RUN, RESPAWN_STABLE_RUN)
+                .is_none(),
+            "the old worker cannot promote the new supervisor",
+        );
+        assert!(
+            pending
+                .promotable(
+                    Some("new"),
+                    RESPAWN_STABLE_RUN - Duration::from_millis(1),
+                    RESPAWN_STABLE_RUN,
+                )
+                .is_none(),
+            "the new worker must first serve stably",
+        );
+        assert_eq!(
+            pending.promotable(Some("new"), RESPAWN_STABLE_RUN, RESPAWN_STABLE_RUN),
+            Some(target),
+        );
+    }
+
+    #[test]
+    fn pending_exec_resets_when_the_record_changes() {
+        let target = |build: &str| {
+            crate::reload::WorkspaceReexecTarget::Verified(crate::reload::StagedBuild {
+                path: PathBuf::from(format!("/state/builds/{build}/rimz")),
+                build: build.to_owned(),
+            })
+        };
+        let mut pending = PendingExec::default();
+        pending.observe(&target("first"), Some("old"));
+        pending.reject("first");
+        pending.observe(&target("first"), Some("old"));
+        assert!(
+            pending.target.is_none(),
+            "a rejected build waits for a new record"
+        );
+
+        pending.observe(&target("second"), Some("old"));
+        assert_eq!(
+            pending.target.as_ref().map(|target| target.build.as_str()),
+            Some("second")
+        );
+        assert_eq!(pending.rejected_build, None);
     }
 }

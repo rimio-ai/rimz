@@ -29,12 +29,7 @@ pub(crate) fn sidebar_socket_path(
     runtime: &RuntimePaths,
     instance_id: &SidebarInstanceId,
 ) -> PathBuf {
-    // Use the short (12-hex) id, not the full `sb_<32 hex>`: the bound path must
-    // fit the platform AF_UNIX budget, same as the per-run socket. The
-    // heartbeat carries this path verbatim, so senders stay in sync.
-    runtime
-        .sock_dir
-        .join(format!("sidebar.{}.sock", instance_id.short()))
+    runtime.sidebar_socket_path(instance_id)
 }
 
 pub(super) fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {

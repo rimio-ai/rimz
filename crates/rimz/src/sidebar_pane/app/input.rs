@@ -7,7 +7,9 @@ use std::io;
 use std::os::unix::net::UnixDatagram;
 
 use crate::agents::AgentStatus;
-use crate::sidebar::events::{RELOAD_CONTROL_WORD, SidebarEventEnvelope};
+use crate::sidebar::events::{
+    RELOAD_CONTROL_WORD, SUPERVISOR_HANDOFF_CONTROL_WORD, SidebarEventEnvelope,
+};
 use crate::sidebar_pane::view::BodyFilter;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
@@ -27,6 +29,9 @@ pub(super) enum Wakeup {
     /// `rimz reload` asks the renderer to re-exec its own binary in place so a
     /// freshly-installed build takes effect without a session rebirth.
     Reload,
+    /// The supervisor has proven a replacement worker and needs this worker to
+    /// release the terminal before the supervisor replaces its own image.
+    SupervisorHandoff,
     /// The local `r` key reload request. Kept separate so the help overlay can
     /// consume keypresses without swallowing external `rimz reload` events.
     ReloadKey,
@@ -172,6 +177,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "snapshot" => Wakeup::Snapshot,
         "resize" => Wakeup::Resize,
         RELOAD_CONTROL_WORD => Wakeup::Reload,
+        SUPERVISOR_HANDOFF_CONTROL_WORD => Wakeup::SupervisorHandoff,
         "key:reload" => Wakeup::ReloadKey,
         KEY_UP => Wakeup::Key(KeyAction::Up),
         KEY_DOWN => Wakeup::Key(KeyAction::Down),

@@ -998,6 +998,13 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             pane_id,
             worker_pid,
         } => format!("reaped orphaned renderer {worker_pid} after pane {pane_id} disappeared"),
+        DiagEvent::SupervisorConvergence { target_build } => {
+            format!("supervisor converging onto build {target_build}")
+        }
+        DiagEvent::SupervisorPreflightRejected {
+            target_build,
+            reason,
+        } => format!("supervisor rejected build {target_build}: {reason}"),
         DiagEvent::RendererExit { cause } => format!("renderer exited: {}", cause.as_str()),
         DiagEvent::FrameAnomaly {
             anomaly,

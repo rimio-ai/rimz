@@ -182,9 +182,12 @@ pub(super) fn handle_wakeup(
         // The serve loop intercepts these before dispatching here: a tick, a
         // typed sidebar event is a re-fetch trigger, worker completions are
         // folded, and a reload re-execs.
-        Wakeup::Tick | Wakeup::Event(_) | Wakeup::Reload | Wakeup::ReloadKey | Wakeup::Snapshot => {
-            InputOutcome::default()
-        }
+        Wakeup::Tick
+        | Wakeup::Event(_)
+        | Wakeup::Reload
+        | Wakeup::SupervisorHandoff
+        | Wakeup::ReloadKey
+        | Wakeup::Snapshot => InputOutcome::default(),
     }
 }
 
@@ -399,6 +402,10 @@ impl LoopState {
                 Ok(LoopFlow::Continue)
             }
             Wakeup::Reload => Ok(self.handle_reload(config, fetch)),
+            Wakeup::SupervisorHandoff => {
+                self.reload_requested = true;
+                Ok(LoopFlow::Exit)
+            }
             // The local `r` key uses a key-specific wakeup so the help overlay
             // can close on the keypress before it reaches the reload path.
             Wakeup::ReloadKey if self.ui.help_visible => {

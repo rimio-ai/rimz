@@ -26,10 +26,10 @@ pub struct ReloadArgs {
 
 pub fn run(args: ReloadArgs, _globals: &GlobalFlags) -> Result<()> {
     let outcome = reload_user_sidebars(args.repair)?;
-    report(&outcome, args.repair)
+    report(&outcome)
 }
 
-fn report(outcome: &ReloadOutcome, repair: bool) -> Result<()> {
+fn report(outcome: &ReloadOutcome) -> Result<()> {
     use std::io::Write;
     let mut out = render::out();
     // Each tally reads at a glance: the count carries the accent, the verb stays plain.
@@ -71,19 +71,11 @@ fn report(outcome: &ReloadOutcome, repair: bool) -> Result<()> {
         )?;
     }
     if outcome.unconverged > 0 {
-        if repair {
-            writeln!(
-                out,
-                "{} did not reload in place; the repair pass handled structural recovery.",
-                n(outcome.unconverged, "sidebar"),
-            )?;
-        } else {
-            writeln!(
-                out,
-                "{} did not reload in place. Run `rimz reload --repair` to recover them without close-before-replace.",
-                n(outcome.unconverged, "sidebar"),
-            )?;
-        }
+        writeln!(
+            out,
+            "{} still converging; their supervisors will retry from the recorded build automatically.",
+            n(outcome.unconverged, "sidebar"),
+        )?;
     }
     if outcome.unverified > 0 {
         writeln!(

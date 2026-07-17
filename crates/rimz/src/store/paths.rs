@@ -314,6 +314,13 @@ impl RuntimePaths {
             .join(format!("sidebar.{}.json", instance_id.as_str()))
     }
 
+    /// Wakeup socket owned by one sidebar render worker.
+    pub fn sidebar_socket_path(&self, instance_id: &SidebarInstanceId) -> PathBuf {
+        // The short id keeps the bound path inside the platform AF_UNIX budget.
+        self.sock_dir
+            .join(format!("sidebar.{}.sock", instance_id.short()))
+    }
+
     /// Path of a sidebar instance's read-mark receipt file. Receipts outlive the
     /// writer so peer renderers can consume them on their next fold; the orphan
     /// sweep reaps stale files once the owning heartbeat has expired.

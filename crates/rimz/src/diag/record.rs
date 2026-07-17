@@ -307,6 +307,13 @@ pub enum DiagEvent {
         pane_id: String,
         worker_pid: i32,
     },
+    SupervisorConvergence {
+        target_build: String,
+    },
+    SupervisorPreflightRejected {
+        target_build: String,
+        reason: String,
+    },
     RendererExit {
         cause: RendererExitCause,
     },
@@ -348,6 +355,7 @@ impl DiagEvent {
             }
             | Self::TopologyWriteRejected { .. }
             | Self::RendererOrphanReaped { .. }
+            | Self::SupervisorPreflightRejected { .. }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
@@ -378,6 +386,7 @@ impl DiagEvent {
             | Self::NewbornQuarantined { .. }
             | Self::MixedBuildWriters { .. }
             | Self::TopologyWriterChanged { .. }
+            | Self::SupervisorConvergence { .. }
             | Self::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
             }
@@ -427,6 +436,8 @@ impl DiagEvent {
             Self::RendererPanic { .. } => "renderer_panic",
             Self::RendererSignalDeath { .. } => "renderer_signal_death",
             Self::RendererOrphanReaped { .. } => "renderer_orphan_reaped",
+            Self::SupervisorConvergence { .. } => "supervisor_convergence",
+            Self::SupervisorPreflightRejected { .. } => "supervisor_preflight_rejected",
             Self::RendererExit { .. } => "renderer_exit",
             Self::FrameAnomaly { .. } => "frame_anomaly",
         }
@@ -573,6 +584,10 @@ impl DiagEvent {
             }
             Self::RendererOrphanReaped { pane_id, .. } => {
                 format!("{}:{pane_id}", self.kind_name())
+            }
+            Self::SupervisorConvergence { target_build }
+            | Self::SupervisorPreflightRejected { target_build, .. } => {
+                format!("{}:{target_build}", self.kind_name())
             }
             Self::RendererExit { cause } => format!("{}:{}", self.kind_name(), cause.as_str()),
         }
