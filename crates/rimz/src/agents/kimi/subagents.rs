@@ -38,6 +38,8 @@ pub(super) fn session_title(session_dir: &Path) -> Option<String> {
     let state: SessionState =
         serde_json::from_slice(&std::fs::read(session_dir.join("state.json")).ok()?).ok()?;
     non_empty(state.title)
+        // Kimi Code creates a session with this title before the first prompt.
+        .filter(|title| title != "New Session")
 }
 
 #[derive(Debug, Default, Deserialize)]

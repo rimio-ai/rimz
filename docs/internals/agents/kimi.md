@@ -58,7 +58,7 @@ Clean turn end, open approvals, open questions, retry waits, and live status sna
 
 ## Context and transcript
 
-The session `state.json` title publishes as the card's session preview. Kimi initializes it from the first prompt and replaces it on an explicit rename, so the activity description stays stable across later turns.
+The session `state.json` title publishes as the card's session preview. Kimi's pre-prompt `"New Session"` placeholder is dropped, so a new session publishes no preview until Kimi initializes the title from the first prompt; an explicit rename replaces it and keeps the activity description stable across later turns.
 
 `usage.record` carries its model and the exact `inputOther`, `inputCacheRead`, `inputCacheCreation`, and `output` split. `llm.request` carries provider, canonical model id, model alias, effective thinking controls, and request hashes. Strip only a leading `kimi-code/` wrapper from display/config aliases.
 

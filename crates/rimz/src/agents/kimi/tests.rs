@@ -636,6 +636,14 @@ fn refresh_publishes_the_state_title_as_session_preview() {
 }
 
 #[test]
+fn session_title_drops_kimis_pre_prompt_placeholder() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("state.json"), r#"{"title":"New Session"}"#).unwrap();
+
+    assert_eq!(subagents::session_title(dir.path()), None);
+}
+
+#[test]
 fn usage_records_drive_context_spend_and_additive_scopes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sessions/wd/s1/agents/main/wire.jsonl");
