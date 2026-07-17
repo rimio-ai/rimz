@@ -231,10 +231,15 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
     runtime.ensure_dirs().unwrap();
     let diag = crate::diag::DiagSink::disabled();
     let cache = PaneFrameCache::new(&runtime, "s", None, Some(&own), &diag);
+    // A future stamp keeps both frames inside the freshness TTL across CI
+    // scheduler stalls (freshness saturates future stamps to age 0), so the
+    // negative assertion below exercises the missing-own validation rather
+    // than an accidental TTL expiry.
+    let stamp = unix_now_ms().saturating_add(60_000);
 
     let missing_own = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_2", Some("zsh"), Some("/repo"))],
-        unix_now_ms(),
+        stamp,
         "s",
     );
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &missing_own).unwrap();
@@ -245,7 +250,7 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
 
     let valid = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
-        unix_now_ms(),
+        stamp,
         "s",
     );
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &valid).unwrap();
@@ -799,9 +804,12 @@ fn fresh_cache_hit_skips_election_mux_and_publication() {
     )
     .unwrap();
     runtime.ensure_dirs().unwrap();
+    // A future stamp keeps the cache inside the freshness TTL across CI
+    // scheduler stalls (freshness saturates future stamps to age 0); a stale
+    // miss here would fork a real mux produce and fail the expect below.
     let cached = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
-        unix_now_ms(),
+        unix_now_ms().saturating_add(60_000),
         "s",
     );
     let path = runtime.pane_frame_path();
