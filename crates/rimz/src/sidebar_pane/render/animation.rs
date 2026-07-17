@@ -92,11 +92,36 @@ pub(crate) fn animation_cadence(
     // quieted to `static`. The cockpit lead bucket pulses with it, so this one
     // condition covers both the row and its bucket.
     breath |= lead_unread_needs_motion(snapshot, animations);
+    breath |= reset_credit_needs_motion(snapshot, animations);
     if breath || animations.has_resting_motion() {
         AnimationCadence::Breath
     } else {
         AnimationCadence::None
     }
+}
+
+/// A useful Codex reset credit wears the same continuous attention treatment
+/// as a lead paused row, so it also keeps the breath grid alive in an otherwise
+/// quiet room.
+fn reset_credit_needs_motion(snapshot: &SidebarSnapshot, animations: &ResolvedAnimations) -> bool {
+    let actionable = snapshot.providers.iter().any(|panel| {
+        panel.kind == "codex"
+            && panel
+                .reset_credits
+                .as_ref()
+                .is_some_and(|credits| credits.count > 0)
+            && panel
+                .windows
+                .iter()
+                .any(|window| window.spent_with_future_reset(snapshot.now))
+    });
+    actionable
+        && matches!(
+            animations
+                .status(AgentStatus::Paused)
+                .unread_anim(animations.unread_effect(), 0, 0,),
+            Some(UnreadAnim::Blink(_) | UnreadAnim::Shimmer(_))
+        )
 }
 
 /// Whether the single lead unread row carries per-frame motion the breath grid

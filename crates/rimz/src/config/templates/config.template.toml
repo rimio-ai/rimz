@@ -142,6 +142,8 @@ aggressive_resize = true
 # auto_continue_backoff_secs = [180, 300] # first retry after 3m; 5m thereafter
 # auto_continue_max_retries = 12      # stop attempting after this many auto-continue tries
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
+# auto_redeem = false                 # spend a Codex reset credit automatically when a usage window is spent
+# auto_redeem_min_gain = "12h"         # redeem only when it buys at least this much blocked time (doomed credits redeem regardless)
 
 [harness]
 ## budget = "50/day"             # turn on the whole-room local-day cap; adjust the live cap with `rimz budget`

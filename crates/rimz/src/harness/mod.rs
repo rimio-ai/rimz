@@ -1,6 +1,7 @@
 //! Agent harness — spawn, address, drive, and reclaim agent sessions.
 
 pub(crate) mod auto_continue;
+pub mod auto_redeem;
 pub mod budget;
 pub mod launch;
 pub mod petname;

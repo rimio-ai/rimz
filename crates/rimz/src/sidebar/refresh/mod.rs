@@ -95,6 +95,10 @@ pub fn refresh_heavy_lanes(
         RemoteControlServerHealth::default(),
     );
     apply_rate_limit_cache(&mut panels, runtime, true);
+    // `with_provider_aggregates` rebuilds panels with empty credit fields; the
+    // scoped producer fold must reapply the shared cache before auto-redeem can
+    // evaluate the already-known reset credits.
+    credits::apply_credits_cache(&mut panels, runtime, &config.accounts);
 
     refresh_live_sessions(base, runtime);
     refresh_account_usage(&panels, runtime);
@@ -110,6 +114,12 @@ pub fn refresh_heavy_lanes(
         base.resume_outcomes.as_deref().unwrap_or_default(),
     );
     crate::harness::auto_continue::resume_parked(base, runtime, &config.resume, &resume_messages);
+    crate::harness::auto_redeem::redeem_credits(
+        &panels.providers,
+        runtime,
+        &config.resume,
+        base.now,
+    );
     let mut budget_snapshot = base.clone();
     apply_live_day_spend(&mut budget_snapshot, &lanes.spending.workspace);
     crate::harness::budget::enforce(&budget_snapshot, runtime, state_messages_dir, config);

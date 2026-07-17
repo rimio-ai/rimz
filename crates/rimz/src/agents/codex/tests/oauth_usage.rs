@@ -1,6 +1,54 @@
 use super::*;
 use crate::agents::ExtraCredits;
 use crate::agents::credits::AccountUsageReportable;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::time::Duration;
+
+fn serve_once(body: &str) -> (String, std::thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let response_body = body.to_owned();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = stream.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")?
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+            response_body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        String::from_utf8(request).unwrap()
+    });
+    (format!("http://{address}"), handle)
+}
 
 #[test]
 fn reportable_classifier_treats_unauthorized_as_settled_auth() {
@@ -108,6 +156,14 @@ fn usage_url_respects_backend_api_base_and_codex_api_base() {
         reset_credits_url(Some("https://chatgpt.com")),
         "https://chatgpt.com/api/codex/rate-limit-reset-credits"
     );
+    assert_eq!(
+        consume_url(None),
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+    );
+    assert_eq!(
+        consume_url(Some("https://chatgpt.com")),
+        "https://chatgpt.com/api/codex/rate-limit-reset-credits/consume"
+    );
 }
 
 #[test]
@@ -163,6 +219,102 @@ fn reset_credits_falls_back_to_available_entries() {
         credits.soonest_expiry,
         Some("2026-07-08T00:00:00Z".parse::<Timestamp>().unwrap())
     );
+}
+
+#[test]
+fn reset_credit_details_keep_available_ids_and_optional_expiries() {
+    let (_, details) = parse_reset_credit_response(
+        r#"{
+            "credits": [
+                { "id": "credit_late", "status": "available", "expires_at": "2026-07-08T00:00:00Z" },
+                { "id": "credit_used", "status": "redeemed", "expires_at": "2026-07-01T00:00:00Z" },
+                { "status": "available", "expires_at": null },
+                { "id": "credit_bad", "status": "available", "expires_at": "bad" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        details,
+        vec![
+            ResetCreditDetail {
+                id: Some("credit_late".to_owned()),
+                expires_at: Some("2026-07-08T00:00:00Z".parse().unwrap()),
+            },
+            ResetCreditDetail {
+                id: None,
+                expires_at: None,
+            },
+            ResetCreditDetail {
+                id: Some("credit_bad".to_owned()),
+                expires_at: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn consume_reset_credit_sends_codex_oauth_contract() {
+    let (origin, server) = serve_once(r#"{"code":"reset","windows_reset":2}"#);
+    let credentials = CodexOauthCredentials {
+        access_token: "sentinel-secret".to_owned(),
+        account_id: Some("account-123".to_owned()),
+    };
+
+    let outcome = consume_reset_credit(
+        &credentials,
+        Some(&origin),
+        "0195-request",
+        Some("credit-456"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome,
+        ConsumeOutcome {
+            code: ConsumeCode::Reset,
+            windows_reset: 2,
+        }
+    );
+    let request = server.join().unwrap();
+    let lower = request.to_ascii_lowercase();
+    assert!(request.starts_with("POST /api/codex/rate-limit-reset-credits/consume HTTP/1.1"));
+    assert!(lower.contains("authorization: bearer sentinel-secret\r\n"));
+    assert!(lower.contains("chatgpt-account-id: account-123\r\n"));
+    assert!(lower.contains("accept: application/json\r\n"));
+    assert!(lower.contains("content-type: application/json\r\n"));
+    assert!(request.ends_with(r#"{"redeem_request_id":"0195-request","credit_id":"credit-456"}"#));
+}
+
+#[test]
+fn consume_response_preserves_known_and_unknown_codes() {
+    for (body, code, windows_reset) in [
+        (
+            r#"{"code":"nothing_to_reset"}"#,
+            ConsumeCode::NothingToReset,
+            0,
+        ),
+        (
+            r#"{"code":"no_credit","windows_reset":0}"#,
+            ConsumeCode::NoCredit,
+            0,
+        ),
+        (
+            r#"{"code":"already_redeemed","windows_reset":0}"#,
+            ConsumeCode::AlreadyRedeemed,
+            0,
+        ),
+        (
+            r#"{"code":"future_code","windows_reset":9}"#,
+            ConsumeCode::Unknown,
+            9,
+        ),
+    ] {
+        let parsed: ConsumeOutcome = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed.code, code);
+        assert_eq!(parsed.windows_reset, windows_reset);
+    }
 }
 
 #[test]

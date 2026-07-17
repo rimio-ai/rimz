@@ -435,3 +435,5 @@ Rate-limit reset credits use the same OAuth token and optional `ChatGPT-Account-
 ```
 
 The usage response's `rate_limit_reset_credits` field remains ignored; the dedicated endpoint is the per-credit source and rides the standard OAuth usage cadence. A reset-credit fetch failure leaves the prior dashboard value in place when the primary usage fetch succeeds.
+
+RimZ consumes a credit with `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume`, or `/api/codex/rate-limit-reset-credits/consume` for a non-`/backend-api` base, using the same OAuth and account headers as the GET. The request is `{"redeem_request_id":"<uuid-v7>","credit_id":"<optional id>"}`; the response carries `code` (`reset`, `nothing_to_reset`, `no_credit`, or `already_redeemed`) and `windows_reset`. Unknown codes remain a non-success outcome for forward compatibility. `nothing_to_reset` leaves the credit available.

@@ -131,6 +131,8 @@ auto_continue = false
 auto_continue_backoff_secs = [180, 300]
 auto_continue_max_retries = 12
 auto_continue_text = "continue"
+auto_redeem = false
+auto_redeem_min_gain = "12h"
 ```
 
 Resume covers two moments; the behavior model is [loops.md → Built-in recovery](./loops.md#built-in-recovery), and these are its keys.
@@ -143,7 +145,9 @@ While the room is **live**, `auto_continue` (off by default) picks a parked turn
 - Overload and transient API-error parks (stalled streams, timeouts, connection drops) fire on the retry ramp: `auto_continue_backoff_secs = [180, 300]` sends the first retry three minutes after the failure, then every five minutes.
 - Every park type stops retrying after `auto_continue_max_retries` (default 12, about an hour on the default ramp), leaving the row parked for you.
 
-The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
+Codex reset-credit expiry rescue is always active within 30 minutes of a credit's expiry, and the provider-header reset marker blinks whenever a spent window makes manual redemption useful. `auto_redeem` opts into automatic redemption while a duration window is spent; `auto_redeem_min_gain` accepts `s`, `m`, `h`, or `d` and requires that much recovered blocked time (default `12h`), while a credit that would retain less than 24 hours after the natural reset redeems regardless of the minimum.
+
+The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth), and the live paths are in [provider internals → Auto-continue](../internals/agents/providers.md#auto-continue) and [Auto-redeem](../internals/agents/providers.md#auto-redeem).
 
 ### Daily dollar budgets
 

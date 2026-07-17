@@ -1,6 +1,7 @@
 //! `rimz agents` — command parsing and agent-operation boundaries.
 
 mod auto_continue;
+mod auto_redeem;
 mod budget;
 mod budget_park;
 mod check;
@@ -55,6 +56,7 @@ use rimz::store::{
 use rimz::workspace::WorkspaceResolver;
 
 use auto_continue::{AutoContinueArgs, run_auto_continue};
+use auto_redeem::{AutoRedeemArgs, run_auto_redeem};
 use budget::{BudgetArgs, run_budget};
 use budget_park::{BudgetParkArgs, run_budget_park};
 use check::{CheckArgs, run_check};
@@ -393,6 +395,10 @@ enum AgentsSubcmd {
     /// condition is due (`sidebar::enrich` auto-continue).
     #[command(hide = true)]
     AutoContinue(AutoContinueArgs),
+    /// Hidden helper the producer spawns to redeem an account-wide Codex reset
+    /// credit after rechecking current provider state.
+    #[command(hide = true)]
+    AutoRedeem(AutoRedeemArgs),
     /// Hidden helper that interrupts an agent after its dollar cap is crossed.
     #[command(hide = true)]
     BudgetPark(BudgetParkArgs),
@@ -482,6 +488,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
+        Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),
         Some(AgentsSubcmd::Budget(args)) => return run_budget(args, globals),

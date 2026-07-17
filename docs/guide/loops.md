@@ -129,10 +129,13 @@ Two opt-in settings keep a live agent working through the interruptions that wou
 
 ```sh
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
+rimz config set resume.auto_redeem true       # spend useful Codex reset credits automatically
 rimz config set harness.smart_compact 200k    # compact before a message once context passes 200k tokens (or "70%")
 ```
 
 **Auto-continue** picks a certified parked turn back up on its own. A provider-owned per-turn failure marker proves why the turn stopped; an authoritative account window then supplies the reset clock for a rate-limit or spend-limit park, while a certified transient overload or API error uses a lengthening backoff ramp. An exhausted window, error message, or stalled pane cannot arm recovery by itself. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. Qwen's Alibaba launch quota is checked only before a fresh managed launch and does not arm mid-run auto-continue; Qwen's native stop failures continue through the ordinary rate-limit or overload classification. Antigravity has account-owned clocks but no failure marker certified recoverable, so its error stops remain terminal and a loop fire records the ordinary failure. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
+
+**Auto-redeem pairs with auto-continue** to carry Codex work through a spent long window: a useful or doomed reset credit restores the account capacity, then the existing certified recovery path wakes the parked turn.
 
 **Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. For check-gated work, `rimz loop show` separates the agent attempts from cheap check passes and totals their costs across the recorded history; other tasks retain the last-run and rolling ten-run average cost. Fresh input/output tokens stay visible per run. The room-fleet and provider-account daily caps gate the same fires before launch. An exact Qwen Alibaba window exhaustion records the same `budget skipped` result before the loop's `--check` command or pane exists, and a different API-key fingerprint cannot gate that launch. The whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
 

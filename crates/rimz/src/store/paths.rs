@@ -389,6 +389,15 @@ impl RuntimePaths {
         self.shared_root.join("credits.lock")
     }
 
+    pub fn shared_auto_redeem_path(&self, kind: &str) -> PathBuf {
+        self.persistent_shared_root
+            .join(format!("auto_redeem.{kind}.json"))
+    }
+
+    pub fn shared_auto_redeem_lock(&self, kind: &str) -> PathBuf {
+        self.shared_root.join(format!("auto_redeem.{kind}.lock"))
+    }
+
     pub fn shared_provider_spending_path(&self) -> PathBuf {
         self.persistent_shared_root.join("provider-spending.json")
     }
@@ -913,6 +922,20 @@ mod tests {
                 .join("rimz")
                 .join("shared")
                 .join("spending.lock")
+        );
+        assert_eq!(
+            paths.shared_auto_redeem_path("codex"),
+            state_root
+                .join("rimz")
+                .join("shared")
+                .join("auto_redeem.codex.json")
+        );
+        assert_eq!(
+            paths.shared_auto_redeem_lock("codex"),
+            runtime_root
+                .join("rimz")
+                .join("shared")
+                .join("auto_redeem.codex.lock")
         );
 
         paths.ensure_dirs().unwrap();

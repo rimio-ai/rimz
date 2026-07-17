@@ -90,7 +90,8 @@ pub use notifications::{
 };
 pub use pets::{CellAspect, PetsConfig, PetsGlyphMode};
 pub use remote_control::RemoteControlConfig;
-pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
+pub(crate) use resume::parse_auto_redeem_min_gain;
+pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, DEFAULT_AUTO_REDEEM_MIN_GAIN, ResumeConfig};
 #[cfg(test)]
 pub(crate) use scheme::parse_scheme_text;
 pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parsed_inline_palette};

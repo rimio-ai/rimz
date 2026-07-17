@@ -105,7 +105,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `$1.27` / `$0.42` | spend — dollar green, two decimals, identical for provider totals and locally priced counters; omitted while a session's cost rounds to zero |
 | `▰▱` / `▱▱` / `ex` / `api` | provider account bar: included-window budget (`5h`/`7d`/`30d`, or a provider- or plugin-defined label such as `bld`/`dep`, fill = left), unknown budget as a dim empty track, paid extra usage as `ex`, API-key budget as `api` (fill = budget left, with `$left` beside it); an unbudgeted API key is a full bar with `∞`, which also marks an explicitly unlimited named quota or a currently lifted limit |
 | `↻ 2h06m`         | when a provider budget resets; a known-duration window is soft at a sustainable burn pace, heating toward red as spend outruns the window or cooling toward green when spend runs well under it once enough of the window has elapsed; a durationless named quota keeps the reported countdown in the quiet tone because pace is unknowable — the duration form of `↻`, next to a budget bar (the count forms are compactions on a card and reset credits in the Codex header) |
-| `↻ N`             | the count form of `↻`: on a card context line, completed compactions; in the Codex provider header, available rate-limit reset credits, with the glyph colored by soonest expiry |
+| `↻ N`             | the count form of `↻`: on a card context line, completed compactions; in the Codex provider header, available rate-limit reset credits, with the glyph colored by soonest expiry and blinking while a spent window makes redemption useful |
 
 **Structure and chrome.**
 

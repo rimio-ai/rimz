@@ -7,7 +7,7 @@
 //! paid-usage types. It never writes auth files or refreshes tokens.
 
 use jiff::Timestamp;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
@@ -153,6 +153,13 @@ pub(crate) fn account_usage_identity() -> crate::agents::AccountUsageIdentity {
     }
 }
 
+pub(crate) fn load_configured_credentials() -> Result<(CodexOauthCredentials, Option<String>)> {
+    let home = codex_home().ok_or(CodexOauthUsageErr::NoCredentials)?;
+    let credentials = load_credentials_from(&home.join("auth.json"))?;
+    let base_url = configured_base_url(&home)?;
+    Ok((credentials, base_url))
+}
+
 pub(crate) fn fetch_usage_with_token(
     access_token: &str,
     account_id: Option<&str>,
@@ -199,7 +206,7 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
     })
 }
 
-fn configured_base_url(home: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn configured_base_url(home: &Path) -> std::io::Result<Option<String>> {
     let path = home.join("config.toml");
     match std::fs::read_to_string(path) {
         Ok(text) => {
@@ -218,6 +225,10 @@ pub(crate) fn usage_url(chatgpt_base_url: Option<&str>) -> String {
 
 pub(crate) fn reset_credits_url(chatgpt_base_url: Option<&str>) -> String {
     endpoint_url(chatgpt_base_url, "rate-limit-reset-credits")
+}
+
+pub(crate) fn consume_url(chatgpt_base_url: Option<&str>) -> String {
+    endpoint_url(chatgpt_base_url, "rate-limit-reset-credits/consume")
 }
 
 fn endpoint_url(chatgpt_base_url: Option<&str>, endpoint: &str) -> String {
@@ -242,6 +253,12 @@ pub(crate) fn fetch_usage_with_url(
 }
 
 fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
+    let headers = http_headers(credentials);
+    oauth_http_get(url, &headers, "codex: fetching OAuth account usage")
+        .map_err(|(kind, host)| CodexOauthUsageErr::Http { kind, host })
+}
+
+fn http_headers(credentials: &CodexOauthCredentials) -> Vec<(&'static str, String)> {
     let mut headers = vec![
         (
             "Authorization",
@@ -252,8 +269,7 @@ fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
     if let Some(account_id) = &credentials.account_id {
         headers.push(("ChatGPT-Account-Id", account_id.clone()));
     }
-    oauth_http_get(url, &headers, "codex: fetching OAuth account usage")
-        .map_err(|(kind, host)| CodexOauthUsageErr::Http { kind, host })
+    headers
 }
 
 pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
@@ -270,36 +286,121 @@ struct ResetCreditsWire {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ResetCreditWire {
+    id: Option<String>,
     status: Option<String>,
     expires_at: Option<String>,
 }
 
-pub(crate) fn parse_reset_credits(body: &str) -> Result<ResetCredits> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResetCreditDetail {
+    pub id: Option<String>,
+    pub expires_at: Option<Timestamp>,
+}
+
+fn parse_reset_credit_response(body: &str) -> Result<(Option<u32>, Vec<ResetCreditDetail>)> {
     let wire = serde_json::from_str::<ResetCreditsWire>(body)?;
-    let mut available_count = 0u32;
-    let mut expiries = Vec::new();
-    for credit in wire.credits {
-        if credit.status.as_deref() != Some("available") {
-            continue;
-        }
-        available_count = available_count.saturating_add(1);
-        if let Some(expiry) = credit
-            .expires_at
-            .as_deref()
-            .and_then(|expires_at| expires_at.parse::<Timestamp>().ok())
-        {
-            expiries.push(expiry);
-        }
+    let details = wire
+        .credits
+        .into_iter()
+        .filter(|credit| credit.status.as_deref() == Some("available"))
+        .map(|credit| ResetCreditDetail {
+            id: credit.id,
+            expires_at: credit
+                .expires_at
+                .as_deref()
+                .and_then(|expires_at| expires_at.parse::<Timestamp>().ok()),
+        })
+        .collect();
+    Ok((wire.available_count, details))
+}
+
+pub(crate) fn parse_reset_credits(body: &str) -> Result<ResetCredits> {
+    let (available_count, details) = parse_reset_credit_response(body)?;
+    Ok(summarize_reset_credits(available_count, &details))
+}
+
+fn summarize_reset_credits(
+    available_count: Option<u32>,
+    details: &[ResetCreditDetail],
+) -> ResetCredits {
+    let fallback_count = details.len().min(u32::MAX as usize) as u32;
+    ResetCredits {
+        count: available_count.unwrap_or(fallback_count),
+        soonest_expiry: details.iter().filter_map(|credit| credit.expires_at).min(),
     }
-    Ok(ResetCredits {
-        count: wire.available_count.unwrap_or(available_count),
-        soonest_expiry: expiries.into_iter().min(),
-    })
 }
 
 fn fetch_reset_credits(url: &str, credentials: &CodexOauthCredentials) -> Result<ResetCredits> {
     let body = http_get(url, credentials)?;
     parse_reset_credits(&body)
+}
+
+pub(crate) fn fetch_reset_credit_state(
+    url: &str,
+    credentials: &CodexOauthCredentials,
+) -> Result<(ResetCredits, Vec<ResetCreditDetail>)> {
+    let body = http_get(url, credentials)?;
+    let (available_count, details) = parse_reset_credit_response(&body)?;
+    let summary = summarize_reset_credits(available_count, &details);
+    Ok((summary, details))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConsumeCode {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+    #[serde(other)]
+    Unknown,
+}
+
+impl ConsumeCode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reset => "reset",
+            Self::NothingToReset => "nothing_to_reset",
+            Self::NoCredit => "no_credit",
+            Self::AlreadyRedeemed => "already_redeemed",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub(crate) struct ConsumeOutcome {
+    pub code: ConsumeCode,
+    #[serde(default)]
+    pub windows_reset: i64,
+}
+
+#[derive(Serialize)]
+struct ConsumeRequest<'a> {
+    redeem_request_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credit_id: Option<&'a str>,
+}
+
+pub(crate) fn consume_reset_credit(
+    credentials: &CodexOauthCredentials,
+    base_url: Option<&str>,
+    redeem_request_id: &str,
+    credit_id: Option<&str>,
+) -> Result<ConsumeOutcome> {
+    let url = consume_url(base_url);
+    let headers = http_headers(credentials);
+    let body = crate::agents::credits::oauth_http_post_json(
+        &url,
+        &headers,
+        &ConsumeRequest {
+            redeem_request_id,
+            credit_id,
+        },
+        "codex: consuming rate-limit reset credit",
+    )
+    .map_err(|(kind, host)| CodexOauthUsageErr::Http { kind, host })?;
+    Ok(serde_json::from_str(&body)?)
 }
 
 impl UsageWire {

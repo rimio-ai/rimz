@@ -99,6 +99,7 @@ fn provider_dashboard_block(
         width,
         zones,
         now,
+        animation_phase: 0,
     })
 }
 

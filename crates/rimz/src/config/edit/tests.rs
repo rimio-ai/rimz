@@ -34,6 +34,8 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "resume.auto_continue_backoff_secs",
     "resume.auto_continue_max_retries",
     "resume.auto_continue_text",
+    "resume.auto_redeem",
+    "resume.auto_redeem_min_gain",
     "remote_control.claude",
     "remote_control.codex",
     "notifications.enabled",
@@ -204,6 +206,8 @@ fn validates_config_key_read_and_write_surfaces() {
         "resume.auto_continue_backoff_secs",
         "resume.auto_continue_max_retries",
         "resume.auto_continue_text",
+        "resume.auto_redeem",
+        "resume.auto_redeem_min_gain",
         "notifications.title",
         "notifications.body",
         "harness.smart_compact",
@@ -524,6 +528,19 @@ fn derived_set_keys_keep_legacy_surface() {
         err,
         "unknown config key `theme.display.context_meter.green.percent`"
     );
+}
+
+#[test]
+fn validates_auto_redeem_min_gain_edits() {
+    let key = parse_key("resume.auto_redeem_min_gain").unwrap();
+    let value = parse_set_value(&key, "12h");
+    assert_eq!(value.as_str(), Some("12h"));
+    validate_set_value(&key, &value).unwrap();
+
+    let err = validate_set_value(&key, &Value::from("one week"))
+        .expect_err("invalid duration")
+        .to_string();
+    assert!(err.contains("auto_redeem_min_gain"), "{err}");
 }
 
 #[test]

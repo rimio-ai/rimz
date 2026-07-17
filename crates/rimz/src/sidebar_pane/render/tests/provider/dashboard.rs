@@ -420,6 +420,62 @@ fn render_provider_dashboard_shows_codex_reset_credit_header() {
 }
 
 #[test]
+fn codex_reset_marker_blinks_only_while_a_window_is_spent() {
+    let theme = Theme::fixed(false);
+    let marker_style = |panel: &crate::SidebarProviderPanel, animation_phase| {
+        dashboard_block(DashboardContext {
+            theme: &theme,
+            providers: std::slice::from_ref(panel),
+            active_provider: None,
+            mode: DashboardMode::Stacked,
+            fleet_tally: None,
+            pet: None,
+            folded_footer: None,
+            width: 54,
+            zones: &crate::config::BudgetBarConfig::default(),
+            now: fixed_now(),
+            animation_phase,
+        })
+        .lines
+        .into_iter()
+        .flat_map(|line| line.spans)
+        .find(|span| span.content.as_ref() == "↻")
+        .map(|span| span.style)
+    };
+
+    let mut spent = provider_panel("codex", "Codex", 33, true, false, Some((100, 20)));
+    spent.reset_credits = Some(crate::ResetCredits {
+        count: 2,
+        soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
+    });
+    let blinking = (0..32)
+        .map(|phase| marker_style(&spent, phase).expect("reset marker"))
+        .collect::<Vec<_>>();
+    assert!(
+        blinking.windows(2).any(|pair| pair[0] != pair[1]),
+        "spent-window marker changes style across animation phases"
+    );
+
+    let mut unspent = spent.clone();
+    unspent.windows[0].used_percentage = Some(99);
+    let steady = (0..32)
+        .map(|phase| marker_style(&unspent, phase).expect("reset marker"))
+        .collect::<Vec<_>>();
+    assert!(steady.iter().all(|style| *style == steady[0]));
+
+    let mut undated = spent;
+    undated.windows[0].resets_at = None;
+    let undated_styles = (0..32)
+        .map(|phase| marker_style(&undated, phase).expect("reset marker"))
+        .collect::<Vec<_>>();
+    assert!(
+        undated_styles
+            .iter()
+            .all(|style| *style == undated_styles[0])
+    );
+}
+
+#[test]
 fn render_provider_dashboard_hides_reset_credit_header_when_not_actionable() {
     let theme = Theme::fixed(false);
     let mut non_codex = provider_panel("claude", "Claude", 173, false, false, None);

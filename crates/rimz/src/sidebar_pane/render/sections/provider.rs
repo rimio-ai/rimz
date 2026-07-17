@@ -1,7 +1,7 @@
 //! The pinned provider dashboard — per-provider header, brand emblem, stats and
 //! budget bars — and the W/M fleet store rows.
 
-use crate::agents::{ExtraCredits, RateLimitWindow};
+use crate::agents::{AgentStatus, ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::{PetBody, PetView};
 use crate::{RemoteControlBadge, SidebarProviderPanel, SpendTally, SpendWindow};
@@ -13,8 +13,8 @@ use crate::sidebar_pane::render::fmt::{
     dollars_cap, dollars2, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    TokenColumns, TokenDetail, mana_bar_spans, mana_style, pace_reading, pace_style,
-    token_breakdown_spans, unknown_mana_bar_spans,
+    TokenColumns, TokenDetail, attention_cell_style, mana_bar_spans, mana_style, pace_reading,
+    pace_style, token_breakdown_spans, unknown_mana_bar_spans, unread_anim,
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -456,6 +456,7 @@ pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) zones: &'a BudgetBarConfig,
     pub(in crate::sidebar_pane::render) now: Timestamp,
+    pub(in crate::sidebar_pane::render) animation_phase: u64,
 }
 
 pub(in crate::sidebar_pane::render) fn dashboard_block(
@@ -561,6 +562,7 @@ fn provider_block_lines(
         context.mode.tabbed(),
         layout.inline_art(),
         context.now,
+        context.animation_phase,
     )];
     if context.mode == DashboardMode::Stacked && layout == ProviderLayout::Wide {
         // Wide stacked blocks keep the historical identity/body breathing room.
@@ -833,8 +835,9 @@ fn provider_header_line(
     tabbed: bool,
     inline_art: bool,
     now: Timestamp,
+    animation_phase: u64,
 ) -> Line<'static> {
-    let mut right = reset_header_spans(theme, panel, now);
+    let mut right = reset_header_spans(theme, panel, now, animation_phase);
     let remote_control = match panel.remote_control {
         RemoteControlBadge::Hidden => None,
         RemoteControlBadge::Healthy => Some(Component::RemoteControl),
@@ -888,6 +891,7 @@ fn reset_header_spans(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     now: Timestamp,
+    animation_phase: u64,
 ) -> Vec<Span<'static>> {
     if panel.kind != "codex" {
         return Vec::new();
@@ -898,12 +902,25 @@ fn reset_header_spans(
     if reset_credits.count == 0 {
         return Vec::new();
     }
-    let style = reset_credits
+    let heat_tone = reset_credits
         .soonest_expiry
         .map(|at| at.duration_since(now).as_secs() as f64 / 3600.0)
         .and_then(reset_expiry_heat_amount)
-        .map(|amount| theme.style(theme.heat_tone(amount), Modifier::empty()))
+        .map(|amount| theme.heat_tone(amount));
+    let steady = heat_tone
+        .map(|color| theme.style(color, Modifier::empty()))
         .unwrap_or_else(|| theme.body());
+    let style = if panel
+        .windows
+        .iter()
+        .any(|window| window.spent_with_future_reset(now))
+    {
+        unread_anim(theme, AgentStatus::Paused, 0, animation_phase, true)
+            .map(|anim| attention_cell_style(theme, heat_tone.or(steady.fg), anim, 0, 1))
+            .unwrap_or_else(|| steady.add_modifier(Modifier::BOLD))
+    } else {
+        steady
+    };
     vec![
         Span::styled(theme.glyph(GlyphRole::MeterReset).to_owned(), style),
         Span::styled(format!(" {}", reset_credits.count), theme.body()),

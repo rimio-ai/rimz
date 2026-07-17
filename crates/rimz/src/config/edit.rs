@@ -706,6 +706,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
     if is_harness_smart_compact_edit(path)
         || is_harness_rtk_edit(path)
         || is_daily_budget_edit(path)
+        || is_auto_redeem_min_gain_edit(path)
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
     {
@@ -722,6 +723,14 @@ fn parse_string_edit_value(raw: &str) -> Value {
 }
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
+    if is_auto_redeem_min_gain_edit(path) {
+        let Some(raw) = value.as_str() else {
+            invalid_value!("resume.auto_redeem_min_gain must be a duration string");
+        };
+        if let Err(err) = super::parse_auto_redeem_min_gain(raw) {
+            invalid_value!("resume.auto_redeem_min_gain {err}");
+        }
+    }
     if is_daily_budget_edit(path) {
         let Some(raw) = value.as_str() else {
             invalid_value!("{} must be a string ending in `/day`", path.join("."));
@@ -799,6 +808,10 @@ fn is_harness_rtk_edit(path: &[String]) -> bool {
 fn is_daily_budget_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "budget")
         || matches!(path, [root, child, _] if root == "accounts" && child == "budget")
+}
+
+fn is_auto_redeem_min_gain_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "resume" && child == "auto_redeem_min_gain")
 }
 
 fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {

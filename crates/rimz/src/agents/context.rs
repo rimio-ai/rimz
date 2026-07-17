@@ -628,6 +628,16 @@ impl RateLimitWindow {
         self.used_percentage.is_some_and(|pct| pct >= 100)
     }
 
+    /// Whether this spent duration window still has a future natural reset.
+    /// Missing and elapsed reset clocks cannot drive redemption or attention
+    /// policy.
+    pub fn spent_with_future_reset(&self, now: Timestamp) -> bool {
+        self.scope.is_none()
+            && self.duration_mins.is_some_and(|mins| mins > 0)
+            && self.is_spent()
+            && self.resets_at.is_some_and(|reset| reset > now)
+    }
+
     /// Whether this window's sliding clock has not begun. These budgets start on
     /// the first billable token, so until then the provider keeps `resets_at`
     /// slid ~a full window-length ahead. Detection keys on that reset distance,

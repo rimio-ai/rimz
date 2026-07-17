@@ -179,7 +179,6 @@ impl ProviderCapacity {
             .collect()
     }
 
-    #[cfg(test)]
     pub(crate) fn from_windows(windows: Vec<RateLimitWindow>) -> Self {
         Self {
             windows,
@@ -200,7 +199,7 @@ impl ProviderCapacity {
     /// Latest reset among subscription windows spent now with a future reset.
     pub(crate) fn latest_spent_window_reset(&self, now: Timestamp) -> Option<Timestamp> {
         self.projected_duration_windows(now)
-            .filter(|window| window_spent_unreset(window, now))
+            .filter(|window| window.spent_with_future_reset(now))
             .filter_map(|window| window.resets_at)
             .max()
     }
