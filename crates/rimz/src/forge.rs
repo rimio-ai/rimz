@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
@@ -41,13 +41,6 @@ pub struct PrCandidate {
     pub number: u64,
     pub state: WorktreePrState,
     pub ci: Option<WorktreePrCi>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct TeaRun {
-    #[serde(deserialize_with = "deserialize_tea_run_id")]
-    pub id: String,
-    pub status: String,
 }
 
 pub fn parse(raw: &str) -> Result<PrTarget, String> {
@@ -338,7 +331,7 @@ pub fn parse_gh_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>
         #[serde(rename = "headRefName")]
         head_ref_name: String,
         #[serde(rename = "statusCheckRollup", default)]
-        status_check_rollup: Vec<Value>,
+        status_check_rollup: Option<Vec<Value>>,
     }
 
     let pulls: Vec<Pull> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
@@ -354,7 +347,7 @@ pub fn parse_gh_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>
         let candidate = PrCandidate {
             number: pull.number,
             state,
-            ci: ci_from_gh_rollup(&pull.status_check_rollup),
+            ci: ci_from_gh_rollup(pull.status_check_rollup.as_deref().unwrap_or_default()),
         };
         links.insert(
             branch.to_owned(),
@@ -440,26 +433,9 @@ pub fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a st
     args
 }
 
-/// Build the bounded `tea actions runs list` argv used for CI enrichment.
-pub fn tea_runs_list_args(branch: &str, status: Option<&str>, repo: Option<&str>) -> Vec<String> {
-    let mut args = vec![
-        "actions".to_owned(),
-        "runs".to_owned(),
-        "list".to_owned(),
-        "--branch".to_owned(),
-        branch.to_owned(),
-        "--limit".to_owned(),
-        "1".to_owned(),
-        "--output".to_owned(),
-        "json".to_owned(),
-    ];
-    if let Some(status) = status {
-        args.extend(["--status".to_owned(), status.to_owned()]);
-    }
-    if let Some(repo) = repo {
-        args.extend(["--repo".to_owned(), repo.to_owned()]);
-    }
-    args
+/// Build the Gitea combined commit-status endpoint used for CI enrichment.
+pub fn tea_commit_status_endpoint(repo_slug: &str, branch: &str) -> String {
+    format!("repos/{repo_slug}/commits/{branch}/status")
 }
 
 /// Aggregate GitHub's check rollup into the worst actionable CI verdict.
@@ -521,35 +497,24 @@ pub fn ci_from_gh_rollup(rollup: &[Value]) -> Option<WorktreePrCi> {
     verdict
 }
 
-/// Parse tea's workflow-run list, including its non-JSON empty-list message.
-pub fn parse_tea_runs_list(raw: &str) -> Result<Vec<TeaRun>, String> {
-    let trimmed = raw.trim();
-    if !trimmed.starts_with('[') {
-        return Ok(Vec::new());
-    }
-    serde_json::from_str(trimmed).map_err(|err| err.to_string())
-}
-
-/// Classify tea's newest workflow run.
-///
-/// Tea exposes workflow conclusions only through status-filtered lists. This
-/// deliberately approximates multi-workflow commits by the single newest run.
-pub fn classify_tea_ci(
-    newest: Option<&TeaRun>,
-    newest_failure: Option<&TeaRun>,
-    newest_success: Option<&TeaRun>,
-) -> Option<WorktreePrCi> {
-    let newest = newest?;
-    if !newest.status.eq_ignore_ascii_case("completed") {
-        return Some(WorktreePrCi::Pending);
-    }
-    if newest_failure.is_some_and(|run| run.id == newest.id) {
-        return Some(WorktreePrCi::Failing);
-    }
-    if newest_success.is_some_and(|run| run.id == newest.id) {
-        return Some(WorktreePrCi::Passing);
-    }
-    None
+/// Parse Gitea's combined commit status into the sidebar CI vocabulary.
+pub fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreePrCi>, String> {
+    let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "tea combined commit status must be a JSON object".to_owned())?;
+    let verdict = object
+        .get("state")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .and_then(|state| match state.as_str() {
+            "success" => Some(WorktreePrCi::Passing),
+            "pending" => Some(WorktreePrCi::Pending),
+            "failure" | "error" | "warning" => Some(WorktreePrCi::Failing),
+            _ => None,
+        });
+    Ok(verdict)
 }
 
 fn worst_ci(current: Option<WorktreePrCi>, next: Option<WorktreePrCi>) -> Option<WorktreePrCi> {
@@ -564,20 +529,6 @@ fn worst_ci(current: Option<WorktreePrCi>, next: Option<WorktreePrCi>) -> Option
             Some(WorktreePrCi::Passing)
         }
         (None, None) => None,
-    }
-}
-
-fn deserialize_tea_run_id<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Value::deserialize(deserializer)?;
-    match value {
-        Value::String(value) => Ok(value),
-        Value::Number(value) => Ok(value.to_string()),
-        _ => Err(serde::de::Error::custom(
-            "tea workflow run id must be a string or number",
-        )),
     }
 }
 
@@ -1029,6 +980,21 @@ bbb\trefs/heads/same-tip
     }
 
     #[test]
+    fn gh_pr_links_accept_null_rollup() {
+        let links = parse_gh_pr_list_links(
+            r#"[{
+                "number":2,
+                "state":"OPEN",
+                "headRefName":"feature",
+                "statusCheckRollup":null
+            }]"#,
+        )
+        .unwrap();
+
+        assert_eq!(links["feature"].ci, None);
+    }
+
+    #[test]
     fn parses_tea_pr_list_and_detail_json() {
         let list = r#"[
             {"index": 7, "head": {"label": "me:feature"}, "state": "closed"},
@@ -1097,72 +1063,35 @@ bbb\trefs/heads/same-tip
     }
 
     #[test]
-    fn parses_and_classifies_tea_workflow_runs() {
-        let runs = parse_tea_runs_list(
-            r#"[{"id":42,"status":"completed"},{"id":"41","status":"in_progress"}]"#,
-        )
-        .unwrap();
-        assert_eq!(runs[0].id, "42");
-        assert_eq!(parse_tea_runs_list("No workflow runs found").unwrap(), []);
-        assert!(parse_tea_runs_list("[").is_err());
+    fn parses_tea_combined_commit_status() {
+        for (state, expected) in [
+            ("success", WorktreePrCi::Passing),
+            ("pending", WorktreePrCi::Pending),
+            ("failure", WorktreePrCi::Failing),
+            ("error", WorktreePrCi::Failing),
+            ("warning", WorktreePrCi::Failing),
+        ] {
+            let raw = format!(r#"{{"state":"{state}"}}"#);
+            assert_eq!(parse_tea_combined_status(&raw).unwrap(), Some(expected));
+        }
 
-        let newest = TeaRun {
-            id: "42".to_owned(),
-            status: "completed".to_owned(),
-        };
-        let failure = TeaRun {
-            id: "42".to_owned(),
-            status: "failure".to_owned(),
-        };
-        let success = TeaRun {
-            id: "42".to_owned(),
-            status: "success".to_owned(),
-        };
-        let other = TeaRun {
-            id: "41".to_owned(),
-            status: "failure".to_owned(),
-        };
-        let pending = TeaRun {
-            id: "43".to_owned(),
-            status: "in_progress".to_owned(),
-        };
-
-        assert_eq!(classify_tea_ci(None, None, None), None);
-        assert_eq!(
-            classify_tea_ci(Some(&pending), None, None),
-            Some(WorktreePrCi::Pending)
-        );
-        assert_eq!(
-            classify_tea_ci(Some(&newest), Some(&failure), Some(&success)),
-            Some(WorktreePrCi::Failing)
-        );
-        assert_eq!(
-            classify_tea_ci(Some(&newest), Some(&other), Some(&success)),
-            Some(WorktreePrCi::Passing)
-        );
-        assert_eq!(classify_tea_ci(Some(&newest), Some(&other), None), None);
+        for raw in [
+            r#"{"state":""}"#,
+            r#"{"state":"unknown"}"#,
+            r#"{}"#,
+            r#"{"message":"not found"}"#,
+        ] {
+            assert_eq!(parse_tea_combined_status(raw).unwrap(), None);
+        }
+        assert!(parse_tea_combined_status("[]").is_err());
     }
 
     #[test]
-    fn tea_runs_args_bound_branch_status_and_repo() {
-        let args = tea_runs_list_args("feature", Some("failure"), Some("org/repo"));
-        assert!(
-            args.windows(2)
-                .any(|window| window == ["--branch", "feature"])
+    fn tea_commit_status_endpoint_carries_repo_and_branch() {
+        assert_eq!(
+            tea_commit_status_endpoint("org/repo", "feature/topic"),
+            "repos/org/repo/commits/feature/topic/status"
         );
-        assert!(args.windows(2).any(|window| window == ["--limit", "1"]));
-        assert!(
-            args.windows(2)
-                .any(|window| window == ["--status", "failure"])
-        );
-        assert!(
-            args.windows(2)
-                .any(|window| window == ["--repo", "org/repo"])
-        );
-
-        let bare = tea_runs_list_args("feature", None, None);
-        assert!(!bare.iter().any(|arg| arg == "--status"));
-        assert!(!bare.iter().any(|arg| arg == "--repo"));
     }
 
     #[test]

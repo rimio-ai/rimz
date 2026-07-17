@@ -88,21 +88,16 @@ fn agent_list_entries<'a>(
 }
 
 pub(super) fn agent_pr(snapshot: &rimz::SidebarSnapshot, agent: &AgentState) -> Option<PrInfo> {
-    let agents = snapshot
-        .agents
+    snapshot
+        .worktree_groups
         .iter()
-        .filter(|candidate| candidate.parent_agent_id.is_none())
-        .collect::<Vec<_>>();
-    let key = rimz::store::snapshot::group_live_agents_by_worktree(&agents, snapshot)
-        .into_iter()
         .find(|group| {
             group
-                .agents
+                .rows
                 .iter()
-                .any(|candidate| candidate.agent_id == agent.agent_id)
-        })?
-        .key;
-    group_pr(snapshot, &key).and_then(pr_info)
+                .any(|row| row.is_agent() && row.id == agent.agent_id.as_str())
+        })
+        .and_then(pr_info)
 }
 
 pub(super) fn group_pr<'a>(
@@ -552,6 +547,60 @@ mod tests {
             serde_json::to_value(plain).unwrap(),
             serde_json::to_value(plain.agent).unwrap()
         );
+    }
+
+    #[test]
+    fn agent_pr_uses_projected_group_membership() {
+        let mut linked = test_agent("linked");
+        linked.worktree_path = Some("/repo/worktree".to_owned());
+        linked.worktree_branch = Some("feature".to_owned());
+        let mut stale = test_agent("stale");
+        stale.worktree_path = Some("/repo/worktree".to_owned());
+        stale.worktree_branch = Some("other".to_owned());
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+            rimz::WorkspaceId::from_project_root(Path::new("/repo/main")),
+            vec![linked, stale],
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        let mut group: rimz::SidebarWorktreeGroup = serde_json::from_value(serde_json::json!({
+            "key": "/repo/worktree",
+            "label": "feature",
+            "kind": "worktree",
+            "status_counts": [],
+            "rows": [],
+            "pr_number": 91,
+            "pr_state": "open",
+            "pr_ci": "passing"
+        }))
+        .unwrap();
+        group.rows.push(rimz::SidebarRow {
+            id: "linked".to_owned(),
+            name: "codex".to_owned(),
+            pane: None,
+            worktree_path: Some("/repo/worktree".to_owned()),
+            worktree_branch: Some("feature".to_owned()),
+            channel: None,
+            unread: false,
+            inactive: false,
+            archived: false,
+            attention_score: 0,
+            last_activity: jiff::Timestamp::UNIX_EPOCH,
+            card: rimz::RowCard::Agent(Box::new(rimz::AgentCard {
+                status: rimz::agents::AgentStatus::Idle,
+                ..rimz::AgentCard::default()
+            })),
+        });
+        snapshot.worktree_groups.push(group);
+
+        assert_eq!(
+            agent_pr(&snapshot, &snapshot.agents[0]),
+            Some(PrInfo {
+                number: Some(91),
+                state: rimz::WorktreePrState::Open,
+                ci: Some(rimz::WorktreePrCi::Passing),
+            })
+        );
+        assert_eq!(agent_pr(&snapshot, &snapshot.agents[1]), None);
     }
 
     fn test_agent(id: &str) -> AgentState {

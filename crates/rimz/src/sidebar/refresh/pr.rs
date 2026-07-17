@@ -7,9 +7,9 @@
 //! `probe_tea` follows a closed candidate with a `tea pr <n>` detail read to
 //! tell merged from closed. Both tea list calls page through
 //! [`crate::forge::tea_pr_list_args`] with the same `--limit`. GitHub includes
-//! CI in its open-PR list. Tea needs up to three bounded workflow-run lists per
-//! open branch; those calls are best-effort enrichment and do not invalidate a
-//! successful PR-state probe.
+//! CI in its open-PR list. Tea reads Gitea's combined commit status with one
+//! `tea api` call per open branch. Those calls are best-effort enrichment and
+//! do not invalidate a successful PR-state probe.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -619,13 +619,15 @@ fn probe_repo_group(
     };
     let assigned = assign_states(&group.targets, &open_map, prior);
     let mut states = assigned.states;
-    if group.forge_cli == ForgeCli::Tea {
+    if group.forge_cli == ForgeCli::Tea
+        && let Some(repo_slug) = group.repo_slug.as_deref()
+    {
         for target in &group.targets {
             let Some(link) = states.get_mut(&target.path) else {
                 continue;
             };
             if link.state == WorktreePrState::Open {
-                link.ci = probe_tea_ci(&group.worktree, &target.branch, group.repo_slug.as_deref());
+                link.ci = probe_tea_ci(&group.worktree, repo_slug, &target.branch);
             }
         }
     }
@@ -806,36 +808,16 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
     }
 }
 
-fn probe_tea_ci(worktree: &Path, branch: &str, repo: Option<&str>) -> Option<WorktreePrCi> {
-    let newest = query_tea_runs(worktree, branch, None, repo)?;
-    let newest = newest.first()?;
-    if !newest.status.eq_ignore_ascii_case("completed") {
-        return forge::classify_tea_ci(Some(newest), None, None);
-    }
-
-    let failures = query_tea_runs(worktree, branch, Some("failure"), repo)?;
-    if let Some(verdict) = forge::classify_tea_ci(Some(newest), failures.first(), None) {
-        return Some(verdict);
-    }
-    let successes = query_tea_runs(worktree, branch, Some("success"), repo)?;
-    forge::classify_tea_ci(Some(newest), failures.first(), successes.first())
-}
-
-fn query_tea_runs(
-    worktree: &Path,
-    branch: &str,
-    status: Option<&str>,
-    repo: Option<&str>,
-) -> Option<Vec<forge::TeaRun>> {
-    let args = forge::tea_runs_list_args(branch, status, repo);
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = command_stdout(worktree, "tea", &arg_refs)?;
-    forge::parse_tea_runs_list(&output)
+fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<WorktreePrCi> {
+    let endpoint = forge::tea_commit_status_endpoint(repo_slug, branch);
+    let output = command_stdout(worktree, "tea", &["api", &endpoint])?;
+    forge::parse_tea_combined_status(&output)
         .map_err(|err| {
-            tracing::debug!(error = %err, "gitea workflow-run list parse failed");
+            tracing::debug!(error = %err, "gitea combined commit-status parse failed");
             err
         })
         .ok()
+        .flatten()
 }
 
 fn git_branch(worktree: &Path) -> Option<String> {
