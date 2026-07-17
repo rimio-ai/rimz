@@ -122,7 +122,12 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
     if !delivered {
         let reason = format!("resume delivery gate closed ({})", args.reason);
         store
-            .record_message_delivery_failure(&message_id, &reason, &workspace.session_name)
+            .record_message_delivery_failures(
+                std::slice::from_ref(&message_id),
+                None,
+                &reason,
+                &workspace.session_name,
+            )
             .context("recording auto-continue delivery miss")?;
     }
     Ok(())

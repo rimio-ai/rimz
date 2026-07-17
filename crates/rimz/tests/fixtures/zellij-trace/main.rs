@@ -42,6 +42,7 @@ enum WebCommand<'a> {
 enum FailureMode {
     Normal,
     FailWrite,
+    FailEnter,
     SocketOverflowOnBirth,
     BirthFails,
 }
@@ -69,7 +70,7 @@ fn main() {
             session,
             configuration,
         } => handle_dump_topology(session, configuration),
-        Invocation::Write => handle_write(&log_path),
+        Invocation::Write => handle_write(&log_path, cli),
         Invocation::Birth => handle_birth(&log_path),
         Invocation::Unhandled => {}
     }
@@ -211,10 +212,22 @@ fn handle_dump_topology(session: Option<&str>, configuration: Option<&str>) {
     }
 }
 
-fn handle_write(log_path: &Path) {
-    if trace_mode(log_path) == FailureMode::FailWrite {
-        write_stderr("simulated zellij write failure");
-        std::process::exit(7);
+fn handle_write(log_path: &Path, args: &[String]) {
+    match trace_mode(log_path) {
+        FailureMode::FailWrite => {
+            write_stderr("simulated zellij write failure");
+            std::process::exit(7);
+        }
+        FailureMode::FailEnter
+            if has_pair(args, "action", "write") && args.last().is_some_and(|arg| arg == "13") =>
+        {
+            write_stderr("simulated zellij Enter failure");
+            std::process::exit(7);
+        }
+        FailureMode::Normal
+        | FailureMode::FailEnter
+        | FailureMode::SocketOverflowOnBirth
+        | FailureMode::BirthFails => {}
     }
 }
 
@@ -228,7 +241,7 @@ fn handle_birth(log_path: &Path) {
             write_stderr("simulated zellij birth failure");
             std::process::exit(5);
         }
-        FailureMode::Normal | FailureMode::FailWrite => {}
+        FailureMode::Normal | FailureMode::FailWrite | FailureMode::FailEnter => {}
     }
 }
 
@@ -287,10 +300,15 @@ fn trace_mode(log_path: &Path) -> FailureMode {
 
 fn mode_from_log_path(log_path: &Path) -> Option<FailureMode> {
     let name = log_path.file_name()?.to_str()?;
-    ["socket-overflow-on-birth", "birth-fails", "fail-write"]
-        .into_iter()
-        .find(|mode| name.contains(mode))
-        .map(FailureMode::from)
+    [
+        "socket-overflow-on-birth",
+        "birth-fails",
+        "fail-write",
+        "fail-enter",
+    ]
+    .into_iter()
+    .find(|mode| name.contains(mode))
+    .map(FailureMode::from)
 }
 
 impl FailureMode {
@@ -303,6 +321,7 @@ impl From<&str> for FailureMode {
     fn from(value: &str) -> Self {
         match value {
             "fail-write" => Self::FailWrite,
+            "fail-enter" => Self::FailEnter,
             "socket-overflow-on-birth" => Self::SocketOverflowOnBirth,
             "birth-fails" => Self::BirthFails,
             _ => Self::Normal,

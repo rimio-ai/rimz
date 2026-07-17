@@ -507,12 +507,14 @@ mod tests {
             rimz::message::DeliveryGate::Done,
         );
         store
-            .record_sent_message(&command, "session")
+            .record_sent_batch(std::slice::from_ref(&command), "session")
             .unwrap()
+            .first()
             .expect("command sent");
         store
-            .record_sent_message(&prompt, "session")
+            .record_sent_batch(std::slice::from_ref(&prompt), "session")
             .unwrap()
+            .first()
             .expect("prompt sent");
 
         let compact_observation = AgentLifecycleObservation::new(

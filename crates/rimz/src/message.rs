@@ -585,12 +585,6 @@ impl MessageRecord {
         self
     }
 
-    #[must_use]
-    pub fn with_status(mut self, status: MessageStatus) -> Self {
-        self.status = status;
-        self
-    }
-
     /// Record who queued the message without duplicating the message body.
     #[must_use]
     pub fn with_sender(mut self, sender: MessageSender) -> Self {

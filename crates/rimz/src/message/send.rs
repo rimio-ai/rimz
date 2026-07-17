@@ -1,13 +1,13 @@
-//! Live-pane message send engine.
+//! Live-pane payload construction, paced writes, and the durable Sent-before-submit barrier.
 
 use std::thread::sleep;
 use std::time::Duration;
 
 use crate::agents::AgentState;
-use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    MessageStatus, WhenCondition,
+    WhenCondition,
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
 use crate::workspace::ResolvedWorkspace;
@@ -23,22 +23,11 @@ pub enum SendErr {
     Mux(#[from] crate::mux::MuxErr),
 }
 
-/// What happened to one live-pane send in a fan-out. Every resolved pane target
-/// carries a live pane, so the only soft skip is Waiting reserving the next
-/// input.
-pub enum Outcome {
-    Sent {
-        label: String,
-        message_id: MessageId,
-    },
-    SkippedWaiting {
-        label: String,
-        message_id: MessageId,
-    },
-    CompactionPending {
-        label: String,
-        message_id: MessageId,
-    },
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Receipt {
+    Sent { compacted: bool },
+    SkippedWaiting,
+    CompactionPending,
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
@@ -139,8 +128,7 @@ impl MessageDraft {
         .with_auto_compact(self.auto_compact)
         .with_not_before(self.not_before)
         .with_after(self.after)
-        .with_when(self.when)
-        .with_status(MessageStatus::Queued);
+        .with_when(self.when);
         match recipient.pane_id {
             Some(pane_id) => record.with_pane_id(pane_id),
             None => record,
@@ -148,12 +136,7 @@ impl MessageDraft {
     }
 }
 
-pub struct SentPrompt {
-    pub outcome: Outcome,
-    pub compacted: Option<MessageId>,
-}
-
-pub fn send_batch_to_live_pane(
+pub(crate) fn send_batch_to_live_pane(
     workspace: &ResolvedWorkspace,
     store: &Store,
     snapshot: &SidebarSnapshot,
@@ -161,25 +144,26 @@ pub fn send_batch_to_live_pane(
     bound: Option<&AgentState>,
     batch: &[MessageRecord],
     send: &mut LiveSend,
-) -> Result<SentPrompt> {
+) -> Result<Receipt> {
     // Dispatch and delivery claims always pass a non-empty batch.
     let head = batch
         .first()
         .expect("send_batch_to_live_pane requires at least one message");
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
-        let outcome = write_batch(workspace, store, snapshot, target, bound, batch, send)?;
-        return Ok(SentPrompt {
-            outcome,
-            compacted: None,
-        });
+        return Ok(
+            match write_batch(workspace, store, snapshot, target, bound, batch, send)? {
+                PaneWrite::Sent => Receipt::Sent { compacted: false },
+                PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
+            },
+        );
     }
     debug_assert!(
         batch
             .iter()
             .all(|message| message.body == MessageBody::Prompt)
     );
-    let mut compacted = None;
+    let mut compacted = false;
     let command = batch
         .iter()
         .find_map(|message| compact_message_for_target(store, target, bound, message));
@@ -194,35 +178,25 @@ pub fn send_batch_to_live_pane(
             std::slice::from_ref(&command),
             send,
         ) {
-            Ok(Outcome::Sent { message_id, .. }) => {
-                compacted = Some(message_id);
+            Ok(PaneWrite::Sent) => {
+                compacted = true;
                 if !send.steer {
-                    return Ok(SentPrompt {
-                        outcome: Outcome::CompactionPending {
-                            label: handle_for_pane_target(snapshot, target, bound),
-                            message_id: head.message_id.clone(),
-                        },
-                        compacted,
-                    });
+                    return Ok(Receipt::CompactionPending);
                 }
             }
-            Ok(skipped @ Outcome::SkippedWaiting { .. }) => {
-                return Ok(SentPrompt {
-                    outcome: skipped,
-                    compacted: None,
-                });
-            }
-            Ok(Outcome::CompactionPending { .. }) => {
-                unreachable!("write_batch only returns pane-write outcomes")
-            }
+            Ok(PaneWrite::SkippedWaiting) => return Ok(Receipt::SkippedWaiting),
             Err(err) => {
                 store.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
                 return Err(err);
             }
         }
     }
-    let outcome = write_batch(workspace, store, snapshot, target, bound, batch, send)?;
-    Ok(SentPrompt { outcome, compacted })
+    Ok(
+        match write_batch(workspace, store, snapshot, target, bound, batch, send)? {
+            PaneWrite::Sent => Receipt::Sent { compacted },
+            PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
+        },
+    )
 }
 
 pub fn synthetic_session_for_pane(pane_id: &crate::ids::PaneId) -> AgentSessionId {
@@ -271,18 +245,14 @@ fn write_batch(
     bound: Option<&AgentState>,
     batch: &[MessageRecord],
     send: &mut LiveSend,
-) -> Result<Outcome> {
+) -> Result<PaneWrite> {
     // Dispatch and delivery claims always pass a non-empty batch.
     let head = batch
         .first()
         .expect("write_batch requires at least one message");
     debug_assert!(batch.iter().all(|message| message.enter == head.enter));
-    let label = handle_for_pane_target(snapshot, target, bound);
     if !send.force && bound.is_some_and(AgentState::is_awaiting_input) {
-        return Ok(Outcome::SkippedWaiting {
-            label,
-            message_id: head.message_id.clone(),
-        });
+        return Ok(PaneWrite::SkippedWaiting);
     }
     let pane_id = &target.pane_id;
     send.pacer.tick();
@@ -317,29 +287,16 @@ fn write_batch(
     }
     // Record the send once the text lands and before the submit keystroke, so a
     // submitted message is always preceded by its durable record and audit event.
-    for message in batch {
-        store.record_sent_message(message, &workspace.session_name)?;
-    }
+    store.record_sent_batch(batch, &workspace.session_name)?;
     if head.enter {
         press_pane_key(pane_id, NamedKey::Enter)?;
     }
-    Ok(Outcome::Sent {
-        label,
-        message_id: head.message_id.clone(),
-    })
+    Ok(PaneWrite::Sent)
 }
 
-pub fn handle_for_pane_target(
-    snapshot: &SidebarSnapshot,
-    target: &PaneAgent,
-    bound: Option<&AgentState>,
-) -> String {
-    if let Some(agent) = bound {
-        let peers: Vec<&AgentState> = snapshot.root_agents().collect();
-        crate::harness::target::agent_handle(agent, &peers, true)
-    } else {
-        format!("@{}", target.label())
-    }
+enum PaneWrite {
+    Sent,
+    SkippedWaiting,
 }
 
 pub fn compact_message_for_target(

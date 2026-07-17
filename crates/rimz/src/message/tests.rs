@@ -641,7 +641,13 @@ fn wake_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
             },
             Some(updated_at + window),
         ),
-        (message.with_status(MessageStatus::Delivered), None),
+        (
+            MessageRecord {
+                status: MessageStatus::Delivered,
+                ..message
+            },
+            None,
+        ),
     ];
     for (message, expected) in cases {
         assert_eq!(message.wake_deadline(now, window), expected);

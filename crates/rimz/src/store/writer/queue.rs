@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use crate::agents::AgentCardRef;
+use crate::agents::{AgentCardRef, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{
     AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
-    claim_expired, queue_head_for_message,
+    claim_expired, gate_open, queue_head_for_message,
 };
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 
@@ -37,6 +37,12 @@ pub struct DeliverySweepUpdate {
     pub when_indices: Vec<usize>,
     pub retry_after: Option<Timestamp>,
     pub archive_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeliveryFailureResult {
+    pub head_found: bool,
+    pub head_sent: bool,
 }
 
 impl MessageEdit {
@@ -294,6 +300,22 @@ fn claim_message(message: &MessageRecord, now: Timestamp) -> MessageRecord {
     claimed
 }
 
+fn same_delivery_lane(left: DeliveryGate, right: DeliveryGate) -> bool {
+    match left {
+        DeliveryGate::Resume => right == DeliveryGate::Resume,
+        DeliveryGate::Done | DeliveryGate::Any => right != DeliveryGate::Resume,
+    }
+}
+
+fn batch_compatible(head: &MessageRecord, candidate: &MessageRecord, status: AgentStatus) -> bool {
+    head.batchable()
+        && head.gate != DeliveryGate::Resume
+        && candidate.batchable()
+        && candidate.batch_key() == head.batch_key()
+        && candidate.force == head.force
+        && gate_open(candidate.gate, status)
+}
+
 fn apply_sweep_update(
     message: &mut MessageRecord,
     update: &DeliverySweepUpdate,
@@ -507,72 +529,114 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn record_sent_message(
+    pub fn record_sent_batch(
         &self,
-        message: &MessageRecord,
+        messages: &[MessageRecord],
         session_name: &str,
-    ) -> Result<Option<MessageRecord>> {
+    ) -> Result<Vec<MessageRecord>> {
         self.commit(|txn| {
             let mut queue = QueueTxn::new(txn)?;
-            let mut message = match queue.get(&message.message_id) {
-                Some(existing)
-                    if matches!(
-                        existing.status,
-                        MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
-                    ) =>
-                {
-                    let mut existing = existing;
-                    existing.pane_id = message.pane_id.clone();
-                    existing.batch_id = message.batch_id.clone();
-                    existing
-                }
-                Some(_) => return Ok(None),
-                None => message.clone(),
-            };
             let now = Timestamp::now();
-            message.status = MessageStatus::Sent;
-            message.updated_at = now;
-            message.last_error = None;
-            queue.upsert(message.clone());
-            let event = EventEnvelope::message_event(
-                &message,
-                session_name,
-                MessageEventMethod::Sent,
-                None,
-            );
-            queue.stage_event(event);
+            let mut sent = Vec::with_capacity(messages.len());
+            for supplied in messages {
+                let mut message = match queue.get(&supplied.message_id) {
+                    Some(existing)
+                        if matches!(
+                            existing.status,
+                            MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
+                        ) =>
+                    {
+                        let mut existing = existing;
+                        existing.pane_id = supplied.pane_id.clone();
+                        existing.batch_id = supplied.batch_id.clone();
+                        existing
+                    }
+                    Some(_) => continue,
+                    None => supplied.clone(),
+                };
+                message.status = MessageStatus::Sent;
+                message.updated_at = now;
+                message.last_error = None;
+                queue.upsert(message.clone());
+                queue.stage_event(EventEnvelope::message_event(
+                    &message,
+                    session_name,
+                    MessageEventMethod::Sent,
+                    None,
+                ));
+                sent.push(message);
+            }
             queue.finish()?;
-            Ok(Some(message))
+            Ok(sent)
         })
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn claim_message_for_delivery(
+    pub fn claim_delivery_batch(
         &self,
         message_id: &MessageId,
+        status: AgentStatus,
         now: Timestamp,
-    ) -> Result<Option<MessageRecord>> {
+    ) -> Result<Option<Vec<MessageRecord>>> {
         self.commit(|txn| {
             let mut queue = QueueTxn::new(txn)?;
             let queued = queue.pending().cloned().collect::<Vec<_>>();
-            let Some(message) = queued
+            let Some(head) = queued
                 .iter()
                 .find(|message| message.message_id == *message_id)
             else {
                 return Ok(None);
             };
-            if !claim_expired(message.last_attempt_at, now) {
+            if !claim_expired(head.last_attempt_at, now) {
                 return Ok(None);
             }
-            let Some(head) = queue_head_for_message(queued.iter(), message, now) else {
+            let Some(current_head) = queue_head_for_message(queued.iter(), head, now) else {
                 return Ok(None);
             };
-            if head.message_id != *message_id {
+            if current_head.message_id != *message_id
+                || queue.live().iter().any(|message| {
+                    message.status == MessageStatus::Claimed
+                        && message.same_card(head.card_ref())
+                        && same_delivery_lane(head.gate, message.gate)
+                        && message.is_deliverable(now)
+                        && message.message_id.as_str() < head.message_id.as_str()
+                })
+            {
                 return Ok(None);
             }
-            let claimed = claim_message(message, now);
-            queue.upsert(claimed.clone());
+            let mut candidates = vec![head.clone()];
+            if head.batchable() && head.gate != DeliveryGate::Resume {
+                for candidate in queue.live().iter().filter(|message| {
+                    matches!(
+                        message.status,
+                        MessageStatus::Queued | MessageStatus::Claimed
+                    ) && message.same_card(head.card_ref())
+                        && same_delivery_lane(head.gate, message.gate)
+                        && message.is_deliverable(now)
+                        && message.message_id.as_str() > head.message_id.as_str()
+                }) {
+                    if !claim_expired(candidate.last_attempt_at, now)
+                        || !batch_compatible(head, candidate, status)
+                    {
+                        break;
+                    }
+                    candidates.push(candidate.clone());
+                }
+            }
+            let mut claimed = candidates
+                .iter()
+                .map(|message| claim_message(message, now))
+                .collect::<Vec<_>>();
+            for message in &claimed {
+                queue.upsert(message.clone());
+            }
             queue.finish()?;
+            if claimed.len() > 1 {
+                let batch_id = claimed[0].message_id.clone();
+                for message in &mut claimed {
+                    message.batch_id = Some(batch_id.clone());
+                }
+            }
             Ok(Some(claimed))
         })
     }
@@ -603,17 +667,21 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn release_message_claim(
+    pub fn release_message_claims(
         &self,
-        message_id: &MessageId,
+        message_ids: &[MessageId],
         note: &str,
         session_name: &str,
-    ) -> Result<Option<MessageRecord>> {
+    ) -> Result<Vec<MessageRecord>> {
         self.commit(|txn| {
             let mut queue = QueueTxn::new(txn)?;
             let now = Timestamp::now();
+            let message_ids = message_ids
+                .iter()
+                .map(MessageId::as_str)
+                .collect::<BTreeSet<_>>();
             let updated = self.update_messages_locked(&mut queue, session_name, now, |message| {
-                if message.message_id != *message_id
+                if !message_ids.contains(message.message_id.as_str())
                     || !matches!(
                         message.status,
                         MessageStatus::Queued | MessageStatus::Claimed
@@ -638,7 +706,7 @@ impl Store {
                 }
             });
             queue.finish()?;
-            Ok(updated.into_iter().next())
+            Ok(updated)
         })
     }
 
@@ -869,45 +937,70 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn record_message_delivery_failure(
+    pub fn record_message_delivery_failures(
         &self,
-        message_id: &MessageId,
+        message_ids: &[MessageId],
+        fallback_head: Option<&MessageRecord>,
         error: &str,
         session_name: &str,
-    ) -> Result<Option<MessageRecord>> {
+    ) -> Result<DeliveryFailureResult> {
         self.commit(|txn| {
             let mut queue = QueueTxn::new(txn)?;
-            let mut message = match queue.get(message_id) {
-                Some(message)
-                    if matches!(
-                        message.status,
-                        MessageStatus::Queued | MessageStatus::Claimed
-                    ) =>
-                {
-                    message
-                }
-                Some(_) | None => return Ok(None),
+            let Some(head_id) = message_ids.first() else {
+                return Ok(DeliveryFailureResult::default());
             };
-            message.last_error = Some(error.to_owned());
-            message.pane_id = None;
-            message.batch_id = None;
-            message.updated_at = Timestamp::now();
-            if message.attempts >= MAX_DELIVERY_ATTEMPTS {
-                let message = queue.terminalize(
-                    message,
-                    MessageStatus::Abandoned,
+            let message_ids = message_ids
+                .iter()
+                .map(MessageId::as_str)
+                .collect::<BTreeSet<_>>();
+            let now = Timestamp::now();
+            let mut result = DeliveryFailureResult::default();
+            self.update_messages_locked(&mut queue, session_name, now, |message| {
+                if !message_ids.contains(message.message_id.as_str()) {
+                    return MessageUpdate::Keep;
+                }
+                if message.message_id == *head_id {
+                    result.head_found = true;
+                    result.head_sent = message.status == MessageStatus::Sent;
+                }
+                if message.status == MessageStatus::Sent || message.status.is_terminal() {
+                    return MessageUpdate::Keep;
+                }
+                if !matches!(
+                    message.status,
+                    MessageStatus::Queued | MessageStatus::Claimed
+                ) {
+                    return MessageUpdate::Keep;
+                }
+                message.last_error = Some(error.to_owned());
+                message.pane_id = None;
+                message.batch_id = None;
+                message.updated_at = now;
+                if message.attempts >= MAX_DELIVERY_ATTEMPTS {
+                    MessageUpdate::Finalize {
+                        status: MessageStatus::Abandoned,
+                        reason: Some(error.to_owned()),
+                    }
+                } else {
+                    message.status = MessageStatus::Queued;
+                    MessageUpdate::SilentRewrite
+                }
+            });
+            if !result.head_found
+                && let Some(fallback) = fallback_head
+            {
+                let mut fallback = fallback.clone();
+                fallback.last_error = Some(error.to_owned());
+                queue.terminalize(
+                    fallback,
+                    MessageStatus::Errored,
                     session_name,
                     Some(error),
-                    Timestamp::now(),
+                    now,
                 );
-                queue.finish()?;
-                Ok(Some(message))
-            } else {
-                message.status = MessageStatus::Queued;
-                queue.upsert(message.clone());
-                queue.finish()?;
-                Ok(Some(message))
             }
+            queue.finish()?;
+            Ok(result)
         })
     }
 

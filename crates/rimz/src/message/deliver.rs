@@ -1,4 +1,4 @@
-//! Queued-message delivery, sweeping, and wake-cache maintenance.
+//! Receiver readiness, shared delivery-attempt recovery, queued sweeps, and wake maintenance.
 
 use std::fs::File;
 use std::io::ErrorKind;
@@ -13,7 +13,7 @@ use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
     AfterCondition, DeliveryGate, MessageRecord, MessageStatus, WhenCondition,
     delivery_window_from_env, gate_open_for_agent, max_delivery_attempts_from_env,
-    message_interval_from_env, older_ready_blocker, queue_batch_tail, queue_head,
+    message_interval_from_env, older_ready_blocker, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, RuntimePaths, SidebarSnapshot, Store};
@@ -46,6 +46,59 @@ pub enum DeliverErr {
 pub enum DeliveryPolicy {
     Boundary,
     Steer { force: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReceiverReadiness {
+    pub status: AgentStatus,
+    pub compacting: bool,
+    pub gate_open: bool,
+    pub waiting: bool,
+}
+
+impl ReceiverReadiness {
+    pub fn accepts_prompt(self) -> bool {
+        self.gate_open && !self.waiting
+    }
+}
+
+pub(crate) fn receiver_readiness(
+    agent: &crate::agents::AgentState,
+    gate: DeliveryGate,
+    force: bool,
+    now: Timestamp,
+) -> ReceiverReadiness {
+    ReceiverReadiness {
+        status: agent.effective_status(),
+        compacting: agent.is_compacting(now),
+        gate_open: gate_open_for_agent(gate, agent, force, now),
+        waiting: !force && agent.is_awaiting_input(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttemptSource {
+    Fresh { durable_receiver: bool },
+    Claimed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttemptOutcome {
+    Sent { compacted: bool },
+    Queued,
+    CompactionPending,
+    SkippedWaiting,
+}
+
+pub(crate) struct Attempt<'a> {
+    pub workspace: &'a ResolvedWorkspace,
+    pub store: &'a Store,
+    pub snapshot: &'a SidebarSnapshot,
+    pub target: &'a PaneAgent,
+    pub bound: Option<&'a crate::agents::AgentState>,
+    pub records: &'a [MessageRecord],
+    pub source: AttemptSource,
+    pub policy: DeliveryPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -108,13 +161,22 @@ fn attempt_delivery(
     pending: &[MessageRecord],
     snapshot: &SidebarSnapshot,
 ) -> Result<bool> {
-    let Some(candidate) = delivery_candidate(pending, snapshot, message_id, policy) else {
+    let now = Timestamp::now();
+    let Some(candidate) = delivery_candidate(pending, snapshot, message_id, policy, now) else {
         return Ok(false);
     };
-    let Some(claimed) = claim_batch(store, policy, &candidate)? else {
+    let claimed = match policy {
+        DeliveryPolicy::Boundary => {
+            store.claim_delivery_batch(&candidate.message.message_id, candidate.status, now)?
+        }
+        DeliveryPolicy::Steer { .. } => store
+            .claim_message_for_steer(&candidate.message.message_id, now)?
+            .map(|message| vec![message]),
+    };
+    let Some(claimed) = claimed else {
         return Ok(false);
     };
-    // Hook delivery handles one claimed message; settle above owns any
+    // Hook delivery handles one claimed batch; settle above owns any
     // pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {
         force: claimed[0].force || matches!(policy, DeliveryPolicy::Steer { force: true }),
@@ -128,119 +190,96 @@ fn attempt_delivery(
         .collect();
     let bound = crate::harness::target::pane_binding(candidate.snapshot, candidate.target, None)
         .and_then(|binding| binding.exact_agent);
-    let sent = send::send_batch_to_live_pane(
+    let outcome = execute_attempt(
+        Attempt {
+            workspace,
+            store,
+            snapshot: candidate.snapshot,
+            target: candidate.target,
+            bound,
+            records: &send_messages,
+            source: AttemptSource::Claimed,
+            policy,
+        },
+        &mut live_send,
+    )?;
+    register_message_wake(workspace, store)?;
+    Ok(matches!(outcome, AttemptOutcome::Sent { .. }))
+}
+
+pub(crate) fn execute_attempt(
+    attempt: Attempt<'_>,
+    live_send: &mut send::LiveSend,
+) -> Result<AttemptOutcome> {
+    let Attempt {
         workspace,
         store,
-        candidate.snapshot,
-        candidate.target,
+        snapshot,
+        target,
         bound,
-        &send_messages,
-        &mut live_send,
-    );
-    match sent {
-        Ok(send::SentPrompt {
-            outcome: send::Outcome::Sent { .. },
-            ..
-        }) => {
-            register_message_wake(workspace, store)?;
-            Ok(true)
-        }
-        Ok(send::SentPrompt {
-            outcome: send::Outcome::SkippedWaiting { .. },
-            ..
-        }) => {
-            for message in &claimed {
-                store.record_message_delivery_failure(
-                    &message.message_id,
-                    "agent is waiting on input in its pane",
-                    &workspace.session_name,
-                )?;
+        records,
+        source,
+        policy,
+    } = attempt;
+    let head = records
+        .first()
+        .expect("delivery attempts require at least one message");
+    let ids = records
+        .iter()
+        .map(|message| message.message_id.clone())
+        .collect::<Vec<_>>();
+    match send::send_batch_to_live_pane(
+        workspace, store, snapshot, target, bound, records, live_send,
+    ) {
+        Ok(send::Receipt::Sent { compacted }) => Ok(AttemptOutcome::Sent { compacted }),
+        Ok(send::Receipt::SkippedWaiting) => {
+            const WAITING: &str = "agent is waiting on input in its pane";
+            if matches!(source, AttemptSource::Fresh { .. })
+                && matches!(policy, DeliveryPolicy::Steer { .. })
+            {
+                store.record_send_error(head, WAITING, &workspace.session_name)?;
+                return Ok(AttemptOutcome::SkippedWaiting);
             }
-            Ok(false)
+            store.record_message_delivery_failures(
+                &ids,
+                records.first(),
+                WAITING,
+                &workspace.session_name,
+            )?;
+            Ok(AttemptOutcome::Queued)
         }
-        Ok(send::SentPrompt {
-            outcome: send::Outcome::CompactionPending { .. },
-            ..
-        }) => {
-            for message in &claimed {
-                store.release_message_claim(
-                    &message.message_id,
-                    "parked: waiting for compaction to finish",
-                    &workspace.session_name,
-                )?;
-            }
-            register_message_wake(workspace, store)?;
-            Ok(false)
+        Ok(send::Receipt::CompactionPending) => {
+            store.release_message_claims(
+                &ids,
+                "parked: waiting for compaction to finish",
+                &workspace.session_name,
+            )?;
+            Ok(AttemptOutcome::CompactionPending)
         }
         Err(err) => {
-            record_batch_failure(workspace, store, &claimed, &send_messages, &err)?;
-            register_message_wake(workspace, store)?;
-            Ok(false)
+            let durable_receiver = matches!(
+                source,
+                AttemptSource::Claimed
+                    | AttemptSource::Fresh {
+                        durable_receiver: true
+                    }
+            );
+            let failure = store.record_message_delivery_failures(
+                &ids,
+                durable_receiver.then_some(head),
+                &err.to_string(),
+                &workspace.session_name,
+            )?;
+            if failure.head_sent {
+                return Ok(AttemptOutcome::Sent { compacted: false });
+            }
+            if durable_receiver {
+                return Ok(AttemptOutcome::Queued);
+            }
+            store.record_send_error(head, &err.to_string(), &workspace.session_name)?;
+            Err(err.into())
         }
     }
-}
-
-fn claim_batch(
-    store: &Store,
-    policy: DeliveryPolicy,
-    candidate: &DeliveryCandidate<'_>,
-) -> Result<Option<Vec<MessageRecord>>> {
-    let claimed_head = match policy {
-        DeliveryPolicy::Boundary => {
-            store.claim_message_for_delivery(&candidate.message.message_id, Timestamp::now())?
-        }
-        DeliveryPolicy::Steer { .. } => {
-            store.claim_message_for_steer(&candidate.message.message_id, Timestamp::now())?
-        }
-    };
-    let Some(message) = claimed_head else {
-        return Ok(None);
-    };
-    debug_assert!(
-        message.kind == candidate.message.kind && message.agent_id == candidate.message.agent_id
-    );
-    debug_assert_eq!(message.message_id, candidate.message.message_id);
-    let mut claimed = vec![message];
-    for tail in &candidate.batch_tail {
-        match store.claim_message_for_delivery(&tail.message_id, Timestamp::now())? {
-            Some(message) => claimed.push(message),
-            None => break,
-        }
-    }
-    if claimed.len() > 1 {
-        let batch_id = claimed[0].message_id.clone();
-        for message in &mut claimed {
-            message.batch_id = Some(batch_id.clone());
-        }
-    }
-    Ok(Some(claimed))
-}
-
-fn record_batch_failure(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    claimed: &[MessageRecord],
-    send_messages: &[MessageRecord],
-    err: &send::SendErr,
-) -> Result<()> {
-    let mut head_failure_recorded = true;
-    for message in claimed {
-        if message_recorded_as_sent(store, &message.message_id)? {
-            continue;
-        }
-        let recorded = store.record_message_delivery_failure(
-            &message.message_id,
-            &err.to_string(),
-            &workspace.session_name,
-        )?;
-        if message.message_id == claimed[0].message_id {
-            head_failure_recorded = recorded.is_some();
-        }
-    }
-    if !head_failure_recorded {
-        store.record_send_error(&send_messages[0], &err.to_string(), &workspace.session_name)?;
-    }
-    Ok(())
 }
 
 pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>) -> Result<()> {
@@ -374,7 +413,7 @@ fn try_start_sweep(runtime: &RuntimePaths) -> Result<Option<SweepRunGuard>> {
 
 struct DeliveryCandidate<'a> {
     message: MessageRecord,
-    batch_tail: Vec<MessageRecord>,
+    status: AgentStatus,
     snapshot: &'a SidebarSnapshot,
     target: &'a PaneAgent,
 }
@@ -612,10 +651,10 @@ fn evaluate_delivery<'a>(
         .agents
         .iter()
         .find(|agent| message.same_agent_card(agent));
-    let status = agent.map(crate::agents::AgentState::effective_status);
-    let compacting = agent.is_some_and(|agent| agent.is_compacting(now));
-    let open =
-        agent.is_some_and(|agent| gate_open_for_agent(message.gate, agent, message.force, now));
+    let readiness = agent.map(|agent| receiver_readiness(agent, message.gate, message.force, now));
+    let status = readiness.map(|readiness| readiness.status);
+    let compacting = readiness.is_some_and(|readiness| readiness.compacting);
+    let open = readiness.is_some_and(|readiness| readiness.gate_open);
     let resume_recovered = match (message.gate, agent, open) {
         (DeliveryGate::Resume, Some(agent), true) => {
             let runtime = RuntimePaths::for_workspace(message.workspace_id.clone()).ok();
@@ -625,7 +664,7 @@ fn evaluate_delivery<'a>(
         }
         _ => None,
     };
-    let waiting = !message.force && agent.is_some_and(crate::agents::AgentState::is_awaiting_input);
+    let waiting = readiness.is_some_and(|readiness| readiness.waiting);
     let binding = agent.and_then(|agent| {
         crate::harness::target::bind_agent(snapshot, agent, message.pane_id.as_ref())
     });
@@ -773,12 +812,12 @@ fn delivery_candidate<'a>(
     snapshot: &'a SidebarSnapshot,
     message_id: &MessageId,
     policy: DeliveryPolicy,
+    now: Timestamp,
 ) -> Option<DeliveryCandidate<'a>> {
     let message = pending
         .iter()
         .find(|message| message.message_id == *message_id)
         .cloned()?;
-    let now = Timestamp::now();
     let evaluation =
         evaluate_delivery(&message, pending, snapshot, now, delivery_window_from_env());
     let check = &evaluation.check;
@@ -792,17 +831,10 @@ fn delivery_candidate<'a>(
     }
     let agent = evaluation.agent?;
     let status = agent.effective_status();
-    let batch_tail = match policy {
-        DeliveryPolicy::Boundary => queue_batch_tail(pending.iter(), &message, status, now)
-            .into_iter()
-            .cloned()
-            .collect(),
-        DeliveryPolicy::Steer { .. } => Vec::new(),
-    };
     let target = evaluation.binding.map(|binding| binding.pane)?;
     Some(DeliveryCandidate {
         message,
-        batch_tail,
+        status,
         snapshot,
         target,
     })
@@ -831,13 +863,6 @@ pub fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp)
     Ok(())
 }
 
-pub fn message_recorded_as_sent(store: &Store, message_id: &MessageId) -> Result<bool> {
-    Ok(store
-        .list_messages()?
-        .iter()
-        .any(|message| message.message_id == *message_id && message.status == MessageStatus::Sent))
-}
-
 pub(crate) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join(crate::message::MESSAGE_WAKE_FILE)
 }
@@ -849,6 +874,21 @@ mod tests {
     use crate::agents::AgentState;
     use crate::ids::WorkspaceId;
     use crate::store::snapshot::PaneAgent;
+
+    #[test]
+    fn receiver_readiness_unifies_gate_waiting_and_force() {
+        let now = Timestamp::now();
+        let idle = agent("sess-idle", AgentStatus::Idle);
+        assert!(receiver_readiness(&idle, DeliveryGate::Done, false, now).accepts_prompt());
+
+        let running = agent("sess-running", AgentStatus::Running);
+        assert!(!receiver_readiness(&running, DeliveryGate::Done, false, now).accepts_prompt());
+
+        let mut waiting = agent("sess-waiting", AgentStatus::Waiting);
+        waiting.waiting_since = Some(waiting.last_activity);
+        assert!(!receiver_readiness(&waiting, DeliveryGate::Done, false, now).accepts_prompt());
+        assert!(receiver_readiness(&waiting, DeliveryGate::Done, true, now).accepts_prompt());
+    }
 
     #[test]
     fn sweep_guard_is_single_flight() {
@@ -1037,6 +1077,7 @@ mod tests {
                 &live,
                 &candidate.message_id,
                 DeliveryPolicy::Boundary,
+                now,
             )
             .is_none(),
             "dynamic truth explains readiness but cannot cross claim boundary"
@@ -1050,6 +1091,7 @@ mod tests {
                 &live,
                 &candidate.message_id,
                 DeliveryPolicy::Boundary,
+                now,
             )
             .is_some()
         );

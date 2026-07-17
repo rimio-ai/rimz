@@ -9,6 +9,80 @@ use crate::message::{AfterCondition, AutoCompact, DeliveryGate, MessageSender, W
 use crate::store::event_log;
 use crate::{RuntimePaths, StatePaths};
 
+trait SingularQueueTestExt {
+    fn claim_message_for_delivery(
+        &self,
+        message_id: &MessageId,
+        now: Timestamp,
+    ) -> Result<Option<MessageRecord>>;
+    fn record_sent_message(
+        &self,
+        message: &MessageRecord,
+        session_name: &str,
+    ) -> Result<Option<MessageRecord>>;
+    fn release_message_claim(
+        &self,
+        message_id: &MessageId,
+        note: &str,
+        session_name: &str,
+    ) -> Result<Option<MessageRecord>>;
+    fn record_message_delivery_failure(
+        &self,
+        message_id: &MessageId,
+        error: &str,
+        session_name: &str,
+    ) -> Result<DeliveryFailureResult>;
+}
+
+impl SingularQueueTestExt for Store {
+    fn claim_message_for_delivery(
+        &self,
+        message_id: &MessageId,
+        now: Timestamp,
+    ) -> Result<Option<MessageRecord>> {
+        Ok(self
+            .claim_delivery_batch(message_id, AgentStatus::Idle, now)?
+            .and_then(|claimed| claimed.into_iter().next()))
+    }
+
+    fn record_sent_message(
+        &self,
+        message: &MessageRecord,
+        session_name: &str,
+    ) -> Result<Option<MessageRecord>> {
+        Ok(self
+            .record_sent_batch(std::slice::from_ref(message), session_name)?
+            .into_iter()
+            .next())
+    }
+
+    fn release_message_claim(
+        &self,
+        message_id: &MessageId,
+        note: &str,
+        session_name: &str,
+    ) -> Result<Option<MessageRecord>> {
+        Ok(self
+            .release_message_claims(std::slice::from_ref(message_id), note, session_name)?
+            .into_iter()
+            .next())
+    }
+
+    fn record_message_delivery_failure(
+        &self,
+        message_id: &MessageId,
+        error: &str,
+        session_name: &str,
+    ) -> Result<DeliveryFailureResult> {
+        self.record_message_delivery_failures(
+            std::slice::from_ref(message_id),
+            None,
+            error,
+            session_name,
+        )
+    }
+}
+
 #[test]
 fn claim_moves_message_out_of_pending_until_send_failure_requeues() {
     let (_dir, store, workspace_id) = store();
@@ -680,6 +754,228 @@ fn only_fifo_head_can_be_claimed() {
 }
 
 #[test]
+fn boundary_batch_claims_maximal_compatible_fifo_prefix() {
+    let (_dir, store, workspace_id) = store();
+    let mut first = message(&workspace_id).with_channel(Some("same".to_owned()));
+    let mut second = message(&workspace_id).with_channel(Some("same".to_owned()));
+    let mut barrier = message(&workspace_id).with_channel(Some("other".to_owned()));
+    let mut after_barrier = message(&workspace_id).with_channel(Some("same".to_owned()));
+    first.message_id = message_id(1);
+    second.message_id = message_id(2);
+    barrier.message_id = message_id(3);
+    after_barrier.message_id = message_id(4);
+    for message in [&first, &second, &barrier, &after_barrier] {
+        store.queue_message(message, "session").unwrap();
+    }
+
+    let claimed = store
+        .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
+        .unwrap()
+        .expect("batch claimed");
+
+    assert_eq!(
+        claimed
+            .iter()
+            .map(|message| message.message_id.clone())
+            .collect::<Vec<_>>(),
+        vec![first.message_id.clone(), second.message_id.clone()]
+    );
+    assert!(claimed.iter().all(|message| message.attempts == 1));
+    assert!(
+        claimed
+            .iter()
+            .all(|message| message.batch_id.as_ref() == Some(&first.message_id))
+    );
+    let live = store.list_messages().unwrap();
+    assert_eq!(live[0].status, MessageStatus::Claimed);
+    assert_eq!(live[1].status, MessageStatus::Claimed);
+    assert_eq!(live[0].batch_id, None);
+    assert_eq!(live[1].batch_id, None);
+    assert_eq!(live[2].status, MessageStatus::Queued);
+    assert_eq!(live[3].status, MessageStatus::Queued);
+}
+
+#[test]
+fn boundary_batch_stops_at_unexpired_claimed_tail() {
+    let (_dir, store, workspace_id) = store();
+    let mut first = message(&workspace_id);
+    let mut claimed_tail = message(&workspace_id);
+    let mut later = message(&workspace_id);
+    first.message_id = message_id(1);
+    claimed_tail.message_id = message_id(2);
+    later.message_id = message_id(3);
+    for message in [&first, &claimed_tail, &later] {
+        store.queue_message(message, "session").unwrap();
+    }
+    let now = Timestamp::now();
+    store
+        .claim_message_for_steer(&claimed_tail.message_id, now)
+        .unwrap()
+        .expect("tail claimed first");
+
+    let claimed = store
+        .claim_delivery_batch(&first.message_id, AgentStatus::Idle, now)
+        .unwrap()
+        .expect("head claimed");
+
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].message_id, first.message_id);
+    assert_eq!(message_by_id(&store, &claimed_tail.message_id).attempts, 1);
+    assert_eq!(
+        message_by_id(&store, &later.message_id).status,
+        MessageStatus::Queued
+    );
+}
+
+#[test]
+fn sent_batch_persists_identity_and_events_in_source_order() {
+    let (_dir, store, workspace_id) = store();
+    let mut first = message(&workspace_id);
+    let mut second = message(&workspace_id);
+    first.message_id = message_id(1);
+    second.message_id = message_id(2);
+    store.queue_message(&first, "session").unwrap();
+    store.queue_message(&second, "session").unwrap();
+    let pane_id = PaneId::from_parts(MuxName::Tmux, "%7");
+    let claimed = store
+        .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
+        .unwrap()
+        .expect("batch claimed")
+        .into_iter()
+        .map(|message| message.with_pane_id(pane_id.clone()))
+        .collect::<Vec<_>>();
+
+    let sent = store.record_sent_batch(&claimed, "session").unwrap();
+
+    assert_eq!(sent.len(), 2);
+    assert!(
+        sent.iter()
+            .all(|message| message.status == MessageStatus::Sent)
+    );
+    assert!(
+        sent.iter()
+            .all(|message| message.pane_id.as_ref() == Some(&pane_id))
+    );
+    assert!(
+        sent.iter()
+            .all(|message| message.batch_id.as_ref() == Some(&first.message_id))
+    );
+    let sent_event_ids = event_log::read_all(&store.inner.paths.events_log)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.method == "message.sent")
+        .map(|event| {
+            event.params_value()["message_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sent_event_ids,
+        vec![first.message_id.to_string(), second.message_id.to_string()]
+    );
+}
+
+#[test]
+fn release_batch_resets_every_claim_field() {
+    let (_dir, store, workspace_id) = store();
+    let pane_id = PaneId::from_parts(MuxName::Tmux, "%7");
+    let retry_after = Timestamp::now() + Duration::from_secs(60);
+    let mut first = message(&workspace_id)
+        .with_pane_id(pane_id.clone())
+        .with_auto_compact(Some(AutoCompact::Percent(70)));
+    let mut second = message(&workspace_id)
+        .with_pane_id(pane_id)
+        .with_auto_compact(Some(AutoCompact::Percent(70)));
+    first.message_id = message_id(1);
+    second.message_id = message_id(2);
+    first.batch_id = Some(first.message_id.clone());
+    second.batch_id = Some(first.message_id.clone());
+    first.retry_after = Some(retry_after);
+    second.retry_after = Some(retry_after);
+    store.queue_message(&first, "session").unwrap();
+    store.queue_message(&second, "session").unwrap();
+    let claimed = store
+        .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
+        .unwrap()
+        .expect("batch claimed");
+    let ids = claimed
+        .iter()
+        .map(|message| message.message_id.clone())
+        .collect::<Vec<_>>();
+
+    let released = store
+        .release_message_claims(&ids, "waiting for compaction", "session")
+        .unwrap();
+
+    assert_eq!(released.len(), 2);
+    for message in released {
+        assert_eq!(message.status, MessageStatus::Queued);
+        assert_eq!(message.attempts, 0);
+        assert_eq!(message.last_attempt_at, None);
+        assert_eq!(message.pane_id, None);
+        assert_eq!(message.batch_id, None);
+        assert_eq!(message.retry_after, None);
+        assert_eq!(message.auto_compact, None);
+        assert_eq!(
+            message.last_error.as_deref(),
+            Some("waiting for compaction")
+        );
+    }
+}
+
+#[test]
+fn batch_failure_preserves_sent_and_requeues_or_abandons_the_rest() {
+    let (_dir, store, workspace_id) = store();
+    let mut sent = message(&workspace_id);
+    let mut requeued = message(&workspace_id);
+    let mut abandoned = message(&workspace_id);
+    sent.message_id = message_id(1);
+    requeued.message_id = message_id(2);
+    abandoned.message_id = message_id(3);
+    abandoned.attempts = MAX_DELIVERY_ATTEMPTS - 1;
+    for message in [&sent, &requeued, &abandoned] {
+        store.queue_message(message, "session").unwrap();
+    }
+    let claimed = store
+        .claim_delivery_batch(&sent.message_id, AgentStatus::Idle, Timestamp::now())
+        .unwrap()
+        .expect("batch claimed");
+    store
+        .record_sent_batch(std::slice::from_ref(&claimed[0]), "session")
+        .unwrap();
+    let ids = claimed
+        .iter()
+        .map(|message| message.message_id.clone())
+        .collect::<Vec<_>>();
+
+    let result = store
+        .record_message_delivery_failures(&ids, None, "pane missing", "session")
+        .unwrap();
+
+    assert!(result.head_found);
+    assert!(result.head_sent);
+    assert_eq!(
+        message_by_id(&store, &sent.message_id).status,
+        MessageStatus::Sent
+    );
+    let requeued = message_by_id(&store, &requeued.message_id);
+    assert_eq!(requeued.status, MessageStatus::Queued);
+    assert_eq!(requeued.pane_id, None);
+    assert_eq!(requeued.batch_id, None);
+    assert_eq!(requeued.last_error.as_deref(), Some("pane missing"));
+    assert!(
+        store
+            .list_message_history()
+            .unwrap()
+            .iter()
+            .any(|message| message.message_id == abandoned.message_id
+                && message.status == MessageStatus::Abandoned)
+    );
+}
+
+#[test]
 fn queued_message_persists_sender() {
     let (_dir, store, workspace_id) = store();
     let sender = MessageSender::Agent {
@@ -1103,6 +1399,15 @@ fn message(workspace_id: &WorkspaceId) -> MessageRecord {
 
 fn message_id(value: u64) -> MessageId {
     MessageId::parse(&format!("msg_{value:016}")).unwrap()
+}
+
+fn message_by_id(store: &Store, message_id: &MessageId) -> MessageRecord {
+    store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == *message_id)
+        .expect("message")
 }
 
 fn agent() -> AgentState {

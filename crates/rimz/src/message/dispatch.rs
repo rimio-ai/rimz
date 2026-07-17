@@ -1,8 +1,9 @@
-//! Resolve one owned message request and dispatch it durably.
+//! Resolve one owned message request, persist it, and order target fan-out.
 //!
 //! This module owns live-plus-durable target resolution, rollup-only selection,
 //! context folding, condition binding, hook preflight, reply causality, record
-//! construction, and park-vs-live delivery.
+//! construction, and the park-vs-live decision. Live attempts delegate receiver
+//! recovery to [`super::deliver`].
 
 use std::collections::BTreeSet;
 
@@ -12,7 +13,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    WhenCondition, gate_open_for_agent, message_interval_from_env, queue_head,
+    WhenCondition, message_interval_from_env, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, SidebarSnapshot, Store, TargetErr};
@@ -344,7 +345,7 @@ impl ResolvedTarget {
             let peers = snapshot.root_agents().collect::<Vec<_>>();
             crate::harness::target::agent_handle(agent, &peers, true)
         } else if let Some(pane) = self.pane.as_ref() {
-            send::handle_for_pane_target(snapshot, pane, None)
+            format!("@{}", pane.label())
         } else {
             "@agent".to_owned()
         }
@@ -355,39 +356,6 @@ impl ResolvedTarget {
             .as_ref()
             .and_then(|pane| crate::harness::target::pane_binding(snapshot, pane, None))
             .and_then(|binding| binding.exact_agent)
-    }
-
-    fn receivable_now(
-        &self,
-        snapshot: &SidebarSnapshot,
-        pending: &[MessageRecord],
-        gate: DeliveryGate,
-        force: bool,
-        now: Timestamp,
-    ) -> bool {
-        if self.pane.is_none() {
-            return false;
-        }
-        let open = match self.bound(snapshot) {
-            None => true,
-            Some(agent) => {
-                gate_open_for_agent(gate, agent, force, now)
-                    && (force || !agent.is_awaiting_input())
-            }
-        };
-        if !open {
-            return false;
-        }
-        self.agent.as_ref().is_none_or(|agent| {
-            queue_head(
-                pending.iter(),
-                &agent.kind,
-                &agent.agent_id,
-                agent.name.as_deref(),
-                now,
-            )
-            .is_none()
-        })
     }
 }
 
@@ -508,8 +476,7 @@ fn agent_needs_live_resolution(
     agent.agent_id.is_provisional()
         || crate::agents::descriptor_by_kind(agent.kind.as_str())
             .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
-        || (gate_open_for_agent(gate, agent, force, now)
-            && (force || !agent.is_awaiting_input())
+        || (deliver::receiver_readiness(agent, gate, force, now).accepts_prompt()
             && queue_head(
                 pending.iter(),
                 &agent.kind,
@@ -776,20 +743,6 @@ impl DispatchState<'_> {
     }
 }
 
-enum LiveAttempt {
-    Sent {
-        message_id: MessageId,
-        compacted: bool,
-    },
-    SkippedWaiting {
-        message_id: MessageId,
-    },
-    CompactionPending {
-        message_id: MessageId,
-    },
-    ParkInstead,
-}
-
 fn dispatch_targets(
     state: &mut DispatchState<'_>,
     targets: &[ResolvedTarget],
@@ -850,7 +803,32 @@ fn should_park(
             .iter()
             .all(|condition| condition.met_at.is_some())
         || !mode.when.iter().all(|condition| condition.met_at.is_some())
-        || !target.receivable_now(state.snapshot, state.pending, mode.gate, mode.force, now)
+        || !target_receivable_now(state, target, mode, now)
+}
+
+fn target_receivable_now(
+    state: &DispatchState<'_>,
+    target: &ResolvedTarget,
+    mode: &PreparedMode,
+    now: Timestamp,
+) -> bool {
+    if target.pane.is_none()
+        || target.bound(state.snapshot).is_some_and(|agent| {
+            !deliver::receiver_readiness(agent, mode.gate, mode.force, now).accepts_prompt()
+        })
+    {
+        return false;
+    }
+    target.agent.as_ref().is_none_or(|agent| {
+        queue_head(
+            state.pending.iter(),
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+            now,
+        )
+        .is_none()
+    })
 }
 
 fn dispatch_one(
@@ -872,16 +850,27 @@ fn dispatch_one(
     let bound = target.bound(state.snapshot);
     let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
     let message_id = message.message_id.clone();
-    match send_live_with_recovery(
-        state,
+    let policy = if mode.steer {
+        deliver::DeliveryPolicy::Steer { force: mode.force }
+    } else {
+        deliver::DeliveryPolicy::Boundary
+    };
+    match deliver::execute_attempt(
+        deliver::Attempt {
+            workspace: state.workspace,
+            store: state.store,
+            snapshot: state.snapshot,
+            target: pane,
+            bound,
+            records: std::slice::from_ref(&message),
+            source: deliver::AttemptSource::Fresh {
+                durable_receiver: target.agent.is_some(),
+            },
+            policy,
+        },
         live_send,
-        target.agent.is_some(),
-        pane,
-        bound,
-        &message,
     )? {
-        LiveAttempt::Sent {
-            message_id,
+        deliver::AttemptOutcome::Sent {
             compacted: was_compacted,
         } => {
             if was_compacted {
@@ -892,46 +881,19 @@ fn dispatch_one(
                 message_id,
             })
         }
-        LiveAttempt::SkippedWaiting { message_id } if mode.steer => {
-            state.store.record_send_error(
-                &message,
-                "agent is waiting on input in its pane",
-                &state.workspace.session_name,
-            )?;
-            Ok(DispatchOutcome::SkippedWaiting {
-                label: handle,
-                message_id,
-            })
-        }
-        LiveAttempt::SkippedWaiting { message_id } => {
-            state.store.record_message_delivery_failure(
-                &message_id,
-                "agent is waiting on input in its pane",
-                &state.workspace.session_name,
-            )?;
+        deliver::AttemptOutcome::SkippedWaiting => Ok(DispatchOutcome::SkippedWaiting {
+            label: handle,
+            message_id,
+        }),
+        deliver::AttemptOutcome::Queued => {
             push_pending(state, message);
             Ok(DispatchOutcome::Queued {
                 label: handle,
                 message_id,
             })
         }
-        LiveAttempt::ParkInstead => {
+        deliver::AttemptOutcome::CompactionPending => {
             push_pending(state, message);
-            Ok(DispatchOutcome::Queued {
-                label: handle,
-                message_id,
-            })
-        }
-        LiveAttempt::CompactionPending { message_id } => {
-            let released = state
-                .store
-                .release_message_claim(
-                    &message_id,
-                    "parked: waiting for compaction to finish",
-                    &state.workspace.session_name,
-                )?
-                .unwrap_or(message);
-            push_pending(state, released);
             Ok(DispatchOutcome::CompactionPending {
                 label: handle,
                 message_id,
@@ -984,63 +946,6 @@ fn push_pending(state: &mut DispatchState<'_>, message: MessageRecord) {
     }
 }
 
-fn send_live_with_recovery(
-    state: &DispatchState<'_>,
-    live_send: &mut send::LiveSend,
-    park_on_failure: bool,
-    pane: &PaneAgent,
-    bound: Option<&AgentState>,
-    message: &MessageRecord,
-) -> Result<LiveAttempt> {
-    let sent = match send::send_batch_to_live_pane(
-        state.workspace,
-        state.store,
-        state.snapshot,
-        pane,
-        bound,
-        std::slice::from_ref(message),
-        live_send,
-    ) {
-        Ok(sent) => sent,
-        Err(err) => {
-            if deliver::message_recorded_as_sent(state.store, &message.message_id)? {
-                return Ok(LiveAttempt::Sent {
-                    message_id: message.message_id.clone(),
-                    compacted: false,
-                });
-            }
-            if park_on_failure {
-                state.store.record_message_delivery_failure(
-                    &message.message_id,
-                    &err.to_string(),
-                    &state.workspace.session_name,
-                )?;
-                deliver::register_message_wake(state.workspace, state.store)?;
-                return Ok(LiveAttempt::ParkInstead);
-            }
-            state.store.record_send_error(
-                message,
-                &err.to_string(),
-                &state.workspace.session_name,
-            )?;
-            deliver::register_message_wake(state.workspace, state.store)?;
-            return Err(err.into());
-        }
-    };
-    match sent.outcome {
-        send::Outcome::Sent { message_id, .. } => Ok(LiveAttempt::Sent {
-            message_id,
-            compacted: sent.compacted.is_some(),
-        }),
-        send::Outcome::SkippedWaiting { message_id, .. } => {
-            Ok(LiveAttempt::SkippedWaiting { message_id })
-        }
-        send::Outcome::CompactionPending { message_id, .. } => {
-            Ok(LiveAttempt::CompactionPending { message_id })
-        }
-    }
-}
-
 fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
     let Some(adapter) = crate::agents::find_adapter(agent.kind.as_str()) else {
         return Err(DispatchErr::UnknownAgentKind(agent.kind.clone()));
@@ -1084,100 +989,8 @@ fn turn_openers_for_sender(snapshot: &SidebarSnapshot, sender: &MessageSender) -
 mod tests {
     use super::*;
 
-    use crate::agents::{AgentStatus, TurnPhase};
-    use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
-    use crate::pane::PaneRef;
-
-    #[test]
-    fn receivable_now_decision_table() {
-        let timestamp = now();
-        let idle = agent("sess-idle", AgentStatus::Idle);
-        let running = agent("sess-running", AgentStatus::Running);
-        let pane = bound_pane(&idle, "terminal_3");
-        let lazy = lazy_pane("codex", "terminal_4");
-        let idle_snapshot =
-            snapshot_with_panes(vec![idle.clone(), running.clone()], vec![pane.clone()]);
-
-        assert!(
-            ResolvedTarget {
-                pane: Some(lazy),
-                agent: None,
-            }
-            .receivable_now(&idle_snapshot, &[], DeliveryGate::Done, false, timestamp)
-        );
-        assert!(
-            ResolvedTarget {
-                pane: Some(pane.clone()),
-                agent: Some(idle.clone()),
-            }
-            .receivable_now(&idle_snapshot, &[], DeliveryGate::Done, false, timestamp)
-        );
-
-        let running_pane = bound_pane(&running, "terminal_5");
-        let running_snapshot =
-            snapshot_with_panes(vec![running.clone()], vec![running_pane.clone()]);
-        assert!(
-            !ResolvedTarget {
-                pane: Some(running_pane),
-                agent: Some(running),
-            }
-            .receivable_now(
-                &running_snapshot,
-                &[],
-                DeliveryGate::Done,
-                false,
-                timestamp
-            )
-        );
-
-        let ask_snapshot = snapshot_with_ask(idle.clone(), pane.clone());
-        let ask_target = ResolvedTarget {
-            pane: Some(pane.clone()),
-            agent: Some(idle.clone()),
-        };
-        assert!(!ask_target.receivable_now(
-            &ask_snapshot,
-            &[],
-            DeliveryGate::Done,
-            false,
-            timestamp
-        ));
-        assert!(ask_target.receivable_now(&ask_snapshot, &[], DeliveryGate::Done, true, timestamp));
-
-        let future = MessageRecord::new(
-            workspace_id(),
-            &idle,
-            "future".to_owned(),
-            true,
-            DeliveryGate::Done,
-        )
-        .with_not_before(Some(timestamp + jiff::SignedDuration::from_secs(60)));
-        let target = ResolvedTarget {
-            pane: Some(pane),
-            agent: Some(idle.clone()),
-        };
-        assert!(target.receivable_now(
-            &idle_snapshot,
-            &[future],
-            DeliveryGate::Done,
-            false,
-            timestamp
-        ));
-        let older = MessageRecord::new(
-            workspace_id(),
-            &idle,
-            "older".to_owned(),
-            true,
-            DeliveryGate::Done,
-        );
-        assert!(!target.receivable_now(
-            &idle_snapshot,
-            &[older],
-            DeliveryGate::Done,
-            false,
-            timestamp
-        ));
-    }
+    use crate::agents::AgentStatus;
+    use crate::ids::{AgentKind, WorkspaceId};
 
     #[test]
     fn condition_broadcast_is_typed_before_resolution() {
@@ -1234,58 +1047,11 @@ mod tests {
         snapshot
     }
 
-    fn snapshot_with_ask(mut agent: AgentState, pane: PaneAgent) -> SidebarSnapshot {
-        agent.status = AgentStatus::Waiting;
-        agent.phase = TurnPhase::Idle;
-        agent.waiting_since = Some(agent.last_activity);
-        let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![agent], now());
-        snapshot.agent_panes = vec![pane];
-        snapshot
-    }
-
     fn agent(id: &str, status: AgentStatus) -> AgentState {
         let mut agent = AgentState::stub("claude", id, status);
-        agent.pane = Some(PaneRef::from_id(PaneId::from_parts(
-            MuxName::Zellij,
-            "terminal_3",
-        )));
         agent.worktree_path = Some("/repo/project".to_owned());
         agent.worktree_branch = Some("project".to_owned());
         agent
-    }
-
-    fn bound_pane(agent: &AgentState, raw: &str) -> PaneAgent {
-        PaneAgent {
-            kind: agent.kind.clone(),
-            kind_ordinal: agent.kind_ordinal,
-            name: agent.name.clone(),
-            name_explicit: agent.name_explicit,
-            profile: None,
-            role: None,
-            channel: None,
-            agent_id: Some(agent.agent_id.clone()),
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            pane_pid: None,
-            worktree_path: agent.worktree_path.clone(),
-            worktree_branch: agent.worktree_branch.clone(),
-        }
-    }
-
-    fn lazy_pane(kind: &str, raw: &str) -> PaneAgent {
-        PaneAgent {
-            kind: AgentKind::new_unchecked(kind),
-            kind_ordinal: None,
-            name: None,
-            name_explicit: false,
-            profile: None,
-            role: None,
-            channel: None,
-            agent_id: None,
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            pane_pid: None,
-            worktree_path: Some("/repo/project".to_owned()),
-            worktree_branch: Some("project".to_owned()),
-        }
     }
 
     fn now() -> Timestamp {

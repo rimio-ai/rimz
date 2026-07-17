@@ -1496,10 +1496,9 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
     let sent_id = sent_id_from_stdout(&sent.stdout);
     assert!(env.store().list_pending_messages().unwrap().is_empty());
     assert_text_then_enter(&trace_log, "go");
-    assert_eq!(
-        message_by_id(&env, &MessageId::parse(&sent_id).expect("message id")).status,
-        MessageStatus::Sent
-    );
+    let fresh = message_by_id(&env, &MessageId::parse(&sent_id).expect("message id"));
+    assert_eq!(fresh.status, MessageStatus::Sent);
+    assert_eq!(fresh.attempts, 0, "fresh live send is not claimed");
 
     run_hook(
         &env,
@@ -1716,6 +1715,53 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
 }
 
 #[test]
+fn send_now_submit_failure_leaves_sent_record() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-submit-fail", "feature-submit-fail", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-submit-fail",
+            "worktree_branch": "feature-submit-fail",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-submit-fail-trace.log");
+
+    let out = traced_rimz(&env, "zellij-submit-fail-trace.log")
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_ZELLIJ_MODE", "fail-enter")
+        .args(["message", "@claude", "--", "submit once"])
+        .output()
+        .expect("send-now message");
+
+    assert!(
+        out.status.success(),
+        "submit failure after the durable Sent barrier stays sent\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let message_id = MessageId::parse(&sent_id_from_stdout(&out.stdout)).expect("message id");
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .any(|line| is_paste(line, "submit once"))
+    );
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .any(|line| is_enter_key(line))
+    );
+    let sent = message_by_id(&env, &message_id);
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert_eq!(sent.attempts, 0);
+}
+
+#[test]
 fn queue_deliver_folds_provisional_message_to_registered_card_name() {
     let env = Env::new();
     env.install_agent_hooks("codex");
@@ -1863,6 +1909,22 @@ fn queued_delivery_batches_compatible_prompts() {
     assert_eq!(sent_second.batch_id, Some(first_id.clone()));
     assert_eq!(queued_third.status, MessageStatus::Queued);
     assert_eq!(queued_third.batch_id, None);
+    assert_eq!(queued_third.attempts, 0, "barrier remains unclaimed");
+    let sent_event_ids = env
+        .read_events()
+        .into_iter()
+        .filter(|event| event.method == "message.sent")
+        .map(|event| {
+            event.params_value()["message_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sent_event_ids,
+        vec![first_id.to_string(), second_id.to_string()]
+    );
 
     run_hook(
         &env,
@@ -2334,6 +2396,19 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
     assert!(
         stdout.contains("sent 1 agent(s)") && stdout.contains("waiting in pane"),
         "summary names the sent and skipped agents: {stdout}"
+    );
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    let skipped = env
+        .store()
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.agent_id.as_str() == "sess-skip-b")
+        .expect("skipped target terminal record");
+    assert_eq!(skipped.status, MessageStatus::Errored);
+    assert_eq!(
+        skipped.last_error.as_deref(),
+        Some("agent is waiting on input in its pane")
     );
 }
 

@@ -4,7 +4,7 @@
 
 `rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and RimZ types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command uses.
 
-One model runs underneath every send: create a durable record first, deliver now when the agent can take the text, otherwise keep the record queued and deliver at the agent's next turn boundary, oldest first. The record-first path lets a message outlive a busy agent, a room that closes and reopens, a transient mux write failure, or a crash between claim and send.
+One model runs underneath every send: create a durable record first, deliver now when the agent can take the text, otherwise keep the record queued and deliver at the agent's next turn boundary, oldest first. Fresh and claimed records use one delivery-attempt recovery path after that decision. The record-first path lets a message outlive a busy agent, a room that closes and reopens, a transient mux write failure, or a crash between claim and send.
 
 Three send modes place a message on that timing axis: `--steer` interrupts the live pane now, the default sends now when the target can receive and parks otherwise, and `--schedule` parks until a wall-clock time. [Send modes](#send-modes) has the detail.
 
@@ -146,7 +146,7 @@ The helper follows a strict sequence:
 
 1. **Settle**: wait a short delay (400 ms default, `RIMZ_MESSAGE_SETTLE_MS` overrides for tests) for the agent state to stabilize.
 2. **Candidate check**: read the queued head, verify `not_before` has passed, the gate is open against a fresh snapshot, the receiver is not waiting on input (skipped under `force`), and a live pane exists.
-3. **Claim**: under the workspace lock, transition the record from `Queued` to `Claimed` and increment the pre-send attempt count. The claim moves the record out of the queued scan immediately before sending.
+3. **Claim**: under the workspace lock, transition the compatible FIFO batch from `Queued` to `Claimed` and increment each pre-send attempt count in one queue transaction. The claim moves those records out of the queued scan immediately before sending.
 4. **Send**: write text to the live pane through the same bracketed-paste path as `--steer`. When smart compaction fires, send the fresh `Command` record alone and release the claimed prompt batch back to `Queued` without an attempt penalty.
 5. **Record send**: a successful pane write moves the record to `Sent`, still live until the agent confirms it or the reconciler times it out.
 
@@ -156,7 +156,7 @@ The helper follows a strict sequence:
 
 When a queued prompt head delivers, the helper extends the claim through the contiguous ready FIFO prefix of that head's lane. Batch members must be prompt bodies that submit with Enter, avoid leading `/`, have their own gate open, match the head's `force` flag, and share one batch key: an agent sender's channel, while a human message counts as the receiver channel as if typed in the pane. `Command` bodies, slash text, no-enter drafts, force mismatches, closed gates, and cross-channel senders stop the batch. Resume control messages live in their own lane and stay outside ordinary batching.
 
-The batch lands as one bracketed paste and one submit. Each member keeps its own `from @sender:` prefix and the sections are separated by one blank line. The first member whose `auto_compact` threshold fires may type one `/compact` command, release the whole claimed batch to `Queued`, and let `CompactionEnded` deliver that batch against the fresh window.
+The batch lands as one bracketed paste and one submit. Each member keeps its own `from @sender:` prefix and the sections are separated by one blank line. Claim, Sent recording, claim release, and pre-send failure each mutate the full batch in one queue transaction; Sent, queued-release, and terminal audit events remain one event per message in message order. The first member whose `auto_compact` threshold fires may type one `/compact` command, release the whole claimed batch to `Queued`, and let `CompactionEnded` deliver that batch against the fresh window.
 
 ### Delivery confirmation
 
@@ -169,7 +169,7 @@ One cannot confirm the other. Batched prompt records carry a shared `batch_id`, 
 
 ### Retry and failure
 
-- **Pre-send failure** (pane gone, gate closed, a waiting agent reserves input): the record stays or returns to `Queued` with `last_error` and no pane affinity, so the next qualifying turn boundary re-resolves a pane. A delivery helper claim increments `attempts`; an initial send-now failure records the error before any claim exists.
+- **Pre-send failure** (pane gone, gate closed, a waiting agent reserves input): shared fresh/claimed recovery keeps or returns retryable durable records to `Queued` with `last_error` and no pane affinity, so the next qualifying turn boundary re-resolves a pane. A delivery helper claim increments `attempts`; an initial send-now failure records the error before any claim exists. Immediate steer rejection on Waiting remains terminal and reports the skipped target.
 - **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id and batch id, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever same-lane prefix is ready at the next boundary. While the receiver is compacting, the reconciler keeps a `Sent` record in place and moves its wake hint one delivery window ahead: confirmation is delayed rather than lost, and requeuing composer-held text would guarantee a duplicate paste. After the unconfirmed-send cap, the record becomes `TimedOut`.
 - **Independent caps**: `unconfirmed_sends` gates the unconfirmed-send cap (`RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS`, 3 by default); `attempts` gates the pre-send cap (`MAX_DELIVERY_ATTEMPTS`, 5). A claim increments `attempts` only, and a stale-`Sent` requeue increments `unconfirmed_sends` only.
 - **Claim TTL**: a `Claimed` record older than 15 s (`CLAIM_TTL`) is treated as expired, so a crash after claim leaves a redeliverable record. `message list --all` surfaces it.
