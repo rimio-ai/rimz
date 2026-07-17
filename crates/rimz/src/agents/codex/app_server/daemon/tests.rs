@@ -26,7 +26,7 @@ fn missing_standalone_guidance_uses_official_install_command() {
 #[test]
 fn updater_skew_guidance_names_risk_and_deliberate_recycle() {
     let skew = UpdaterSkew {
-        updater_pid: 42,
+        updater_pid: 1_643_110,
         updater_exe: "/home/u/.codex/packages/standalone/releases/0.144.4/bin/codex".into(),
         managed_exe: "/home/u/.codex/packages/standalone/releases/0.144.5/bin/codex".into(),
         updater_exe_deleted: false,
@@ -34,8 +34,9 @@ fn updater_skew_guidance_names_risk_and_deliberate_recycle() {
 
     insta::assert_snapshot!(skew.to_string(), @r###"
     Codex remote-control updater version skew:
-    updater (pid 42): /home/u/.codex/packages/standalone/releases/0.144.4/bin/codex
-    managed install:  /home/u/.codex/packages/standalone/releases/0.144.5/bin/codex
+    updater pid: 1643110
+    updater exe: /home/u/.codex/packages/standalone/releases/0.144.4/bin/codex
+    managed exe: /home/u/.codex/packages/standalone/releases/0.144.5/bin/codex
     The next hourly update tick can restart the shared app-server and disconnect every daemon-backed Codex session.
 
     Schedule one deliberate recycle while no valuable Codex turns are running:

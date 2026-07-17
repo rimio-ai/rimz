@@ -79,8 +79,9 @@ impl std::fmt::Display for UpdaterSkew {
         write!(
             f,
             "Codex remote-control updater version skew:\n\
-                 updater (pid {}): {}{}\n\
-                 managed install:  {}\n\
+                 updater pid: {}\n\
+                 updater exe: {}{}\n\
+                 managed exe: {}\n\
              The next hourly update tick can restart the shared app-server and disconnect every \
              daemon-backed Codex session.\n\n\
              Schedule one deliberate recycle while no valuable Codex turns are running:\n    \
