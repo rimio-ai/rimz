@@ -1,8 +1,8 @@
 use super::*;
 
 use super::list::{
-    agent_status_label, agent_status_projection, agent_status_style, context_cell, model_label,
-    worktree_label,
+    PrInfo, agent_pr, agent_status_label, agent_status_projection, agent_status_style,
+    context_cell, model_label, worktree_label,
 };
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
 use crate::cli::render;
@@ -131,7 +131,7 @@ fn render_show_report(
     render_agent_section(&mut out, agent, &peers)?;
     render_activity_section(&mut out, agent, report.ask.as_ref(), report.stale, now)?;
     render_context_section(&mut out, agent, report.cost.as_ref(), runtime)?;
-    render_placement_section(&mut out, agent)?;
+    render_placement_section(&mut out, agent, agent_pr(snapshot, agent))?;
     let fallback_run = if report.run.is_none() {
         newest_run_for_agent(store, agent).ok().flatten()
     } else {
@@ -383,7 +383,11 @@ fn render_context_section(
     writeln!(w)
 }
 
-fn render_placement_section(w: &mut impl Write, agent: &AgentState) -> std::io::Result<()> {
+pub(super) fn render_placement_section(
+    w: &mut impl Write,
+    agent: &AgentState,
+    pr: Option<PrInfo>,
+) -> std::io::Result<()> {
     section(w, "Placement")?;
     let mut kv = render::KeyVals::new().indent(2);
     kv.push("channel", render::cell(worktree_label(agent)).dash());
@@ -391,9 +395,31 @@ fn render_placement_section(w: &mut impl Write, agent: &AgentState) -> std::io::
         "worktree",
         render::cell(agent.worktree_path.as_deref().unwrap_or("-")).dash(),
     );
+    kv.push(
+        "pr",
+        render::cell(pr.map(format_pr_info).unwrap_or_else(|| "-".to_owned())).dash(),
+    );
     push_pane_anchor(&mut kv, agent);
     kv.render(w)?;
     writeln!(w)
+}
+
+pub(super) fn format_pr_info(pr: PrInfo) -> String {
+    let state = match pr.state {
+        rimz::WorktreePrState::Open => "open",
+        rimz::WorktreePrState::Closed => "closed",
+        rimz::WorktreePrState::Merged => "merged",
+    };
+    let number = pr
+        .number
+        .map(|number| format!("#{number} "))
+        .unwrap_or_default();
+    let ci = pr.ci.map(|ci| match ci {
+        rimz::WorktreePrCi::Pending => " · ci pending",
+        rimz::WorktreePrCi::Passing => " · ci passing",
+        rimz::WorktreePrCi::Failing => " · ci failing",
+    });
+    format!("{number}{state}{}", ci.unwrap_or_default())
 }
 
 fn render_run_section(

@@ -17,7 +17,7 @@ use std::time::Duration;
 use super::chrome::abbreviate_under;
 use super::sections::{
     DashboardContext, RowCtx, Tier, WorktreeRenderContext, content_width, dashboard_block,
-    fleet_header_lines, fleet_store_lines, reset_expiry_heat_amount,
+    fleet_header_lines, fleet_store_lines, open_pr_worst_ci, reset_expiry_heat_amount,
     worktree_group_lines_projected,
 };
 use crate::sidebar_pane::pixel::meter::MeterPixels;

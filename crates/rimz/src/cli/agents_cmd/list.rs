@@ -3,6 +3,23 @@ use super::*;
 use crate::cli::render;
 use rimz::config::{GlyphRole, ThemeConfig};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub(super) struct PrInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<u64>,
+    pub state: rimz::WorktreePrState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ci: Option<rimz::WorktreePrCi>,
+}
+
+#[derive(serde::Serialize)]
+struct AgentListEntry<'a> {
+    #[serde(flatten)]
+    agent: &'a AgentState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr: Option<PrInfo>,
+}
+
 pub(super) fn list_agents(
     json: bool,
     all: bool,
@@ -37,7 +54,7 @@ pub(super) fn list_agents(
         })
         .collect();
     if json {
-        supervised::output::print_json(&agents)?;
+        supervised::output::print_json(&agent_list_entries(&snapshot, &agents))?;
         return Ok(());
     }
 
@@ -52,6 +69,61 @@ pub(super) fn list_agents(
         &machine_config.theme,
     )?;
     Ok(())
+}
+
+fn agent_list_entries<'a>(
+    snapshot: &rimz::SidebarSnapshot,
+    agents: &[&'a AgentState],
+) -> Vec<AgentListEntry<'a>> {
+    rimz::store::snapshot::group_live_agents_by_worktree(agents, snapshot)
+        .into_iter()
+        .flat_map(|group| {
+            let pr = group_pr(snapshot, &group.key).and_then(pr_info);
+            group
+                .agents
+                .into_iter()
+                .map(move |agent| AgentListEntry { agent, pr })
+        })
+        .collect()
+}
+
+pub(super) fn agent_pr(snapshot: &rimz::SidebarSnapshot, agent: &AgentState) -> Option<PrInfo> {
+    let agents = snapshot
+        .agents
+        .iter()
+        .filter(|candidate| candidate.parent_agent_id.is_none())
+        .collect::<Vec<_>>();
+    let key = rimz::store::snapshot::group_live_agents_by_worktree(&agents, snapshot)
+        .into_iter()
+        .find(|group| {
+            group
+                .agents
+                .iter()
+                .any(|candidate| candidate.agent_id == agent.agent_id)
+        })?
+        .key;
+    group_pr(snapshot, &key).and_then(pr_info)
+}
+
+pub(super) fn group_pr<'a>(
+    snapshot: &'a rimz::SidebarSnapshot,
+    key: &str,
+) -> Option<&'a rimz::SidebarWorktreeGroup> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .find(|group| group.key == key)
+}
+
+fn pr_info(group: &rimz::SidebarWorktreeGroup) -> Option<PrInfo> {
+    let state = group.pr_state?;
+    Some(PrInfo {
+        number: group.pr_number,
+        state,
+        ci: (state == rimz::WorktreePrState::Open)
+            .then_some(group.pr_ci)
+            .flatten(),
+    })
 }
 
 fn in_room_agent_ids(
@@ -121,6 +193,27 @@ fn group_header_cells(
         && !group.label.ends_with(&format!("/{team}"))
     {
         cells.push(render::cell(format!("· {team} team")).fg(render::palette::META));
+    }
+    if let Some(pr) = group_pr(snapshot, &group.key)
+        && let Some(number) = pr.pr_number
+    {
+        cells.push(render::cell(format!("#{number}")).fg(render::palette::ACCENT));
+        if pr.pr_state == Some(rimz::WorktreePrState::Open)
+            && let Some(ci) = pr.pr_ci
+        {
+            let (role, style) = match ci {
+                rimz::WorktreePrCi::Passing => {
+                    (GlyphRole::WorktreeCiPassing, render::palette::GOOD)
+                }
+                rimz::WorktreePrCi::Pending => {
+                    (GlyphRole::WorktreeCiPending, render::palette::WARN)
+                }
+                rimz::WorktreePrCi::Failing => {
+                    (GlyphRole::WorktreeCiFailing, render::palette::ALARM)
+                }
+            };
+            cells.push(render::cell(glyph(role)).fg(style));
+        }
     }
     cells
 }
@@ -399,6 +492,66 @@ mod tests {
 
         agent.context = None;
         assert_eq!(model_label(&agent), "launch-model@launch-effort");
+    }
+
+    #[test]
+    fn json_entries_add_pr_only_to_agents_in_the_linked_group() {
+        let now = jiff::Timestamp::UNIX_EPOCH;
+        let mut linked = test_agent("linked");
+        linked.channel = Some("feature".to_owned());
+        linked.worktree_path = Some("/repo/worktrees/feature".to_owned());
+        linked.worktree_branch = Some("feature".to_owned());
+        let mut plain = test_agent("plain");
+        plain.channel = Some("docs".to_owned());
+        plain.worktree_path = Some("/repo/main".to_owned());
+        plain.worktree_branch = Some("main".to_owned());
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+            rimz::WorkspaceId::from_project_root(Path::new("/repo/main")),
+            vec![linked, plain],
+            now,
+        )
+        .with_project_root(Some(PathBuf::from("/repo/main")));
+        let refs = snapshot.agents.iter().collect::<Vec<_>>();
+        let (linked_key, linked_label, linked_kind) = {
+            let group = rimz::store::snapshot::group_live_agents_by_worktree(&refs, &snapshot)
+                .into_iter()
+                .find(|group| group.label == "feature")
+                .unwrap();
+            (group.key, group.label, group.kind)
+        };
+        snapshot.worktree_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "key": linked_key,
+                "label": linked_label,
+                "kind": linked_kind,
+                "status_counts": [],
+                "rows": [],
+                "pr_number": 91,
+                "pr_state": "open",
+                "pr_ci": "passing"
+            }))
+            .unwrap(),
+        );
+
+        let refs = snapshot.agents.iter().collect::<Vec<_>>();
+        let entries = agent_list_entries(&snapshot, &refs);
+        let linked = entries
+            .iter()
+            .find(|entry| entry.agent.agent_id.as_str() == "linked")
+            .unwrap();
+        let plain = entries
+            .iter()
+            .find(|entry| entry.agent.agent_id.as_str() == "plain")
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(linked).unwrap()["pr"],
+            serde_json::json!({"number": 91, "state": "open", "ci": "passing"})
+        );
+        assert_eq!(
+            serde_json::to_value(plain).unwrap(),
+            serde_json::to_value(plain.agent).unwrap()
+        );
     }
 
     fn test_agent(id: &str) -> AgentState {

@@ -125,6 +125,14 @@ pub enum WorktreePrState {
     Merged,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreePrCi {
+    Pending,
+    Passing,
+    Failing,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarWorktreeGroup {
     pub key: String,
@@ -168,6 +176,9 @@ pub struct SidebarWorktreeGroup {
     /// Best-effort pull-request state for this worktree's branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_state: Option<WorktreePrState>,
+    /// Best-effort CI verdict for the branch's open pull request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_ci: Option<WorktreePrCi>,
     /// Best-effort linked pull-request number: the forge-resolved PR for the
     /// branch, else the worktree marker's `--from-pr` provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]

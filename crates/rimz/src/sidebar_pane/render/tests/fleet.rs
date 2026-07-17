@@ -662,6 +662,33 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
 }
 
 #[test]
+fn cockpit_pr_ci_uses_worst_known_open_verdict() {
+    let mut snapshot = make_up_snapshot();
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+    snapshot.worktree_groups[1].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[1].pr_ci = Some(crate::WorktreePrCi::Passing);
+    assert_eq!(
+        open_pr_worst_ci(&snapshot.worktree_groups),
+        Some(crate::WorktreePrCi::Passing)
+    );
+
+    snapshot.worktree_groups[1].pr_ci = None;
+    assert_eq!(open_pr_worst_ci(&snapshot.worktree_groups), None);
+
+    snapshot.worktree_groups[1].pr_ci = Some(crate::WorktreePrCi::Pending);
+    assert_eq!(
+        open_pr_worst_ci(&snapshot.worktree_groups),
+        Some(crate::WorktreePrCi::Pending)
+    );
+    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Failing);
+    assert_eq!(
+        open_pr_worst_ci(&snapshot.worktree_groups),
+        Some(crate::WorktreePrCi::Failing)
+    );
+}
+
+#[test]
 fn render_cockpit_uses_dedicated_nerd_font_pr_glyph() {
     let mut snapshot = make_up_snapshot();
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);

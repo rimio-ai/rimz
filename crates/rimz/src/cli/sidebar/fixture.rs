@@ -83,6 +83,7 @@ struct WorktreeGroupSpec {
     landed: Option<bool>,
     trunk_sync: Option<rimz::WorktreeTrunkSync>,
     pr_state: Option<rimz::WorktreePrState>,
+    pr_ci: Option<rimz::WorktreePrCi>,
     pr_number: Option<u64>,
 }
 
@@ -100,6 +101,7 @@ impl Default for WorktreeGroupSpec {
             landed: Some(false),
             trunk_sync: None,
             pr_state: None,
+            pr_ci: None,
             pr_number: None,
         }
     }
@@ -123,6 +125,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> rimz::SidebarWorktreeGroup {
         landed: spec.landed,
         trunk_sync: spec.trunk_sync,
         pr_state: spec.pr_state,
+        pr_ci: spec.pr_ci,
         pr_number: spec.pr_number,
     }
 }
@@ -533,6 +536,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_ci: Some(rimz::WorktreePrCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -558,6 +562,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(true),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
             pr_state: Some(rimz::WorktreePrState::Merged),
+            pr_ci: None,
             pr_number: Some(91),
         },
         WorktreeGroupSpec {
@@ -570,6 +575,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_behind: Some(1),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_ci: Some(rimz::WorktreePrCi::Failing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -964,6 +970,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_behind: Some(0),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_ci: Some(rimz::WorktreePrCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -987,6 +994,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_ci: Some(rimz::WorktreePrCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1294,6 +1302,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_ci: Some(rimz::WorktreePrCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1316,6 +1325,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_ci: Some(rimz::WorktreePrCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1342,6 +1352,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(true),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
             pr_state: Some(rimz::WorktreePrState::Merged),
+            pr_ci: None,
             pr_number: Some(91),
         },
     ]
@@ -1648,6 +1659,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_ci: Some(rimz::WorktreePrCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },

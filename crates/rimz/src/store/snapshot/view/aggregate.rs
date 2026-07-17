@@ -173,6 +173,7 @@ pub(super) fn build_worktree_groups_from_rows(
                 landed: None,
                 trunk_sync: None,
                 pr_state: None,
+                pr_ci: None,
                 pr_number: None,
             }
         })

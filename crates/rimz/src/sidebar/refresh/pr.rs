@@ -6,7 +6,10 @@
 //! resolves open/closed/merged. `tea pr list` reports only open/closed, so
 //! `probe_tea` follows a closed candidate with a `tea pr <n>` detail read to
 //! tell merged from closed. Both tea list calls page through
-//! [`crate::forge::tea_pr_list_args`] with the same `--limit`.
+//! [`crate::forge::tea_pr_list_args`] with the same `--limit`. GitHub includes
+//! CI in its open-PR list. Tea needs up to three bounded workflow-run lists per
+//! open branch; those calls are best-effort enrichment and do not invalidate a
+//! successful PR-state probe.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -22,7 +25,7 @@ use crate::sidebar::refresh::git_stats::{
     read_diff_stats_cache,
 };
 use crate::sidebar::timing::{PR_STATE_HOT_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL, unix_now_ms};
-use crate::{SidebarSnapshot, WorktreePrState};
+use crate::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
 
 const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
@@ -54,6 +57,8 @@ pub struct PrLink {
     pub state: WorktreePrState,
     #[serde(default)]
     pub number: Option<u64>,
+    #[serde(default)]
+    pub ci: Option<WorktreePrCi>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +199,9 @@ fn cached_due_repo_keys(
     for path in needed {
         let head_sha = target_head_sha(diff_cache, path);
         let has_uncached = !cache.head_seen.contains_key(path);
+        let pending_ci = cache.states.get(path).is_some_and(|link| {
+            link.state == WorktreePrState::Open && link.ci == Some(WorktreePrCi::Pending)
+        });
         let Some(repo_key) = cache.path_repos.get(path) else {
             if has_uncached || head_nudged(&cache.head_seen, path, head_sha) {
                 return None;
@@ -202,12 +210,12 @@ fn cached_due_repo_keys(
         };
         if repo_key == UNSUPPORTED_REPO_KEY {
             let input = inputs.entry(repo_key.clone()).or_default();
-            input.hot |= hot.contains(path) || focused.contains(path);
+            input.hot |= hot.contains(path) || focused.contains(path) || pending_ci;
             input.has_uncached |= has_uncached;
             continue;
         }
         let input = inputs.entry(repo_key.clone()).or_default();
-        input.hot |= hot.contains(path) || focused.contains(path);
+        input.hot |= hot.contains(path) || focused.contains(path) || pending_ci;
         input.nudged |= head_nudged(&cache.head_seen, path, head_sha);
         input.has_uncached |= has_uncached;
     }
@@ -250,10 +258,14 @@ fn due_repo_keys(
     groups
         .iter()
         .filter_map(|(repo_key, group)| {
-            let repo_hot = group
-                .targets
-                .iter()
-                .any(|target| hot.contains(&target.path) || focused.contains(&target.path));
+            let repo_hot = group.targets.iter().any(|target| {
+                hot.contains(&target.path)
+                    || focused.contains(&target.path)
+                    || cache.states.get(&target.path).is_some_and(|link| {
+                        link.state == WorktreePrState::Open
+                            && link.ci == Some(WorktreePrCi::Pending)
+                    })
+            });
             let nudged = group.targets.iter().any(|target| {
                 head_nudged(&cache.head_seen, &target.path, target.head_sha.as_deref())
             });
@@ -496,6 +508,7 @@ fn assign_states(
                 PrLink {
                     state: WorktreePrState::Open,
                     number: Some(candidate.number),
+                    ci: candidate.ci,
                 },
             );
             continue;
@@ -606,6 +619,16 @@ fn probe_repo_group(
     };
     let assigned = assign_states(&group.targets, &open_map, prior);
     let mut states = assigned.states;
+    if group.forge_cli == ForgeCli::Tea {
+        for target in &group.targets {
+            let Some(link) = states.get_mut(&target.path) else {
+                continue;
+            };
+            if link.state == WorktreePrState::Open {
+                link.ci = probe_tea_ci(&group.worktree, &target.branch, group.repo_slug.as_deref());
+            }
+        }
+    }
     let mut ok = true;
     for target in assigned.transitions {
         let result = probe_transition(&target);
@@ -654,7 +677,7 @@ fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, forge::PrCandida
                 "--state",
                 "open",
                 "--json",
-                "number,state,headRefName",
+                "number,state,headRefName,statusCheckRollup",
                 "--limit",
                 "500",
             ],
@@ -713,6 +736,7 @@ fn probe_github(worktree: &Path, branch: &str) -> ProbeState {
             state: candidate.map(|candidate| PrLink {
                 state: candidate.state,
                 number: Some(candidate.number),
+                ci: None,
             }),
             ok: true,
         },
@@ -766,6 +790,7 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
                 state: Some(PrLink {
                     state: WorktreePrState::Merged,
                     number: Some(candidate.number),
+                    ci: None,
                 }),
                 ok: true,
             };
@@ -775,9 +800,42 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
         state: Some(PrLink {
             state: candidate.state,
             number: Some(candidate.number),
+            ci: None,
         }),
         ok: true,
     }
+}
+
+fn probe_tea_ci(worktree: &Path, branch: &str, repo: Option<&str>) -> Option<WorktreePrCi> {
+    let newest = query_tea_runs(worktree, branch, None, repo)?;
+    let newest = newest.first()?;
+    if !newest.status.eq_ignore_ascii_case("completed") {
+        return forge::classify_tea_ci(Some(newest), None, None);
+    }
+
+    let failures = query_tea_runs(worktree, branch, Some("failure"), repo)?;
+    if let Some(verdict) = forge::classify_tea_ci(Some(newest), failures.first(), None) {
+        return Some(verdict);
+    }
+    let successes = query_tea_runs(worktree, branch, Some("success"), repo)?;
+    forge::classify_tea_ci(Some(newest), failures.first(), successes.first())
+}
+
+fn query_tea_runs(
+    worktree: &Path,
+    branch: &str,
+    status: Option<&str>,
+    repo: Option<&str>,
+) -> Option<Vec<forge::TeaRun>> {
+    let args = forge::tea_runs_list_args(branch, status, repo);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = command_stdout(worktree, "tea", &arg_refs)?;
+    forge::parse_tea_runs_list(&output)
+        .map_err(|err| {
+            tracing::debug!(error = %err, "gitea workflow-run list parse failed");
+            err
+        })
+        .ok()
 }
 
 fn git_branch(worktree: &Path) -> Option<String> {
@@ -907,6 +965,7 @@ mod tests {
             forge::PrCandidate {
                 number: 91,
                 state: WorktreePrState::Open,
+                ci: Some(WorktreePrCi::Passing),
             },
         );
         let mut prior = BTreeMap::new();
@@ -915,6 +974,7 @@ mod tests {
             PrLink {
                 state: WorktreePrState::Merged,
                 number: Some(80),
+                ci: Some(WorktreePrCi::Failing),
             },
         );
         prior.insert(
@@ -922,6 +982,7 @@ mod tests {
             PrLink {
                 state: WorktreePrState::Open,
                 number: Some(81),
+                ci: Some(WorktreePrCi::Pending),
             },
         );
         prior.insert(
@@ -929,6 +990,7 @@ mod tests {
             PrLink {
                 state: WorktreePrState::Closed,
                 number: Some(82),
+                ci: None,
             },
         );
 
@@ -939,6 +1001,7 @@ mod tests {
             Some(&PrLink {
                 state: WorktreePrState::Open,
                 number: Some(91),
+                ci: Some(WorktreePrCi::Passing),
             })
         );
         assert_eq!(
@@ -946,6 +1009,7 @@ mod tests {
             Some(&PrLink {
                 state: WorktreePrState::Merged,
                 number: Some(80),
+                ci: Some(WorktreePrCi::Failing),
             })
         );
         assert_eq!(
@@ -953,6 +1017,7 @@ mod tests {
             Some(&PrLink {
                 state: WorktreePrState::Closed,
                 number: Some(82),
+                ci: None,
             })
         );
         assert!(!assigned.states.contains_key("/repo/none"));
@@ -989,6 +1054,58 @@ mod tests {
         assert!(
             due_repo_keys(&groups, &cache, &BTreeSet::new(), &BTreeSet::new(), 1_000)
                 .contains("gh:github.com:org/repo")
+        );
+    }
+
+    #[test]
+    fn legacy_pr_link_without_ci_defaults_to_unknown() {
+        let link: PrLink = serde_json::from_str(r#"{"state":"open","number":91}"#).unwrap();
+
+        assert_eq!(link.ci, None);
+    }
+
+    #[test]
+    fn pending_ci_keeps_repo_on_hot_ttl() {
+        let repo_key = "gh:github.com:org/repo".to_owned();
+        let path = "/repo/a".to_owned();
+        let mut cache = PrStateCache::default();
+        cache.repos.insert(
+            repo_key.clone(),
+            RepoProbe {
+                refreshed_at_ms: 1_000,
+                ok: true,
+                consecutive_failures: 0,
+            },
+        );
+        cache.path_repos.insert(path.clone(), repo_key.clone());
+        cache.head_seen.insert(path.clone(), String::new());
+        cache.states.insert(
+            path.clone(),
+            PrLink {
+                state: WorktreePrState::Open,
+                number: Some(91),
+                ci: Some(WorktreePrCi::Pending),
+            },
+        );
+        let needed = vec![path];
+        let groups = group_targets(vec![target("/repo/a", "a")]);
+        let now_ms = 1_001 + PR_STATE_HOT_TTL.as_millis() as u64;
+
+        assert!(
+            cached_due_repo_keys(
+                &cache,
+                &needed,
+                &DiffStatsCache::default(),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                now_ms,
+            )
+            .unwrap()
+            .contains(&repo_key)
+        );
+        assert!(
+            due_repo_keys(&groups, &cache, &BTreeSet::new(), &BTreeSet::new(), now_ms,)
+                .contains(&repo_key)
         );
     }
 
@@ -1082,6 +1199,7 @@ mod tests {
             PrLink {
                 state: WorktreePrState::Open,
                 number: Some(91),
+                ci: None,
             },
         );
         cache

@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use crate::config::GlyphRole;
 use crate::{
-    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
+    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi, WorktreePrState,
     WorktreeTrunkSync,
 };
 use ratatui::style::Modifier;
@@ -367,9 +367,32 @@ fn group_header(
     let right_width = spans_width(&right);
     let badge = group
         .pr_number
-        .map(|number| format!(" #{number}"))
-        .filter(|badge| cw.saturating_sub(right_width.saturating_add(1)) > text_width(badge));
-    let badge_width = badge.as_deref().map(text_width).unwrap_or_default();
+        .map(|number| {
+            let ci = (group.pr_state == Some(WorktreePrState::Open))
+                .then_some(group.pr_ci)
+                .flatten()
+                .map(|ci| {
+                    let (role, component) = pr_ci_marker(ci);
+                    (format!(" {}", theme.glyph(role)), component)
+                });
+            (format!(" #{number}"), ci)
+        })
+        .filter(|(badge, ci)| {
+            let badge_width = text_width(badge)
+                + ci.as_ref()
+                    .map(|(glyph, _)| text_width(glyph))
+                    .unwrap_or_default();
+            cw.saturating_sub(right_width.saturating_add(1)) > badge_width
+        });
+    let badge_width = badge
+        .as_ref()
+        .map(|(badge, ci)| {
+            text_width(badge)
+                + ci.as_ref()
+                    .map(|(glyph, _)| text_width(glyph))
+                    .unwrap_or_default()
+        })
+        .unwrap_or_default();
     let label_width = cw
         .saturating_sub(right_width.saturating_add(1).saturating_add(badge_width))
         .max(1);
@@ -424,11 +447,17 @@ fn group_header(
         theme.styled(Component::WorktreeHeader, Modifier::BOLD)
     };
     let mut spans = vec![Span::styled(left, label_style)];
-    if let Some(badge) = badge {
+    if let Some((badge, ci)) = badge {
         spans.push(Span::styled(
             badge,
             theme.styled(Component::WorktreePrBadge, Modifier::empty()),
         ));
+        if let Some((glyph, component)) = ci {
+            spans.push(Span::styled(
+                glyph,
+                theme.styled(component, Modifier::empty()),
+            ));
+        }
     }
     spans.push(Span::styled(fill, fill_style));
     spans.extend(right);
@@ -492,6 +521,14 @@ fn pr_state_marker(state: WorktreePrState) -> (GlyphRole, Component) {
         WorktreePrState::Merged => (GlyphRole::WorktreeTrunkMerge, Component::WorktreeMerged),
         WorktreePrState::Closed => (GlyphRole::WorktreePrClosed, Component::WorktreePrClosed),
         WorktreePrState::Open => (GlyphRole::WorktreePrOpen, Component::WorktreePrOpen),
+    }
+}
+
+fn pr_ci_marker(ci: WorktreePrCi) -> (GlyphRole, Component) {
+    match ci {
+        WorktreePrCi::Pending => (GlyphRole::WorktreeCiPending, Component::PrCiPending),
+        WorktreePrCi::Passing => (GlyphRole::WorktreeCiPassing, Component::PrCiPassing),
+        WorktreePrCi::Failing => (GlyphRole::WorktreeCiFailing, Component::PrCiFailing),
     }
 }
 

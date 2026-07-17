@@ -130,6 +130,7 @@ fn row_snapshot_at(
         landed: None,
         trunk_sync: None,
         pr_state: None,
+        pr_ci: None,
         pr_number: None,
     }];
     if focused {
@@ -184,6 +185,7 @@ fn snapshot_in_group(
         landed: None,
         trunk_sync: None,
         pr_state: None,
+        pr_ci: None,
         pr_number: None,
     };
     let mut snapshot = SidebarSnapshot::build_with_agents(

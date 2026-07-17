@@ -796,6 +796,7 @@ fn band(inactive: bool, archived: bool) -> u8 {
 /// One worktree's live agents, ranked within the group like the sidebar.
 #[derive(Debug)]
 pub struct AgentWorktreeGroup<'a> {
+    pub key: String,
     pub label: String,
     pub kind: SidebarWorktreeKind,
     pub agents: Vec<&'a AgentState>,
@@ -832,8 +833,9 @@ pub fn group_live_agents_by_worktree<'a>(
             branch: agent.worktree_branch.as_deref(),
         });
         by_key
-            .entry(identity.key)
+            .entry(identity.key.clone())
             .or_insert_with(|| AgentWorktreeGroup {
+                key: identity.key,
                 label: identity.label,
                 kind: identity.kind,
                 agents: Vec::new(),

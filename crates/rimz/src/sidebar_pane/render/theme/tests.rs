@@ -488,12 +488,12 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 LaneSpine => p.selection,
                 WorktreeHeader | BranchDelta => p.body,
                 WorktreePristine | WindowSmall => p.faint,
-                ProcMem | CacheRead | RemoteControl => p.good,
-                WorktreeReconciling | Compaction => p.warn,
+                ProcMem | CacheRead | RemoteControl | PrCiPassing => p.good,
+                WorktreeReconciling | Compaction | PrCiPending => p.warn,
                 WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu
                 | WindowLarge => p.cool,
                 SubagentHeader | ProcIo | CacheWrite => p.meta,
-                RemoteControlDown | WorktreePrClosed => p.alarm,
+                RemoteControlDown | WorktreePrClosed | PrCiFailing => p.alarm,
                 Input => p.expense,
                 WorktreeMerged | WindowMedium | UnknownBrand => p.muted,
             };

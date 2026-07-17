@@ -1,7 +1,7 @@
 //! The fleet make-up line — the cockpit's status buckets.
 
 use crate::agents::AgentStatus;
-use crate::{SidebarWorktreeGroup, WorktreePrState};
+use crate::{SidebarWorktreeGroup, WorktreePrCi, WorktreePrState};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -312,4 +312,29 @@ pub(in crate::sidebar_pane::render) fn open_pr_total(groups: &[SidebarWorktreeGr
         .iter()
         .filter(|group| group.pr_state == Some(WorktreePrState::Open))
         .count()
+}
+
+pub(in crate::sidebar_pane::render) fn open_pr_worst_ci(
+    groups: &[SidebarWorktreeGroup],
+) -> Option<WorktreePrCi> {
+    let mut saw_open = false;
+    let mut saw_unknown = false;
+    let mut saw_pending = false;
+    let mut saw_passing = false;
+    for group in groups
+        .iter()
+        .filter(|group| group.pr_state == Some(WorktreePrState::Open))
+    {
+        saw_open = true;
+        match group.pr_ci {
+            Some(WorktreePrCi::Failing) => return Some(WorktreePrCi::Failing),
+            Some(WorktreePrCi::Pending) => saw_pending = true,
+            Some(WorktreePrCi::Passing) => saw_passing = true,
+            None => saw_unknown = true,
+        }
+    }
+    if saw_pending {
+        return Some(WorktreePrCi::Pending);
+    }
+    (saw_open && saw_passing && !saw_unknown).then_some(WorktreePrCi::Passing)
 }

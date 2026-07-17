@@ -100,6 +100,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         landed: None,
         trunk_sync: None,
         pr_state: None,
+        pr_ci: None,
         pr_number: None,
     }];
     snapshot
@@ -239,6 +240,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             landed: None,
             trunk_sync: None,
             pr_state: None,
+            pr_ci: None,
             pr_number: None,
         },
         crate::SidebarWorktreeGroup {
@@ -268,6 +270,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             landed: None,
             trunk_sync: None,
             pr_state: None,
+            pr_ci: None,
             pr_number: None,
         },
     ];

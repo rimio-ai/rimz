@@ -322,6 +322,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
         crate::sidebar::refresh::pr::PrLink {
             state: crate::WorktreePrState::Open,
             number: Some(91),
+            ci: None,
         },
     );
     atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &pr).unwrap();

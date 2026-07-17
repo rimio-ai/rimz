@@ -225,6 +225,35 @@ fn render_pr_badge_keeps_identity_style_across_states() {
 }
 
 #[test]
+fn render_open_pr_badge_carries_ci_glyph_and_tone() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    snapshot.worktree_groups[0].pr_number = Some(91);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Failing);
+
+    let lines = group_lines(&snapshot, &theme, 0);
+    let ci = lines[0]
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == " ✕")
+        .expect("PR CI span");
+    assert_eq!(
+        ci.style,
+        theme.styled(Component::PrCiFailing, Modifier::empty())
+    );
+
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    let lines = group_lines(&snapshot, &theme, 0);
+    assert!(
+        lines[0]
+            .spans
+            .iter()
+            .all(|span| span.content.as_ref() != " ✕"),
+        "stale CI stays off a closed PR badge"
+    );
+}
+
+#[test]
 fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Merged));
@@ -257,8 +286,9 @@ fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
 #[test]
 fn render_pr_badge_yields_to_the_name_at_extreme_width() {
     let theme = Theme::fixed(false);
-    let mut snapshot = pristine_worktree_with_pr_state(None);
+    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(91);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
 
     let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
     let text = header
@@ -268,6 +298,7 @@ fn render_pr_badge_yields_to_the_name_at_extreme_width() {
         .collect::<String>();
 
     assert!(!text.contains("#91"), "badge drops first: {text:?}");
+    assert!(!text.contains('✓'), "CI drops with its badge: {text:?}");
     assert!(
         text.contains('…'),
         "the clipped name keeps the label slot: {text:?}"

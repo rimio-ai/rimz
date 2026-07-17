@@ -53,6 +53,7 @@ pub(in crate::sidebar_pane::render) struct CockpitBadges {
     pub unread_agents: usize,
     pub unread_picked: bool,
     pub open_prs: usize,
+    pub open_pr_ci: Option<crate::WorktreePrCi>,
     pub pr_picked: bool,
 }
 
@@ -66,8 +67,9 @@ pub(in crate::sidebar_pane::render) struct CockpitChipHits {
 /// on the left, with headline fleet spend pinned to the right edge, counting up
 /// as a turn lands. The steady unread count and open-PR count are
 /// click-to-filter targets and paint as picked chips while their lenses are
-/// active. The open-PR count uses the lane markers' PR-open tone and appears
-/// only when an agent lane's branch has an open PR. The figure ticks toward the
+/// active. The open-PR count uses the worst known lane CI tone — failing,
+/// pending, or all passing — and keeps the PR-open tone when CI is unknown. It
+/// appears only when an agent lane's branch has an open PR. The figure ticks toward the
 /// workspace tally's headline total via the shared [`TallyAnim`] roll — big decaying steps, then
 /// penny by penny onto the exact figure — and brightens for a beat the instant
 /// it settles (the W/M store rows below stay static). Always present — an empty
@@ -112,6 +114,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         unread_agents,
         unread_picked,
         open_prs,
+        open_pr_ci,
         pr_picked,
     } = badges;
     if unread_agents > 0 {
@@ -132,17 +135,23 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     }
     let mut open_pr_range = None;
     if open_prs > 0 {
+        let component = match open_pr_ci {
+            Some(crate::WorktreePrCi::Passing) => Component::PrCiPassing,
+            Some(crate::WorktreePrCi::Pending) => Component::PrCiPending,
+            Some(crate::WorktreePrCi::Failing) => Component::PrCiFailing,
+            None => Component::WorktreePrOpen,
+        };
+        let tone = theme.component(component);
         left.push(Span::styled(" ".to_owned(), theme.body()));
         let start = spans_width(&left);
         let mut pr_spans = metric_spans(
             theme,
             theme.glyph(GlyphRole::CockpitPrOpen),
-            theme.component(Component::WorktreePrOpen),
+            tone,
             &open_prs.to_string(),
         );
         if pr_picked {
-            let style =
-                theme.picked_chip(theme.component(Component::WorktreePrOpen), Modifier::BOLD);
+            let style = theme.picked_chip(tone, Modifier::BOLD);
             for span in &mut pr_spans {
                 span.style = style;
             }

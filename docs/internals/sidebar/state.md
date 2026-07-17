@@ -52,7 +52,7 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 | Lane | Scope | Carries |
 | --- | --- | --- |
 | `diff-stats.json` | room | per-worktree git facts split into edit-sensitive stats (`added`/`removed`, dirty/untracked state, branch, merge/rebase state) and commit/PR-shaped stats (ahead/behind counts, landed markers, did-work marker, `--from-pr` provenance), each with its own stamp, plus the group-root set |
-| `pr-state.json` | room | producer-only `gh`/`tea` pull-request state and number by worktree path, plus per-repo probe stamps, path-to-repo metadata, and last-seen HEAD SHAs; absent when no PR or unsupported forge |
+| `pr-state.json` | room | producer-only `gh`/`tea` pull-request state, number, and best-effort open-PR CI verdict by worktree path, plus per-repo probe stamps, path-to-repo metadata, and last-seen HEAD SHAs; GitHub supplies CI in the existing `statusCheckRollup` list field, while tea uses bounded `actions runs list` probes; a pending verdict keeps the repo on the hot refresh TTL; absent when no PR or unsupported forge |
 | `metrics-sample.json` | room (producer-only) | per-pane resource samples and pane→root-pid bindings; figures publish on the pane frame |
 | `workspace-spending.<hash>.json` | room | the producer-derived room cockpit spend tally, headline cutoff, and live-card session keys excluded from walked headline USD; consumers accept a hash-matching publication only and leave the workspace tally absent until it exists |
 | `link-stats.json` | room | the latest remote-SSH probe stats for the footer link badge ([remote.md](../remote.md)) |

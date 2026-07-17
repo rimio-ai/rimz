@@ -52,6 +52,12 @@ pub(crate) enum Component {
     WorktreePrOpen,
     /// A closed, unmerged pull request for the worktree branch — alarm verdict.
     WorktreePrClosed,
+    /// A passing open pull request's CI verdict — success tone.
+    PrCiPassing,
+    /// A still-running open pull request's CI verdict — warning tone.
+    PrCiPending,
+    /// A failing open pull request's CI verdict — alarm tone.
+    PrCiFailing,
     /// The `◌` cache-read token marker.
     CacheRead,
     /// The `W:`/`M:` timeframe label on a store row.
@@ -114,6 +120,9 @@ impl Component {
         Component::WorktreeReconciling,
         Component::WorktreePrOpen,
         Component::WorktreePrClosed,
+        Component::PrCiPassing,
+        Component::PrCiPending,
+        Component::PrCiFailing,
         Component::CacheRead,
         Component::StoreLabel,
         Component::TokenTotal,
@@ -145,13 +154,13 @@ impl Component {
             LaneSpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
             WorktreePristine | WindowSmall => palette.faint,
-            ProcMem | CacheRead | RemoteControl => palette.good,
-            WorktreeReconciling | Compaction => palette.warn,
+            ProcMem | CacheRead | RemoteControl | PrCiPassing => palette.good,
+            WorktreeReconciling | Compaction | PrCiPending => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }
             SubagentHeader | ProcIo | CacheWrite => palette.meta,
-            RemoteControlDown | WorktreePrClosed => palette.alarm,
+            RemoteControlDown | WorktreePrClosed | PrCiFailing => palette.alarm,
             Input => palette.expense,
             WorktreeMerged | WindowMedium | UnknownBrand => palette.muted,
         }

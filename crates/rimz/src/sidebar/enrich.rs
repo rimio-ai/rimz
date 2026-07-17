@@ -206,6 +206,10 @@ pub fn project_pr_state_map(
             continue;
         };
         group.pr_state = states.get(path).map(|link| link.state);
+        group.pr_ci = states
+            .get(path)
+            .filter(|link| link.state == crate::WorktreePrState::Open)
+            .and_then(|link| link.ci);
         if let Some(number) = states.get(path).and_then(|link| link.number) {
             group.pr_number = Some(number);
         }

@@ -63,7 +63,7 @@ pub use crate::store::{
     RemoteControlBadge, RowCallSplit, RowCard, RuntimePaths, RuntimeProjection, RuntimeScope,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel,
     SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind, StatePaths, Store, TruthNotice, WorkspaceRecord, WorktreePrState,
-    WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
+    SidebarWorktreeKind, StatePaths, Store, TruthNotice, WorkspaceRecord, WorktreePrCi,
+    WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

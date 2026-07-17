@@ -6,10 +6,10 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use crate::store::snapshot::WorktreePrState;
+use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Forge {
@@ -40,6 +40,14 @@ pub struct PrHead {
 pub struct PrCandidate {
     pub number: u64,
     pub state: WorktreePrState,
+    pub ci: Option<WorktreePrCi>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct TeaRun {
+    #[serde(deserialize_with = "deserialize_tea_run_id")]
+    pub id: String,
+    pub status: String,
 }
 
 pub fn parse(raw: &str) -> Result<PrTarget, String> {
@@ -316,6 +324,7 @@ pub fn parse_gh_pr_state_json(raw: &str) -> Result<Option<PrCandidate>, String> 
             Some(PrCandidate {
                 number: pull.number,
                 state: parse_pr_state(&pull.state)?,
+                ci: None,
             })
         })
         .fold(None, |current, next| Some(prefer_candidate(current, next))))
@@ -328,6 +337,8 @@ pub fn parse_gh_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>
         state: String,
         #[serde(rename = "headRefName")]
         head_ref_name: String,
+        #[serde(rename = "statusCheckRollup", default)]
+        status_check_rollup: Vec<Value>,
     }
 
     let pulls: Vec<Pull> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
@@ -343,6 +354,7 @@ pub fn parse_gh_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>
         let candidate = PrCandidate {
             number: pull.number,
             state,
+            ci: ci_from_gh_rollup(&pull.status_check_rollup),
         };
         links.insert(
             branch.to_owned(),
@@ -364,6 +376,7 @@ pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<PrCandid
             Some(PrCandidate {
                 number: pr_number(pull)?,
                 state: pr_state_from_value(pull)?,
+                ci: None,
             })
         })
         .fold(None, |current, next| Some(prefer_candidate(current, next))))
@@ -385,7 +398,11 @@ pub fn parse_tea_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate
         let Some(number) = pr_number(pull) else {
             continue;
         };
-        let candidate = PrCandidate { number, state };
+        let candidate = PrCandidate {
+            number,
+            state,
+            ci: None,
+        };
         links.insert(
             branch.clone(),
             prefer_candidate(links.get(&branch).copied(), candidate),
@@ -421,6 +438,147 @@ pub fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a st
         args.extend_from_slice(&["--repo", repo]);
     }
     args
+}
+
+/// Build the bounded `tea actions runs list` argv used for CI enrichment.
+pub fn tea_runs_list_args(branch: &str, status: Option<&str>, repo: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "actions".to_owned(),
+        "runs".to_owned(),
+        "list".to_owned(),
+        "--branch".to_owned(),
+        branch.to_owned(),
+        "--limit".to_owned(),
+        "1".to_owned(),
+        "--output".to_owned(),
+        "json".to_owned(),
+    ];
+    if let Some(status) = status {
+        args.extend(["--status".to_owned(), status.to_owned()]);
+    }
+    if let Some(repo) = repo {
+        args.extend(["--repo".to_owned(), repo.to_owned()]);
+    }
+    args
+}
+
+/// Aggregate GitHub's check rollup into the worst actionable CI verdict.
+pub fn ci_from_gh_rollup(rollup: &[Value]) -> Option<WorktreePrCi> {
+    let mut verdict = None;
+    for item in rollup {
+        let Some(kind) = item.get("__typename").and_then(Value::as_str) else {
+            continue;
+        };
+        let next = if kind.eq_ignore_ascii_case("CheckRun") {
+            let status = item.get("status").and_then(Value::as_str);
+            let conclusion = item.get("conclusion").and_then(Value::as_str);
+            if conclusion.is_some_and(|value| {
+                [
+                    "FAILURE",
+                    "TIMED_OUT",
+                    "ACTION_REQUIRED",
+                    "CANCELLED",
+                    "STARTUP_FAILURE",
+                ]
+                .iter()
+                .any(|failure| value.eq_ignore_ascii_case(failure))
+            }) {
+                Some(WorktreePrCi::Failing)
+            } else if status.is_some_and(|value| !value.eq_ignore_ascii_case("COMPLETED"))
+                || (status.is_some_and(|value| value.eq_ignore_ascii_case("COMPLETED"))
+                    && conclusion.is_none())
+            {
+                Some(WorktreePrCi::Pending)
+            } else if conclusion.is_some_and(|value| value.eq_ignore_ascii_case("SUCCESS")) {
+                Some(WorktreePrCi::Passing)
+            } else {
+                None
+            }
+        } else if kind.eq_ignore_ascii_case("StatusContext") {
+            match item.get("state").and_then(Value::as_str) {
+                Some(value)
+                    if ["FAILURE", "ERROR"]
+                        .iter()
+                        .any(|failure| value.eq_ignore_ascii_case(failure)) =>
+                {
+                    Some(WorktreePrCi::Failing)
+                }
+                Some(value)
+                    if ["PENDING", "EXPECTED"]
+                        .iter()
+                        .any(|pending| value.eq_ignore_ascii_case(pending)) =>
+                {
+                    Some(WorktreePrCi::Pending)
+                }
+                Some(value) if value.eq_ignore_ascii_case("SUCCESS") => Some(WorktreePrCi::Passing),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        verdict = worst_ci(verdict, next);
+    }
+    verdict
+}
+
+/// Parse tea's workflow-run list, including its non-JSON empty-list message.
+pub fn parse_tea_runs_list(raw: &str) -> Result<Vec<TeaRun>, String> {
+    let trimmed = raw.trim();
+    if !trimmed.starts_with('[') {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(trimmed).map_err(|err| err.to_string())
+}
+
+/// Classify tea's newest workflow run.
+///
+/// Tea exposes workflow conclusions only through status-filtered lists. This
+/// deliberately approximates multi-workflow commits by the single newest run.
+pub fn classify_tea_ci(
+    newest: Option<&TeaRun>,
+    newest_failure: Option<&TeaRun>,
+    newest_success: Option<&TeaRun>,
+) -> Option<WorktreePrCi> {
+    let newest = newest?;
+    if !newest.status.eq_ignore_ascii_case("completed") {
+        return Some(WorktreePrCi::Pending);
+    }
+    if newest_failure.is_some_and(|run| run.id == newest.id) {
+        return Some(WorktreePrCi::Failing);
+    }
+    if newest_success.is_some_and(|run| run.id == newest.id) {
+        return Some(WorktreePrCi::Passing);
+    }
+    None
+}
+
+fn worst_ci(current: Option<WorktreePrCi>, next: Option<WorktreePrCi>) -> Option<WorktreePrCi> {
+    match (current, next) {
+        (Some(WorktreePrCi::Failing), _) | (_, Some(WorktreePrCi::Failing)) => {
+            Some(WorktreePrCi::Failing)
+        }
+        (Some(WorktreePrCi::Pending), _) | (_, Some(WorktreePrCi::Pending)) => {
+            Some(WorktreePrCi::Pending)
+        }
+        (Some(WorktreePrCi::Passing), _) | (_, Some(WorktreePrCi::Passing)) => {
+            Some(WorktreePrCi::Passing)
+        }
+        (None, None) => None,
+    }
+}
+
+fn deserialize_tea_run_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::String(value) => Ok(value),
+        Value::Number(value) => Ok(value.to_string()),
+        _ => Err(serde::de::Error::custom(
+            "tea workflow run id must be a string or number",
+        )),
+    }
 }
 
 fn pr_state_from_value(value: &Value) -> Option<WorktreePrState> {
@@ -763,6 +921,7 @@ bbb\trefs/heads/same-tip
             Some(PrCandidate {
                 number: 2,
                 state: WorktreePrState::Open,
+                ci: None,
             })
         );
         assert_eq!(
@@ -773,6 +932,7 @@ bbb\trefs/heads/same-tip
             Some(PrCandidate {
                 number: 2,
                 state: WorktreePrState::Merged,
+                ci: None,
             })
         );
         assert_eq!(parse_gh_pr_state_json("[]").unwrap(), None);
@@ -795,6 +955,7 @@ bbb\trefs/heads/same-tip
             Some(&PrCandidate {
                 number: 2,
                 state: WorktreePrState::Open,
+                ci: None,
             })
         );
         assert_eq!(
@@ -802,9 +963,69 @@ bbb\trefs/heads/same-tip
             Some(&PrCandidate {
                 number: 3,
                 state: WorktreePrState::Open,
+                ci: None,
             })
         );
         assert!(parse_gh_pr_list_links("{").is_err());
+    }
+
+    #[test]
+    fn classifies_gh_check_rollups_by_worst_verdict() {
+        let parse = |raw: &str| serde_json::from_str::<Vec<Value>>(raw).unwrap();
+        assert_eq!(
+            ci_from_gh_rollup(&parse(
+                r#"[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]"#
+            )),
+            Some(WorktreePrCi::Passing)
+        );
+        assert_eq!(
+            ci_from_gh_rollup(&parse(
+                r#"[{"__typename":"StatusContext","state":"EXPECTED"}]"#
+            )),
+            Some(WorktreePrCi::Pending)
+        );
+        assert_eq!(
+            ci_from_gh_rollup(&parse(
+                r#"[{"__typename":"CheckRun","status":"COMPLETED","conclusion":null}]"#
+            )),
+            Some(WorktreePrCi::Pending)
+        );
+        assert_eq!(
+            ci_from_gh_rollup(&parse(
+                r#"[
+                    {"__typename":"StatusContext","state":"SUCCESS"},
+                    {"__typename":"CheckRun","status":"completed","conclusion":"timed_out"}
+                ]"#
+            )),
+            Some(WorktreePrCi::Failing)
+        );
+        assert_eq!(
+            ci_from_gh_rollup(&parse(
+                r#"[
+                    {"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"},
+                    {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"}
+                ]"#
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn gh_pr_links_include_rollup_ci() {
+        let links = parse_gh_pr_list_links(
+            r#"[{
+                "number":2,
+                "state":"OPEN",
+                "headRefName":"feature",
+                "statusCheckRollup":[
+                    {"__typename":"StatusContext","state":"SUCCESS"},
+                    {"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":null}
+                ]
+            }]"#,
+        )
+        .unwrap();
+
+        assert_eq!(links["feature"].ci, Some(WorktreePrCi::Pending));
     }
 
     #[test]
@@ -818,6 +1039,7 @@ bbb\trefs/heads/same-tip
             Some(PrCandidate {
                 number: 7,
                 state: WorktreePrState::Closed,
+                ci: None,
             })
         );
         assert_eq!(
@@ -845,6 +1067,7 @@ bbb\trefs/heads/same-tip
             Some(&PrCandidate {
                 number: 8,
                 state: WorktreePrState::Open,
+                ci: None,
             })
         );
         assert_eq!(
@@ -852,6 +1075,7 @@ bbb\trefs/heads/same-tip
             Some(&PrCandidate {
                 number: 9,
                 state: WorktreePrState::Open,
+                ci: None,
             })
         );
         assert!(parse_tea_pr_list_links("{}").is_err());
@@ -870,6 +1094,75 @@ bbb\trefs/heads/same-tip
         let bare = tea_pr_list_args("open", None);
         assert!(bare.windows(2).any(|window| window == ["--limit", "500"]));
         assert!(!bare.contains(&"--repo"));
+    }
+
+    #[test]
+    fn parses_and_classifies_tea_workflow_runs() {
+        let runs = parse_tea_runs_list(
+            r#"[{"id":42,"status":"completed"},{"id":"41","status":"in_progress"}]"#,
+        )
+        .unwrap();
+        assert_eq!(runs[0].id, "42");
+        assert_eq!(parse_tea_runs_list("No workflow runs found").unwrap(), []);
+        assert!(parse_tea_runs_list("[").is_err());
+
+        let newest = TeaRun {
+            id: "42".to_owned(),
+            status: "completed".to_owned(),
+        };
+        let failure = TeaRun {
+            id: "42".to_owned(),
+            status: "failure".to_owned(),
+        };
+        let success = TeaRun {
+            id: "42".to_owned(),
+            status: "success".to_owned(),
+        };
+        let other = TeaRun {
+            id: "41".to_owned(),
+            status: "failure".to_owned(),
+        };
+        let pending = TeaRun {
+            id: "43".to_owned(),
+            status: "in_progress".to_owned(),
+        };
+
+        assert_eq!(classify_tea_ci(None, None, None), None);
+        assert_eq!(
+            classify_tea_ci(Some(&pending), None, None),
+            Some(WorktreePrCi::Pending)
+        );
+        assert_eq!(
+            classify_tea_ci(Some(&newest), Some(&failure), Some(&success)),
+            Some(WorktreePrCi::Failing)
+        );
+        assert_eq!(
+            classify_tea_ci(Some(&newest), Some(&other), Some(&success)),
+            Some(WorktreePrCi::Passing)
+        );
+        assert_eq!(classify_tea_ci(Some(&newest), Some(&other), None), None);
+    }
+
+    #[test]
+    fn tea_runs_args_bound_branch_status_and_repo() {
+        let args = tea_runs_list_args("feature", Some("failure"), Some("org/repo"));
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--branch", "feature"])
+        );
+        assert!(args.windows(2).any(|window| window == ["--limit", "1"]));
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--status", "failure"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--repo", "org/repo"])
+        );
+
+        let bare = tea_runs_list_args("feature", None, None);
+        assert!(!bare.iter().any(|arg| arg == "--status"));
+        assert!(!bare.iter().any(|arg| arg == "--repo"));
     }
 
     #[test]

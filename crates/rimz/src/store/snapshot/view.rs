@@ -38,7 +38,7 @@ pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use model::{
     DailyBudgetView, PresenceSample, RemoteControlBadge, SidebarLinkFreshness, SidebarLinkHealth,
     SidebarPresence, SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
+    SidebarWorktreeKind, WorktreePrCi, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
     lead_unread_row, triage_key,
 };
 pub use reap::RuntimeReapInputs;

@@ -229,6 +229,8 @@ Bare `rimz agents` lists the live room's pane-backed root-agent cards in attenti
 
 Rows group under channel section headers: `⑂` marks a worktree-backed or isolated lane, `#` marks a plain lane, a bare label marks the room root, and a dim `external` tail holds agents outside the project. Header glyphs follow the configured theme glyph set, including Nerd Font presets, and a shared team appears in the header as `· <team> team`.
 
+`--json` keeps every serialized agent field and adds `pr` to agents whose lane has a linked pull request. The object carries optional `number`, required `state` (`open`, `closed`, or `merged`), and optional `ci` (`pending`, `passing`, or `failing`); absent or unknown PR data leaves the whole `pr` field out or omits its optional members.
+
 | Column | What it shows |
 |---|---|
 | `AGENT` | the shortest handle you can type back under that header — its role (`@coder`), else its explicit `--name` (`@writer`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one lane |

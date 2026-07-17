@@ -16,7 +16,7 @@ use super::chrome::{
 use super::sections::{
     CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext, cockpit_spend_line,
     cockpit_summary_line, content_width, dashboard_block, fleet_header_lines, fleet_size,
-    fleet_store_lines, fleet_total_lines, open_pr_total, trim_spans_to_width,
+    fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci, trim_spans_to_width,
     worktree_group_lines_projected,
 };
 use super::theme::Theme;
@@ -701,6 +701,7 @@ pub(super) fn top_lines(
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
     let unread_agents = BodyFilter::Unread.total(&snapshot.worktree_groups);
     let open_prs = open_pr_total(&snapshot.worktree_groups);
+    let open_pr_ci = open_pr_worst_ci(&snapshot.worktree_groups);
     let tripped = snapshot
         .fleet_budget
         .as_ref()
@@ -716,6 +717,7 @@ pub(super) fn top_lines(
             unread_agents,
             unread_picked,
             open_prs,
+            open_pr_ci,
             pr_picked: ui.make_up_filter == Some(BodyFilter::OpenPr),
         },
         (today_usd, tripped),

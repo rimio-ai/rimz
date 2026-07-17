@@ -226,6 +226,7 @@ fn pr_state_projection_uses_the_given_map() {
         PrLink {
             state: crate::WorktreePrState::Closed,
             number: Some(91),
+            ci: Some(crate::WorktreePrCi::Failing),
         },
     );
     project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
@@ -234,6 +235,21 @@ fn pr_state_projection_uses_the_given_map() {
         Some(crate::WorktreePrState::Closed)
     );
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(91));
+    assert_eq!(snapshot.worktree_groups[0].pr_ci, None);
+
+    states.insert(
+        worktree.display().to_string(),
+        PrLink {
+            state: crate::WorktreePrState::Open,
+            number: Some(91),
+            ci: Some(crate::WorktreePrCi::Passing),
+        },
+    );
+    project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
+    assert_eq!(
+        snapshot.worktree_groups[0].pr_ci,
+        Some(crate::WorktreePrCi::Passing)
+    );
 
     snapshot.worktree_groups[0].pr_number = Some(69);
     project_pr_state_map(&mut snapshot, &BTreeMap::new(), &DiffStatsCache::default());
@@ -262,6 +278,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
         PrLink {
             state: crate::WorktreePrState::Merged,
             number: Some(91),
+            ci: None,
         },
     );
     project_pr_state_map(&mut snapshot, &states, &diff_cache);
@@ -289,6 +306,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
         PrLink {
             state: crate::WorktreePrState::Merged,
             number: Some(91),
+            ci: None,
         },
     );
     project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
@@ -1134,6 +1152,7 @@ fn config_fold_stamps_agent_context_severity() {
         landed: None,
         trunk_sync: None,
         pr_state: None,
+        pr_ci: None,
         pr_number: None,
     }];
 

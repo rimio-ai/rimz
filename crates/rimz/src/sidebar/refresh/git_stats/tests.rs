@@ -118,6 +118,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         landed: None,
         trunk_sync: None,
         pr_state: None,
+        pr_ci: None,
         pr_number: None,
     }
 }

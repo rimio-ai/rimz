@@ -70,7 +70,8 @@ pub use crate::store::snapshot::{
     RemoteControlBadge, RowCallSplit, RowCard, SidebarLinkFreshness, SidebarLinkHealth,
     SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
     SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
-    WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
+    WorktreePrCi, WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row,
+    triage_key,
 };
 pub use crate::store::workspace_record::WorkspaceRecord;
 pub(crate) use crate::store::writer::DeliverySweepUpdate;

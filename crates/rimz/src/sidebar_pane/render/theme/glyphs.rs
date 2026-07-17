@@ -139,6 +139,9 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::WorktreeTrunkMerge => "✓",
         GlyphRole::WorktreePrOpen => "⑃",
         GlyphRole::WorktreePrClosed => "✕",
+        GlyphRole::WorktreeCiPassing => "✓",
+        GlyphRole::WorktreeCiFailing => "✕",
+        GlyphRole::WorktreeCiPending => "◌",
         GlyphRole::WorktreeReconciling => "⟳",
         GlyphRole::WorktreeExpand => "▸",
         GlyphRole::WorktreeDotted => "┄",
@@ -245,6 +248,9 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         GlyphRole::WorktreeTrunkMerge => "\u{f419}", // nf-oct-git_merge
         GlyphRole::WorktreePrOpen => "\u{f407}", // nf-oct-git_pull_request
         GlyphRole::WorktreePrClosed => "\u{f4dc}", // nf-oct-git_pull_request_closed
+        GlyphRole::WorktreeCiPassing => "\u{f42e}", // nf-oct-check
+        GlyphRole::WorktreeCiFailing => "\u{f467}", // nf-oct-x
+        GlyphRole::WorktreeCiPending => "\u{f444}", // nf-oct-dot_fill
         GlyphRole::WorktreeReconciling => "\u{f4db}", // nf-oct-git_merge_queue
         GlyphRole::WorktreeAhead
         | GlyphRole::WorktreeBehind

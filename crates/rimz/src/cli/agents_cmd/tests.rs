@@ -1032,7 +1032,7 @@ mod render {
         let auth_path = Some("/repo/worktrees/auth-refresh");
         let mut external = agent_in_lane("external", None, None, None);
         external.status = AgentStatus::Failed;
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo/main")),
             vec![
                 agent_in_lane("planner", Some("auth-refresh"), auth_path, Some("forge")),
@@ -1062,8 +1062,30 @@ mod render {
         )
         .with_project_root(Some(PathBuf::from("/repo/main")));
 
+        let refs = snapshot.agents.iter().collect::<Vec<_>>();
+        let (auth_key, auth_label, auth_kind) = {
+            let group = rimz::store::snapshot::group_live_agents_by_worktree(&refs, &snapshot)
+                .into_iter()
+                .find(|group| group.label == "auth-refresh")
+                .unwrap();
+            (group.key, group.label, group.kind)
+        };
+        snapshot.worktree_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "key": auth_key,
+                "label": auth_label,
+                "kind": auth_kind,
+                "status_counts": [],
+                "rows": [],
+                "pr_number": 91,
+                "pr_state": "open",
+                "pr_ci": "passing"
+            }))
+            .unwrap(),
+        );
+
         let text = render_agents_text(&snapshot, now, 120);
-        assert!(text.contains("⑂ auth-refresh · forge team"), "{text}");
+        assert!(text.contains("⑂ auth-refresh · forge team #91 ✓"), "{text}");
         assert!(text.contains("# docs"), "{text}");
         assert!(text.contains("external"), "{text}");
         assert!(
@@ -1084,7 +1106,35 @@ mod render {
         };
         let text = render_agents_text_with_theme(&snapshot, now, 120, &theme);
         assert!(text.contains("\u{f126} auth-refresh"), "{text}");
+        assert!(text.contains("#91 \u{f42e}"), "{text}");
         assert!(text.contains("\u{f292} docs"), "{text}");
+    }
+
+    #[test]
+    fn show_placement_includes_pr_state_and_ci() {
+        let agent = agent_in_lane(
+            "coder",
+            Some("feature"),
+            Some("/repo/worktrees/feature"),
+            None,
+        );
+        let mut out = anstream::StripStream::new(Vec::new());
+        super::show::render_placement_section(
+            &mut out,
+            &agent,
+            Some(super::list::PrInfo {
+                number: Some(91),
+                state: rimz::WorktreePrState::Open,
+                ci: Some(rimz::WorktreePrCi::Failing),
+            }),
+        )
+        .unwrap();
+        let text = String::from_utf8(out.into_inner()).unwrap();
+
+        assert!(
+            text.contains("pr:") && text.contains("#91 open · ci failing"),
+            "{text}"
+        );
     }
 
     #[test]
