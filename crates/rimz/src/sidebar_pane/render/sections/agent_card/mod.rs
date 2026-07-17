@@ -6,7 +6,7 @@
 
 use crate::agents::{AgentContext, AgentCurrentUsage, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
-use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
+use crate::config::{AnimationRole, ContextMeterConfig, GlyphRole};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
