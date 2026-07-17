@@ -628,33 +628,21 @@ fn verdict_and_backoff_classify_reconnects() {
         ]
     );
 
-    let policy = ReconnectPolicy::default();
-    assert_eq!(verdict(Some(0), true, 0, &policy), Verdict::CleanExit);
+    assert_eq!(verdict(Some(0), true), Verdict::CleanExit);
+    assert_eq!(verdict(Some(SSH_TRANSPORT_EXIT), true), Verdict::Retry);
     assert_eq!(
-        verdict(Some(SSH_TRANSPORT_EXIT), true, 2, &policy),
-        Verdict::Retry {
-            delay: Duration::from_secs(4)
-        }
-    );
-    assert_eq!(
-        verdict(Some(SSH_TRANSPORT_EXIT), true, 30, &policy),
-        Verdict::Retry {
-            delay: Duration::from_secs(30)
-        }
-    );
-    assert_eq!(
-        verdict(Some(SSH_TRANSPORT_EXIT), false, 0, &policy),
+        verdict(Some(SSH_TRANSPORT_EXIT), false),
         Verdict::Fatal {
             code: SSH_TRANSPORT_EXIT
         }
     );
     assert_eq!(
-        verdict(Some(REMOTE_RIMZ_MISSING_EXIT), true, 0, &policy),
+        verdict(Some(REMOTE_RIMZ_MISSING_EXIT), true),
         Verdict::Fatal {
             code: REMOTE_RIMZ_MISSING_EXIT
         }
     );
-    assert_eq!(verdict(None, true, 0, &policy), Verdict::Fatal { code: 1 });
+    assert_eq!(verdict(None, true), Verdict::Fatal { code: 1 });
 }
 
 #[test]
@@ -696,8 +684,7 @@ fn unreachable_retry_delay_uses_the_user_safety_ladder() {
 
 #[test]
 fn reconnect_state_settles_established_sessions_and_failures() {
-    let policy = ReconnectPolicy::default();
-    let mut state = ReconnectState::new(policy);
+    let mut state = ReconnectState::new();
 
     assert_eq!(
         state.settle(Some(SSH_TRANSPORT_EXIT), false),
@@ -707,30 +694,15 @@ fn reconnect_state_settles_established_sessions_and_failures() {
     );
     assert_eq!(state.consecutive_failures(), 0);
 
-    assert_eq!(
-        state.settle(Some(SSH_TRANSPORT_EXIT), true),
-        Verdict::Retry {
-            delay: Duration::from_secs(1)
-        }
-    );
+    assert_eq!(state.settle(Some(SSH_TRANSPORT_EXIT), true), Verdict::Retry);
     assert_eq!(state.consecutive_failures(), 1);
 
     assert_eq!(
         state.settle(Some(SSH_TRANSPORT_EXIT), false),
-        Verdict::Retry {
-            delay: Duration::from_secs(2)
-        }
+        Verdict::Retry
     );
     assert_eq!(state.consecutive_failures(), 2);
 
-    state.network_restored();
-    assert_eq!(state.consecutive_failures(), 0);
-    assert_eq!(
-        state.settle(Some(SSH_TRANSPORT_EXIT), false),
-        Verdict::Retry {
-            delay: Duration::from_secs(1)
-        }
-    );
     state.settle_zombie_kill();
     assert_eq!(state.consecutive_failures(), 0);
 

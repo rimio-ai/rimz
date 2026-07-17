@@ -339,8 +339,7 @@ fn http_204_probe() -> (String, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
 fn remote_web_command(env: &Env, log: &Path, port: u16) -> Command {
     let mut cmd = remote_connect_command(env, log);
     cmd.args(["--web", "--web-port", &port.to_string()])
-        .env("RIMZ_REMOTE_GATETIME_MS", "0")
-        .env("RIMZ_REMOTE_BACKOFF_MS", "1");
+        .env("RIMZ_REMOTE_GATETIME_MS", "0");
     cmd
 }
 
@@ -564,7 +563,6 @@ fn supervised_connect_restores_tty_and_resets_emulator_after_retry() {
     cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
     cmd.env("RIMZ_TEST_SSH_TTY_STATE_LOG", &tty_state_log);
     cmd.env("RIMZ_REMOTE_GATETIME_MS", "0");
-    cmd.env("RIMZ_REMOTE_BACKOFF_MS", "1");
     let (output, settings) = run_pty_command(pair, cmd);
 
     assert_eq!(main_invocation_count(&log), 2, "one retry: {output}");
@@ -683,7 +681,6 @@ fn established_link_drop_reconnects_and_notifies_once() {
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
         .env("RIMZ_REMOTE_GATETIME_MS", "20")
-        .env("RIMZ_REMOTE_BACKOFF_MS", "1")
         .env("RIMZ_NOTIFY_TEST_LOG", &notify_log)
         .bounded_output()
         .expect("run rimz remote connect --attach");
@@ -768,7 +765,6 @@ fn unreachable_endpoint_holds_until_restored_then_reconnects_immediately() {
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
-        .env("RIMZ_REMOTE_BACKOFF_MS", "60000")
         .env("RIMZ_REMOTE_DIAL_MS", "25")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -815,7 +811,6 @@ fn unreachable_endpoint_retries_at_the_hold_cap() {
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
-        .env("RIMZ_REMOTE_BACKOFF_MS", "50")
         .env("RIMZ_REMOTE_BACKOFF_CAP_MS", "200")
         .env("RIMZ_REMOTE_DIAL_MS", "25")
         .stdout(Stdio::piped())

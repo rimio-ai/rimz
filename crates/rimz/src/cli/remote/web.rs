@@ -54,7 +54,7 @@ impl RemoteTunnel {
             host,
             reconnect,
             policy,
-            reconnect_state: rimz::remote::ReconnectState::new(policy),
+            reconnect_state: rimz::remote::ReconnectState::new(),
             dial_plan,
             child: None,
             started: Instant::now(),
@@ -354,8 +354,8 @@ fn tunnel_step(verdict: rimz::remote::Verdict, reconnect: bool) -> TunnelStep {
     match verdict {
         Verdict::CleanExit => TunnelStep::Clean,
         Verdict::Fatal { code } => TunnelStep::Fatal(code),
-        Verdict::Retry { .. } if reconnect => TunnelStep::Retry,
-        Verdict::Retry { .. } => TunnelStep::Fatal(rimz::remote::SSH_TRANSPORT_EXIT),
+        Verdict::Retry if reconnect => TunnelStep::Retry,
+        Verdict::Retry => TunnelStep::Fatal(rimz::remote::SSH_TRANSPORT_EXIT),
     }
 }
 
@@ -380,9 +380,7 @@ mod tests {
 
     #[test]
     fn no_reconnect_turns_retry_into_fatal_tunnel_exit() {
-        let retry = rimz::remote::Verdict::Retry {
-            delay: Duration::from_secs(1),
-        };
+        let retry = rimz::remote::Verdict::Retry;
 
         assert_eq!(tunnel_step(retry, true), TunnelStep::Retry);
         assert_eq!(

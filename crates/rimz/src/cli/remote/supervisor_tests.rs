@@ -162,3 +162,25 @@ fn preestablished_probe_preserves_the_master_socket() {
 
     assert!(control.exists());
 }
+
+#[test]
+fn master_guard_transfer_preserves_then_cleans_up_the_control_socket() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let control = dir.path().join("master.sock");
+    std::fs::write(&control, b"live control socket").expect("write control marker");
+    let attempt = MasterAttempt {
+        child: None,
+        stderr: None,
+        control_path: control.clone(),
+        remove_control_path_on_drop: true,
+    };
+
+    let guard = attempt.into_guard();
+    assert!(
+        control.exists(),
+        "transferring ownership must preserve the live socket"
+    );
+
+    drop(guard);
+    assert!(!control.exists(), "the owning guard cleans up the socket");
+}

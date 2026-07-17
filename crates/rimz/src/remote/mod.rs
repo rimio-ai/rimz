@@ -623,8 +623,8 @@ fn display_word(word: &str) -> String {
 }
 
 /// Reconnect tuning. A session must confirm its transport or live past the
-/// gatetime to count as established; retries use an autossh-style ladder
-/// without reachability evidence and outage-age pacing with it.
+/// gatetime to count as established; retry pacing follows network state and
+/// outage age.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReconnectPolicy {
     /// How long a session must live to count as established when no probe ack
@@ -632,8 +632,6 @@ pub struct ReconnectPolicy {
     /// transport failure before any session establishes is an auth/host
     /// problem, not a drop — fatal, never a password-prompt loop.
     pub gatetime: Duration,
-    /// First retry delay; doubles per consecutive failed attempt.
-    pub backoff_base: Duration,
     /// Backoff ceiling.
     pub backoff_cap: Duration,
     /// Retry delay while the SSH endpoint remains reachable.
@@ -646,7 +644,6 @@ impl Default for ReconnectPolicy {
     fn default() -> Self {
         Self {
             gatetime: Duration::from_secs(30),
-            backoff_base: Duration::from_secs(1),
             backoff_cap: Duration::from_secs(30),
             reachable_retry: Duration::from_secs(2),
             flat_window: Duration::from_secs(3 * 60),
@@ -656,16 +653,12 @@ impl Default for ReconnectPolicy {
 
 impl ReconnectPolicy {
     /// Resolve the policy, honoring the hidden test seams
-    /// (`RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_MS`,
-    /// `RIMZ_REMOTE_BACKOFF_CAP_MS`, `RIMZ_REMOTE_REACHABLE_RETRY_MS`,
-    /// `RIMZ_REMOTE_FLAT_WINDOW_MS`).
+    /// (`RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_CAP_MS`,
+    /// `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`).
     pub fn from_env() -> Self {
         let mut policy = Self::default();
         if let Some(gatetime) = env_ms("RIMZ_REMOTE_GATETIME_MS") {
             policy.gatetime = gatetime;
-        }
-        if let Some(base) = env_ms("RIMZ_REMOTE_BACKOFF_MS") {
-            policy.backoff_base = base;
         }
         if let Some(cap) = env_ms("RIMZ_REMOTE_BACKOFF_CAP_MS") {
             policy.backoff_cap = cap;
@@ -753,50 +746,31 @@ pub enum Verdict {
         /// The exit code to report.
         code: i32,
     },
-    /// The link dropped on an established session — reconnect after `delay`.
-    Retry {
-        /// How long to sleep before the next attempt.
-        delay: Duration,
-    },
+    /// The link dropped on an established session — enter background recovery.
+    Retry,
 }
 
 /// Classify a finished ssh session. Pure: the caller measures `established`
-/// (any session confirmed its transport or lived past the gatetime) and counts
-/// consecutive failed attempts since the last established session.
-pub fn verdict(
-    exit_code: Option<i32>,
-    established: bool,
-    consecutive_failures: u32,
-    policy: &ReconnectPolicy,
-) -> Verdict {
+/// from a confirmed transport or the gatetime fallback.
+pub fn verdict(exit_code: Option<i32>, established: bool) -> Verdict {
     match exit_code {
         Some(0) => Verdict::CleanExit,
-        Some(SSH_TRANSPORT_EXIT) if established => Verdict::Retry {
-            delay: backoff(
-                consecutive_failures,
-                policy.backoff_base,
-                policy.backoff_cap,
-            ),
-        },
+        Some(SSH_TRANSPORT_EXIT) if established => Verdict::Retry,
         Some(code) => Verdict::Fatal { code },
         // Signal-death: something killed ssh deliberately; don't fight it.
         None => Verdict::Fatal { code: 1 },
     }
 }
 
+#[derive(Default)]
 pub struct ReconnectState {
-    policy: ReconnectPolicy,
     established: bool,
     consecutive_failures: u32,
 }
 
 impl ReconnectState {
-    pub fn new(policy: ReconnectPolicy) -> Self {
-        Self {
-            policy,
-            established: false,
-            consecutive_failures: 0,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Settle one finished ssh session: a session that confirmed its transport
@@ -807,13 +781,8 @@ impl ReconnectState {
             self.established = true;
             self.consecutive_failures = 0;
         }
-        let verdict = verdict(
-            exit_code,
-            self.established,
-            self.consecutive_failures,
-            &self.policy,
-        );
-        if matches!(verdict, Verdict::Retry { .. }) {
+        let verdict = verdict(exit_code, self.established);
+        if matches!(verdict, Verdict::Retry) {
             self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         }
         verdict
@@ -821,11 +790,6 @@ impl ReconnectState {
 
     pub fn consecutive_failures(&self) -> u32 {
         self.consecutive_failures
-    }
-
-    /// Start a fresh backoff ladder after a confirmed network transition.
-    pub fn network_restored(&mut self) {
-        self.consecutive_failures = 0;
     }
 
     /// Settle an intentional zombie-transport kill without classifying its

@@ -73,7 +73,7 @@ pub(super) fn supervise_remote(
     use rimz::remote::{ReconnectPolicy, ReconnectState, Verdict};
 
     let policy = ReconnectPolicy::from_env();
-    let mut reconnect = ReconnectState::new(policy);
+    let mut reconnect = ReconnectState::new();
     let target = plan.target();
     let host = target.host_display();
     let dial_plan = resolve_dial_plan(target.ssh_destination().as_str());
@@ -148,7 +148,7 @@ pub(super) fn supervise_remote(
                 guard.reset_emulator();
                 bail!("{}", fatal_session_message(code, host, setup_hint))
             }
-            Verdict::Retry { .. } => {
+            Verdict::Retry => {
                 guard.reset_emulator();
                 let mut ui = OutageUi::auto(host);
                 let outage = outage.get_or_insert_with(|| {
@@ -611,6 +611,7 @@ struct MasterAttempt {
     child: Option<Child>,
     stderr: Option<std::thread::JoinHandle<String>>,
     control_path: PathBuf,
+    remove_control_path_on_drop: bool,
 }
 
 impl MasterAttempt {
@@ -632,6 +633,7 @@ impl MasterAttempt {
             child: Some(child),
             stderr,
             control_path,
+            remove_control_path_on_drop: true,
         })
     }
 
@@ -644,6 +646,7 @@ impl MasterAttempt {
             let _ = child.wait();
         }
         remove_control_path(&self.control_path);
+        self.remove_control_path_on_drop = false;
         self.stderr
             .take()
             .and_then(|reader| reader.join().ok())
@@ -651,11 +654,13 @@ impl MasterAttempt {
     }
 
     fn into_guard(mut self) -> MasterGuard {
-        MasterGuard {
+        let guard = MasterGuard {
             child: self.child.take(),
             stderr: self.stderr.take(),
             control_path: self.control_path.clone(),
-        }
+        };
+        self.remove_control_path_on_drop = false;
+        guard
     }
 
     fn stop(&mut self) {
@@ -667,7 +672,9 @@ impl MasterAttempt {
         if let Some(reader) = self.stderr.take() {
             let _ = reader.join();
         }
-        remove_control_path(&self.control_path);
+        if self.remove_control_path_on_drop {
+            remove_control_path(&self.control_path);
+        }
     }
 }
 
