@@ -320,16 +320,19 @@ fn remove_worktree(
 ) -> Result<()> {
     let store = open_store(workspace)?;
     let removed = rimz::worktree::remove(&workspace.project_root, config, &name, force)?;
-    store
+    // Both store cleanups get a chance after the irreversible Git removal.
+    let retirement = store
         .retire_worktree_sessions(removed.removed_path(), Some(removed.branch()))
-        .context("retiring sessions for removed worktree")?;
-    store
+        .context("retiring sessions for removed worktree");
+    let archival = store
         .archive_channel_messages(
             removed.worktree_name(),
             rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
             &workspace.session_name,
         )
-        .context("archiving messages for removed worktree channel")?;
+        .context("archiving messages for removed worktree channel");
+    retirement?;
+    archival?;
     #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
     {
         println!("removed {name}");

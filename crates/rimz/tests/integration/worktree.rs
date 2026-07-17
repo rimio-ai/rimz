@@ -280,6 +280,21 @@ fn worktree_remove_archives_messages_for_removed_channel() {
         .args(["worktree", "new", "demo", "--branch", "scratch"])
         .assert()
         .success();
+    let worktree = env.home_root.join("project-worktrees").join("demo");
+    let ghost_id = AgentSessionId::from("sess-removed-ghost");
+    let mut ghost =
+        AgentLifecycleObservation::new(Some(ghost_id.clone()), LifecycleSignal::Registered);
+    ghost.worktree_path = Some(worktree.display().to_string());
+    ghost.worktree_branch = Some("scratch".to_owned());
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionStart",
+            &ghost,
+        ))
+        .expect("append stale worktree session");
     let message_id = queue_channel_message(&env, "demo", "old work");
 
     env.rimz()
@@ -297,6 +312,25 @@ fn worktree_remove_archives_messages_for_removed_channel() {
         })
         .expect("message");
     assert_eq!(archived.params_value()["reason"], "worktree removed");
+    let store = env.store();
+    let audit = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection");
+    assert!(
+        audit
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == ghost_id && agent.ended_at.is_some())
+    );
+    let runtime = store
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .expect("runtime projection");
+    assert!(
+        runtime
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != ghost_id)
+    );
 }
 
 #[test]
