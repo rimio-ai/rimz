@@ -34,6 +34,8 @@ OpenSSH keepalives stay at `ServerAliveInterval=5` and `ServerAliveCountMax=3`, 
 
 Established transport drops reconnect with capped exponential backoff (`1s` to `30s`, with `RIMZ_REMOTE_BACKOFF_MS` as the test seam) while the SSH endpoint remains reachable. Clean exit `0` returns to the caller. Missing remote `rimz`, remote room failures, and signal death are fatal.
 
+The supervisor snapshots local termios at connect, repairs a leftover raw tty at entry, and restores the snapshot after every SSH session. An unclean end also resets emulator modes because `ssh -t` mirrors local tty modes onto the remote pty, while a SIGKILLed transport such as the zombie replacement cannot restore termios or terminal-emulator state itself.
+
 At supervisor startup, RimZ runs `ssh -G -- <destination>` once and reads the effective `hostname` and `port`. A configured `ProxyJump` or `ProxyCommand` opts out because a direct dial would not test the path SSH uses; a failed query or unparseable output also keeps the timed reconnect policy unchanged. DNS resolution stays per-dial so a network change can supply a fresh address.
 
 During each retry wait, RimZ quietly dials the effective SSH endpoint every second with a two-second TCP timeout. An unreachable endpoint holds SSH attempts to one per backoff cap while the cheap dials continue; any unreachable-to-reachable transition attaches immediately and resets the consecutive-failure counter. A reachable endpoint honors the full exponential backoff, keeping the ladder focused on reachable-but-failing servers.

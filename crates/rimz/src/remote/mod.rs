@@ -14,6 +14,7 @@ pub mod bandwidth;
 pub mod link;
 pub mod reachability;
 pub mod setup;
+pub mod tty;
 pub mod web;
 
 use std::path::Path;

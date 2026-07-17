@@ -44,6 +44,7 @@ pub(super) fn supervise_remote(
     let stop = AtomicBool::new(false);
     let mut first_attempt = true;
     report_remote_connect(host, true);
+    let guard = super::tty::TtyGuard::acquire();
     loop {
         let (events_tx, events_rx) = mpsc::channel();
         let probe = ProbeHandle::start(target.clone(), control_path.to_path_buf(), events_tx);
@@ -61,8 +62,10 @@ pub(super) fn supervise_remote(
             &mut session_link,
             dial_plan.as_ref(),
         )?;
+        guard.restore();
         drop(probe);
         if outcome.killed_zombie {
+            guard.reset_emulator();
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
@@ -72,8 +75,12 @@ pub(super) fn supervise_remote(
         }
         match reconnect.settle(outcome.status.code(), outcome.established) {
             Verdict::CleanExit => return Ok(()),
-            Verdict::Fatal { code } => bail!("{}", fatal_session_message(code, host, setup_hint)),
+            Verdict::Fatal { code } => {
+                guard.reset_emulator();
+                bail!("{}", fatal_session_message(code, host, setup_hint))
+            }
             Verdict::Retry { delay } => {
+                guard.reset_emulator();
                 let consecutive_failures = reconnect.consecutive_failures();
                 let mut stderr = std::io::stderr().lock();
                 let _ = writeln!(

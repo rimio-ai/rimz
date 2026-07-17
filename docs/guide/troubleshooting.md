@@ -168,6 +168,10 @@ After an upgrade, `rimz start` and `rimz attach` also warn when a live room stil
 
 A Ghostty tab exposed to mouse-mode churn from an older RimZ build can wedge into converting wheel ticks to arrow keys. Run `reset` once at a shell prompt or open a new Ghostty tab; current RimZ keeps the outer mouse mode constant so the state does not recur.
 
+### Garbled terminal after a remote link death
+
+Staircased lines or Enter and Ctrl-C echoing as `^M` and `^C` mean a dead SSH link left the local terminal in raw mode. Current RimZ repairs the terminal automatically on the next `rimz remote connect`; on older builds, run `reset` once at a shell prompt.
+
 ## Notifications don't fire
 
 RimZ raises a desktop notification by writing a terminal notification escape (OSC 777) from the sidebar; your terminal turns it into the OS banner, even over SSH. When no banner appears, check in order:

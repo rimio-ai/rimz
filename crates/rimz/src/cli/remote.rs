@@ -21,6 +21,7 @@ mod link_stats;
 mod list;
 mod setup;
 mod supervisor;
+mod tty;
 mod web;
 
 #[derive(Debug, Args)]
@@ -407,6 +408,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             } else {
                 supervisor::report_remote_connect(plan.target().host_display(), false);
                 let plain_spec = plan.initial().plain();
+                tty::sanitize_local_tty();
                 exec_attach_command(&plain_spec)
             }
         }
