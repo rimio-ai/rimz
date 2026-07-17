@@ -25,7 +25,7 @@ pub(super) fn write_heartbeat(
     .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
 }
 
-pub(super) fn sidebar_socket_path(
+pub(crate) fn sidebar_socket_path(
     runtime: &RuntimePaths,
     instance_id: &SidebarInstanceId,
 ) -> PathBuf {

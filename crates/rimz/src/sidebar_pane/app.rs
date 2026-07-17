@@ -56,7 +56,7 @@ mod paint;
 mod reload;
 mod remind;
 mod selection;
-mod socket;
+pub(crate) mod socket;
 mod state;
 mod timing;
 mod tmux_watch;

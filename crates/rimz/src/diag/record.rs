@@ -303,6 +303,10 @@ pub enum DiagEvent {
         exit_code: Option<i32>,
         stderr_excerpt: String,
     },
+    RendererOrphanReaped {
+        pane_id: String,
+        worker_pid: i32,
+    },
     RendererExit {
         cause: RendererExitCause,
     },
@@ -343,6 +347,7 @@ impl DiagEvent {
                 ..
             }
             | Self::TopologyWriteRejected { .. }
+            | Self::RendererOrphanReaped { .. }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
@@ -421,6 +426,7 @@ impl DiagEvent {
             Self::TopologyWriteRejected { .. } => "topology_write_rejected",
             Self::RendererPanic { .. } => "renderer_panic",
             Self::RendererSignalDeath { .. } => "renderer_signal_death",
+            Self::RendererOrphanReaped { .. } => "renderer_orphan_reaped",
             Self::RendererExit { .. } => "renderer_exit",
             Self::FrameAnomaly { .. } => "frame_anomaly",
         }
@@ -564,6 +570,9 @@ impl DiagEvent {
                 signal, exit_code, ..
             } => {
                 format!("{}:{signal:?}:{exit_code:?}", self.kind_name())
+            }
+            Self::RendererOrphanReaped { pane_id, .. } => {
+                format!("{}:{pane_id}", self.kind_name())
             }
             Self::RendererExit { cause } => format!("{}:{}", self.kind_name(), cause.as_str()),
         }

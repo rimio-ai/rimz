@@ -30,8 +30,15 @@ const TEST_EXIT_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_EXIT_FILE";
 const TEST_REAP_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS";
 #[cfg(feature = "testkit")]
 const TEST_STRAY_PID_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FILE";
+#[cfg(feature = "testkit")]
+const TEST_PANE_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS";
+#[cfg(feature = "testkit")]
+const TEST_PANE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE";
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
 const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const PANE_PROBE_INTERVAL: Duration = Duration::from_secs(60);
+const PANE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const PANE_GONE_STRIKES: u8 = 3;
 pub const RELOAD_EXIT_CODE: i32 = 100;
 const PANIC_EXIT_CODE: i32 = 101;
 pub const RESPAWN_EXIT_CODE: i32 = 102;
@@ -102,12 +109,20 @@ pub fn run(config: ServeConfig) -> Result<()> {
             .stderr
             .take()
             .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
-        let worker = wait_for_worker_and_reap_strays(worker_pid);
+        let worker =
+            wait_for_worker_and_reap_strays(worker_pid, PaneWatchdog::from_config(&config));
         drop(child);
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
         }
-        let worker = worker?;
+        let worker = match worker? {
+            WaitOutcome::Worker(worker) => worker,
+            WaitOutcome::OrphanReaped => {
+                record_orphan_reap(&config, worker_pid.as_raw());
+                remove_orphan_runtime_files(&config);
+                return Ok(());
+            }
+        };
 
         match supervise_action(worker.exit_code, worker.signal) {
             SuperviseAction::ReloadReexec => {
@@ -216,28 +231,129 @@ struct WorkerTermination {
     exit_code: Option<i32>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum WaitOutcome {
+    Worker(WorkerTermination),
+    OrphanReaped,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaneProbe {
+    Present,
+    Absent,
+    Unknown,
+}
+
+#[derive(Debug)]
+struct PaneWatchdog {
+    pane: crate::ids::PaneId,
+    mux: crate::ids::MuxName,
+    session_name: String,
+    workspace_id: crate::ids::WorkspaceId,
+    next_probe: Instant,
+    strikes: u8,
+}
+
+impl PaneWatchdog {
+    fn from_config(config: &ServeConfig) -> Option<Self> {
+        Some(Self {
+            pane: config.own_pane.clone()?,
+            mux: config.mux,
+            session_name: config.session_name.clone(),
+            workspace_id: config.workspace_id.clone(),
+            next_probe: Instant::now() + pane_probe_interval(),
+            strikes: 0,
+        })
+    }
+
+    fn observe(&mut self, probe: PaneProbe) -> bool {
+        match probe {
+            PaneProbe::Present => self.strikes = 0,
+            PaneProbe::Absent => self.strikes = self.strikes.saturating_add(1),
+            PaneProbe::Unknown => {}
+        }
+        self.strikes >= PANE_GONE_STRIKES
+    }
+
+    fn probe_if_due(&mut self, now: Instant) -> bool {
+        if now < self.next_probe {
+            return false;
+        }
+        self.next_probe = now + pane_probe_interval();
+        let probe = self.probe();
+        self.observe(probe)
+    }
+
+    fn probe(&self) -> PaneProbe {
+        #[cfg(feature = "testkit")]
+        if let Some(probe) = forced_pane_probe() {
+            return probe;
+        }
+
+        let options = crate::mux::PaneListOptions {
+            session_name: Some(self.session_name.clone()),
+            workspace_id: Some(self.workspace_id.clone()),
+            command_timeout: Some(PANE_PROBE_TIMEOUT),
+            ..Default::default()
+        };
+        match crate::mux::backend_for(self.mux).list_panes(options) {
+            Ok(listing) => {
+                if listing.panes.iter().any(|pane| pane.pane_id == self.pane) {
+                    PaneProbe::Present
+                } else {
+                    PaneProbe::Absent
+                }
+            }
+            Err(err) => {
+                debug!(
+                    pane = %self.pane,
+                    session = %self.session_name,
+                    error = %err,
+                    "sidebar supervisor pane-liveness probe unavailable",
+                );
+                PaneProbe::Unknown
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 fn worker_pid(child: &Child) -> nix::unistd::Pid {
     nix::unistd::Pid::from_raw(child.id() as i32)
 }
 
 #[cfg(unix)]
-fn wait_for_worker_and_reap_strays(worker_pid: nix::unistd::Pid) -> Result<WorkerTermination> {
+fn wait_for_worker_and_reap_strays(
+    worker_pid: nix::unistd::Pid,
+    mut watchdog: Option<PaneWatchdog>,
+) -> Result<WaitOutcome> {
+    use nix::sys::signal::{Signal, kill};
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
 
+    let mut orphan_reap_pending = false;
     loop {
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::Exited(pid, status)) if pid == worker_pid => {
-                return Ok(WorkerTermination {
+                let worker = WorkerTermination {
                     exit_code: Some(status),
                     signal: None,
+                };
+                return Ok(if orphan_reap_pending {
+                    WaitOutcome::OrphanReaped
+                } else {
+                    WaitOutcome::Worker(worker)
                 });
             }
             Ok(WaitStatus::Signaled(pid, signal, _)) if pid == worker_pid => {
-                return Ok(WorkerTermination {
+                let worker = WorkerTermination {
                     exit_code: None,
                     signal: Some(signal as i32),
+                };
+                return Ok(if orphan_reap_pending {
+                    WaitOutcome::OrphanReaped
+                } else {
+                    WaitOutcome::Worker(worker)
                 });
             }
             Ok(WaitStatus::Exited(pid, status)) => {
@@ -253,11 +369,29 @@ fn wait_for_worker_and_reap_strays(worker_pid: nix::unistd::Pid) -> Result<Worke
                     "reaped stray sidebar supervisor child",
                 );
             }
-            Ok(WaitStatus::StillAlive) => thread::sleep(reap_poll_interval()),
+            Ok(WaitStatus::StillAlive) => {
+                if !orphan_reap_pending
+                    && watchdog
+                        .as_mut()
+                        .is_some_and(|watchdog| watchdog.probe_if_due(Instant::now()))
+                {
+                    match kill(worker_pid, Signal::SIGKILL) {
+                        Ok(()) | Err(nix::errno::Errno::ESRCH) => orphan_reap_pending = true,
+                        Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
+                    }
+                }
+                thread::sleep(reap_poll_interval());
+            }
             Ok(status) => {
                 debug!(status = ?status, "observed non-terminal child status");
             }
-            Err(nix::errno::Errno::ECHILD) => return Ok(WorkerTermination::default()),
+            Err(nix::errno::Errno::ECHILD) => {
+                return Ok(if orphan_reap_pending {
+                    WaitOutcome::OrphanReaped
+                } else {
+                    WaitOutcome::Worker(WorkerTermination::default())
+                });
+            }
             Err(nix::errno::Errno::EINTR) => continue,
             Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
         }
@@ -286,6 +420,44 @@ fn record_signal_death(
         stderr_excerpt: stderr_excerpt.clone(),
     });
     report_sentry_signal_death(signal, exit_code, &stderr_excerpt);
+}
+
+fn record_orphan_reap(config: &ServeConfig, worker_pid: i32) {
+    crate::diag::DiagSink::for_workspace(
+        config.workspace_id.clone(),
+        config.session_name.clone(),
+        Some(config.instance_id.clone()),
+    )
+    .emit(DiagEvent::RendererOrphanReaped {
+        pane_id: config
+            .own_pane
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        worker_pid,
+    });
+}
+
+fn remove_orphan_runtime_files(config: &ServeConfig) {
+    let runtime = match crate::RuntimePaths::for_workspace(config.workspace_id.clone()) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            debug!(error = %err, "sidebar supervisor orphan runtime cleanup unavailable");
+            return;
+        }
+    };
+    for path in [
+        runtime.sidebar_heartbeat_path(&config.instance_id),
+        crate::sidebar_pane::app::socket::sidebar_socket_path(&runtime, &config.instance_id),
+    ] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                debug!(path = %path.display(), error = %err, "sidebar supervisor orphan runtime cleanup failed");
+            }
+        }
+    }
 }
 
 #[cfg(feature = "sentry")]
@@ -381,6 +553,35 @@ fn reap_poll_interval() -> Duration {
         .and_then(|value| value.parse::<u64>().ok())
         .map(Duration::from_millis)
         .unwrap_or(REAP_POLL_INTERVAL)
+}
+
+#[cfg(feature = "testkit")]
+fn pane_probe_interval() -> Duration {
+    let Some(value) =
+        env::var_os(TEST_PANE_PROBE_INTERVAL_MS_ENV).filter(|value| !value.is_empty())
+    else {
+        return PANE_PROBE_INTERVAL;
+    };
+    value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(PANE_PROBE_INTERVAL)
+}
+
+#[cfg(not(feature = "testkit"))]
+fn pane_probe_interval() -> Duration {
+    PANE_PROBE_INTERVAL
+}
+
+#[cfg(feature = "testkit")]
+fn forced_pane_probe() -> Option<PaneProbe> {
+    match env::var(TEST_PANE_PROBE_ENV).ok().as_deref() {
+        Some("present") => Some(PaneProbe::Present),
+        Some("absent") => Some(PaneProbe::Absent),
+        Some("unknown") => Some(PaneProbe::Unknown),
+        _ => None,
+    }
 }
 
 #[cfg(not(feature = "testkit"))]
@@ -508,6 +709,27 @@ mod tests {
             respawn_backoff(Duration::from_secs(32), RESPAWN_STABLE_RUN),
             (Duration::from_secs(1), Duration::from_secs(2))
         );
+    }
+
+    #[test]
+    fn pane_watchdog_requires_three_fresh_absences() {
+        let mut watchdog = PaneWatchdog {
+            pane: crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
+            mux: crate::ids::MuxName::Tmux,
+            session_name: "rimz-test".to_owned(),
+            workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/repo")),
+            next_probe: Instant::now(),
+            strikes: 0,
+        };
+
+        assert!(!watchdog.observe(PaneProbe::Absent));
+        assert!(!watchdog.observe(PaneProbe::Unknown));
+        assert_eq!(watchdog.strikes, 1);
+        assert!(!watchdog.observe(PaneProbe::Present));
+        assert_eq!(watchdog.strikes, 0);
+        assert!(!watchdog.observe(PaneProbe::Absent));
+        assert!(!watchdog.observe(PaneProbe::Absent));
+        assert!(watchdog.observe(PaneProbe::Absent));
     }
 
     #[test]
