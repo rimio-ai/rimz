@@ -187,6 +187,8 @@ fn migrate_frozen_order(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {
 }
 
 fn admit_new_items(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {
+    // Held and producer order can disagree mid-hold; never walk the cursor
+    // backward past a known producer predecessor.
     let mut cursor = 0;
     for group in &current.worktree_groups {
         if let Some(position) = frozen.groups.iter().position(|key| key == &group.key) {

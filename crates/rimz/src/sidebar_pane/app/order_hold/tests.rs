@@ -278,6 +278,26 @@ fn reorder_pipeline_splices_unknowns_at_ranked_positions() {
 }
 
 #[test]
+fn mid_hold_group_churn_keeps_new_last_ranked_group_last() {
+    let mut current = snapshot_with_groups(vec![
+        group("b", vec![row("b1", "terminal_2")]),
+        group("a", vec![row("a1", "terminal_1")]),
+        group("new", vec![row("new1", "terminal_3")]),
+    ]);
+    let mut frozen = FrozenOrder {
+        groups: vec!["a".to_owned(), "b".to_owned()],
+        rows: Vec::new(),
+        visible: HashSet::new(),
+    };
+
+    admit_new_items(&current, &mut frozen);
+    reorder_to_frozen(&mut current, &frozen);
+
+    assert_eq!(group_keys(&current), vec!["a", "b", "new"]);
+    assert_eq!(frozen.groups, vec!["a", "b", "new"]);
+}
+
+#[test]
 fn new_row_splices_between_ranked_neighbors() {
     let mut current = snapshot_with_groups(vec![group(
         "a",
