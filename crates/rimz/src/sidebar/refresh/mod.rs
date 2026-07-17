@@ -105,12 +105,6 @@ pub fn refresh_heavy_lanes(
 
     refresh_live_sessions(base, runtime);
     refresh_account_usage(&panels, runtime);
-    let pr_states = produce_pr_states(base, runtime);
-    let lanes = RefreshedLanes {
-        spending,
-        accounts,
-        pr_states,
-    };
     let resume_messages = read_auto_continue_resume_messages(
         Some(state_messages_dir),
         &config.resume,
@@ -124,9 +118,14 @@ pub fn refresh_heavy_lanes(
         base.now,
     );
     let mut budget_snapshot = base.clone();
-    apply_live_day_spend(&mut budget_snapshot, &lanes.spending.workspace);
+    apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
     crate::harness::budget::enforce(&budget_snapshot, runtime, state_messages_dir, config);
     refresh_diff_stats_for(base, runtime, config.sidebar.trunk.as_deref());
+    let pr_states = produce_pr_states(base, runtime);
 
-    lanes
+    RefreshedLanes {
+        spending,
+        accounts,
+        pr_states,
+    }
 }

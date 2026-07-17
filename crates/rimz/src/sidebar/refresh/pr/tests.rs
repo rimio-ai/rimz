@@ -184,13 +184,35 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         assigned
             .transitions
             .iter()
-            .map(|target| target.path.as_str())
+            .map(|(target, number)| (target.path.as_str(), *number))
             .collect::<Vec<_>>(),
         vec![
-            "/repo/merged-pending",
-            "/repo/merged-legacy",
-            "/repo/transition"
+            ("/repo/merged-pending", Some(79)),
+            ("/repo/merged-legacy", Some(78)),
+            ("/repo/transition", Some(81)),
         ]
+    );
+}
+
+#[test]
+fn transition_args_prefer_cached_pr_numbers() {
+    assert_eq!(
+        github_transition_args("feature", Some(42)),
+        [
+            "pr",
+            "view",
+            "42",
+            "--json",
+            "number,state,mergeCommit,statusCheckRollup",
+        ]
+    );
+    assert_eq!(
+        github_transition_args("feature", None)[..4],
+        ["pr", "list", "--head", "feature"]
+    );
+    assert_eq!(
+        tea_pr_detail_args(42, Some("org/repo")),
+        ["pr", "42", "--output", "json", "--repo", "org/repo"]
     );
 }
 

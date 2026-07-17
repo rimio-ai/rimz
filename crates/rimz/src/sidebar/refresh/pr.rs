@@ -494,7 +494,7 @@ fn reconcile_target_bookkeeping(
 
 struct AssignedStates {
     states: BTreeMap<String, PrLink>,
-    transitions: Vec<Target>,
+    transitions: Vec<(Target, Option<u64>)>,
 }
 
 fn assign_states(
@@ -526,7 +526,7 @@ fn assign_states(
                     states.insert(target.path.clone(), link);
                 }
                 WorktreePrState::Merged | WorktreePrState::Open => {
-                    transitions.push(target.clone());
+                    transitions.push((target.clone(), link.number));
                 }
                 WorktreePrState::Closed => {
                     states.insert(target.path.clone(), link);
@@ -644,8 +644,8 @@ fn probe_repo_group(
         }
     }
     let mut ok = true;
-    for target in assigned.transitions {
-        let result = probe_transition(&target);
+    for (target, number) in assigned.transitions {
+        let result = probe_transition(&target, number);
         if !result.ok {
             ok = false;
             if let Some(link) = prior.get(&target.path).cloned() {
@@ -718,60 +718,63 @@ struct ProbeState {
     ok: bool,
 }
 
-fn probe_transition(target: &Target) -> ProbeState {
+fn probe_transition(target: &Target, number: Option<u64>) -> ProbeState {
     match target.forge_cli {
-        ForgeCli::Gh => probe_github(target),
-        ForgeCli::Tea => probe_tea(&target.worktree, &target.branch, &target.remote),
+        ForgeCli::Gh => probe_github(target, number),
+        ForgeCli::Tea => probe_tea(&target.worktree, &target.branch, &target.remote, number),
     }
 }
 
-fn probe_github(target: &Target) -> ProbeState {
-    let Some(output) = command_stdout(
-        &target.worktree,
-        "gh",
-        &[
-            "pr",
-            "list",
-            "--head",
-            &target.branch,
-            "--state",
-            "all",
-            "--json",
-            "number,state,mergeCommit,statusCheckRollup",
-        ],
-    ) else {
+fn github_transition_args(branch: &str, number: Option<u64>) -> Vec<String> {
+    if let Some(number) = number {
+        return vec![
+            "pr".to_owned(),
+            "view".to_owned(),
+            number.to_string(),
+            "--json".to_owned(),
+            "number,state,mergeCommit,statusCheckRollup".to_owned(),
+        ];
+    }
+    vec![
+        "pr".to_owned(),
+        "list".to_owned(),
+        "--head".to_owned(),
+        branch.to_owned(),
+        "--state".to_owned(),
+        "all".to_owned(),
+        "--json".to_owned(),
+        "number,state,mergeCommit,statusCheckRollup".to_owned(),
+    ]
+}
+
+fn probe_github(target: &Target, number: Option<u64>) -> ProbeState {
+    if number.is_some() {
+        let args = github_transition_args(&target.branch, number);
+        let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        if let Some(output) = command_stdout(&target.worktree, "gh", &refs) {
+            match forge::parse_gh_pr_detail_json(&output) {
+                Ok(Some(candidate)) => return github_candidate_state(target, candidate),
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::debug!(error = %err, "github PR detail parse failed");
+                }
+            }
+        }
+    }
+    let args = github_transition_args(&target.branch, None);
+    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let Some(output) = command_stdout(&target.worktree, "gh", &refs) else {
         return ProbeState {
             state: None,
             ok: false,
         };
     };
     match forge::parse_gh_pr_state_json(&output) {
-        Ok(candidate) => {
-            let state = candidate.map(|candidate| {
-                let ci = if candidate.state == WorktreePrState::Merged {
-                    candidate
-                        .merge_sha
-                        .as_deref()
-                        .and_then(|sha| {
-                            target.repo_slug.as_deref().and_then(|repo_slug| {
-                                probe_gh_commit_ci(&target.worktree, repo_slug, sha)
-                            })
-                        })
-                        .or(candidate.ci)
-                } else if candidate.state == WorktreePrState::Open {
-                    candidate.ci
-                } else {
-                    None
-                };
-                PrLink {
-                    state: candidate.state,
-                    number: Some(candidate.number),
-                    ci,
-                    merge_sha: candidate.merge_sha,
-                }
-            });
-            ProbeState { state, ok: true }
-        }
+        Ok(Some(candidate)) => github_candidate_state(target, candidate),
+        Ok(None) => ProbeState {
+            state: None,
+            ok: true,
+        },
         Err(err) => {
             tracing::debug!(error = %err, "github PR state parse failed");
             ProbeState {
@@ -779,6 +782,34 @@ fn probe_github(target: &Target) -> ProbeState {
                 ok: false,
             }
         }
+    }
+}
+
+fn github_candidate_state(target: &Target, candidate: forge::PrCandidate) -> ProbeState {
+    let ci = if candidate.state == WorktreePrState::Merged {
+        candidate
+            .merge_sha
+            .as_deref()
+            .and_then(|sha| {
+                target
+                    .repo_slug
+                    .as_deref()
+                    .and_then(|repo_slug| probe_gh_commit_ci(&target.worktree, repo_slug, sha))
+            })
+            .or(candidate.ci)
+    } else if candidate.state == WorktreePrState::Open {
+        candidate.ci
+    } else {
+        None
+    };
+    ProbeState {
+        state: Some(PrLink {
+            state: candidate.state,
+            number: Some(candidate.number),
+            ci,
+            merge_sha: candidate.merge_sha,
+        }),
+        ok: true,
     }
 }
 
@@ -811,8 +842,29 @@ fn probe_gh_commit_ci(worktree: &Path, repo_slug: &str, sha: &str) -> Option<Wor
     forge::worst_ci(checks, status)
 }
 
-fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
+fn tea_pr_detail_args(number: u64, repo: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "pr".to_owned(),
+        number.to_string(),
+        "--output".to_owned(),
+        "json".to_owned(),
+    ];
+    if let Some(repo) = repo {
+        args.extend(["--repo".to_owned(), repo.to_owned()]);
+    }
+    args
+}
+
+fn probe_tea(worktree: &Path, branch: &str, remote: &str, prior_number: Option<u64>) -> ProbeState {
     let repo = forge::remote_repo_slug(remote);
+    if let Some(number) = prior_number
+        && let Some(link) = probe_tea_detail(worktree, repo.as_deref(), number)
+    {
+        return ProbeState {
+            state: Some(link),
+            ok: true,
+        };
+    }
     let list_args = forge::tea_pr_list_args("all", repo.as_deref());
     let Some(output) = command_stdout(worktree, "tea", &list_args) else {
         return ProbeState {
@@ -837,43 +889,13 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
         };
     };
     if candidate.state == WorktreePrState::Closed {
-        let number = candidate.number.to_string();
-        let mut detail_args = vec!["pr", number.as_str(), "--output", "json"];
-        if let Some(repo) = repo.as_deref() {
-            detail_args.extend_from_slice(&["--repo", repo]);
-        }
         // `tea pr list` omits merged metadata; the detail object carries
         // `merged`/`merged_at` so closed candidates can become merged.
-        if let Some(output) = command_stdout(worktree, "tea", &detail_args)
-            && let Ok(detail) = forge::parse_tea_pr_detail_json(&output)
-            && detail.state == Some(WorktreePrState::Merged)
+        if let Some(link) = probe_tea_detail(worktree, repo.as_deref(), candidate.number)
+            && link.state == WorktreePrState::Merged
         {
-            let merge_sha = detail
-                .merged_sha
-                .clone()
-                .or_else(|| detail.head_sha.clone());
-            let ci = repo.as_deref().and_then(|repo_slug| {
-                detail
-                    .merged_sha
-                    .as_deref()
-                    .and_then(|sha| probe_tea_ci(worktree, repo_slug, sha))
-                    .or_else(|| {
-                        detail.head_sha.as_deref().and_then(|head_sha| {
-                            if detail.merged_sha.as_deref() == Some(head_sha) {
-                                None
-                            } else {
-                                probe_tea_ci(worktree, repo_slug, head_sha)
-                            }
-                        })
-                    })
-            });
             return ProbeState {
-                state: Some(PrLink {
-                    state: WorktreePrState::Merged,
-                    number: Some(candidate.number),
-                    ci,
-                    merge_sha,
-                }),
+                state: Some(link),
                 ok: true,
             };
         }
@@ -887,6 +909,47 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
         }),
         ok: true,
     }
+}
+
+fn probe_tea_detail(worktree: &Path, repo: Option<&str>, number: u64) -> Option<PrLink> {
+    let detail_args = tea_pr_detail_args(number, repo);
+    let refs = detail_args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = command_stdout(worktree, "tea", &refs)?;
+    let detail = forge::parse_tea_pr_detail_json(&output).ok()?;
+    let state = detail.state?;
+    let merge_sha = (state == WorktreePrState::Merged)
+        .then(|| {
+            detail
+                .merged_sha
+                .clone()
+                .or_else(|| detail.head_sha.clone())
+        })
+        .flatten();
+    let ci = (state == WorktreePrState::Merged)
+        .then(|| {
+            repo.and_then(|repo_slug| {
+                detail
+                    .merged_sha
+                    .as_deref()
+                    .and_then(|sha| probe_tea_ci(worktree, repo_slug, sha))
+                    .or_else(|| {
+                        detail.head_sha.as_deref().and_then(|head_sha| {
+                            if detail.merged_sha.as_deref() == Some(head_sha) {
+                                None
+                            } else {
+                                probe_tea_ci(worktree, repo_slug, head_sha)
+                            }
+                        })
+                    })
+            })
+        })
+        .flatten();
+    Some(PrLink {
+        state,
+        number: Some(number),
+        ci,
+        merge_sha,
+    })
 }
 
 fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<WorktreePrCi> {
