@@ -392,15 +392,15 @@ mod tests {
 
         let copilot = agent_cells(&matrix, "copilot");
         assert_eq!(count(&copilot, MatrixCellState::Ok), 7);
-        assert_eq!(count(&copilot, MatrixCellState::Partial), 4);
-        assert_eq!(count(&copilot, MatrixCellState::Absent), 5);
+        assert_eq!(count(&copilot, MatrixCellState::Partial), 5);
+        assert_eq!(count(&copilot, MatrixCellState::Absent), 4);
         assert_eq!(
             agent_labels(&matrix, "copilot", MatrixCellState::Partial),
-            ["compact", "sub", "idle", "live$"]
+            ["compact", "sub", "idle", "live$", "spend"]
         );
         assert_eq!(
             agent_labels(&matrix, "copilot", MatrixCellState::Absent),
-            ["plan", "answer", "bg", "spend", "remote"]
+            ["plan", "answer", "bg", "remote"]
         );
 
         let kimi = agent_cells(&matrix, "kimi");

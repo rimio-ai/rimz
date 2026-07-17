@@ -95,6 +95,7 @@ pub struct SubagentCorrelation {
     pub role: Option<String>,
     pub task: Option<String>,
     pub prompt: Option<String>,
+    pub model: Option<String>,
 }
 
 /// One root turn whose durable provider transcript may name spawned children.
@@ -114,6 +115,8 @@ pub struct SpawnedSubagent {
     pub agent_name: Option<String>,
     pub role: Option<String>,
     pub prompt: Option<String>,
+    pub model: Option<String>,
+    pub total_tokens: Option<u64>,
 }
 
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native

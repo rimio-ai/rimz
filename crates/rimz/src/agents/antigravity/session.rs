@@ -266,6 +266,8 @@ pub(super) fn spawned_subagents_under(
             agent_name: normalized(Some(&pair.spec.type_name)),
             role: normalized(Some(&pair.spec.role)),
             prompt: sanitize_user_prompt(Some(&pair.spec.prompt)),
+            model: None,
+            total_tokens: None,
         })
         .collect()
 }

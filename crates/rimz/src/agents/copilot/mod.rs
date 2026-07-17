@@ -13,6 +13,7 @@ mod install;
 mod otel;
 mod paths;
 pub(crate) mod payloads;
+mod spend;
 mod statusline;
 mod subagent;
 mod transcript;
@@ -38,9 +39,9 @@ use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPol
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextRefresh,
-    LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, SubagentCorrelation,
-    SubagentCorrelationInput, SubagentIdentity, TranscriptMessage, TurnErrorClass,
-    resolve_subagent_identity, sanitize_user_prompt,
+    LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, SpawnedSubagent,
+    SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
+    TranscriptMessage, TurnErrorClass, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -141,8 +142,8 @@ const COPILOT_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         gap: "no native post-compact hook",
     },
     subagents: ConcernCoverage::Partial {
-        via: "child prompt/stop hooks joined to the parent transcript's subagent.started toolCallId",
-        gap: "no child tool/permission hooks; token totals stay on the parent",
+        via: "child hooks joined to parent subagent.started/subagent.completed records",
+        gap: "no child tool/permission hooks",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no parked-on-background signal",
@@ -165,8 +166,9 @@ const COPILOT_COVERAGE: IntegrationCoverage = IntegrationCoverage {
     hook_install: ConcernCoverage::Wired {
         via: "$COPILOT_HOME/hooks/rimz.json + reversible settings.json statusline",
     },
-    account_spend: ConcernCoverage::Unsupported {
-        reason: "no authoritative account dollar ledger",
+    account_spend: ConcernCoverage::Partial {
+        via: "finalized session.shutdown history priced by the local book",
+        gap: "no authoritative account dollar ledger",
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "remote-control preflight is not wired",
@@ -188,12 +190,12 @@ const COPILOT_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
         event: "permissionRequest",
     },
     subagent_started: HookCoverage::Derived {
-        via: "child userPromptSubmitted joined to the parent's subagent.started record",
-        gap: "no child tool/permission hooks; token totals stay on the parent",
+        via: "child userPromptSubmitted joined to parent subagent.started model metadata",
+        gap: "no child tool/permission hooks",
     },
     subagent_stopped: HookCoverage::Derived {
-        via: "child agentStop joined to the parent's subagent.started record",
-        gap: "no child tool/permission hooks; token totals stay on the parent",
+        via: "child agentStop plus parent subagent.completed token reconciliation",
+        gap: "no child tool/permission hooks",
     },
     compacting: HookCoverage::Native {
         event: "preCompact",
@@ -453,7 +455,29 @@ impl AgentAdapter for CopilotAdapter {
             role: None,
             task: correlated.task,
             prompt: sanitize_user_prompt(correlated.prompt.as_deref()),
+            model: correlated.model,
         })
+    }
+
+    fn spawned_subagents(&self, input: SubagentSpawnInput<'_>) -> Vec<SpawnedSubagent> {
+        let Some(parent_transcript) = input
+            .parent_transcript_path
+            .map(Path::to_path_buf)
+            .or_else(|| paths::session_transcript_path(input.parent_agent_id.as_str()))
+        else {
+            return Vec::new();
+        };
+        subagent::completed(&parent_transcript, input.parent_agent_id.as_str())
+            .into_iter()
+            .map(|child| SpawnedSubagent {
+                child_agent_id: AgentSessionId::from(child.child_id),
+                agent_name: child.agent_name,
+                role: child.task.clone(),
+                prompt: sanitize_user_prompt(child.prompt.as_deref()),
+                model: child.model,
+                total_tokens: child.total_tokens,
+            })
+            .collect()
     }
 
     fn observe_turn_error_from_hook(
@@ -569,6 +593,19 @@ impl AgentAdapter for CopilotAdapter {
             return Some(path);
         }
         paths::session_transcript_path(session_id)
+    }
+
+    fn transcript_files(&self) -> Vec<PathBuf> {
+        paths::transcript_files()
+    }
+
+    fn parse_spend(
+        &self,
+        path: &Path,
+        resume: Option<&crate::agents::spending::SpendCursor>,
+        prices: &super::PriceBook,
+    ) -> crate::agents::spending::SpendParse {
+        spend::parse(path, resume, prices)
     }
 
     fn launch_env(&self) -> Vec<(&'static str, &'static str)> {

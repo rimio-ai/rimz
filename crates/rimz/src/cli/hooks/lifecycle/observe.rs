@@ -121,7 +121,10 @@ fn record_mapped_lifecycle_observation(
     // keyed child evidence can update a self-registered root before the
     // guarded adoption append below reparents it.
     let pre_adoption_snapshot = ((observation.parent_agent_id.is_none()
-        && matches!(observation.signal, LifecycleSignal::TurnEnded { .. }))
+        && matches!(
+            observation.signal,
+            LifecycleSignal::ToolUsed { .. } | LifecycleSignal::TurnEnded { .. }
+        ))
         || (observation.parent_agent_id.is_some()
             && matches!(
                 observation.signal,
@@ -159,7 +162,7 @@ fn record_mapped_lifecycle_observation(
             &observation,
             pre_adoption_snapshot.as_ref(),
         );
-        adopt_spawned_subagents(
+        reconcile_spawned_subagents(
             workspace,
             store,
             agent,
@@ -214,7 +217,7 @@ fn adopt_observed_subagent(
     );
 }
 
-fn adopt_spawned_subagents(
+fn reconcile_spawned_subagents(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
@@ -222,7 +225,10 @@ fn adopt_spawned_subagents(
     pre_adoption_snapshot: Option<&rimz::store::snapshot::SidebarSnapshot>,
 ) {
     if parent_observation.parent_agent_id.is_some()
-        || !matches!(parent_observation.signal, LifecycleSignal::TurnEnded { .. })
+        || !matches!(
+            parent_observation.signal,
+            LifecycleSignal::ToolUsed { .. } | LifecycleSignal::TurnEnded { .. }
+        )
     {
         return;
     }
@@ -257,17 +263,98 @@ fn adopt_spawned_subagents(
         );
         observation.agent_name = child.agent_name;
         observation.launch.role = child.role.clone();
+        observation.launch.model = child.model.clone();
         observation.task = child.role.or_else(|| child.prompt.clone());
         observation.prompt = child.prompt;
+        observation.total_tokens = child.total_tokens;
         observation.pane_id = parent_observation.pane_id.clone();
-        append_subagent_adoption(
-            workspace,
-            store,
-            agent,
-            snapshot,
-            parent_id,
-            observation,
-            LifecycleSignal::SubagentStopped { errored },
+        if child_state.is_some_and(|state| state.parent_agent_id.is_some()) {
+            append_subagent_reconciliation(
+                workspace,
+                store,
+                agent,
+                snapshot,
+                parent_id,
+                observation,
+            );
+        } else {
+            append_subagent_adoption(
+                workspace,
+                store,
+                agent,
+                snapshot,
+                parent_id,
+                observation,
+                LifecycleSignal::SubagentStopped { errored },
+            );
+        }
+    }
+}
+
+fn append_subagent_reconciliation(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    parent_id: &rimz::ids::AgentSessionId,
+    mut observation: AgentLifecycleObservation,
+) {
+    let Some(child_id) = observation.agent_id.as_ref() else {
+        return;
+    };
+    let root_parent_id = snapshot
+        .agents
+        .iter()
+        .find(|state| {
+            state.kind.as_str() == agent.descriptor().kind && state.agent_id == *parent_id
+        })
+        .and_then(|state| state.parent_agent_id.clone())
+        .unwrap_or_else(|| parent_id.clone());
+    let Some(child_state) = snapshot.agents.iter().find(|state| {
+        state.kind.as_str() == agent.descriptor().kind && state.agent_id == *child_id
+    }) else {
+        return;
+    };
+    if child_state.parent_agent_id.as_ref() != Some(&root_parent_id)
+        || child_state
+            .pane
+            .as_ref()
+            .is_some_and(|pane| observation.pane_id.as_ref() != Some(&pane.pane_id))
+    {
+        return;
+    }
+    let model_changed = observation
+        .launch
+        .model
+        .as_ref()
+        .is_some_and(|model| child_state.model.as_ref() != Some(model));
+    let tokens_changed = observation
+        .total_tokens
+        .is_some_and(|tokens| child_state.total_tokens != Some(tokens));
+    if !model_changed && !tokens_changed {
+        return;
+    }
+    observation.agent_name = None;
+    observation.launch.role = None;
+    observation.task = None;
+    observation.prompt = None;
+    observation.parent_agent_id = Some(root_parent_id);
+    let errored = child_state.status == rimz::agents::AgentStatus::Failed;
+    observation.signal = LifecycleSignal::SubagentStopped { errored };
+    let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
+    if let Err(err) = store.append_agent_lifecycle(AgentLifecycleIntent {
+        session_name: &workspace.session_name,
+        agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        event_name: "SubagentReconciled",
+        observation: &observation,
+        transition,
+    }) {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = "SubagentReconciled",
+            child_id = observation.agent_id.as_deref().unwrap_or(""),
+            error = %err,
+            "lifecycle: failed to record subagent metadata reconciliation",
         );
     }
 }
@@ -446,6 +533,7 @@ fn correlate_subagent_observation(
     observation.launch.role = correlation.role;
     observation.task = correlation.task;
     observation.prompt = correlation.prompt;
+    observation.launch.model = correlation.model;
     normalize_correlated_subagent_signal(observation);
 }
 

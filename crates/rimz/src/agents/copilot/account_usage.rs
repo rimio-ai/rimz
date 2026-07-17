@@ -392,7 +392,7 @@ impl UsageWire {
             .and_then(parse_reset)
             .or(quota_reset);
         let chat_label = if self.token_based_billing == Some(true) {
-            "AIC"
+            "cr"
         } else {
             "cht"
         };
@@ -699,7 +699,7 @@ mod tests {
         );
         assert_eq!(snapshot.plan.as_deref(), Some("individual"));
         let chat = window(&windows, "chat");
-        assert_eq!(chat.scope.as_ref().unwrap().label, "AIC");
+        assert_eq!(chat.scope.as_ref().unwrap().label, "cr");
         assert_eq!(chat.used_percentage, Some(19));
         assert_eq!(chat.duration_mins, None);
         assert_eq!(chat.resets_at, "2026-07-31T12:00:00Z".parse().ok());

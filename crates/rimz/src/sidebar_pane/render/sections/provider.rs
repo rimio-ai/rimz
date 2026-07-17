@@ -1030,6 +1030,13 @@ fn art_row_spans(theme: &Theme, panel: &SidebarProviderPanel, row: usize) -> Vec
         panel.art.get(row).map(String::as_str).unwrap_or(""),
         PROVIDER_ART_WIDTH,
     );
+    let emblem_width = panel
+        .art
+        .iter()
+        .map(|row| text_width(&clip(row, PROVIDER_ART_WIDTH)))
+        .max()
+        .unwrap_or(0);
+    let leading_pad = PROVIDER_ART_WIDTH.saturating_sub(emblem_width) / 2;
     let chars: Vec<char> = clipped.chars().collect();
     let brand = theme.style(theme.brand_tone(panel), Modifier::empty());
     let mut row_tints: Vec<_> = panel
@@ -1040,6 +1047,9 @@ fn art_row_spans(theme: &Theme, panel: &SidebarProviderPanel, row: usize) -> Vec
     row_tints.sort_by_key(|tint| tint.start);
 
     let mut spans = Vec::new();
+    if leading_pad > 0 {
+        spans.push(Span::raw(" ".repeat(leading_pad)));
+    }
     let mut cursor = 0;
     for tint in row_tints {
         let start = tint.start.max(cursor).min(chars.len());

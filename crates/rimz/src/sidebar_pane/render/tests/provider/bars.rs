@@ -495,6 +495,31 @@ fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
 }
 
 #[test]
+fn copilot_credit_label_fills_the_shared_three_cell_slot() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("copilot", "Copilot", 140, true, false, None);
+    panel.windows = vec![RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: "chat".to_owned(),
+            label: "cr".to_owned(),
+        }),
+        used_percentage: Some(20),
+        ..Default::default()
+    }];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    let text = rows[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(
+        text.starts_with("cr "),
+        "literal three-cell label slot: {text:?}"
+    );
+}
+
+#[test]
 fn api_key_provider_shows_budget_left_or_unlimited_full_bar() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("codex", "Codex", 33, false, false, None);

@@ -160,7 +160,9 @@ impl ContextWindow {
             input_tokens: self
                 .total_input_tokens
                 .map(|total| total.saturating_sub(cached_input)),
-            output_tokens: self.total_output_tokens,
+            output_tokens: self
+                .total_output_tokens
+                .map(|output| output.saturating_sub(self.total_reasoning_tokens.unwrap_or(0))),
             cache_creation_input_tokens: self.total_cache_write_tokens,
             cache_read_input_tokens: self.total_cache_read_tokens,
             thinking_tokens: self.total_reasoning_tokens,
@@ -365,10 +367,10 @@ mod tests {
     fn modern_fixture_separates_live_window_and_session_totals() {
         let payload: Value =
             serde_json::from_str(include_str!("tests/fixtures/statusline-modern.json")).unwrap();
-
+        let prices = PriceBook::embedded();
         let estimated_cost = StatuslinePayload::parse(&payload)
             .unwrap()
-            .cost(&PriceBook::embedded())
+            .cost(&prices)
             .unwrap();
 
         let context = context(payload).unwrap();
@@ -391,14 +393,18 @@ mod tests {
             tokens.session_usage,
             Some(AgentSessionUsage {
                 input_tokens: Some(6_000),
-                output_tokens: Some(6_100),
+                output_tokens: Some(77),
                 cache_creation_input_tokens: Some(7_000),
                 cache_read_input_tokens: Some(69_000),
-                thinking_tokens: Some(1_200),
+                thinking_tokens: Some(128),
             })
         );
         assert_eq!(context.cost.unwrap().total_cost_usd, None);
-        assert!(estimated_cost.total_cost_usd.is_some_and(|cost| cost > 0.0));
+        let expected = prices
+            .price("claude-sonnet-4.6")
+            .unwrap()
+            .cost(6_000, 205, 7_000, 0, 69_000, false);
+        assert_eq!(estimated_cost.total_cost_usd, Some(expected));
         assert_eq!(estimated_cost.coverage, CostCoverage::Session);
     }
 

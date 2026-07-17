@@ -286,6 +286,7 @@ fn adapter_correlates_child_hook_ids_through_the_parent_transcript() {
             role: None,
             task: Some("Inspect auth retry".to_owned()),
             prompt: Some("Trace the retry flow".to_owned()),
+            model: Some("claude-haiku-4.5".to_owned()),
         })
     );
 }

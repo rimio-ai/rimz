@@ -855,9 +855,10 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// Enumerate the children a completed root turn spawned through
-    /// provider-owned durable records. The shared hook path adopts validated
-    /// children whose earlier hooks arrived before that evidence was readable.
+    /// Enumerate child lifecycle metadata observed through provider-owned
+    /// durable records. The shared hook path adopts children whose earlier
+    /// hooks arrived before that evidence was readable and reconciles exact
+    /// model/token metadata that became available after adoption.
     fn spawned_subagents(&self, _input: SubagentSpawnInput<'_>) -> Vec<SpawnedSubagent> {
         Vec::new()
     }

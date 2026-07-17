@@ -1,12 +1,10 @@
 use super::*;
 
 #[test]
-fn render_selected_card_collapses_finished_subagent_and_keeps_running_metadata() {
+fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     // A selected parent expands its `⧉ subagents` list. A finished child
-    // collapses to its single type line — the head holds its `✓` verdict and the
-    // description rides beside it, while the metadata row (tokens · model ·
-    // effort and the elapsed clock) is dropped, since a done child needs no live
-    // work span. A still-running child keeps both lines: the live thinking head,
+    // keeps its exact token/model/effort row, while the elapsed clock is dropped
+    // because a done child needs no live work span. A still-running child keeps both lines: the live thinking head,
     // type, and description, then the token spend `◇` and model left with the
     // live sub-minute `<1m` clock-fill elapsed pinned right.
     let mut parent = agent(
@@ -88,22 +86,28 @@ fn render_selected_card_collapses_finished_subagent_and_keeps_running_metadata()
     // (`3k` sized to the one rendered row, no sibling to pad to), the live
     // sub-minute `<1m` clock pinned right.
     assert!(
-        rendered.contains("◇ 3k · Haiku 4.5"),
+        rendered.contains("◇  3k · Haiku 4.5"),
         "the running child carries its token spend and model:\n{rendered}"
     );
     assert!(
         rendered.contains("◔ <1m"),
         "the running child reads the live sub-minute clock:\n{rendered}"
     );
-    // The finished child drops its whole metadata row: its `12k` token spend —
-    // unique to that child — is gone, so no second line renders for it. (Its
-    // model and effort happen to match the parent's, so the row's absence reads
-    // through the token figure.)
     assert!(
-        !rendered.contains("12k"),
-        "the finished child's metadata row is dropped:\n{rendered}"
+        rendered
+            .lines()
+            .any(|line| line.contains("◇ 12k · Opus 4.8") && line.contains("· high")),
+        "the finished child retains exact metadata:\n{rendered}"
     );
-    // Exactly one subagent metadata row renders — the running child's.
+    let finished_line = rendered
+        .lines()
+        .find(|line| line.contains("◇ 12k"))
+        .expect("finished child metadata line");
+    assert!(
+        !finished_line.contains('◔'),
+        "the finished child has no elapsed clock:\n{rendered}"
+    );
+    // Both metadata-bearing children render a second line.
     let subagent_metadata_rows = rendered
         .lines()
         .filter(|line| {
@@ -115,10 +119,54 @@ fn render_selected_card_collapses_finished_subagent_and_keeps_running_metadata()
         })
         .count();
     assert_eq!(
-        subagent_metadata_rows, 1,
-        "only the running child carries a `◇` metadata row:\n{rendered}"
+        subagent_metadata_rows, 2,
+        "both metadata-bearing children carry a `◇` row:\n{rendered}"
     );
     assert_snapshot("subagent_two_line_entry", rendered);
+}
+
+#[test]
+fn metadata_free_finished_subagent_stays_one_line() {
+    let parent = agent(
+        "copilot-root",
+        "copilot",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    let mut child = agent(
+        "copilot-child",
+        "copilot",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("cleanup"),
+    );
+    child.parent_agent_id = Some("copilot-root".into());
+
+    let snapshot = snapshot_with(vec![parent, child]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        },
+        54,
+        21,
+    );
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let child_line = lines
+        .iter()
+        .position(|line| line.contains("✓ cleanup"))
+        .unwrap_or_else(|| panic!("finished child missing:\n{rendered}"));
+    assert!(
+        !lines
+            .get(child_line + 1)
+            .is_some_and(|line| line.starts_with("▌      ")),
+        "metadata-free completion stays one line:\n{rendered}"
+    );
 }
 #[test]
 fn subagent_metadata_blank_fills_the_per_card_grid() {

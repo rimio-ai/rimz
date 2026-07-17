@@ -17,12 +17,12 @@ expression: strip_sgr(&ansi)
 ▌  ▤ 333k · ◌ 286k ◍ 33k ↘ 13k ↗ 41k · ↻ 2           ▐
 ▌  ⧉ subagents (2)                                   ▐
 ▌    ✓ Explore — audit auth watcher changes          ▐
+▌      ◇ 22k · Haiku · xhigh                         ▐
 ▌    ⠁ Plan — run focused nextest                    ▐
 ▌      ◇ 18k · Haiku · xhigh                    ◔  3m▐
 
  ⑂ remote-link              ⇡1 ⇣1  +1240 -380  ⑂ main
  ? codex · GPT 5.5 · xhigh · 272k               $3.71
-   approve SSH link retry
 
  ─── Claude ──── Codex ──── Pi ──── Opencode ────────
 

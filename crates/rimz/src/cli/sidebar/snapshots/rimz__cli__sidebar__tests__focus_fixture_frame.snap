@@ -17,12 +17,12 @@ expression: strip_sgr(&ansi)
 ▌  󰿦 183k · 󱥸 157k  18k  7k  22k             󰪠 22m▐
 ▌   subagents (5)                                   ▐
 ▌     Explore — trace handler graph                 ▐
+▌       20k · Haiku · xhigh                         ▐
 ▌     Explore — exercise auth edge cases            ▐
+▌       18k · Haiku · xhigh                         ▐
 ▌     Explore — summarize docs drift                ▐
+▌       11k · Haiku · xhigh                         ▐
 ▌     Plan — write migration runbook                ▐
-▌     Plan — split blocking checks                  ▐
-▎⢄ coder · GPT 5.5 · xhigh · 272k              $11.84🮇
-▎  wire auth router migration                        🮇
 
  ─── Claude ──── Codex ──── Pi ──── Opencode ────────
 

@@ -141,9 +141,9 @@ pub(super) fn row_lines(
 /// lines. Claude's description, cumulative tokens, and elapsed ride in from
 /// `subagentStatusLine`; Codex reports current child context from the rollout
 /// tail. Model, effort, and phase come from child lifecycle events. A child
-/// with none of them — and any finished
-/// child, whose work span is over — degrades to the bare type line, with line 2
-/// dropped.
+/// with none of them degrades to the bare type line. A finished child retains
+/// reported token/model/effort metadata but drops the elapsed clock because its
+/// work span is over.
 fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line<'static>> {
     if sub_agents.is_empty() {
         return Vec::new();
@@ -170,17 +170,15 @@ fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line
     // columns across children (the elapsed cluster already stacks via its
     // fixed right-pinned slot). A column exists only while some child carries
     // the field; a child missing a carried field blank-fills the slot. Finished
-    // children render no metadata row, so they never widen a column.
+    // metadata-free children render no second row.
     let token_col = sub_agents
         .iter()
-        .filter(|sub| !sub_agent_finished(sub))
         .filter_map(sub_agent_tokens)
         .map(|total| tokens_int(total).chars().count())
         .max()
         .unwrap_or(0);
     let model_col = sub_agents
         .iter()
-        .filter(|sub| !sub_agent_finished(sub))
         .filter_map(|sub| sub.model.as_deref())
         .map(|model| model_label(model).chars().count())
         .max()
@@ -223,10 +221,7 @@ fn sub_agent_tokens(sub: &SidebarSubAgent) -> Option<u64> {
     sub.total_tokens.filter(|total| *total > 0)
 }
 
-/// A finished subagent — its turn has ended in a verdict. The card collapses it
-/// to its single type line: the metadata row (tokens · model · effort and the
-/// frozen elapsed clock) is dropped, since a done child needs no live work span.
-/// A still-running child keeps its metadata row with the live elapsed.
+/// A finished subagent has a verdict and no longer needs a live elapsed clock.
 fn sub_agent_finished(sub: &SidebarSubAgent) -> bool {
     matches!(sub.status, AgentStatus::Success | AgentStatus::Failed)
 }
@@ -238,11 +233,10 @@ fn sub_agent_metadata_line(
     model_col: usize,
     width: usize,
 ) -> Option<Line<'static>> {
-    if sub_agent_finished(sub) {
-        return None;
-    }
     let tokens = sub_agent_tokens(sub);
-    let elapsed = sub.elapsed_secs;
+    let elapsed = (!sub_agent_finished(sub))
+        .then_some(sub.elapsed_secs)
+        .flatten();
     let model = sub.model.as_deref();
     let effort = sub.effort.as_deref();
     if tokens.is_none() && elapsed.is_none() && model.is_none() && effort.is_none() {

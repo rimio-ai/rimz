@@ -16,13 +16,13 @@ expression: strip_sgr(&ansi)
 ▌  󰿦 175k · 󱥸 168k  7k  21k                        ▐
 ▌   subagents (2)                                   ▐
 ▌     Explore — audit auth watcher changes          ▐
+▌       22k · Haiku · xhigh                         ▐
 ▌    ⠁ Plan — run focused nextest                    ▐
 ▌       18k · Haiku · xhigh                    󰪞  3m▐
 ▎⢄ claude · Opus 4.8 · xhigh · 1m              $12.62🮇
 ▎  audit provider spend                              🮇
 ▎  󰕰 ━━━━━━━━━━━━━━━━━━╺━━╺────────────────────   29%🮇
 ▎  󰿦 296k · 󱥸 254k  29k  11k  37k             󰪞 6m🮇
-▎⣾ pnpm serve                  12%   262M   450k/s🮇
 
  ─── Claude ──── Codex ──── Pi ──── Opencode ────────
 

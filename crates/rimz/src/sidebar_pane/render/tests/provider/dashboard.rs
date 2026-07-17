@@ -61,7 +61,7 @@ fn copilot_crest_rides_tabbed_header_without_growing_the_block() {
         .find(|line| line.contains("v2.1.158"))
         .expect("tabbed provider header");
 
-    assert!(header.contains("╭─╮╭─╮"), "{header}");
+    assert!(header.contains(" ╭─╮╭─╮"), "{header}");
     assert_eq!(copilot_lines.len(), claude_lines.len());
 }
 
@@ -84,10 +84,34 @@ fn copilot_crest_uses_wide_stacked_spacer() {
         .expect("copilot crest");
 
     assert!(
-        texts[crest + 1].starts_with("╰─╯╰─╯"),
+        texts[crest].starts_with(" ╭─╮╭─╮")
+            && texts[crest + 1].starts_with(" ╰─╯╰─╯")
+            && texts[crest + 2].starts_with(" █ ▘▝ █")
+            && texts[crest + 3].starts_with("  ▔▔▔▔"),
         "{}",
         texts.join("\n")
     );
+}
+
+#[test]
+fn theme_supplied_narrow_art_centers_as_one_emblem() {
+    let theme = Theme::fixed(false);
+    let mut panel = copilot_panel();
+    panel.art = vec!["xxx".to_owned(), " x ".to_owned()];
+    panel.art_tints.clear();
+
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[panel],
+        None,
+        DashboardMode::Stacked,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let texts = line_texts(&lines);
+    assert!(texts.iter().any(|line| line.starts_with("   xxx   ")));
+    assert!(texts.iter().any(|line| line.starts_with("    x    ")));
 }
 
 #[test]

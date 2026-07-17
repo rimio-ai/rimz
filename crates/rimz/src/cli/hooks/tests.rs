@@ -136,6 +136,7 @@ impl rimz::agents::AgentAdapter for CorrelationTestAdapter {
             role: Some(format!("role-{child}")),
             task: Some(format!("task-{child}")),
             prompt: Some(format!("prompt-{child}")),
+            model: None,
         })
     }
 
@@ -150,6 +151,8 @@ impl rimz::agents::AgentAdapter for CorrelationTestAdapter {
                     agent_name: Some(name.to_owned()),
                     role: Some(role.to_owned()),
                     prompt: Some(prompt.to_owned()),
+                    model: None,
+                    total_tokens: None,
                 }
             };
         match input.parent_agent_id.as_str() {
@@ -239,6 +242,13 @@ impl rimz::agents::AgentAdapter for CopilotCorrelationAdapter {
         input: rimz::agents::SubagentCorrelationInput<'_>,
     ) -> Option<rimz::agents::SubagentCorrelation> {
         rimz::agents::CopilotAdapter.correlate_subagent(input)
+    }
+
+    fn spawned_subagents(
+        &self,
+        input: rimz::agents::SubagentSpawnInput<'_>,
+    ) -> Vec<rimz::agents::SpawnedSubagent> {
+        rimz::agents::CopilotAdapter.spawned_subagents(input)
     }
 }
 
@@ -695,17 +705,16 @@ fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() 
 }
 
 #[test]
-fn copilot_child_prompt_and_stop_join_to_the_parent_transcript() {
+fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
     let (_store_dir, store) = hooks_test_store();
     let transcript_dir = tempfile::tempdir().unwrap();
     let parent_dir = transcript_dir.path().join("parent-session");
     std::fs::create_dir(&parent_dir).unwrap();
     let transcript = parent_dir.join("events.jsonl");
-    std::fs::write(
-        &transcript,
-        include_str!("../../agents/copilot/tests/fixtures/subagents.jsonl"),
-    )
-    .unwrap();
+    let records = include_str!("../../agents/copilot/tests/fixtures/subagents.jsonl")
+        .lines()
+        .collect::<Vec<_>>();
+    std::fs::write(&transcript, format!("{}\n{}\n", records[0], records[1])).unwrap();
     feed_copilot(
         &store,
         "sessionStart",
@@ -746,6 +755,49 @@ fn copilot_child_prompt_and_stop_join_to_the_parent_transcript() {
         }),
     );
 
+    let child_before_completion = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|state| state.agent_id == "toolu_alpha")
+        .unwrap();
+    assert_eq!(
+        child_before_completion.parent_agent_id.as_deref(),
+        Some("parent-session")
+    );
+    assert_eq!(child_before_completion.name.as_deref(), Some("researcher"));
+    assert_eq!(
+        child_before_completion.task.as_deref(),
+        Some("Inspect auth retry")
+    );
+    assert_eq!(
+        child_before_completion.model.as_deref(),
+        Some("claude-haiku-4.5")
+    );
+    assert_eq!(child_before_completion.total_tokens, None);
+    assert_eq!(
+        child_before_completion.status,
+        rimz::agents::AgentStatus::Success
+    );
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    use std::io::Write as _;
+    writeln!(file, "{}", records[2]).unwrap();
+    feed_copilot(
+        &store,
+        "postToolUse",
+        serde_json::json!({
+            "sessionId":"parent-session",
+            "cwd":"/tmp/hooks-test",
+            "transcriptPath":transcript,
+            "toolName":"task",
+        }),
+    );
+
     let child = store
         .snapshot_cached()
         .unwrap()
@@ -754,9 +806,49 @@ fn copilot_child_prompt_and_stop_join_to_the_parent_transcript() {
         .find(|state| state.agent_id == "toolu_alpha")
         .unwrap();
     assert_eq!(child.parent_agent_id.as_deref(), Some("parent-session"));
-    assert_eq!(child.name.as_deref(), Some("researcher"));
     assert_eq!(child.task.as_deref(), Some("Inspect auth retry"));
+    assert_eq!(child.model.as_deref(), Some("claude-haiku-4.5"));
+    assert_eq!(child.total_tokens, Some(22_116));
     assert_eq!(child.status, rimz::agents::AgentStatus::Success);
+
+    let reconciliation_count = || {
+        store
+            .read_events()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.kind(),
+                    rimz::store::event::EventKind::AgentLifecycle(payload)
+                        if payload.event_name.as_deref() == Some("SubagentReconciled")
+                )
+            })
+            .count()
+    };
+    assert_eq!(reconciliation_count(), 1);
+    feed_copilot(
+        &store,
+        "postToolUse",
+        serde_json::json!({
+            "sessionId":"parent-session",
+            "cwd":"/tmp/hooks-test",
+            "transcriptPath":transcript,
+        }),
+    );
+    feed_copilot(
+        &store,
+        "agentStop",
+        serde_json::json!({
+            "sessionId":"parent-session",
+            "cwd":"/tmp/hooks-test",
+            "transcriptPath":transcript,
+        }),
+    );
+    assert_eq!(
+        reconciliation_count(),
+        1,
+        "repeated root checkpoints are idempotent"
+    );
 
     let signals = store
         .read_events()
@@ -775,6 +867,7 @@ fn copilot_child_prompt_and_stop_join_to_the_parent_transcript() {
         signals,
         vec![
             LifecycleSignal::SubagentStarted,
+            LifecycleSignal::SubagentStopped { errored: false },
             LifecycleSignal::SubagentStopped { errored: false },
         ]
     );

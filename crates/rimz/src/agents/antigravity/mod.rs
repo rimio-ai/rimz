@@ -419,6 +419,7 @@ impl AgentAdapter for AntigravityAdapter {
             role: role.clone(),
             task: role.or_else(|| prompt.clone()),
             prompt,
+            model: None,
         })
     }
 
