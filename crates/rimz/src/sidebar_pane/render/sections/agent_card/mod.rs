@@ -1,8 +1,8 @@
 //! The per-agent card: identity line, description, the context meter and its
-//! token line, and the expanded subagent list. [`CardStage`] fixes the card's
-//! shape from lifecycle state; late or absent data only fills that shape. The
-//! card anatomy is drawn in docs/interface/sidebar.md; the density and
-//! selection invariants live in docs/internals/sidebar/sidebar.md.
+//! token line, and the expanded subagent list. A state-to-template table fixes
+//! the ordered line slots from lifecycle facts; late or absent data only fills
+//! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
+//! density and selection invariants live in docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, AgentCurrentUsage, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
@@ -29,10 +29,12 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 mod description;
 mod gauge;
 mod identity;
+mod template;
 
 use self::{description::*, gauge::*};
 pub(in crate::sidebar_pane::render) use identity::brand_tone;
 use identity::{display_context_window, identity_line};
+use template::{CardSlot, CardStage, template};
 
 use super::process::{process_detail_line, process_row_line};
 use super::{Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
@@ -41,31 +43,6 @@ use super::{Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width,
 /// `opencode-docsmith` fit, and longer profiles clip with `…` rather than
 /// pushing the model/effort tokens off the line.
 const NAME_MAX: usize = 18;
-
-/// The card lifecycle state. Its line set is stable; enrichment only changes
-/// the contents of those lines.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CardStage {
-    Fresh,
-    Engaged,
-}
-
-impl CardStage {
-    fn of(row: &SidebarRow) -> Self {
-        let Some(agent) = row.as_agent() else {
-            return Self::Engaged;
-        };
-        if matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
-            && agent.prompt.is_none()
-            && !agent.has_session_history()
-            && gauge_percent(row).unwrap_or(0) == 0
-        {
-            Self::Fresh
-        } else {
-            Self::Engaged
-        }
-    }
-}
 
 fn agent(row: &SidebarRow) -> Option<&AgentCard> {
     row.as_agent()
@@ -78,7 +55,7 @@ pub(in crate::sidebar_pane::render::sections) fn session_cost_usd(row: &SidebarR
 }
 
 pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
-    CardStage::of(row) == CardStage::Fresh && awaiting_first_prompt(row)
+    matches!(CardStage::of(row), CardStage::Fresh { labeled: false })
 }
 
 pub(super) fn row_lines(
@@ -112,51 +89,29 @@ pub(super) fn row_lines(
     let wash = (!selected && attention.emphasis == CardEmphasis::Blink)
         .then(|| ctx.theme.unread_wash())
         .flatten();
-    // Auto/expanded modes keep the stage-fixed card shape: selection only
-    // appends subagents (expanded appends them on every card). Compact is
-    // deliberately different: resting cards trim by status, and the selected
-    // card opens back to its stage's full shape.
-    let mut inner = vec![identity_line(ctx, row, attention)];
+    let mut inner = Vec::new();
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
-    if row.is_process()
-        && let Some(line) = process_detail_line(ctx.theme, row, cw)
-    {
-        inner.push(line);
-    }
-    if let Some(agent) = agent(row) {
+    if row.is_process() {
+        inner.push(identity_line(ctx, row, attention));
+        if let Some(line) = process_detail_line(ctx.theme, row, cw) {
+            inner.push(line);
+        }
+    } else if let Some(agent) = agent(row) {
         let stage = CardStage::of(row);
-        let compact_resting = ctx.card_density == CardDensityMode::Compact && !selected;
-        match (stage, compact_resting, status) {
-            (_, true, AgentStatus::Idle) => {}
-            (_, true, AgentStatus::Running | AgentStatus::Waiting) => {
-                inner.push(description_line(ctx, row, attention));
-                inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
-            }
-            (_, true, AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed) => {
-                inner.push(description_line(ctx, row, attention));
-            }
-            (CardStage::Fresh, false, _) => {
-                if awaiting_first_prompt(row) {
-                    if selected {
-                        inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
-                        inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
-                    }
-                } else if descriptor(row).is_some() {
-                    inner.push(description_line(ctx, row, attention));
+        for slot in template(stage, status, ctx.card_density, selected) {
+            match slot {
+                CardSlot::Identity => inner.push(identity_line(ctx, row, attention)),
+                CardSlot::Description => inner.push(description_line(ctx, row, attention)),
+                CardSlot::AwaitingDots => {
+                    inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
                 }
-            }
-            (CardStage::Engaged, false, _) => {
-                inner.push(description_line(ctx, row, attention));
-                inner.push(gauge_line(ctx, row, meter_pixels));
-                inner.push(context_tokens_line(ctx, row));
-                // The subagents this agent spawned this turn, appended after the
-                // stats. Auto and compact show them on the selected card; expanded
-                // shows them on every card.
-                if (selected || ctx.card_density == CardDensityMode::Expanded)
-                    && !agent.sub_agents.is_empty()
-                {
+                CardSlot::Gauge => {
+                    inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
+                }
+                CardSlot::Tokens => inner.push(context_tokens_line(ctx, row)),
+                CardSlot::Subagents => {
                     inner.extend(sub_agent_lines(ctx, &agent.sub_agents));
                 }
             }
@@ -190,6 +145,9 @@ pub(super) fn row_lines(
 /// child, whose work span is over — degrades to the bare type line, with line 2
 /// dropped.
 fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line<'static>> {
+    if sub_agents.is_empty() {
+        return Vec::new();
+    }
     let theme = ctx.theme;
     let width = content_width(ctx.width);
     let animation_phase = ctx.animation_phase;
