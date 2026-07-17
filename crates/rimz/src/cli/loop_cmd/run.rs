@@ -47,6 +47,7 @@ pub(super) fn run_one(
     let source = loaded.source;
     gate_project_trust(name, &entry, source, mode)?;
     let action_kind = TaskAction::from_entry(name, &entry)?.kind();
+    refresh_reset_ping_usage(&entry);
     let started = Instant::now();
     if mode == LoopRunMode::Manual {
         write_manual_header(&mut ui::out(), name, &entry)?;
@@ -130,6 +131,23 @@ pub(super) fn run_one(
         std::process::exit(code);
     }
     Ok(())
+}
+
+fn refresh_reset_ping_usage(entry: &TaskEntry) {
+    if entry.every.as_deref() != Some("reset") {
+        return;
+    }
+    let Some(kind) = entry
+        .agent
+        .as_deref()
+        .and_then(rimz::harness::spec::ping_kind)
+    else {
+        return;
+    };
+    let Some(runtime) = runtime_for_root(&entry.resolved_root()) else {
+        return;
+    };
+    let _ = rimz::sidebar::refresh::usage::refresh_account_usage_now(&runtime, kind);
 }
 
 fn gate_project_trust(

@@ -8,6 +8,8 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LoopConfig {
+    #[serde(rename = "auto-ping")]
+    pub auto_ping: bool,
     #[serde(
         rename = "default-timeout",
         default,
@@ -20,7 +22,7 @@ pub struct LoopConfig {
 
 impl LoopConfig {
     pub fn is_empty(&self) -> bool {
-        self.default_timeout.is_none() && self.tasks.0.is_empty()
+        !self.auto_ping && self.default_timeout.is_none() && self.tasks.0.is_empty()
     }
 
     pub fn validate_budgets(&self) -> Result<(), TaskBudgetError> {
@@ -353,6 +355,17 @@ mod tests {
         let err = toml::from_str::<LoopConfig>("default-timeout = \"forever\"\n")
             .expect_err("invalid default timeout");
         assert!(err.to_string().contains("duration"), "{err}");
+    }
+
+    #[test]
+    fn auto_ping_round_trips_as_a_bare_loop_flag() {
+        let config: LoopConfig = toml::from_str("auto-ping = true\n").expect("auto-ping flag");
+        assert!(config.auto_ping);
+        assert!(!config.is_empty());
+
+        let encoded = toml::to_string(&config).expect("serialize auto-ping");
+        assert!(encoded.contains("auto-ping = true"), "{encoded}");
+        assert_eq!(toml::from_str::<LoopConfig>(&encoded).unwrap(), config);
     }
 
     #[test]

@@ -349,7 +349,7 @@ fn task_timing_classifies_runtime_schedule_edges() {
             Some(seconds_before(now.timestamp(), 10 * 60)),
             None,
             &now,
-            None,
+            ResetSignal::Unknown,
         )
         .state(),
         TaskTimingState::Upcoming(_)
@@ -362,13 +362,22 @@ fn task_timing_classifies_runtime_schedule_edges() {
             Some(seconds_before(now.timestamp(), 20 * 60)),
             None,
             &now,
-            None,
+            ResetSignal::Unknown,
         )
         .state(),
         TaskTimingState::Due(_)
     ));
     assert_eq!(
-        TaskTiming::evaluate("task", &interval, None, None, None, &now, None).state(),
+        TaskTiming::evaluate(
+            "task",
+            &interval,
+            None,
+            None,
+            None,
+            &now,
+            ResetSignal::Unknown,
+        )
+        .state(),
         TaskTimingState::Unarmed
     );
 
@@ -381,7 +390,7 @@ fn task_timing_classifies_runtime_schedule_edges() {
             Some(seconds_before(now.timestamp(), 60)),
             None,
             &now,
-            None,
+            ResetSignal::Unknown,
         )
         .state(),
         TaskTimingState::NoOccurrence
@@ -396,7 +405,7 @@ fn task_timing_classifies_runtime_schedule_edges() {
             Some(now.timestamp()),
             None,
             &now,
-            None,
+            ResetSignal::Unknown,
         )
         .state(),
         TaskTimingState::Invalid
@@ -419,13 +428,22 @@ fn task_timing_precedence_is_blocked_then_pause_then_schedule() {
             None,
             Some(&manual),
             &now,
-            None,
+            ResetSignal::Unknown,
         )
         .state(),
         TaskTimingState::Blocked(crate::trust::TrustState::Stale)
     );
     assert_eq!(
-        TaskTiming::evaluate("task", &invalid, None, None, Some(&manual), &now, None).state(),
+        TaskTiming::evaluate(
+            "task",
+            &invalid,
+            None,
+            None,
+            Some(&manual),
+            &now,
+            ResetSignal::Unknown,
+        )
+        .state(),
         TaskTimingState::Paused(manual)
     );
 
@@ -437,7 +455,16 @@ fn task_timing_precedence_is_blocked_then_pause_then_schedule() {
         strikes: None,
     };
     assert_eq!(
-        TaskTiming::evaluate("task", &invalid, None, None, Some(&timed), &now, None).state(),
+        TaskTiming::evaluate(
+            "task",
+            &invalid,
+            None,
+            None,
+            Some(&timed),
+            &now,
+            ResetSignal::Unknown,
+        )
+        .state(),
         TaskTimingState::Paused(timed)
     );
 }
@@ -457,7 +484,7 @@ fn task_timing_uses_expired_pause_as_last_fire_edge() {
         Some(seconds_before(now.timestamp(), 20 * 60)),
         Some(&pause),
         &now,
-        None,
+        ResetSignal::Unknown,
     );
     assert_eq!(
         timing.state(),
@@ -473,34 +500,34 @@ fn task_timing_uses_expired_pause_as_last_fire_edge() {
 fn task_timing_due_matches_schedule_rules_at_occurrence_edges() {
     let now = zdt(2026, 6, 24, 8, 10, 0);
     let reset = seconds_before(now.timestamp(), 60);
-    for (name, entry, last_fire, window_reset) in [
+    for (name, entry, last_fire, reset_signal) in [
         (
             "calendar",
             entry(Some("08:10"), None, None),
             seconds_before(now.timestamp(), 60),
-            None,
+            ResetSignal::Unknown,
         ),
         (
             "interval",
             entry(None, Some("15m"), None),
             seconds_before(now.timestamp(), 15 * 60),
-            None,
+            ResetSignal::Unknown,
         ),
         (
             "cron",
             entry(None, None, Some("10 8 * * *")),
             seconds_before(now.timestamp(), 60),
-            None,
+            ResetSignal::Unknown,
         ),
         (
             "reset",
             reset_entry(Some("claude-ping")),
             seconds_before(now.timestamp(), 60),
-            Some(reset),
+            ResetSignal::At(reset),
         ),
     ] {
         let parsed = parse_schedule(name, &entry).expect("parsed schedule");
-        assert!(parsed.schedule.due(last_fire, &now, window_reset), "{name}");
+        assert!(parsed.schedule.due(last_fire, &now, reset_signal), "{name}");
         assert!(matches!(
             TaskTiming::evaluate(
                 name,
@@ -509,7 +536,7 @@ fn task_timing_due_matches_schedule_rules_at_occurrence_edges() {
                 Some(last_fire),
                 None,
                 &now,
-                window_reset,
+                reset_signal,
             )
             .state(),
             TaskTimingState::Due(_)
@@ -578,8 +605,16 @@ fn every_reset_parse_requires_ping_agent() {
 fn interval_due_at_exact_boundary_only() {
     let schedule = Schedule::Interval(IntervalSpec::new(15));
     let now = zdt(2026, 6, 24, 8, 15, 0);
-    assert!(!schedule.due(seconds_before(now.timestamp(), 899), &now, None));
-    assert!(schedule.due(seconds_before(now.timestamp(), 900), &now, None));
+    assert!(!schedule.due(
+        seconds_before(now.timestamp(), 899),
+        &now,
+        ResetSignal::Unknown
+    ));
+    assert!(schedule.due(
+        seconds_before(now.timestamp(), 900),
+        &now,
+        ResetSignal::Unknown
+    ));
 }
 
 #[test]
@@ -589,8 +624,8 @@ fn calendar_fires_once_per_matching_day() {
         .schedule;
     let now = zdt(2026, 6, 24, 7, 30, 0);
     let occurrence = now.timestamp();
-    assert!(schedule.due(seconds_before(occurrence, 60), &now, None));
-    assert!(!schedule.due(occurrence, &now, None));
+    assert!(schedule.due(seconds_before(occurrence, 60), &now, ResetSignal::Unknown));
+    assert!(!schedule.due(occurrence, &now, ResetSignal::Unknown));
 }
 
 #[test]
@@ -601,10 +636,44 @@ fn window_reset_due_uses_reset_plus_margin_once() {
     let at_margin = zdt(2026, 6, 24, 8, 1, 0);
     let occurrence = at_margin.timestamp();
 
-    assert!(!schedule.due(seconds_before(reset, 60), &before, Some(reset)));
-    assert!(schedule.due(seconds_before(occurrence, 60), &at_margin, Some(reset)));
-    assert!(!schedule.due(occurrence, &at_margin, Some(reset)));
-    assert!(!schedule.due(seconds_before(occurrence, 60), &at_margin, None));
+    assert!(!schedule.due(seconds_before(reset, 60), &before, ResetSignal::At(reset)));
+    assert!(schedule.due(
+        seconds_before(occurrence, 60),
+        &at_margin,
+        ResetSignal::At(reset)
+    ));
+    assert!(!schedule.due(occurrence, &at_margin, ResetSignal::At(reset)));
+    assert!(!schedule.due(
+        seconds_before(occurrence, 60),
+        &at_margin,
+        ResetSignal::Unknown
+    ));
+}
+
+#[test]
+fn confirmed_down_window_reset_retries_at_hourly_edge() {
+    let schedule = Schedule::WindowReset;
+    let now = zdt(2026, 6, 24, 8, 0, 0);
+    let one_hour_ago = seconds_before(now.timestamp(), RESET_RETRY_INTERVAL.as_secs());
+
+    assert!(
+        !schedule.due(
+            one_hour_ago
+                .checked_add(SignedDuration::from_secs(1))
+                .expect("inside retry interval"),
+            &now,
+            ResetSignal::ConfirmedDown
+        )
+    );
+    assert!(schedule.due(one_hour_ago, &now, ResetSignal::ConfirmedDown));
+    assert_eq!(
+        schedule.next_after(one_hour_ago, &now, ResetSignal::ConfirmedDown),
+        Some(now.timestamp())
+    );
+    assert_eq!(
+        schedule.next_after(one_hour_ago, &now, ResetSignal::Unknown),
+        None
+    );
 }
 
 #[test]
@@ -616,7 +685,7 @@ fn calendar_waits_for_matching_weekday_and_time() {
     assert!(!weekday_schedule.due(
         seconds_before(wednesday.timestamp(), 86_400),
         &wednesday,
-        None
+        ResetSignal::Unknown
     ));
 
     let time_schedule = parse_schedule("m", &entry(Some("07:30"), None, None))
@@ -626,7 +695,7 @@ fn calendar_waits_for_matching_weekday_and_time() {
     assert!(!time_schedule.due(
         seconds_before(before_time.timestamp(), 86_400),
         &before_time,
-        None
+        ResetSignal::Unknown
     ));
 }
 
@@ -634,14 +703,22 @@ fn calendar_waits_for_matching_weekday_and_time() {
 fn cron_interval_matches_and_suppresses_same_minute() {
     let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
     let now = zdt(2026, 6, 24, 8, 30, 12);
-    assert!(schedule.due(seconds_before(now.timestamp(), 60), &now, None));
-    assert!(!schedule.due(seconds_before(now.timestamp(), 1), &now, None));
+    assert!(schedule.due(
+        seconds_before(now.timestamp(), 60),
+        &now,
+        ResetSignal::Unknown
+    ));
+    assert!(!schedule.due(
+        seconds_before(now.timestamp(), 1),
+        &now,
+        ResetSignal::Unknown
+    ));
 
     let off_minute = zdt(2026, 6, 24, 8, 31, 0);
     assert!(!schedule.due(
         seconds_before(off_minute.timestamp(), 60),
         &off_minute,
-        None
+        ResetSignal::Unknown
     ));
 }
 
@@ -649,10 +726,18 @@ fn cron_interval_matches_and_suppresses_same_minute() {
 fn cron_weekday_gates() {
     let schedule = Schedule::RawCron("0 7 * * 1-5".to_owned());
     let wednesday = zdt(2026, 6, 24, 7, 0, 0);
-    assert!(schedule.due(seconds_before(wednesday.timestamp(), 60), &wednesday, None));
+    assert!(schedule.due(
+        seconds_before(wednesday.timestamp(), 60),
+        &wednesday,
+        ResetSignal::Unknown
+    ));
 
     let saturday = zdt(2026, 6, 27, 7, 0, 0);
-    assert!(!schedule.due(seconds_before(saturday.timestamp(), 60), &saturday, None));
+    assert!(!schedule.due(
+        seconds_before(saturday.timestamp(), 60),
+        &saturday,
+        ResetSignal::Unknown
+    ));
 }
 
 #[test]
@@ -661,7 +746,7 @@ fn interval_next_after_uses_last_fire_edge() {
     let now = zdt(2026, 6, 24, 8, 10, 0);
     let last_fire = seconds_before(now.timestamp(), 60);
     assert_eq!(
-        schedule.next_after(last_fire, &now, None),
+        schedule.next_after(last_fire, &now, ResetSignal::Unknown),
         Some(Timestamp::from_second(last_fire.as_second() + 900).expect("timestamp"))
     );
 }
@@ -676,12 +761,15 @@ fn window_reset_next_after_reports_unconsumed_occurrence() {
         .expect("reset occurrence");
 
     assert_eq!(
-        schedule.next_after(seconds_before(occurrence, 1), &now, Some(reset)),
+        schedule.next_after(seconds_before(occurrence, 1), &now, ResetSignal::At(reset)),
         Some(occurrence)
     );
-    assert_eq!(schedule.next_after(occurrence, &now, Some(reset)), None);
     assert_eq!(
-        schedule.next_after(seconds_before(occurrence, 1), &now, None),
+        schedule.next_after(occurrence, &now, ResetSignal::At(reset)),
+        None
+    );
+    assert_eq!(
+        schedule.next_after(seconds_before(occurrence, 1), &now, ResetSignal::Unknown),
         None
     );
 }
@@ -694,7 +782,7 @@ fn calendar_next_after_crosses_week_boundary() {
     let now = zdt(2026, 6, 24, 8, 0, 0);
     let last_fire = zdt(2026, 6, 22, 7, 30, 0).timestamp();
     assert_eq!(
-        schedule.next_after(last_fire, &now, None),
+        schedule.next_after(last_fire, &now, ResetSignal::Unknown),
         Some(zdt(2026, 6, 29, 7, 30, 0).timestamp())
     );
 }
@@ -707,7 +795,7 @@ fn calendar_next_after_reports_due_today() {
     let now = zdt(2026, 6, 24, 8, 0, 0);
     let last_fire = zdt(2026, 6, 23, 7, 30, 0).timestamp();
     assert_eq!(
-        schedule.next_after(last_fire, &now, None),
+        schedule.next_after(last_fire, &now, ResetSignal::Unknown),
         Some(zdt(2026, 6, 24, 7, 30, 0).timestamp())
     );
 }
@@ -717,7 +805,11 @@ fn cron_next_after_walks_to_next_matching_minute() {
     let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
     let now = zdt(2026, 6, 24, 8, 14, 12);
     assert_eq!(
-        schedule.next_after(seconds_before(now.timestamp(), 60), &now, None),
+        schedule.next_after(
+            seconds_before(now.timestamp(), 60),
+            &now,
+            ResetSignal::Unknown
+        ),
         Some(zdt(2026, 6, 24, 8, 15, 0).timestamp())
     );
 }
@@ -727,7 +819,11 @@ fn cron_next_after_reports_current_matching_minute_due_once() {
     let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
     let now = zdt(2026, 6, 24, 8, 30, 12);
     assert_eq!(
-        schedule.next_after(seconds_before(now.timestamp(), 60), &now, None),
+        schedule.next_after(
+            seconds_before(now.timestamp(), 60),
+            &now,
+            ResetSignal::Unknown
+        ),
         Some(now.timestamp())
     );
 }
@@ -737,7 +833,11 @@ fn cron_next_after_returns_none_past_search_cap() {
     let schedule = Schedule::RawCron("0 0 1 1 *".to_owned());
     let now = zdt(2026, 1, 2, 0, 0, 0);
     assert_eq!(
-        schedule.next_after(seconds_before(now.timestamp(), 60), &now, None),
+        schedule.next_after(
+            seconds_before(now.timestamp(), 60),
+            &now,
+            ResetSignal::Unknown
+        ),
         None
     );
 }

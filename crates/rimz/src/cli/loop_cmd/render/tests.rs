@@ -718,7 +718,7 @@ fn interval_timing(
         last_fire,
         pause,
         &now.to_zoned(jiff::tz::TimeZone::UTC),
-        None,
+        schedule::ResetSignal::Unknown,
     )
 }
 
@@ -776,7 +776,7 @@ fn task_timing_maps_to_existing_list_and_watch_labels() {
                 Some(now),
                 None,
                 &now.to_zoned(jiff::tz::TimeZone::UTC),
-                None,
+                schedule::ResetSignal::Unknown,
             ),
             RowState::NeverRun,
             "—",

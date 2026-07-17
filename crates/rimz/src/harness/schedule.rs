@@ -3,7 +3,7 @@
 //! The elected sidebar elder keeps time for loop tasks while a room is open and
 //! fires `rimz loop run <name>`, which drives one configured loop wake-up. A
 //! `<kind>-ping` virtual cell is the window-priming special case; the schedule
-//! machinery stays generic by evaluating an externally resolved reset instant.
+//! machinery stays generic by evaluating an externally resolved reset signal.
 //!
 //! This module owns task action validation, catalog precedence and mutation,
 //! the [`runner::TaskFire`] state machine, terminal transitions, schedule
@@ -240,9 +240,21 @@ pub enum Schedule {
     WindowReset,
 }
 
+/// Externally resolved state of a provider window-reset schedule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetSignal {
+    At(Timestamp),
+    ConfirmedDown,
+    Unknown,
+}
+
 /// Skew margin so a reset-priming ping lands in the new provider window, never
 /// the final seconds of the old one.
 pub const RESET_PING_MARGIN: SignedDuration = SignedDuration::from_secs(60);
+
+/// Minimum interval between retries while a provider authoritatively reports
+/// that its longest window has not started.
+pub const RESET_RETRY_INTERVAL: SignedDuration = SignedDuration::from_secs(3_600);
 
 impl Schedule {
     /// A short human description for listings.
@@ -268,7 +280,7 @@ impl Schedule {
 
     /// Whether this schedule is due now, given the last time its task was
     /// armed or fired. First-sight arming is owned by the elder firing module.
-    pub fn due(&self, last_fire: Timestamp, now: &Zoned, window_reset: Option<Timestamp>) -> bool {
+    pub fn due(&self, last_fire: Timestamp, now: &Zoned, reset_signal: ResetSignal) -> bool {
         match self {
             Schedule::Interval(spec) => {
                 now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
@@ -277,7 +289,7 @@ impl Schedule {
             Schedule::RawCron(expr) => {
                 cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
             }
-            Schedule::WindowReset => window_reset_due(last_fire, now.timestamp(), window_reset),
+            Schedule::WindowReset => window_reset_due(last_fire, now.timestamp(), reset_signal),
         }
     }
 
@@ -288,7 +300,7 @@ impl Schedule {
         &self,
         last_fire: Timestamp,
         now: &Zoned,
-        window_reset: Option<Timestamp>,
+        reset_signal: ResetSignal,
     ) -> Option<Timestamp> {
         match self {
             Schedule::Interval(spec) => last_fire
@@ -296,7 +308,7 @@ impl Schedule {
                 .ok(),
             Schedule::Calendar(spec) => calendar_next_after(spec, last_fire, now),
             Schedule::RawCron(expr) => cron_next_after(expr, last_fire, now),
-            Schedule::WindowReset => window_reset_next_after(last_fire, window_reset),
+            Schedule::WindowReset => window_reset_next_after(last_fire, reset_signal),
         }
     }
 }
@@ -349,7 +361,7 @@ impl TaskTiming {
         last_fire: Option<Timestamp>,
         pause: Option<&pauses::PauseEntry>,
         now: &Zoned,
-        window_reset: Option<Timestamp>,
+        reset_signal: ResetSignal,
     ) -> Self {
         let parsed = parse_schedule(name, entry);
         let active_pause = pause
@@ -359,7 +371,7 @@ impl TaskTiming {
             (Ok(parsed), Some(last_fire)) => parsed.schedule.next_after(
                 pauses::effective_last_fire(last_fire, pause, now.timestamp()),
                 now,
-                window_reset,
+                reset_signal,
             ),
             (Ok(_), None) | (Err(_), _) => None,
         };
@@ -681,20 +693,30 @@ fn format_minutes(minutes: u32) -> String {
     }
 }
 
-fn window_reset_occurrence(window_reset: Option<Timestamp>) -> Option<Timestamp> {
-    window_reset?.checked_add(RESET_PING_MARGIN).ok()
+fn window_reset_occurrence(reset_signal: ResetSignal) -> Option<Timestamp> {
+    let ResetSignal::At(reset_at) = reset_signal else {
+        return None;
+    };
+    reset_at.checked_add(RESET_PING_MARGIN).ok()
 }
 
-fn window_reset_due(last_fire: Timestamp, now: Timestamp, window_reset: Option<Timestamp>) -> bool {
-    window_reset_occurrence(window_reset)
-        .is_some_and(|occurrence| last_fire < occurrence && now >= occurrence)
+fn window_reset_due(last_fire: Timestamp, now: Timestamp, reset_signal: ResetSignal) -> bool {
+    match reset_signal {
+        ResetSignal::At(_) => window_reset_occurrence(reset_signal)
+            .is_some_and(|occurrence| last_fire < occurrence && now >= occurrence),
+        ResetSignal::ConfirmedDown => now.duration_since(last_fire) >= RESET_RETRY_INTERVAL,
+        ResetSignal::Unknown => false,
+    }
 }
 
-fn window_reset_next_after(
-    last_fire: Timestamp,
-    window_reset: Option<Timestamp>,
-) -> Option<Timestamp> {
-    window_reset_occurrence(window_reset).filter(|occurrence| *occurrence > last_fire)
+fn window_reset_next_after(last_fire: Timestamp, reset_signal: ResetSignal) -> Option<Timestamp> {
+    match reset_signal {
+        ResetSignal::At(_) => {
+            window_reset_occurrence(reset_signal).filter(|occurrence| *occurrence > last_fire)
+        }
+        ResetSignal::ConfirmedDown => last_fire.checked_add(RESET_RETRY_INTERVAL).ok(),
+        ResetSignal::Unknown => None,
+    }
 }
 
 fn calendar_due(spec: &CalendarSpec, last_fire: Timestamp, now: &Zoned) -> bool {

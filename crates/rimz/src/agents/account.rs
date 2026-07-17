@@ -125,6 +125,16 @@ pub struct ProviderCapacity {
     pacing_max_mins: Option<u32>,
 }
 
+/// Provider truth for whether the longest subscription window has a live
+/// countdown edge. Harness scheduling maps this provider-owned verdict onto
+/// its generic reset schedule signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LongestWindowSignal {
+    At(Timestamp),
+    ConfirmedDown,
+    Unknown,
+}
+
 impl ProviderCapacity {
     /// Read one kind-wide capacity from the shared provider cache.
     pub fn read(runtime: &RuntimePaths, kind: &str) -> Option<Self> {
@@ -226,9 +236,37 @@ impl ProviderCapacity {
         window_running_verdict(self.duration_window(true)?, now)
     }
 
-    /// Raw reset stamp for the longest duration-bearing window.
-    pub(crate) fn longest_window_reset_at(&self) -> Option<Timestamp> {
-        self.duration_window(true)?.resets_at
+    /// Whether an authoritative reading says the longest known duration is not
+    /// currently enforced, so a reset primer has no window to start.
+    pub(crate) fn longest_window_lifted(&self) -> bool {
+        self.duration_window(true)
+            .is_some_and(|window| window.lifted)
+    }
+
+    /// Authoritative state of the longest duration-bearing window without
+    /// projecting a passed reset into a synthetic future countdown.
+    pub(crate) fn longest_window_signal(&self, now: Timestamp) -> LongestWindowSignal {
+        let Some(window) = self.duration_window(true) else {
+            return LongestWindowSignal::Unknown;
+        };
+        if window.lifted {
+            return LongestWindowSignal::Unknown;
+        }
+        if window.not_started(now) {
+            return if window.source.is_authoritative() {
+                LongestWindowSignal::ConfirmedDown
+            } else {
+                LongestWindowSignal::Unknown
+            };
+        }
+        if let Some(resets_at) = window.resets_at {
+            return LongestWindowSignal::At(resets_at);
+        }
+        if window.used_percentage.is_some() && window.source.is_authoritative() {
+            LongestWindowSignal::ConfirmedDown
+        } else {
+            LongestWindowSignal::Unknown
+        }
     }
 
     /// Forward budget headroom in the longest running window.

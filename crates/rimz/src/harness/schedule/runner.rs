@@ -21,17 +21,17 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{
-    HookPreflightErr, ProviderAccountBinding, ProviderCapacity, TurnLifecycleNeed, WindowSurplus,
-    find_adapter, preflight_hooks,
+    HookPreflightErr, LongestWindowSignal, ProviderAccountBinding, ProviderCapacity,
+    TurnLifecycleNeed, WindowSurplus, find_adapter, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
-use crate::harness::schedule::TaskAction;
 use crate::harness::schedule::catalog::{self, TaskCatalog};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition,
 };
+use crate::harness::schedule::{ResetSignal, TaskAction};
 use crate::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use crate::ids::WorkspaceId;
 use crate::store::paths::{RuntimePaths, StatePaths, config_home, runtime_home, state_home};
@@ -225,6 +225,13 @@ impl FireScope {
         let running = self.window_running_state(entry.every.as_deref() == Some("reset"), now)?;
         if kind == "qwen" {
             return Ok(qwen_ping_cache_reason(true, binding_state, running));
+        }
+        if entry.every.as_deref() == Some("reset")
+            && self
+                .capacity()?
+                .is_some_and(ProviderCapacity::longest_window_lifted)
+        {
+            return Ok(Some(format!("{kind} budget window already counting down")));
         }
         Ok((running == Some(true)).then(|| format!("{kind} budget window already counting down")))
     }
@@ -1781,15 +1788,33 @@ fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
     }
 }
 
-/// Raw reset stamp for `entry`'s provider longest budget window.
-pub fn window_reset_at(
+pub(crate) fn reset_signal(capacity: Option<&ProviderCapacity>, now: Timestamp) -> ResetSignal {
+    match capacity.map(|capacity| capacity.longest_window_signal(now)) {
+        Some(LongestWindowSignal::At(reset_at)) => ResetSignal::At(reset_at),
+        Some(LongestWindowSignal::ConfirmedDown) => ResetSignal::ConfirmedDown,
+        Some(LongestWindowSignal::Unknown) | None => ResetSignal::Unknown,
+    }
+}
+
+pub(crate) fn reset_signal_for(
+    runtime: &RuntimePaths,
+    kind: &str,
+    binding: Option<&ProviderAccountBinding>,
+    now: Timestamp,
+) -> ResetSignal {
+    let capacity = capacity_for(runtime, kind, binding);
+    reset_signal(capacity.as_ref(), now)
+}
+
+/// Reset signal for `entry`'s provider longest budget window.
+pub fn window_reset_signal(
     entry: &TaskEntry,
     kind: &str,
     binding: Option<&ProviderAccountBinding>,
-) -> Result<Option<Timestamp>> {
+    now: Timestamp,
+) -> Result<ResetSignal> {
     let runtime = entry_runtime(entry)?;
-    Ok(capacity_for(&runtime, kind, binding)
-        .and_then(|capacity| capacity.longest_window_reset_at()))
+    Ok(reset_signal_for(&runtime, kind, binding, now))
 }
 
 fn capacity_for(
@@ -1925,11 +1950,11 @@ mod tests {
         .expect("rate-limit cache");
         let mut active = FireScope::new(
             crate::ids::AgentKind::new_unchecked("claude"),
-            workspace_id,
+            workspace_id.clone(),
             runtime.clone(),
             None,
         );
-        active.capacity_runtime = Some(runtime);
+        active.capacity_runtime = Some(runtime.clone());
         let entry = TaskEntry {
             surplus: Some("0.5".to_owned()),
             ..TaskEntry::default()
@@ -1940,6 +1965,98 @@ mod tests {
         );
         assert!(active.window_running(false, now).expect("active window"));
         assert_eq!(active.capacity_reads.get(), 1);
+
+        let lifted_cache = crate::agents::account::RateLimitsCache {
+            entries: std::collections::BTreeMap::from([(
+                "claude".to_owned(),
+                crate::agents::account::RateLimitCacheEntry {
+                    limits: crate::agents::AgentRateLimits {
+                        windows: vec![crate::agents::RateLimitWindow {
+                            duration_mins: Some(7 * 24 * 60),
+                            source: crate::agents::context::WindowSource::Authoritative,
+                            lifted: true,
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        crate::store::atomic::write_temp_then_rename_cache(
+            &runtime.shared_rate_limits_path(),
+            &lifted_cache,
+        )
+        .expect("lifted rate-limit cache");
+        let mut lifted = FireScope::new(
+            crate::ids::AgentKind::new_unchecked("claude"),
+            workspace_id,
+            runtime.clone(),
+            None,
+        );
+        lifted.capacity_runtime = Some(runtime);
+        let reset_ping = TaskEntry {
+            every: Some("reset".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert_eq!(
+            lifted
+                .ping_gate_reason(&reset_ping, now)
+                .expect("lifted reset window needs no primer"),
+            Some("claude budget window already counting down".to_owned())
+        );
+    }
+
+    #[test]
+    fn qwen_reset_signal_requires_exact_bound_capacity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("runtime paths");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let now = Timestamp::from_second(1_000_000).expect("now");
+        let reset = now + jiff::SignedDuration::from_secs(2 * 86_400);
+        let scope = crate::agents::ProviderAccountScope::sub_provider("alibaba", "international");
+        let cache = crate::agents::account::RateLimitsCache {
+            entries: std::collections::BTreeMap::from([(
+                "qwen".to_owned(),
+                crate::agents::account::RateLimitCacheEntry {
+                    scope: scope.clone(),
+                    account_key: Some("owner".to_owned()),
+                    limits: crate::agents::AgentRateLimits {
+                        windows: vec![crate::agents::RateLimitWindow {
+                            used_percentage: Some(40),
+                            resets_at: Some(reset),
+                            duration_mins: Some(7 * 24 * 60),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        crate::store::atomic::write_temp_then_rename_cache(
+            &runtime.shared_rate_limits_path(),
+            &cache,
+        )
+        .expect("rate-limit cache");
+
+        assert_eq!(
+            reset_signal_for(&runtime, "qwen", None, now),
+            ResetSignal::Unknown
+        );
+        let mismatch = ProviderAccountBinding::new(scope.clone(), "other".to_owned())
+            .expect("mismatched binding");
+        assert_eq!(
+            reset_signal_for(&runtime, "qwen", Some(&mismatch), now),
+            ResetSignal::Unknown
+        );
+        let matching =
+            ProviderAccountBinding::new(scope, "owner".to_owned()).expect("matching binding");
+        assert_eq!(
+            reset_signal_for(&runtime, "qwen", Some(&matching), now),
+            ResetSignal::At(reset)
+        );
     }
 
     #[test]

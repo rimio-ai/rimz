@@ -13,7 +13,6 @@ use jiff::{Timestamp, Zoned};
 use super::pauses::PauseEntry;
 use super::{catalog::TaskCatalog, pauses};
 use crate::RuntimePaths;
-use crate::agents::ProviderCapacity;
 use crate::config::TaskEntry;
 use crate::harness::schedule;
 use crate::ids::WorkspaceId;
@@ -47,8 +46,8 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     let path = state_path(runtime);
     let state = read_state(&path);
     let pauses = pauses::load();
-    let resets = reset_occurrences(runtime, &tasks);
-    let (actions, next_state) = plan(&tasks, &state, &pauses, now, &resets);
+    let reset_signals = reset_signals(runtime, &tasks, now.timestamp());
+    let (actions, next_state) = plan(&tasks, &state, &pauses, now, &reset_signals);
     if next_state != state
         && let Err(err) = write_temp_then_rename_cache(&path, &next_state)
     {
@@ -87,7 +86,7 @@ fn plan(
     state: &BTreeMap<String, Timestamp>,
     pauses: &BTreeMap<String, PauseEntry>,
     now: &Zoned,
-    resets: &BTreeMap<String, Timestamp>,
+    reset_signals: &BTreeMap<String, schedule::ResetSignal>,
 ) -> (Vec<(String, Action)>, BTreeMap<String, Timestamp>) {
     let mut actions = Vec::new();
     let mut next_state = BTreeMap::new();
@@ -118,7 +117,10 @@ fn plan(
                 if parsed.schedule.due(
                     pauses::effective_last_fire(last_fire, pause, now.timestamp()),
                     now,
-                    resets.get(name).copied(),
+                    reset_signals
+                        .get(name)
+                        .copied()
+                        .unwrap_or(schedule::ResetSignal::Unknown),
                 ) =>
             {
                 actions.push((name.clone(), Action::Fire));
@@ -132,10 +134,11 @@ fn plan(
     (actions, next_state)
 }
 
-fn reset_occurrences(
+fn reset_signals(
     runtime: &RuntimePaths,
     tasks: &BTreeMap<String, TaskEntry>,
-) -> BTreeMap<String, Timestamp> {
+    now: Timestamp,
+) -> BTreeMap<String, schedule::ResetSignal> {
     tasks
         .iter()
         .filter(|(_, entry)| entry.every.as_deref() == Some("reset"))
@@ -144,15 +147,15 @@ fn reset_occurrences(
                 .agent
                 .as_deref()
                 .and_then(crate::harness::spec::ping_kind)?;
-            let capacity = if kind == "qwen" {
+            let binding = if kind == "qwen" {
                 super::runner::managed_ping_binding(entry, kind)
-                    .and_then(|binding| ProviderCapacity::read_bound(runtime, kind, &binding))
             } else {
-                ProviderCapacity::read(runtime, kind)
+                None
             };
-            capacity
-                .and_then(|capacity| capacity.longest_window_reset_at())
-                .map(|reset| (name.clone(), reset))
+            Some((
+                name.clone(),
+                super::runner::reset_signal_for(runtime, kind, binding.as_ref(), now),
+            ))
         })
         .collect()
 }
@@ -300,7 +303,7 @@ mod tests {
             .expect("reset occurrence");
         let now = occurrence.to_zoned(jiff::tz::TimeZone::UTC);
         let tasks = BTreeMap::from([("w7".to_owned(), reset_task("/repo"))]);
-        let resets = BTreeMap::from([("w7".to_owned(), reset)]);
+        let resets = BTreeMap::from([("w7".to_owned(), schedule::ResetSignal::At(reset))]);
 
         let (actions, next) = plan(&tasks, &BTreeMap::new(), &BTreeMap::new(), &now, &resets);
         assert_eq!(actions, vec![("w7".to_owned(), Action::Arm)]);
@@ -318,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn at_reset_task_without_cached_reset_never_fires() {
+    fn unknown_reset_task_never_fires() {
         let now = zdt(2026, 6, 24, 8, 1, 0);
         let tasks = BTreeMap::from([("w7".to_owned(), reset_task("/repo"))]);
         let state = BTreeMap::from([("w7".to_owned(), seconds_before(now.timestamp(), 120))]);
@@ -327,6 +330,23 @@ mod tests {
 
         assert!(actions.is_empty());
         assert_eq!(next.get("w7"), state.get("w7"));
+    }
+
+    #[test]
+    fn confirmed_down_reset_task_fires_hourly() {
+        let now = zdt(2026, 6, 24, 8, 1, 0);
+        let tasks = BTreeMap::from([("w7".to_owned(), reset_task("/repo"))]);
+        let signals = BTreeMap::from([("w7".to_owned(), schedule::ResetSignal::ConfirmedDown)]);
+        let not_due = BTreeMap::from([("w7".to_owned(), seconds_before(now.timestamp(), 3_599))]);
+        let due = BTreeMap::from([("w7".to_owned(), seconds_before(now.timestamp(), 3_600))]);
+
+        let (actions, next) = plan(&tasks, &not_due, &BTreeMap::new(), &now, &signals);
+        assert!(actions.is_empty());
+        assert_eq!(next, not_due);
+
+        let (actions, next) = plan(&tasks, &due, &BTreeMap::new(), &now, &signals);
+        assert_eq!(actions, vec![("w7".to_owned(), Action::Fire)]);
+        assert_eq!(next.get("w7"), Some(&now.timestamp()));
     }
 
     #[test]

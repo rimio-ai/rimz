@@ -36,7 +36,7 @@ use rimz::harness::schedule::runner::{
     StopAction, managed_ping_binding, newest_active_run, newest_active_run_for_entry,
     next_stop_action, parse_mode, parse_task_timeout, ping_kind_supported, preflight_entry,
     probe_run_lock, resolve_task_spec, run_lock_path, signal_run_lock_holder, tail_output,
-    wait_for_run_lock_release, window_reset_at,
+    wait_for_run_lock_release, window_reset_signal,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -315,20 +315,22 @@ fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
     RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
 }
 
-fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
+fn reset_signal_for(entry: &TaskEntry, now: Timestamp) -> schedule::ResetSignal {
     if entry.every.as_deref() != Some("reset") {
-        return None;
+        return schedule::ResetSignal::Unknown;
     }
-    let kind = entry
+    let Some(kind) = entry
         .agent
         .as_deref()
-        .and_then(rimz::harness::spec::ping_kind)?;
+        .and_then(rimz::harness::spec::ping_kind)
+    else {
+        return schedule::ResetSignal::Unknown;
+    };
     let binding = (kind == "qwen")
         .then(|| managed_ping_binding(entry, kind))
         .flatten();
-    window_reset_at(entry, kind, binding.as_ref())
-        .ok()
-        .flatten()
+    window_reset_signal(entry, kind, binding.as_ref(), now)
+        .unwrap_or(schedule::ResetSignal::Unknown)
 }
 
 fn observe_task_timing(
@@ -350,11 +352,14 @@ fn observe_task_timing(
             .as_deref()
             .and_then(rimz::harness::spec::ping_kind)
             .is_some();
-    let window_reset = ((retain_overlaid_next || (blocked.is_none() && !active_pause))
+    let reset_signal = if (retain_overlaid_next || (blocked.is_none() && !active_pause))
         && last_fire.is_some()
-        && valid_reset_shape)
-        .then(|| window_reset_for(entry))
-        .flatten();
+        && valid_reset_shape
+    {
+        reset_signal_for(entry, now_zoned.timestamp())
+    } else {
+        schedule::ResetSignal::Unknown
+    };
     schedule::TaskTiming::evaluate(
         name,
         entry,
@@ -362,7 +367,7 @@ fn observe_task_timing(
         last_fire,
         pause,
         now_zoned,
-        window_reset,
+        reset_signal,
     )
 }
 

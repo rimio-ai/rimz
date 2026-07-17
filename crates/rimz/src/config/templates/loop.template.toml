@@ -7,6 +7,9 @@
 # Supervised scheduled turns without a task-specific timeout use two hours.
 # default-timeout = "2h"
 
+# Keep each provider's longest budget window running with autoping-<kind> tasks.
+# auto-ping = false
+
 # Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
 # fired by the sidebar elder while a room for the task's project is open. Use
 # either `agent` to spawn a supervised turn or `wake` to wake one pinned live

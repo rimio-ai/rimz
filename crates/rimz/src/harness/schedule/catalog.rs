@@ -76,28 +76,30 @@ impl TaskCatalog {
     /// fails at command entry.
     pub fn load(project_root: Option<&Path>) -> Result<Self> {
         let instances = instances::load_strict_from(&state_home())?;
-        let machine = MachineConfig::load_loop()
-            .context("reading per-machine loop.toml")?
-            .tasks;
+        let machine = MachineConfig::load_loop().context("reading per-machine loop.toml")?;
+        let auto_ping = machine.auto_ping;
+        let machine_tasks = machine.tasks;
         let project = project_root
             .map(|root| crate::config::effective::project_tasks(root, &config_home()))
             .transpose()?
             .flatten()
             .map(|project| (project.tasks, project.state));
-        Ok(Self::from_layers(instances, machine, project))
+        Ok(Self::from_layers(instances, machine_tasks, project)
+            .with_auto_ping(auto_ping, project_root))
     }
 
     /// Best-effort load for elder, doctor, and maintenance reads.
     pub fn load_lenient(project_root: Option<&Path>) -> Self {
         let instances = instances::load();
-        let machine = MachineConfig::load_lenient().r#loop.tasks.clone();
+        let machine = MachineConfig::load_lenient().r#loop.clone();
+        let auto_ping = machine.auto_ping;
         let project = project_root.and_then(|root| {
             crate::config::effective::project_tasks(root, &config_home())
                 .ok()
                 .flatten()
                 .map(|project| (project.tasks, project.state))
         });
-        Self::from_layers(instances, machine, project)
+        Self::from_layers(instances, machine.tasks, project).with_auto_ping(auto_ping, project_root)
     }
 
     fn from_layers(instances: Tasks, machine: Tasks, project: Option<(Tasks, TrustState)>) -> Self {
@@ -125,6 +127,35 @@ impl TaskCatalog {
             }
         }
         Self { visible, runnable }
+    }
+
+    fn with_auto_ping(mut self, enabled: bool, project_root: Option<&Path>) -> Self {
+        let Some(project_root) = project_root.filter(|_| enabled) else {
+            return self;
+        };
+        for adapter in crate::agents::registry::ADAPTERS {
+            if adapter.ping_args().is_none() {
+                continue;
+            }
+            let kind = adapter.descriptor().kind;
+            let name = format!("autoping-{kind}");
+            if self.visible.contains_key(&name) {
+                continue;
+            }
+            let task = LoadedTask {
+                entry: TaskEntry {
+                    agent: Some(format!("{kind}-ping")),
+                    prompt: Some("ping".to_owned()),
+                    root: project_root.to_path_buf(),
+                    every: Some("reset".to_owned()),
+                    ..TaskEntry::default()
+                },
+                source: TaskSource::Config,
+            };
+            self.visible.insert(name.clone(), task.clone());
+            self.runnable.insert(name, task);
+        }
+        self
     }
 
     pub fn visible(&self) -> &BTreeMap<String, LoadedTask> {
@@ -454,6 +485,79 @@ mod tests {
         assert_eq!(
             catalog.for_run("same").unwrap().entry.prompt.as_deref(),
             Some("project")
+        );
+    }
+
+    #[test]
+    fn auto_ping_synthesizes_each_ping_capable_adapter_with_a_root() {
+        let catalog = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
+            .with_auto_ping(true, Some(Path::new("/repo")));
+        let expected = crate::agents::registry::ADAPTERS
+            .iter()
+            .filter(|adapter| adapter.ping_args().is_some())
+            .map(|adapter| format!("autoping-{}", adapter.descriptor().kind))
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            catalog.visible.keys().cloned().collect::<BTreeSet<_>>(),
+            expected
+        );
+        assert_eq!(
+            catalog.runnable.keys().cloned().collect::<BTreeSet<_>>(),
+            expected
+        );
+        assert!(catalog.visible.contains_key("autoping-qwen"));
+        for (name, task) in &catalog.visible {
+            let kind = name.trim_start_matches("autoping-");
+            assert_eq!(task.source, TaskSource::Config);
+            assert_eq!(
+                task.entry.agent.as_deref(),
+                Some(format!("{kind}-ping").as_str())
+            );
+            assert_eq!(task.entry.prompt.as_deref(), Some("ping"));
+            assert_eq!(task.entry.root, Path::new("/repo"));
+            assert_eq!(task.entry.worktree, None);
+            assert_eq!(
+                task.action(name).unwrap(),
+                TaskAction::Spawn(format!("{kind}-ping"))
+            );
+            assert!(matches!(
+                super::super::parse_schedule(name, &task.entry)
+                    .unwrap()
+                    .schedule,
+                super::super::Schedule::WindowReset
+            ));
+        }
+    }
+
+    #[test]
+    fn auto_ping_requires_enablement_and_a_project_root() {
+        let disabled = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
+            .with_auto_ping(false, Some(Path::new("/repo")));
+        let rootless = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
+            .with_auto_ping(true, None);
+
+        assert!(disabled.visible.is_empty());
+        assert!(rootless.visible.is_empty());
+    }
+
+    #[test]
+    fn user_task_shadows_synthetic_auto_ping() {
+        let user = task("user-owned");
+        let catalog = TaskCatalog::from_layers(
+            Tasks::default(),
+            Tasks(BTreeMap::from([("autoping-claude".to_owned(), user)])),
+            None,
+        )
+        .with_auto_ping(true, Some(Path::new("/repo")));
+
+        assert_eq!(
+            catalog.visible["autoping-claude"].entry.prompt.as_deref(),
+            Some("user-owned")
+        );
+        assert_eq!(
+            catalog.runnable["autoping-claude"].entry.prompt.as_deref(),
+            Some("user-owned")
         );
     }
 

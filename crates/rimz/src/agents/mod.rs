@@ -69,6 +69,7 @@ use crate::harness::run::PermissionMode;
 use crate::mux::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
+pub(crate) use account::LongestWindowSignal;
 pub(crate) use account::WindowSurplus;
 #[doc(hidden)]
 pub use account::provider_budget_gate;

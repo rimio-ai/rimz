@@ -554,7 +554,7 @@ fn write_add_feedback(
 fn first_next_fire(entry: &TaskEntry, parsed: &schedule::ParsedSchedule) -> Option<Timestamp> {
     let now = Timestamp::now();
     let zone = MachineConfig::load_lenient().time_zone();
-    let window_reset = match &parsed.schedule {
+    let reset_signal = match &parsed.schedule {
         schedule::Schedule::WindowReset => entry
             .agent
             .as_deref()
@@ -565,15 +565,14 @@ fn first_next_fire(entry: &TaskEntry, parsed: &schedule::ParsedSchedule) -> Opti
                 } else {
                     None
                 };
-                window_reset_at(entry, kind, binding.as_ref())
-                    .ok()
-                    .flatten()
-            }),
-        _ => None,
+                window_reset_signal(entry, kind, binding.as_ref(), now).ok()
+            })
+            .unwrap_or(schedule::ResetSignal::Unknown),
+        _ => schedule::ResetSignal::Unknown,
     };
     parsed
         .schedule
-        .next_after(now, &now.to_zoned(zone), window_reset)
+        .next_after(now, &now.to_zoned(zone), reset_signal)
 }
 
 fn resolve_deadline(raw: &str) -> Result<Timestamp> {

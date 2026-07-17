@@ -56,6 +56,14 @@ rimz loop add prime --agent claude-ping --prompt ping --every reset
 
 `--every reset` fires one minute after the provider's longest pacing window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes. Qwen uses the exact account's `7d` window for reset recurrence; an exhausted Alibaba `30d` window still blocks a fire without stretching the recurrence to a month. The shape requires a supported `<kind>-ping`.
 
+To keep the longest window running for every supported provider without defining each task, enable the machine-level loop flag:
+
+```toml
+auto-ping = true
+```
+
+RimZ synthesizes a visible `autoping-<kind>` reset task for each ping-capable adapter in every open project room. When an authoritative provider reading says the longest window is down, the task retries within an hour; immediately before each ping, RimZ checks the provider's OAuth usage API again and skips if the window has started elsewhere. An officially cleared limit — full bars with no active reset countdown — enters the same retry path, while a logged-out provider or unknown reading stays idle.
+
 ## Wake a running agent
 
 An agent's work often ends in a wait. CI has twenty minutes left, a reviewer owes comments, a deploy is baking. The agent has nothing to do until then, and the follow-up falls to you: remember to check CI, then tell the agent to merge. You become the reminder service for your own fleet.

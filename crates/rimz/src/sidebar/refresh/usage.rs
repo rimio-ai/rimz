@@ -286,6 +286,24 @@ pub fn complete_realtime_account_usage(
     )
 }
 
+/// Force one bounded direct account-usage read before a reset-shaped ping.
+/// Cache publication remains nonce-guarded by the normal claim path.
+pub fn refresh_account_usage_now(runtime: &RuntimePaths, kind: &str) -> bool {
+    if crate::agents::credits::oauth_usage_offline() {
+        return false;
+    }
+    refresh_account_usage_now_with(runtime, kind, merge_account_usage_if_due)
+}
+
+fn refresh_account_usage_now_with(
+    runtime: &RuntimePaths,
+    kind: &str,
+    refresh: impl FnOnce(&RuntimePaths, &str, bool) -> bool,
+) -> bool {
+    super::credits::invalidate_oauth_read(runtime, kind);
+    refresh(runtime, kind, true)
+}
+
 fn complete_realtime_account_usage_with(
     runtime: &RuntimePaths,
     kind: &str,

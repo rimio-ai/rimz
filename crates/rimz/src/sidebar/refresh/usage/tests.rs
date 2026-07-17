@@ -102,6 +102,43 @@ fn account_usage_runtime() -> (tempfile::TempDir, RuntimePaths) {
     (dir, runtime)
 }
 
+#[test]
+fn forced_account_usage_refresh_invalidates_throttle_before_direct_claim() {
+    let (_dir, runtime) = account_usage_runtime();
+    super::super::credits::write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            entries: BTreeMap::from([(
+                "claude".to_owned(),
+                ProviderCreditsEntry {
+                    oauth_read_at_ms: 123,
+                    auth_settled: true,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+    let mut called = false;
+
+    assert!(refresh_account_usage_now_with(
+        &runtime,
+        "claude",
+        |runtime, kind, merge_windows| {
+            called = true;
+            assert_eq!(kind, "claude");
+            assert!(merge_windows);
+            let cache = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
+            let entry = &cache.entries[kind];
+            assert_eq!(entry.oauth_read_at_ms, 0);
+            assert!(!entry.auth_settled);
+            assert_eq!(entry.direct_query_claim, None);
+            true
+        }
+    ));
+    assert!(called);
+}
+
 fn usage_windows(percent: u8) -> AgentRateLimits {
     AgentRateLimits {
         windows: vec![RateLimitWindow {
