@@ -45,46 +45,17 @@ fn fatal_session_message_keeps_reconnect_tail_for_other_codes() {
 }
 
 #[test]
-fn direct_dial_plan_selects_outage_age_pacing() {
-    let policy = rimz::remote::ReconnectPolicy::default();
-    let ladder = Duration::from_secs(30);
-
-    assert_eq!(
-        retry_delay(&policy, true, Duration::from_secs(30), ladder),
-        ladder
-    );
-    assert_eq!(
-        retry_delay(
-            &policy,
-            true,
-            Duration::from_secs(30),
-            Duration::from_secs(1)
-        ),
-        Duration::from_secs(2)
-    );
-    assert_eq!(
-        retry_delay(&policy, false, Duration::from_secs(30), ladder),
-        ladder
-    );
-}
-
-#[test]
 fn plain_retry_wait_reports_interruption() {
     let stop = AtomicBool::new(true);
-    let mut ui = OutageUi::plain_lines("dev-box");
-    let mut outage = OutageState::new("dev-box", None, None);
 
     assert_eq!(
-        wait_before_retry(
+        wait_for_plain_attempt(
             None,
-            Duration::from_secs(30),
-            Duration::from_secs(30),
-            &mut outage,
-            &mut ui,
+            &rimz::remote::ReconnectPolicy::default(),
+            "dev-box",
             Some(&stop),
-        )
-        .expect("wait result"),
-        WaitOutcome::Interrupted
+        ),
+        PlainWaitOutcome::Interrupted
     );
 }
 
@@ -97,22 +68,14 @@ fn plain_retry_wait_omits_the_internet_checkpoint() {
 
 #[test]
 fn settled_retry_wait_returns_only_attach_or_interrupted() {
-    let mut ui = OutageUi::plain_lines("dev-box");
-    let mut outage = OutageState::new("dev-box", None, None);
+    let policy = rimz::remote::ReconnectPolicy {
+        reachable_retry: Duration::ZERO,
+        ..rimz::remote::ReconnectPolicy::default()
+    };
 
     assert_eq!(
-        wait_before_retry(
-            None,
-            Duration::ZERO,
-            Duration::from_secs(30),
-            &mut outage,
-            &mut ui,
-            None,
-        )
-        .expect("wait result"),
-        WaitOutcome::AttachNow {
-            network_restored: false
-        }
+        wait_for_plain_attempt(None, &policy, "dev-box", None,),
+        PlainWaitOutcome::AttemptNow
     );
 }
 
@@ -181,4 +144,21 @@ fn prepare_control_path_hardens_control_directories() {
             .mode();
         assert_eq!(mode & 0o077, 0, "{} is private", path.display());
     }
+}
+
+#[test]
+fn preestablished_probe_preserves_the_master_socket() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let control = dir.path().join("master.sock");
+    std::fs::write(&control, b"owned by master guard").expect("write control marker");
+    let mut probe = ProbeHandle {
+        stop: Arc::new(AtomicBool::new(true)),
+        join: None,
+        control_path: Some(control.clone()),
+        remove_control_path: false,
+    };
+
+    probe.finish();
+
+    assert!(control.exists());
 }

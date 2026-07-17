@@ -10,6 +10,7 @@ use ratatui::crossterm::style::{
 };
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
 use ratatui::crossterm::{execute, queue};
+use rimz::remote::reachability::FooterPhase;
 use rimz::remote::recovery::{RecoveryFrame, RecoveryPanel, StageStatus};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -68,7 +69,38 @@ impl OutageUi {
         if self.is_plain() {
             let _ = writeln!(
                 std::io::stderr().lock(),
-                "rimz: {} unreachable — holding reconnect until the network returns; Ctrl-C stops",
+                "rimz: network to {} lost — waiting for network; Ctrl-C stops",
+                self.host,
+            );
+        }
+    }
+
+    pub(super) fn report_network_restored(&self) {
+        if self.is_plain() {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: network to {} restored — reconnecting now",
+                self.host,
+            );
+        }
+    }
+
+    pub(super) fn report_attempt_failed(&self, error: Option<&str>) {
+        if self.is_plain() {
+            let detail = error.unwrap_or("SSH attempt failed");
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: reconnect to {} failed — {detail}",
+                self.host,
+            );
+        }
+    }
+
+    pub(super) fn report_reattached(&self) {
+        if self.is_plain() {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: reattached to {}",
                 self.host,
             );
         }
@@ -79,7 +111,7 @@ impl OutageUi {
         recovery: &mut RecoveryPanel,
         wait_elapsed: Duration,
         outage_for: Duration,
-        next_attempt_in: Option<Duration>,
+        phase: FooterPhase,
     ) -> io::Result<UiEvent> {
         if matches!(self.state, UiState::PlainLines) || !recovery.visible(wait_elapsed) {
             return Ok(UiEvent::Continue);
@@ -100,15 +132,15 @@ impl OutageUi {
         let UiState::Panel(panel) = &mut self.state else {
             return Ok(UiEvent::Continue);
         };
-        panel.draw(&recovery.frame(outage_for, next_attempt_in))?;
+        panel.draw(&recovery.frame(outage_for, phase))?;
         panel.poll_interrupt()
     }
 
-    pub(super) fn release(&mut self, establishing: bool) -> io::Result<()> {
+    pub(super) fn release(&mut self) -> io::Result<()> {
         let UiState::Panel(panel) = std::mem::replace(&mut self.state, UiState::PlainLines) else {
             return Ok(());
         };
-        panel.release(&self.host, establishing)
+        panel.release()
     }
 }
 
@@ -195,13 +227,10 @@ impl OutagePanel {
         Ok(UiEvent::Continue)
     }
 
-    fn release(mut self, host: &str, establishing: bool) -> io::Result<()> {
+    fn release(mut self) -> io::Result<()> {
         drop(self.guard.take());
         let mut stdout = std::io::stdout().lock();
         execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
-        if establishing {
-            writeln!(stdout, "rimz: establishing session to {host}…")?;
-        }
         stdout.flush()
     }
 }
@@ -253,6 +282,14 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
             dim: false,
         }
     }));
+    if let Some(error) = &frame.last_error {
+        rows.push(DisplayRow {
+            text: format!("last error: {error}"),
+            color: Color::DarkGrey,
+            bold: false,
+            dim: true,
+        });
+    }
     rows.push(DisplayRow {
         text: String::new(),
         color: Color::Reset,
@@ -260,13 +297,15 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
         dim: false,
     });
     rows.push(DisplayRow {
-        text: if frame.connecting {
-            format!("{spinner} connecting…")
-        } else {
-            format!(
+        text: match frame.phase {
+            FooterPhase::WaitingForNetwork => format!("{spinner} waiting for network"),
+            FooterPhase::Connecting => {
+                format!("{spinner} reconnecting… (attempt {})", frame.attempt)
+            }
+            FooterPhase::NextAttemptIn(remaining) => format!(
                 "{spinner} next attempt in {}s",
-                countdown_seconds(frame.next_attempt_in.unwrap_or_default())
-            )
+                countdown_seconds(remaining)
+            ),
         },
         color: Color::Yellow,
         bold: false,
@@ -330,6 +369,7 @@ pub(super) const PANEL_TICK: Duration = SPINNER_TICK;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::remote::reachability::FooterPhase;
     use rimz::remote::recovery::{RecoveryStage, StageFrame};
 
     #[test]
@@ -378,14 +418,14 @@ mod tests {
             host: "dev-box".to_owned(),
             outage_for: Duration::from_secs(133),
             attempt: 7,
-            next_attempt_in: Some(Duration::from_millis(11_100)),
-            connecting: false,
+            phase: FooterPhase::NextAttemptIn(Duration::from_millis(11_100)),
+            last_error: Some("Permission denied (publickey).".to_owned()),
             rows: vec![
                 StageFrame {
                     stage: RecoveryStage::Internet,
                     status: StageStatus::Ok,
                     label: "Internet".to_owned(),
-                    detail: "1.1.1.1:443".to_owned(),
+                    detail: "cp.cloudflare.com".to_owned(),
                 },
                 StageFrame {
                     stage: RecoveryStage::Server,
@@ -400,12 +440,31 @@ mod tests {
         let text = rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>();
 
         assert_eq!(text[1], "down 2m 13s · attempt 7");
-        assert_eq!(text[3], "✓  Internet     1.1.1.1:443");
+        assert_eq!(text[3], "✓  Internet     cp.cloudflare.com");
         assert_eq!(
             text[4],
             "!  Server       dev-box:22 · answers TCP · SSH failing"
         );
-        assert_eq!(text[6], "⠹ next attempt in 12s");
-        assert_eq!(text[7], "retrying until it returns · Ctrl-C stops");
+        assert_eq!(text[5], "last error: Permission denied (publickey).");
+        assert_eq!(text[7], "⠹ next attempt in 12s");
+        assert_eq!(text[8], "retrying until it returns · Ctrl-C stops");
+    }
+
+    #[test]
+    fn display_rows_distinguish_network_wait_from_fast_reconnect() {
+        let mut frame = RecoveryFrame {
+            host: "dev-box".to_owned(),
+            outage_for: Duration::from_secs(2),
+            attempt: 3,
+            phase: FooterPhase::WaitingForNetwork,
+            last_error: None,
+            rows: Vec::new(),
+        };
+        let waiting = display_rows(&frame, 0);
+        assert_eq!(waiting[4].text, "⠋ waiting for network");
+
+        frame.phase = FooterPhase::Connecting;
+        let connecting = display_rows(&frame, 0);
+        assert_eq!(connecting[4].text, "⠋ reconnecting… (attempt 3)");
     }
 }

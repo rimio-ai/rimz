@@ -1,5 +1,5 @@
-use std::io::{BufRead, BufReader, IsTerminal, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
+use std::net::{IpAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::Arc;
@@ -15,46 +15,53 @@ use rimz::remote::link::{
     probe_timeout_from_env,
 };
 use rimz::remote::reachability::{
-    DIAL_TIMEOUT, DialGate, DialPlan, WaitVerdict, dial_interval_from_env, parse_dial_plan,
+    AttemptPacer, DIAL_TIMEOUT, DialPlan, dial_interval_from_env, parse_dial_plan,
     ssh_config_query_spec,
 };
-use rimz::remote::recovery::{INTERNET_PROBE_TIMEOUT, RecoveryPanel, internet_probe_from_env};
+use rimz::remote::recovery::{
+    INTERNET_PROBE_TIMEOUT, InternetProbe, RecoveryPanel, internet_probe_from_env,
+};
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
 use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent};
 
-const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(50);
+const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
 const PROBE_STREAM_BLACKOUT_FAILURES: u32 = 3;
 const PROBE_RESPAWN_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) struct OutageState {
+struct OutageState {
     started: Instant,
-    internet_probe: Option<DialPlan>,
+    internet_probe: Option<InternetProbe>,
     panel: RecoveryPanel,
+    attempts: u32,
 }
 
 impl OutageState {
-    pub(super) fn new(
-        host: &str,
-        internet_probe: Option<DialPlan>,
-        server: Option<&DialPlan>,
-    ) -> Self {
+    fn new(host: &str, internet_probe: Option<InternetProbe>, server: Option<&DialPlan>) -> Self {
+        let mut panel = RecoveryPanel::new(host, internet_probe.as_ref(), server);
+        panel.note_attempt(1);
         Self {
             started: Instant::now(),
-            panel: RecoveryPanel::new(host, internet_probe.as_ref(), server),
+            panel,
             internet_probe,
+            attempts: 0,
         }
     }
 
-    pub(super) fn elapsed(&self) -> Duration {
+    fn elapsed(&self) -> Duration {
         self.started.elapsed()
     }
 
-    pub(super) fn note_attempt(&mut self, consecutive_failures: u32) {
-        self.panel.note_attempt(consecutive_failures);
+    fn begin_attempt(&mut self) {
+        self.attempts = self.attempts.saturating_add(1);
+        self.panel.note_attempt(self.attempts);
+    }
+
+    fn note_next_attempt(&mut self) {
+        self.panel.note_attempt(self.attempts.saturating_add(1));
     }
 }
 
@@ -75,11 +82,17 @@ pub(super) fn supervise_remote(
     let stop = AtomicBool::new(false);
     let mut first_attempt = true;
     let mut outage = None;
+    let mut ready_master = None;
     report_remote_connect(host, true);
     let guard = super::tty::TtyGuard::acquire();
     loop {
         let (events_tx, events_rx) = mpsc::channel();
-        let probe = ProbeHandle::start(target.clone(), control_path.to_path_buf(), events_tx);
+        let confirmed_master = ready_master.is_some();
+        let probe = if confirmed_master {
+            ProbeHandle::start_preestablished(target.clone(), control_path.to_path_buf(), events_tx)
+        } else {
+            ProbeHandle::start(target.clone(), control_path.to_path_buf(), events_tx)
+        };
         let attempt = if first_attempt {
             plan.initial()
         } else {
@@ -87,15 +100,17 @@ pub(super) fn supervise_remote(
         };
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
-        let outcome = run_ssh_session(
+        let mut outcome = run_ssh_session(
             &spec,
             host,
             &events_rx,
             &mut session_link,
             dial_plan.as_ref(),
         )?;
+        outcome.established |= confirmed_master;
         guard.restore();
         drop(probe);
+        drop(ready_master.take());
         if outcome.established {
             outage = None;
         }
@@ -106,12 +121,25 @@ pub(super) fn supervise_remote(
                 "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
             );
             reconnect.settle_zombie_kill();
-            let ui = OutageUi::auto(host);
-            outage = Some(OutageState::new(
-                host,
-                internet_probe_for_wait(&ui),
+            let mut ui = OutageUi::auto(host);
+            let outage = outage.get_or_insert_with(|| {
+                OutageState::new(host, internet_probe_for_wait(&ui), dial_plan.as_ref())
+            });
+            match reconnect_in_background(
+                plan,
+                control_path,
                 dial_plan.as_ref(),
-            ));
+                &policy,
+                outage,
+                &mut ui,
+                Some(&stop),
+            )? {
+                WaitOutcome::Connected(master) => ready_master = Some(master),
+                WaitOutcome::Interrupted => {
+                    let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
+                    return Ok(());
+                }
+            }
             continue;
         }
         match reconnect.settle(outcome.status.code(), outcome.established) {
@@ -120,45 +148,31 @@ pub(super) fn supervise_remote(
                 guard.reset_emulator();
                 bail!("{}", fatal_session_message(code, host, setup_hint))
             }
-            Verdict::Retry {
-                delay: ladder_delay,
-            } => {
+            Verdict::Retry { .. } => {
                 guard.reset_emulator();
-                let consecutive_failures = reconnect.consecutive_failures();
                 let mut ui = OutageUi::auto(host);
                 let outage = outage.get_or_insert_with(|| {
                     OutageState::new(host, internet_probe_for_wait(&ui), dial_plan.as_ref())
                 });
-                let outage_age = outage.elapsed();
-                let delay = retry_delay(&policy, dial_plan.is_some(), outage_age, ladder_delay);
-                outage.note_attempt(consecutive_failures);
                 if ui.is_plain() {
                     let _ = writeln!(
                         std::io::stderr().lock(),
-                        "rimz: link to {host} lost — reconnecting in {}s (attempt {consecutive_failures}); Ctrl-C stops",
-                        delay.as_secs(),
+                        "rimz: link to {host} lost — reconnecting in the background; Ctrl-C stops",
                     );
                 }
                 if let Some(action) = session_link.transport_lost() {
                     render_session_link_action(host, action);
                 }
-                match wait_before_retry(
+                match reconnect_in_background(
+                    plan,
+                    control_path,
                     dial_plan.as_ref(),
-                    delay,
-                    policy.backoff_cap,
+                    &policy,
                     outage,
                     &mut ui,
                     Some(&stop),
                 )? {
-                    WaitOutcome::AttachNow { network_restored } => {
-                        if network_restored {
-                            reconnect.network_restored();
-                            let _ = writeln!(
-                                std::io::stderr().lock(),
-                                "rimz: network to {host} restored — reconnecting now",
-                            );
-                        }
-                    }
+                    WaitOutcome::Connected(master) => ready_master = Some(master),
                     WaitOutcome::Interrupted => {
                         let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped",);
                         return Ok(());
@@ -308,13 +322,12 @@ fn dial_with_timeout(plan: &DialPlan, timeout: Duration) -> bool {
     false
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WaitOutcome {
-    AttachNow { network_restored: bool },
+    Connected(MasterGuard),
     Interrupted,
 }
 
-fn internet_probe_for_wait(ui: &OutageUi) -> Option<DialPlan> {
+fn internet_probe_for_wait(ui: &OutageUi) -> Option<InternetProbe> {
     if ui.is_plain() {
         None
     } else {
@@ -322,157 +335,230 @@ fn internet_probe_for_wait(ui: &OutageUi) -> Option<DialPlan> {
     }
 }
 
-pub(super) fn retry_delay(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PlainWaitOutcome {
+    AttemptNow,
+    Interrupted,
+}
+
+pub(super) fn wait_for_plain_attempt(
+    dial_plan: Option<&DialPlan>,
     policy: &rimz::remote::ReconnectPolicy,
-    has_dial_plan: bool,
-    outage_age: Duration,
-    ladder_delay: Duration,
-) -> Duration {
-    if has_dial_plan {
-        policy.reachable_delay(outage_age).max(ladder_delay)
-    } else {
-        ladder_delay
+    host: &str,
+    stop: Option<&AtomicBool>,
+) -> PlainWaitOutcome {
+    let started = Instant::now();
+    let interval = dial_interval_from_env();
+    let mut pacer = AttemptPacer::new(
+        *policy,
+        started,
+        false,
+        dial_plan.is_some() && interval.is_some(),
+    );
+    pacer.note_attempt_failed(started);
+    let mut next_dial = started;
+    let (dial_tx, dial_rx) = mpsc::channel::<DialResult>();
+    let mut server_pending = false;
+    let mut last_network_up = pacer.network_up();
+    let ui = OutageUi::plain_lines(host);
+    loop {
+        let now = Instant::now();
+        for result in dial_rx.try_iter() {
+            server_pending = false;
+            pacer.note_server(result.reachable, now);
+        }
+        let network_up = pacer.network_up();
+        if network_up != last_network_up {
+            if network_up {
+                ui.report_network_restored();
+            } else {
+                ui.report_unreachable();
+            }
+            last_network_up = network_up;
+        }
+        if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
+            return PlainWaitOutcome::Interrupted;
+        }
+        if interval.is_some_and(|_| now >= next_dial) {
+            if let Some(plan) = dial_plan
+                && !server_pending
+            {
+                spawn_dial(DialStage::Server, plan, DIAL_TIMEOUT, dial_tx.clone());
+                server_pending = true;
+            }
+            next_dial = now + interval.unwrap_or_default();
+        }
+        if pacer.may_attempt(now) {
+            return PlainWaitOutcome::AttemptNow;
+        }
+        sleep_retry_wait(PANEL_TICK, stop);
     }
 }
 
-pub(super) fn wait_before_retry(
+fn reconnect_in_background(
+    plan: &SshAttachPlan,
+    control_path: &Path,
     dial_plan: Option<&DialPlan>,
-    delay: Duration,
-    hold: Duration,
+    policy: &rimz::remote::ReconnectPolicy,
     outage: &mut OutageState,
     ui: &mut OutageUi,
     stop: Option<&AtomicBool>,
 ) -> Result<WaitOutcome> {
-    let outage_age = outage.elapsed();
-    let internet_probe = outage.internet_probe.as_ref();
-    let recovery = &mut outage.panel;
     let started = Instant::now();
-    recovery.begin_wait();
+    outage.panel.begin_wait();
     let interval = dial_interval_from_env();
-    let mut gate = dial_plan
-        .zip(interval)
-        .map(|_| DialGate::new(started, delay, hold));
+    let mut pacer = AttemptPacer::new(
+        *policy,
+        started,
+        outage.internet_probe.is_some() && interval.is_some(),
+        dial_plan.is_some() && interval.is_some(),
+    );
+    pacer.note_attempt_failed(started);
     let mut next_dial = started;
-    let mut reported_unreachable = false;
     let (dial_tx, dial_rx) = mpsc::channel::<DialResult>();
     let mut internet_pending = false;
     let mut server_pending = false;
+    let mut master: Option<MasterAttempt> = None;
+    let mut master_ready_release = None;
+    let mut next_control_check = started;
+    let mut last_network_up = pacer.network_up();
+    let mut last_reported_error = None;
     loop {
         let now = Instant::now();
         for result in dial_rx.try_iter() {
             match result.stage {
                 DialStage::Internet => {
                     internet_pending = false;
-                    recovery.note_internet(result.reachable);
+                    outage.panel.note_internet(result.reachable);
+                    pacer.note_internet(result.reachable, now);
                 }
                 DialStage::Server => {
                     server_pending = false;
-                    recovery.note_server(result.reachable);
-                    if let Some(gate) = &mut gate {
-                        gate.note_dial(result.reachable);
-                    }
-                    if !result.reachable && !reported_unreachable {
-                        reported_unreachable = true;
-                        ui.report_unreachable();
-                    }
+                    outage.panel.note_server(result.reachable);
+                    pacer.note_server(result.reachable, now);
                 }
             }
+        }
+        let network_up = pacer.network_up();
+        if network_up != last_network_up {
+            if network_up {
+                ui.report_network_restored();
+            } else {
+                ui.report_unreachable();
+            }
+            last_network_up = network_up;
         }
         if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
-            ui.release(false)?;
+            drop(master.take());
+            ui.release()?;
             return Ok(WaitOutcome::Interrupted);
-        }
-        let deadline = gate
-            .as_ref()
-            .map_or(started + delay, DialGate::effective_deadline);
-        let wait_elapsed = started.elapsed();
-        if ui.tick(
-            recovery,
-            wait_elapsed,
-            outage_age.saturating_add(wait_elapsed),
-            Some(deadline.saturating_duration_since(now)),
-        )? == UiEvent::Interrupted
-        {
-            ui.release(false)?;
-            return Ok(WaitOutcome::Interrupted);
-        }
-
-        let verdict = gate.as_ref().map_or_else(
-            || {
-                if now >= started + delay {
-                    WaitVerdict::AttachNow {
-                        network_restored: false,
-                    }
-                } else {
-                    WaitVerdict::KeepWaiting
-                }
-            },
-            |gate| gate.verdict(now),
-        );
-        if !matches!(verdict, WaitVerdict::KeepWaiting) && !server_pending {
-            recovery.session_starting();
-            let release_at = recovery.release_at(started.elapsed());
-            while started.elapsed() < release_at {
-                let wait_elapsed = started.elapsed();
-                if stop.is_some_and(|stop| stop.load(Ordering::SeqCst))
-                    || ui.tick(
-                        recovery,
-                        wait_elapsed,
-                        outage_age.saturating_add(wait_elapsed),
-                        None,
-                    )? == UiEvent::Interrupted
-                {
-                    ui.release(false)?;
-                    return Ok(WaitOutcome::Interrupted);
-                }
-                sleep_retry_wait(
-                    PANEL_TICK.min(release_at.saturating_sub(started.elapsed())),
-                    stop,
-                );
-            }
-            ui.release(true)?;
-            let WaitVerdict::AttachNow { network_restored } = verdict else {
-                continue;
-            };
-            return Ok(WaitOutcome::AttachNow { network_restored });
         }
 
         if interval.is_some_and(|_| now >= next_dial) {
-            if let Some(plan) = internet_probe
+            pacer.note_fingerprint(network_fingerprint(), now);
+            if let Some(probe) = &outage.internet_probe
                 && !internet_pending
             {
-                spawn_dial(
-                    DialStage::Internet,
-                    plan,
-                    INTERNET_PROBE_TIMEOUT,
-                    dial_tx.clone(),
-                );
+                spawn_internet_probe(probe, dial_tx.clone());
                 internet_pending = true;
             }
-            if let (Some(plan), Some(gate)) = (dial_plan, &gate)
+            if let Some(plan) = dial_plan
                 && !server_pending
             {
-                let timeout = DIAL_TIMEOUT.min(
-                    gate.effective_deadline()
-                        .saturating_duration_since(now)
-                        .max(PANEL_TICK),
-                );
-                spawn_dial(DialStage::Server, plan, timeout, dial_tx.clone());
+                spawn_dial(DialStage::Server, plan, DIAL_TIMEOUT, dial_tx.clone());
                 server_pending = true;
             }
             next_dial = now + interval.unwrap_or_default();
         }
-        let deadline = gate
-            .as_ref()
-            .map_or(started + delay, DialGate::effective_deadline);
-        let until_deadline = deadline.saturating_duration_since(Instant::now());
-        let wake_in = if until_deadline.is_zero() {
-            PANEL_TICK
-        } else {
-            until_deadline.min(PANEL_TICK)
-        };
-        sleep_retry_wait(wake_in, stop);
+
+        if let Some(attempt) = &mut master {
+            if let Some(status) = attempt.try_wait().context("polling SSH ControlMaster")? {
+                let stderr = master
+                    .take()
+                    .expect("master attempt exists")
+                    .finish_failed();
+                let summary =
+                    rimz::remote::ssh_error_summary(&stderr).or_else(|| Some(status.to_string()));
+                outage.panel.note_ssh_error(summary.clone());
+                outage.note_next_attempt();
+                master_ready_release = None;
+                if summary != last_reported_error {
+                    ui.report_attempt_failed(summary.as_deref());
+                    last_reported_error = summary;
+                }
+                pacer.note_attempt_failed(now);
+            } else if master_ready_release.is_none() && now >= next_control_check {
+                if control_check_spec(plan.target(), control_path)
+                    .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
+                    .is_ok()
+                {
+                    master_ready_release = Some(outage.panel.release_at(started.elapsed()));
+                }
+                next_control_check = now + CONTROL_MASTER_CHECK_INTERVAL;
+            }
+        }
+
+        if master_ready_release.is_some_and(|release_at| started.elapsed() >= release_at) {
+            let master = master.take().expect("ready master exists").into_guard();
+            ui.release()?;
+            ui.report_reattached();
+            return Ok(WaitOutcome::Connected(master));
+        }
+
+        if master.is_none() && pacer.may_attempt(now) {
+            if let Err(err) = prepare_control_path(control_path) {
+                let summary = Some(format!("preparing SSH control socket: {err}"));
+                outage.panel.note_ssh_error(summary.clone());
+                outage.note_next_attempt();
+                if summary != last_reported_error {
+                    ui.report_attempt_failed(summary.as_deref());
+                    last_reported_error = summary;
+                }
+                pacer.note_attempt_failed(now);
+            } else {
+                outage.begin_attempt();
+                outage.panel.session_starting();
+                pacer.begin_attempt(now);
+                match MasterAttempt::spawn(plan.master(control_path), control_path.to_path_buf()) {
+                    Ok(attempt) => {
+                        master = Some(attempt);
+                        next_control_check = now;
+                    }
+                    Err(err) => {
+                        let summary = Some(format!("starting SSH: {err}"));
+                        outage.panel.note_ssh_error(summary.clone());
+                        outage.note_next_attempt();
+                        if summary != last_reported_error {
+                            ui.report_attempt_failed(summary.as_deref());
+                            last_reported_error = summary;
+                        }
+                        pacer.note_attempt_failed(now);
+                    }
+                }
+            }
+        }
+
+        let wait_elapsed = started.elapsed();
+        let outage_elapsed = outage.elapsed();
+        if ui.tick(
+            &mut outage.panel,
+            wait_elapsed,
+            outage_elapsed,
+            pacer.footer(now, master.is_some()),
+        )? == UiEvent::Interrupted
+        {
+            drop(master.take());
+            ui.release()?;
+            return Ok(WaitOutcome::Interrupted);
+        }
+        sleep_retry_wait(PANEL_TICK, stop);
     }
+}
+
+fn network_fingerprint() -> Option<IpAddr> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("1.1.1.1:443").ok()?;
+    socket.local_addr().ok().map(|address| address.ip())
 }
 
 #[derive(Clone, Copy)]
@@ -499,6 +585,116 @@ fn spawn_dial(
             reachable: dial_with_timeout(&plan, timeout),
         });
     });
+}
+
+fn spawn_internet_probe(probe: &InternetProbe, results: mpsc::Sender<DialResult>) {
+    let url = probe.url().to_owned();
+    std::thread::spawn(move || {
+        let agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .timeout_global(Some(INTERNET_PROBE_TIMEOUT))
+            .build()
+            .new_agent();
+        let reachable = agent
+            .get(&url)
+            .call()
+            .is_ok_and(|response| response.status().as_u16() == 204);
+        let _ = results.send(DialResult {
+            stage: DialStage::Internet,
+            reachable,
+        });
+    });
+}
+
+struct MasterAttempt {
+    child: Option<Child>,
+    stderr: Option<std::thread::JoinHandle<String>>,
+    control_path: PathBuf,
+}
+
+impl MasterAttempt {
+    fn spawn(spec: rimz::mux::CommandSpec, control_path: PathBuf) -> std::io::Result<Self> {
+        let mut child = spec
+            .to_command()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let stderr = child.stderr.take().map(|mut stderr| {
+            std::thread::spawn(move || {
+                let mut output = String::new();
+                let _ = stderr.read_to_string(&mut output);
+                output
+            })
+        });
+        Ok(Self {
+            child: Some(child),
+            stderr,
+            control_path,
+        })
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.child.as_mut().expect("master child exists").try_wait()
+    }
+
+    fn finish_failed(mut self) -> String {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.wait();
+        }
+        remove_control_path(&self.control_path);
+        self.stderr
+            .take()
+            .and_then(|reader| reader.join().ok())
+            .unwrap_or_default()
+    }
+
+    fn into_guard(mut self) -> MasterGuard {
+        MasterGuard {
+            child: self.child.take(),
+            stderr: self.stderr.take(),
+            control_path: self.control_path.clone(),
+        }
+    }
+
+    fn stop(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.child = None;
+        if let Some(reader) = self.stderr.take() {
+            let _ = reader.join();
+        }
+        remove_control_path(&self.control_path);
+    }
+}
+
+impl Drop for MasterAttempt {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+pub(super) struct MasterGuard {
+    child: Option<Child>,
+    stderr: Option<std::thread::JoinHandle<String>>,
+    control_path: PathBuf,
+}
+
+impl Drop for MasterGuard {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.child = None;
+        if let Some(reader) = self.stderr.take() {
+            let _ = reader.join();
+        }
+        remove_control_path(&self.control_path);
+    }
 }
 
 fn sleep_retry_wait(duration: Duration, stop: Option<&AtomicBool>) {
@@ -651,6 +847,7 @@ struct ProbeHandle {
     stop: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
     control_path: Option<PathBuf>,
+    remove_control_path: bool,
 }
 
 impl ProbeHandle {
@@ -663,7 +860,15 @@ impl ProbeHandle {
             );
             return Self::disabled();
         }
-        spawn_probe_loop(target, control_path, events)
+        spawn_probe_loop(target, control_path, events, false, true)
+    }
+
+    fn start_preestablished(
+        target: RemoteTarget,
+        control_path: PathBuf,
+        events: mpsc::Sender<LinkEvent>,
+    ) -> Self {
+        spawn_probe_loop(target, control_path, events, true, false)
     }
 
     fn disabled() -> Self {
@@ -671,6 +876,7 @@ impl ProbeHandle {
             stop: Arc::new(AtomicBool::new(true)),
             join: None,
             control_path: None,
+            remove_control_path: false,
         }
     }
 
@@ -686,7 +892,9 @@ impl ProbeHandle {
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
-        if let Some(path) = &self.control_path {
+        if self.remove_control_path
+            && let Some(path) = &self.control_path
+        {
             remove_control_path(path);
         }
     }
@@ -702,24 +910,35 @@ fn spawn_probe_loop(
     target: RemoteTarget,
     control_path: PathBuf,
     events: mpsc::Sender<LinkEvent>,
+    control_confirmed: bool,
+    remove_control_path: bool,
 ) -> ProbeHandle {
     let Some(interval) = probe_interval_from_env() else {
         return ProbeHandle {
             stop: Arc::new(AtomicBool::new(true)),
             join: None,
             control_path: Some(control_path),
+            remove_control_path,
         };
     };
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
     let thread_path = control_path.clone();
     let join = std::thread::spawn(move || {
-        probe_loop(target, thread_path, interval, events, thread_stop);
+        probe_loop(
+            target,
+            thread_path,
+            interval,
+            events,
+            thread_stop,
+            control_confirmed,
+        );
     });
     ProbeHandle {
         stop,
         join: Some(join),
         control_path: Some(control_path),
+        remove_control_path,
     }
 }
 
@@ -742,14 +961,16 @@ fn probe_loop(
     interval: Duration,
     events: mpsc::Sender<LinkEvent>,
     stop: Arc<AtomicBool>,
+    mut control_confirmed: bool,
 ) {
     let mut monitor =
         LinkMonitor::with_timeout(probe_timeout_from_env(), blackout_after_from_env());
     let mut failures = 0u32;
     while !stop.load(Ordering::Relaxed) {
-        if !wait_for_control_master(&target, &control_path, &stop) {
+        if !control_confirmed && !wait_for_control_master(&target, &control_path, &stop) {
             return;
         }
+        control_confirmed = false;
         match run_probe_stream(
             &target,
             &control_path,

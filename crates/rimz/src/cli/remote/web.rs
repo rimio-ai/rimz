@@ -29,7 +29,6 @@ struct RemoteTunnel {
     dial_plan: Option<rimz::remote::reachability::DialPlan>,
     child: Option<rimz::child_process::SupervisedChild>,
     started: Instant,
-    outage: Option<super::supervisor::OutageState>,
     wake_tx: mpsc::Sender<()>,
     wake_rx: mpsc::Receiver<()>,
 }
@@ -59,7 +58,6 @@ impl RemoteTunnel {
             dial_plan,
             child: None,
             started: Instant::now(),
-            outage: None,
             wake_tx,
             wake_rx,
         };
@@ -145,9 +143,6 @@ impl RemoteTunnel {
 
     fn settle_exit(&mut self, exit_code: Option<i32>) -> Result<TunnelFlow> {
         let established = self.started.elapsed() >= self.policy.gatetime;
-        if established {
-            self.outage = None;
-        }
         match tunnel_step(
             self.reconnect_state.settle(exit_code, established),
             self.reconnect,
@@ -159,40 +154,21 @@ impl RemoteTunnel {
                     self.host
                 )
             }
-            TunnelStep::Retry(ladder_delay) => {
-                let outage = self.outage.get_or_insert_with(|| {
-                    super::supervisor::OutageState::new(&self.host, None, self.dial_plan.as_ref())
-                });
-                let outage_age = outage.elapsed();
-                let delay = super::supervisor::retry_delay(
-                    &self.policy,
-                    self.dial_plan.is_some(),
-                    outage_age,
-                    ladder_delay,
-                );
+            TunnelStep::Retry => {
                 let consecutive_failures = self.reconnect_state.consecutive_failures();
-                outage.note_attempt(consecutive_failures);
                 let _ = writeln!(
                     std::io::stderr().lock(),
-                    "rimz: web tunnel to {} lost — reconnecting in {}s (attempt {consecutive_failures})",
+                    "rimz: web tunnel to {} lost — reconnecting (attempt {consecutive_failures})",
                     self.host,
-                    delay.as_secs(),
                 );
-                let mut ui = super::outage_ui::OutageUi::plain_lines(&self.host);
-                match super::supervisor::wait_before_retry(
+                match super::supervisor::wait_for_plain_attempt(
                     self.dial_plan.as_ref(),
-                    delay,
-                    self.policy.backoff_cap,
-                    outage,
-                    &mut ui,
+                    &self.policy,
+                    &self.host,
                     None,
-                )? {
-                    super::supervisor::WaitOutcome::AttachNow { network_restored } => {
-                        if network_restored {
-                            self.reconnect_state.network_restored();
-                        }
-                    }
-                    super::supervisor::WaitOutcome::Interrupted => {
+                ) {
+                    super::supervisor::PlainWaitOutcome::AttemptNow => {}
+                    super::supervisor::PlainWaitOutcome::Interrupted => {
                         return Ok(TunnelFlow::Done);
                     }
                 }
@@ -369,7 +345,7 @@ fn remote_output_context(label: &str, bytes: &[u8]) -> String {
 enum TunnelStep {
     Clean,
     Fatal(i32),
-    Retry(Duration),
+    Retry,
 }
 
 fn tunnel_step(verdict: rimz::remote::Verdict, reconnect: bool) -> TunnelStep {
@@ -378,7 +354,7 @@ fn tunnel_step(verdict: rimz::remote::Verdict, reconnect: bool) -> TunnelStep {
     match verdict {
         Verdict::CleanExit => TunnelStep::Clean,
         Verdict::Fatal { code } => TunnelStep::Fatal(code),
-        Verdict::Retry { delay } if reconnect => TunnelStep::Retry(delay),
+        Verdict::Retry { .. } if reconnect => TunnelStep::Retry,
         Verdict::Retry { .. } => TunnelStep::Fatal(rimz::remote::SSH_TRANSPORT_EXIT),
     }
 }
@@ -408,10 +384,7 @@ mod tests {
             delay: Duration::from_secs(1),
         };
 
-        assert_eq!(
-            tunnel_step(retry, true),
-            TunnelStep::Retry(Duration::from_secs(1))
-        );
+        assert_eq!(tunnel_step(retry, true), TunnelStep::Retry);
         assert_eq!(
             tunnel_step(retry, false),
             TunnelStep::Fatal(rimz::remote::SSH_TRANSPORT_EXIT)

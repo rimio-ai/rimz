@@ -2,13 +2,33 @@
 
 use std::time::Duration;
 
-use super::{env_ms, reachability::DialPlan};
+use super::{
+    env_ms,
+    reachability::{DialPlan, FooterPhase},
+};
 
 pub const RECOVERY_GRACE: Duration = Duration::from_millis(500);
 pub const RECOVERY_MIN_DISPLAY: Duration = Duration::from_millis(1_500);
 pub const INTERNET_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
-const INTERNET_PROBE: &str = "1.1.1.1:443";
+const INTERNET_PROBE: &str = "http://cp.cloudflare.com/generate_204";
+
+/// End-to-end HTTP checkpoint used by the recovery panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InternetProbe {
+    url: String,
+    host: String,
+}
+
+impl InternetProbe {
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StageStatus {
@@ -39,8 +59,8 @@ pub struct RecoveryFrame {
     pub host: String,
     pub outage_for: Duration,
     pub attempt: u32,
-    pub next_attempt_in: Option<Duration>,
-    pub connecting: bool,
+    pub phase: FooterPhase,
+    pub last_error: Option<String>,
     pub rows: Vec<StageFrame>,
 }
 
@@ -62,12 +82,13 @@ pub struct RecoveryPanel {
     server: Option<Checkpoint>,
     session: StageStatus,
     attempt: u32,
+    last_error: Option<String>,
 }
 
 impl RecoveryPanel {
     pub fn new(
         host: impl Into<String>,
-        internet: Option<&DialPlan>,
+        internet: Option<&InternetProbe>,
         server: Option<&DialPlan>,
     ) -> Self {
         Self::with_timing(
@@ -81,7 +102,7 @@ impl RecoveryPanel {
 
     fn with_timing(
         host: impl Into<String>,
-        internet: Option<&DialPlan>,
+        internet: Option<&InternetProbe>,
         server: Option<&DialPlan>,
         grace: Duration,
         min_display: Duration,
@@ -93,10 +114,14 @@ impl RecoveryPanel {
             wait_started: false,
             grace_this_wait: true,
             shown_at: None,
-            internet: internet.map(checkpoint),
+            internet: internet.map(|probe| Checkpoint {
+                endpoint_label: probe.host().to_owned(),
+                result: None,
+            }),
             server: server.map(checkpoint),
             session: StageStatus::Waiting,
             attempt: 0,
+            last_error: None,
         }
     }
 
@@ -128,6 +153,15 @@ impl RecoveryPanel {
         self.session = StageStatus::Checking;
     }
 
+    pub fn note_ssh_error(&mut self, error: Option<String>) {
+        self.session = if error.is_some() {
+            StageStatus::Down
+        } else {
+            StageStatus::Waiting
+        };
+        self.last_error = error;
+    }
+
     /// Whether the recovery canvas owns the terminal at this elapsed age.
     pub fn visible(&self, elapsed: Duration) -> bool {
         !self.grace_this_wait || elapsed >= self.grace
@@ -145,7 +179,7 @@ impl RecoveryPanel {
         })
     }
 
-    pub fn frame(&self, outage_for: Duration, next_attempt_in: Option<Duration>) -> RecoveryFrame {
+    pub fn frame(&self, outage_for: Duration, phase: FooterPhase) -> RecoveryFrame {
         let mut rows = Vec::with_capacity(3);
         if let Some(checkpoint) = &self.internet {
             rows.push(StageFrame {
@@ -175,6 +209,10 @@ impl RecoveryPanel {
             label: "SSH session".to_owned(),
             detail: match self.session {
                 StageStatus::Checking => "starting…".to_owned(),
+                StageStatus::Down => self
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "failed".to_owned()),
                 _ => "waiting".to_owned(),
             },
         });
@@ -182,8 +220,8 @@ impl RecoveryPanel {
             host: self.host.clone(),
             outage_for,
             attempt: self.attempt,
-            next_attempt_in,
-            connecting: self.session == StageStatus::Checking,
+            phase,
+            last_error: self.last_error.clone(),
             rows,
         }
     }
@@ -197,30 +235,26 @@ pub fn recovery_min_display_from_env() -> Duration {
     env_ms("RIMZ_REMOTE_MIN_DISPLAY_MS").unwrap_or(RECOVERY_MIN_DISPLAY)
 }
 
-/// Internet checkpoint endpoint. Empty, `0`, or an invalid `host:port`
-/// disables the checkpoint.
-pub fn internet_probe_from_env() -> Option<DialPlan> {
+/// Internet checkpoint URL. Empty, `0`, or an invalid HTTP URL disables the
+/// checkpoint.
+pub fn internet_probe_from_env() -> Option<InternetProbe> {
     match std::env::var("RIMZ_REMOTE_INTERNET_PROBE") {
         Ok(value) => parse_endpoint(&value),
         Err(_) => parse_endpoint(INTERNET_PROBE),
     }
 }
 
-fn parse_endpoint(value: &str) -> Option<DialPlan> {
+fn parse_endpoint(value: &str) -> Option<InternetProbe> {
     if value.is_empty() || value == "0" {
         return None;
     }
-    let (host, port) = value.rsplit_once(':')?;
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host);
-    if host.is_empty() {
+    let uri = value.parse::<ureq::http::Uri>().ok()?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
         return None;
     }
-    Some(DialPlan {
-        host: host.to_owned(),
-        port: port.parse().ok()?,
+    Some(InternetProbe {
+        url: value.to_owned(),
+        host: uri.host()?.to_owned(),
     })
 }
 
@@ -258,10 +292,14 @@ mod tests {
         }
     }
 
+    fn internet() -> InternetProbe {
+        parse_endpoint(INTERNET_PROBE).expect("default internet probe")
+    }
+
     fn panel(server: Option<&DialPlan>) -> RecoveryPanel {
         RecoveryPanel::with_timing(
             "dev-box",
-            Some(&plan("1.1.1.1")),
+            Some(&internet()),
             server,
             Duration::from_millis(500),
             Duration::from_millis(1_500),
@@ -328,7 +366,7 @@ mod tests {
         panel.note_internet(false);
         panel.note_server(false);
 
-        let frame = panel.frame(Duration::ZERO, None);
+        let frame = panel.frame(Duration::ZERO, FooterPhase::Connecting);
         assert_eq!(frame.rows[0].status, StageStatus::Down);
         assert_eq!(frame.rows[1].status, StageStatus::Down);
     }
@@ -339,7 +377,7 @@ mod tests {
 
         assert_eq!(
             panel
-                .frame(Duration::ZERO, None)
+                .frame(Duration::ZERO, FooterPhase::Connecting)
                 .rows
                 .iter()
                 .map(|row| row.stage)
@@ -353,7 +391,7 @@ mod tests {
         let server = plan("dev-box");
         let mut panel = panel(Some(&server));
         assert_eq!(
-            panel.frame(Duration::ZERO, None).rows[0].status,
+            panel.frame(Duration::ZERO, FooterPhase::Connecting).rows[0].status,
             StageStatus::Checking
         );
 
@@ -362,7 +400,7 @@ mod tests {
         panel.begin_wait();
         panel.begin_wait();
 
-        let frame = panel.frame(Duration::from_secs(2), None);
+        let frame = panel.frame(Duration::from_secs(2), FooterPhase::Connecting);
         assert_eq!(frame.rows[0].status, StageStatus::Ok);
         assert_eq!(frame.rows[1].status, StageStatus::Ok);
     }
@@ -375,11 +413,11 @@ mod tests {
 
         panel.note_attempt(1);
         assert_eq!(
-            panel.frame(Duration::ZERO, None).rows[1].status,
+            panel.frame(Duration::ZERO, FooterPhase::Connecting).rows[1].status,
             StageStatus::Ok
         );
         panel.note_attempt(2);
-        let suspect = panel.frame(Duration::ZERO, None);
+        let suspect = panel.frame(Duration::ZERO, FooterPhase::Connecting);
         assert_eq!(suspect.rows[1].status, StageStatus::Suspect);
         assert!(
             suspect.rows[1]
@@ -389,43 +427,53 @@ mod tests {
 
         panel.note_attempt(0);
         assert_eq!(
-            panel.frame(Duration::ZERO, None).rows[1].status,
+            panel.frame(Duration::ZERO, FooterPhase::Connecting).rows[1].status,
             StageStatus::Ok
         );
     }
 
     #[test]
-    fn frame_carries_outage_attempt_countdown_and_connecting_state() {
+    fn frame_carries_footer_phase_and_persistent_ssh_error() {
         let mut panel = panel(None);
         panel.note_attempt(7);
+        panel.note_ssh_error(Some("Permission denied (publickey).".to_owned()));
 
-        let frame = panel.frame(Duration::from_secs(133), Some(Duration::from_secs(12)));
+        let frame = panel.frame(
+            Duration::from_secs(133),
+            FooterPhase::NextAttemptIn(Duration::from_secs(12)),
+        );
         assert_eq!(frame.outage_for, Duration::from_secs(133));
         assert_eq!(frame.attempt, 7);
-        assert_eq!(frame.next_attempt_in, Some(Duration::from_secs(12)));
-        assert!(!frame.connecting);
+        assert_eq!(
+            frame.phase,
+            FooterPhase::NextAttemptIn(Duration::from_secs(12))
+        );
+        assert_eq!(
+            frame.last_error.as_deref(),
+            Some("Permission denied (publickey).")
+        );
+        assert_eq!(frame.rows.last().unwrap().status, StageStatus::Down);
 
         panel.session_starting();
-        assert!(panel.frame(Duration::from_secs(133), None).connecting);
+        let connecting = panel.frame(Duration::from_secs(133), FooterPhase::Connecting);
+        assert_eq!(
+            connecting.rows.last().unwrap().status,
+            StageStatus::Checking
+        );
+        assert_eq!(
+            connecting.last_error.as_deref(),
+            Some("Permission denied (publickey).")
+        );
     }
 
     #[test]
-    fn endpoint_parser_accepts_hostnames_and_bracketed_ipv6() {
-        assert_eq!(
-            parse_endpoint("dev:2202"),
-            Some(DialPlan {
-                host: "dev".to_owned(),
-                port: 2202
-            })
-        );
-        assert_eq!(
-            parse_endpoint("[::1]:443"),
-            Some(DialPlan {
-                host: "::1".to_owned(),
-                port: 443
-            })
-        );
+    fn endpoint_parser_accepts_http_urls_and_extracts_the_host() {
+        let probe = parse_endpoint("http://dev:2202/generate_204").expect("probe");
+        assert_eq!(probe.url(), "http://dev:2202/generate_204");
+        assert_eq!(probe.host(), "dev");
+        let v6 = parse_endpoint("https://[::1]:443/check").expect("IPv6 probe");
+        assert_eq!(v6.host(), "[::1]");
         assert_eq!(parse_endpoint("0"), None);
-        assert_eq!(parse_endpoint("bad"), None);
+        assert_eq!(parse_endpoint("dev:443"), None);
     }
 }

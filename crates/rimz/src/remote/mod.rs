@@ -356,6 +356,29 @@ impl SshAttachPlan {
             phase: AttemptPhase::Retry,
         }
     }
+
+    /// Compile the unattended ControlMaster used to prove transport and auth
+    /// behind the recovery panel before the tty attach begins.
+    pub fn master(&self, control_path: &Path) -> CommandSpec {
+        CommandSpec::new(ssh_program())
+            .args([
+                "-o",
+                "ServerAliveInterval=5",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "Compression=yes",
+                "-M",
+                "-N",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+            ])
+            .arg(format!("ControlPath={}", control_path.display()))
+            .args(["--", self.options.target.ssh_destination().as_str()])
+    }
 }
 
 impl SshAttachAttempt<'_> {
@@ -668,6 +691,47 @@ impl ReconnectPolicy {
             .saturating_add(1);
         backoff(exponent, self.reachable_retry, self.backoff_cap)
     }
+
+    /// Pace hidden safety attempts while every configured network checkpoint
+    /// is down: 1s through 10s, then 20s, then the 30s ceiling.
+    pub fn unreachable_delay(&self, failures: u32) -> Duration {
+        let seconds = match failures {
+            0..=9 => u64::from(failures) + 1,
+            10 => 20,
+            _ => 30,
+        };
+        Duration::from_secs(seconds).min(self.backoff_cap)
+    }
+}
+
+/// Extract the useful tail of OpenSSH stderr for the recovery panel.
+pub fn ssh_error_summary(stderr: &str) -> Option<String> {
+    use unicode_width::UnicodeWidthChar as _;
+
+    const MAX_CELLS: usize = 80;
+    let line = stderr.lines().rev().find(|line| !line.trim().is_empty())?;
+    let line = line.trim().strip_prefix("ssh: ").unwrap_or(line.trim());
+    let width = line
+        .chars()
+        .map(|ch| ch.width().unwrap_or(0))
+        .sum::<usize>();
+    if width <= MAX_CELLS {
+        return Some(line.to_owned());
+    }
+    let mut used = 0;
+    let mut summary = line
+        .chars()
+        .take_while(|ch| {
+            let next = used + ch.width().unwrap_or(0);
+            if next > MAX_CELLS - 1 {
+                return false;
+            }
+            used = next;
+            true
+        })
+        .collect::<String>();
+    summary.push('…');
+    Some(summary)
 }
 
 pub(crate) fn env_ms(key: &str) -> Option<Duration> {

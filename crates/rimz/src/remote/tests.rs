@@ -236,6 +236,53 @@ fn quote_and_display_are_shell_safe() {
 }
 
 #[test]
+fn master_spec_is_unattended_and_has_no_remote_command() {
+    let spec = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false)
+        .master(Path::new("/tmp/rimz.sock"));
+
+    assert_eq!(
+        spec.args,
+        [
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "Compression=yes",
+            "-M",
+            "-N",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ControlPath=/tmp/rimz.sock",
+            "--",
+            "dev-box",
+        ]
+    );
+    assert!(!spec.args.iter().any(|arg| arg == "-t"));
+}
+
+#[test]
+fn ssh_error_summary_uses_the_last_open_ssh_line() {
+    assert_eq!(
+        ssh_error_summary("debug noise\nssh: connect to host dev port 22: Connection refused\n"),
+        Some("connect to host dev port 22: Connection refused".to_owned())
+    );
+    assert_eq!(
+        ssh_error_summary("Permission denied (publickey).\n"),
+        Some("Permission denied (publickey).".to_owned())
+    );
+    assert_eq!(
+        ssh_error_summary("ssh: Could not resolve hostname dev: Name or service not known\n"),
+        Some("Could not resolve hostname dev: Name or service not known".to_owned())
+    );
+    assert_eq!(ssh_error_summary("\n \n"), None);
+    assert!(ssh_error_summary(&"x".repeat(100)).unwrap().ends_with('…'));
+}
+
+#[test]
 fn term_plan_selects_keep_copy_or_downgrade() {
     for term in ["alacritty", "xterm-kitty", "xterm-ghostty"] {
         assert!(term_needs_terminfo_copy(term), "{term}");
@@ -633,6 +680,17 @@ fn reachable_retry_delay_stays_flat_then_doubles_each_minute() {
     assert_eq!(
         policy.reachable_delay(Duration::from_secs(6 * 60)),
         Duration::from_secs(30)
+    );
+}
+
+#[test]
+fn unreachable_retry_delay_uses_the_user_safety_ladder() {
+    let policy = ReconnectPolicy::default();
+    assert_eq!(
+        (0..14)
+            .map(|failure| policy.unreachable_delay(failure).as_secs())
+            .collect::<Vec<_>>(),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 30, 30]
     );
 }
 

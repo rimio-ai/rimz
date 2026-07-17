@@ -9,6 +9,8 @@
 //! `$RIMZ_TEST_SSH_RAW_TTY` simulates OpenSSH leaving the controlling tty raw;
 //! `$RIMZ_TEST_SSH_TTY_STATE_LOG` records whether each attach inherited sane
 //! shell flags before that transition.
+//! `$RIMZ_TEST_SSH_MASTER_PLAN` scripts background ControlMaster failures and
+//! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -49,6 +51,10 @@ fn main() {
 
     if argv.iter().any(|arg| arg.contains("web token ensure")) {
         exit_web_token();
+    }
+
+    if argv.iter().any(|arg| arg == "-M") {
+        run_control_master();
     }
 
     if argv.iter().any(|arg| arg == "-N") {
@@ -166,10 +172,30 @@ fn run_web_tunnel(argv: &[String]) -> ! {
     exit_from_plan("RIMZ_TEST_SSH_TUNNEL_PLAN");
 }
 
+fn run_control_master() -> ! {
+    if let Ok(stderr) = env::var("RIMZ_TEST_SSH_MASTER_STDERR") {
+        let mut stream = std::io::stderr().lock();
+        stream
+            .write_all(stderr.as_bytes())
+            .expect("write master stderr");
+        stream.flush().expect("flush master stderr");
+    }
+    let code = pop_exit_plan("RIMZ_TEST_SSH_MASTER_PLAN").unwrap_or(0);
+    if code != 0 {
+        std::process::exit(code);
+    }
+    publish_control_master_if_requested();
+    loop {
+        std::thread::park_timeout(std::time::Duration::from_secs(60));
+    }
+}
+
 fn exit_from_plan(key: &str) -> ! {
-    let Some(plan_path) = env::var_os(key) else {
-        std::process::exit(0);
-    };
+    std::process::exit(pop_exit_plan(key).unwrap_or(0));
+}
+
+fn pop_exit_plan(key: &str) -> Option<i32> {
+    let plan_path = env::var_os(key)?;
     let plan = std::fs::read_to_string(&plan_path).expect("read exit plan");
     let mut lines = plan.lines();
     let code: i32 = lines
@@ -180,7 +206,7 @@ fn exit_from_plan(key: &str) -> ! {
         .expect("plan line is an exit code");
     let rest = lines.collect::<Vec<_>>().join("\n");
     std::fs::write(&plan_path, rest).expect("rewrite exit plan");
-    std::process::exit(code);
+    Some(code)
 }
 
 fn is_config_query(argv: &[String]) -> bool {

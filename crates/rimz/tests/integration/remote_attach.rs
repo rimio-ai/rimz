@@ -6,10 +6,12 @@
 //! `$RIMZ_TEST_SSH_PLAN`. Quoting precision lives in `remote/mod.rs` unit tests;
 //! these prove the CLI surface end to end.
 
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use nix::sys::termios::{self, InputFlags, LocalFlags, OutputFlags, Termios};
@@ -64,6 +66,8 @@ fn remote_connect_command(env: &Env, log: &Path) -> Command {
         .env("RIMZ_TEST_SSH_LOG", log)
         .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "0")
+        .env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1")
+        .env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0")
         .env("TERM", "xterm-256color");
     cmd
 }
@@ -83,6 +87,9 @@ fn remote_connect_pty_command(env: &Env, log: &Path) -> CommandBuilder {
     cmd.env("RIMZ_TEST_SSH_LOG", log);
     cmd.env("RIMZ_REMOTE_DIAL_MS", "0");
     cmd.env("RIMZ_REMOTE_PROBE_MS", "0");
+    cmd.env("RIMZ_REMOTE_INTERNET_PROBE", "0");
+    cmd.env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1");
+    cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0");
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("ENV");
     cmd.env_remove("BASH_ENV");
@@ -255,10 +262,15 @@ fn is_config_query_invocation(argv: &[String]) -> bool {
     argv.iter().any(|arg| arg == "-G")
 }
 
+fn is_master_invocation(argv: &[String]) -> bool {
+    argv.iter().any(|arg| arg == "-M")
+}
+
 fn is_main_invocation(argv: &[String]) -> bool {
     !is_probe_invocation(argv)
         && !is_control_check_invocation(argv)
         && !is_config_query_invocation(argv)
+        && !is_master_invocation(argv)
 }
 
 fn main_invocation_count(log: &Path) -> usize {
@@ -295,6 +307,33 @@ fn closed_ssh_endpoint(env: &Env) -> (PathBuf, SocketAddr) {
     )
     .expect("write ssh config fixture");
     (path, address)
+}
+
+fn http_204_probe() -> (String, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind HTTP probe");
+    listener
+        .set_nonblocking(true)
+        .expect("make HTTP probe nonblocking");
+    let address = listener.local_addr().expect("HTTP probe address");
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let join = std::thread::spawn(move || {
+        while !thread_stop.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0; 1024];
+                    let _ = stream.read(&mut request);
+                    let _ =
+                        stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => return,
+            }
+        }
+    });
+    (format!("http://{address}/generate_204"), stop, join)
 }
 
 fn remote_web_command(env: &Env, log: &Path, port: u16) -> Command {
@@ -546,6 +585,41 @@ fn supervised_connect_restores_tty_and_resets_emulator_after_retry() {
 }
 
 #[test]
+fn recovery_panel_checks_the_configured_http_204_endpoint() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    std::fs::write(&plan, "255\n0\n").expect("write plan");
+    let (probe_url, stop, probe_thread) = http_204_probe();
+
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_TEST_SSH_PLAN", &plan);
+    cmd.env("RIMZ_TEST_SSH_SLEEP_MS", "20");
+    cmd.env("RIMZ_REMOTE_GATETIME_MS", "0");
+    cmd.env("RIMZ_REMOTE_DIAL_MS", "25");
+    cmd.env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "500");
+    cmd.env("RIMZ_REMOTE_GRACE_MS", "0");
+    cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "500");
+    cmd.env("RIMZ_REMOTE_INTERNET_PROBE", &probe_url);
+    let (output, _) = run_pty_command(remote_connect_pty(), cmd);
+    stop.store(true, Ordering::Relaxed);
+    probe_thread.join().expect("join HTTP probe");
+
+    assert!(
+        output.contains("Internet"),
+        "internet row is visible: {output}"
+    );
+    assert!(
+        output.contains("127.0.0.1"),
+        "the row labels the configured URL host: {output}"
+    );
+    assert!(
+        output.contains("✓  Internet"),
+        "HTTP 204 settles the checkpoint as reachable: {output}"
+    );
+}
+
+#[test]
 fn probe_stream_waits_for_control_master_before_starting() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
@@ -623,6 +697,15 @@ fn established_link_drop_reconnects_and_notifies_once() {
         .filter(|argv| is_main_invocation(argv))
         .collect::<Vec<_>>();
     assert_eq!(invocations.len(), 2, "dropped once, reattached once");
+    let all_invocations = shim_invocations(&log);
+    assert_eq!(
+        all_invocations
+            .iter()
+            .filter(|argv| is_master_invocation(argv))
+            .count(),
+        1,
+        "one background master proves the retry"
+    );
     assert!(
         !snippet(&invocations[0]).contains("RIMZ_REMOTE_RECONNECT"),
         "the initial attach stays attended: {:?}",
@@ -631,6 +714,13 @@ fn established_link_drop_reconnects_and_notifies_once() {
     assert!(
         snippet(&invocations[1]).contains("export RIMZ_REMOTE_RECONNECT=1;"),
         "the retry is marked unattended: {:?}",
+        invocations[1]
+    );
+    assert!(
+        invocations[1]
+            .iter()
+            .any(|arg| arg.starts_with("ControlPath=")),
+        "the tty reattach reuses the confirmed master: {:?}",
         invocations[1]
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -643,8 +733,8 @@ fn established_link_drop_reconnects_and_notifies_once() {
         "a plain link drop must not report network restoration: {stderr}"
     );
     assert!(
-        stderr.contains("(attempt 1)"),
-        "attempts number per outage, not per lifetime: {stderr}"
+        stderr.contains("reattached to dev-box"),
+        "plain mode reports the successful handoff: {stderr}"
     );
 
     let text = wait_for_notify_log(
@@ -704,9 +794,7 @@ fn unreachable_endpoint_holds_until_restored_then_reconnects_immediately() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains(
-            "dev-box unreachable — holding reconnect until the network returns; Ctrl-C stops"
-        ),
+        stderr.contains("network to dev-box lost — waiting for network; Ctrl-C stops"),
         "the unreachable hold is visible: {stderr}"
     );
     assert!(
@@ -751,19 +839,25 @@ fn unreachable_endpoint_retries_at_the_hold_cap() {
 }
 
 #[test]
-fn reachable_endpoint_cannot_bypass_the_ssh_failure_ladder() {
+fn reachable_endpoint_retries_failed_masters_without_stderr_spam() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
+    let master_plan = env.project_root.join("ssh-master.plan");
     let (ssh_config, address) = closed_ssh_endpoint(&env);
     let _listener = TcpListener::bind(address).expect("answer endpoint dials");
-    std::fs::write(&plan, "255\n255\n0\n").expect("write plan");
+    std::fs::write(&plan, "255\n0\n").expect("write plan");
+    std::fs::write(&master_plan, "255\n255\n0\n").expect("write master plan");
 
     let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_MASTER_PLAN", &master_plan)
+        .env(
+            "RIMZ_TEST_SSH_MASTER_STDERR",
+            "ssh: connect to host dev-box port 22: Connection refused\n",
+        )
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
-        .env("RIMZ_REMOTE_BACKOFF_MS", "120")
         .env("RIMZ_REMOTE_BACKOFF_CAP_MS", "500")
         .env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1")
         .env("RIMZ_REMOTE_DIAL_MS", "20")
@@ -772,20 +866,27 @@ fn reachable_endpoint_cannot_bypass_the_ssh_failure_ladder() {
         .spawn()
         .expect("spawn supervised remote connect");
 
-    wait_for_main_invocations(&mut child, &log, 1, Duration::from_secs(2));
-    std::thread::sleep(Duration::from_millis(60));
-    assert_eq!(
-        main_invocation_count(&log),
-        1,
-        "a TCP-answering middlebox must not bypass the SSH failure ladder"
-    );
-
-    wait_for_main_invocations(&mut child, &log, 3, Duration::from_secs(2));
+    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(2));
     let out = child.wait_with_output().expect("wait for clean reattach");
     assert!(
         out.status.success(),
-        "ladder-paced reconnect ends cleanly\nstderr:\n{}",
+        "background-master reconnect ends cleanly\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+    let invocations = shim_invocations(&log);
+    assert_eq!(
+        invocations
+            .iter()
+            .filter(|argv| is_master_invocation(argv))
+            .count(),
+        3,
+        "two failed masters precede the successful one: {invocations:?}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.matches("Connection refused").count(),
+        1,
+        "identical fast failures report only on transition: {stderr}"
     );
 }
 
