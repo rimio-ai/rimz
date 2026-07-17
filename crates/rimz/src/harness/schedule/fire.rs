@@ -350,6 +350,59 @@ mod tests {
     }
 
     #[test]
+    fn qwen_reset_signal_requires_exact_bound_capacity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("runtime paths");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let now = Timestamp::from_second(1_000_000).expect("now");
+        let reset = now + jiff::SignedDuration::from_secs(2 * 86_400);
+        let scope = crate::agents::ProviderAccountScope::sub_provider("alibaba", "international");
+        let cache = crate::agents::account::RateLimitsCache {
+            entries: BTreeMap::from([(
+                "qwen".to_owned(),
+                crate::agents::account::RateLimitCacheEntry {
+                    scope: scope.clone(),
+                    account_key: Some("owner".to_owned()),
+                    limits: crate::agents::AgentRateLimits {
+                        windows: vec![crate::agents::RateLimitWindow {
+                            used_percentage: Some(40),
+                            resets_at: Some(reset),
+                            duration_mins: Some(7 * 24 * 60),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        crate::store::atomic::write_temp_then_rename_cache(
+            &runtime.shared_rate_limits_path(),
+            &cache,
+        )
+        .expect("rate-limit cache");
+
+        let mismatch =
+            crate::agents::ProviderAccountBinding::new(scope.clone(), "other".to_owned())
+                .expect("mismatched binding");
+        let matching = crate::agents::ProviderAccountBinding::new(scope, "owner".to_owned())
+            .expect("matching binding");
+        assert_eq!(
+            [
+                super::super::runner::reset_signal_for(&runtime, "qwen", None, now),
+                super::super::runner::reset_signal_for(&runtime, "qwen", Some(&mismatch), now,),
+                super::super::runner::reset_signal_for(&runtime, "qwen", Some(&matching), now,),
+            ],
+            [
+                schedule::ResetSignal::Unknown,
+                schedule::ResetSignal::Unknown,
+                schedule::ResetSignal::At(reset),
+            ]
+        );
+    }
+
+    #[test]
     fn active_pause_holds_existing_stamp() {
         let now = zdt(2026, 6, 24, 8, 0, 0);
         let prior = seconds_before(now.timestamp(), 600);

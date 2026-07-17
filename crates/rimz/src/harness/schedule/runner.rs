@@ -2008,58 +2008,6 @@ mod tests {
     }
 
     #[test]
-    fn qwen_reset_signal_requires_exact_bound_capacity() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-            .expect("runtime paths");
-        runtime.ensure_dirs().expect("runtime dirs");
-        let now = Timestamp::from_second(1_000_000).expect("now");
-        let reset = now + jiff::SignedDuration::from_secs(2 * 86_400);
-        let scope = crate::agents::ProviderAccountScope::sub_provider("alibaba", "international");
-        let cache = crate::agents::account::RateLimitsCache {
-            entries: std::collections::BTreeMap::from([(
-                "qwen".to_owned(),
-                crate::agents::account::RateLimitCacheEntry {
-                    scope: scope.clone(),
-                    account_key: Some("owner".to_owned()),
-                    limits: crate::agents::AgentRateLimits {
-                        windows: vec![crate::agents::RateLimitWindow {
-                            used_percentage: Some(40),
-                            resets_at: Some(reset),
-                            duration_mins: Some(7 * 24 * 60),
-                            ..Default::default()
-                        }],
-                    },
-                    ..Default::default()
-                },
-            )]),
-            ..Default::default()
-        };
-        crate::store::atomic::write_temp_then_rename_cache(
-            &runtime.shared_rate_limits_path(),
-            &cache,
-        )
-        .expect("rate-limit cache");
-
-        assert_eq!(
-            reset_signal_for(&runtime, "qwen", None, now),
-            ResetSignal::Unknown
-        );
-        let mismatch = ProviderAccountBinding::new(scope.clone(), "other".to_owned())
-            .expect("mismatched binding");
-        assert_eq!(
-            reset_signal_for(&runtime, "qwen", Some(&mismatch), now),
-            ResetSignal::Unknown
-        );
-        let matching =
-            ProviderAccountBinding::new(scope, "owner".to_owned()).expect("matching binding");
-        assert_eq!(
-            reset_signal_for(&runtime, "qwen", Some(&matching), now),
-            ResetSignal::At(reset)
-        );
-    }
-
-    #[test]
     fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing_path = dir.path().join("missing.lock");
