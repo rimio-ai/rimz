@@ -38,7 +38,8 @@ pub struct DoctorArgs {
     /// Write the report to a file (atomically) instead of stdout.
     #[arg(long, value_name = "PATH")]
     output: Option<PathBuf>,
-    /// Dismiss recorded history so reports only show records from after this moment.
+    /// Dismiss recorded diagnostics, the last incident, and message failures so
+    /// reports only show records from after this moment.
     #[arg(long)]
     clear: bool,
 }

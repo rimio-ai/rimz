@@ -1125,6 +1125,8 @@ fn render_diagnostics(
                 if record.stale_build
                     && let Some(build) = &record.build
                 {
+                    // ponytail: SUMMARY is the unpadded final column; add styled Cell spans
+                    // before giving this table a max width.
                     summary.push_str(&paint(palette::MUTED, &format!(" · old build {build}")));
                 }
                 table.row([
@@ -1627,6 +1629,23 @@ mod tests {
         });
         assert!(out.contains("MESSAGES"), "{out}");
         assert!(out.contains("no open messages"), "{out}");
+    }
+
+    #[test]
+    fn diagnostics_section_renders_history_watermark() {
+        let mut report = report_fixture();
+        report.history_cleared_at = Some(Timestamp::now());
+        report.diagnostics = Some(Diagnostics::Ready {
+            path: "/tmp/diagnostics".to_owned(),
+            records: Vec::new(),
+        });
+
+        let out = strip(|w| {
+            let mut tally = Tally::default();
+            render_diagnostics(w, &report, &mut tally)
+        });
+
+        assert!(out.contains("history cleared 0s ago"), "{out}");
     }
 
     #[test]
