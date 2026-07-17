@@ -44,6 +44,8 @@ fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Pa
              if [ \"${{1:-}}\" = \"sidebar\" ] && [ \"${{2:-}}\" = \"focus\" ]; then\n\
                {real_rimz} \"$@\" >> {focus_exec_log} 2>&1\n\
                printf 'exit=%s\\n' \"$?\" >> {focus_exec_log}\n\
+             else\n\
+               {real_rimz} \"$@\" >/dev/null 2>&1\n\
              fi\n",
             log = sh_quote(&log.display().to_string()),
             real_rimz = sh_quote(&real_rimz.display().to_string()),
