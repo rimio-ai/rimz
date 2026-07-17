@@ -142,6 +142,51 @@ fn write_stamp(path: &Path, stamp: &RedeemStamp) -> Result<(), AutoRedeemErr> {
     Ok(())
 }
 
+fn reserve_attempt(
+    runtime: &RuntimePaths,
+    reason: RedeemReason,
+    now: Timestamp,
+    request_id: &str,
+) -> bool {
+    let Some(_guard) = crate::store::lock::WorkspaceLock::try_acquire(
+        &runtime.shared_auto_redeem_lock(CODEX_KIND),
+    )
+    .ok()
+    .flatten() else {
+        return false;
+    };
+    let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
+    if !stamp_allows_attempt(read_stamp(&stamp_path).as_ref(), now) {
+        return false;
+    }
+    write_stamp(
+        &stamp_path,
+        &RedeemStamp {
+            attempted_at: now,
+            request_id: request_id.to_owned(),
+            reason,
+            outcome: None,
+        },
+    )
+    .is_ok()
+}
+
+fn cancel_attempt_reservation(runtime: &RuntimePaths, request_id: &str) {
+    let Some(_guard) = crate::store::lock::WorkspaceLock::try_acquire(
+        &runtime.shared_auto_redeem_lock(CODEX_KIND),
+    )
+    .ok()
+    .flatten() else {
+        return;
+    };
+    let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
+    let owns_reservation = read_stamp(&stamp_path)
+        .is_some_and(|stamp| stamp.request_id == request_id && stamp.outcome.is_none());
+    if owns_reservation {
+        let _ = std::fs::remove_file(stamp_path);
+    }
+}
+
 /// Evaluate the Codex panel and spawn the account-wide helper when due.
 /// Codex is the only provider with reset credits today; keep that provider
 /// choice here while the verdict above remains provider-neutral.
@@ -168,47 +213,15 @@ pub(crate) fn redeem_credits(
         return;
     };
 
-    // Serialize the cooldown check and reservation across room producers. The
-    // helper waits on this same lock, so it cannot observe the pre-reservation
-    // state after a successful spawn.
-    let _guard = match crate::store::lock::WorkspaceLock::try_acquire(
-        &runtime.shared_auto_redeem_lock(CODEX_KIND),
-    ) {
-        Ok(Some(guard)) => guard,
-        Ok(None) => return,
-        Err(err) => {
-            tracing::debug!(
-                workspace = %runtime.workspace_id,
-                tags.operation = "auto_redeem.reserve",
-                error = &err as &dyn std::error::Error,
-                "sidebar: failed to reserve agent auto-redeem",
-            );
-            return;
-        }
-    };
-    let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
-    if !stamp_allows_attempt(read_stamp(&stamp_path).as_ref(), now) {
-        return;
-    }
     let request_id = uuid::Uuid::now_v7().to_string();
-    if !spawn_auto_redeem(runtime, reason, &request_id) {
+    // A pending reservation deliberately uses the 10-minute attempt cooldown
+    // as its dead-helper lease. Redemption is rare and account-scoped, so the
+    // conservative backstop is preferable to a second freshness clock.
+    if !reserve_attempt(runtime, reason, now, &request_id) {
         return;
     }
-    if let Err(err) = write_stamp(
-        &stamp_path,
-        &RedeemStamp {
-            attempted_at: now,
-            request_id,
-            reason,
-            outcome: None,
-        },
-    ) {
-        tracing::debug!(
-            workspace = %runtime.workspace_id,
-            tags.operation = "auto_redeem.reserve",
-            error = &err as &dyn std::error::Error,
-            "sidebar: failed to record agent auto-redeem reservation",
-        );
+    if !spawn_auto_redeem(runtime, reason, &request_id) {
+        cancel_attempt_reservation(runtime, &request_id);
     }
 }
 
