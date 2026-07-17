@@ -30,8 +30,8 @@ fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Opti
 
 /// Stamp the in-pane agent CLI's `/proc` start onto agent panes the backend
 /// left without one — every pane today: tmux has no per-pane process-start
-/// format variable, and Zellij 0.44 emits no process fields (`RawPane` keeps
-/// reading builds that do). A startless pane leaves the cwd-fallback guard
+/// format variable, and Zellij 0.44 emits no process fields (`PaneTopologyPane`
+/// keeps reading builds that do). A startless pane leaves the cwd-fallback guard
 /// (`pane_start_allows_bind`) blind, so a stale daemon-mode Codex session would
 /// latch onto a freshly-started pane in the same cwd and project its old stats.
 /// Runs at frame production, in both produce arms, so the published pane frame
