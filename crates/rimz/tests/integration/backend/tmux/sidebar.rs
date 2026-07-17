@@ -71,12 +71,18 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
 
     server.tmux(&["send-keys", "-t", pane.raw(), "r"]);
     let deadline = Instant::now() + Duration::from_secs(10);
+    let handoff_started = Instant::now();
     loop {
-        assert_eq!(
-            server.display(pane.raw(), "#{mouse_any_flag}"),
-            "1",
-            "mouse capture dropped during the reload handoff",
-        );
+        let mouse = server.display(pane.raw(), "#{mouse_any_flag}");
+        if mouse != "1" {
+            let panes = list_session_panes(&server, session);
+            let current_heartbeat =
+                rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&heartbeat).ok();
+            panic!(
+                "mouse capture dropped {:?} into reload; panes={panes:?}; heartbeat={current_heartbeat:?}",
+                handoff_started.elapsed(),
+            );
+        }
         if rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
             .is_ok_and(|heartbeat| heartbeat.last_seen > initial_seen)
         {

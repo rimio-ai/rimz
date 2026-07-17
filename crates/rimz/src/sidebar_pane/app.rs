@@ -336,11 +336,15 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
         drop(_heartbeat_cleanup);
         std::process::exit(crate::sidebar_pane::supervise::RELOAD_EXIT_CODE);
     }
-    Ok(if state.tab_emptied {
-        ServeOutcome::SelfCloseRequested
-    } else {
-        ServeOutcome::Stopped
-    })
+    if state.tab_emptied {
+        // A cache-backed empty fold is only a request. Keep terminal modes
+        // continuous while the supervisor checks mux truth; it restores them
+        // if the authoritative verdict really closes the pane, or the
+        // replacement worker reasserts them after a rejected request.
+        _input_mode.preserve_for_reexec();
+        return Ok(ServeOutcome::SelfCloseRequested);
+    }
+    Ok(ServeOutcome::Stopped)
 }
 
 fn fetch_deadline_timeout(base: Duration, deadline: Option<Instant>, now: Instant) -> Duration {

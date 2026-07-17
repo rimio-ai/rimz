@@ -1,9 +1,11 @@
 //! Convergence supervisor for the pane-resident sidebar renderer.
 //!
 //! The worker owns the TUI and its in-process panic diagnostics. The supervisor
-//! owns the pane command PID: it relaunches or re-execs the worker onto the
-//! current binary, preserves the sidebar instance identity across reloads,
-//! reaps stray children, and records deaths Rust hooks cannot catch.
+//! owns the pane command PID, polls durable build intent, proves a replacement
+//! worker stable before preflight and self-exec, and preserves the sidebar
+//! instance across failures and reloads. It also confirms worker self-close
+//! requests against authoritative mux truth, reaps stray children, and records
+//! deaths Rust hooks cannot catch.
 
 use std::env;
 use std::ffi::OsString;
@@ -108,7 +110,10 @@ pub fn run(config: ServeConfig) -> Result<()> {
         // `RIMZ_BIN` and `current_exe()` would make its next respawn fail.
         let target = crate::reload::recorded_reexec_target(&config.workspace_id);
         exec_state.observe(&target, supervisor_build.as_deref());
-        let current = env::current_exe().unwrap_or_else(|_| crate::proc::rimz_exe());
+        // Atomic installs leave `current_exe()` spelling a deleted inode on
+        // Linux. Resolve its replacement before spawning so a legacy room
+        // without a verified staged target can still complete the handoff.
+        let current = crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
         let worker_build = worker_build(&target, supervisor_build.as_deref());
         let exe = worker_executable(target, current);
         let started = Instant::now();
@@ -179,13 +184,13 @@ pub fn run(config: ServeConfig) -> Result<()> {
             SuperviseAction::ConfirmSelfClose => {
                 match confirm_self_close(&config, &pane_watchdog) {
                     SelfCloseConfirmation::Close | SelfCloseConfirmation::PaneGone => {
+                        restore_terminal(MouseCapture::Stdout, Screen::Main);
                         remove_orphan_runtime_files(&config);
                         record_confirmed_self_close(&config);
                         return Ok(());
                     }
                     SelfCloseConfirmation::Keep { siblings, reason } => {
                         record_self_close_rejected(&config, siblings, &reason);
-                        restore_terminal(MouseCapture::Stdout, Screen::Main);
                         sleep_respawn_backoff(
                             respawn_delay(RESPAWN_BACKOFF_INITIAL),
                             &mut record_watch,
