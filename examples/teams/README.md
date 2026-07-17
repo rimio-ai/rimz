@@ -6,13 +6,13 @@ One team ships today: **forge**, the plan → code → review team RimZ builds i
 
 ## Forge — `forge/`
 
-Forge carries one change from idea to open PR through three roles, each a profile with its own model and prompt, so every member spends its whole window inside its comfort zone:
+Forge carries one change from idea to open PR through three roles, each with its own model and prompt, so every member spends its whole window inside its comfort zone:
 
 - **@planner** (Claude, on Fable) talks with you. It explores the code through subagents, confirms design choices at user gates, and writes the plan to `plan.md`. It owns design and intent: every design question during the loop lands on its desk.
 - **@coder** (Codex, on the current GPT) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. It treats the plan as a hypothesis to verify against the real code, implements, resolves review findings, and opens the PR.
 - **@reviewer** (Claude, on Opus) is a third fresh window. It reviews the full diff blind — findings drafted before it ever opens the coder's report — then reconciles that report claim by claim, conceding only to the code.
 
-The fragment is four files: [`team.toml`](./forge/team.toml) declares the three profiles (model, effort, launch args) and the team — roles, prompts, layout — and [`planner.md`](./forge/planner.md), [`coder.md`](./forge/coder.md), [`reviewer.md`](./forge/reviewer.md) are the role prompts, each stating the role's craft plus the shared team protocol.
+The fragment is four files: [`team.toml`](./forge/team.toml) declares the team and each role's agent kind, model, effort, launch args, prompt, and layout; [`planner.md`](./forge/planner.md), [`coder.md`](./forge/coder.md), and [`reviewer.md`](./forge/reviewer.md) are the role prompts, each stating the role's craft plus the shared team protocol.
 
 ### How the loop runs
 
@@ -74,7 +74,7 @@ rimz agents forge --resume         # reopen the newest closed forge team
 
 ### Customize
 
-`team.toml` is the tuning surface: swap models, change effort, or adjust the Codex feature flags in the profile `args`. The role prompts do the heavy lifting, so renaming roles, dropping one, or adding a fourth means editing the prompts and the `[[agents.teams.forge.roles]]` list together. Forge also makes a solid skeleton for a team of your own: copy the directory under a new name and reshape the roles to how your work splits. The full config shape is in [configuration → profiles and teams](../../docs/guide/configuration.md#agent-profiles-commands-and-teams).
+`team.toml` is the tuning surface: swap models, change effort, or adjust the Codex feature flags in the role's `args`. The role prompts do the heavy lifting, so renaming roles, dropping one, or adding a fourth means editing the prompts and the `[[agents.teams.forge.roles]]` list together. Forge also makes a solid skeleton for a team of your own: copy the directory under a new name and reshape the roles to how your work splits. The full config shape is in [configuration → profiles and teams](../../docs/guide/configuration.md#agent-profiles-commands-and-teams).
 
 ## See also
 
