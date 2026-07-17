@@ -651,6 +651,19 @@ fn from_pr_reuse_requires_matching_pr_provenance() {
     .expect_err("different PR must not reuse worktree");
 
     assert!(err.to_string().contains("not requested PR 2"), "{err}");
+
+    configure_origin_rewrite(&env, "https://github.com/org/repo.git");
+    let other_repo = rimz::forge::parse("https://github.com/other/repo/pull/1").unwrap();
+    let err = rimz::worktree::create_from_pr(
+        &env.project_root,
+        &rimz::config::WorktreeConfig::default(),
+        &other_repo,
+        Some("review"),
+        None,
+        true,
+    )
+    .expect_err("reused worktree must still validate URL identity");
+    assert!(err.to_string().contains("other/repo"), "{err}");
 }
 
 #[cfg(unix)]

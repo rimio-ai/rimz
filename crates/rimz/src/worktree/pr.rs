@@ -55,26 +55,15 @@ pub fn create_from_pr(
                     requested: pr.number,
                 });
             }
+            let remote = origin_remote(repo_root, pr.number)?;
+            validate_pr_origin(pr, &remote)?;
             return Ok(reused);
         }
     };
     let review_branch = branch.or(fresh.branch.as_deref());
 
-    let remote = git_stdout(repo_root, ["config", "--get", "remote.origin.url"]).map_err(
-        |err| match err {
-            WorktreeErr::Git { .. } => WorktreeErr::Parse(format!(
-                "could not fetch PR #{}: git remote `origin` is not configured",
-                pr.number
-            )),
-            other => other,
-        },
-    )?;
-    if !forge::pr_url_matches_origin(pr, &remote) {
-        return Err(WorktreeErr::PrRepoMismatch {
-            url_repo: pr.repo.clone().unwrap_or_default(),
-            origin_repo: forge::remote_repo_slug(&remote).unwrap_or(remote),
-        });
-    }
+    let remote = origin_remote(repo_root, pr.number)?;
+    validate_pr_origin(pr, &remote)?;
     let forge = pr.forge.unwrap_or_else(|| forge::forge_for_remote(&remote));
     let context = PrContext {
         number: pr.number,
@@ -127,6 +116,26 @@ pub fn create_from_pr(
     } else {
         fork_checkout(repo_root, fresh, &context, head)
     }
+}
+
+fn origin_remote(repo_root: &Path, number: u64) -> Result<String> {
+    git_stdout(repo_root, ["config", "--get", "remote.origin.url"]).map_err(|err| match err {
+        WorktreeErr::Git { .. } => WorktreeErr::Parse(format!(
+            "could not fetch PR #{}: git remote `origin` is not configured",
+            number
+        )),
+        other => other,
+    })
+}
+
+fn validate_pr_origin(pr: &forge::PrTarget, remote: &str) -> Result<()> {
+    if !forge::pr_url_matches_origin(pr, remote) {
+        return Err(WorktreeErr::PrRepoMismatch {
+            url_repo: pr.repo.clone().unwrap_or_default(),
+            origin_repo: forge::remote_repo_slug(remote).unwrap_or_else(|| remote.to_owned()),
+        });
+    }
+    Ok(())
 }
 
 fn review_only_checkout(
@@ -279,7 +288,12 @@ fn fetch_pr_head<'a>(
 ) -> Result<TempPrHead<'a>> {
     let nonce = TEMP_REF_NONCE.fetch_add(1, Ordering::Relaxed);
     let ref_name = format!("refs/rimz/pr/{number}-{}-{nonce}", std::process::id());
-    let fetch_refspec = format!("+{refspec}:{ref_name}");
+    let mut head = TempPrHead {
+        repo_root,
+        ref_name,
+        oid: String::new(),
+    };
+    let fetch_refspec = format!("+{refspec}:{}", head.ref_name);
     git_network_output(
         repo_root,
         [
@@ -292,12 +306,8 @@ fn fetch_pr_head<'a>(
         PR_FETCH_TIMEOUT,
     )
     .map_err(pr_fetch_err(number, remote))?;
-    let oid = git_stdout(repo_root, ["rev-parse", ref_name.as_str()])?;
-    Ok(TempPrHead {
-        repo_root,
-        ref_name,
-        oid,
-    })
+    head.oid = git_stdout(repo_root, ["rev-parse", head.ref_name.as_str()])?;
+    Ok(head)
 }
 
 fn add_pr_worktree(
