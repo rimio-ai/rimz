@@ -111,7 +111,7 @@ pub(super) fn supervise_remote(
                 if let Some(action) = session_link.transport_lost() {
                     render_session_link_action(host, action);
                 }
-                let internet_probe = internet_probe_from_env();
+                let internet_probe = internet_probe_for_wait(&ui);
                 match wait_before_retry(
                     dial_plan.as_ref(),
                     internet_probe.as_ref(),
@@ -121,7 +121,7 @@ pub(super) fn supervise_remote(
                     &mut ui,
                     Some(&stop),
                 )? {
-                    WaitOutcome::Verdict(WaitVerdict::AttachNow { network_restored }) => {
+                    WaitOutcome::AttachNow { network_restored } => {
                         if network_restored {
                             reconnect.network_restored();
                             let _ = writeln!(
@@ -129,9 +129,6 @@ pub(super) fn supervise_remote(
                                 "rimz: network to {host} restored — reconnecting now",
                             );
                         }
-                    }
-                    WaitOutcome::Verdict(WaitVerdict::KeepWaiting) => {
-                        bail!("remote reconnect wait returned before settling")
                     }
                     WaitOutcome::Interrupted => {
                         let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped",);
@@ -284,8 +281,16 @@ fn dial_with_timeout(plan: &DialPlan, timeout: Duration) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WaitOutcome {
-    Verdict(WaitVerdict),
+    AttachNow { network_restored: bool },
     Interrupted,
+}
+
+fn internet_probe_for_wait(ui: &OutageUi) -> Option<DialPlan> {
+    if ui.is_plain() {
+        None
+    } else {
+        internet_probe_from_env()
+    }
 }
 
 pub(super) fn retry_delay(
@@ -380,7 +385,10 @@ pub(super) fn wait_before_retry(
                 );
             }
             ui.release(true)?;
-            return Ok(WaitOutcome::Verdict(verdict));
+            let WaitVerdict::AttachNow { network_restored } = verdict else {
+                continue;
+            };
+            return Ok(WaitOutcome::AttachNow { network_restored });
         }
 
         if interval.is_some_and(|_| now >= next_dial) {

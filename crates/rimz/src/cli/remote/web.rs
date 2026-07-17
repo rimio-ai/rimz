@@ -184,16 +184,11 @@ impl RemoteTunnel {
                     &mut ui,
                     None,
                 )? {
-                    super::supervisor::WaitOutcome::Verdict(
-                        rimz::remote::reachability::WaitVerdict::AttachNow { network_restored },
-                    ) => {
+                    super::supervisor::WaitOutcome::AttachNow { network_restored } => {
                         if network_restored {
                             self.reconnect_state.network_restored();
                         }
                     }
-                    super::supervisor::WaitOutcome::Verdict(
-                        rimz::remote::reachability::WaitVerdict::KeepWaiting,
-                    ) => bail!("remote web reconnect wait returned before settling"),
                     super::supervisor::WaitOutcome::Interrupted => {
                         return Ok(TunnelFlow::Done);
                     }

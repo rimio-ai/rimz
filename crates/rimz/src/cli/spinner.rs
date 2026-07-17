@@ -120,7 +120,7 @@ fn animation_enabled() -> bool {
         )
 }
 
-fn animation_allowed(
+pub(crate) fn animation_allowed(
     no_progress: Option<&str>,
     agent_kind: Option<&str>,
     term: Option<&str>,

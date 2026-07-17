@@ -116,12 +116,13 @@ impl RecoveryPanel {
     }
 
     /// Whether the recovery canvas owns the terminal at this elapsed age.
-    pub fn visible(&mut self, elapsed: Duration) -> bool {
-        let visible = !self.first_wait || elapsed >= self.grace;
-        if visible && self.shown_at.is_none() {
-            self.shown_at = Some(elapsed);
-        }
-        visible
+    pub fn visible(&self, elapsed: Duration) -> bool {
+        !self.first_wait || elapsed >= self.grace
+    }
+
+    /// Record the instant at which the renderer successfully opened the canvas.
+    pub fn note_shown(&mut self, elapsed: Duration) {
+        self.shown_at.get_or_insert(elapsed);
     }
 
     /// Earliest release time after the checkpoints say the next attach may start.
@@ -237,7 +238,7 @@ mod tests {
 
     #[test]
     fn sub_grace_recovery_never_shows_or_holds() {
-        let mut panel = panel(true, None);
+        let panel = panel(true, None);
 
         assert!(!panel.visible(Duration::from_millis(499)));
         assert_eq!(
@@ -251,6 +252,7 @@ mod tests {
         let mut panel = panel(true, None);
 
         assert!(panel.visible(Duration::from_millis(500)));
+        panel.note_shown(Duration::from_millis(500));
         assert_eq!(
             panel.release_at(Duration::from_millis(700)),
             Duration::from_millis(2_000)
@@ -266,6 +268,12 @@ mod tests {
         let mut panel = panel(false, None);
 
         assert!(panel.visible(Duration::ZERO));
+        assert_eq!(
+            panel.release_at(Duration::from_millis(100)),
+            Duration::from_millis(100),
+            "eligibility alone does not count as a displayed panel"
+        );
+        panel.note_shown(Duration::ZERO);
         assert_eq!(
             panel.release_at(Duration::from_millis(100)),
             Duration::from_millis(1_500)

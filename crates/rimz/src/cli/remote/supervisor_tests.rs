@@ -80,6 +80,34 @@ fn plain_retry_wait_reports_interruption() {
 }
 
 #[test]
+fn plain_retry_wait_omits_the_internet_checkpoint() {
+    let ui = OutageUi::plain_lines("dev-box");
+
+    assert_eq!(internet_probe_for_wait(&ui), None);
+}
+
+#[test]
+fn settled_retry_wait_returns_only_attach_or_interrupted() {
+    let mut ui = OutageUi::plain_lines("dev-box");
+
+    assert_eq!(
+        wait_before_retry(
+            None,
+            None,
+            Duration::ZERO,
+            Duration::from_secs(30),
+            true,
+            &mut ui,
+            None,
+        )
+        .expect("wait result"),
+        WaitOutcome::AttachNow {
+            network_restored: false
+        }
+    );
+}
+
+#[test]
 fn link_notifications_respect_command_and_terminal_gates() {
     let prefs = rimz::config::NotificationsPrefs {
         enabled: true,

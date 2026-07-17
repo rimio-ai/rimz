@@ -13,7 +13,7 @@ use ratatui::crossterm::{execute, queue};
 use rimz::remote::recovery::{RecoveryFrame, RecoveryPanel, StageStatus};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::cli::spinner::{SPINNER_FRAMES, SPINNER_TICK};
+use crate::cli::spinner::{SPINNER_FRAMES, SPINNER_TICK, animation_allowed};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard, no_color};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +37,11 @@ impl OutageUi {
     pub(super) fn auto(host: impl Into<String>) -> Self {
         let panel = panel_allowed(
             std::io::stdout().is_terminal(),
-            std::env::var_os("RIMZ_NO_PROGRESS").as_deref(),
+            std::env::var("RIMZ_NO_PROGRESS").ok().as_deref(),
+            std::env::var(rimz::harness::run::ENV_AGENT_KIND)
+                .ok()
+                .as_deref(),
+            std::env::var("TERM").ok().as_deref(),
         );
         Self {
             host: host.into(),
@@ -84,7 +88,10 @@ impl OutageUi {
         }
         if matches!(self.state, UiState::PendingPanel) {
             match OutagePanel::new() {
-                Ok(panel) => self.state = UiState::Panel(panel),
+                Ok(panel) => {
+                    recovery.note_shown(elapsed);
+                    self.state = UiState::Panel(panel);
+                }
                 Err(err) => {
                     tracing::debug!(error = %err, "remote recovery panel unavailable");
                     self.state = UiState::PlainLines;
@@ -107,8 +114,13 @@ impl OutageUi {
     }
 }
 
-fn panel_allowed(stdout_is_terminal: bool, no_progress: Option<&std::ffi::OsStr>) -> bool {
-    stdout_is_terminal && no_progress.is_none()
+fn panel_allowed(
+    stdout_is_terminal: bool,
+    no_progress: Option<&str>,
+    agent_kind: Option<&str>,
+    term: Option<&str>,
+) -> bool {
+    stdout_is_terminal && animation_allowed(no_progress, agent_kind, term)
 }
 
 struct OutagePanel {
@@ -257,9 +269,12 @@ mod tests {
 
     #[test]
     fn panel_requires_stdout_tty_and_progress_permission() {
-        assert!(panel_allowed(true, None));
-        assert!(!panel_allowed(false, None));
-        assert!(!panel_allowed(true, Some(std::ffi::OsStr::new("1"))));
+        assert!(panel_allowed(true, None, None, None));
+        assert!(!panel_allowed(false, None, None, None));
+        assert!(!panel_allowed(true, Some("1"), None, None));
+        assert!(panel_allowed(true, Some("0"), None, None));
+        assert!(!panel_allowed(true, None, Some("codex"), None));
+        assert!(!panel_allowed(true, None, None, Some("dumb")));
     }
 
     #[test]
