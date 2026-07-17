@@ -67,10 +67,7 @@ pub struct ResumeConfig {
     pub auto_redeem: bool,
     /// Minimum blocked time an automatic redemption must recover. A credit that
     /// would expire shortly after the natural reset redeems regardless.
-    #[serde(
-        default = "default_auto_redeem_min_gain",
-        deserialize_with = "deserialize_auto_redeem_min_gain"
-    )]
+    #[serde(deserialize_with = "deserialize_auto_redeem_min_gain")]
     pub auto_redeem_min_gain: String,
 }
 
@@ -92,12 +89,14 @@ impl Default for ResumeConfig {
 impl ResumeConfig {
     pub fn auto_redeem_min_gain(&self) -> Duration {
         parse_auto_redeem_min_gain(&self.auto_redeem_min_gain)
-            .unwrap_or_else(|_| Duration::from_secs(12 * 60 * 60))
+            .unwrap_or_else(|_| default_auto_redeem_min_gain())
     }
 }
 
-fn default_auto_redeem_min_gain() -> String {
-    DEFAULT_AUTO_REDEEM_MIN_GAIN.to_owned()
+fn default_auto_redeem_min_gain() -> Duration {
+    // This in-source default is validated by `auto_redeem_min_gain_defaults_and_parses_supported_units`.
+    parse_auto_redeem_min_gain(DEFAULT_AUTO_REDEEM_MIN_GAIN)
+        .expect("DEFAULT_AUTO_REDEEM_MIN_GAIN must be a supported duration")
 }
 
 fn deserialize_auto_redeem_min_gain<'de, D>(deserializer: D) -> Result<String, D::Error>
