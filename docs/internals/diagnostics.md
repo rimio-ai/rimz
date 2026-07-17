@@ -126,7 +126,9 @@ The captures that pair with the carry, drop, and reject records live in `diag-fr
 
 ## Reading
 
-`rimz doctor` prints the last twelve records for the current workspace with severity, kind, age, and a one-line summary, collapsing a run of consecutive same-identity records into one row that carries the run count. The file stays plain JSONL for direct inspection.
+`rimz doctor` prints the last twelve records for the current workspace with severity, kind, age, and a one-line summary, collapsing a run of consecutive same-identity records into one row that carries the run count. A row whose known writer build differs from the running doctor binary carries an `old build <id>` label; an absent build id is unknown rather than stale. The file stays plain JSONL for direct inspection.
+
+`rimz doctor --clear` writes `doctor-cleared.json` beside the diagnostic log and filters diagnostics, the last incident marker, and durable message failures at or before its `cleared_at` timestamp. The JSONL logs, incident archive, and event log stay untouched; deleting the watermark restores the full retained history.
 
 ```sh
 DIAG=~/.local/state/rimz/workspaces/<workspace-id>/diag.log.jsonl

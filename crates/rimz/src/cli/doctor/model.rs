@@ -45,6 +45,8 @@ pub(super) struct DoctorReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agents: Option<AgentRollup>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) history_cleared_at: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) messages: Option<Probe<Messages>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) diagnostics: Option<Diagnostics>,
@@ -534,4 +536,7 @@ pub(super) struct DiagRow {
     pub(super) kind: String,
     pub(super) at_ms: u64,
     pub(super) summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) build: Option<String>,
+    pub(super) stale_build: bool,
 }

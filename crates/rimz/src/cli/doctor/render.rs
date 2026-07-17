@@ -1088,6 +1088,19 @@ fn render_diagnostics(
         return Ok(());
     };
     section(w, "DIAGNOSTICS")?;
+    if let Some(cleared_at) = report.history_cleared_at {
+        writeln!(
+            w,
+            "  {}",
+            paint(
+                palette::MUTED,
+                &format!(
+                    "history cleared {}",
+                    age_short(Timestamp::now(), cleared_at)
+                )
+            )
+        )?;
+    }
     match diagnostics {
         Diagnostics::Unavailable => writeln!(w, "  {}", paint(palette::FAINT, "unavailable")),
         Diagnostics::Ready { path, records } if records.is_empty() => writeln!(
@@ -1108,12 +1121,18 @@ fn render_diagnostics(
             let mut table = Table::new(["", "SEVERITY", "KIND", "SEEN", "SUMMARY"]).right(&[3]);
             for record in records {
                 let health = severity_health(record.severity);
+                let mut summary = record.summary.clone();
+                if record.stale_build
+                    && let Some(build) = &record.build
+                {
+                    summary.push_str(&paint(palette::MUTED, &format!(" · old build {build}")));
+                }
                 table.row([
                     badge(tally, health),
                     cell(severity_label(record.severity)).fg(style_of(health)),
                     cell(record.kind.as_str()),
                     cell(age_ms_short(now_ms, record.at_ms)),
-                    cell(record.summary.as_str()).fg(palette::BODY),
+                    cell(summary).fg(palette::BODY),
                 ]);
             }
             table.render(w)
@@ -1342,6 +1361,7 @@ mod tests {
             protocols: None,
             trust: None,
             agents: None,
+            history_cleared_at: None,
             messages: None,
             diagnostics: None,
             last_incident: None,

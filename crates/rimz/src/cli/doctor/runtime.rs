@@ -70,10 +70,16 @@ pub(super) fn collect_storage() -> model::Storage {
     }
 }
 
-pub(super) fn collect_last_incident(ws: &rimz::ResolvedWorkspace) -> Option<model::LastIncident> {
+pub(super) fn collect_last_incident(
+    ws: &rimz::ResolvedWorkspace,
+    cleared_at: Option<jiff::Timestamp>,
+) -> Option<model::LastIncident> {
     let paths = StatePaths::for_workspace(ws.workspace_id.clone()).ok()?;
     let marker: rimz::store::event::LastDeathMarker =
         serde_json::from_slice(&fs::read(&paths.last_death_marker).ok()?).ok()?;
+    if cleared_at.is_some_and(|cleared_at| marker.at <= cleared_at) {
+        return None;
+    }
     let forensics = (marker.cause == SessionDeathCause::Crash)
         .then(|| newest_crash_archive(&paths.crashes_dir))
         .flatten()
@@ -688,13 +694,17 @@ pub(super) fn collect_socket_headroom(
     })
 }
 
-pub(super) fn collect_diagnostics(ws: &rimz::ResolvedWorkspace) -> model::Diagnostics {
+pub(super) fn collect_diagnostics(
+    ws: &rimz::ResolvedWorkspace,
+    cleared_at: Option<jiff::Timestamp>,
+) -> model::Diagnostics {
     const RECENT_DIAG_ROWS: usize = 12;
     let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), usize::MAX)
     else {
         return model::Diagnostics::Unavailable;
     };
-    let records = diagnostic_rows(records, RECENT_DIAG_ROWS);
+    let cleared_at_ms = cleared_at.and_then(|at| u64::try_from(at.as_millisecond()).ok());
+    let records = diagnostic_rows(records, RECENT_DIAG_ROWS, cleared_at_ms);
     model::Diagnostics::Ready {
         path: path.display().to_string(),
         records,
@@ -704,9 +714,13 @@ pub(super) fn collect_diagnostics(ws: &rimz::ResolvedWorkspace) -> model::Diagno
 fn diagnostic_rows(
     records: Vec<rimz::diag::record::DiagEnvelope>,
     limit: usize,
+    cleared_at_ms: Option<u64>,
 ) -> Vec<model::DiagRow> {
     let mut groups: Vec<(String, rimz::diag::record::DiagEnvelope, usize)> = Vec::new();
-    for record in records {
+    for record in records
+        .into_iter()
+        .filter(|record| cleared_at_ms.is_none_or(|cleared_at| record.at_ms > cleared_at))
+    {
         let key = record.event.identity_key();
         match groups.last_mut() {
             Some((last_key, latest, count)) if last_key == &key => {
@@ -733,12 +747,19 @@ fn diagnostic_row(record: rimz::diag::record::DiagEnvelope, count: usize) -> mod
         ),
         count,
     );
+    let stale_build = stale_build(record.build.as_deref(), rimz::build_id::current());
     model::DiagRow {
         severity: record.severity,
         kind: record.event.kind_name().to_owned(),
         at_ms: record.at_ms,
         summary,
+        build: record.build,
+        stale_build,
     }
+}
+
+fn stale_build(record_build: Option<&str>, current_build: Option<&str>) -> bool {
+    matches!((record_build, current_build), (Some(record), Some(current)) if record != current)
 }
 
 fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
@@ -1218,6 +1239,7 @@ mod tests {
                 diag_record(2, tick_breach(10, None, 6)),
             ],
             12,
+            None,
         );
 
         assert_eq!(rows.len(), 1);
@@ -1235,7 +1257,7 @@ mod tests {
         records.push(diag_record(20, tick_breach(10, Some(10), 13)));
         records.push(diag_record(21, tick_breach(30, None, 5)));
 
-        let rows = diagnostic_rows(records, 12);
+        let rows = diagnostic_rows(records, 12, None);
 
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].at_ms, 13);
@@ -1244,6 +1266,31 @@ mod tests {
         assert!(!rows[1].summary.contains("records"));
         assert!(rows[2].summary.contains("over budget for 5 ticks"));
         assert!(!rows[2].summary.contains("records"));
+    }
+
+    #[test]
+    fn diagnostic_rows_drop_records_at_or_before_watermark() {
+        let rows = diagnostic_rows(
+            vec![
+                diag_record(9, tick_breach(9, None, 1)),
+                diag_record(10, tick_breach(10, None, 2)),
+                diag_record(11, tick_breach(11, None, 3)),
+            ],
+            12,
+            Some(10),
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].at_ms, 11);
+    }
+
+    #[test]
+    fn stale_build_requires_two_known_different_builds() {
+        assert!(!stale_build(Some("current"), Some("current")));
+        assert!(stale_build(Some("old"), Some("current")));
+        assert!(!stale_build(None, Some("current")));
+        assert!(!stale_build(Some("old"), None));
+        assert!(!stale_build(None, None));
     }
 
     #[test]

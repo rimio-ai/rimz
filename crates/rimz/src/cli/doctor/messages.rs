@@ -16,7 +16,10 @@ const MAX_FAILURE_ROWS: usize = 10;
 
 /// Message queue health: live stuck records and recent terminal delivery
 /// failures from the store's event log.
-pub(super) fn collect_messages(ws: &rimz::ResolvedWorkspace) -> Probe<Messages> {
+pub(super) fn collect_messages(
+    ws: &rimz::ResolvedWorkspace,
+    cleared_at: Option<Timestamp>,
+) -> Probe<Messages> {
     let store = match open_store(ws) {
         Ok(store) => store,
         Err(err) => {
@@ -70,6 +73,7 @@ pub(super) fn collect_messages(ws: &rimz::ResolvedWorkspace) -> Probe<Messages> 
             payload.status,
             MessageStatus::TimedOut | MessageStatus::Errored | MessageStatus::Abandoned
         ) || event.timestamp < cutoff
+            || cleared_at.is_some_and(|cleared_at| event.timestamp <= cleared_at)
         {
             continue;
         }

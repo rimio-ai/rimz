@@ -71,6 +71,7 @@ pub struct StatePaths {
     pub boot_marker: PathBuf,
     pub live_roster: PathBuf,
     pub last_death_marker: PathBuf,
+    pub doctor_watermark: PathBuf,
     pub crashes_dir: PathBuf,
 }
 
@@ -110,6 +111,7 @@ impl StatePaths {
             boot_marker: root.join("boot.json"),
             live_roster: root.join("live-roster.json"),
             last_death_marker: root.join("last-death.json"),
+            doctor_watermark: root.join("doctor-cleared.json"),
             crashes_dir: root.join("crashes"),
             locks_dir,
             root,

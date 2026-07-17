@@ -55,10 +55,10 @@ rimz setup [--yes]
 `rimz setup` prints a first-run report — selected multiplexer, workspace root and class, trust state, config path, detected agent binaries, and hook install status — and makes changes only with your consent. In an interactive terminal it offers to keep and refresh an existing config against the current templates (skipping incompatible keys with a warning) or to overwrite cleanly, then presents one summarized install or refresh for detected agents with missing hooks or stale RimZ-owned whole-file integrations. The summary names every affected file and points to `rimz hooks install --dry-run` for exact unified diffs before the color-and-icon probe and pet questions. `--yes` takes the non-interactive path: merge existing files, write missing ones, and make no hook installs, upgrades, trust grants, or appearance changes. For an explicit clean reset of config, use [`rimz config init --force`](./config.md#read-and-edit-config); the config model is the [configuration guide](../../guide/configuration.md).
 
 ```sh
-rimz doctor [--audit] [--json] [--output PATH]
+rimz doctor [--audit] [--clear] [--json] [--output PATH]
 ```
 
-`rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. It reads and reports only; it changes nothing. Each check prints as a titled section with a status glyph, and each failing check prints the next fix where RimZ knows one. The report covers:
+`rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. It reads and reports only unless you pass `--clear`. Each check prints as a titled section with a status glyph, and each failing check prints the next fix where RimZ knows one. The report covers:
 
 - **Identity and paths** — current OS user, absolute rimz binary path, resolved workspace with absolute paths
 - **Backend** — backend and version, PATH-visible backend binaries, server-log excerpts, server socket, session health, duplicate sidebars
@@ -67,4 +67,4 @@ rimz doctor [--audit] [--json] [--output PATH]
 - **Last incident** — previous room death cause and time, lost agents, `recovered N of M`, and the crash forensic archive path when a prior incarnation died
 - **Verdict** — the closing summary line
 
-`--audit` widens the agent section to every observed session, `--json` emits the whole report as one machine-readable document, and `--output PATH` writes it atomically to a file. Static adapter coverage has its own command, [`rimz coverage`](./maintenance.md#adapter-coverage).
+`--audit` widens the agent section to every observed session, `--json` emits the whole report as one machine-readable document, and `--output PATH` writes it atomically to a file. `--clear` stamps the current workspace so diagnostics, the last incident, and message failures recorded through that moment stay out of this and future reports; the diagnostic files and durable event log remain on disk for direct inspection. Static adapter coverage has its own command, [`rimz coverage`](./maintenance.md#adapter-coverage).

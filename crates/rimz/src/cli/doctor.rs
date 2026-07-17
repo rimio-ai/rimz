@@ -23,6 +23,7 @@ mod model;
 mod protocol;
 mod render;
 mod runtime;
+mod watermark;
 
 use model::DoctorReport;
 
@@ -37,9 +38,19 @@ pub struct DoctorArgs {
     /// Write the report to a file (atomically) instead of stdout.
     #[arg(long, value_name = "PATH")]
     output: Option<PathBuf>,
+    /// Dismiss recorded history so reports only show records from after this moment.
+    #[arg(long)]
+    clear: bool,
 }
 
 pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
+    if args.clear {
+        let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
+            .context("resolving workspace to clear doctor history")?;
+        let paths = rimz::StatePaths::for_workspace(workspace.workspace_id)
+            .context("resolving workspace state to clear doctor history")?;
+        watermark::stamp(&paths, jiff::Timestamp::now())?;
+    }
     let report = collect_report(globals, args.audit);
     emit(&report, args.json, args.output.as_deref())
 }
@@ -47,6 +58,10 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
 fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
     let ws = workspace.as_ref().ok();
+    let history_cleared_at = ws
+        .and_then(|ws| rimz::StatePaths::for_workspace(ws.workspace_id.clone()).ok())
+        .as_ref()
+        .and_then(watermark::read);
     DoctorReport {
         version: rimz::build_id::VERSION,
         host: runtime::collect_host(),
@@ -67,9 +82,10 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         protocols: ws.map(protocol::collect_protocols),
         trust: ws.map(agents::collect_trust),
         agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
-        messages: ws.map(messages::collect_messages),
-        diagnostics: ws.map(runtime::collect_diagnostics),
-        last_incident: ws.and_then(runtime::collect_last_incident),
+        history_cleared_at,
+        messages: ws.map(|ws| messages::collect_messages(ws, history_cleared_at)),
+        diagnostics: ws.map(|ws| runtime::collect_diagnostics(ws, history_cleared_at)),
+        last_incident: ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at)),
     }
 }
 

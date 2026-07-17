@@ -5,8 +5,10 @@
 use jiff::Timestamp;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
+use rimz::diag::DiagSink;
+use rimz::diag::record::{DiagEnvelope, DiagEvent, RendererExitCause};
 use rimz::ids::{AgentKind, MuxName, PaneId, SidebarInstanceId};
-use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
+use rimz::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::event::{
     EventEnvelope, LastDeathMarker, MessageEventMethod, SessionDeathAgent, SessionDeathCause,
@@ -534,6 +536,138 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
 }
 
 #[test]
+fn doctor_clear_dismisses_recorded_history() {
+    let env = Env::new();
+    write_diag_record(&env, 0, None);
+    let _ = write_last_death_marker(&env, SessionDeathCause::Crash, Some(2));
+    let mut failed = EventEnvelope::unresolved_message_event(
+        env.workspace_id.clone(),
+        "test-session",
+        "@missing".to_owned(),
+        None,
+        MessageSender::Human,
+        6,
+        "receiver not found".to_owned(),
+    );
+    failed.timestamp = Timestamp::UNIX_EPOCH;
+    env.store()
+        .append_event(&failed)
+        .expect("append failed message event");
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--clear", "--json"])
+            .output()
+            .expect("spawn clear doctor"),
+    );
+    let cleared_at: Timestamp = report["history_cleared_at"]
+        .as_str()
+        .expect("history watermark")
+        .parse()
+        .expect("watermark timestamp");
+    assert!(
+        report["diagnostics"]["records"]
+            .as_array()
+            .expect("diagnostic records")
+            .is_empty(),
+        "old diagnostics are dismissed: {report}"
+    );
+    assert!(
+        report.get("last_incident").is_none(),
+        "old incident is dismissed: {report}"
+    );
+    assert!(
+        report["messages"]["ready"]["recent_failures"]
+            .as_array()
+            .expect("recent failures")
+            .is_empty(),
+        "old message failure is dismissed: {report}"
+    );
+
+    let paths = env.state_path_for(&env.project_root);
+    assert!(paths.doctor_watermark.exists(), "watermark is durable");
+    assert!(
+        paths.last_death_marker.exists(),
+        "incident evidence remains"
+    );
+    assert!(diag_log_path(&env).exists(), "diagnostic evidence remains");
+    assert!(paths.events_log.exists(), "event evidence remains");
+
+    let next = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor after clear"),
+    );
+    assert_eq!(next["history_cleared_at"], report["history_cleared_at"]);
+    assert!(
+        next["diagnostics"]["records"]
+            .as_array()
+            .expect("diagnostic records")
+            .is_empty()
+    );
+    assert!(next.get("last_incident").is_none());
+    assert!(
+        next["messages"]["ready"]["recent_failures"]
+            .as_array()
+            .expect("recent failures")
+            .is_empty()
+    );
+
+    write_diag_record(
+        &env,
+        u64::try_from(cleared_at.as_millisecond() + 1).expect("positive timestamp"),
+        None,
+    );
+    let fresh = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor with fresh diagnostic"),
+    );
+    assert_eq!(
+        fresh["diagnostics"]["records"]
+            .as_array()
+            .expect("diagnostic records")
+            .len(),
+        1,
+        "post-clear records remain visible: {fresh}"
+    );
+}
+
+#[test]
+fn doctor_labels_stale_build_diagnostics() {
+    let env = Env::new();
+    write_diag_record(
+        &env,
+        rimz::sidebar::timing::unix_now_ms(),
+        Some("stale-build"),
+    );
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+    let rows = report["diagnostics"]["records"]
+        .as_array()
+        .expect("diagnostic records");
+    assert_eq!(rows.len(), 1, "one diagnostic row: {rows:?}");
+    assert_eq!(rows[0]["build"], "stale-build");
+    assert_eq!(rows[0]["stale_build"], true);
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 human report");
+    assert!(stdout.contains("old build stale-build"), "{stdout}");
+}
+
+#[test]
 fn doctor_writes_json_report_to_file() {
     let env = Env::new();
     let path = env.home_root.join("doctor-report.json");
@@ -638,6 +772,27 @@ fn write_last_death_marker(
         std::fs::create_dir_all(&archive).expect("mkdir crash archive");
         archive
     })
+}
+
+fn write_diag_record(env: &Env, at_ms: u64, build: Option<&str>) {
+    let mut record = DiagEnvelope::new(
+        env.workspace_id.clone(),
+        "test-session".to_owned(),
+        None,
+        at_ms,
+        DiagEvent::RendererExit {
+            cause: RendererExitCause::DegradedGaveUp,
+        },
+    );
+    record.build = build.map(ToOwned::to_owned);
+    rimz::diag::JsonlLog::new(diag_log_path(env), 1_048_576).append(&record);
+}
+
+fn diag_log_path(env: &Env) -> PathBuf {
+    let paths = env.state_path_for(&env.project_root);
+    DiagSink::under(paths.root, env.workspace_id.clone(), "test-session", None)
+        .log_path()
+        .expect("diagnostic log path")
 }
 
 /// Append `[hooks.state]` trust entries for every RimZ-installed codex event,

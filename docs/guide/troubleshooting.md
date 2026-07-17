@@ -4,7 +4,7 @@ When something looks off, `rimz doctor` is the first move, this page is the symp
 
 ## Start with `rimz doctor`
 
-`rimz doctor` reports the whole room in one pass: the multiplexer backend and whether its version clears the floor, per-machine config parsing, per-agent hook status, workspace and store health, project trust state, terminal color depth, scheduled loop tasks, and the Zellij presence grant. It resolves the workspace, probes each of those surfaces, and prints a verdict. It writes nothing, so you can run it as often as you like.
+`rimz doctor` reports the whole room in one pass: the multiplexer backend and whether its version clears the floor, per-machine config parsing, per-agent hook status, workspace and store health, project trust state, terminal color depth, scheduled loop tasks, and the Zellij presence grant. It resolves the workspace, probes each of those surfaces, and prints a verdict. A normal run writes nothing, so you can run it as often as you like.
 
 ```sh
 rimz doctor
@@ -156,9 +156,10 @@ When the running RimZ build drifts from an agent's tested version range, reporti
 ```sh
 rimz reload             # re-exec sidebars in place; every pane stays unchanged
 rimz reload --repair    # then repair missing, duplicate, mis-docked, or wedged sidebars
+rimz doctor --clear     # dismiss diagnostics and incidents from before the upgrade
 ```
 
-`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the pane-preserving fix for that mixed-build state. If it reports sidebars that did not converge, run `rimz reload --repair`; replacement mounts and proves a current-build heartbeat before the old pane closes.
+`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the pane-preserving fix for that mixed-build state. If it reports sidebars that did not converge, run `rimz reload --repair`; replacement mounts and proves a current-build heartbeat before the old pane closes. Once the live writers converge, `rimz doctor --clear` records a workspace watermark so pre-upgrade diagnostics, the last incident, and message failures stop appearing without deleting their evidence files.
 
 After an upgrade, `rimz start` and `rimz attach` also warn when a live room still runs a different sidebar build and point to `rimz reload`.
 
