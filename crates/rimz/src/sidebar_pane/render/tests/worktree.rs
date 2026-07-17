@@ -225,22 +225,25 @@ fn render_pr_badge_keeps_identity_style_across_states() {
 }
 
 #[test]
-fn render_open_pr_badge_carries_ci_glyph_and_tone() {
+fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(91);
     snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Failing);
 
-    let lines = group_lines(&snapshot, &theme, 0);
-    let ci = lines[0]
-        .spans
-        .iter()
-        .find(|span| span.content.as_ref() == " ✕")
-        .expect("PR CI span");
-    assert_eq!(
-        ci.style,
-        theme.styled(Component::PrCiFailing, Modifier::empty())
-    );
+    for state in [crate::WorktreePrState::Open, crate::WorktreePrState::Merged] {
+        snapshot.worktree_groups[0].pr_state = Some(state);
+        let lines = group_lines(&snapshot, &theme, 0);
+        let ci = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == " ✕")
+            .expect("PR CI span");
+        assert_eq!(
+            ci.style,
+            theme.styled(Component::PrCiFailing, Modifier::empty())
+        );
+    }
 
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
     let lines = group_lines(&snapshot, &theme, 0);

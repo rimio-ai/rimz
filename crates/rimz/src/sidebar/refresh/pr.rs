@@ -7,9 +7,10 @@
 //! `probe_tea` follows a closed candidate with a `tea pr <n>` detail read to
 //! tell merged from closed. Both tea list calls page through
 //! [`crate::forge::tea_pr_list_args`] with the same `--limit`. GitHub includes
-//! CI in its open-PR list. Tea reads Gitea's combined commit status with one
-//! `tea api` call per open branch. Those calls are best-effort enrichment and
-//! do not invalidate a successful PR-state probe.
+//! CI in its open-PR list and reads merge-commit checks after a transition.
+//! Tea reads Gitea's combined commit status for open branches and merge commits.
+//! Those calls are best-effort enrichment and do not invalidate a successful
+//! PR-state probe.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -52,13 +53,15 @@ pub struct PrStateCache {
     pub path_repos: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrLink {
     pub state: WorktreePrState,
     #[serde(default)]
     pub number: Option<u64>,
     #[serde(default)]
     pub ci: Option<WorktreePrCi>,
+    #[serde(default)]
+    pub merge_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,9 +202,7 @@ fn cached_due_repo_keys(
     for path in needed {
         let head_sha = target_head_sha(diff_cache, path);
         let has_uncached = !cache.head_seen.contains_key(path);
-        let pending_ci = cache.states.get(path).is_some_and(|link| {
-            link.state == WorktreePrState::Open && link.ci == Some(WorktreePrCi::Pending)
-        });
+        let pending_ci = cache.states.get(path).is_some_and(has_pending_ci);
         let Some(repo_key) = cache.path_repos.get(path) else {
             if has_uncached || head_nudged(&cache.head_seen, path, head_sha) {
                 return None;
@@ -261,10 +262,7 @@ fn due_repo_keys(
             let repo_hot = group.targets.iter().any(|target| {
                 hot.contains(&target.path)
                     || focused.contains(&target.path)
-                    || cache.states.get(&target.path).is_some_and(|link| {
-                        link.state == WorktreePrState::Open
-                            && link.ci == Some(WorktreePrCi::Pending)
-                    })
+                    || cache.states.get(&target.path).is_some_and(has_pending_ci)
             });
             let nudged = group.targets.iter().any(|target| {
                 head_nudged(&cache.head_seen, &target.path, target.head_sha.as_deref())
@@ -291,6 +289,11 @@ fn repo_tier_ttl(repo_hot: bool) -> Duration {
     } else {
         PR_STATE_TTL
     }
+}
+
+fn has_pending_ci(link: &PrLink) -> bool {
+    matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged)
+        && link.ci == Some(WorktreePrCi::Pending)
 }
 
 fn repo_due(
@@ -509,16 +512,25 @@ fn assign_states(
                     state: WorktreePrState::Open,
                     number: Some(candidate.number),
                     ci: candidate.ci,
+                    merge_sha: None,
                 },
             );
             continue;
         }
-        if let Some(link) = prior.get(&target.path).copied() {
+        if let Some(link) = prior.get(&target.path).cloned() {
             match link.state {
-                WorktreePrState::Merged | WorktreePrState::Closed => {
+                WorktreePrState::Merged
+                    if matches!(link.ci, Some(WorktreePrCi::Passing | WorktreePrCi::Failing))
+                        || (link.ci.is_none() && link.merge_sha.is_some()) =>
+                {
                     states.insert(target.path.clone(), link);
                 }
-                WorktreePrState::Open => transitions.push(target.clone()),
+                WorktreePrState::Merged | WorktreePrState::Open => {
+                    transitions.push(target.clone());
+                }
+                WorktreePrState::Closed => {
+                    states.insert(target.path.clone(), link);
+                }
             }
         }
     }
@@ -636,7 +648,7 @@ fn probe_repo_group(
         let result = probe_transition(&target);
         if !result.ok {
             ok = false;
-            if let Some(link) = prior.get(&target.path).copied() {
+            if let Some(link) = prior.get(&target.path).cloned() {
                 states.insert(target.path.clone(), link);
             }
             continue;
@@ -662,7 +674,7 @@ fn carry_prior_states(
         .filter_map(|target| {
             prior
                 .get(&target.path)
-                .copied()
+                .cloned()
                 .map(|link| (target.path.clone(), link))
         })
         .collect()
@@ -708,24 +720,24 @@ struct ProbeState {
 
 fn probe_transition(target: &Target) -> ProbeState {
     match target.forge_cli {
-        ForgeCli::Gh => probe_github(&target.worktree, &target.branch),
+        ForgeCli::Gh => probe_github(target),
         ForgeCli::Tea => probe_tea(&target.worktree, &target.branch, &target.remote),
     }
 }
 
-fn probe_github(worktree: &Path, branch: &str) -> ProbeState {
+fn probe_github(target: &Target) -> ProbeState {
     let Some(output) = command_stdout(
-        worktree,
+        &target.worktree,
         "gh",
         &[
             "pr",
             "list",
             "--head",
-            branch,
+            &target.branch,
             "--state",
             "all",
             "--json",
-            "number,state",
+            "number,state,mergeCommit,statusCheckRollup",
         ],
     ) else {
         return ProbeState {
@@ -734,14 +746,32 @@ fn probe_github(worktree: &Path, branch: &str) -> ProbeState {
         };
     };
     match forge::parse_gh_pr_state_json(&output) {
-        Ok(candidate) => ProbeState {
-            state: candidate.map(|candidate| PrLink {
-                state: candidate.state,
-                number: Some(candidate.number),
-                ci: None,
-            }),
-            ok: true,
-        },
+        Ok(candidate) => {
+            let state = candidate.map(|candidate| {
+                let ci = if candidate.state == WorktreePrState::Merged {
+                    candidate
+                        .merge_sha
+                        .as_deref()
+                        .and_then(|sha| {
+                            target.repo_slug.as_deref().and_then(|repo_slug| {
+                                probe_gh_commit_ci(&target.worktree, repo_slug, sha)
+                            })
+                        })
+                        .or(candidate.ci)
+                } else if candidate.state == WorktreePrState::Open {
+                    candidate.ci
+                } else {
+                    None
+                };
+                PrLink {
+                    state: candidate.state,
+                    number: Some(candidate.number),
+                    ci,
+                    merge_sha: candidate.merge_sha,
+                }
+            });
+            ProbeState { state, ok: true }
+        }
         Err(err) => {
             tracing::debug!(error = %err, "github PR state parse failed");
             ProbeState {
@@ -750,6 +780,35 @@ fn probe_github(worktree: &Path, branch: &str) -> ProbeState {
             }
         }
     }
+}
+
+fn probe_gh_commit_ci(worktree: &Path, repo_slug: &str, sha: &str) -> Option<WorktreePrCi> {
+    let checks_endpoint = format!("repos/{repo_slug}/commits/{sha}/check-runs?per_page=100");
+    let checks = command_stdout(
+        worktree,
+        "gh",
+        &["api", "--paginate", "--slurp", &checks_endpoint],
+    )
+    .and_then(|output| {
+        forge::parse_gh_check_runs(&output)
+            .map_err(|err| {
+                tracing::debug!(error = %err, "github check-runs parse failed");
+                err
+            })
+            .ok()
+            .flatten()
+    });
+    let status_endpoint = format!("repos/{repo_slug}/commits/{sha}/status");
+    let status = command_stdout(worktree, "gh", &["api", &status_endpoint]).and_then(|output| {
+        forge::parse_gh_combined_status(&output)
+            .map_err(|err| {
+                tracing::debug!(error = %err, "github combined commit-status parse failed");
+                err
+            })
+            .ok()
+            .flatten()
+    });
+    forge::worst_ci(checks, status)
 }
 
 fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
@@ -786,13 +845,34 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
         // `tea pr list` omits merged metadata; the detail object carries
         // `merged`/`merged_at` so closed candidates can become merged.
         if let Some(output) = command_stdout(worktree, "tea", &detail_args)
-            && let Ok(Some(WorktreePrState::Merged)) = forge::parse_tea_pr_detail_json(&output)
+            && let Ok(detail) = forge::parse_tea_pr_detail_json(&output)
+            && detail.state == Some(WorktreePrState::Merged)
         {
+            let merge_sha = detail
+                .merged_sha
+                .clone()
+                .or_else(|| detail.head_sha.clone());
+            let ci = repo.as_deref().and_then(|repo_slug| {
+                detail
+                    .merged_sha
+                    .as_deref()
+                    .and_then(|sha| probe_tea_ci(worktree, repo_slug, sha))
+                    .or_else(|| {
+                        detail.head_sha.as_deref().and_then(|head_sha| {
+                            if detail.merged_sha.as_deref() == Some(head_sha) {
+                                None
+                            } else {
+                                probe_tea_ci(worktree, repo_slug, head_sha)
+                            }
+                        })
+                    })
+            });
             return ProbeState {
                 state: Some(PrLink {
                     state: WorktreePrState::Merged,
                     number: Some(candidate.number),
-                    ci: None,
+                    ci,
+                    merge_sha,
                 }),
                 ok: true,
             };
@@ -803,6 +883,7 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
             state: candidate.state,
             number: Some(candidate.number),
             ci: None,
+            merge_sha: None,
         }),
         ok: true,
     }
@@ -866,473 +947,4 @@ fn write_pr_state_cache(path: &Path, cache: &PrStateCache) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
-
-    #[test]
-    fn failure_ttl_escalates_to_success_ttl_cap() {
-        assert_eq!(pr_state_failure_ttl(0, PR_STATE_TTL), PR_STATE_RETRY_TTL);
-        assert_eq!(pr_state_failure_ttl(1, PR_STATE_TTL), PR_STATE_RETRY_TTL);
-        assert_eq!(
-            pr_state_failure_ttl(2, PR_STATE_TTL),
-            Duration::from_secs(60)
-        );
-        assert_eq!(
-            pr_state_failure_ttl(3, PR_STATE_TTL),
-            Duration::from_secs(120)
-        );
-        assert_eq!(
-            pr_state_failure_ttl(4, PR_STATE_TTL),
-            Duration::from_secs(240)
-        );
-        assert_eq!(pr_state_failure_ttl(5, PR_STATE_TTL), PR_STATE_TTL);
-        assert_eq!(pr_state_failure_ttl(u32::MAX, PR_STATE_TTL), PR_STATE_TTL);
-        assert_eq!(pr_state_failure_ttl(1, PR_STATE_HOT_TTL), PR_STATE_HOT_TTL);
-    }
-
-    #[test]
-    fn failure_counter_resets_on_success_and_saturates_on_failure() {
-        let mut prior = RepoProbe {
-            ok: false,
-            consecutive_failures: 7,
-            ..RepoProbe::default()
-        };
-
-        assert_eq!(next_consecutive_failures(Some(&prior), true), 0);
-        assert_eq!(next_consecutive_failures(Some(&prior), false), 8);
-        assert_eq!(next_consecutive_failures(None, false), 1);
-
-        prior.consecutive_failures = u32::MAX;
-        assert_eq!(next_consecutive_failures(Some(&prior), false), u32::MAX);
-    }
-
-    #[test]
-    fn repo_due_tracks_fresh_stale_nudge_uncached_and_failure_backoff() {
-        let ttl = Duration::from_secs(20);
-        let ttl_ms = ttl.as_millis() as u64;
-        let probe = RepoProbe {
-            refreshed_at_ms: 1_000,
-            ok: true,
-            consecutive_failures: 0,
-        };
-
-        assert!(!repo_due(Some(&probe), ttl, 1_000 + ttl_ms, false, false));
-        assert!(repo_due(Some(&probe), ttl, 1_001 + ttl_ms, false, false));
-        assert!(repo_due(None, ttl, 1_000, false, false));
-        assert!(repo_due(Some(&probe), ttl, 1_000, true, false));
-        assert!(repo_due(Some(&probe), ttl, 1_000, false, true));
-
-        let failed = RepoProbe {
-            refreshed_at_ms: 1_000,
-            ok: false,
-            consecutive_failures: 1,
-        };
-        assert!(!repo_due(Some(&failed), ttl, 1_000 + ttl_ms, false, false));
-        assert!(repo_due(Some(&failed), ttl, 1_001 + ttl_ms, false, false));
-    }
-
-    #[test]
-    fn assign_states_handles_open_terminal_transition_closed_and_absent() {
-        let targets = vec![
-            target("/repo/open", "open"),
-            target("/repo/merged", "merged"),
-            target("/repo/transition", "transition"),
-            target("/repo/closed", "closed"),
-            target("/repo/none", "none"),
-        ];
-        let mut open_map = BTreeMap::new();
-        open_map.insert(
-            "open".to_owned(),
-            forge::PrCandidate {
-                number: 91,
-                state: WorktreePrState::Open,
-                ci: Some(WorktreePrCi::Passing),
-            },
-        );
-        let mut prior = BTreeMap::new();
-        prior.insert(
-            "/repo/merged".to_owned(),
-            PrLink {
-                state: WorktreePrState::Merged,
-                number: Some(80),
-                ci: Some(WorktreePrCi::Failing),
-            },
-        );
-        prior.insert(
-            "/repo/transition".to_owned(),
-            PrLink {
-                state: WorktreePrState::Open,
-                number: Some(81),
-                ci: Some(WorktreePrCi::Pending),
-            },
-        );
-        prior.insert(
-            "/repo/closed".to_owned(),
-            PrLink {
-                state: WorktreePrState::Closed,
-                number: Some(82),
-                ci: None,
-            },
-        );
-
-        let assigned = assign_states(&targets, &open_map, &prior);
-
-        assert_eq!(
-            assigned.states.get("/repo/open"),
-            Some(&PrLink {
-                state: WorktreePrState::Open,
-                number: Some(91),
-                ci: Some(WorktreePrCi::Passing),
-            })
-        );
-        assert_eq!(
-            assigned.states.get("/repo/merged"),
-            Some(&PrLink {
-                state: WorktreePrState::Merged,
-                number: Some(80),
-                ci: Some(WorktreePrCi::Failing),
-            })
-        );
-        assert_eq!(
-            assigned.states.get("/repo/closed"),
-            Some(&PrLink {
-                state: WorktreePrState::Closed,
-                number: Some(82),
-                ci: None,
-            })
-        );
-        assert!(!assigned.states.contains_key("/repo/none"));
-        assert_eq!(
-            assigned
-                .transitions
-                .iter()
-                .map(|target| target.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["/repo/transition"]
-        );
-    }
-
-    #[test]
-    fn legacy_cache_defaults_and_leaves_repos_due() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("pr-state.json");
-        std::fs::write(
-            &path,
-            r#"{
-                "refreshed_at_ms": 1000,
-                "ok": true,
-                "consecutive_failures": 0,
-                "states": {"/repo/a": "open"}
-            }"#,
-        )
-        .unwrap();
-        let cache = read_pr_state_cache(&path);
-        let groups = group_targets(vec![target("/repo/a", "a")]);
-
-        assert!(cache.states.is_empty());
-        assert!(cache.repos.is_empty());
-        assert!(cache.head_seen.is_empty());
-        assert!(
-            due_repo_keys(&groups, &cache, &BTreeSet::new(), &BTreeSet::new(), 1_000)
-                .contains("gh:github.com:org/repo")
-        );
-    }
-
-    #[test]
-    fn legacy_pr_link_without_ci_defaults_to_unknown() {
-        let link: PrLink = serde_json::from_str(r#"{"state":"open","number":91}"#).unwrap();
-
-        assert_eq!(link.ci, None);
-    }
-
-    #[test]
-    fn pending_ci_keeps_repo_on_hot_ttl() {
-        let repo_key = "gh:github.com:org/repo".to_owned();
-        let path = "/repo/a".to_owned();
-        let mut cache = PrStateCache::default();
-        cache.repos.insert(
-            repo_key.clone(),
-            RepoProbe {
-                refreshed_at_ms: 1_000,
-                ok: true,
-                consecutive_failures: 0,
-            },
-        );
-        cache.path_repos.insert(path.clone(), repo_key.clone());
-        cache.head_seen.insert(path.clone(), String::new());
-        cache.states.insert(
-            path.clone(),
-            PrLink {
-                state: WorktreePrState::Open,
-                number: Some(91),
-                ci: Some(WorktreePrCi::Pending),
-            },
-        );
-        let needed = vec![path];
-        let groups = group_targets(vec![target("/repo/a", "a")]);
-        let now_ms = 1_001 + PR_STATE_HOT_TTL.as_millis() as u64;
-
-        assert!(
-            cached_due_repo_keys(
-                &cache,
-                &needed,
-                &DiffStatsCache::default(),
-                &BTreeSet::new(),
-                &BTreeSet::new(),
-                now_ms,
-            )
-            .unwrap()
-            .contains(&repo_key)
-        );
-        assert!(
-            due_repo_keys(&groups, &cache, &BTreeSet::new(), &BTreeSet::new(), now_ms,)
-                .contains(&repo_key)
-        );
-    }
-
-    #[test]
-    fn cached_due_uses_head_nudge_without_git_metadata() {
-        let mut cache = PrStateCache::default();
-        cache.repos.insert(
-            "gh:github.com:org/repo".to_owned(),
-            RepoProbe {
-                refreshed_at_ms: 1_000,
-                ok: true,
-                consecutive_failures: 0,
-            },
-        );
-        cache
-            .head_seen
-            .insert("/repo/a".to_owned(), "old".to_owned());
-        cache
-            .path_repos
-            .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());
-        let mut diff = DiffStatsCache::default();
-        diff.entries.insert(
-            "/repo/a".to_owned(),
-            DiffStatsCacheEntry {
-                head_sha: Some("old".to_owned()),
-                ..DiffStatsCacheEntry::default()
-            },
-        );
-        let needed = vec!["/repo/a".to_owned()];
-
-        assert!(
-            cached_due_repo_keys(
-                &cache,
-                &needed,
-                &diff,
-                &BTreeSet::new(),
-                &BTreeSet::new(),
-                1_000 + PR_STATE_TTL.as_millis() as u64
-            )
-            .unwrap()
-            .is_empty()
-        );
-
-        diff.entries.get_mut("/repo/a").unwrap().head_sha = Some("new".to_owned());
-
-        assert!(
-            cached_due_repo_keys(
-                &cache,
-                &needed,
-                &diff,
-                &BTreeSet::new(),
-                &BTreeSet::new(),
-                1_000
-            )
-            .unwrap()
-            .contains("gh:github.com:org/repo")
-        );
-    }
-
-    #[test]
-    fn uncached_path_requires_target_assembly() {
-        let cache = PrStateCache::default();
-        let needed = vec!["/repo/a".to_owned()];
-        let mut diff = DiffStatsCache::default();
-        diff.entries.insert(
-            "/repo/a".to_owned(),
-            DiffStatsCacheEntry {
-                head_sha: Some("new".to_owned()),
-                ..DiffStatsCacheEntry::default()
-            },
-        );
-
-        assert!(
-            cached_due_repo_keys(
-                &cache,
-                &needed,
-                &diff,
-                &BTreeSet::new(),
-                &BTreeSet::new(),
-                1_000
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn unsupported_reconcile_drops_state_and_marks_head_seen() {
-        let mut cache = PrStateCache::default();
-        cache.states.insert(
-            "/repo/a".to_owned(),
-            PrLink {
-                state: WorktreePrState::Open,
-                number: Some(91),
-                ci: None,
-            },
-        );
-        cache
-            .path_repos
-            .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());
-        cache
-            .head_seen
-            .insert("/repo/a".to_owned(), "old".to_owned());
-        let needed = vec!["/repo/a".to_owned()];
-        let mut diff = DiffStatsCache::default();
-        diff.entries.insert(
-            "/repo/a".to_owned(),
-            DiffStatsCacheEntry {
-                head_sha: Some("new".to_owned()),
-                ..DiffStatsCacheEntry::default()
-            },
-        );
-        let target_paths = BTreeSet::new();
-
-        assert!(needs_target_reconcile(
-            &cache,
-            &needed,
-            &diff,
-            &target_paths
-        ));
-
-        let cache = reconcile_target_bookkeeping(cache, &needed, &diff, &target_paths, 1_000);
-
-        assert!(!cache.states.contains_key("/repo/a"));
-        assert_eq!(
-            cache.path_repos.get("/repo/a").map(String::as_str),
-            Some(UNSUPPORTED_REPO_KEY)
-        );
-        assert_eq!(
-            cache.head_seen.get("/repo/a").map(String::as_str),
-            Some("new")
-        );
-        assert_eq!(
-            cache
-                .repos
-                .get(UNSUPPORTED_REPO_KEY)
-                .map(|probe| probe.refreshed_at_ms),
-            Some(1_000)
-        );
-        assert!(!needs_target_reconcile(
-            &cache,
-            &needed,
-            &diff,
-            &target_paths
-        ));
-    }
-
-    #[test]
-    fn unsupported_cached_path_does_not_reassemble_on_head_nudge() {
-        let mut cache = PrStateCache::default();
-        cache
-            .path_repos
-            .insert("/repo/a".to_owned(), UNSUPPORTED_REPO_KEY.to_owned());
-        cache.head_seen.insert("/repo/a".to_owned(), String::new());
-        cache.repos.insert(
-            UNSUPPORTED_REPO_KEY.to_owned(),
-            RepoProbe {
-                refreshed_at_ms: 1_000,
-                ok: true,
-                consecutive_failures: 0,
-            },
-        );
-        let needed = vec!["/repo/a".to_owned()];
-        let mut diff = DiffStatsCache::default();
-        diff.entries.insert(
-            "/repo/a".to_owned(),
-            DiffStatsCacheEntry {
-                head_sha: Some("new".to_owned()),
-                ..DiffStatsCacheEntry::default()
-            },
-        );
-
-        assert!(
-            cached_due_repo_keys(
-                &cache,
-                &needed,
-                &diff,
-                &BTreeSet::new(),
-                &BTreeSet::new(),
-                1_000
-            )
-            .unwrap()
-            .is_empty()
-        );
-        assert!(
-            cached_due_repo_keys(
-                &cache,
-                &needed,
-                &diff,
-                &BTreeSet::new(),
-                &BTreeSet::new(),
-                1_001 + PR_STATE_TTL.as_millis() as u64
-            )
-            .unwrap()
-            .contains(UNSUPPORTED_REPO_KEY)
-        );
-    }
-
-    #[test]
-    fn repo_bookkeeping_prunes_stale_repo_stamps() {
-        let mut prior = PrStateCache::default();
-        prior
-            .path_repos
-            .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());
-        prior.repos.insert(
-            "gh:github.com:org/repo".to_owned(),
-            RepoProbe {
-                refreshed_at_ms: 1_000,
-                ok: true,
-                consecutive_failures: 0,
-            },
-        );
-        prior.repos.insert(
-            "gh:github.com:old/repo".to_owned(),
-            RepoProbe {
-                refreshed_at_ms: 1_000,
-                ok: true,
-                consecutive_failures: 0,
-            },
-        );
-        let groups = group_targets(vec![target("/repo/a", "a")]);
-        let needed = vec!["/repo/a".to_owned()];
-
-        let cache = probe_due_repos(
-            &groups,
-            &BTreeSet::new(),
-            &prior,
-            &needed,
-            &DiffStatsCache::default(),
-            2_000,
-        );
-
-        assert!(cache.repos.contains_key("gh:github.com:org/repo"));
-        assert!(!cache.repos.contains_key("gh:github.com:old/repo"));
-    }
-
-    fn target(path: &str, branch: &str) -> Target {
-        Target {
-            path: path.to_owned(),
-            branch: branch.to_owned(),
-            remote: "https://github.com/org/repo.git".to_owned(),
-            forge_cli: ForgeCli::Gh,
-            repo_key: "gh:github.com:org/repo".to_owned(),
-            repo_slug: Some("org/repo".to_owned()),
-            worktree: PathBuf::from("/repo"),
-            head_sha: Some("sha".to_owned()),
-        }
-    }
-}
+mod tests;

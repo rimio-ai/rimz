@@ -227,6 +227,7 @@ fn pr_state_projection_uses_the_given_map() {
             state: crate::WorktreePrState::Closed,
             number: Some(91),
             ci: Some(crate::WorktreePrCi::Failing),
+            merge_sha: None,
         },
     );
     project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
@@ -243,12 +244,28 @@ fn pr_state_projection_uses_the_given_map() {
             state: crate::WorktreePrState::Open,
             number: Some(91),
             ci: Some(crate::WorktreePrCi::Passing),
+            merge_sha: None,
         },
     );
     project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
     assert_eq!(
         snapshot.worktree_groups[0].pr_ci,
         Some(crate::WorktreePrCi::Passing)
+    );
+
+    states.insert(
+        worktree.display().to_string(),
+        PrLink {
+            state: crate::WorktreePrState::Merged,
+            number: Some(91),
+            ci: Some(crate::WorktreePrCi::Failing),
+            merge_sha: Some("merged-sha".to_owned()),
+        },
+    );
+    project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
+    assert_eq!(
+        snapshot.worktree_groups[0].pr_ci,
+        Some(crate::WorktreePrCi::Failing)
     );
 
     snapshot.worktree_groups[0].pr_number = Some(69);
@@ -279,6 +296,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
             state: crate::WorktreePrState::Merged,
             number: Some(91),
             ci: None,
+            merge_sha: Some("merged-sha".to_owned()),
         },
     );
     project_pr_state_map(&mut snapshot, &states, &diff_cache);
@@ -307,6 +325,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
             state: crate::WorktreePrState::Merged,
             number: Some(91),
             ci: None,
+            merge_sha: Some("merged-sha".to_owned()),
         },
     );
     project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());

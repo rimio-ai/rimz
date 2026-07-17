@@ -368,13 +368,16 @@ fn group_header(
     let badge = group
         .pr_number
         .map(|number| {
-            let ci = (group.pr_state == Some(WorktreePrState::Open))
-                .then_some(group.pr_ci)
-                .flatten()
-                .map(|ci| {
-                    let (role, component) = pr_ci_marker(ci);
-                    (format!(" {}", theme.glyph(role)), component)
-                });
+            let ci = matches!(
+                group.pr_state,
+                Some(WorktreePrState::Open | WorktreePrState::Merged)
+            )
+            .then_some(group.pr_ci)
+            .flatten()
+            .map(|ci| {
+                let (role, component) = pr_ci_marker(ci);
+                (format!(" {}", theme.glyph(role)), component)
+            });
             (format!(" #{number}"), ci)
         })
         .filter(|(badge, ci)| {
