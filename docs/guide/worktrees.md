@@ -44,7 +44,7 @@ A branch-style name with a `/` names the branch directly and maps to `-` for the
 
 ### From a pull request
 
-`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree on the pull request's own head branch. Same-repository branches track `origin`; fork branches pull from and push to the fork, so a plain `git push` updates the pull request while the worktree, channel, and tab keep the `pr-<N>` name.
+`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree. A PR URL must name the same host and repository as `origin`. On GitHub, Gitea, and Forgejo, the authenticated forge CLI identifies whether the head belongs to the origin repository or a fork: same-repository branches track `origin`, while fork branches pull from and push to the fork so a plain `git push` updates the pull request. Without a supported forge CLI, RimZ creates a review-only local branch at the exact PR head and leaves pushes unconfigured.
 
 ```sh
 rimz agents claude --from-pr 42               # review PR 42 in its own tree
@@ -87,7 +87,7 @@ rimz agents forge -w ingest     # a second forge team, fully isolated
 
 **A branch per worktree, a PR at the end.** Each tree is a real branch, so the natural unit of work is one worktree to one pull request. Launch a [team](./teams.md) into a tree, let it carry the change from plan to reviewed diff, then open a PR from the branch. Once the PR merges, [cleanup](#cleanup-once-work-lands) proves the content landed and reclaims the tree.
 
-**Start from a PR, push back to it.** The same loop in reverse: `--from-pr` drops an agent onto an existing pull request's branch to address review comments or chase a failing check, and the fixes push straight back to the PR.
+**Start from a PR, push back to it.** The same loop in reverse: `--from-pr` drops an agent onto an existing pull request to address review comments or chase a failing check. With an authenticated `gh` or `tea`, the fixes push straight back to the PR; review-only fallback checkouts require you to configure a push destination deliberately.
 
 **You, your editor, and the agents in one tree.** A layout cell can be `term` for a shell or the name of your editor, so `rimz agents 'vim,claude+term' -w feat-x` opens your editor, an agent, and a shell all rooted in the same fresh tree. You edit the same files the agent does, run its build in the shared shell, and review as you go.
 
