@@ -23,7 +23,14 @@ const START_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 /// Official managed-standalone installer surfaced by readiness guidance.
 const INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
-const RECYCLE_COMMAND: &str = "codex remote-control stop; sleep 3; codex remote-control start";
+/// Human-facing recycle. The leading `cd` anchors the restarted daemon in a
+/// durable directory: the detached app-server inherits the spawning shell's
+/// working directory, so a recycle run from a worktree that is later removed
+/// leaves the daemon resolving config against a deleted path, failing every
+/// `thread/start` with "failed to load configuration". RimZ's own spawn passes
+/// `CODEX_HOME` as cwd for the same reason.
+const RECYCLE_COMMAND: &str =
+    "cd ~; codex remote-control stop; sleep 3; codex remote-control start";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Readiness {

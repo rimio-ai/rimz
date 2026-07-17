@@ -40,7 +40,7 @@ fn updater_skew_guidance_names_risk_and_deliberate_recycle() {
     The next hourly update tick can restart the shared app-server and disconnect every daemon-backed Codex session.
 
     Schedule one deliberate recycle while no valuable Codex turns are running:
-        codex remote-control stop; sleep 3; codex remote-control start
+        cd ~; codex remote-control stop; sleep 3; codex remote-control start
     (a start immediately after stop races the daemon teardown and fails with "connection is errored"). This disconnects daemon-backed Codex sessions once; resume them afterwards.
     "###);
 }
