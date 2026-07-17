@@ -62,6 +62,15 @@ pub(crate) struct CodexOauthCredentials {
     account_id: Option<String>,
 }
 
+impl CodexOauthCredentials {
+    pub(crate) fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+        crate::agents::AccountUsageIdentity {
+            account_key: self.account_id.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct CodexConfig {
     #[serde(default)]
@@ -119,9 +128,8 @@ pub(crate) fn probe_usage() -> crate::agents::AccountUsageProbe {
         }
     };
     let identity = crate::agents::AccountUsageIdentity {
-        account_key: credentials.account_id.clone(),
         credentials_stamp,
-        ..Default::default()
+        ..credentials.account_usage_identity()
     };
     let result = configured_base_url(&home)
         .map_err(CodexOauthUsageErr::Io)

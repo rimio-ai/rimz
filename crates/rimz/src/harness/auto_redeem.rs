@@ -17,7 +17,7 @@ use crate::agents::codex::oauth_usage::{
     ConsumeCode, ResetCreditDetail, consume_reset_credit, fetch_reset_credit_state,
     fetch_usage_with_url, load_configured_credentials, reset_credits_url, usage_url,
 };
-use crate::agents::{AccountUsageSnapshot, ProviderAccountScope, ResetCredits};
+use crate::agents::{AccountUsageSnapshot, ResetCredits};
 #[cfg(not(test))]
 use crate::child_process::detached_rimz_command;
 use crate::config::ResumeConfig;
@@ -256,6 +256,7 @@ pub fn execute_auto_redeem(
 
     let (credentials, base_url) =
         load_configured_credentials().map_err(|err| AutoRedeemErr::Codex(err.to_string()))?;
+    let usage_identity = credentials.account_usage_identity();
     let usage = fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials)
         .map_err(|err| AutoRedeemErr::Codex(err.to_string()))?;
     let (credits, details) =
@@ -314,7 +315,7 @@ pub fn execute_auto_redeem(
         fetch_reset_credit_state(&reset_credits_url(base_url.as_deref()), &credentials)
             .ok()
             .map(|(credits, _)| credits);
-    publish_usage(runtime, refreshed);
+    publish_usage(runtime, usage_identity, refreshed);
     Ok(true)
 }
 
@@ -328,24 +329,21 @@ fn soonest_credit_id(details: &[ResetCreditDetail]) -> Option<&str> {
         .and_then(|detail| detail.id.as_deref())
 }
 
-fn publish_usage(runtime: &RuntimePaths, snapshot: AccountUsageSnapshot) {
+fn publish_usage(
+    runtime: &RuntimePaths,
+    identity: crate::agents::AccountUsageIdentity,
+    snapshot: AccountUsageSnapshot,
+) {
+    let scope = identity.scope.clone();
     if let Some(windows) = snapshot.rate_limits.clone() {
-        crate::sidebar::refresh::merge_account_rate_limits(
-            runtime,
-            CODEX_KIND,
-            ProviderAccountScope::KindWide,
-            windows,
-        );
+        crate::sidebar::refresh::merge_account_rate_limits(runtime, CODEX_KIND, identity, windows);
     }
     if snapshot.plan.is_some()
         || snapshot.extra_credits.is_some()
         || snapshot.reset_credits.is_some()
     {
         crate::sidebar::refresh::merge_provider_realtime_usage(
-            runtime,
-            CODEX_KIND,
-            ProviderAccountScope::KindWide,
-            snapshot,
+            runtime, CODEX_KIND, scope, snapshot,
         );
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{AgentRateLimits, ProviderAccountScope, RateLimitWindow};
+use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::ids::WorkspaceId;
 use jiff::SignedDuration;
 
@@ -217,7 +217,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     crate::sidebar::refresh::merge_account_rate_limits(
         &runtime,
         CODEX_KIND,
-        ProviderAccountScope::KindWide,
+        Default::default(),
         AgentRateLimits {
             windows: vec![RateLimitWindow {
                 used_percentage: Some(100),
