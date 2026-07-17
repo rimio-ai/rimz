@@ -225,7 +225,7 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
     rows.push(DisplayRow {
         text: format!(
             "down {} · attempt {}",
-            format_elapsed(frame.outage_for),
+            format_elapsed(frame.outage_for).replace('m', "m "),
             frame.attempt
         ),
         color: Color::DarkGrey,
