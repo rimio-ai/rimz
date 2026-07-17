@@ -806,6 +806,7 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
         .find(|state| state.agent_id == "toolu_alpha")
         .unwrap();
     assert_eq!(child.parent_agent_id.as_deref(), Some("parent-session"));
+    assert_eq!(child.name.as_deref(), Some("researcher"));
     assert_eq!(child.task.as_deref(), Some("Inspect auth retry"));
     assert_eq!(child.model.as_deref(), Some("claude-haiku-4.5"));
     assert_eq!(child.total_tokens, Some(22_116));
