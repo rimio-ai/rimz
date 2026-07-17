@@ -114,6 +114,12 @@ pub(crate) fn run_bounded_output(
     timeout: Duration,
 ) -> std::io::Result<BoundedOutput> {
     testkit::count_spawn();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+
+        command.process_group(0);
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -136,6 +142,14 @@ pub(crate) fn run_bounded_output(
                 timeout_ms = timeout.as_millis(),
                 "bounded subprocess timed out",
             );
+            #[cfg(unix)]
+            {
+                use nix::sys::signal::{Signal, killpg};
+                use nix::unistd::Pid;
+
+                let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+            }
+            #[cfg(not(unix))]
             let _ = child.kill();
             let status = child.wait()?;
             return Ok(BoundedOutput {
@@ -907,6 +921,20 @@ mod tests {
 
         assert!(output.timed_out);
         assert!(!output.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_output_kills_pipe_holding_grandchildren_on_timeout() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 30 & exec sleep 30"]);
+        let started = Instant::now();
+
+        let output =
+            run_bounded_output(&mut cmd, Duration::from_millis(100)).expect("bounded output");
+
+        assert!(output.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
