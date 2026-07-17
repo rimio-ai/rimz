@@ -292,12 +292,7 @@ impl PaneWatchdog {
             return probe;
         }
 
-        let options = crate::mux::PaneListOptions {
-            session_name: Some(self.session_name.clone()),
-            workspace_id: Some(self.workspace_id.clone()),
-            command_timeout: Some(PANE_PROBE_TIMEOUT),
-            ..Default::default()
-        };
+        let options = self.probe_options();
         match crate::mux::backend_for(self.mux).list_panes(options) {
             Ok(listing) => {
                 if listing.panes.iter().any(|pane| pane.pane_id == self.pane) {
@@ -315,6 +310,20 @@ impl PaneWatchdog {
                 );
                 PaneProbe::Unknown
             }
+        }
+    }
+
+    fn probe_options(&self) -> crate::mux::PaneListOptions {
+        crate::mux::PaneListOptions {
+            session_name: Some(self.session_name.clone()),
+            workspace_id: Some(self.workspace_id.clone()),
+            // Orphan reaping kills the render worker, so require mux truth.
+            // A fresh but incomplete presence cache can omit a newly-created
+            // tab and must stay a latency hint rather than destructive proof.
+            authoritative: true,
+            require_authoritative: true,
+            command_timeout: Some(PANE_PROBE_TIMEOUT),
+            ..Default::default()
         }
     }
 }
@@ -751,6 +760,23 @@ mod tests {
         assert!(!watchdog.observe(PaneProbe::Absent));
         assert!(!watchdog.observe(PaneProbe::Absent));
         assert!(watchdog.observe(PaneProbe::Absent));
+    }
+
+    #[test]
+    fn pane_watchdog_requires_authoritative_mux_truth() {
+        let watchdog = PaneWatchdog {
+            pane: crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_9"),
+            mux: crate::ids::MuxName::Zellij,
+            session_name: "rimz-test".to_owned(),
+            workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/repo")),
+            next_probe: Instant::now(),
+            strikes: 0,
+        };
+
+        let options = watchdog.probe_options();
+        assert!(options.authoritative);
+        assert!(options.require_authoritative);
+        assert_eq!(options.command_timeout, Some(PANE_PROBE_TIMEOUT));
     }
 
     #[test]
