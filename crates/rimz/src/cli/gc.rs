@@ -388,6 +388,15 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             false,
         ) {
             Ok(removed) => {
+                if let Err(err) =
+                    store.retire_worktree_sessions(removed.removed_path(), Some(removed.branch()))
+                {
+                    tracing::warn!(
+                        worktree = %removed.worktree_name(),
+                        error = %err,
+                        "could not retire sessions for removed worktree",
+                    );
+                }
                 let archive_error = store
                     .archive_channel_messages(
                         removed.worktree_name(),

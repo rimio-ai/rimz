@@ -200,6 +200,9 @@ fn recreate_or_done(
         false,
     )?;
     store
+        .retire_worktree_sessions(removed.removed_path(), Some(removed.branch()))
+        .context("retiring sessions for recreated worktree")?;
+    store
         .archive_channel_messages(
             removed.worktree_name(),
             "worktree recreated",

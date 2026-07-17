@@ -47,7 +47,7 @@ CLI gathers pane cwd, stored agent path, process cwd, and liveness facts once. `
 
 Branch deletion follows the same proof. The automatic path tries `git branch -d`, escalates to `git branch -D` only after the landed check passes again, and otherwise keeps the branch. Force removal — `remove --force`, or the interactive `remove` on a dirty tree — is the human explicitly choosing destruction, so it uses Git's force path.
 
-Every explicit, wrapper, reconciliation, and GC removal enters the same domain removal path. When the caller's cwd is inside the candidate checkout, that path moves to the repository root before `git worktree remove`, then applies the existing branch-deletion proof. Channel archival remains a CLI effect after successful removal: explicit removal and reconciliation surface archive failure, while wrapper cleanup and GC report it best-effort.
+Every explicit, wrapper, reconciliation, and GC removal enters the same domain removal path. When the caller's cwd is inside the candidate checkout, that path moves to the repository root before `git worktree remove`, then applies the existing branch-deletion proof. Successful removal retires the worktree's non-live root sessions in the durable store before archiving its channel messages. Explicit removal and reconciliation surface cleanup failure, while wrapper cleanup and GC report it best-effort.
 
 Cohort relaunch uses the same status oracle. When a named team or multi-agent inline layout launched with an explicit `-w <name>` finds closed cohort history in a clean content-landed worktree, it offers to run the ordinary marked-worktree removal path, archives the worktree channel messages as recreated, and then lets the launch path create the worktree again.
 

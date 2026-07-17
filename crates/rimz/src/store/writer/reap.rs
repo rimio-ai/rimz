@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -28,6 +29,48 @@ fn reap_session_name(paths: &StatePaths) -> String {
 }
 
 impl Store {
+    pub fn retire_worktree_sessions(
+        &self,
+        worktree_path: &Path,
+        worktree_branch: Option<&str>,
+    ) -> Result<usize> {
+        let projection = self.runtime_projection(RuntimeScope::Audit)?;
+        let target_path = crate::worktree::normalize_path_lexical(worktree_path);
+        let victims = projection
+            .agents
+            .iter()
+            .filter(|agent| agent.parent_agent_id.is_none())
+            .filter(|agent| agent.ended_at.is_none())
+            .filter(|agent| {
+                agent.worktree_path.as_deref().is_some_and(|path| {
+                    crate::worktree::normalize_path_lexical(Path::new(path)) == target_path
+                }) || worktree_branch
+                    .is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
+            })
+            .filter(|agent| !matches!(runtime::agent_liveness(agent), AgentLiveness::Live { .. }))
+            .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+            .collect::<Vec<_>>();
+        if victims.is_empty() {
+            return Ok(0);
+        }
+
+        let session_name = reap_session_name(&self.inner.paths);
+        self.commit(|txn| {
+            for (kind, agent_id) in &victims {
+                let observation =
+                    AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Ended);
+                txn.append(&EventEnvelope::agent_lifecycle(
+                    txn.paths.workspace_id.clone(),
+                    session_name.as_str(),
+                    kind.as_str(),
+                    "WorktreeRemoved",
+                    &observation,
+                ))?;
+            }
+            Ok(victims.len())
+        })
+    }
+
     pub(crate) fn reap_dead_sessions(&self) -> Result<usize> {
         // The persisted roster protects crash-recovery candidates until room
         // rebirth consumes it. The remaining scan stays lock-free: a live
@@ -141,6 +184,37 @@ mod tests {
             } else {
                 "SessionStart"
             },
+            &observation,
+        )
+    }
+
+    fn worktree_lifecycle(
+        workspace_id: &WorkspaceId,
+        agent_id: &str,
+        pid: Option<u32>,
+        parent: Option<&str>,
+        path: &str,
+        branch: &str,
+        signal: LifecycleSignal,
+    ) -> EventEnvelope {
+        let event_name = if matches!(&signal, LifecycleSignal::Ended) {
+            "SessionEnd"
+        } else if parent.is_some() {
+            "SubagentStart"
+        } else {
+            "SessionStart"
+        };
+        let mut observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
+        observation.agent_pid = pid;
+        observation.parent_agent_id = parent.map(AgentSessionId::from);
+        observation.worktree_path = Some(path.to_owned());
+        observation.worktree_branch = Some(branch.to_owned());
+        EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            "rimz-test",
+            "codex",
+            event_name,
             &observation,
         )
     }
@@ -391,6 +465,154 @@ mod tests {
                 .any(|agent| agent.agent_id == key.1 && agent.ended_at.is_some())
         );
         assert!(reaped.ended.contains(&key));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retire_worktree_sessions_ends_matching_dead_and_unknown_roots() {
+        let (_dir, store, workspace_id) = store();
+        let removed_path = Path::new("/r/a");
+        for (agent_id, pid, parent, path, branch) in [
+            ("dead-root", Some(u32::MAX), None, "/r/a/./", "b"),
+            ("pidless-root", None, None, "/r/b", "a"),
+            ("live-root", Some(std::process::id()), None, "/r/a", "a"),
+            ("other-root", None, None, "/r/b", "b"),
+            ("already-ended", None, None, "/r/a", "a"),
+            ("child", None, Some("dead-root"), "/r/a", "a"),
+        ] {
+            let event = worktree_lifecycle(
+                &workspace_id,
+                agent_id,
+                pid,
+                parent,
+                path,
+                branch,
+                LifecycleSignal::Registered,
+            );
+            event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+        }
+        let ended = worktree_lifecycle(
+            &workspace_id,
+            "already-ended",
+            None,
+            None,
+            "/r/a",
+            "a",
+            LifecycleSignal::Ended,
+        );
+        event_log::append(&store.paths().events_log, &ended).expect("append end lifecycle");
+
+        assert_eq!(
+            store
+                .retire_worktree_sessions(removed_path, Some("a"))
+                .expect("retire worktree sessions"),
+            2
+        );
+
+        let audit = store
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("audit projection");
+        for agent_id in ["dead-root", "pidless-root"] {
+            assert!(
+                audit
+                    .agents
+                    .iter()
+                    .any(|agent| agent.agent_id == agent_id && agent.ended_at.is_some()),
+                "expected {agent_id} to be retired"
+            );
+        }
+        for agent_id in ["live-root", "other-root", "child"] {
+            assert!(
+                audit
+                    .agents
+                    .iter()
+                    .any(|agent| agent.agent_id == agent_id && agent.ended_at.is_none()),
+                "expected {agent_id} to stay active"
+            );
+        }
+        let runtime = store
+            .runtime_projection(RuntimeScope::Runtime)
+            .expect("runtime projection");
+        assert!(
+            runtime
+                .agents
+                .iter()
+                .all(|agent| agent.agent_id != "dead-root" && agent.agent_id != "pidless-root")
+        );
+        let mut retired_ids = store
+            .read_events()
+            .expect("read lifecycle events")
+            .iter()
+            .filter_map(|event| match event.kind() {
+                EventKind::AgentLifecycle(payload)
+                    if payload.event_name.as_deref() == Some("WorktreeRemoved") =>
+                {
+                    payload
+                        .observation
+                        .agent_id
+                        .as_ref()
+                        .map(|agent_id| agent_id.as_str().to_owned())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        retired_ids.sort();
+        assert_eq!(retired_ids, ["dead-root", "pidless-root"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retire_worktree_sessions_bypasses_live_roster_protection() {
+        let (_dir, store, workspace_id) = store();
+        let event = lifecycle(&workspace_id, "recoverable", Some(u32::MAX), None);
+        event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+        let key = (
+            AgentKind::new_unchecked("codex"),
+            AgentSessionId::from("recoverable"),
+        );
+        live_roster::publish(
+            &store.paths().live_roster,
+            [key.clone()].into_iter().collect(),
+        )
+        .expect("publish roster");
+
+        assert_eq!(
+            store
+                .retire_worktree_sessions(Path::new("/repo/recoverable"), None)
+                .expect("retire protected session"),
+            1
+        );
+        let audit = store
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("audit projection");
+        assert!(audit.ended.contains(&key));
+    }
+
+    #[test]
+    fn retired_session_revives_on_next_lifecycle_event() {
+        let (_dir, store, workspace_id) = store();
+        let registered = lifecycle(&workspace_id, "resumed", None, None);
+        event_log::append(&store.paths().events_log, &registered).expect("append lifecycle");
+        assert_eq!(
+            store
+                .retire_worktree_sessions(Path::new("/repo/resumed"), None)
+                .expect("retire session"),
+            1
+        );
+
+        let resumed = lifecycle(&workspace_id, "resumed", None, None);
+        store
+            .append_event(&resumed)
+            .expect("append resume lifecycle");
+        let audit = store
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("audit projection");
+        assert!(
+            audit
+                .agents
+                .iter()
+                .any(|agent| agent.agent_id == "resumed" && agent.ended_at.is_none())
+        );
     }
 
     #[test]
