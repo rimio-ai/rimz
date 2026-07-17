@@ -92,7 +92,9 @@ fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback()
 fn named_attach_preserves_recorded_room_owner() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
-    let recorded_owner = PathBuf::from("/previous/rimz");
+    let recorded_owner = env.project_root.join("previous-rimz");
+    rimz::store::atomic::write_executable_bytes_atomically(&recorded_owner, b"recorded build")
+        .expect("write recorded room owner");
     let store = env.store();
     store
         .record_room_bin(&workspace, recorded_owner.clone(), "recorded".to_owned())

@@ -12,6 +12,7 @@ Under `${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/`:
 
 ```text
 workspace.json                                  project root, root class, session name, verified room build target
+rimz                                            stable executable path for deferred room spawns
 events.log.jsonl                                the framed event log — crash-recoverable truth
 events.log.archive/events.<uuidv7>.jsonl        rotated logs, chronologically sortable
 agents.carryover.json                           agent rollup carried across rotation
@@ -28,7 +29,7 @@ locks/{publish,log-sync,auto-rotate,dead-reap}.stamp debounce stamps for the off
 
 `<workspace_id>` is `ws_` plus the first 24 hex of the SHA-256 of the canonical root path — the same derivation for every root class (repo, marker, directory), so introducing a class never re-keys a store.
 
-User-scoped immutable executable generations live under `${XDG_STATE_HOME:-~/.local/state}/rimz/builds/<build_id>/rimz`. Room start and reload copy the invoking executable there with a durable temp-file-plus-rename write and mode `0755`, then publish its path and digest together in each live workspace record. Staging reuses a matching digest and sweeps generations referenced by no known workspace record, while retaining the generation being staged and any generation younger than the one-minute stage-to-record race lease.
+User-scoped immutable executable generations live under `${XDG_STATE_HOME:-~/.local/state}/rimz/builds/<build_id>/rimz`. Room start and reload copy the invoking executable there with a durable temp-file-plus-rename write and mode `0755`, then publish its path and digest together in each live workspace record. Each publish also atomically refreshes `workspaces/<workspace_id>/rimz`, the stable room-bin path used by deferred pane spawns and session-lifetime helpers; it is a hardlink to the staged generation when the filesystem permits, so sweeping the generation directory cannot orphan the spawn path, with an executable byte copy as the fallback. Staging reuses a matching digest and sweeps generations referenced by no known workspace record, while retaining the generation being staged and any generation younger than the one-minute stage-to-record race lease.
 
 The split of truth from cache is the organizing rule: **`events.log.jsonl` and the durable record files beside it are the crash-recoverable truth; everything under `snapshots/` is a reconstructible cache.** A reader rebuilds the cache from the log on any mismatch or parse failure, so a writer that crashes before publishing costs the next reader a bounded fold, never staleness.
 

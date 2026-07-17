@@ -361,7 +361,7 @@ fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
 }
 
 #[test]
-fn record_workspace_preserves_existing_room_bin() {
+fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).expect("project dir");
@@ -369,18 +369,37 @@ fn record_workspace_preserves_existing_room_bin() {
     let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("state");
     let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime");
     let store = Store::open(paths.clone(), runtime).expect("open store");
-    let owner = dir.path().join("bin").join("rimz");
+    let first_dir = dir.path().join("builds/first");
+    let first = first_dir.join("rimz");
+    crate::store::atomic::write_executable_bytes_atomically(&first, b"first build")
+        .expect("write first build");
 
     store
-        .record_room_bin(&workspace, owner.clone(), "build-1".to_owned())
+        .record_room_bin(&workspace, first.clone(), "build-1".to_owned())
         .expect("record owner bin");
+    assert_eq!(std::fs::read(&paths.room_bin).unwrap(), b"first build");
+    std::fs::remove_dir_all(first_dir).expect("sweep first build");
+    assert_eq!(std::fs::read(&paths.room_bin).unwrap(), b"first build");
+
     store
         .record_workspace(&workspace)
         .expect("generic rerecord preserves owner bin");
 
-    let record = workspace_record::read(&paths.workspace_record).expect("read record");
-    assert_eq!(record.rimz_bin.as_deref(), Some(owner.as_path()));
-    assert_eq!(record.rimz_build.as_deref(), Some("build-1"));
+    let preserved = workspace_record::read(&paths.workspace_record).expect("read record");
+    assert_eq!(preserved.rimz_bin.as_deref(), Some(first.as_path()));
+    assert_eq!(preserved.rimz_build.as_deref(), Some("build-1"));
+
+    let second = dir.path().join("builds/second/rimz");
+    crate::store::atomic::write_executable_bytes_atomically(&second, b"second build")
+        .expect("write second build");
+    store
+        .record_room_bin(&workspace, second.clone(), "build-2".to_owned())
+        .expect("replace owner bin");
+
+    assert_eq!(std::fs::read(&paths.room_bin).unwrap(), b"second build");
+    let replaced = workspace_record::read(&paths.workspace_record).expect("read replacement");
+    assert_eq!(replaced.rimz_bin.as_deref(), Some(second.as_path()));
+    assert_eq!(replaced.rimz_build.as_deref(), Some("build-2"));
 }
 
 #[test]

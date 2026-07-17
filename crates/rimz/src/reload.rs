@@ -403,7 +403,7 @@ fn reconcile_live(
         ..ReloadOutcome::default()
     };
     let backend = backend_for(mux);
-    record_live_room_bin(ws, staged);
+    let room_bin = record_live_room_bin(ws, staged).unwrap_or_else(|| staged.path.clone());
     let before_signal = session_heartbeats(runtime, mux, &ws.session_name);
 
     // 1. Signal live sidebars to re-exec onto the freshly-installed binary.
@@ -445,7 +445,7 @@ fn reconcile_live(
             session_name: ws.session_name.clone(),
             workspace_id: ws.workspace_id.clone(),
             wasm,
-            rimz_bin: staged.path.clone(),
+            rimz_bin: room_bin.clone(),
             converge: true,
             seed_permissions: machine_config.web.enabled,
             focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
@@ -483,7 +483,7 @@ fn reconcile_live(
             birth_size: width.birth_size(None),
             detected_view_size: None,
             width_override: crate::sidebar::width_override::load(runtime),
-            rimz_bin: staged.path.clone(),
+            rimz_bin: room_bin,
             replace_existing: false,
             pristine_birth: false,
             config: mux_config.clone(),
@@ -561,16 +561,24 @@ fn presence_channel_is_live(
     }
 }
 
-fn record_live_room_bin(ws: &KnownWorkspace, staged: &StagedBuild) {
+fn record_live_room_bin(ws: &KnownWorkspace, staged: &StagedBuild) -> Option<PathBuf> {
     let Ok(paths) = StatePaths::for_workspace(ws.workspace_id.clone()) else {
-        return;
+        return None;
     };
+    record_live_room_bin_at(ws, staged, &paths)
+}
+
+fn record_live_room_bin_at(
+    ws: &KnownWorkspace,
+    staged: &StagedBuild,
+    paths: &StatePaths,
+) -> Option<PathBuf> {
     let Ok(_guard) = crate::store::lock::WorkspaceLock::acquire(&paths.workspace_lock) else {
         tracing::debug!(workspace = %ws.workspace_id, "reload: locking room record failed");
-        return;
+        return None;
     };
     let Ok(mut record) = workspace_record::read(&paths.workspace_record) else {
-        return;
+        return None;
     };
     record.rimz_bin = Some(staged.path.clone());
     record.rimz_build = Some(staged.build.clone());
@@ -581,7 +589,19 @@ fn record_live_room_bin(ws: &KnownWorkspace, staged: &StagedBuild) {
             error = %err,
             "reload: recording room binary failed",
         );
+        return None;
     }
+    if let Err(err) =
+        crate::store::atomic::link_executable_atomically(&staged.path, &paths.room_bin)
+    {
+        tracing::debug!(
+            workspace = %ws.workspace_id,
+            error = %err,
+            "reload: publishing stable room binary failed",
+        );
+        return None;
+    }
+    Some(paths.room_bin.clone())
 }
 
 fn session_heartbeats(
@@ -792,6 +812,13 @@ mod tests {
         record.rimz_bin = Some(first.path.clone());
         record.rimz_build = Some(first.build.clone());
         workspace_record::write(&paths, &record).unwrap();
+        let known = KnownWorkspace {
+            workspace_id: workspace.workspace_id.clone(),
+            project_root: workspace.project_root.clone(),
+            session_name: workspace.session_name.clone(),
+            root_class: workspace.root_class,
+            rimz_bin: record.rimz_bin.clone(),
+        };
 
         let unreferenced = crate::store::paths::builds_dir_under(dir.path()).join("unused");
         std::fs::create_dir_all(&unreferenced).unwrap();
@@ -803,10 +830,18 @@ mod tests {
             )
             .unwrap();
         let second = stage_build_under(&second_source, dir.path()).unwrap();
+        let room_bin = record_live_room_bin_at(&known, &second, &paths).unwrap();
 
-        assert!(first.path.is_file(), "recorded build remains staged");
+        assert!(
+            first.path.is_file(),
+            "previously recorded build remains staged"
+        );
         assert!(second.path.is_file(), "new build remains staged");
         assert!(!unreferenced.exists(), "unreferenced build is swept");
+        assert_eq!(std::fs::read(room_bin).unwrap(), b"second build");
+        let updated = workspace_record::read(&paths.workspace_record).unwrap();
+        assert_eq!(updated.rimz_bin.as_deref(), Some(second.path.as_path()));
+        assert_eq!(updated.rimz_build.as_deref(), Some(second.build.as_str()));
     }
 
     #[test]

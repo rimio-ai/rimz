@@ -147,7 +147,10 @@ impl RoomContext {
             machine_config,
             mux,
             sizing,
-            crate::workspace::resolve_recorded_rimz_bin(record.rimz_bin.as_deref()),
+            crate::workspace::resolve_recorded_rimz_bin(
+                &record.workspace_id,
+                record.rimz_bin.as_deref(),
+            ),
         )
     }
 
@@ -206,11 +209,12 @@ impl RoomContext {
         let staged = crate::reload::stage_current_build().context("staging room binary")?;
         let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
             .context("preparing store paths")?;
+        let room_bin = paths.room_bin.clone();
         let store = Store::open(paths, self.runtime.clone()).context("opening store")?;
         store
             .record_room_bin(&self.workspace, staged.path.clone(), staged.build.clone())
             .context("recording room binary")?;
-        self.rimz_bin = staged.path;
+        self.rimz_bin = room_bin;
         Ok(())
     }
 
@@ -438,7 +442,7 @@ fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {
         .ok()
         .and_then(|paths| workspace_record::read(&paths.workspace_record).ok())
         .and_then(|record| record.rimz_bin);
-    crate::workspace::resolve_recorded_rimz_bin(recorded.as_deref())
+    crate::workspace::resolve_recorded_rimz_bin(workspace_id, recorded.as_deref())
 }
 
 #[cfg(test)]

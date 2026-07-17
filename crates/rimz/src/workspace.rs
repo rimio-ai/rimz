@@ -257,10 +257,18 @@ fn normalize_known_workspace_record(
     })
 }
 
-/// Resolve the room-owning RimZ binary recorded for session-local helpers.
-/// Missing or removed records fall back to the current executable so legacy
-/// rooms and unowned test fixtures keep working.
-pub fn resolve_recorded_rimz_bin(recorded: Option<&Path>) -> PathBuf {
+/// Resolve the room-owning RimZ binary used by session-local helpers.
+///
+/// Prefer the stable workspace link because Zellij's immutable new-tab
+/// template and long-lived presence plugin outlast swept build generations.
+/// Legacy rooms without that link use their recorded build while it exists,
+/// then fall back to the current executable.
+pub fn resolve_recorded_rimz_bin(workspace_id: &WorkspaceId, recorded: Option<&Path>) -> PathBuf {
+    if let Ok(paths) = crate::store::StatePaths::for_workspace(workspace_id.clone())
+        && paths.room_bin.is_file()
+    {
+        return paths.room_bin;
+    }
     match recorded {
         Some(path) if path.is_file() => path.to_path_buf(),
         Some(path) => {

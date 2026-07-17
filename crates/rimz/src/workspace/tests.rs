@@ -195,6 +195,34 @@ fn known_workspaces_under_missing_root_is_empty() {
 }
 
 #[test]
+fn recorded_room_bin_prefers_stable_then_recorded_then_current() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = crate::store::StatePaths::for_workspace(workspace_id.clone()).expect("state paths");
+    let recorded = dir.path().join("recorded-rimz");
+    std::fs::write(&recorded, b"recorded").expect("write recorded");
+    std::fs::create_dir_all(&paths.root).expect("create workspace state");
+    std::fs::write(&paths.room_bin, b"stable").expect("write stable");
+
+    assert_eq!(
+        resolve_recorded_rimz_bin(&workspace_id, Some(&recorded)),
+        paths.room_bin
+    );
+    std::fs::remove_file(&paths.room_bin).expect("remove stable");
+    assert_eq!(
+        resolve_recorded_rimz_bin(&workspace_id, Some(&recorded)),
+        recorded
+    );
+    std::fs::remove_file(&recorded).expect("remove recorded");
+    assert_eq!(
+        resolve_recorded_rimz_bin(&workspace_id, Some(&recorded)),
+        crate::proc::rimz_exe()
+    );
+
+    std::fs::remove_dir_all(&paths.root).expect("clean workspace state");
+}
+
+#[test]
 fn session_name_collapses_unsafe_runs() {
     // Spaces and `/` both fold to `-`, and runs collapse to a single `-`.
     let root = Path::new("/tmp/my repo");

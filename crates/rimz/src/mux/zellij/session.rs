@@ -185,7 +185,10 @@ impl ZellijBackend {
             session_name: known.session_name.clone(),
             workspace_id: known.workspace_id.clone(),
             wasm,
-            rimz_bin: workspace::resolve_recorded_rimz_bin(known.rimz_bin.as_deref()),
+            rimz_bin: workspace::resolve_recorded_rimz_bin(
+                &known.workspace_id,
+                known.rimz_bin.as_deref(),
+            ),
             converge: false,
             seed_permissions: machine_config.web.enabled,
             focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),

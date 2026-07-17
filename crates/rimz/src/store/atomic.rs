@@ -70,6 +70,37 @@ pub fn write_executable_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()
     })
 }
 
+/// Atomically replace `dst` with a hardlink to the executable at `src`.
+/// Filesystems that reject the link fall back to an executable byte copy.
+#[must_use = "durability barrier; check the result"]
+pub fn link_executable_atomically(src: &Path, dst: &Path) -> Result<()> {
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| AtomicErr::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let tmp = temp_sibling(dst);
+    let mut temp_guard = TempFileGuard::new(tmp.clone());
+    match std::fs::hard_link(src, &tmp) {
+        Ok(()) => {
+            std::fs::rename(&tmp, dst).map_err(|source| AtomicErr::Io {
+                path: dst.to_path_buf(),
+                source,
+            })?;
+            temp_guard.disarm();
+            sync_parent_dir(dst)
+        }
+        Err(_) => {
+            let bytes = std::fs::read(src).map_err(|source| AtomicErr::Io {
+                path: src.to_path_buf(),
+                source,
+            })?;
+            write_executable_bytes_atomically(dst, &bytes)
+        }
+    }
+}
+
 /// Whether a temp+rename write fsyncs before it becomes observable.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Fsync {
@@ -568,6 +599,29 @@ mod tests {
         write_bytes_atomically(&path, b"raw bytes").unwrap();
 
         assert_eq!(std::fs::read(path).unwrap(), b"raw bytes");
+    }
+
+    #[test]
+    fn executable_link_replaces_destination_and_survives_source_sweep() {
+        let dir = tempdir().unwrap();
+        let source_dir = dir.path().join("builds/old");
+        let source = source_dir.join("rimz");
+        let destination = dir.path().join("workspaces/ws_test/rimz");
+        write_executable_bytes_atomically(&source, b"stable build").unwrap();
+        write_executable_bytes_atomically(&destination, b"obsolete build").unwrap();
+
+        link_executable_atomically(&source, &destination).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(&source).unwrap().ino(),
+                std::fs::metadata(&destination).unwrap().ino(),
+            );
+        }
+        std::fs::remove_dir_all(source_dir).unwrap();
+        assert_eq!(std::fs::read(destination).unwrap(), b"stable build");
     }
 
     #[test]

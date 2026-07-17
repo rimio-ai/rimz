@@ -67,6 +67,7 @@ pub struct StatePaths {
     pub workspace_lock: PathBuf,
     pub publish_lock: PathBuf,
     pub workspace_record: PathBuf,
+    pub room_bin: PathBuf,
     pub channels_record: PathBuf,
     pub boot_marker: PathBuf,
     pub live_roster: PathBuf,
@@ -107,6 +108,7 @@ impl StatePaths {
             workspace_lock: locks_dir.join("workspace.lock"),
             publish_lock: locks_dir.join("publish.lock"),
             workspace_record: root.join("workspace.json"),
+            room_bin: root.join("rimz"),
             channels_record: root.join("channels.json"),
             boot_marker: root.join("boot.json"),
             live_roster: root.join("live-roster.json"),
@@ -778,6 +780,7 @@ mod tests {
             paths.workspace_record.file_name().unwrap(),
             "workspace.json"
         );
+        assert_eq!(paths.room_bin.file_name().unwrap(), "rimz");
         assert_eq!(paths.live_roster.file_name().unwrap(), "live-roster.json");
         assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
     }

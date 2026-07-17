@@ -66,7 +66,7 @@ State is three tiers of plain files. The path constants and their exact filename
 workspace store   ~/.local/state/rimz/workspaces/<id>/
   events.log.jsonl · snapshots/latest.json
   runs/<run_id>.json · messages/messages.jsonl · transcript/<date>.jsonl · locks/workspace.lock
-  workspace.json · channels.json · live-roster.json
+  workspace.json · rimz (stable room executable) · channels.json · live-roster.json
   diag.log.jsonl · diag-frames/                      durable truth
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<id>/   (or /tmp/rimz-<uid>/… )

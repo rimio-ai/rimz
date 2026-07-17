@@ -184,12 +184,15 @@ impl Store {
         rimz_build: String,
     ) -> Result<()> {
         self.commit(|txn| {
+            let room_bin_target = rimz_bin.clone();
             let record = workspace_record_preserving_rimz_target(
                 txn.paths,
                 workspace,
                 Some((rimz_bin, rimz_build)),
             );
             workspace_record::write(txn.paths, &record)?;
+            crate::store::atomic::link_executable_atomically(&room_bin_target, &txn.paths.room_bin)
+                .map_err(workspace_record::WorkspaceRecordErr::from)?;
             Ok(())
         })
     }
