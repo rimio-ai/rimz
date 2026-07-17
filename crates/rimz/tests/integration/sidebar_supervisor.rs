@@ -215,6 +215,46 @@ fn crashing_recorded_build_keeps_old_supervisor_and_recovers_on_next_record() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn self_close_request_with_authoritative_siblings_respawns_worker() {
+    let env = Env::new();
+    let starts = env.home_root.join("self-close-rejected-starts.log");
+    let worker_exit_path = env.home_root.join("unused-exit-file");
+    let mut cmd = supervisor_command(&env, &worker_exit_path, &starts, "self_close");
+    cmd.env("TMUX_PANE", "%31")
+        .env("RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE", "siblings")
+        .env("RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_BACKOFF_MS", "10");
+    let mut child = cmd.spawn().expect("spawn sidebar supervisor");
+
+    wait_for_start_after(&starts, &env.rimz_bin(), 1, Duration::from_secs(2));
+    assert!(
+        child.try_wait().expect("poll supervisor").is_none(),
+        "a rejected self-close request must keep the pane supervisor alive",
+    );
+
+    child.kill().expect("stop supervisor");
+    child.wait().expect("reap supervisor");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn self_close_request_with_authoritative_empty_view_exits_supervisor() {
+    let env = Env::new();
+    let starts = env.home_root.join("self-close-confirmed-starts.log");
+    let worker_exit_path = env.home_root.join("unused-exit-file");
+    let mut cmd = supervisor_command(&env, &worker_exit_path, &starts, "self_close");
+    cmd.env("TMUX_PANE", "%32")
+        .env("RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE", "empty");
+    let mut child = cmd.spawn().expect("spawn sidebar supervisor");
+
+    let status = wait_child(&mut child, Duration::from_secs(2));
+    assert!(
+        status.success(),
+        "confirmed self-close should end the pane owner"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn sidebar_supervisor_reaps_worker_when_its_pane_disappears() {
     let env = Env::new();
     let instance =

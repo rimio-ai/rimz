@@ -314,6 +314,10 @@ pub enum DiagEvent {
         target_build: String,
         reason: String,
     },
+    SelfCloseRejected {
+        siblings: usize,
+        reason: String,
+    },
     RendererExit {
         cause: RendererExitCause,
     },
@@ -356,6 +360,7 @@ impl DiagEvent {
             | Self::TopologyWriteRejected { .. }
             | Self::RendererOrphanReaped { .. }
             | Self::SupervisorPreflightRejected { .. }
+            | Self::SelfCloseRejected { .. }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
@@ -438,6 +443,7 @@ impl DiagEvent {
             Self::RendererOrphanReaped { .. } => "renderer_orphan_reaped",
             Self::SupervisorConvergence { .. } => "supervisor_convergence",
             Self::SupervisorPreflightRejected { .. } => "supervisor_preflight_rejected",
+            Self::SelfCloseRejected { .. } => "self_close_rejected",
             Self::RendererExit { .. } => "renderer_exit",
             Self::FrameAnomaly { .. } => "frame_anomaly",
         }
@@ -588,6 +594,9 @@ impl DiagEvent {
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {
                 format!("{}:{target_build}", self.kind_name())
+            }
+            Self::SelfCloseRejected { reason, .. } => {
+                format!("{}:{reason}", self.kind_name())
             }
             Self::RendererExit { cause } => format!("{}:{}", self.kind_name(), cause.as_str()),
         }

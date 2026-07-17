@@ -1005,6 +1005,9 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             target_build,
             reason,
         } => format!("supervisor rejected build {target_build}: {reason}"),
+        DiagEvent::SelfCloseRejected { siblings, reason } => {
+            format!("self-close rejected ({siblings} siblings): {reason}")
+        }
         DiagEvent::RendererExit { cause } => format!("renderer exited: {}", cause.as_str()),
         DiagEvent::FrameAnomaly {
             anomaly,

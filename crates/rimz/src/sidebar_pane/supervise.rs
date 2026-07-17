@@ -44,6 +44,8 @@ const TEST_STABLE_RUN_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_STABLE_RUN_MS";
 const TEST_HANDOFF_GRACE_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_HANDOFF_GRACE_MS";
 #[cfg(feature = "testkit")]
 const TEST_WORKER_STARTED_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_STARTED_FILE";
+#[cfg(feature = "testkit")]
+const TEST_SELF_CLOSE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE";
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
 const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PANE_PROBE_INTERVAL: Duration = Duration::from_secs(60);
@@ -52,6 +54,7 @@ const PANE_GONE_STRIKES: u8 = 3;
 pub const RELOAD_EXIT_CODE: i32 = 100;
 const PANIC_EXIT_CODE: i32 = 101;
 pub const RESPAWN_EXIT_CODE: i32 = 102;
+pub const SELF_CLOSE_EXIT_CODE: i32 = 103;
 const RESPAWN_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPAWN_STABLE_RUN: Duration = Duration::from_secs(60);
@@ -84,7 +87,9 @@ pub fn instance_id() -> SidebarInstanceId {
         .unwrap_or_default()
 }
 
-pub fn run_worker(config: ServeConfig) -> crate::sidebar_pane::app::Result<()> {
+pub fn run_worker(
+    config: ServeConfig,
+) -> crate::sidebar_pane::app::Result<crate::sidebar_pane::app::ServeOutcome> {
     inject_test_fault_if_requested();
     crate::sidebar_pane::app::serve(config)
 }
@@ -171,6 +176,25 @@ pub fn run(config: ServeConfig) -> Result<()> {
                     }
                 }
             }
+            SuperviseAction::ConfirmSelfClose => {
+                match confirm_self_close(&config, &pane_watchdog) {
+                    SelfCloseConfirmation::Close | SelfCloseConfirmation::PaneGone => {
+                        remove_orphan_runtime_files(&config);
+                        record_confirmed_self_close(&config);
+                        return Ok(());
+                    }
+                    SelfCloseConfirmation::Keep { siblings, reason } => {
+                        record_self_close_rejected(&config, siblings, &reason);
+                        restore_terminal(MouseCapture::Stdout, Screen::Main);
+                        sleep_respawn_backoff(
+                            respawn_delay(RESPAWN_BACKOFF_INITIAL),
+                            &mut record_watch,
+                            &mut exec_state,
+                            supervisor_build.as_deref(),
+                        );
+                    }
+                }
+            }
             SuperviseAction::Respawn => {
                 let stderr_excerpt = stderr_tail
                     .lock()
@@ -242,12 +266,14 @@ fn exec_supervisor(exe: &Path, args: &[OsString], config: &ServeConfig) -> Resul
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SuperviseAction {
     ReloadReexec,
+    ConfirmSelfClose,
     Respawn,
 }
 
 fn supervise_action(exit_code: Option<i32>, signal: Option<i32>) -> SuperviseAction {
     match (exit_code, signal) {
         (Some(RELOAD_EXIT_CODE), None) => SuperviseAction::ReloadReexec,
+        (Some(SELF_CLOSE_EXIT_CODE), None) => SuperviseAction::ConfirmSelfClose,
         (Some(PANIC_EXIT_CODE), None)
         | (Some(RESPAWN_EXIT_CODE), None)
         | (Some(0), None)
@@ -495,6 +521,112 @@ impl PaneWatchdog {
             command_timeout: Some(PANE_PROBE_TIMEOUT),
             ..Default::default()
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SelfCloseVerdict {
+    PaneGone,
+    Empty { floating_siblings: usize },
+    Keep { siblings: usize, reason: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SelfCloseConfirmation {
+    PaneGone,
+    Close,
+    Keep { siblings: usize, reason: String },
+}
+
+fn self_close_verdict(
+    panes: &[crate::pane::PaneRef],
+    own_pane: &crate::ids::PaneId,
+) -> SelfCloseVerdict {
+    let Some(own) = panes.iter().find(|pane| &pane.pane_id == own_pane) else {
+        return SelfCloseVerdict::PaneGone;
+    };
+    let Some(view_id) = own.view_id.as_deref() else {
+        return SelfCloseVerdict::Keep {
+            siblings: 0,
+            reason: "own view id is unavailable".to_owned(),
+        };
+    };
+    let siblings = panes
+        .iter()
+        .filter(|pane| pane.pane_id != *own_pane && pane.view_id.as_deref() == Some(view_id))
+        .collect::<Vec<_>>();
+    let working_siblings = siblings.iter().filter(|pane| !pane.is_floating).count();
+    if working_siblings > 0 {
+        return SelfCloseVerdict::Keep {
+            siblings: siblings.len(),
+            reason: "authoritative listing still has working siblings".to_owned(),
+        };
+    }
+    SelfCloseVerdict::Empty {
+        floating_siblings: siblings.len(),
+    }
+}
+
+fn confirm_self_close(
+    config: &ServeConfig,
+    watchdog: &Option<PaneWatchdog>,
+) -> SelfCloseConfirmation {
+    #[cfg(feature = "testkit")]
+    if let Some(confirmation) = forced_self_close_confirmation() {
+        return confirmation;
+    }
+
+    let Some(watchdog) = watchdog.as_ref() else {
+        return SelfCloseConfirmation::Keep {
+            siblings: 0,
+            reason: "own pane is unavailable".to_owned(),
+        };
+    };
+    let listing = match crate::mux::backend_for(watchdog.mux).list_panes(watchdog.probe_options()) {
+        Ok(listing) => listing,
+        Err(err) => {
+            return SelfCloseConfirmation::Keep {
+                siblings: 0,
+                reason: format!("authoritative pane probe failed: {err}"),
+            };
+        }
+    };
+    match self_close_verdict(&listing.panes, &watchdog.pane) {
+        SelfCloseVerdict::PaneGone => SelfCloseConfirmation::PaneGone,
+        SelfCloseVerdict::Keep { siblings, reason } => {
+            SelfCloseConfirmation::Keep { siblings, reason }
+        }
+        SelfCloseVerdict::Empty { floating_siblings } => {
+            if floating_siblings == 0 {
+                return SelfCloseConfirmation::Close;
+            }
+            match crate::mux::backend_for(config.mux)
+                .close_view_floating_panes(&config.session_name, &watchdog.pane)
+            {
+                Ok(_) => SelfCloseConfirmation::Close,
+                Err(err) => SelfCloseConfirmation::Keep {
+                    siblings: floating_siblings,
+                    reason: format!("floating-pane cleanup failed: {err}"),
+                },
+            }
+        }
+    }
+}
+
+#[cfg(feature = "testkit")]
+fn forced_self_close_confirmation() -> Option<SelfCloseConfirmation> {
+    match env::var(TEST_SELF_CLOSE_PROBE_ENV).ok().as_deref() {
+        Some("empty") => Some(SelfCloseConfirmation::Close),
+        Some("absent") => Some(SelfCloseConfirmation::PaneGone),
+        Some("siblings") => Some(SelfCloseConfirmation::Keep {
+            siblings: 1,
+            reason: "forced siblings-present probe".to_owned(),
+        }),
+        Some("error") => Some(SelfCloseConfirmation::Keep {
+            siblings: 0,
+            reason: "forced authoritative probe failure".to_owned(),
+        }),
+        _ => None,
     }
 }
 
@@ -763,6 +895,29 @@ fn record_preflight_rejected(config: &ServeConfig, target_build: &str, reason: &
     });
 }
 
+fn record_self_close_rejected(config: &ServeConfig, siblings: usize, reason: &str) {
+    crate::diag::DiagSink::for_workspace(
+        config.workspace_id.clone(),
+        config.session_name.clone(),
+        Some(config.instance_id.clone()),
+    )
+    .emit(DiagEvent::SelfCloseRejected {
+        siblings,
+        reason: reason.to_owned(),
+    });
+}
+
+fn record_confirmed_self_close(config: &ServeConfig) {
+    crate::diag::DiagSink::for_workspace(
+        config.workspace_id.clone(),
+        config.session_name.clone(),
+        Some(config.instance_id.clone()),
+    )
+    .emit_unlimited(DiagEvent::RendererExit {
+        cause: crate::diag::record::RendererExitCause::SelfCloseEmptyTab,
+    });
+}
+
 fn remove_orphan_runtime_files(config: &ServeConfig) {
     let runtime = match crate::RuntimePaths::for_workspace(config.workspace_id.clone()) {
         Ok(runtime) => runtime,
@@ -986,6 +1141,7 @@ fn inject_test_fault_if_requested() {
             std::process::abort();
         }
         "exit_on_file" => exit_when_test_file_appears(),
+        "self_close" => std::process::exit(SELF_CLOSE_EXIT_CODE),
         _ => {}
     }
 }
@@ -1093,6 +1249,10 @@ mod tests {
             supervise_action(Some(RESPAWN_EXIT_CODE), None),
             SuperviseAction::Respawn
         );
+        assert_eq!(
+            supervise_action(Some(SELF_CLOSE_EXIT_CODE), None),
+            SuperviseAction::ConfirmSelfClose
+        );
         assert_eq!(supervise_action(Some(0), None), SuperviseAction::Respawn);
         assert_eq!(supervise_action(None, Some(9)), SuperviseAction::Respawn);
         assert_eq!(supervise_action(Some(1), None), SuperviseAction::Respawn);
@@ -1150,6 +1310,58 @@ mod tests {
         assert!(options.authoritative);
         assert!(options.require_authoritative);
         assert_eq!(options.command_timeout, Some(PANE_PROBE_TIMEOUT));
+    }
+
+    #[test]
+    fn self_close_verdict_requires_authoritative_view_emptiness() {
+        let own_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1");
+        let sibling_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%2");
+        let pane = |pane_id: crate::ids::PaneId, view_id: Option<&str>, is_floating: bool| {
+            crate::pane::PaneRef {
+                pane_id,
+                session_name: "rimz-test".to_owned(),
+                view_id: view_id.map(str::to_owned),
+                is_floating,
+                ..crate::pane::PaneRef::from_id(crate::ids::PaneId::from_parts(
+                    crate::ids::MuxName::Tmux,
+                    "%unused",
+                ))
+            }
+        };
+
+        assert_eq!(self_close_verdict(&[], &own_id), SelfCloseVerdict::PaneGone);
+        assert!(matches!(
+            self_close_verdict(&[pane(own_id.clone(), None, false)], &own_id),
+            SelfCloseVerdict::Keep { .. }
+        ));
+        assert_eq!(
+            self_close_verdict(&[pane(own_id.clone(), Some("@1"), false)], &own_id),
+            SelfCloseVerdict::Empty {
+                floating_siblings: 0
+            }
+        );
+        assert!(matches!(
+            self_close_verdict(
+                &[
+                    pane(own_id.clone(), Some("@1"), false),
+                    pane(sibling_id.clone(), Some("@1"), false),
+                ],
+                &own_id,
+            ),
+            SelfCloseVerdict::Keep { siblings: 1, .. }
+        ));
+        assert_eq!(
+            self_close_verdict(
+                &[
+                    pane(own_id.clone(), Some("@1"), false),
+                    pane(sibling_id, Some("@1"), true),
+                ],
+                &own_id,
+            ),
+            SelfCloseVerdict::Empty {
+                floating_siblings: 1
+            }
+        );
     }
 
     #[test]

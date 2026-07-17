@@ -118,7 +118,13 @@ pub enum SidebarAppErr {
 
 pub type Result<T> = std::result::Result<T, SidebarAppErr>;
 
-pub fn serve(config: ServeConfig) -> Result<()> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServeOutcome {
+    Stopped,
+    SelfCloseRequested,
+}
+
+pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     crate::build_id::warm();
     reap_inherited_zombies();
     set_terminal_title()?;
@@ -307,10 +313,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         state.maybe_remind(&config, &mut terminal, &diag);
         state.paint_frame_if_due(&mut terminal, anim_start, active)?;
     }
-    if state.tab_emptied {
-        close_self_closing_view_floating_panes(&config);
-    }
     if !state.reload_requested
+        && !state.tab_emptied
         && let Some(cause) = state.exit_cause
     {
         diag.emit_unlimited(DiagEvent::RendererExit { cause });
@@ -332,7 +336,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         drop(_heartbeat_cleanup);
         std::process::exit(crate::sidebar_pane::supervise::RELOAD_EXIT_CODE);
     }
-    Ok(())
+    Ok(if state.tab_emptied {
+        ServeOutcome::SelfCloseRequested
+    } else {
+        ServeOutcome::Stopped
+    })
 }
 
 fn fetch_deadline_timeout(base: Duration, deadline: Option<Instant>, now: Instant) -> Duration {
@@ -427,28 +435,6 @@ fn with_produce_panic_diagnostic_suppressed<T>(f: impl FnOnce() -> T) -> T {
 
 fn produce_panic_diagnostic_suppressed() -> bool {
     PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED.with(Cell::get)
-}
-
-fn close_self_closing_view_floating_panes(config: &ServeConfig) {
-    let Some(anchor) = config.own_pane.as_ref() else {
-        return;
-    };
-    match crate::mux::backend_for(config.mux)
-        .close_view_floating_panes(&config.session_name, anchor)
-    {
-        Ok(closed) if closed.is_empty() => {}
-        Ok(closed) => debug!(
-            session = %config.session_name,
-            panes = ?closed,
-            "closed floating panes left in the self-closing sidebar tab",
-        ),
-        Err(err) => warn!(
-            session = %config.session_name,
-            pane = %anchor,
-            error = %err,
-            "could not close floating panes left in the self-closing sidebar tab",
-        ),
-    }
 }
 
 fn set_terminal_title() -> io::Result<()> {
