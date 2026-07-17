@@ -506,7 +506,9 @@ impl Engine {
             self.stale_writer_rejections = self.stale_writer_rejections.saturating_add(1);
             if self.stale_writer_rejections >= STALE_WRITER_RETIRE_THRESHOLD {
                 self.retired = true;
-                return vec![Effect::Unsubscribe, Effect::CloseSelf];
+                // `close_self()` unloads the accepted same-id clone too; this
+                // retired clone stays revivable through `rimz:dump_topology`.
+                return vec![Effect::Unsubscribe];
             }
             return Vec::new();
         }

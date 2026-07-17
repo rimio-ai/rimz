@@ -865,9 +865,12 @@ fn repeated_stale_writer_rejections_retire_the_losing_plugin() {
     );
     assert_eq!(
         engine.on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 30, &host),
-        vec![Effect::Unsubscribe, Effect::CloseSelf]
+        vec![Effect::Unsubscribe]
     );
     assert!(engine.on_timer(40, &host).is_empty());
+    let effects = engine.on_dump_topology_pipe(50, &host);
+    assert_eq!(effects.first(), Some(&Effect::Resubscribe));
+    assert_eq!(reasons(&effects), vec!["alive"]);
 
     let mut reset = Engine::new(0, config());
     grant(&mut reset, 1, &host);
