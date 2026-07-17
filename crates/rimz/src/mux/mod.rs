@@ -401,7 +401,7 @@ pub struct ResumeTab {
     /// The channel's worktree: the cwd every resumed pane runs in.
     pub cwd: PathBuf,
     /// Pane layout to recreate. Resume panes run the supervised exec wrapper,
-    /// e.g. `["<rimz>", "agents", "exec", "claude", "--resume", "<uuid>"]`,
+    /// e.g. `["<rimz>", "agents", "exec", "claude", "--request", "<json>"]`,
     /// so a resumed agent gets the same launch-env injection as a fresh launch.
     pub layout: LayoutPanes,
 }

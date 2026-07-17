@@ -375,7 +375,7 @@ fn exec_identity_env_maps_identity_fields() {
 }
 
 #[test]
-fn launch_id_without_a_name_is_not_emitted() {
+fn exec_wire_rejects_launch_id_without_a_name() {
     let mut invocation = request(
         "claude",
         ExecAction::Launch {
