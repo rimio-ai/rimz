@@ -107,19 +107,14 @@ pub(super) fn descriptor(row: &SidebarRow) -> Option<&str> {
 }
 
 /// An idle agent with no submitted prompt or authored pre-prompt label. Rich
-/// session names are deliberately not evidence: providers may fill that field
-/// with presentation text before the user submits anything.
+/// session names and previews are deliberately not evidence: providers may
+/// fill those fields with presentation text before the user submits anything.
 pub(super) fn awaiting_first_prompt(row: &SidebarRow) -> bool {
     let Some(agent) = row.as_agent() else {
         return false;
     };
     matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && agent.prompt.is_none()
-        && agent
-            .context
-            .as_ref()
-            .and_then(|context| context.session_preview.as_deref())
-            .is_none_or(|preview| !crate::agents::usable_description(preview))
         && agent
             .description
             .as_deref()

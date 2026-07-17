@@ -101,6 +101,47 @@ fn line_two_rich_context_replaces_launch_description() {
 }
 
 #[test]
+fn pre_prompt_session_preview_cannot_reshape_a_fresh_card() {
+    let mut kimi = agent(
+        "kimi-1",
+        "kimi",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    let mut context = codex_context(fixed_now());
+    context.source = "kimi".to_owned();
+    context.session_preview = Some("New Session".to_owned());
+    context.model_id = None;
+    context.model_display_name = None;
+    context.effort = None;
+    context.rate_limits = None;
+    kimi.context = Some(context);
+    let snapshot = snapshot_with(vec![kimi]);
+    let theme = Theme::fixed(true);
+
+    let unselected = line_texts(&group_lines(&snapshot, &theme, usize::MAX))
+        .into_iter()
+        .skip(1)
+        .collect::<Vec<_>>();
+    assert_eq!(unselected.len(), 1, "{}", unselected.join("\n"));
+    assert!(!unselected.iter().any(|line| line.contains("New Session")));
+
+    let selected = line_texts(&group_lines(&snapshot, &theme, 0))
+        .into_iter()
+        .skip(1)
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 3, "{}", selected.join("\n"));
+    assert!(selected[1].contains(".  "), "{selected:?}");
+    assert!(
+        selected[2].contains('▢') && selected[2].contains("0%"),
+        "{selected:?}"
+    );
+    assert!(!selected.iter().any(|line| line.contains("New Session")));
+}
+
+#[test]
 fn line_two_rejects_skill_blocks_at_renderer_backstop() {
     let codex = agent(
         "codex-1",
