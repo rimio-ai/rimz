@@ -34,10 +34,14 @@ pub struct TopologyClients {
     pub viewed_panes: Vec<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopologyWriter {
     pub plugin_id: u32,
     pub loaded_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
 }
 
 impl TopologyWriter {
@@ -181,12 +185,24 @@ mod tests {
             cache.writer,
             Some(TopologyWriter {
                 plugin_id: 9,
-                loaded_at_ms: 1000
+                loaded_at_ms: 1000,
+                build: None,
+                config: None,
             }),
         );
         let encoded = serde_json::to_value(&cache).expect("topology serializes");
         assert_eq!(encoded["writer"]["plugin_id"], 9);
         assert_eq!(encoded["writer"]["loaded_at_ms"], 1000);
+        assert!(encoded["writer"].get("build").is_none());
+        assert!(encoded["writer"].get("config").is_none());
+
+        let mut current = cache;
+        let writer = current.writer.as_mut().unwrap();
+        writer.build = Some("wasm-build".to_owned());
+        writer.config = Some("config-hash".to_owned());
+        let encoded = serde_json::to_value(current).expect("current topology serializes");
+        assert_eq!(encoded["writer"]["build"], "wasm-build");
+        assert_eq!(encoded["writer"]["config"], "config-hash");
     }
 
     #[test]

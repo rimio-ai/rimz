@@ -483,8 +483,8 @@ pub struct PresencePluginOptions {
     pub workspace_id: WorkspaceId,
     /// The presence-plugin wasm to load.
     pub wasm: PathBuf,
-    /// Absolute `rimz` the plugin runs, insulating the poke from the host
-    /// PATH.
+    /// Stable absolute `rimz` pointer the plugin runs, insulating the poke from
+    /// the host PATH without changing the plugin configuration per build.
     pub rimz_bin: PathBuf,
     /// Also converge a *running* plugin onto the current wasm — the explicit
     /// upgrade verb `rimz reload` passes; routine loads leave a healthy

@@ -63,6 +63,20 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             n(outcome.presence_dead, "session"),
         )?;
     }
+    if outcome.plugin_upgraded > 0 {
+        writeln!(
+            out,
+            "Upgraded {}.",
+            n(outcome.plugin_upgraded, "presence plugin")
+        )?;
+    }
+    if outcome.plugin_current > 0 {
+        writeln!(
+            out,
+            "{} already current.",
+            n(outcome.plugin_current, "presence plugin")
+        )?;
+    }
     if outcome.already_current > 0 {
         writeln!(
             out,

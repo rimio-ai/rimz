@@ -184,7 +184,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
     let mut opts = rimz::mux::PresencePluginOptions {
         session_name: name.clone(),
-        workspace_id,
+        workspace_id: workspace_id.clone(),
         wasm,
         rimz_bin: rimz_shim,
         converge: false,
@@ -234,6 +234,31 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         logged_arg(&lines[0], "--plugin-zellij-version").is_some_and(|version| !version.is_empty()),
         "the first poke carries the Zellij version: {:?}",
         lines[0],
+    );
+    let runtime = rimz::store::RuntimePaths::under(workspace_id, session.xdg.path())
+        .expect("presence runtime paths");
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let writer = loop {
+        if let Some(writer) = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &name)
+            .and_then(|cache| cache.writer)
+        {
+            break writer;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "presence plugin never echoed its writer identity",
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(
+        writer.build.as_deref(),
+        Some(rimz::mux::zellij::presence_plugin_build())
+    );
+    assert!(
+        writer
+            .config
+            .as_deref()
+            .is_some_and(|hash| !hash.is_empty())
     );
 
     // Converge — `rimz reload`'s upgrade verb — reloads the instance in

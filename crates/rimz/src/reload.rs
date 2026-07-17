@@ -204,6 +204,11 @@ pub struct ReloadOutcome {
     pub sessions: usize,
     /// Zellij sessions whose presence channel did not publish after converge.
     pub presence_dead: usize,
+    /// Zellij sessions whose fresh plugin writer already matches the desired
+    /// wasm and load configuration.
+    pub plugin_current: usize,
+    /// Zellij sessions whose plugin convergence completed this pass.
+    pub plugin_upgraded: usize,
     /// Located sidebars already publishing the on-disk build before reload.
     pub already_current: usize,
     /// Located sidebars that published the on-disk build after the reload signal.
@@ -239,6 +244,8 @@ impl ReloadOutcome {
         let Self {
             sessions,
             presence_dead,
+            plugin_current,
+            plugin_upgraded,
             already_current,
             reexeced,
             unconverged,
@@ -255,6 +262,8 @@ impl ReloadOutcome {
         } = delta;
         self.sessions += sessions;
         self.presence_dead += presence_dead;
+        self.plugin_current += plugin_current;
+        self.plugin_upgraded += plugin_upgraded;
         self.already_current += already_current;
         self.reexeced += reexeced;
         self.unconverged += unconverged;
@@ -440,7 +449,9 @@ fn reconcile_live(
     //    later reload. Best-effort like every step here.
     let mux_config = MultiplexerConfig::from(machine_config);
     let presence_floor_ms = unix_now_ms();
-    if let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact() {
+    if mux == MuxName::Zellij
+        && let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact()
+    {
         let presence = crate::mux::PresencePluginOptions {
             session_name: ws.session_name.clone(),
             workspace_id: ws.workspace_id.clone(),
@@ -452,13 +463,29 @@ fn reconcile_live(
             focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
             mouse_click_through: mux_config.zellij.mouse_click_through,
         };
-        if let Err(err) = backend.ensure_presence_plugin(&presence) {
-            tracing::warn!(
-                session = %ws.session_name,
-                tags.operation = "reload.presence_converge",
-                error = &err as &dyn std::error::Error,
-                "reload: presence plugin convergence failed",
-            );
+        let configuration = crate::mux::zellij::presence_plugin_configuration(&presence);
+        let desired_config =
+            crate::mux::zellij::presence_plugin_config_hash(&configuration).unwrap_or_default();
+        let cache = crate::sidebar::cache::read_pane_topology_cache(runtime, &ws.session_name);
+        if presence_plugin_is_current(
+            cache.as_ref(),
+            unix_now_ms(),
+            crate::mux::zellij::presence_plugin_build(),
+            desired_config,
+        ) {
+            outcome.plugin_current += 1;
+        } else {
+            match backend.ensure_presence_plugin(&presence) {
+                Ok(()) => outcome.plugin_upgraded += 1,
+                Err(err) => {
+                    tracing::warn!(
+                        session = %ws.session_name,
+                        tags.operation = "reload.presence_converge",
+                        error = &err as &dyn std::error::Error,
+                        "reload: presence plugin convergence failed",
+                    );
+                }
+            }
         }
     }
 
@@ -527,6 +554,21 @@ fn reconcile_live(
     //    fresh or still starting.
     crate::sidebar::sweep_orphan_runtime(runtime);
     outcome
+}
+
+fn presence_plugin_is_current(
+    cache: Option<&crate::mux::zellij::pane_topology::PaneTopologyCache>,
+    now_ms: u64,
+    desired_build: &str,
+    desired_config: &str,
+) -> bool {
+    cache.is_some_and(|cache| {
+        crate::sidebar::cache::pane_topology_cache_is_fresh(cache, now_ms, None)
+            && cache.writer.as_ref().is_some_and(|writer| {
+                writer.build.as_deref() == Some(desired_build)
+                    && writer.config.as_deref() == Some(desired_config)
+            })
+    })
 }
 
 const RELOAD_PRESENCE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -921,58 +963,114 @@ mod tests {
         let mut base = ReloadOutcome {
             sessions: 1,
             presence_dead: 2,
-            already_current: 3,
-            reexeced: 4,
-            unconverged: 5,
-            unverified: 6,
-            recovered: 7,
-            closed: 8,
-            reaped: 9,
-            dead_swept: 10,
-            stats_reloaded: 11,
-            failed: 12,
-            deferred: 13,
-            redocked: 14,
-            misdocked: 15,
+            plugin_current: 3,
+            plugin_upgraded: 4,
+            already_current: 5,
+            reexeced: 6,
+            unconverged: 7,
+            unverified: 8,
+            recovered: 9,
+            closed: 10,
+            reaped: 11,
+            dead_swept: 12,
+            stats_reloaded: 13,
+            failed: 14,
+            deferred: 15,
+            redocked: 16,
+            misdocked: 17,
         };
         base.merge(ReloadOutcome {
-            sessions: 16,
-            presence_dead: 17,
-            already_current: 18,
-            reexeced: 19,
-            unconverged: 20,
-            unverified: 21,
-            recovered: 22,
-            closed: 23,
-            reaped: 24,
-            dead_swept: 25,
-            stats_reloaded: 26,
-            failed: 27,
-            deferred: 28,
-            redocked: 29,
-            misdocked: 30,
+            sessions: 18,
+            presence_dead: 19,
+            plugin_current: 20,
+            plugin_upgraded: 21,
+            already_current: 22,
+            reexeced: 23,
+            unconverged: 24,
+            unverified: 25,
+            recovered: 26,
+            closed: 27,
+            reaped: 28,
+            dead_swept: 29,
+            stats_reloaded: 30,
+            failed: 31,
+            deferred: 32,
+            redocked: 33,
+            misdocked: 34,
         });
 
         assert_eq!(
             base,
             ReloadOutcome {
-                sessions: 17,
-                presence_dead: 19,
-                already_current: 21,
-                reexeced: 23,
-                unconverged: 25,
-                unverified: 27,
-                recovered: 29,
-                closed: 31,
-                reaped: 33,
-                dead_swept: 35,
-                stats_reloaded: 37,
-                failed: 39,
-                deferred: 41,
-                redocked: 43,
-                misdocked: 45,
+                sessions: 19,
+                presence_dead: 21,
+                plugin_current: 23,
+                plugin_upgraded: 25,
+                already_current: 27,
+                reexeced: 29,
+                unconverged: 31,
+                unverified: 33,
+                recovered: 35,
+                closed: 37,
+                reaped: 39,
+                dead_swept: 41,
+                stats_reloaded: 43,
+                failed: 45,
+                deferred: 47,
+                redocked: 49,
+                misdocked: 51,
             }
         );
+    }
+
+    #[test]
+    fn presence_plugin_gate_requires_fresh_matching_build_and_config() {
+        use crate::mux::zellij::pane_topology::{PaneTopologyCache, TopologyWriter};
+
+        let cache = |produced_at_ms, build: Option<&str>, config: Option<&str>| PaneTopologyCache {
+            session_name: "rimz-test".to_owned(),
+            produced_at_ms,
+            writer: Some(TopologyWriter {
+                plugin_id: 7,
+                loaded_at_ms: 10,
+                build: build.map(str::to_owned),
+                config: config.map(str::to_owned),
+            }),
+            focused_pane: None,
+            clients: None,
+            panes: Vec::new(),
+        };
+        let current = cache(1_000, Some("wasm"), Some("config"));
+        assert!(presence_plugin_is_current(
+            Some(&current),
+            1_000,
+            "wasm",
+            "config"
+        ));
+        assert!(!presence_plugin_is_current(
+            Some(&cache(1_000, None, None)),
+            1_000,
+            "wasm",
+            "config"
+        ));
+        assert!(!presence_plugin_is_current(
+            Some(&cache(1_000, Some("old"), Some("config"))),
+            1_000,
+            "wasm",
+            "config"
+        ));
+        assert!(!presence_plugin_is_current(
+            Some(&cache(1_000, Some("wasm"), Some("old"))),
+            1_000,
+            "wasm",
+            "config"
+        ));
+        assert!(!presence_plugin_is_current(
+            Some(&current),
+            1_000 + crate::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1,
+            "wasm",
+            "config"
+        ));
     }
 
     fn heartbeat(raw: &str, build: Option<&str>) -> SidebarHeartbeat {

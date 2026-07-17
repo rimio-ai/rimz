@@ -61,6 +61,8 @@ pub struct EngineConfig {
     pub session_name: Option<String>,
     pub rimz_bin: Option<String>,
     pub plugin_id: Option<u32>,
+    pub plugin_build: Option<String>,
+    pub plugin_config: Option<String>,
     pub focus_key: Option<String>,
     pub focus_follows_mouse: Option<bool>,
     pub mouse_click_through: Option<bool>,
@@ -81,6 +83,8 @@ pub struct Engine {
     session_name: Option<String>,
     rimz_bin: Option<String>,
     plugin_id: Option<u32>,
+    plugin_build: Option<String>,
+    plugin_config: Option<String>,
     focus_key: Option<String>,
     focus_follows_mouse: Option<bool>,
     mouse_click_through: Option<bool>,
@@ -118,6 +122,8 @@ impl Engine {
             session_name: config.session_name,
             rimz_bin: config.rimz_bin,
             plugin_id: config.plugin_id,
+            plugin_build: config.plugin_build,
+            plugin_config: config.plugin_config,
             focus_key: config.focus_key,
             focus_follows_mouse: config.focus_follows_mouse,
             mouse_click_through: config.mouse_click_through,
@@ -480,6 +486,8 @@ impl Engine {
         let own = policy::TopologyWriter {
             plugin_id: self.plugin_id.unwrap_or_default(),
             loaded_at_ms: self.loaded_at_ms,
+            build: self.plugin_build.clone(),
+            config: self.plugin_config.clone(),
         };
         if (own.loaded_at_ms, own.plugin_id) >= (generation.loaded_at_ms, generation.plugin_id) {
             return Vec::new();
@@ -801,6 +809,8 @@ impl Engine {
         let writer = self.plugin_id.map(|plugin_id| policy::TopologyWriter {
             plugin_id,
             loaded_at_ms: self.loaded_at_ms,
+            build: self.plugin_build.clone(),
+            config: self.plugin_config.clone(),
         });
         let topology = wire::topology_json(
             self.session_name.as_deref(),

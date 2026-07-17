@@ -368,7 +368,9 @@ impl RoomContext {
             session_name: self.workspace.session_name.clone(),
             workspace_id: self.workspace.workspace_id.clone(),
             wasm,
-            rimz_bin: self.rimz_bin.clone(),
+            rimz_bin: StatePaths::for_workspace(self.workspace.workspace_id.clone())
+                .ok()?
+                .room_bin,
             converge: false,
             seed_permissions: self.machine_config.web.enabled,
             focus_key: self

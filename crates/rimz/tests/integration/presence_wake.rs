@@ -292,6 +292,8 @@ impl WakeEnv {
         cache.writer = Some(TopologyWriter {
             plugin_id,
             loaded_at_ms,
+            build: None,
+            config: None,
         });
         cache
     }

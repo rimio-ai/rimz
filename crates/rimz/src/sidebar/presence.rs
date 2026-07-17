@@ -90,14 +90,16 @@ pub fn ingest_zellij_wake(
             emit_topology_writer_changed(
                 state,
                 &incoming.session_name,
-                existing.writer,
-                incoming.writer,
+                existing.writer.as_ref(),
+                incoming.writer.as_ref(),
             );
         }
         let mut cache = incoming.clone();
         sanitize_topology_cache(&mut cache);
         match write_pane_topology_cache(runtime, &cache) {
-            Ok(()) if writer_changed => clear_superseded_conflict(runtime, incoming.writer),
+            Ok(()) if writer_changed => {
+                clear_superseded_conflict(runtime, incoming.writer.as_ref())
+            }
             Ok(()) => {}
             Err(err) => {
                 tracing::debug!(error = %err, "presence poke: topology cache write failed");
@@ -127,7 +129,8 @@ fn topology_decision(
         return TopologyDecision::Accept;
     };
     if !pane_topology_cache_is_fresh(existing, now_ms, None)
-        || writer_generation(incoming.writer) >= writer_generation(existing.writer)
+        || writer_generation(incoming.writer.as_ref())
+            >= writer_generation(existing.writer.as_ref())
     {
         TopologyDecision::Accept
     } else {
@@ -135,15 +138,15 @@ fn topology_decision(
     }
 }
 
-fn writer_generation(writer: Option<TopologyWriter>) -> (u64, u32) {
+fn writer_generation(writer: Option<&TopologyWriter>) -> (u64, u32) {
     writer.map_or((0, 0), |writer| writer.generation())
 }
 
 fn emit_topology_writer_changed(
     state: &StatePaths,
     session_name: &str,
-    prior: Option<TopologyWriter>,
-    incoming: Option<TopologyWriter>,
+    prior: Option<&TopologyWriter>,
+    incoming: Option<&TopologyWriter>,
 ) {
     let (prior_loaded_at_ms, prior_plugin_id) = writer_generation(prior);
     let (loaded_at_ms, plugin_id) = writer_generation(incoming);
@@ -172,8 +175,8 @@ fn record_topology_write_rejected(
     if conflict.stale_writer != incoming.writer || conflict.accepted_writer != existing.writer {
         conflict.rejected_count = 0;
     }
-    conflict.stale_writer = incoming.writer;
-    conflict.accepted_writer = existing.writer;
+    conflict.stale_writer = incoming.writer.clone();
+    conflict.accepted_writer = existing.writer.clone();
     conflict.rejected_count = conflict.rejected_count.saturating_add(1);
     conflict.last_ms = now_ms;
     let emit_diag = now_ms.saturating_sub(conflict.last_diag_ms) >= TOPOLOGY_CONFLICT_DIAG_MS;
@@ -184,8 +187,9 @@ fn record_topology_write_rejected(
         tracing::debug!(error = %err, "presence poke: topology writer conflict write failed");
     }
     if emit_diag {
-        let (loaded_at_ms, plugin_id) = writer_generation(incoming.writer);
-        let (accepted_loaded_at_ms, accepted_plugin_id) = writer_generation(existing.writer);
+        let (loaded_at_ms, plugin_id) = writer_generation(incoming.writer.as_ref());
+        let (accepted_loaded_at_ms, accepted_plugin_id) =
+            writer_generation(existing.writer.as_ref());
         DiagSink::under(
             state.root.clone(),
             state.workspace_id.clone(),
@@ -202,11 +206,11 @@ fn record_topology_write_rejected(
     }
 }
 
-fn clear_superseded_conflict(runtime: &RuntimePaths, writer: Option<TopologyWriter>) {
+fn clear_superseded_conflict(runtime: &RuntimePaths, writer: Option<&TopologyWriter>) {
     let Some(conflict) = read_topology_writer_conflict(runtime) else {
         return;
     };
-    if writer_generation(writer) <= writer_generation(conflict.accepted_writer) {
+    if writer_generation(writer) <= writer_generation(conflict.accepted_writer.as_ref()) {
         return;
     }
     let path = topology_writer_conflict_path(runtime);
@@ -362,6 +366,8 @@ mod tests {
         TopologyWriter {
             plugin_id,
             loaded_at_ms,
+            build: None,
+            config: None,
         }
     }
 
@@ -513,9 +519,9 @@ mod tests {
         };
         write_topology_writer_conflict(&runtime, &conflict).expect("seed writer conflict");
 
-        clear_superseded_conflict(&runtime, Some(writer(2, 200)));
+        clear_superseded_conflict(&runtime, Some(&writer(2, 200)));
         assert!(read_topology_writer_conflict(&runtime).is_some());
-        clear_superseded_conflict(&runtime, Some(writer(9, 100)));
+        clear_superseded_conflict(&runtime, Some(&writer(9, 100)));
         assert!(read_topology_writer_conflict(&runtime).is_some());
     }
 

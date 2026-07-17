@@ -276,6 +276,8 @@ fn published_topology_payload_carries_writer() {
         Some(TopologyWriter {
             plugin_id: 9,
             loaded_at_ms: 1000,
+            build: Some("wasm-build".to_owned()),
+            config: Some("config-hash".to_owned()),
         }),
         None,
         None,
@@ -287,7 +289,9 @@ fn published_topology_payload_carries_writer() {
         payload.writer,
         Some(TopologyWriter {
             plugin_id: 9,
-            loaded_at_ms: 1000
+            loaded_at_ms: 1000,
+            build: Some("wasm-build".to_owned()),
+            config: Some("config-hash".to_owned()),
         }),
     );
 }

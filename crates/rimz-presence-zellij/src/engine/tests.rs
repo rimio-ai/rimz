@@ -40,6 +40,8 @@ fn config() -> EngineConfig {
         session_name: Some("session-1".to_owned()),
         rimz_bin: Some("/bin/rimz".to_owned()),
         plugin_id: Some(9),
+        plugin_build: Some("wasm-build".to_owned()),
+        plugin_config: Some("config-hash".to_owned()),
         focus_key: None,
         focus_follows_mouse: None,
         mouse_click_through: None,

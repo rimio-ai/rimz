@@ -1,6 +1,7 @@
 //! Zellij presence-plugin materialization and wakeup pipe helpers.
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use std::{env, fs};
 
@@ -21,6 +22,13 @@ const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
 const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 3] =
     ["ReadApplicationState", "RunCommands", "Reconfigure"];
 const PRESENCE_PLUGIN_WEB_PERMISSION: &str = "StartWebServer";
+static PRESENCE_PLUGIN_BUILD: LazyLock<String> =
+    LazyLock::new(|| crate::build_id::of_bytes(EMBEDDED_PRESENCE_PLUGIN));
+
+/// Digest of the embedded wasm generation this host loads.
+pub fn presence_plugin_build() -> &'static str {
+    &PRESENCE_PLUGIN_BUILD
+}
 
 /// Locate the presence-plugin wasm without writing: the
 /// `RIMZ_PRESENCE_PLUGIN` override, else an already-materialized embedded
@@ -114,7 +122,7 @@ pub(super) fn materialize_presence_plugin_bytes(
 /// falls back to `rimz` on the host PATH, while an inexpressible plugin URL
 /// disables the runtime focus keybind rather than register a mis-targeted pipe.
 /// Workspace ids are `ws_` + hex by construction, always expressible.
-pub(super) fn presence_plugin_configuration(opts: &super::super::PresencePluginOptions) -> String {
+pub(crate) fn presence_plugin_configuration(opts: &super::super::PresencePluginOptions) -> String {
     let mut configuration = format!("workspace_id={}", opts.workspace_id.as_str());
     let plugin_url = format!("file:{}", opts.wasm.display());
     let focus_destination_expressible = !plugin_url.contains([',', '=']);
@@ -178,7 +186,20 @@ pub(super) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
             configuration.push_str(focus_key);
         }
     }
+    configuration.push_str(",plugin_build=");
+    configuration.push_str(presence_plugin_build());
+    let config_hash = crate::build_id::of_bytes(configuration.as_bytes());
+    configuration.push_str(",plugin_config=");
+    configuration.push_str(&config_hash);
     configuration
+}
+
+pub(crate) fn presence_plugin_config_hash(configuration: &str) -> Option<&str> {
+    configuration
+        .rsplit(',')
+        .next()?
+        .strip_prefix("plugin_config=")
+        .filter(|hash| !hash.is_empty())
 }
 
 impl ZellijBackend {
@@ -728,6 +749,8 @@ fi
             presence_convergence_log(Some(crate::mux::zellij::pane_topology::TopologyWriter {
                 plugin_id: 2,
                 loaded_at_ms: u64::MAX,
+                build: None,
+                config: None,
             }));
 
         assert!(
@@ -754,6 +777,8 @@ fi
             presence_convergence_log(Some(crate::mux::zellij::pane_topology::TopologyWriter {
                 plugin_id: 1,
                 loaded_at_ms: 0,
+                build: None,
+                config: None,
             }));
 
         assert!(
@@ -782,9 +807,9 @@ fi
         let cases = [
             Case {
                 session: "rimz-test",
-                rimz_bin: "/home/user/.cargo/bin/rimz",
+                rimz_bin: "/state/rimz/workspaces/ws_0123456789abcdef01234567/bin/current",
                 mutate: |_| {},
-                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/state/rimz/workspaces/ws_0123456789abcdef01234567/bin/current,focus_follows_mouse=false,mouse_click_through=true",
             },
             Case {
                 session: "rimz-test",
@@ -836,7 +861,13 @@ fi
         for case in cases {
             let mut opts = presence_opts(case.session, case.rimz_bin);
             (case.mutate)(&mut opts);
-            assert_eq!(presence_plugin_configuration(&opts), case.expected);
+            let without_config =
+                format!("{},plugin_build={}", case.expected, presence_plugin_build());
+            let expected = format!(
+                "{without_config},plugin_config={}",
+                crate::build_id::of_bytes(without_config.as_bytes())
+            );
+            assert_eq!(presence_plugin_configuration(&opts), expected);
         }
     }
 

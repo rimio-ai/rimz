@@ -74,6 +74,8 @@ mod shell {
                 session_name: configuration.get("session_name").cloned(),
                 rimz_bin: configuration.get("rimz_bin").cloned(),
                 plugin_id: Some(get_plugin_ids().plugin_id),
+                plugin_build: configuration.get("plugin_build").cloned(),
+                plugin_config: configuration.get("plugin_config").cloned(),
                 focus_key: configuration.get("focus_key").cloned(),
                 focus_follows_mouse: wire::parse_configuration_bool(
                     configuration.get("focus_follows_mouse").map(String::as_str),
