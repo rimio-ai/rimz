@@ -167,13 +167,49 @@ pub(crate) fn redeem_credits(
     ) else {
         return;
     };
-    if !stamp_allows_attempt(
-        read_stamp(&runtime.shared_auto_redeem_path(CODEX_KIND)).as_ref(),
-        now,
+
+    // Serialize the cooldown check and reservation across room producers. The
+    // helper waits on this same lock, so it cannot observe the pre-reservation
+    // state after a successful spawn.
+    let _guard = match crate::store::lock::WorkspaceLock::try_acquire(
+        &runtime.shared_auto_redeem_lock(CODEX_KIND),
     ) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::debug!(
+                workspace = %runtime.workspace_id,
+                tags.operation = "auto_redeem.reserve",
+                error = &err as &dyn std::error::Error,
+                "sidebar: failed to reserve agent auto-redeem",
+            );
+            return;
+        }
+    };
+    let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
+    if !stamp_allows_attempt(read_stamp(&stamp_path).as_ref(), now) {
         return;
     }
-    spawn_auto_redeem(runtime, reason);
+    let request_id = uuid::Uuid::now_v7().to_string();
+    if !spawn_auto_redeem(runtime, reason, &request_id) {
+        return;
+    }
+    if let Err(err) = write_stamp(
+        &stamp_path,
+        &RedeemStamp {
+            attempted_at: now,
+            request_id,
+            reason,
+            outcome: None,
+        },
+    ) {
+        tracing::debug!(
+            workspace = %runtime.workspace_id,
+            tags.operation = "auto_redeem.reserve",
+            error = &err as &dyn std::error::Error,
+            "sidebar: failed to record agent auto-redeem reservation",
+        );
+    }
 }
 
 /// Run the provider-specific action behind the hidden helper. Returns `true`
@@ -182,6 +218,7 @@ pub fn execute_auto_redeem(
     runtime: &RuntimePaths,
     kind: &str,
     requested_reason: &str,
+    request_id: &str,
     config: &ResumeConfig,
 ) -> Result<bool, AutoRedeemErr> {
     if kind != CODEX_KIND {
@@ -196,7 +233,11 @@ pub fn execute_auto_redeem(
         crate::store::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))?;
     let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
     let now = Timestamp::now();
-    if !stamp_allows_attempt(read_stamp(&stamp_path).as_ref(), now) {
+    let prior_stamp = read_stamp(&stamp_path);
+    let owns_reservation = prior_stamp
+        .as_ref()
+        .is_some_and(|stamp| stamp.request_id == request_id && stamp.outcome.is_none());
+    if !owns_reservation && !stamp_allows_attempt(prior_stamp.as_ref(), now) {
         return Ok(false);
     }
 
@@ -222,10 +263,9 @@ pub fn execute_auto_redeem(
     };
 
     let credit_id = soonest_credit_id(&details);
-    let request_id = uuid::Uuid::now_v7().to_string();
     let mut stamp = RedeemStamp {
         attempted_at: now,
-        request_id: request_id.clone(),
+        request_id: request_id.to_owned(),
         reason,
         outcome: None,
     };
@@ -238,7 +278,7 @@ pub fn execute_auto_redeem(
         reason = reason.as_str(),
         "auto-redeem: consuming reset credit",
     );
-    let outcome = consume_reset_credit(&credentials, base_url.as_deref(), &request_id, credit_id)
+    let outcome = consume_reset_credit(&credentials, base_url.as_deref(), request_id, credit_id)
         .map_err(|err| AutoRedeemErr::Codex(err.to_string()))?;
     stamp.outcome = Some(outcome.code.as_str().to_owned());
     write_stamp(&stamp_path, &stamp)?;
@@ -284,16 +324,21 @@ fn publish_usage(runtime: &RuntimePaths, snapshot: AccountUsageSnapshot) {
             windows,
         );
     }
-    crate::sidebar::refresh::merge_provider_realtime_usage(
-        runtime,
-        CODEX_KIND,
-        ProviderAccountScope::KindWide,
-        snapshot,
-    );
+    if snapshot.plan.is_some()
+        || snapshot.extra_credits.is_some()
+        || snapshot.reset_credits.is_some()
+    {
+        crate::sidebar::refresh::merge_provider_realtime_usage(
+            runtime,
+            CODEX_KIND,
+            ProviderAccountScope::KindWide,
+            snapshot,
+        );
+    }
 }
 
 #[cfg(not(test))]
-fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason) {
+fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: &str) -> bool {
     let exe = crate::proc::rimz_exe();
     let mut cmd = detached_rimz_command(exe, runtime);
     cmd.args([
@@ -305,6 +350,8 @@ fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason) {
         CODEX_KIND,
         "--reason",
         reason.as_str(),
+        "--request-id",
+        request_id,
     ]);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
@@ -320,12 +367,15 @@ fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason) {
             error = &err as &dyn std::error::Error,
             "sidebar: failed to spawn agent auto-redeem",
         );
+        return false;
     }
+    true
 }
 
 #[cfg(test)]
-fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason) {
-    let _ = (runtime, reason);
+fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: &str) -> bool {
+    let _ = (runtime, reason, request_id);
+    true
 }
 
 #[cfg(test)]

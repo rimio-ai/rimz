@@ -16,6 +16,8 @@ pub(super) struct AutoRedeemArgs {
     kind: String,
     #[arg(long)]
     reason: String,
+    #[arg(long)]
+    request_id: uuid::Uuid,
 }
 
 pub(super) fn run_auto_redeem(args: AutoRedeemArgs) -> Result<()> {
@@ -28,6 +30,7 @@ pub(super) fn run_auto_redeem(args: AutoRedeemArgs) -> Result<()> {
         &runtime,
         &args.kind,
         &args.reason,
+        &args.request_id.to_string(),
         &config.resume,
     )
     .context("redeeming Codex reset credit")?;

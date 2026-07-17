@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::RateLimitWindow;
+use crate::agents::{AgentRateLimits, ProviderAccountScope, RateLimitWindow};
 use crate::ids::WorkspaceId;
 use jiff::SignedDuration;
 
@@ -205,6 +205,52 @@ fn stamp_round_trips_atomically() {
     write_stamp(&path, &stamp).unwrap();
 
     assert_eq!(read_stamp(&path), Some(stamp));
+}
+
+#[test]
+fn producer_reserves_a_spawn_and_paces_the_next_tick() {
+    let now = ts(1_700_000_000);
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    crate::sidebar::refresh::merge_account_rate_limits(
+        &runtime,
+        CODEX_KIND,
+        ProviderAccountScope::KindWide,
+        AgentRateLimits {
+            windows: vec![RateLimitWindow {
+                used_percentage: Some(100),
+                resets_at: Some(now + Duration::from_secs(3 * 86_400)),
+                duration_mins: Some(10_080),
+                ..Default::default()
+            }],
+        },
+    );
+    let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
+    panel.reset_credits = Some(credits(now, Some(Duration::from_secs(10 * 86_400))));
+    let config = ResumeConfig {
+        auto_redeem: true,
+        ..Default::default()
+    };
+
+    redeem_credits(std::slice::from_ref(&panel), &runtime, &config, now);
+    let first = read_stamp(&runtime.shared_auto_redeem_path(CODEX_KIND)).unwrap();
+    assert_eq!(first.attempted_at, now);
+    assert_eq!(first.reason, RedeemReason::BlockedGain);
+    assert_eq!(first.outcome, None);
+
+    redeem_credits(
+        std::slice::from_ref(&panel),
+        &runtime,
+        &config,
+        now + Duration::from_secs(1),
+    );
+    assert_eq!(
+        read_stamp(&runtime.shared_auto_redeem_path(CODEX_KIND)),
+        Some(first),
+        "the pending reservation must pace producer ticks before the helper reports an outcome"
+    );
 }
 
 #[test]
