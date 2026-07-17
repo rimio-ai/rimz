@@ -143,6 +143,9 @@ fn newest_present_member_with_pane<'a>(members: &[&'a AgentState]) -> Option<&'a
 }
 
 fn member_is_present(member: &AgentState) -> bool {
+    if member.ended_at.is_some() {
+        return false;
+    }
     match rimz::store::runtime::agent_liveness(member) {
         rimz::store::runtime::AgentLiveness::Live { .. } => true,
         rimz::store::runtime::AgentLiveness::Unknown => member.pane.is_some(),
@@ -259,6 +262,22 @@ mod tests {
             "terminal_1",
         )));
         assert!(member_is_present(&agent));
+    }
+
+    #[test]
+    fn ended_member_is_not_present_while_its_owner_exits() {
+        let mut agent = test_agent("sess-ended");
+        agent.pane = Some(rimz::pane::PaneRef::from_id(rimz::PaneId::from_parts(
+            rimz::MuxName::Zellij,
+            "terminal_94",
+        )));
+        agent.runtime_owner = Some(rimz::store::runtime::current_process_owner(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            agent.agent_id.to_string(),
+        ));
+        agent.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
+
+        assert!(!member_is_present(&agent));
     }
 
     #[test]
