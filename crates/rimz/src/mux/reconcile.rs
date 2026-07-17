@@ -166,8 +166,11 @@ where
                 }
                 Ok(())
             }
-            ViewVerdict::Add { .. } if defer_adds => Ok(()),
-            ViewVerdict::Add { .. } => match add(view) {
+            ViewVerdict::Add { .. } => match if defer_adds {
+                Ok(ReconcileAddOutcome::Deferred)
+            } else {
+                add(view)
+            } {
                 Ok(ReconcileAddOutcome::Verified) => {
                     report.recovered += 1;
                     Ok(())
@@ -178,15 +181,22 @@ where
                     Ok(())
                 }
                 Ok(ReconcileAddOutcome::Deferred) => {
-                    report.deferred += 1;
+                    if !defer_adds {
+                        report.deferred += 1;
+                    }
                     Ok(())
                 }
                 Err(error) => Err(error),
             },
-            ViewVerdict::Replace { .. } if defer_adds => Ok(()),
-            ViewVerdict::Replace { close: panes, .. } => match add(view) {
+            ViewVerdict::Replace { close: panes, .. } => match if defer_adds {
+                Ok(ReconcileAddOutcome::Deferred)
+            } else {
+                add(view)
+            } {
                 Ok(ReconcileAddOutcome::Deferred) => {
-                    report.deferred += 1;
+                    if !defer_adds {
+                        report.deferred += 1;
+                    }
                     Ok(())
                 }
                 Ok(outcome) => {
