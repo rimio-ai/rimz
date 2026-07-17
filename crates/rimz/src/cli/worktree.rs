@@ -176,6 +176,11 @@ fn report_created(created: &rimz::worktree::CreatedWorktree) {
             println!("  push   : git push {remote} HEAD:{head}");
         }
     }
+    if let Some(reason) = created.review_only_reason.as_deref() {
+        println!(
+            "  review : review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
+        );
+    }
     if let Some(base_branch) = marker.base_branch.as_deref() {
         println!("  base branch: {base_branch}");
     }

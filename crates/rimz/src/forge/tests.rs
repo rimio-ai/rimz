@@ -6,7 +6,9 @@ fn parses_bare_number_without_forge() {
         parse(" 42 ").expect("parse PR number"),
         PrTarget {
             number: 42,
-            forge: None
+            forge: None,
+            host: None,
+            repo: None,
         }
     );
 }
@@ -17,14 +19,18 @@ fn parses_github_style_urls() {
         parse("https://github.com/org/repo/pull/123").expect("github URL"),
         PrTarget {
             number: 123,
-            forge: Some(Forge::GitHubStyle)
+            forge: Some(Forge::GitHubStyle),
+            host: Some("github.com".to_owned()),
+            repo: Some("org/repo".to_owned()),
         }
     );
     assert_eq!(
         parse("https://gitea.example.test/org/repo/pulls/7").expect("gitea URL"),
         PrTarget {
             number: 7,
-            forge: Some(Forge::GitHubStyle)
+            forge: Some(Forge::GitHubStyle),
+            host: Some("gitea.example.test".to_owned()),
+            repo: Some("org/repo".to_owned()),
         }
     );
 }
@@ -32,12 +38,36 @@ fn parses_github_style_urls() {
 #[test]
 fn parses_gitlab_urls() {
     assert_eq!(
-        parse("https://gitlab.com/org/repo/-/merge_requests/9").expect("gitlab URL"),
+        parse("https://GitLab.com/org/team/repo.git/-/merge_requests/9").expect("gitlab URL"),
         PrTarget {
             number: 9,
-            forge: Some(Forge::GitLab)
+            forge: Some(Forge::GitLab),
+            host: Some("gitlab.com".to_owned()),
+            repo: Some("org/team/repo".to_owned()),
         }
     );
+}
+
+#[test]
+fn compares_pr_url_identity_with_origin() {
+    let target = parse("https://github.com/Org/Repo/pull/7").unwrap();
+
+    assert!(pr_url_matches_origin(
+        &target,
+        "git@github.com:org/repo.git"
+    ));
+    assert!(!pr_url_matches_origin(
+        &target,
+        "ssh://git@github.com/other/repo.git"
+    ));
+    assert!(!pr_url_matches_origin(
+        &target,
+        "git@gitlab.com:org/repo.git"
+    ));
+    assert!(pr_url_matches_origin(
+        &parse("7").unwrap(),
+        "git@gitlab.com:other/repo.git"
+    ));
 }
 
 #[test]
@@ -95,6 +125,7 @@ fn extracts_remote_repo_slug() {
         ("ssh://git@host:2222/owner/repo.git", "owner/repo"),
         ("git@host:owner/repo", "owner/repo"),
         ("https://host/owner/repo/", "owner/repo"),
+        ("git@host:owner/team/repo.git", "owner/team/repo"),
     ] {
         assert_eq!(remote_repo_slug(remote), Some(slug.to_owned()), "{remote}");
     }
@@ -109,32 +140,9 @@ fn rejects_remote_repo_slug_without_owner_repo_path() {
         "/tmp/repo",
         "https://host/repo.git",
         "https:///owner/repo.git",
-        "git@host:owner/team/repo.git",
     ] {
         assert_eq!(remote_repo_slug(remote), None, "{remote}");
     }
-}
-
-#[test]
-fn resolves_pr_head_branches_from_ls_remote() {
-    let raw = "\
-aaa\trefs/heads/main
-bbb\trefs/heads/feature
-bbb\trefs/pull/7/head
-bbb\trefs/heads/same-tip
-";
-    assert_eq!(
-        pr_head_branches(raw, "refs/pull/7/head"),
-        Some((
-            "bbb".to_owned(),
-            vec!["feature".to_owned(), "same-tip".to_owned()]
-        ))
-    );
-    assert_eq!(pr_head_branches(raw, "refs/pull/8/head"), None);
-    assert_eq!(
-        pr_head_branches("bbb\trefs/pull/7/head\n", "refs/pull/7/head"),
-        Some(("bbb".to_owned(), Vec::new()))
-    );
 }
 
 #[test]
@@ -144,7 +152,8 @@ fn parses_gh_pr_heads() {
             r#"{
                 "headRefName":"feature",
                 "headRepository":{"name":"repo"},
-                "headRepositoryOwner":{"login":"org"}
+                "headRepositoryOwner":{"login":"org"},
+                "isCrossRepository":false
             }"#
         )
         .unwrap(),
@@ -152,6 +161,7 @@ fn parses_gh_pr_heads() {
             branch: "feature".to_owned(),
             owner: Some("org".to_owned()),
             repo_full_name: Some("org/repo".to_owned()),
+            is_cross_repository: Some(false),
         }
     );
     assert_eq!(
@@ -183,6 +193,7 @@ fn parses_tea_pr_heads() {
             branch: "feature".to_owned(),
             owner: Some("alice".to_owned()),
             repo_full_name: Some("alice/fork".to_owned()),
+            is_cross_repository: None,
         }
     );
     assert_eq!(
@@ -192,6 +203,7 @@ fn parses_tea_pr_heads() {
             branch: "feature".to_owned(),
             owner: Some("org".to_owned()),
             repo_full_name: Some("org/repo".to_owned()),
+            is_cross_repository: None,
         }
     );
 }
@@ -255,6 +267,23 @@ fn parses_gh_pr_state_json_with_priority() {
     );
     assert_eq!(parse_gh_pr_state_json("[]").unwrap(), None);
     assert!(parse_gh_pr_state_json("{").is_err());
+}
+
+#[test]
+fn parses_gh_pr_detail_object() {
+    assert_eq!(
+        parse_gh_pr_detail_json(
+            r#"{"number":2,"state":"MERGED","mergeCommit":{"oid":"merged-sha"}}"#
+        )
+        .unwrap(),
+        Some(PrCandidate {
+            number: 2,
+            state: WorktreePrState::Merged,
+            ci: None,
+            merge_sha: Some("merged-sha".to_owned()),
+        })
+    );
+    assert!(parse_gh_pr_detail_json("[]").is_err());
 }
 
 #[test]

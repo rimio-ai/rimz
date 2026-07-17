@@ -311,6 +311,12 @@ fn prepare_supervised(
         request.worktree.as_deref(),
         request.from_pr.as_ref(),
     )?;
+    if let Some(reason) = launch.review_only_reason.as_deref() {
+        writeln!(
+            std::io::stderr(),
+            "review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
+        )?;
+    }
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
     let launch_invocation = rimz::harness::launch::ExecRequest {

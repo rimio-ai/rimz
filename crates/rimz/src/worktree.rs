@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -71,6 +72,19 @@ pub enum WorktreeErr {
         remote: String,
         stderr: String,
     },
+    #[error("PR URL targets `{url_repo}` but origin is `{origin_repo}`")]
+    PrRepoMismatch {
+        url_repo: String,
+        origin_repo: String,
+    },
+    #[error(
+        "worktree `{name}` was created from PR {existing:?}, not requested PR {requested}; use another --worktree name or remove it first"
+    )]
+    PrWorktreeMismatch {
+        name: String,
+        existing: Option<u64>,
+        requested: u64,
+    },
     #[error(
         "could not resolve the head branch of PR #{number} ({reason}); install/log in to gh or tea, or pass --branch <name> for a review-only checkout"
     )]
@@ -117,6 +131,8 @@ pub struct CreatedWorktree {
     pub linked: usize,
     /// Fork push target established while creating a PR worktree.
     pub push_destination: Option<PushDestination>,
+    /// Why a PR checkout intentionally has no configured push destination.
+    pub review_only_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -130,6 +146,7 @@ pub struct PushDestination {
 pub struct LaunchCheckout {
     pub cwd: PathBuf,
     pub worktree_name: Option<String>,
+    pub review_only_reason: Option<String>,
     generated_name: bool,
 }
 
@@ -445,10 +462,12 @@ pub fn resolve_launch_checkout(
             None,
             name.is_some(),
         )?;
+        let review_only_reason = created.review_only_reason;
         let marker = created.marker;
         return Ok(LaunchCheckout {
             cwd: marker.worktree_path,
             worktree_name: Some(marker.name),
+            review_only_reason,
             generated_name: false,
         });
     }
@@ -457,6 +476,7 @@ pub fn resolve_launch_checkout(
         return Ok(LaunchCheckout {
             cwd: workspace.worktree_root.clone(),
             worktree_name: None,
+            review_only_reason: None,
             generated_name: false,
         });
     };
@@ -476,6 +496,7 @@ pub fn resolve_launch_checkout(
     Ok(LaunchCheckout {
         cwd: marker.worktree_path,
         worktree_name: Some(marker.name),
+        review_only_reason: None,
         generated_name: name.is_empty(),
     })
 }
@@ -756,6 +777,7 @@ fn resolve_fresh_worktree(
                 included: 0,
                 linked: 0,
                 push_destination: None,
+                review_only_reason: None,
             }));
         }
         return Err(WorktreeErr::Exists { name, path });
@@ -848,6 +870,7 @@ fn finish_worktree(
         included,
         linked,
         push_destination: None,
+        review_only_reason: None,
     })
 }
 
@@ -1209,6 +1232,38 @@ where
         .output()?;
     if output.status.success() {
         return Ok(output);
+    }
+    Err(WorktreeErr::Git {
+        cwd: cwd.to_path_buf(),
+        args: args.join(" "),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+fn git_network_output<'a, I>(cwd: &Path, args: I, timeout: Duration) -> Result<std::process::Output>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let args: Vec<&str> = args.into_iter().collect();
+    let mut command = crate::proc::git_command(cwd);
+    command
+        .args(&args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C");
+    let output = crate::proc::run_bounded_output(&mut command, timeout)?;
+    if output.timed_out {
+        return Err(WorktreeErr::Git {
+            cwd: cwd.to_path_buf(),
+            args: args.join(" "),
+            stderr: format!("timed out after {}s", timeout.as_secs()),
+        });
+    }
+    if output.status.success() {
+        return Ok(std::process::Output {
+            status: output.status,
+            stdout: output.stdout,
+            stderr: output.stderr,
+        });
     }
     Err(WorktreeErr::Git {
         cwd: cwd.to_path_buf(),

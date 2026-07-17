@@ -62,6 +62,8 @@ fn launch_checkout_reports_non_repository_flags_exactly() {
     let pr = PrTarget {
         number: 42,
         forge: None,
+        host: None,
+        repo: None,
     };
     let from_pr =
         resolve_launch_checkout(&workspace, &config, None, Some(&pr)).expect_err("PR needs repo");
@@ -76,6 +78,7 @@ fn generated_launch_name_is_exposed_only_for_bare_checkout() {
     let generated = LaunchCheckout {
         cwd: PathBuf::from("/code/query-engine-worktrees/swift-orbit"),
         worktree_name: Some("swift-orbit".to_owned()),
+        review_only_reason: None,
         generated_name: true,
     };
     let named = LaunchCheckout {

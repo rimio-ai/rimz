@@ -175,6 +175,12 @@ pub(super) fn launch_layout(
         args.worktree.as_deref(),
         args.from_pr.as_ref(),
     )?;
+    if let Some(reason) = launch.review_only_reason.as_deref() {
+        writeln!(
+            std::io::stderr(),
+            "review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
+        )?;
+    }
     if let Some(channel) = args.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(store.paths(), channel)?;

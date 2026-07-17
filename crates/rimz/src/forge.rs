@@ -23,10 +23,12 @@ pub enum ForgeCli {
     Tea,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrTarget {
     pub number: u64,
     pub forge: Option<Forge>,
+    pub host: Option<String>,
+    pub repo: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +36,7 @@ pub struct PrHead {
     pub branch: String,
     pub owner: Option<String>,
     pub repo_full_name: Option<String>,
+    pub is_cross_repository: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,10 +63,16 @@ pub fn parse(raw: &str) -> Result<PrTarget, String> {
         return Ok(PrTarget {
             number: parse_number(trimmed)?,
             forge: None,
+            host: None,
+            repo: None,
         });
     }
 
-    let segments = trimmed.split('/').collect::<Vec<_>>();
+    let url = url::Url::parse(trimmed).ok();
+    let segments = url
+        .as_ref()
+        .and_then(|url| url.path_segments().map(Iterator::collect::<Vec<_>>))
+        .unwrap_or_else(|| trimmed.split('/').collect());
     for (index, segment) in segments.iter().enumerate() {
         let marker = clean_segment(segment);
         let forge = match marker {
@@ -77,13 +86,42 @@ pub fn parse(raw: &str) -> Result<PrTarget, String> {
         else {
             return Err(format!("PR URL is missing a number after `{marker}`"));
         };
+        let (host, repo) = match url.as_ref() {
+            Some(url) => {
+                let (host, repo) = pr_url_identity(url, &segments, index, forge)
+                    .ok_or_else(|| "PR URL must name a host and repository".to_owned())?;
+                (Some(host), Some(repo))
+            }
+            None => (None, None),
+        };
         return Ok(PrTarget {
             number: parse_number(number)?,
             forge: Some(forge),
+            host,
+            repo,
         });
     }
 
     Err("PR must be a number or a GitHub, Gitea, Forgejo, or GitLab PR URL".to_owned())
+}
+
+fn pr_url_identity(
+    url: &url::Url,
+    segments: &[&str],
+    marker_index: usize,
+    forge: Forge,
+) -> Option<(String, String)> {
+    let host = url.host_str()?.to_ascii_lowercase();
+    let mut repo_segments = segments[..marker_index].to_vec();
+    if forge == Forge::GitLab && repo_segments.last() == Some(&"-") {
+        repo_segments.pop();
+    }
+    let repo = repo_segments.last_mut()?;
+    *repo = repo.strip_suffix(".git").unwrap_or(repo);
+    if repo_segments.len() < 2 || repo_segments.iter().any(|segment| segment.is_empty()) {
+        return None;
+    }
+    Some((host, repo_segments.join("/")))
 }
 
 pub fn forge_for_remote(remote_url: &str) -> Forge {
@@ -131,32 +169,19 @@ pub fn remote_repo_slug(remote_url: &str) -> Option<String> {
     };
     let path = path.trim_matches('/');
     let slug = path.strip_suffix(".git").unwrap_or(path);
-    let mut segments = slug.split('/');
-    let owner = segments.next()?;
-    let repo = segments.next()?;
-    (!owner.is_empty() && !repo.is_empty() && segments.next().is_none()).then(|| slug.to_owned())
+    let segments = slug.split('/').collect::<Vec<_>>();
+    (segments.len() >= 2 && segments.iter().all(|segment| !segment.is_empty()))
+        .then(|| slug.to_owned())
 }
 
-/// Find a pull-request head and the remote branches which point at it from one
-/// `git ls-remote` response.
-pub fn pr_head_branches(output: &str, pr_ref: &str) -> Option<(String, Vec<String>)> {
-    let refs = output
-        .lines()
-        .filter_map(|line| line.split_once(char::is_whitespace))
-        .map(|(sha, ref_name)| (ref_name.trim(), sha.trim()))
-        .filter(|(ref_name, sha)| !ref_name.is_empty() && !sha.is_empty())
-        .collect::<BTreeMap<_, _>>();
-    let pr_sha = refs.get(pr_ref)?.to_string();
-    let branches = refs
-        .iter()
-        .filter_map(|(ref_name, sha)| {
-            (*sha == pr_sha)
-                .then(|| ref_name.strip_prefix("refs/heads/"))
-                .flatten()
-                .map(ToOwned::to_owned)
-        })
-        .collect();
-    Some((pr_sha, branches))
+/// Return whether URL-derived PR identity names the origin repository.
+pub fn pr_url_matches_origin(target: &PrTarget, origin_url: &str) -> bool {
+    let (Some(host), Some(repo)) = (target.host.as_deref(), target.repo.as_deref()) else {
+        return true;
+    };
+    host.eq_ignore_ascii_case(remote_host(origin_url))
+        && remote_repo_slug(origin_url)
+            .is_some_and(|origin_repo| repo.eq_ignore_ascii_case(origin_repo.as_str()))
 }
 
 pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
@@ -168,6 +193,8 @@ pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
         head_repository: Option<Repository>,
         #[serde(rename = "headRepositoryOwner")]
         head_repository_owner: Option<Owner>,
+        #[serde(rename = "isCrossRepository", default)]
+        is_cross_repository: Option<bool>,
     }
 
     #[derive(Deserialize)]
@@ -197,6 +224,7 @@ pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
         branch,
         owner,
         repo_full_name,
+        is_cross_repository: pull.is_cross_repository,
     })
 }
 
@@ -230,6 +258,7 @@ pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
         branch,
         owner,
         repo_full_name,
+        is_cross_repository: None,
     })
 }
 
@@ -311,47 +340,54 @@ pub(crate) fn remote_host(remote_url: &str) -> &str {
         .trim()
 }
 
+#[derive(Deserialize)]
+struct GhPrState {
+    number: u64,
+    state: String,
+    #[serde(rename = "mergeCommit", default)]
+    merge_commit: Option<GhMergeCommit>,
+    #[serde(rename = "statusCheckRollup", default)]
+    status_check_rollup: Option<Vec<Value>>,
+}
+
+#[derive(Deserialize)]
+struct GhMergeCommit {
+    oid: String,
+}
+
 pub fn parse_gh_pr_state_json(raw: &str) -> Result<Option<PrCandidate>, String> {
-    #[derive(Deserialize)]
-    struct Pull {
-        number: u64,
-        state: String,
-        #[serde(rename = "mergeCommit", default)]
-        merge_commit: Option<MergeCommit>,
-        #[serde(rename = "statusCheckRollup", default)]
-        status_check_rollup: Option<Vec<Value>>,
-    }
-
-    #[derive(Deserialize)]
-    struct MergeCommit {
-        oid: String,
-    }
-
-    let pulls: Vec<Pull> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    let pulls: Vec<GhPrState> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     Ok(pulls
         .into_iter()
-        .filter_map(|pull| {
-            let state = parse_pr_state(&pull.state)?;
-            let ci = match state {
-                WorktreePrState::Open | WorktreePrState::Merged => {
-                    ci_from_gh_rollup(pull.status_check_rollup.as_deref().unwrap_or_default())
-                }
-                WorktreePrState::Closed => None,
-            };
-            let merge_sha = if state == WorktreePrState::Merged {
-                pull.merge_commit.map(|commit| commit.oid)
-            } else {
-                None
-            }
-            .filter(|sha| !sha.trim().is_empty());
-            Some(PrCandidate {
-                number: pull.number,
-                state,
-                ci,
-                merge_sha,
-            })
-        })
+        .filter_map(gh_pr_candidate)
         .fold(None, |current, next| Some(prefer_candidate(current, next))))
+}
+
+pub fn parse_gh_pr_detail_json(raw: &str) -> Result<Option<PrCandidate>, String> {
+    let pull: GhPrState = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    Ok(gh_pr_candidate(pull))
+}
+
+fn gh_pr_candidate(pull: GhPrState) -> Option<PrCandidate> {
+    let state = parse_pr_state(&pull.state)?;
+    let ci = match state {
+        WorktreePrState::Open | WorktreePrState::Merged => {
+            ci_from_gh_rollup(pull.status_check_rollup.as_deref().unwrap_or_default())
+        }
+        WorktreePrState::Closed => None,
+    };
+    let merge_sha = if state == WorktreePrState::Merged {
+        pull.merge_commit.map(|commit| commit.oid)
+    } else {
+        None
+    }
+    .filter(|sha| !sha.trim().is_empty());
+    Some(PrCandidate {
+        number: pull.number,
+        state,
+        ci,
+        merge_sha,
+    })
 }
 
 pub fn parse_gh_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>, String> {

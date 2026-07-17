@@ -511,6 +511,7 @@ fn worktree_gc_reports_archive_failure_after_removal() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn worktree_new_from_pr_fetches_github_style_ref() {
     if git_missing() {
@@ -518,9 +519,12 @@ fn worktree_new_from_pr_fetches_github_style_ref() {
     }
     let env = Env::new();
     let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
+    configure_github_origin_rewrite(&env);
+    let shim_dir = write_gh_pr_head_shim(&env, gh_same_repo_head());
 
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
         .assert()
         .success()
         .stdout(contains("created pr-1"))
@@ -560,6 +564,7 @@ fn worktree_new_from_pr_url_fetches_gitlab_ref() {
     }
     let env = Env::new();
     let (pr_head, _trunk) = publish_pr_ref(&env, "refs/merge-requests/1/head");
+    configure_origin_rewrite(&env, "https://gitlab.com/org/repo.git");
 
     env.rimz()
         .args([
@@ -571,34 +576,84 @@ fn worktree_new_from_pr_url_fetches_gitlab_ref() {
         .assert()
         .success()
         .stdout(contains("created pr-1"))
-        .stdout(contains("branch : feature"));
+        .stdout(contains("branch : pr-1"))
+        .stdout(contains(
+            "review-only checkout (origin has no supported forge CLI)",
+        ));
 
     let path = env.home_root.join("project-worktrees").join("pr-1");
     assert_eq!(
         git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
-        "feature"
+        "pr-1"
     );
     assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
-    assert_eq!(
-        git_stdout(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
-        "origin/feature"
+    assert!(
+        !git_succeeds(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "review-only checkout has no upstream"
     );
-    commit_file(
-        &path,
-        "gitlab-push.txt",
-        "pushed\n",
-        "push GitLab PR worktree",
-    );
-    git(&path, &["push"]);
     assert_eq!(
-        git_stdout(
-            &env.home_root.join("origin.git"),
-            &["rev-parse", "refs/heads/feature"]
-        ),
-        git_stdout(&path, &["rev-parse", "HEAD"])
+        git_stdout(&env.project_root, &["for-each-ref", "refs/rimz/"]),
+        "",
+        "temporary PR ref is cleaned up"
     );
 }
 
+#[test]
+fn worktree_new_rejects_pr_url_for_another_repository() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    publish_pr_ref(&env, "refs/pull/1/head");
+    configure_origin_rewrite(&env, "https://github.com/org/repo.git");
+
+    env.rimz()
+        .args([
+            "worktree",
+            "new",
+            "--from-pr",
+            "https://github.com/other/repo/pull/1",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "PR URL targets `other/repo` but origin is `org/repo`",
+        ));
+
+    assert!(!env.home_root.join("project-worktrees/pr-1").exists());
+    assert_eq!(
+        git_stdout(&env.project_root, &["for-each-ref", "refs/rimz/"]),
+        ""
+    );
+}
+
+#[test]
+fn from_pr_reuse_requires_matching_pr_provenance() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    publish_pr_ref_without_branch(&env, "refs/pull/1/head");
+    env.rimz()
+        .args(["worktree", "new", "review", "--from-pr", "1"])
+        .assert()
+        .success();
+
+    let target = rimz::forge::parse("2").expect("PR target");
+    let err = rimz::worktree::create_from_pr(
+        &env.project_root,
+        &rimz::config::WorktreeConfig::default(),
+        &target,
+        Some("review"),
+        None,
+        true,
+    )
+    .expect_err("different PR must not reuse worktree");
+
+    assert!(err.to_string().contains("not requested PR 2"), "{err}");
+}
+
+#[cfg(unix)]
 #[test]
 fn worktree_new_from_pr_adopts_matching_local_branch() {
     if git_missing() {
@@ -607,9 +662,12 @@ fn worktree_new_from_pr_adopts_matching_local_branch() {
     let env = Env::new();
     let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["branch", "feature", pr_head.as_str()]);
+    configure_github_origin_rewrite(&env);
+    let shim_dir = write_gh_pr_head_shim(&env, gh_same_repo_head());
 
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
         .assert()
         .success();
 
@@ -621,6 +679,7 @@ fn worktree_new_from_pr_adopts_matching_local_branch() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn worktree_new_from_pr_fast_forwards_ancestor_local_branch() {
     if git_missing() {
@@ -629,9 +688,12 @@ fn worktree_new_from_pr_fast_forwards_ancestor_local_branch() {
     let env = Env::new();
     let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["branch", "feature", trunk.as_str()]);
+    configure_github_origin_rewrite(&env);
+    let shim_dir = write_gh_pr_head_shim(&env, gh_same_repo_head());
 
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
         .assert()
         .success();
 
@@ -639,6 +701,7 @@ fn worktree_new_from_pr_fast_forwards_ancestor_local_branch() {
     assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
 }
 
+#[cfg(unix)]
 #[test]
 fn worktree_new_from_pr_refuses_diverged_local_branch() {
     if git_missing() {
@@ -649,15 +712,19 @@ fn worktree_new_from_pr_refuses_diverged_local_branch() {
     git(&env.project_root, &["checkout", "-b", "feature"]);
     commit_file(&env.project_root, "local.txt", "local\n", "diverge locally");
     git(&env.project_root, &["checkout", "main"]);
+    configure_github_origin_rewrite(&env);
+    let shim_dir = write_gh_pr_head_shim(&env, gh_same_repo_head());
 
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
         .assert()
         .failure()
         .stderr(contains("local PR branch `feature` conflicts"))
         .stderr(contains("diverged"));
 }
 
+#[cfg(unix)]
 #[test]
 fn worktree_new_from_pr_refuses_branch_checked_out_elsewhere() {
     if git_missing() {
@@ -676,9 +743,12 @@ fn worktree_new_from_pr_refuses_branch_checked_out_elsewhere() {
             "feature",
         ],
     );
+    configure_github_origin_rewrite(&env);
+    let shim_dir = write_gh_pr_head_shim(&env, gh_same_repo_head());
 
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
         .assert()
         .failure()
         .stderr(contains("local PR branch `feature` conflicts"))
@@ -686,7 +756,7 @@ fn worktree_new_from_pr_refuses_branch_checked_out_elsewhere() {
 }
 
 #[test]
-fn worktree_new_from_fork_pr_requires_cli_or_explicit_branch() {
+fn worktree_new_from_pr_without_forge_cli_is_review_only() {
     if git_missing() {
         return;
     }
@@ -696,17 +766,31 @@ fn worktree_new_from_fork_pr_requires_cli_or_explicit_branch() {
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
         .assert()
-        .failure()
-        .stderr(contains("could not resolve the head branch of PR #1"))
-        .stderr(contains("install/log in to gh or tea"))
-        .stderr(contains("--branch <name>"));
+        .success()
+        .stdout(contains("branch : pr-1"))
+        .stdout(contains("review-only checkout"));
+
+    let path = env.home_root.join("project-worktrees/pr-1");
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    assert!(
+        !git_succeeds(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "automatic review branch has no upstream"
+    );
 
     env.rimz()
-        .args(["worktree", "new", "--from-pr", "1", "--branch", "review-1"])
+        .args([
+            "worktree",
+            "new",
+            "explicit-review",
+            "--from-pr",
+            "1",
+            "--branch",
+            "review-1",
+        ])
         .assert()
         .success()
         .stdout(contains("branch : review-1"));
-    let path = env.home_root.join("project-worktrees/pr-1");
+    let path = env.home_root.join("project-worktrees/explicit-review");
     assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
     assert!(
         !git_succeeds(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
@@ -721,9 +805,9 @@ fn worktree_new_from_fork_pr_tracks_fork_from_gh() {
         return;
     }
     let env = Env::new();
-    let (_pr_head, _) = publish_pr_ref_without_branch(&env, "refs/pull/1/head");
+    let (_pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     configure_github_origin_rewrite(&env);
-    let shim_dir = write_gh_pr_head_shim(&env);
+    let shim_dir = write_gh_pr_head_shim(&env, gh_fork_head());
 
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
@@ -743,6 +827,11 @@ fn worktree_new_from_fork_pr_tracks_fork_from_gh() {
     assert_eq!(
         git_stdout(&path, &["config", "--get", "branch.feature.merge"]),
         "refs/heads/feature"
+    );
+    assert_eq!(
+        git_stdout(&env.project_root, &["for-each-ref", "refs/rimz/"]),
+        "",
+        "temporary PR ref is cleaned up"
     );
     commit_file(&path, "fork-push.txt", "pushed\n", "push fork PR worktree");
     git(&path, &["push"]);
@@ -765,7 +854,7 @@ fn worktree_new_from_fork_pr_prefixes_local_branch_collision() {
     publish_pr_ref_without_branch(&env, "refs/pull/1/head");
     configure_github_origin_rewrite(&env);
     git(&env.project_root, &["branch", "feature", "main"]);
-    let shim_dir = write_gh_pr_head_shim(&env);
+    let shim_dir = write_gh_pr_head_shim(&env, gh_fork_head());
 
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
@@ -1599,45 +1688,60 @@ fn publish_pr_ref_inner(env: &Env, remote_ref: &str, publish_branch: bool) -> (S
 
 #[cfg(unix)]
 fn configure_github_origin_rewrite(env: &Env) {
+    configure_origin_rewrite(env, "https://github.com/org/repo.git");
+    let remote = env.home_root.join("origin.git");
+    let remote = remote.to_str().expect("utf8 remote path");
+    let key = format!("url.{remote}.insteadOf");
+    git(
+        &env.project_root,
+        &[
+            "config",
+            "--add",
+            key.as_str(),
+            "https://github.com/alice/fork.git",
+        ],
+    );
+}
+
+fn configure_origin_rewrite(env: &Env, origin_url: &str) {
     let remote = env.home_root.join("origin.git");
     let remote = remote.to_str().expect("utf8 remote path");
     git(
         &env.project_root,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "https://github.com/org/repo.git",
-        ],
+        &["remote", "set-url", "origin", origin_url],
     );
-    for url in [
-        "https://github.com/org/repo.git",
-        "https://github.com/alice/fork.git",
-    ] {
-        let key = format!("url.{remote}.insteadOf");
-        git(&env.project_root, &["config", "--add", key.as_str(), url]);
-    }
+    let key = format!("url.{remote}.insteadOf");
+    git(
+        &env.project_root,
+        &["config", "--add", key.as_str(), origin_url],
+    );
 }
 
 #[cfg(unix)]
-fn write_gh_pr_head_shim(env: &Env) -> std::path::PathBuf {
+fn write_gh_pr_head_shim(env: &Env, payload: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = env.home_root.join("forge-bin");
     std::fs::create_dir_all(&dir).expect("mkdir forge bin");
     let shim = dir.join("gh");
-    std::fs::write(
-        &shim,
-        "#!/bin/sh\n\
-         printf '%s\\n' '{\"headRefName\":\"feature\",\"headRepository\":{\"name\":\"fork\"},\"headRepositoryOwner\":{\"login\":\"alice\"}}'\n",
-    )
-    .expect("write gh shim");
+    std::fs::write(&shim, format!("#!/bin/sh\nprintf '%s\\n' '{payload}'\n"))
+        .expect("write gh shim");
     let mut perms = std::fs::metadata(&shim)
         .expect("gh shim metadata")
         .permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&shim, perms).expect("chmod gh shim");
     dir
+}
+
+#[cfg(unix)]
+fn gh_same_repo_head() -> &'static str {
+    r#"{"headRefName":"feature","headRepository":{"name":"repo"},"headRepositoryOwner":{"login":"org"},"isCrossRepository":false}"#
+}
+
+#[cfg(unix)]
+fn gh_fork_head() -> &'static str {
+    r#"{"headRefName":"feature","headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"alice"},"isCrossRepository":true}"#
 }
 
 fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {

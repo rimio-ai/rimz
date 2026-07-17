@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::config::WorktreeConfig;
@@ -11,11 +12,16 @@ use crate::forge;
 
 use super::{
     Checkout, CreatedWorktree, FreshWorktree, MarkerProvenance, PushDestination, Result,
-    WorktreeCreateTarget, WorktreeErr, add_worktree, ensure_repo, git_run, git_stdout, is_ancestor,
-    parse_worktree_list, resolve_base_commit, resolve_branch, resolve_fresh_worktree, trunk_ref,
+    WorktreeCreateTarget, WorktreeErr, add_worktree, ensure_repo, git_network_output, git_run,
+    git_stdout, is_ancestor, parse_worktree_list, resolve_base_commit, resolve_branch,
+    resolve_fresh_worktree, trunk_ref,
 };
 
 const PR_HEAD_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+// PR refs are incremental fetches into an existing clone, but still need enough
+// room for ordinary remote latency and repository negotiation.
+const PR_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
+static TEMP_REF_NONCE: AtomicU64 = AtomicU64::new(0);
 
 struct PrContext {
     number: u64,
@@ -41,7 +47,16 @@ pub fn create_from_pr(
         reuse_existing,
     )? {
         WorktreeCreateTarget::Fresh(fresh) => fresh,
-        WorktreeCreateTarget::Reuse(reused) => return Ok(reused),
+        WorktreeCreateTarget::Reuse(reused) => {
+            if reused.marker.from_pr != Some(pr.number) {
+                return Err(WorktreeErr::PrWorktreeMismatch {
+                    name: reused.marker.name.clone(),
+                    existing: reused.marker.from_pr,
+                    requested: pr.number,
+                });
+            }
+            return Ok(reused);
+        }
     };
     let review_branch = branch.or(fresh.branch.as_deref());
 
@@ -54,6 +69,12 @@ pub fn create_from_pr(
             other => other,
         },
     )?;
+    if !forge::pr_url_matches_origin(pr, &remote) {
+        return Err(WorktreeErr::PrRepoMismatch {
+            url_repo: pr.repo.clone().unwrap_or_default(),
+            origin_repo: forge::remote_repo_slug(&remote).unwrap_or(remote),
+        });
+    }
     let forge = pr.forge.unwrap_or_else(|| forge::forge_for_remote(&remote));
     let context = PrContext {
         number: pr.number,
@@ -63,40 +84,48 @@ pub fn create_from_pr(
 
     if let Some(branch) = review_branch {
         let branch = resolve_branch(Some(branch), None, &fresh.name)?;
-        return review_only_checkout(repo_root, fresh, &context, branch);
+        return review_only_checkout(repo_root, fresh, &context, branch, None);
     }
 
-    let advertised = git_stdout(repo_root, ["ls-remote", "origin"])
-        .map_err(pr_fetch_err(context.number, &context.remote))?;
-    let (_advertised_head, head_branches) = forge::pr_head_branches(&advertised, &context.refspec)
-        .ok_or_else(|| WorktreeErr::PrFetch {
-            number: context.number,
-            remote: context.remote.clone(),
-            stderr: format!("remote did not advertise {}", context.refspec),
-        })?;
-
-    let same_repo_branch = match head_branches.as_slice() {
-        [branch] => Some(branch.clone()),
-        [] => None,
-        branches => {
-            let head = resolve_pr_head_with_cli(repo_root, context.number, &context.remote)?;
-            Some(
-                branches
-                    .contains(&head.branch)
-                    .then_some(head.branch)
-                    .ok_or_else(|| WorktreeErr::PrHeadUnresolved {
-                        number: context.number,
-                        reason: "forge CLI head branch did not match an advertised origin branch"
-                            .to_owned(),
-                    })?,
-            )
-        }
+    let Some(cli) = forge::forge_cli_for_remote(&context.remote) else {
+        let branch = resolve_branch(None, fresh.branch.as_deref(), &fresh.name)?;
+        return review_only_checkout(
+            repo_root,
+            fresh,
+            &context,
+            branch,
+            Some("origin has no supported forge CLI".to_owned()),
+        );
+    };
+    let program = forge_cli_program(cli);
+    if which::which(program).is_err() {
+        let branch = resolve_branch(None, fresh.branch.as_deref(), &fresh.name)?;
+        return review_only_checkout(
+            repo_root,
+            fresh,
+            &context,
+            branch,
+            Some(format!("`{program}` is not installed")),
+        );
+    }
+    let head = resolve_pr_head_with_cli(repo_root, context.number, &context.remote)?;
+    let same_repo = match (cli, head.is_cross_repository) {
+        (forge::ForgeCli::Gh, Some(cross_repository)) => !cross_repository,
+        _ => head
+            .repo_full_name
+            .as_deref()
+            .zip(forge::remote_repo_slug(&context.remote).as_deref())
+            .map(|(head_repo, origin_repo)| head_repo.eq_ignore_ascii_case(origin_repo))
+            .ok_or_else(|| WorktreeErr::PrHeadUnresolved {
+                number: context.number,
+                reason: "forge CLI output did not identify the head repository".to_owned(),
+            })?,
     };
 
-    if let Some(branch) = same_repo_branch {
-        same_repo_checkout(repo_root, fresh, &context, branch)
+    if same_repo {
+        same_repo_checkout(repo_root, fresh, &context, head.branch)
     } else {
-        fork_checkout(repo_root, fresh, &context)
+        fork_checkout(repo_root, fresh, &context, head)
     }
 }
 
@@ -105,16 +134,19 @@ fn review_only_checkout(
     fresh: FreshWorktree,
     context: &PrContext,
     branch: String,
+    review_only_reason: Option<String>,
 ) -> Result<CreatedWorktree> {
     let pr_head = fetch_pr_head(repo_root, context.number, &context.remote, &context.refspec)?;
-    add_pr_worktree(
+    let mut created = add_pr_worktree(
         repo_root,
         fresh,
         branch,
-        pr_head.clone(),
-        pr_head.as_str(),
+        pr_head.oid.clone(),
+        pr_head.oid.as_str(),
         context.number,
-    )
+    )?;
+    created.review_only_reason = review_only_reason;
+    Ok(created)
 }
 
 fn same_repo_checkout(
@@ -126,8 +158,18 @@ fn same_repo_checkout(
     validate_pr_branch(repo_root, context.number, &branch)?;
     let remote_ref = format!("origin/{branch}");
     let fetch_refspec = format!("+refs/heads/{branch}:refs/remotes/{remote_ref}");
-    git_run(repo_root, ["fetch", "origin", fetch_refspec.as_str()])
-        .map_err(pr_fetch_err(context.number, &context.remote))?;
+    git_network_output(
+        repo_root,
+        [
+            "fetch",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "origin",
+            fetch_refspec.as_str(),
+        ],
+        PR_FETCH_TIMEOUT,
+    )
+    .map_err(pr_fetch_err(context.number, &context.remote))?;
     let remote_head = git_stdout(repo_root, ["rev-parse", remote_ref.as_str()])?;
     let provenance = pr_marker_provenance(repo_root, &remote_head, context.number);
     let checkout = match prepare_local_pr_branch(repo_root, &branch, &remote_ref, &remote_head)? {
@@ -143,8 +185,8 @@ fn fork_checkout(
     repo_root: &Path,
     fresh: FreshWorktree,
     context: &PrContext,
+    head: forge::PrHead,
 ) -> Result<CreatedWorktree> {
-    let head = resolve_pr_head_with_cli(repo_root, context.number, &context.remote)?;
     validate_pr_branch(repo_root, context.number, &head.branch)?;
     let owner = head
         .owner
@@ -184,8 +226,8 @@ fn fork_checkout(
         repo_root,
         fresh,
         branch.clone(),
-        pr_head.clone(),
-        pr_head.as_str(),
+        pr_head.oid.clone(),
+        pr_head.oid.as_str(),
         context.number,
     )?;
     let remote_key = format!("branch.{branch}.remote");
@@ -217,9 +259,45 @@ fn pr_fetch_err(number: u64, remote: &str) -> impl FnOnce(WorktreeErr) -> Worktr
     }
 }
 
-fn fetch_pr_head(repo_root: &Path, number: u64, remote: &str, refspec: &str) -> Result<String> {
-    git_run(repo_root, ["fetch", "origin", refspec]).map_err(pr_fetch_err(number, remote))?;
-    git_stdout(repo_root, ["rev-parse", "FETCH_HEAD"])
+struct TempPrHead<'a> {
+    repo_root: &'a Path,
+    ref_name: String,
+    oid: String,
+}
+
+impl Drop for TempPrHead<'_> {
+    fn drop(&mut self) {
+        let _ = git_run(self.repo_root, ["update-ref", "-d", self.ref_name.as_str()]);
+    }
+}
+
+fn fetch_pr_head<'a>(
+    repo_root: &'a Path,
+    number: u64,
+    remote: &str,
+    refspec: &str,
+) -> Result<TempPrHead<'a>> {
+    let nonce = TEMP_REF_NONCE.fetch_add(1, Ordering::Relaxed);
+    let ref_name = format!("refs/rimz/pr/{number}-{}-{nonce}", std::process::id());
+    let fetch_refspec = format!("+{refspec}:{ref_name}");
+    git_network_output(
+        repo_root,
+        [
+            "fetch",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "origin",
+            fetch_refspec.as_str(),
+        ],
+        PR_FETCH_TIMEOUT,
+    )
+    .map_err(pr_fetch_err(number, remote))?;
+    let oid = git_stdout(repo_root, ["rev-parse", ref_name.as_str()])?;
+    Ok(TempPrHead {
+        repo_root,
+        ref_name,
+        oid,
+    })
 }
 
 fn add_pr_worktree(
@@ -268,6 +346,13 @@ fn resolve_pr_head_with_cli(repo_root: &Path, number: u64, remote: &str) -> Resu
     parsed.map_err(|reason| WorktreeErr::PrHeadUnresolved { number, reason })
 }
 
+fn forge_cli_program(cli: forge::ForgeCli) -> &'static str {
+    match cli {
+        forge::ForgeCli::Gh => "gh",
+        forge::ForgeCli::Tea => "tea",
+    }
+}
+
 fn gh_pr_head(repo_root: &Path, number: u64) -> std::result::Result<forge::PrHead, String> {
     let number_arg = number.to_string();
     let args = [
@@ -275,7 +360,7 @@ fn gh_pr_head(repo_root: &Path, number: u64) -> std::result::Result<forge::PrHea
         "view",
         number_arg.as_str(),
         "--json",
-        "headRefName,headRepository,headRepositoryOwner",
+        "headRefName,headRepository,headRepositoryOwner,isCrossRepository",
     ];
     let raw = pr_command_stdout(repo_root, "gh", &args)?;
     forge::parse_gh_pr_view_json(&raw)
