@@ -77,6 +77,7 @@ impl SingularQueueTestExt for Store {
         self.record_message_delivery_failures(
             std::slice::from_ref(message_id),
             None,
+            DeliveryFailureDisposition::Retry,
             error,
             session_name,
         )
@@ -951,7 +952,13 @@ fn batch_failure_preserves_sent_and_requeues_or_abandons_the_rest() {
         .collect::<Vec<_>>();
 
     let result = store
-        .record_message_delivery_failures(&ids, None, "pane missing", "session")
+        .record_message_delivery_failures(
+            &ids,
+            None,
+            DeliveryFailureDisposition::Retry,
+            "pane missing",
+            "session",
+        )
         .unwrap();
 
     assert!(result.head_found);

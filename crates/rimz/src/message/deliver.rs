@@ -243,6 +243,7 @@ pub(crate) fn execute_attempt(
             store.record_message_delivery_failures(
                 &ids,
                 records.first(),
+                crate::store::DeliveryFailureDisposition::Retry,
                 WAITING,
                 &workspace.session_name,
             )?;
@@ -267,6 +268,11 @@ pub(crate) fn execute_attempt(
             let failure = store.record_message_delivery_failures(
                 &ids,
                 durable_receiver.then_some(head),
+                if durable_receiver {
+                    crate::store::DeliveryFailureDisposition::Retry
+                } else {
+                    crate::store::DeliveryFailureDisposition::Terminal
+                },
                 &err.to_string(),
                 &workspace.session_name,
             )?;
@@ -276,7 +282,6 @@ pub(crate) fn execute_attempt(
             if durable_receiver {
                 return Ok(AttemptOutcome::Queued);
             }
-            store.record_send_error(head, &err.to_string(), &workspace.session_name)?;
             Err(err.into())
         }
     }

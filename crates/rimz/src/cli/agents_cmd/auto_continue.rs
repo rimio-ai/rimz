@@ -125,6 +125,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
             .record_message_delivery_failures(
                 std::slice::from_ref(&message_id),
                 None,
+                rimz::store::DeliveryFailureDisposition::Retry,
                 &reason,
                 &workspace.session_name,
             )

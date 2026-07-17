@@ -29,7 +29,7 @@ mod reset;
 
 pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_LOG_ROTATE_BYTES};
 pub(crate) use queue::DeliverySweepUpdate;
-pub use queue::{EditOutcome, MessageEdit};
+pub use queue::{DeliveryFailureDisposition, EditOutcome, MessageEdit};
 
 pub(super) struct Txn<'a> {
     pub(super) paths: &'a StatePaths,

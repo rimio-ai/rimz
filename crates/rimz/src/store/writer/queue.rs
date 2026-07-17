@@ -45,6 +45,12 @@ pub struct DeliveryFailureResult {
     pub head_sent: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryFailureDisposition {
+    Retry,
+    Terminal,
+}
+
 impl MessageEdit {
     /// Apply requested deltas to a record. Setting `auto_compact` resets the
     /// compaction baseline so the new threshold is re-evaluated at delivery.
@@ -941,6 +947,7 @@ impl Store {
         &self,
         message_ids: &[MessageId],
         fallback_head: Option<&MessageRecord>,
+        disposition: DeliveryFailureDisposition,
         error: &str,
         session_name: &str,
     ) -> Result<DeliveryFailureResult> {
@@ -976,7 +983,12 @@ impl Store {
                 message.pane_id = None;
                 message.batch_id = None;
                 message.updated_at = now;
-                if message.attempts >= MAX_DELIVERY_ATTEMPTS {
+                if disposition == DeliveryFailureDisposition::Terminal {
+                    MessageUpdate::Finalize {
+                        status: MessageStatus::Errored,
+                        reason: Some(error.to_owned()),
+                    }
+                } else if message.attempts >= MAX_DELIVERY_ATTEMPTS {
                     MessageUpdate::Finalize {
                         status: MessageStatus::Abandoned,
                         reason: Some(error.to_owned()),

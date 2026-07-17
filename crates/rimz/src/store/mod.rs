@@ -76,8 +76,8 @@ pub use crate::store::snapshot::{
 pub use crate::store::workspace_record::WorkspaceRecord;
 pub(crate) use crate::store::writer::DeliverySweepUpdate;
 pub use crate::store::writer::{
-    AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_LOG_ROTATE_BYTES, EditOutcome,
-    MessageEdit,
+    AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_LOG_ROTATE_BYTES,
+    DeliveryFailureDisposition, EditOutcome, MessageEdit,
 };
 
 /// Terminal audit-only message outcome for a target that never resolved to a
