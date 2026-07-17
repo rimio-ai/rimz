@@ -1,0 +1,89 @@
+---
+source: crates/rimz/src/cli/providers/tests.rs
+expression: json
+---
+[
+  {
+    "kind": "claude",
+    "product_name": "Claude",
+    "status": "logged_in",
+    "probed_at": "2023-11-14T22:13:20Z",
+    "plan": "max",
+    "plan_label": "Claude Max",
+    "account_id": "acct_123",
+    "sub_provider": null,
+    "account_scope": {
+      "kind": "kind_wide"
+    },
+    "metered": true,
+    "version": "1.2.3",
+    "windows": [
+      {
+        "used_percentage": 62,
+        "resets_at": "2023-11-14T23:36:20Z",
+        "duration_mins": 300,
+        "observed_at": "2023-11-14T22:13:20Z"
+      },
+      {
+        "used_percentage": 14,
+        "resets_at": "2023-11-19T00:13:20Z",
+        "duration_mins": 10080,
+        "observed_at": "2023-11-14T22:13:20Z"
+      }
+    ],
+    "extra_credits": {
+      "known": {
+        "used_usd": 12.4,
+        "limit_usd": 50.0
+      }
+    },
+    "reset_credits": {
+      "count": 2,
+      "soonest_expiry": "2023-11-17T22:13:20Z"
+    },
+    "spending": {
+      "today": {
+        "usd": 0.0,
+        "tokens": 0,
+        "input": 0,
+        "output": 0,
+        "cache_write": 0,
+        "cache_read": 0,
+        "sessions": 0
+      },
+      "week": {
+        "usd": 31.2,
+        "tokens": 12000,
+        "input": 0,
+        "output": 0,
+        "cache_write": 0,
+        "cache_read": 0,
+        "sessions": 3
+      },
+      "month": {
+        "usd": 118.75,
+        "tokens": 48000,
+        "input": 0,
+        "output": 0,
+        "cache_write": 0,
+        "cache_read": 0,
+        "sessions": 9
+      },
+      "year": {
+        "usd": 400.0,
+        "tokens": 160000,
+        "input": 0,
+        "output": 0,
+        "cache_write": 0,
+        "cache_read": 0,
+        "sessions": 20
+      }
+    },
+    "day_budget": {
+      "cap_usd": 25.0,
+      "spend_usd": 8.1,
+      "parked": false
+    },
+    "active_sessions": 2
+  }
+]

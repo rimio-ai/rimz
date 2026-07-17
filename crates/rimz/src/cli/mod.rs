@@ -24,6 +24,7 @@ mod loop_cmd;
 mod message;
 mod opencode;
 mod pane;
+mod providers;
 mod reload;
 mod remote;
 mod render;
@@ -103,6 +104,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
+        Some(Subcmd::Providers(args)) => providers::run(args, &globals),
         Some(Subcmd::Budget(args)) => budget::run(args, &globals),
         Some(Subcmd::ListPets(args)) => list_pets::run(args, &globals),
         Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
@@ -472,6 +474,8 @@ enum Subcmd {
     ///
     /// Includes model and agent breakdowns.
     Stats(stats::StatsArgs),
+    /// Query provider account plans, auth, limits, credits, and spend.
+    Providers(providers::ProvidersArgs),
     /// Inspect or change room and provider-account daily dollar caps.
     Budget(budget::BudgetArgs),
     /// Preview the bundled provider-dashboard pets.

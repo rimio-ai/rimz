@@ -90,19 +90,44 @@ fn produce_accounts_with(
     runtime: &RuntimePaths,
     probe: impl Fn(&SidebarSnapshot, &RuntimePaths, &BTreeSet<String>, &AccountsCache) -> AccountsCache,
 ) -> BTreeMap<String, AgentAccount> {
-    let path = runtime.shared_accounts_path();
     let context_versions = context_versions(snapshot);
+    let cache = query_provider_accounts_with(snapshot, runtime, false, probe);
+    accounts_with_context_versions(&cache, &context_versions)
+}
+
+/// Query every registered provider account through the shared account-cache
+/// single-flight. A forced query bypasses per-provider TTLs for this call while
+/// preserving cache publication and contention behavior.
+pub fn query_provider_accounts(runtime: &RuntimePaths, force: bool) -> AccountsCache {
+    let snapshot = SidebarSnapshot::build_with_agents(
+        runtime.workspace_id.clone(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    query_provider_accounts_with(&snapshot, runtime, force, probe_accounts)
+}
+
+fn query_provider_accounts_with(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    force: bool,
+    probe: impl Fn(&SidebarSnapshot, &RuntimePaths, &BTreeSet<String>, &AccountsCache) -> AccountsCache,
+) -> AccountsCache {
+    let path = runtime.shared_accounts_path();
     let cache = read_accounts_cache(&path);
-    if due_provider_kinds(&cache, snapshot, unix_now_ms()).is_empty() {
-        return accounts_with_context_versions(&cache, &context_versions);
+    if !force && due_provider_kinds(&cache, snapshot, unix_now_ms()).is_empty() {
+        return cache;
     }
 
     let lock_path = runtime.shared_accounts_lock();
     let fresh = || {
+        if force {
+            return None;
+        }
         let cache = read_accounts_cache(&path);
         due_provider_kinds(&cache, snapshot, unix_now_ms())
             .is_empty()
-            .then(|| accounts_with_context_versions(&cache, &context_versions))
+            .then_some(cache)
     };
     let coordination_started = Instant::now();
     match crate::store::single_flight::coordinate(
@@ -111,24 +136,31 @@ fn produce_accounts_with(
         ACCOUNTS_WAIT_STEPS,
         fresh,
     ) {
-        crate::store::single_flight::Coordination::Shared(accounts) => accounts,
+        crate::store::single_flight::Coordination::Shared(cache) => cache,
         crate::store::single_flight::Coordination::Produce(_guard) => {
             let cache = read_accounts_cache(&path);
-            let due = due_provider_kinds(&cache, snapshot, unix_now_ms());
+            let due = if force {
+                provider_kinds(snapshot)
+            } else {
+                due_provider_kinds(&cache, snapshot, unix_now_ms())
+            };
             if due.is_empty() {
-                return accounts_with_context_versions(&cache, &context_versions);
+                return cache;
             }
             let cache = probe(snapshot, runtime, &due, &cache);
             write_accounts_cache(&path, &cache);
-            accounts_with_context_versions(&cache, &context_versions)
+            cache
         }
         // A missing coordination path cannot protect a shared publication.
         // Probe locally for this frame without writing the cache.
         crate::store::single_flight::Coordination::Unavailable => {
             let cache = read_accounts_cache(&path);
-            let due = due_provider_kinds(&cache, snapshot, unix_now_ms());
-            let cache = probe(snapshot, runtime, &due, &cache);
-            accounts_with_context_versions(&cache, &context_versions)
+            let due = if force {
+                provider_kinds(snapshot)
+            } else {
+                due_provider_kinds(&cache, snapshot, unix_now_ms())
+            };
+            probe(snapshot, runtime, &due, &cache)
         }
         // A live producer still owns publication. Serve current cache truth and
         // let the next tick observe its atomic write instead of duplicating the
@@ -144,7 +176,7 @@ fn produce_accounts_with(
                 tags.operation = "accounts.probe_contention",
                 "account probe producer still running; serving current cache",
             );
-            accounts_with_context_versions(&read_accounts_cache(&path), &context_versions)
+            read_accounts_cache(&path)
         }
     }
 }
@@ -679,6 +711,49 @@ mod tests {
 
         assert_eq!(probes.load(Ordering::SeqCst), 0);
         assert!(!runtime.shared_accounts_path().exists());
+    }
+
+    #[test]
+    fn provider_query_force_bypasses_ttl_for_every_registered_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_shared_dirs().unwrap();
+        write_accounts_cache(&runtime.shared_accounts_path(), &fresh_cache(unix_now_ms()));
+        let snapshot = empty_snapshot();
+        let due = Mutex::new(Vec::new());
+
+        let refreshed =
+            query_provider_accounts_with(&snapshot, &runtime, true, |_, _, kinds, cache| {
+                due.lock().unwrap().push(kinds.clone());
+                cache.clone()
+            });
+
+        assert_eq!(due.into_inner().unwrap(), [provider_kinds(&snapshot)]);
+        assert_eq!(
+            refreshed.providers.len(),
+            crate::agents::known_kinds().count()
+        );
+    }
+
+    #[test]
+    fn provider_query_preserves_normal_per_provider_ttls() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_shared_dirs().unwrap();
+        let expected = fresh_cache(unix_now_ms());
+        write_accounts_cache(&runtime.shared_accounts_path(), &expected);
+        let probes = AtomicUsize::new(0);
+
+        let cached =
+            query_provider_accounts_with(&empty_snapshot(), &runtime, false, |_, _, _, cache| {
+                probes.fetch_add(1, Ordering::SeqCst);
+                cache.clone()
+            });
+
+        assert_eq!(cached, expected);
+        assert_eq!(probes.load(Ordering::SeqCst), 0);
     }
 
     #[test]

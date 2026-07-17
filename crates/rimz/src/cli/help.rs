@@ -6,7 +6,15 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
     (
         "Open and connect rooms",
         &[
-            "start", "attach", "remote", "web", "list", "stats", "setup", "doctor",
+            "start",
+            "attach",
+            "remote",
+            "web",
+            "list",
+            "stats",
+            "providers",
+            "setup",
+            "doctor",
         ],
     ),
     (

@@ -284,6 +284,7 @@ Golden the account mapping from a fixture probe payload and a fixture transport 
 
 ## What lives elsewhere
 
+- **The standalone CLI query** for account status, windows, credits, published spend, and daily caps is [`rimz providers`](../../reference/cli/providers.md).
 - **The on-screen look** — the mana bars, the `ex` paid-usage and `api` budget rows, the aligned grid, the `⇅ rc` flag, the exhausted-window and longer-window-gating rendering — is [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard).
 - **The renderer's projection** of `providers` and where the dashboard sits in the sidebar is [sidebar.md → Provider dashboard](../sidebar/sidebar.md#provider-dashboard).
 - **The per-kind transport** that carries the rich context — the statusline pipe and its wrap/restore, the Codex app-server connection ladder and broker — is the adapter docs ([claude.md](./claude.md#context-and-transcript), [codex.md](./codex.md#context-and-transcript)).

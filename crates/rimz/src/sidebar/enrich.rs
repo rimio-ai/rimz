@@ -713,6 +713,40 @@ fn fold_machine_config(
     (snapshot, spending)
 }
 
+/// Build the provider-dashboard projection from user-scoped published caches
+/// without reading a room snapshot or starting a spending walk.
+pub fn provider_panels_from_caches(
+    runtime: &RuntimePaths,
+    config: &crate::config::MachineConfig,
+    accounts: BTreeMap<String, crate::agents::AgentAccount>,
+    provider_spending: &crate::agents::spending::ProviderSpendingCache,
+) -> Vec<crate::SidebarProviderPanel> {
+    let now = Timestamp::now();
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), Vec::new(), now);
+    let mut config = config.clone();
+    // The query surface needs every qualifying provider while retaining the
+    // dashboard's usage ranking; local display caps and explicit tabs only
+    // control the sidebar's screen layout.
+    config.theme.display.provider_list = vec!["all".to_owned()];
+    snapshot = fold_machine_config_with(
+        snapshot,
+        &config,
+        accounts,
+        &provider_spending.spending.by_provider,
+        RemoteControlServerHealth::default(),
+    );
+    apply_rate_limit_cache(&mut snapshot, runtime, false);
+    apply_credits_cache(&mut snapshot, runtime, &config.accounts);
+    crate::harness::budget::project_budget_views(
+        &mut snapshot,
+        runtime,
+        &config,
+        provider_spending,
+    );
+    snapshot.providers
+}
+
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
 /// the per-provider `⇅ rc` flags, the dashboard aggregates, and each agent
 /// row's context-severity verdict.

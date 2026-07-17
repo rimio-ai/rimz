@@ -27,7 +27,7 @@ pub mod spending;
 mod trace;
 pub mod usage;
 
-pub use accounts::{AccountsCache, ProviderRecord};
+pub use accounts::{AccountsCache, ProviderRecord, query_provider_accounts};
 pub use credits::{
     CreditsCache, DirectQueryClaim, ProviderCreditsEntry, merge_provider_credits,
     merge_provider_realtime_usage,
@@ -40,7 +40,10 @@ pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,
     refresh_session_transcript_context_from_watch,
 };
-pub use usage::{complete_realtime_account_usage, refresh_claimed_account_usage};
+pub use usage::{
+    complete_realtime_account_usage, refresh_account_usage_if_due, refresh_account_usage_now,
+    refresh_claimed_account_usage,
+};
 
 use self::accounts::produce_accounts;
 use self::daemon_reap::refresh_codex_daemon_reap_cache;

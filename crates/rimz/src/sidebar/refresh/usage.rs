@@ -295,6 +295,15 @@ pub fn refresh_account_usage_now(runtime: &RuntimePaths, kind: &str) -> bool {
     refresh_account_usage_now_with(runtime, kind, merge_account_usage_if_due)
 }
 
+/// Refresh one provider's account usage when its durable cadence says it is
+/// due. The claim path single-flights concurrent callers.
+pub fn refresh_account_usage_if_due(runtime: &RuntimePaths, kind: &str) -> bool {
+    if crate::agents::credits::oauth_usage_offline() {
+        return false;
+    }
+    merge_account_usage_if_due(runtime, kind, true)
+}
+
 fn refresh_account_usage_now_with(
     runtime: &RuntimePaths,
     kind: &str,
