@@ -252,15 +252,17 @@ fn longest_window_signal_distinguishes_reset_down_and_unknown_truth() {
         );
     }
 
-    let authoritative_undated = RateLimitWindow {
-        resets_at: None,
-        source: crate::agents::context::WindowSource::Authoritative,
-        ..window(now, Some(0), 3_600, Some(duration_mins))
-    };
-    assert_eq!(
-        capacity(authoritative_undated).longest_window_signal(now),
-        LongestWindowSignal::ConfirmedDown
-    );
+    for used_percentage in [0, 1] {
+        let authoritative_undated = RateLimitWindow {
+            resets_at: None,
+            source: crate::agents::context::WindowSource::Authoritative,
+            ..window(now, Some(used_percentage), 3_600, Some(duration_mins))
+        };
+        assert_eq!(
+            capacity(authoritative_undated).longest_window_signal(now),
+            LongestWindowSignal::ConfirmedDown
+        );
+    }
 
     for unknown in [
         RateLimitWindow {
@@ -272,6 +274,11 @@ fn longest_window_signal_distinguishes_reset_down_and_unknown_truth() {
             used_percentage: None,
             source: crate::agents::context::WindowSource::Authoritative,
             ..window(now, Some(20), 3_600, Some(duration_mins))
+        },
+        RateLimitWindow {
+            resets_at: None,
+            source: crate::agents::context::WindowSource::Authoritative,
+            ..window(now, Some(45), 3_600, Some(duration_mins))
         },
         window(now, Some(20), 3_600, None),
     ] {

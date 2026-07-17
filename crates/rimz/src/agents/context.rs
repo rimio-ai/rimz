@@ -592,6 +592,9 @@ impl WindowSource {
 /// small skew between the first token and the provider stamping the reset.
 const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 
+/// Usage at or below this percentage still represents a fresh provider window.
+pub(crate) const FRESH_WINDOW_USAGE_FLOOR: u8 = 1;
+
 impl RateLimitWindow {
     pub(crate) fn key(&self) -> RateLimitWindowKey {
         self.scope.as_ref().map_or_else(
@@ -648,7 +651,7 @@ impl RateLimitWindow {
     /// reading whose countdown is a real one. Drives the dashboard's
     /// no-countdown "ready to start" treatment and the window-priming ping guard.
     pub fn not_started(&self, now: Timestamp) -> bool {
-        if self.used_percentage > Some(1) {
+        if self.used_percentage > Some(FRESH_WINDOW_USAGE_FLOOR) {
             return false;
         }
         let (Some(reset), Some(mins)) = (self.resets_at, self.duration_mins) else {

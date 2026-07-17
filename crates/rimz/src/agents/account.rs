@@ -31,7 +31,10 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
+use super::{
+    AgentRateLimits, ProviderAccountScope, RateLimitWindow,
+    context::{FRESH_WINDOW_USAGE_FLOOR, RateLimitWindowKey},
+};
 use crate::RuntimePaths;
 use crate::ids::AgentKind;
 
@@ -262,7 +265,11 @@ impl ProviderCapacity {
         if let Some(resets_at) = window.resets_at {
             return LongestWindowSignal::At(resets_at);
         }
-        if window.used_percentage.is_some() && window.source.is_authoritative() {
+        if window
+            .used_percentage
+            .is_some_and(|used| used <= FRESH_WINDOW_USAGE_FLOOR)
+            && window.source.is_authoritative()
+        {
             LongestWindowSignal::ConfirmedDown
         } else {
             LongestWindowSignal::Unknown
