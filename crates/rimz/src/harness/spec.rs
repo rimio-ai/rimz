@@ -312,31 +312,32 @@ pub enum LayoutErr {
 
 pub type Result<T> = std::result::Result<T, LayoutErr>;
 
-/// Resolve each agent profile's `system-prompt-file` against `config_dir` so
-/// the path is correct wherever the profile later launches: `~` expands to the
-/// home directory and a relative path roots at the config file's directory, not
-/// the agent's launch cwd. Pure — the file's existence is checked at the launch
-/// entry point, not here, so a moved prompt never breaks an unrelated config
-/// read.
-pub fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, config_dir: &Path) {
+/// Resolve agent prompt files against the directory of the config source that
+/// declared them. `~` expands to the home directory and a relative path roots
+/// at that source directory, not the agent's launch cwd. Call this before
+/// combining config sources so a drop-in `team.toml` keeps paths relative to
+/// its own directory. Pure — the file's existence is checked at the launch
+/// entry point, so a moved prompt never breaks an unrelated config read.
+pub fn resolve_prompt_paths(
+    profiles: &mut ProfilesConfig,
+    teams: &mut TeamsConfig,
+    source_dir: &Path,
+) {
     for profile in profiles.0.values_mut() {
         if let Some(path) = profile.system_prompt_file.as_mut() {
-            *path = resolve_prompt_path(path, config_dir);
+            *path = resolve_prompt_path(path, source_dir);
         }
         if let Some(path) = profile.append_system_prompt_file.as_mut() {
-            *path = resolve_prompt_path(path, config_dir);
+            *path = resolve_prompt_path(path, source_dir);
         }
     }
-}
-
-pub fn resolve_team_prompt_paths(teams: &mut TeamsConfig, config_dir: &Path) {
     for team in teams.0.values_mut() {
         for binding in &mut team.roles {
             if let Some(path) = binding.system_prompt_file.as_mut() {
-                *path = resolve_prompt_path(path, config_dir);
+                *path = resolve_prompt_path(path, source_dir);
             }
             if let Some(path) = binding.append_system_prompt_file.as_mut() {
-                *path = resolve_prompt_path(path, config_dir);
+                *path = resolve_prompt_path(path, source_dir);
             }
         }
     }

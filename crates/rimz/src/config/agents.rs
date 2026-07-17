@@ -137,12 +137,16 @@ pub struct RoleBinding {
     pub effort: Option<String>,
     #[serde(default)]
     pub budget: Option<String>,
+    /// A replacement system prompt. Relative paths use the declaring file's
+    /// directory, so a role in `~/.agents/teams/<name>/team.toml` can name a
+    /// prompt shipped beside that fragment.
     #[serde(
         default,
         rename = "system-prompt-file",
         skip_serializing_if = "Option::is_none"
     )]
     pub system_prompt_file: Option<PathBuf>,
+    /// An appended system prompt, resolved like `system_prompt_file`.
     #[serde(
         default,
         rename = "append-system-prompt-file",

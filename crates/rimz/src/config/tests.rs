@@ -511,7 +511,8 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
              [[agents.teams.review.roles]]\n\
              role = \"planner\"\n\
              profile = \"planner\"\n\
-             system-prompt-file = \"prompts/planner.md\"\n",
+             system-prompt-file = \"planner.md\"\n\
+             append-system-prompt-file = \"prompts/shared.md\"\n",
     );
 
     let mut agents = AgentsConfig::default();
@@ -527,8 +528,17 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
         .path()
         .join(AGENTS_HOME_TEAMS_SUBDIR)
         .join("review")
-        .join("prompts/planner.md");
+        .join("planner.md");
     assert_eq!(role.system_prompt_file.as_deref(), Some(expected.as_path()));
+    let expected_append = root
+        .path()
+        .join(AGENTS_HOME_TEAMS_SUBDIR)
+        .join("review")
+        .join("prompts/shared.md");
+    assert_eq!(
+        role.append_system_prompt_file.as_deref(),
+        Some(expected_append.as_path())
+    );
 }
 
 #[test]

@@ -452,7 +452,7 @@ impl MachineConfig {
         };
         let mut merged = config.agents.clone();
         overlay_agents_fragment_under(&mut merged, &fragment);
-        match validate_agents_config(&mut merged, &agents_path) {
+        match validate_agents_config(&merged, &agents_path) {
             Ok(()) => config.agents = merged,
             Err(err) => {
                 tracing::warn!(
@@ -461,7 +461,7 @@ impl MachineConfig {
                 );
                 let mut fallback = AgentsConfig::default();
                 overlay_agents_fragment_under(&mut fallback, &fragment);
-                match validate_agents_config(&mut fallback, &agents_path) {
+                match validate_agents_config(&fallback, &agents_path) {
                     Ok(()) => config.agents = fallback,
                     Err(err) => {
                         tracing::warn!(
@@ -880,10 +880,11 @@ fn parse_theme_text(path: &Path, text: &str) -> Result<ThemeConfig> {
 
 fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsConfig> {
     check_removed_agents_tables(path, text)?;
-    let file: AgentsFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
+    let mut file: AgentsFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         source,
     })?;
+    resolve_agents_prompt_paths(&mut file.agents.profiles, &mut file.agents.teams, path);
     Ok(file.agents)
 }
 
@@ -938,11 +939,21 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
 }
 
 fn parse_agents_fragment_text(path: &Path, text: &str) -> Result<AgentsFragment> {
-    let file: AgentsFragmentFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
+    let mut file: AgentsFragmentFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         source,
     })?;
+    resolve_agents_prompt_paths(&mut file.agents.profiles, &mut file.agents.teams, path);
     Ok(file.agents)
+}
+
+fn resolve_agents_prompt_paths(
+    profiles: &mut ProfilesConfig,
+    teams: &mut TeamsConfig,
+    source_path: &Path,
+) {
+    let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
+    crate::harness::spec::resolve_prompt_paths(profiles, teams, source_dir);
 }
 
 fn discover_agents_home(root: &Path) -> Result<AgentsFragment> {
@@ -972,11 +983,9 @@ fn discover_agents_home_subdir(
     dirs.sort();
     for dir in dirs {
         let path = dir.join(fragment_file);
-        let Some(mut fragment) = load_optional(&path, parse_agents_fragment_text)? else {
+        let Some(fragment) = load_optional(&path, parse_agents_fragment_text)? else {
             continue;
         };
-        crate::harness::spec::resolve_profile_prompt_paths(&mut fragment.profiles, &dir);
-        crate::harness::spec::resolve_team_prompt_paths(&mut fragment.teams, &dir);
         out.profiles.0.extend(fragment.profiles.0);
         out.teams.0.extend(fragment.teams.0);
         out.commands.0.extend(fragment.commands.0);
@@ -1017,7 +1026,7 @@ fn apply_agents_home(agents: &mut AgentsConfig, root: &Path, agents_path: &Path)
     let mut merged = agents.clone();
     let fragment = discover_agents_home(root)?;
     overlay_agents_fragment_under(&mut merged, &fragment);
-    validate_agents_config(&mut merged, agents_path)?;
+    validate_agents_config(&merged, agents_path)?;
     *agents = merged;
     Ok(())
 }
@@ -1034,10 +1043,7 @@ fn overlay_under<V>(file: &mut BTreeMap<String, V>, fragment: BTreeMap<String, V
     }
 }
 
-fn validate_agents_config(agents: &mut AgentsConfig, path: &Path) -> Result<()> {
-    let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    crate::harness::spec::resolve_profile_prompt_paths(&mut agents.profiles, config_dir);
-    crate::harness::spec::resolve_team_prompt_paths(&mut agents.teams, config_dir);
+fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {
     crate::harness::spec::validate_config(&agents.profiles, &agents.commands, &agents.teams)
         .map_err(|source| ConfigErr::Agents {
             path: path.to_path_buf(),

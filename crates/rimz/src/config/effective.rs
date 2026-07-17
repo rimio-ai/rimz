@@ -121,8 +121,7 @@ pub fn load(
             source,
         })?;
     let config_dir = config_path.parent().unwrap_or(project_root);
-    agents_spec::resolve_profile_prompt_paths(&mut repo.profiles, config_dir);
-    agents_spec::resolve_team_prompt_paths(&mut repo.teams, config_dir);
+    agents_spec::resolve_prompt_paths(&mut repo.profiles, &mut repo.teams, config_dir);
     agents_spec::validate_config(
         &repo.profiles,
         &CommandsConfig::default(),
