@@ -549,17 +549,18 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_started_at: Option<Timestamp>,
     /// When this agent's current turn began, stamped from the lifecycle state
-    /// machine's `opened_turn` fact and from a context reset that rests the agent
-    /// — a manual `/compact` (`CompactionEnded` landing on idle) or a `/clear`
-    /// (`Registered`), each of which retires the prior turn's children (carried
-    /// forward; `None` until the first such boundary). Automatic compaction
-    /// *mid-turn* resumes the same turn and leaves this stamp untouched, so its
-    /// in-flight children stay listed. Unlike `last_seen` it does *not* advance
-    /// on `Stop`, so it marks the "next prompt" boundary the sidebar uses to
-    /// clear a finished subagent: a completed child older than its parent's
-    /// `turn_started_at` belongs to a past turn and drops from the parent's
-    /// expanded list. A prompt waking a parked running row resumes the same
-    /// logical turn and carries this stamp forward.
+    /// machine's `opened_turn` fact and from a context reset that rests an existing
+    /// session — a manual `/compact` (`CompactionEnded` landing on idle) or a
+    /// `/clear` (`Registered`), each of which retires the prior turn's children. A
+    /// first-event registration leaves it `None` until the first turn opens
+    /// (otherwise carried forward; `None` until the first such boundary).
+    /// Automatic compaction *mid-turn* resumes the same turn and leaves this stamp
+    /// untouched, so its in-flight children stay listed. Unlike `last_seen` it
+    /// does *not* advance on `Stop`, so it marks the "next prompt" boundary the
+    /// sidebar uses to clear a finished subagent: a completed child older than
+    /// its parent's `turn_started_at` belongs to a past turn and drops from the
+    /// parent's expanded list. A prompt waking a parked running row resumes the
+    /// same logical turn and carries this stamp forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
     /// Timestamp of the native prompt that put this session in `Waiting`.

@@ -113,3 +113,37 @@ fn turn_started_at_survives_parked_wake_then_restamps_on_next_turn() {
     assert_eq!(agents[0].phase, TurnPhase::Reasoning);
     assert_eq!(agents[0].turn_started_at, Some(next_turn));
 }
+
+#[test]
+fn turn_started_at_stamps_first_turn_and_existing_session_reset() {
+    let start = raw_lifecycle_at(
+        "codex",
+        0,
+        serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "signal": { "signal": "registered" } }),
+    );
+    let prompt = raw_lifecycle_at(
+        "codex",
+        10,
+        serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
+    );
+    let stop = raw_lifecycle_at(
+        "codex",
+        20,
+        serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false } }),
+    );
+    let reset = raw_lifecycle_at(
+        "codex",
+        30,
+        serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "signal": { "signal": "registered" } }),
+    );
+
+    let registered = reduce_agent_states(std::slice::from_ref(&start));
+    assert_eq!(registered[0].turn_started_at, None);
+
+    let first_turn = reduce_agent_states(&[start.clone(), prompt.clone()]);
+    assert_eq!(first_turn[0].turn_started_at, Some(prompt.timestamp));
+
+    let reset_session = reduce_agent_states(&[start, prompt, stop, reset.clone()]);
+    assert_eq!(reset_session[0].status, AgentStatus::Idle);
+    assert_eq!(reset_session[0].turn_started_at, Some(reset.timestamp));
+}

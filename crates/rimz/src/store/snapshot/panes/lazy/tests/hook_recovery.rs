@@ -322,7 +322,7 @@ fn provisional_launch_stamp_allows_recovery_for_known_session() {
 }
 
 #[test]
-fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
+fn occupied_pane_fallback_stays_daemon_hooked_and_first_turn_only() {
     let pane_id = id("terminal_30");
     let old_codex = prior(
         "codex",
@@ -368,7 +368,7 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     );
     assert_eq!(selected.pane_id, Some(pane_id.clone()));
 
-    let known_new = prior(
+    let mut known_new = prior(
         "codex",
         "new",
         None,
@@ -376,6 +376,7 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
         Some(SessionOrigin::Fresh),
         jiff::Timestamp::UNIX_EPOCH,
     );
+    known_new.turn_started_at = Some(jiff::Timestamp::UNIX_EPOCH);
     let selected = select(
         &[old_codex, known_new],
         &[occupied],
@@ -418,6 +419,70 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     .select("/repo/main", &[claude_pane], Some(&focus));
     assert_eq!(selected.pane_id, None);
     assert_eq!(selected.candidate_count, 0);
+}
+
+#[test]
+fn occupied_pane_adopts_known_never_turned_codex_on_first_turn_start() {
+    let pane_id = id("terminal_30");
+    let old_codex = prior(
+        "codex",
+        "old",
+        Some(pane_id.clone()),
+        AgentStatus::Idle,
+        Some(SessionOrigin::Fresh),
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let registered_new = prior(
+        "codex",
+        "new",
+        None,
+        AgentStatus::Idle,
+        Some(SessionOrigin::Fresh),
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let occupied = candidate("terminal_30", true);
+    let focus = [pane_id.clone()];
+
+    let selected = select(
+        &[old_codex.clone(), registered_new.clone()],
+        std::slice::from_ref(&occupied),
+        Some(&focus),
+        Some(SessionOrigin::Fresh),
+        HookPaneRecoveryPhase::Registered,
+    );
+    assert_eq!(selected.pane_id, None);
+    assert_eq!(selected.candidate_count, 0);
+
+    let selected = select(
+        &[old_codex.clone(), registered_new.clone()],
+        std::slice::from_ref(&occupied),
+        Some(&focus),
+        Some(SessionOrigin::Fresh),
+        HookPaneRecoveryPhase::TurnStarted,
+    );
+    assert_eq!(selected.pane_id.as_ref(), Some(&pane_id));
+    assert_eq!(selected.candidate_count, 1);
+    assert!(selected.candidates[0].reject_reasons.is_empty());
+
+    let mut started_new = registered_new;
+    started_new.status = AgentStatus::Running;
+    started_new.turn_started_at = Some(jiff::Timestamp::UNIX_EPOCH);
+    let selected = select(
+        &[old_codex, started_new],
+        &[occupied],
+        Some(&focus),
+        Some(SessionOrigin::Fresh),
+        HookPaneRecoveryPhase::TurnStarted,
+    );
+    assert_eq!(selected.pane_id, None);
+    assert_eq!(selected.candidate_count, 0);
+    assert!(
+        selected.candidates[0]
+            .reject_reasons
+            .contains(&StampedToOther {
+                agent_id: "old".to_owned(),
+            })
+    );
 }
 
 #[test]

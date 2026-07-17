@@ -348,8 +348,10 @@ impl<'a> HookPaneRecoveryContext<'a> {
         }
     }
 
-    /// Daemon-hooked kinds adopt only on an unknown id's first event.
-    /// Follow-latest kinds may retry until the incoming id carries a pane stamp.
+    /// Daemon-hooked kinds adopt until the incoming id carries a pane stamp or
+    /// has entered a turn. A pane-less registration record therefore remains
+    /// eligible for its first turn start. Follow-latest kinds may retry until the
+    /// incoming id carries a pane stamp.
     fn can_share_occupied_pane(&self) -> bool {
         let Some(descriptor) = crate::agents::descriptor_by_kind(self.kind.as_str()) else {
             return false;
@@ -358,10 +360,11 @@ impl<'a> HookPaneRecoveryContext<'a> {
             return !self.already_stamped();
         }
         descriptor.capabilities.daemon_hooked_sessions
-            && !self
-                .prior_agents
-                .iter()
-                .any(|agent| agent.kind == *self.kind && agent.agent_id == *self.agent_id)
+            && !self.prior_agents.iter().any(|agent| {
+                agent.kind == *self.kind
+                    && agent.agent_id == *self.agent_id
+                    && (agent.pane.is_some() || agent.turn_started_at.is_some())
+            })
     }
 
     fn follows_latest(&self) -> bool {
