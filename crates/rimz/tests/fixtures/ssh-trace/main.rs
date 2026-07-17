@@ -6,6 +6,9 @@
 //! scripted exit sequence the reconnect tests drive (a dropped link is
 //! `255`, a clean detach `0`); without a plan it exits 0. Tests reach the
 //! shim through the `RIMZ_SSH_BIN` override, never PATH.
+//! `$RIMZ_TEST_SSH_RAW_TTY` simulates OpenSSH leaving the controlling tty raw;
+//! `$RIMZ_TEST_SSH_TTY_STATE_LOG` records whether each attach inherited sane
+//! shell flags before that transition.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -54,6 +57,7 @@ fn main() {
 
     publish_control_master_if_requested();
     wait_for_probe_if_requested(&log_path);
+    record_and_enter_raw_tty_if_requested();
 
     if let Ok(ms) = env::var("RIMZ_TEST_SSH_SLEEP_MS")
         && let Ok(ms) = ms.parse::<u64>()
@@ -62,6 +66,39 @@ fn main() {
     }
 
     exit_from_plan("RIMZ_TEST_SSH_PLAN");
+}
+
+#[cfg(unix)]
+fn record_and_enter_raw_tty_if_requested() {
+    use nix::sys::termios::{self, InputFlags, LocalFlags, OutputFlags, SetArg};
+
+    let state_log = env::var_os("RIMZ_TEST_SSH_TTY_STATE_LOG");
+    let enter_raw = env::var_os("RIMZ_TEST_SSH_RAW_TTY").is_some();
+    if state_log.is_none() && !enter_raw {
+        return;
+    }
+    let stdin = std::io::stdin();
+    let mut settings = termios::tcgetattr(&stdin).expect("read ssh trace tty state");
+    if let Some(path) = state_log {
+        let sane = settings.input_flags.contains(InputFlags::ICRNL)
+            && settings
+                .output_flags
+                .contains(OutputFlags::OPOST | OutputFlags::ONLCR)
+            && settings
+                .local_flags
+                .contains(LocalFlags::ICANON | LocalFlags::ISIG | LocalFlags::ECHO);
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open ssh trace tty state log");
+        writeln!(log, "{}", if sane { "sane" } else { "damaged" })
+            .expect("write ssh trace tty state");
+    }
+    if enter_raw {
+        termios::cfmakeraw(&mut settings);
+        termios::tcsetattr(&stdin, SetArg::TCSANOW, &settings).expect("set ssh trace tty raw");
+    }
 }
 
 fn exit_web_prep() -> ! {

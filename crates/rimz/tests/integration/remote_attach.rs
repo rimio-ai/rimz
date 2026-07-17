@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::common::{CommandTimeoutExt, Env};
+use nix::sys::termios::{self, InputFlags, LocalFlags, OutputFlags, Termios};
+use portable_pty::{CommandBuilder, PtyPair, PtySize, native_pty_system};
+
+use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 fn ssh_shim() -> PathBuf {
     crate::common::cargo_bin("ssh-trace", env!("CARGO_BIN_EXE_ssh-trace"))
@@ -63,6 +66,114 @@ fn remote_connect_command(env: &Env, log: &Path) -> Command {
         .env("RIMZ_REMOTE_PROBE_MS", "0")
         .env("TERM", "xterm-256color");
     cmd
+}
+
+fn remote_connect_pty_command(env: &Env, log: &Path) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    cmd.scrub_session_env();
+    cmd.args(["remote", "connect", "dev-box:query-engine", "--attach"]);
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("XDG_STATE_HOME", env.state_root());
+    cmd.env("XDG_RUNTIME_DIR", &env.runtime_root);
+    cmd.env("XDG_CONFIG_HOME", env.config_root());
+    cmd.env("HOME", &env.home_root);
+    cmd.env("SHELL", "/bin/sh");
+    cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
+    cmd.env("RIMZ_SSH_BIN", ssh_shim());
+    cmd.env("RIMZ_TEST_SSH_LOG", log);
+    cmd.env("RIMZ_REMOTE_DIAL_MS", "0");
+    cmd.env("RIMZ_REMOTE_PROBE_MS", "0");
+    cmd.env("TERM", "xterm-256color");
+    cmd.env_remove("ENV");
+    cmd.env_remove("BASH_ENV");
+    cmd.env_remove("ZDOTDIR");
+    cmd.env_remove("RUST_LOG");
+    cmd
+}
+
+fn remote_connect_pty() -> PtyPair {
+    native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open remote connect pty")
+}
+
+fn put_pty_in_raw_mode(pair: &PtyPair) {
+    let mut cmd = CommandBuilder::new("stty");
+    cmd.args(["raw", "-echo"]);
+    let status = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("spawn stty raw")
+        .wait()
+        .expect("wait stty raw");
+    assert!(status.success(), "stty raw failed: {status:?}");
+}
+
+fn read_pty_termios(pair: &PtyPair) -> Termios {
+    read_tty_termios(&pair.master.tty_name().expect("remote connect pty name"))
+}
+
+fn read_tty_termios(path: &Path) -> Termios {
+    let tty = std::fs::File::open(path).expect("open remote connect pty");
+    termios::tcgetattr(&tty).expect("read remote connect pty state")
+}
+
+fn run_pty_command(pair: PtyPair, cmd: CommandBuilder) -> (String, Termios) {
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
+    let tty_name = pair.master.tty_name().expect("remote connect pty name");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll remote connect") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let settings = read_tty_termios(&tty_name);
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let status = status.unwrap_or_else(|| panic!("remote connect timed out; output:\n{output}"));
+    assert!(
+        status.success(),
+        "remote connect failed with {status:?}; output:\n{output}"
+    );
+    (output, settings)
+}
+
+fn assert_shell_tty(settings: &Termios) {
+    assert!(
+        settings.input_flags.contains(InputFlags::ICRNL),
+        "ICRNL missing: {settings:?}"
+    );
+    assert!(
+        settings
+            .output_flags
+            .contains(OutputFlags::OPOST | OutputFlags::ONLCR),
+        "OPOST/ONLCR missing: {settings:?}"
+    );
+    assert!(
+        settings
+            .local_flags
+            .contains(LocalFlags::ICANON | LocalFlags::ISIG | LocalFlags::ECHO),
+        "ICANON/ISIG/ECHO missing: {settings:?}"
+    );
 }
 
 fn run_exec_with_term(colorterm: Option<&str>, infocmp: InfocmpFixture) -> Vec<String> {
@@ -371,6 +482,67 @@ fn exec_downgrades_or_copies_terminal_at_the_cli_boundary() {
         "{}",
         snippet(&copy)
     );
+}
+
+#[test]
+fn one_shot_connect_repairs_a_raw_tty_before_exec() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let pair = remote_connect_pty();
+    put_pty_in_raw_mode(&pair);
+    let damaged = read_pty_termios(&pair);
+    assert!(rimz::remote::tty::termios_damaged(
+        damaged.input_flags,
+        damaged.output_flags,
+        damaged.local_flags
+    ));
+
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.arg("--no-reconnect");
+    let (_, settings) = run_pty_command(pair, cmd);
+
+    assert_shell_tty(&settings);
+}
+
+#[test]
+fn supervised_connect_restores_tty_and_resets_emulator_after_retry() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let tty_state_log = env.project_root.join("ssh-tty-state.log");
+    std::fs::write(&plan, "255\n0\n").expect("write ssh plan");
+    let pair = remote_connect_pty();
+    put_pty_in_raw_mode(&pair);
+    let damaged = read_pty_termios(&pair);
+    assert!(rimz::remote::tty::termios_damaged(
+        damaged.input_flags,
+        damaged.output_flags,
+        damaged.local_flags
+    ));
+
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_TEST_SSH_PLAN", &plan);
+    cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
+    cmd.env("RIMZ_TEST_SSH_TTY_STATE_LOG", &tty_state_log);
+    cmd.env("RIMZ_REMOTE_GATETIME_MS", "0");
+    cmd.env("RIMZ_REMOTE_BACKOFF_MS", "1");
+    let (output, settings) = run_pty_command(pair, cmd);
+
+    assert_eq!(main_invocation_count(&log), 2, "one retry: {output}");
+    assert_eq!(
+        std::fs::read_to_string(&tty_state_log)
+            .expect("read ssh tty state log")
+            .lines()
+            .collect::<Vec<_>>(),
+        ["sane", "sane"],
+        "the guard repairs entry and restores before retry"
+    );
+    assert_eq!(
+        output.matches(rimz::remote::tty::EMULATOR_RESET).count(),
+        1,
+        "only the dropped session resets the emulator: {output:?}"
+    );
+    assert_shell_tty(&settings);
 }
 
 #[test]

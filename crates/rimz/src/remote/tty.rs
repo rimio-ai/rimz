@@ -4,8 +4,8 @@ use nix::sys::termios::{InputFlags, LocalFlags, OutputFlags};
 
 /// Restores emulator modes that an interrupted remote TUI can leave behind.
 ///
-/// - `ESC[<u` pops kitty keyboard enhancement.
 /// - `ESC[?1049l` leaves the alternate screen before later bytes target the main screen.
+/// - `ESC[<9999u` drains kitty keyboard enhancement from the main-screen stack.
 /// - `ESC[?2004l` disables bracketed paste.
 /// - `ESC[?1004l` disables focus reporting.
 /// - `ESC[?1006l`, `ESC[?1003l`, `ESC[?1002l`, and `ESC[?1000l` disable mouse reporting.
@@ -15,8 +15,8 @@ use nix::sys::termios::{InputFlags, LocalFlags, OutputFlags};
 /// - `ESC[r` resets the scroll region.
 /// - `ESC>` selects the normal keypad.
 pub const EMULATOR_RESET: &str = concat!(
-    "\x1b[<u",
     "\x1b[?1049l",
+    "\x1b[<9999u",
     "\x1b[?2004l",
     "\x1b[?1004l",
     "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l",
@@ -106,7 +106,7 @@ mod tests {
     fn emulator_reset_bytes_cover_terminal_modes() {
         assert_eq!(
             EMULATOR_RESET,
-            "\x1b[<u\x1b[?1049l\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[0m\x1b[r\x1b>"
+            "\x1b[?1049l\x1b[<9999u\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[0m\x1b[r\x1b>"
         );
     }
 }
