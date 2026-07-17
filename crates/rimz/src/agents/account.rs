@@ -79,10 +79,6 @@ impl ProviderAccountBinding {
         &self.account_key
     }
 
-    pub(crate) fn encode(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
-    }
-
     #[doc(hidden)]
     pub fn decode(value: &str) -> Option<Self> {
         serde_json::from_str(value)

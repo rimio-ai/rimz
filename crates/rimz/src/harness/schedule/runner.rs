@@ -1139,20 +1139,19 @@ fn resolve_managed_spawn_binding(
         model: resolved.model.clone(),
         ..crate::agents::LaunchParams::default()
     };
-    let invocation = crate::harness::launch::ExecInvocation {
-        kind: &resolved.kind,
+    let invocation = crate::harness::launch::ExecRequest {
+        kind: crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
         action: crate::harness::launch::ExecAction::Launch {
             prompt: None,
-            extra_args: &resolved.args,
+            extra_args: resolved.args.clone(),
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
+        provider_account: crate::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         identity: crate::harness::launch::ExecIdentity {
-            params: Some(&launch),
+            params: launch,
             ..Default::default()
         },
     };

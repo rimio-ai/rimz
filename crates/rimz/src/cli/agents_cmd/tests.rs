@@ -8,7 +8,7 @@ use rimz::agents::{
 };
 use rimz::config::{MachineConfig, Profile, ProfilesConfig, ThemeConfig, ThemeGlyphsConfig};
 use rimz::forge::Forge;
-use rimz::harness::launch::{ExecAction, ExecIdentity, ExecInvocation};
+use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
@@ -17,12 +17,6 @@ use rimz::sidebar::refresh::CodexDaemonReap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-#[derive(Debug, Parser)]
-struct ExecHarness {
-    #[command(subcommand)]
-    command: AgentsSubcmd,
-}
 
 #[derive(Debug, Parser)]
 struct AgentsHarness {
@@ -54,16 +48,9 @@ fn parse_agents(argv: &[&str]) -> AgentsArgs {
         .args
 }
 
-fn parse_exec(argv: &[&str]) -> ExecArgs {
-    let parsed = ExecHarness::try_parse_from(argv).expect("parse exec");
-    let AgentsSubcmd::Exec(args) = parsed.command else {
-        panic!("expected exec subcommand");
-    };
-    *args
-}
-
-fn parse_exec_invocation(input: &ExecInvocation<'_>) -> ExecArgs {
-    let argv = rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), input);
+fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
+    let argv =
+        rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), input).expect("render exec argv");
     let parsed = crate::cli::Cli::try_parse_from(argv).expect("parse rendered exec argv");
     let Some(crate::cli::Subcmd::Agents(args)) = parsed.subcommand else {
         panic!("expected agents subcommand");
@@ -71,15 +58,19 @@ fn parse_exec_invocation(input: &ExecInvocation<'_>) -> ExecArgs {
     let Some(AgentsSubcmd::Exec(args)) = args.command else {
         panic!("expected exec subcommand");
     };
-    *args
+    rimz::harness::launch::decode_exec_request(
+        &args.kind,
+        args.worktree_path.as_deref(),
+        &args.request,
+    )
+    .expect("decode exec request")
 }
 
-fn minimal_exec_invocation<'a>(kind: &'a str, action: ExecAction<'a>) -> ExecInvocation<'a> {
-    ExecInvocation {
-        kind,
+fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
+    ExecRequest {
+        kind: AgentKind::new_unchecked(kind),
         action,
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
+        provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
         close_pane_on_exit: false,
@@ -88,7 +79,7 @@ fn minimal_exec_invocation<'a>(kind: &'a str, action: ExecAction<'a>) -> ExecInv
     }
 }
 
-fn resume_or_fork_contract(action: ExecAction<'_>) -> (&str, &str, &[String]) {
+fn resume_or_fork_contract(action: &ExecAction) -> (&str, &str, &[String]) {
     use ExecAction::{Fork, Launch, Resume};
 
     match action {
@@ -354,7 +345,7 @@ mod parse {
     }
 
     #[test]
-    fn exec_argv_round_trips_identity_actions_and_conflicts() {
+    fn exec_argv_round_trips_identity_actions_and_bindings() {
         let launch_extra = vec!["--dangerously-skip-permissions".to_owned()];
         let input_params = LaunchParams {
             profile: Some("planner".to_owned()),
@@ -369,58 +360,61 @@ mod parse {
             channel: Some("design".to_owned()),
             kind_ordinal: None,
         };
-        let input = ExecInvocation {
-            kind: "claude",
+        let input = ExecRequest {
+            kind: AgentKind::new_unchecked("claude"),
             action: ExecAction::Launch {
-                prompt: Some("fix it"),
-                extra_args: &launch_extra,
+                prompt: Some("fix it".to_owned()),
+                extra_args: launch_extra,
             },
-            provider_account_binding: None,
-            provider_account_binding_finalized: false,
-            run_id: Some("run_0123456789abcdef0123456789abcdef"),
-            worktree_path: Some(Path::new("/repo/worktree")),
+            provider_account: ProviderAccountState::Unbound,
+            run_id: Some(
+                "run_0123456789abcdef0123456789abcdef"
+                    .parse()
+                    .expect("run id"),
+            ),
+            worktree_path: Some(PathBuf::from("/repo/worktree")),
             close_pane_on_exit: true,
             exit_on_run_completion: true,
             identity: ExecIdentity {
-                name: Some("swift-otter"),
+                name: Some("swift-otter".to_owned()),
                 name_explicit: true,
-                launch_id: Some("launch_0123456789abcdef0123456789abcdef"),
-                params: Some(&input_params),
+                launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
+                params: input_params,
             },
         };
 
-        let args = parse_exec_invocation(&input);
-        let action = exec_action(&args);
-        let actual_params = launch_params(&args);
-        let actual = exec_invocation(&args, action, &actual_params, None);
+        let actual = parse_exec_request(&input);
         assert_eq!(
             (
-                actual.kind,
-                actual.run_id,
-                actual.worktree_path,
+                actual.kind.as_str(),
+                actual.run_id.as_ref().map(ToString::to_string),
+                actual.worktree_path.as_deref(),
                 actual.close_pane_on_exit,
                 actual.exit_on_run_completion,
             ),
             (
                 "claude",
-                Some("run_0123456789abcdef0123456789abcdef"),
+                Some("run_0123456789abcdef0123456789abcdef".to_owned()),
                 Some(Path::new("/repo/worktree")),
                 true,
                 true,
             )
         );
-        let ExecAction::Launch { prompt, extra_args } = actual.action else {
+        let ExecAction::Launch { prompt, extra_args } = &actual.action else {
             panic!("expected launch actions");
         };
         assert_eq!(
-            (prompt, extra_args),
-            (Some("fix it"), launch_extra.as_slice())
+            (prompt.as_deref(), extra_args.as_slice()),
+            (
+                Some("fix it"),
+                ["--dangerously-skip-permissions".to_owned()].as_slice()
+            )
         );
         assert_eq!(
             (
-                actual.identity.name,
+                actual.identity.name.as_deref(),
                 actual.identity.name_explicit,
-                args.launch_id.as_deref(),
+                actual.identity.launch_id.as_deref(),
             ),
             (
                 Some("swift-otter"),
@@ -429,7 +423,7 @@ mod parse {
             )
         );
         assert_eq!(
-            launch_params(&args),
+            actual.identity.params,
             LaunchParams {
                 profile: Some("planner".to_owned()),
                 mode: Some(PermissionMode::Yolo),
@@ -448,49 +442,64 @@ mod parse {
         let resume_extra = vec!["--verbose".to_owned()];
         let fork_extra = vec!["--branch".to_owned()];
         for input in [
-            minimal_exec_invocation(
+            minimal_exec_request(
                 "claude",
                 ExecAction::Resume {
-                    session_id: "sess-1",
-                    extra_args: &resume_extra,
+                    session_id: "sess-1".to_owned(),
+                    extra_args: resume_extra,
                 },
             ),
-            minimal_exec_invocation(
+            minimal_exec_request(
                 "codex",
                 ExecAction::Fork {
-                    session_id: "sess-2",
-                    extra_args: &fork_extra,
+                    session_id: "sess-2".to_owned(),
+                    extra_args: fork_extra,
                 },
             ),
         ] {
-            let args = parse_exec_invocation(&input);
-            let params = launch_params(&args);
-            let actual = exec_invocation(&args, exec_action(&args), &params, None);
+            let actual = parse_exec_request(&input);
             assert_eq!(actual.kind, input.kind);
             assert_eq!(
-                resume_or_fork_contract(actual.action),
-                resume_or_fork_contract(input.action)
+                resume_or_fork_contract(&actual.action),
+                resume_or_fork_contract(&input.action)
             );
         }
 
-        for command in [
-            "rimz exec claude --resume sess-1 --prompt hi",
-            "rimz exec codex --fork sess-2 --resume sess-1",
-            "rimz exec codex --fork sess-2 --prompt hi",
-        ] {
-            assert!(
-                ExecHarness::try_parse_from(command.split_ascii_whitespace()).is_err(),
-                "{command}"
-            );
-        }
-
-        let args = parse_exec(&["rimz", "exec", "claude", "--launch-id", "launch_orphan"]);
+        let mut orphan = minimal_exec_request(
+            "claude",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        orphan.identity.launch_id = Some("launch_orphan".to_owned());
         assert_eq!(
-            super::exec::exec_launch_identity(&args, &launch_params(&args))
+            super::exec::exec_launch_identity(&orphan)
                 .expect_err("launch id requires a name")
                 .to_string(),
             "--launch-id requires --agent-name"
         );
+
+        let binding = rimz::agents::ProviderAccountBinding::decode(
+            r#"{"scope":{"kind":"sub_provider","provider":"alibaba","variant":"international"},"account_key":"owner"}"#,
+        )
+        .expect("binding");
+        for provider_account in [
+            ProviderAccountState::Pending {
+                binding: binding.clone(),
+            },
+            ProviderAccountState::Finalized { binding },
+        ] {
+            let mut request = minimal_exec_request(
+                "qwen",
+                ExecAction::Launch {
+                    prompt: None,
+                    extra_args: Vec::new(),
+                },
+            );
+            request.provider_account = provider_account;
+            assert_eq!(parse_exec_request(&request), request);
+        }
     }
 }
 
@@ -764,11 +773,11 @@ mod pane_exec {
     #[test]
     fn exit_hints_use_best_relaunch_identity() {
         let mut team = bare_exec_args();
-        team.agent_team = Some("trim".to_owned());
-        team.agent_role = Some("pruner".to_owned());
-        team.agent_profile = Some("codex-plan".to_owned());
+        team.identity.params.team = Some("trim".to_owned());
+        team.identity.params.role = Some("pruner".to_owned());
+        team.identity.params.profile = Some("codex-plan".to_owned());
         let mut profile = bare_exec_args();
-        profile.agent_profile = Some("codex-plan".to_owned());
+        profile.identity.params.profile = Some("codex-plan".to_owned());
         assert_eq!(relaunch_command(&team), "rimz agents trim.pruner");
         assert_eq!(relaunch_command(&profile), "rimz agents codex-plan");
         assert_eq!(relaunch_command(&bare_exec_args()), "rimz agents codex");
@@ -829,8 +838,7 @@ mod runs {
             rimz::harness::run_wake::bind_run(&runtime, &run_id).expect("bind run");
         let context = RunExecContext {
             run_id: run_id.clone(),
-            paths: paths.clone(),
-            runtime,
+            store: rimz::Store::open(paths.clone(), runtime).expect("store"),
             session_name: "rimz-test".to_owned(),
         };
 
@@ -1200,7 +1208,7 @@ mod automation {
 }
 
 #[test]
-fn qwen_finalizer_requires_the_exact_preflight_binding() {
+fn provider_binding_debug_redacts_account_key() {
     let binding = |key: &str| {
         rimz::agents::ProviderAccountBinding::decode(&format!(
             r#"{{"scope":{{"kind":"sub_provider","provider":"alibaba","variant":"international"}},"account_key":"{key}"}}"#
@@ -1208,19 +1216,27 @@ fn qwen_finalizer_requires_the_exact_preflight_binding() {
         .expect("binding")
     };
     let expected = binding("owner");
-    let matching = binding("owner");
-    let other = binding("other");
-    assert!(provider_account_binding_matches(&expected, Some(&matching)));
-    assert!(!provider_account_binding_matches(&expected, Some(&other)));
-    assert!(!provider_account_binding_matches(&expected, None));
     assert!(!format!("{expected:?}").contains("owner"));
 }
 
-fn bare_exec_args() -> ExecArgs {
-    let argv: Vec<_> = "rimz exec codex --agent-name lucid-atlas --launch-id launch_0123456789abcdef0123456789abcdef"
-        .split_ascii_whitespace()
-        .collect();
-    parse_exec(&argv)
+fn bare_exec_args() -> ExecRequest {
+    ExecRequest {
+        kind: AgentKind::new_unchecked("codex"),
+        action: ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: ExecIdentity {
+            name: Some("lucid-atlas".to_owned()),
+            launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
+            ..ExecIdentity::default()
+        },
+    }
 }
 
 fn render_agents_text(

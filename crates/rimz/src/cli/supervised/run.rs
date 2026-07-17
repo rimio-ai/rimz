@@ -313,20 +313,19 @@ fn prepare_supervised(
     )?;
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
-    let launch_invocation = rimz::harness::launch::ExecInvocation {
-        kind: agent_cell.kind.as_str(),
+    let launch_invocation = rimz::harness::launch::ExecRequest {
+        kind: agent_cell.kind.clone(),
         action: rimz::harness::launch::ExecAction::Launch {
-            prompt: Some(&request.prompt),
-            extra_args: &agent_cell.args,
+            prompt: Some(request.prompt.clone()),
+            extra_args: agent_cell.args.clone(),
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
+        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         identity: rimz::harness::launch::ExecIdentity {
-            params: Some(&preflight_launch),
+            params: preflight_launch,
             ..rimz::harness::launch::ExecIdentity::default()
         },
     };

@@ -15,6 +15,8 @@
 use rimz::EventEnvelope;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
+use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
+use rimz::ids::AgentKind;
 use rimz::ids::MuxName;
 use rimz::ids::PaneId;
 use std::path::Path;
@@ -79,17 +81,35 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
 }
 
 fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
-    vec![
-        "/bin/rimz".to_owned(),
-        "agents".to_owned(),
-        "exec".to_owned(),
-        kind.to_owned(),
-        "--resume".to_owned(),
-        id.to_owned(),
-        "--agent-name".to_owned(),
-        name.to_owned(),
-        "--close-pane-on-exit".to_owned(),
-    ]
+    rimz::harness::launch::exec_argv(
+        Path::new("/bin/rimz"),
+        &ExecRequest {
+            kind: AgentKind::new_unchecked(kind),
+            action: ExecAction::Resume {
+                session_id: id.to_owned(),
+                extra_args: Vec::new(),
+            },
+            provider_account: ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: true,
+            exit_on_run_completion: false,
+            identity: ExecIdentity {
+                name: Some(name.to_owned()),
+                ..ExecIdentity::default()
+            },
+        },
+    )
+    .expect("resume argv")
+}
+
+fn decode_exec_request(argv: &[String]) -> ExecRequest {
+    let payload = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
+        .expect("exec request payload");
+    rimz::harness::launch::decode_exec_request(&argv[3], None, payload)
+        .expect("decode exec request")
 }
 
 fn single_column(tab: &rimz::mux::ResumeTab) -> Vec<Vec<String>> {
@@ -160,31 +180,24 @@ fn resume_replays_role_and_team() {
 
     let plan = plan_from_rollup(&h);
     assert_eq!(plan.tabs.len(), 1);
+    let commands = single_column(&plan.tabs[0]);
+    assert_eq!(commands.len(), 1);
+    let request = decode_exec_request(&commands[0]);
     assert_eq!(
-        single_column(&plan.tabs[0]),
-        vec![
-            vec![
-                "/bin/rimz",
-                "agents",
-                "exec",
-                "claude",
-                "--resume",
-                "sess-claude",
-                "--agent-name",
-                "warm-drift",
-                "--agent-profile",
-                "claude-planner",
-                "--agent-role",
-                "planner",
-                "--agent-team",
-                "forge",
-                "--close-pane-on-exit",
-            ]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<String>>()
-        ]
+        request.action,
+        ExecAction::Resume {
+            session_id: "sess-claude".to_owned(),
+            extra_args: Vec::new(),
+        }
     );
+    assert_eq!(request.identity.name.as_deref(), Some("warm-drift"));
+    assert_eq!(
+        request.identity.params.profile.as_deref(),
+        Some("claude-planner")
+    );
+    assert_eq!(request.identity.params.role.as_deref(), Some("planner"));
+    assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
+    assert!(request.close_pane_on_exit);
 }
 
 #[test]
@@ -313,17 +326,13 @@ fn soft_reset_preserves_dead_paneless_resume_identity() {
     assert_eq!(plan.tabs.len(), 1);
     let commands = single_column(&plan.tabs[0]);
     let command = &commands[0];
-    assert_eq!(command[5], "sess-planner");
-    assert!(
-        command
-            .windows(2)
-            .any(|pair| pair[0] == "--agent-role" && pair[1] == "planner")
-    );
-    assert!(
-        command
-            .windows(2)
-            .any(|pair| pair[0] == "--agent-team" && pair[1] == "forge")
-    );
+    let request = decode_exec_request(command);
+    assert!(matches!(
+        request.action,
+        ExecAction::Resume { ref session_id, .. } if session_id == "sess-planner"
+    ));
+    assert_eq!(request.identity.params.role.as_deref(), Some("planner"));
+    assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
 }
 
 #[test]

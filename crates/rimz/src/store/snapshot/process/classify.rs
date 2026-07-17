@@ -80,7 +80,8 @@ fn rimz_exec_kind<'a>(program: &str, mut tokens: std::str::SplitWhitespace<'a>) 
 /// Worktree path carried by RimZ's own supervised agent wrapper, when the mux's
 /// live pane read has not reported `cwd` yet. This is intentionally narrower
 /// than command parsing in general: only the hidden `rimz agents exec <kind>
-/// --worktree-path <path>` contract supplies path truth.
+/// --worktree-path <path>` envelope supplies path truth; opaque wrapper state
+/// after that envelope is deliberately ignored.
 pub(crate) fn rimz_exec_worktree_path(command: &str) -> Option<&str> {
     let (program, tokens) = effective_program_and_args(command)?;
     rimz_exec_kind(program, tokens.clone())?;
@@ -374,11 +375,19 @@ mod tests {
         assert_eq!(command_agent_kind(wrapped), Some("codex"));
         assert_eq!(rimz_exec_worktree_path(wrapped), Some("/repo/wt"));
         assert_eq!(
-            command_agent_kind("sudo /home/me/.cargo/bin/rimz agents exec codex --prompt hi"),
+            command_agent_kind(
+                "sudo /home/me/.cargo/bin/rimz agents exec codex --request opaque-state"
+            ),
             Some("codex")
         );
         assert_eq!(
             rimz_exec_worktree_path("/bin/rimz agents exec codex --worktree-path=/repo/wt"),
+            Some("/repo/wt")
+        );
+        assert_eq!(
+            rimz_exec_worktree_path(
+                "/bin/rimz agents exec codex --worktree-path /repo/wt --request arbitrary-later-state"
+            ),
             Some("/repo/wt")
         );
         assert_eq!(command_agent_kind("rimz agents exec unknown"), None);

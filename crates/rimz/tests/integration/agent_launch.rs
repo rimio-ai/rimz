@@ -7,15 +7,34 @@ use predicates::str::contains;
 #[cfg(unix)]
 use rimz::agents::LaunchParams;
 #[cfg(unix)]
+use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
+#[cfg(unix)]
 use rimz::ids::{AgentKind, AgentSessionId};
 #[cfg(unix)]
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
 #[cfg(unix)]
 use crate::common::{
-    CommandTimeoutExt, Env, path_with_front, write_env_dump_shim, write_failing_agent_shim,
-    write_fake_bash_shell, write_fake_login_shell,
+    CommandTimeoutExt, Env, exec_args, path_with_front, write_env_dump_shim,
+    write_failing_agent_shim, write_fake_bash_shell, write_fake_login_shell,
 };
+
+#[cfg(unix)]
+fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
+    ExecRequest {
+        kind: AgentKind::new_unchecked(kind),
+        action: ExecAction::Launch {
+            prompt: prompt.map(ToOwned::to_owned),
+            extra_args: Vec::new(),
+        },
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: ExecIdentity::default(),
+    }
+}
 
 #[cfg(unix)]
 #[test]
@@ -30,7 +49,7 @@ fn shell_rc_env_reaches_the_spawned_agent() {
     let dump = env.home_root.join("codex-shell.env");
 
     env.rimz()
-        .args(["agents", "exec", "codex"])
+        .args(exec_args(&fresh_exec("codex", None)))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -62,7 +81,7 @@ fn bashrc_path_reaches_the_spawned_agent() {
     let dump = env.home_root.join("codex-bashrc.env");
 
     env.rimz()
-        .args(["agents", "exec", "codex"])
+        .args(exec_args(&fresh_exec("codex", None)))
         .env("SHELL", &shell)
         .env("PATH", "/usr/bin:/bin")
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -90,7 +109,7 @@ fn adapter_preserves_agent_view_shell_env() {
     let dump = env.home_root.join("claude-shell.env");
 
     env.rimz()
-        .args(["agents", "exec", "claude"])
+        .args(exec_args(&fresh_exec("claude", None)))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -119,7 +138,7 @@ fn trusted_agent_env_overrides_shell_rc_env() {
     let dump = env.home_root.join("codex-trusted-shell.env");
 
     env.rimz()
-        .args(["agents", "exec", "codex"])
+        .args(exec_args(&fresh_exec("codex", None)))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -142,7 +161,7 @@ fn missing_shell_path_falls_back_to_direct_exec() {
     let dump = env.home_root.join("codex-direct.env");
 
     env.rimz()
-        .args(["agents", "exec", "codex"])
+        .args(exec_args(&fresh_exec("codex", None)))
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -246,7 +265,7 @@ fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
     let prompt = r#"say "hello there" with spaces"#;
 
     env.rimz()
-        .args(["agents", "exec", "codex", "--prompt", prompt])
+        .args(exec_args(&fresh_exec("codex", Some(prompt))))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -279,22 +298,21 @@ fn close_pane_exec_reports_startup_failure_before_dropping_to_shell() {
     let launch_id = "launch_startup_failure";
     seed_provisional_agent_launch(&env, launch_id, "pruner");
 
+    let mut request = fresh_exec("codex", None);
+    request.close_pane_on_exit = true;
+    request.identity = ExecIdentity {
+        name: Some("pruner".to_owned()),
+        launch_id: Some(launch_id.to_owned()),
+        params: LaunchParams {
+            team: Some("trim".to_owned()),
+            role: Some("pruner".to_owned()),
+            ..LaunchParams::default()
+        },
+        ..ExecIdentity::default()
+    };
     let output = env
         .rimz()
-        .args([
-            "agents",
-            "exec",
-            "codex",
-            "--launch-id",
-            launch_id,
-            "--agent-name",
-            "pruner",
-            "--agent-team",
-            "trim",
-            "--agent-role",
-            "pruner",
-            "--close-pane-on-exit",
-        ])
+        .args(exec_args(&request))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_IDLE_SHELL_MARKER", &idle_shell_marker)

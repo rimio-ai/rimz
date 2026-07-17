@@ -66,15 +66,32 @@ fn no_ended() -> BTreeSet<(AgentKind, AgentSessionId)> {
 }
 
 fn exec_resume(kind: &str, id: &str) -> Vec<String> {
-    vec![
-        "/bin/rimz".to_owned(),
-        "agents".to_owned(),
-        "exec".to_owned(),
-        kind.to_owned(),
-        "--resume".to_owned(),
-        id.to_owned(),
-        "--close-pane-on-exit".to_owned(),
-    ]
+    crate::harness::launch::exec_argv(
+        Path::new("/bin/rimz"),
+        &crate::harness::launch::ExecRequest {
+            kind: AgentKind::new_unchecked(kind),
+            action: crate::harness::launch::ExecAction::Resume {
+                session_id: id.to_owned(),
+                extra_args: Vec::new(),
+            },
+            provider_account: crate::harness::launch::ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: true,
+            exit_on_run_completion: false,
+            identity: crate::harness::launch::ExecIdentity::default(),
+        },
+    )
+    .expect("exec argv")
+}
+
+fn decode_exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
+    let payload = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
+        .expect("exec request payload");
+    crate::harness::launch::decode_exec_request(&argv[3], None, payload)
+        .expect("decode exec request")
 }
 
 fn single_column(tab: &ResumeTab) -> Vec<Vec<String>> {
@@ -710,30 +727,29 @@ fn resume_command_replays_launch_identity() {
     agent.team = Some("forge".to_owned());
     agent.launch_group = Some("launch_group_1".to_owned());
     agent.launch_ordinal = Some(2);
+    let argv = resume_command(Path::new("/bin/rimz"), &agent, agent.channel.as_deref());
+    assert_eq!(&argv[..4], ["/bin/rimz", "agents", "exec", "claude"]);
+    let request = decode_exec_request(&argv);
     assert_eq!(
-        resume_command(Path::new("/bin/rimz"), &agent, agent.channel.as_deref()),
-        vec![
-            "/bin/rimz",
-            "agents",
-            "exec",
-            "claude",
-            "--resume",
-            "a1",
-            "--agent-name",
-            "swift-otter",
-            "--agent-profile",
-            "claude-planner",
-            "--agent-role",
-            "planner",
-            "--agent-team",
-            "forge",
-            "--launch-group",
-            "launch_group_1",
-            "--launch-ordinal",
-            "2",
-            "--close-pane-on-exit",
-        ]
+        request.action,
+        crate::harness::launch::ExecAction::Resume {
+            session_id: "a1".to_owned(),
+            extra_args: Vec::new(),
+        }
     );
+    assert!(request.close_pane_on_exit);
+    assert_eq!(request.identity.name.as_deref(), Some("swift-otter"));
+    assert_eq!(
+        request.identity.params.profile.as_deref(),
+        Some("claude-planner")
+    );
+    assert_eq!(request.identity.params.role.as_deref(), Some("planner"));
+    assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
+    assert_eq!(
+        request.identity.params.launch_group.as_deref(),
+        Some("launch_group_1")
+    );
+    assert_eq!(request.identity.params.launch_ordinal, Some(2));
 }
 
 #[test]
@@ -1005,13 +1021,8 @@ fn named_channel_groups_by_explicit_channel_and_replays_identity() {
         build_label("codex", Some("design"), Path::new("/code/query-engine")),
         "codex:design"
     );
-    assert!(
-        first_argv(&plan.tabs[0])
-            .windows(2)
-            .any(|pair| { pair[0].as_str() == "--agent-channel" && pair[1].as_str() == "design" }),
-        "resume argv re-stamps the named channel: {:?}",
-        first_argv(&plan.tabs[0])
-    );
+    let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+    assert_eq!(request.identity.params.channel.as_deref(), Some("design"));
 }
 
 #[test]
@@ -1036,20 +1047,9 @@ fn worktree_team_resume_replays_flat_worktree_channel() {
     );
 
     assert_eq!(plan.tabs[0].label, "#auth");
-    assert!(
-        first_argv(&plan.tabs[0])
-            .windows(2)
-            .any(|pair| { pair[0].as_str() == "--agent-channel" && pair[1].as_str() == "auth" }),
-        "resume argv re-stamps the worktree channel: {:?}",
-        first_argv(&plan.tabs[0])
-    );
-    assert!(
-        first_argv(&plan.tabs[0])
-            .windows(2)
-            .any(|pair| { pair[0].as_str() == "--agent-team" && pair[1].as_str() == "forge" }),
-        "resume argv keeps the team identity: {:?}",
-        first_argv(&plan.tabs[0])
-    );
+    let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+    assert_eq!(request.identity.params.channel.as_deref(), Some("auth"));
+    assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
 }
 
 fn team_configs() -> (TeamsConfig, ProfilesConfig, CommandsConfig) {
@@ -1411,7 +1411,11 @@ fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
         PaneId::from_parts(MuxName::Zellij, "live-pane")
     );
     assert_eq!(commands.len(), 1);
-    assert!(commands[0].iter().any(|arg| arg == "closed"));
+    assert!(matches!(
+        decode_exec_request(&commands[0]).action,
+        crate::harness::launch::ExecAction::Resume { ref session_id, .. }
+            if session_id == "closed"
+    ));
     assert_eq!(live_labels.len(), 1);
 }
 

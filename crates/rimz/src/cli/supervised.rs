@@ -136,26 +136,30 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     let rimz_bin = rimz::proc::rimz_exe();
     let argv = rimz::harness::launch::exec_argv(
         &rimz_bin,
-        &rimz::harness::launch::ExecInvocation {
-            kind: args.adapter.descriptor().kind,
+        &rimz::harness::launch::ExecRequest {
+            kind: rimz::ids::AgentKind::new_unchecked(args.adapter.descriptor().kind),
             action: rimz::harness::launch::ExecAction::Launch {
-                prompt: Some(args.prompt),
-                extra_args: args.permission_args,
+                prompt: Some(args.prompt.to_owned()),
+                extra_args: args.permission_args.to_vec(),
             },
-            provider_account_binding: args.provider_account_binding,
-            provider_account_binding_finalized: false,
-            run_id: Some(args.run_id.as_str()),
-            worktree_path: args.cleanup_worktree.then_some(args.cwd),
+            provider_account: args.provider_account_binding.map_or(
+                rimz::harness::launch::ProviderAccountState::Unbound,
+                |binding| rimz::harness::launch::ProviderAccountState::Pending {
+                    binding: binding.clone(),
+                },
+            ),
+            run_id: Some(args.run_id.clone()),
+            worktree_path: args.cleanup_worktree.then(|| args.cwd.to_path_buf()),
             close_pane_on_exit: args.self_cleanup_on_completion,
             exit_on_run_completion: args.self_cleanup_on_completion,
             identity: rimz::harness::launch::ExecIdentity {
-                name: args.agent_name,
+                name: args.agent_name.map(ToOwned::to_owned),
                 name_explicit: args.agent_name_explicit,
-                launch_id: args.launch_id.map(rimz::ids::AgentSessionId::as_str),
-                params: Some(args.launch),
+                launch_id: args.launch_id.map(ToString::to_string),
+                params: args.launch.clone(),
             },
         },
-    );
+    )?;
     Ok(PaneCmd { argv })
 }
 

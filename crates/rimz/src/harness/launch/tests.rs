@@ -14,24 +14,24 @@ fn provider_compiler_preserves_action_and_trailing_argument_order() {
     for (action, verb, session) in [
         (
             ExecAction::Launch {
-                prompt: Some("inspect"),
-                extra_args: &trailing,
+                prompt: Some("inspect".to_owned()),
+                extra_args: trailing.clone(),
             },
             "inspect",
             None,
         ),
         (
             ExecAction::Fork {
-                session_id: "fork-id",
-                extra_args: &trailing,
+                session_id: "fork-id".to_owned(),
+                extra_args: trailing.clone(),
             },
             "fork",
             Some("fork-id"),
         ),
         (
             ExecAction::Resume {
-                session_id: "resume-id",
-                extra_args: &trailing,
+                session_id: "resume-id".to_owned(),
+                extra_args: trailing.clone(),
             },
             "resume",
             Some("resume-id"),
@@ -45,6 +45,30 @@ fn provider_compiler_preserves_action_and_trailing_argument_order() {
     }
 }
 
+fn request(kind: &str, action: ExecAction) -> ExecRequest {
+    ExecRequest {
+        kind: AgentKind::new_unchecked(kind),
+        action,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: ExecIdentity::default(),
+    }
+}
+
+fn round_trip(input: &ExecRequest) -> (Vec<String>, ExecRequest) {
+    let argv = exec_argv(Path::new("/bin/rimz"), input).expect("encode exec request");
+    let payload = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
+        .expect("request payload");
+    let decoded = decode_exec_request(input.kind.as_str(), input.worktree_path.as_deref(), payload)
+        .expect("decode exec request");
+    (argv, decoded)
+}
+
 #[test]
 fn process_compiler_composes_adapter_identity_and_rtk_environment() {
     let project = tempfile::tempdir().expect("project");
@@ -52,23 +76,19 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
         channel: Some("design".to_owned()),
         ..Default::default()
     };
-    let invocation = ExecInvocation {
-        kind: "copilot",
-        action: ExecAction::Launch {
-            prompt: Some("inspect"),
-            extra_args: &[],
+    let mut invocation = request(
+        "copilot",
+        ExecAction::Launch {
+            prompt: Some("inspect".to_owned()),
+            extra_args: Vec::new(),
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
-        run_id: Some("run_123"),
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        identity: ExecIdentity {
-            params: Some(&params),
-            ..ExecIdentity::default()
-        },
-    };
+    );
+    invocation.run_id = Some(
+        "run_0123456789abcdef0123456789abcdef"
+            .parse()
+            .expect("run id"),
+    );
+    invocation.identity.params = params;
 
     let process = compile_agent_process(
         project.path(),
@@ -116,23 +136,14 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
         channel: Some("identity".to_owned()),
         ..Default::default()
     };
-    let invocation = ExecInvocation {
-        kind: "copilot",
-        action: ExecAction::Launch {
+    let mut invocation = request(
+        "copilot",
+        ExecAction::Launch {
             prompt: None,
-            extra_args: &[],
+            extra_args: Vec::new(),
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        identity: ExecIdentity {
-            params: Some(&params),
-            ..ExecIdentity::default()
-        },
-    };
+    );
+    invocation.identity.params = params;
     let project = env(&[
         (
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
@@ -156,20 +167,13 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
 #[test]
 fn process_compiler_names_invalid_environment_key() {
     let adapter = crate::agents::find_adapter("codex").expect("codex");
-    let invocation = ExecInvocation {
-        kind: "codex",
-        action: ExecAction::Launch {
+    let invocation = request(
+        "codex",
+        ExecAction::Launch {
             prompt: None,
-            extra_args: &[],
+            extra_args: Vec::new(),
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        identity: ExecIdentity::default(),
-    };
+    );
 
     let err = compose_agent_env(
         env(&[("-BROKEN", "value")]),
@@ -190,7 +194,7 @@ fn argv(args: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn exec_argv_renders_maximal_launch_identity() {
+fn exec_wire_round_trips_maximal_launch_identity() {
     let extra_args = argv(&["--dangerously-skip-permissions"]);
     let params = crate::agents::LaunchParams {
         profile: Some("planner".to_owned()),
@@ -205,74 +209,53 @@ fn exec_argv_renders_maximal_launch_identity() {
         budget: Some("$12.50/day".to_owned()),
         kind_ordinal: Some(99),
     };
-    let invocation = ExecInvocation {
-        kind: "claude",
+    let invocation = ExecRequest {
+        kind: AgentKind::new_unchecked("claude"),
         action: ExecAction::Launch {
-            prompt: Some("fix it"),
-            extra_args: &extra_args,
+            prompt: Some("fix it".to_owned()),
+            extra_args,
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
-        run_id: Some("run_123"),
-        worktree_path: Some(Path::new("/repo/worktree")),
+        provider_account: ProviderAccountState::Unbound,
+        run_id: Some(
+            "run_0123456789abcdef0123456789abcdef"
+                .parse()
+                .expect("run id"),
+        ),
+        worktree_path: Some(PathBuf::from("/repo/worktree")),
         close_pane_on_exit: true,
         exit_on_run_completion: true,
         identity: ExecIdentity {
-            name: Some("swift-otter"),
+            name: Some("swift-otter".to_owned()),
             name_explicit: true,
-            launch_id: Some("launch_123"),
-            params: Some(&params),
+            launch_id: Some("launch_123".to_owned()),
+            params,
         },
     };
 
+    let (argv, decoded) = round_trip(&invocation);
     assert_eq!(
-        exec_argv(Path::new("/bin/rimz"), &invocation),
-        argv(&[
+        &argv[..6],
+        [
             "/bin/rimz",
             "agents",
             "exec",
             "claude",
-            "--run-id",
-            "run_123",
-            "--agent-name",
-            "swift-otter",
-            "--agent-name-explicit",
-            "--launch-id",
-            "launch_123",
-            "--agent-profile",
-            "planner",
-            "--agent-mode",
-            "yolo",
-            "--agent-role",
-            "coder",
-            "--agent-team",
-            "forge",
-            "--launch-group",
-            "launch_group_1",
-            "--launch-ordinal",
-            "2",
-            "--agent-channel",
-            "design",
-            "--agent-model",
-            "opus",
-            "--agent-effort",
-            "high",
-            "--agent-budget",
-            "$12.50/day",
-            "--exit-on-run-completion",
-            "--close-pane-on-exit",
             "--worktree-path",
-            "/repo/worktree",
-            "--prompt",
-            "fix it",
-            "--",
-            "--dangerously-skip-permissions",
-        ])
+            "/repo/worktree"
+        ]
     );
+    assert_eq!(argv[6], "--request");
+    assert_eq!(decoded.identity.params.kind_ordinal, None);
+    let mut expected = invocation;
+    expected.identity.params.kind_ordinal = None;
+    assert_eq!(decoded, expected);
+    for removed in ["--agent-name", "--launch-id", "--prompt", "--agent-profile"] {
+        assert!(!argv.iter().any(|arg| arg == removed));
+    }
 }
 
 #[test]
-fn exec_argv_renders_resume() {
+fn exec_wire_round_trips_resume_and_fork() {
     let extra_args = argv(&["--dangerously-skip-permissions"]);
     let params = crate::agents::LaunchParams {
         profile: Some("planner".to_owned()),
@@ -283,105 +266,27 @@ fn exec_argv_renders_resume() {
         channel: Some("design".to_owned()),
         ..Default::default()
     };
-    let invocation = ExecInvocation {
-        kind: "claude",
-        action: ExecAction::Resume {
-            session_id: "session-1",
-            extra_args: &extra_args,
+    for action in [
+        ExecAction::Resume {
+            session_id: "resume-1".to_owned(),
+            extra_args: extra_args.clone(),
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: true,
-        exit_on_run_completion: false,
-        identity: ExecIdentity {
-            name: Some("swift-otter"),
-            params: Some(&params),
+        ExecAction::Fork {
+            session_id: "fork-1".to_owned(),
+            extra_args: extra_args.clone(),
+        },
+    ] {
+        let mut invocation = request("claude", action);
+        invocation.close_pane_on_exit = true;
+        invocation.identity = ExecIdentity {
+            name: Some("swift-otter".to_owned()),
+            params: params.clone(),
             ..ExecIdentity::default()
-        },
-    };
-
-    assert_eq!(
-        exec_argv(Path::new("/bin/rimz"), &invocation),
-        argv(&[
-            "/bin/rimz",
-            "agents",
-            "exec",
-            "claude",
-            "--resume",
-            "session-1",
-            "--agent-name",
-            "swift-otter",
-            "--agent-profile",
-            "planner",
-            "--agent-role",
-            "coder",
-            "--agent-team",
-            "forge",
-            "--launch-group",
-            "launch_group_1",
-            "--launch-ordinal",
-            "2",
-            "--agent-channel",
-            "design",
-            "--close-pane-on-exit",
-            "--",
-            "--dangerously-skip-permissions",
-        ])
-    );
-}
-
-#[test]
-fn exec_argv_renders_fork() {
-    let extra_args = argv(&["--dangerously-bypass-approvals-and-sandbox"]);
-    let params = crate::agents::LaunchParams {
-        profile: Some("planner".to_owned()),
-        mode: Some(crate::harness::run::PermissionMode::Yolo),
-        channel: Some("design".to_owned()),
-        ..Default::default()
-    };
-    let invocation = ExecInvocation {
-        kind: "codex",
-        action: ExecAction::Fork {
-            session_id: "session-1",
-            extra_args: &extra_args,
-        },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: true,
-        exit_on_run_completion: false,
-        identity: ExecIdentity {
-            name: Some("swift-otter"),
-            params: Some(&params),
-            ..ExecIdentity::default()
-        },
-    };
-
-    assert_eq!(
-        exec_argv(Path::new("/bin/rimz"), &invocation),
-        argv(&[
-            "/bin/rimz",
-            "agents",
-            "exec",
-            "codex",
-            "--fork",
-            "session-1",
-            "--agent-name",
-            "swift-otter",
-            "--agent-profile",
-            "planner",
-            "--agent-mode",
-            "yolo",
-            "--agent-channel",
-            "design",
-            "--close-pane-on-exit",
-            "--",
-            "--dangerously-bypass-approvals-and-sandbox",
-        ])
-    );
+        };
+        let (argv, decoded) = round_trip(&invocation);
+        assert_eq!(argv[..4], ["/bin/rimz", "agents", "exec", "claude"]);
+        assert_eq!(decoded, invocation);
+    }
 }
 
 #[test]
@@ -398,23 +303,22 @@ fn exec_identity_env_maps_identity_fields() {
         budget: Some("$12.50/day".to_owned()),
         ..Default::default()
     };
-    let invocation = ExecInvocation {
-        kind: "claude",
-        action: ExecAction::Launch {
+    let mut invocation = request(
+        "claude",
+        ExecAction::Launch {
             prompt: None,
-            extra_args: &[],
+            extra_args: Vec::new(),
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
-        run_id: Some("run_123"),
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        identity: ExecIdentity {
-            name: Some("swift-otter"),
-            params: Some(&params),
-            ..ExecIdentity::default()
-        },
+    );
+    invocation.run_id = Some(
+        "run_0123456789abcdef0123456789abcdef"
+            .parse()
+            .expect("run id"),
+    );
+    invocation.identity = ExecIdentity {
+        name: Some("swift-otter".to_owned()),
+        params,
+        ..ExecIdentity::default()
     };
 
     assert_eq!(
@@ -426,7 +330,7 @@ fn exec_identity_env_maps_identity_fields() {
             ),
             (
                 crate::harness::run::ENV_RUN_ID.to_owned(),
-                "run_123".to_owned()
+                "run_0123456789abcdef0123456789abcdef".to_owned()
             ),
             (
                 crate::harness::run::ENV_AGENT_NAME.to_owned(),
@@ -472,28 +376,155 @@ fn exec_identity_env_maps_identity_fields() {
 
 #[test]
 fn launch_id_without_a_name_is_not_emitted() {
-    let invocation = ExecInvocation {
-        kind: "claude",
-        action: ExecAction::Launch {
+    let mut invocation = request(
+        "claude",
+        ExecAction::Launch {
             prompt: None,
-            extra_args: &[],
+            extra_args: Vec::new(),
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        identity: ExecIdentity {
-            launch_id: Some("launch_orphan"),
-            ..ExecIdentity::default()
-        },
-    };
+    );
+    invocation.identity.launch_id = Some("launch_orphan".to_owned());
 
     assert_eq!(
-        exec_argv(Path::new("/bin/rimz"), &invocation),
-        argv(&["/bin/rimz", "agents", "exec", "claude"])
+        exec_argv(Path::new("/bin/rimz"), &invocation)
+            .expect_err("orphan launch id")
+            .to_string(),
+        "--launch-id requires --agent-name"
     );
+}
+
+fn provider_binding(key: &str) -> crate::agents::ProviderAccountBinding {
+    crate::agents::ProviderAccountBinding::decode(&format!(
+        r#"{{"scope":{{"kind":"sub_provider","provider":"alibaba","variant":"international"}},"account_key":"{key}"}}"#
+    ))
+    .expect("provider binding")
+}
+
+#[test]
+fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
+    let mut missing_run = request(
+        "codex",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    missing_run.exit_on_run_completion = true;
+    assert_eq!(
+        exec_argv(Path::new("/bin/rimz"), &missing_run)
+            .expect_err("run id required")
+            .to_string(),
+        "--exit-on-run-completion requires --run-id"
+    );
+
+    let input = request(
+        "codex",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let argv = exec_argv(Path::new("/bin/rimz"), &input).expect("argv");
+    let payload = argv.last().expect("payload");
+    assert!(matches!(
+        decode_exec_request("claude", None, payload),
+        Err(ExecWireErr::KindMismatch { .. })
+    ));
+    assert!(matches!(
+        decode_exec_request("codex", Some(Path::new("/other")), payload),
+        Err(ExecWireErr::WorktreeMismatch)
+    ));
+
+    let mut value = serde_json::to_value(&input).expect("request value");
+    value["provider_account"] = serde_json::json!({ "state": "finalized" });
+    let err = decode_exec_request("codex", None, &value.to_string())
+        .expect_err("finalized binding required");
+    assert!(
+        err.to_string()
+            .contains("finalized provider-account launch is missing its expected binding"),
+        "{err}"
+    );
+}
+
+#[test]
+fn provider_account_stage_validates_and_reenters_once() {
+    let project = tempfile::tempdir().expect("project");
+    let binding = provider_binding("owner");
+    for (kind, action) in [
+        (
+            "codex",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        ),
+        (
+            "qwen",
+            ExecAction::Resume {
+                session_id: "sess-1".to_owned(),
+                extra_args: Vec::new(),
+            },
+        ),
+    ] {
+        let mut input = request(kind, action);
+        input.provider_account = ProviderAccountState::Pending {
+            binding: binding.clone(),
+        };
+        let err = compile_agent_process_stage(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &input,
+            project.path(),
+            Path::new("/bin/rimz"),
+        )
+        .expect_err("binding scope");
+        assert_eq!(
+            err.to_string(),
+            "provider-account binding applies only to fresh managed Qwen launches"
+        );
+    }
+
+    let mut pending = request(
+        "qwen",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    pending.provider_account = ProviderAccountState::Pending {
+        binding: binding.clone(),
+    };
+    let stage = compile_agent_process_stage(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &pending,
+        project.path(),
+        Path::new("/bin/rimz"),
+    )
+    .expect("pending stage");
+    let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
+        panic!("pending binding must re-enter");
+    };
+    let payload = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
+        .expect("reentry payload");
+    let finalized = decode_exec_request("qwen", None, payload).expect("finalized request");
+    assert!(matches!(
+        finalized.provider_account,
+        ProviderAccountState::Finalized { .. }
+    ));
+
+    let err = compile_agent_process_stage(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &finalized,
+        project.path(),
+        Path::new("/bin/rimz"),
+    )
+    .expect_err("unresolved account mismatches");
+    assert!(err.is_finalized_provider_mismatch());
+    assert!(!format!("{err:?}").contains("owner"));
 }
 
 #[test]

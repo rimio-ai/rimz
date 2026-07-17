@@ -294,12 +294,13 @@ fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() 
         .flat_map(|column| column.panes.iter().map(|pane| &pane.argv))
         .collect::<Vec<_>>();
     assert!(argvs[0].iter().any(|arg| arg == "planner"), "{argvs:?}");
-    assert!(
-        argvs[1]
-            .windows(2)
-            .any(|pair| pair[0] == "--agent-role" && pair[1] == "coder"),
-        "{argvs:?}"
-    );
+    let payload = argvs[1]
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
+        .expect("exec request payload");
+    let request = crate::harness::launch::decode_exec_request(&argvs[1][3], None, payload)
+        .expect("decode exec request");
+    assert_eq!(request.identity.params.role.as_deref(), Some("coder"));
     let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).expect("store");
     let projection = store
         .runtime_projection(crate::RuntimeScope::Audit)

@@ -65,8 +65,8 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
             adapter,
             agent.kind.as_str(),
             &rimz::harness::launch::ExecAction::Resume {
-                session_id: agent.agent_id.as_str(),
-                extra_args: &[],
+                session_id: agent.agent_id.to_string(),
+                extra_args: Vec::new(),
             },
             &cwd,
         )
@@ -101,33 +101,32 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         effort: None,
         kind_ordinal: None,
     };
-    let invocation = rimz::harness::launch::ExecInvocation {
-        kind: agent.kind.as_str(),
+    let invocation = rimz::harness::launch::ExecRequest {
+        kind: agent.kind.clone(),
         action: match fresh_identity {
             Some(_) => rimz::harness::launch::ExecAction::Launch {
                 prompt: None,
-                extra_args: &extra_args,
+                extra_args,
             },
             None => rimz::harness::launch::ExecAction::Resume {
-                session_id: agent.agent_id.as_str(),
-                extra_args: &extra_args,
+                session_id: agent.agent_id.to_string(),
+                extra_args,
             },
         },
-        provider_account_binding: None,
-        provider_account_binding_finalized: false,
+        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
         close_pane_on_exit: true,
         exit_on_run_completion: false,
         identity: rimz::harness::launch::ExecIdentity {
-            name: identity_name,
+            name: identity_name.map(ToOwned::to_owned),
             name_explicit: fresh_identity
                 .map_or(agent.name_explicit, |identity| identity.name_explicit),
-            launch_id: fresh_identity.map(|identity| identity.agent_id.as_str()),
-            params: Some(&restart_params),
+            launch_id: fresh_identity.map(|identity| identity.agent_id.to_string()),
+            params: restart_params,
         },
     };
-    let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation);
+    let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation)?;
     let mut env = rimz::room::pane_identity_env(&workspace, agent.channel.as_deref(), false);
     env.insert(
         rimz::harness::run::ENV_WORKTREE_PATH.to_owned(),

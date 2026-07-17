@@ -66,14 +66,13 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
         config.harness.rtk,
-        &rimz::harness::launch::ExecInvocation {
-            kind: seed.kind.as_str(),
+        &rimz::harness::launch::ExecRequest {
+            kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {
-                session_id: seed.source_session_id.as_str(),
-                extra_args: &[],
+                session_id: seed.source_session_id.to_string(),
+                extra_args: Vec::new(),
             },
-            provider_account_binding: None,
-            provider_account_binding_finalized: false,
+            provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
             close_pane_on_exit: false,
@@ -130,26 +129,25 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_default();
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
-        &rimz::harness::launch::ExecInvocation {
-            kind: seed.kind.as_str(),
+        &rimz::harness::launch::ExecRequest {
+            kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {
-                session_id: seed.source_session_id.as_str(),
-                extra_args: &permission_args,
+                session_id: seed.source_session_id.to_string(),
+                extra_args: permission_args,
             },
-            provider_account_binding: None,
-            provider_account_binding_finalized: false,
+            provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
             close_pane_on_exit: placement != Placement::SamePane,
             exit_on_run_completion: false,
             identity: rimz::harness::launch::ExecIdentity {
-                name: Some(launch.name.as_str()),
+                name: Some(launch.name.clone()),
                 name_explicit: launch.name_explicit,
-                launch_id: Some(launch.agent_id.as_str()),
-                params: Some(&launch.launch),
+                launch_id: Some(launch.agent_id.to_string()),
+                params: launch.launch.clone(),
             },
         },
-    );
+    )?;
     let panes = LayoutPanes {
         columns: vec![LayoutColumn {
             panes: vec![PaneCmd { argv }],

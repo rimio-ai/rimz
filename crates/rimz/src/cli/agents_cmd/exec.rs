@@ -1,29 +1,25 @@
 use super::*;
 use crate::cli::{open_store, worktree};
+use std::cell::RefCell;
 use std::sync::mpsc;
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
-    let run_context = run_exec_context(&args, &workspace)?;
-    let launch_params = launch_params(&args);
-    let launch_identity = exec_launch_identity(&args, &launch_params)?;
-    let action = exec_action(&args);
-    let provider_account_binding = provider_account_binding(&args)?;
-    if args.provider_account_binding_finalized && provider_account_binding.is_none() {
-        bail!("finalized provider-account launch is missing its expected binding");
-    }
-    if provider_account_binding.is_some()
-        && (args.kind != "qwen"
-            || !matches!(action, rimz::harness::launch::ExecAction::Launch { .. }))
-    {
-        bail!("provider-account binding applies only to fresh managed Qwen launches");
-    }
-    let entered_worktree = match args.worktree_path.as_deref() {
+    let request = rimz::harness::launch::decode_exec_request(
+        &args.kind,
+        args.worktree_path.as_deref(),
+        &args.request,
+    )
+    .context("decoding hidden agent exec request")?;
+    let invocation = ExecInvocationContext::new(&workspace);
+    let run_context = run_exec_context(&request, &invocation)?;
+    let launch_identity = exec_launch_identity(&request)?;
+    let entered_worktree = match request.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
             Ok(path) => Some(path),
             Err(err) => {
-                mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
+                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
                 fail_run_on_exec_precondition(run_context.as_ref());
                 return Err(err);
             }
@@ -31,7 +27,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         None => None,
     };
     let machine_config = crate::cli::machine_config();
-    let provider_cwd = match action {
+    let provider_cwd = match &request.action {
         rimz::harness::launch::ExecAction::Fork { .. } => {
             std::env::current_dir().context("reading the fork pane cwd")?
         }
@@ -42,72 +38,57 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .clone()
             .unwrap_or_else(|| workspace.worktree_root.clone()),
     };
-    let exec_invocation = exec_invocation(
-        &args,
-        action,
-        &launch_params,
-        provider_account_binding.as_ref(),
-    );
-    let process = rimz::harness::launch::compile_agent_process(
+    let stage = rimz::harness::launch::compile_agent_process_stage(
         &workspace.project_root,
         machine_config.harness.rtk,
-        &exec_invocation,
+        &request,
         &provider_cwd,
-    )?;
-    if let Some(expected) = provider_account_binding.as_ref() {
-        if args.provider_account_binding_finalized {
-            let adapter = rimz::agents::find_adapter(&args.kind)
-                .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
-            let actual = adapter.resolve_managed_launch(
-                &provider_cwd,
-                &rimz::harness::launch::effective_launch_env(&process.env),
-                args.agent_model.as_deref(),
-                &process.provider_argv,
-            );
-            if !provider_account_binding_matches(expected, actual.as_ref()) {
-                mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
+        &rimz::proc::rimz_exe(),
+    );
+    let stage = match stage {
+        Ok(stage) => stage,
+        Err(err) => {
+            if err.is_finalized_provider_mismatch() {
+                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
                 fail_run_on_exec_precondition(run_context.as_ref());
-                bail!(
-                    "Qwen provider account changed after launch preflight; retry the managed run so quota can be checked against the final account"
-                );
             }
-        } else {
-            let finalized = rimz::harness::launch::ExecInvocation {
-                provider_account_binding_finalized: true,
-                ..exec_invocation
-            };
-            let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &finalized);
-            let argv = rimz::harness::launch::login_shell_argv(&process.env, &argv);
+            return Err(err.into());
+        }
+    };
+    let (process, raw_provider_argv) = match stage {
+        rimz::harness::launch::AgentProcessStage::Wrapped(process) => (process, false),
+        rimz::harness::launch::AgentProcessStage::FinalizedRaw(process) => (process, true),
+        rimz::harness::launch::AgentProcessStage::LoginShellReentry { process, argv } => {
             let (program, rest) = argv.split_first().ok_or_else(|| {
                 anyhow::anyhow!("finalized Qwen launch produced an empty command")
             })?;
             if let Err(err) = exec_agent_command(program, rest, &process.env) {
-                mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
+                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
                 fail_run_on_exec_precondition(run_context.as_ref());
                 return Err(err);
             }
             return Ok(());
         }
-    }
+    };
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
     }
     if let Some(identity) = launch_identity.as_ref() {
-        record_own_launch_pane(&workspace, identity);
+        record_own_launch_pane(&invocation, identity);
     }
-    let argv = if args.provider_account_binding_finalized {
+    let argv = if raw_provider_argv {
         &process.provider_argv
     } else {
         &process.argv
     };
-    let (program, rest) = argv
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
-    if should_exec_agent_directly(&args) {
+    let (program, rest) = argv.split_first().ok_or_else(|| {
+        anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
+    })?;
+    if should_exec_agent_directly(&request) {
         match exec_agent_command(program, rest, &process.env) {
             Ok(()) => return Ok(()),
             Err(err) => {
-                mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
+                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
                 return Err(err);
             }
         }
@@ -124,16 +105,16 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
-    let monitor = if args.exit_on_run_completion {
+    let monitor = if request.exit_on_run_completion {
         run_context.as_ref()
     } else {
         None
     };
     let outcome = supervise_child(child, monitor).context("supervising agent process")?;
     settle_after_exit(
-        &args,
+        &request,
         globals,
-        &workspace,
+        &invocation,
         run_context.as_ref(),
         launch_identity.as_ref(),
         entered_worktree.as_deref(),
@@ -141,70 +122,10 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-pub(super) fn exec_action(args: &ExecArgs) -> rimz::harness::launch::ExecAction<'_> {
-    match (args.fork.as_deref(), args.resume.as_deref()) {
-        (Some(session_id), _) => rimz::harness::launch::ExecAction::Fork {
-            session_id,
-            extra_args: &args.extra_args,
-        },
-        (None, Some(session_id)) => rimz::harness::launch::ExecAction::Resume {
-            session_id,
-            extra_args: &args.extra_args,
-        },
-        (None, None) => rimz::harness::launch::ExecAction::Launch {
-            prompt: args.prompt.as_deref(),
-            extra_args: &args.extra_args,
-        },
-    }
-}
-
-pub(super) fn exec_invocation<'a>(
-    args: &'a ExecArgs,
-    action: rimz::harness::launch::ExecAction<'a>,
-    params: &'a rimz::agents::LaunchParams,
-    provider_account_binding: Option<&'a rimz::agents::ProviderAccountBinding>,
-) -> rimz::harness::launch::ExecInvocation<'a> {
-    rimz::harness::launch::ExecInvocation {
-        kind: &args.kind,
-        action,
-        provider_account_binding,
-        provider_account_binding_finalized: args.provider_account_binding_finalized,
-        run_id: args.run_id.as_ref().map(|run_id| run_id.as_str()),
-        worktree_path: args.worktree_path.as_deref(),
-        close_pane_on_exit: args.close_pane_on_exit,
-        exit_on_run_completion: args.exit_on_run_completion,
-        identity: rimz::harness::launch::ExecIdentity {
-            name: args.agent_name.as_deref(),
-            name_explicit: args.agent_name_explicit,
-            params: Some(params),
-            ..rimz::harness::launch::ExecIdentity::default()
-        },
-    }
-}
-
-fn provider_account_binding(
-    args: &ExecArgs,
-) -> Result<Option<rimz::agents::ProviderAccountBinding>> {
-    args.provider_account_binding
-        .as_deref()
-        .map(|value| {
-            rimz::agents::ProviderAccountBinding::decode(value)
-                .context("parsing hidden provider-account launch binding")
-        })
-        .transpose()
-}
-
-pub(super) fn provider_account_binding_matches(
-    expected: &rimz::agents::ProviderAccountBinding,
-    actual: Option<&rimz::agents::ProviderAccountBinding>,
-) -> bool {
-    actual == Some(expected)
-}
-
 fn settle_after_exit(
-    args: &ExecArgs,
+    request: &rimz::harness::launch::ExecRequest,
     globals: &GlobalFlags,
-    workspace: &rimz::ResolvedWorkspace,
+    invocation: &ExecInvocationContext<'_>,
     run_context: Option<&RunExecContext>,
     launch_identity: Option<&LaunchIdentity>,
     entered_worktree: Option<&Path>,
@@ -214,20 +135,20 @@ fn settle_after_exit(
         fail_run_if_child_exited_first(context, globals, RUN_EXIT_TERMINAL_GRACE);
     }
     let startup_failure =
-        !outcome.status.success() && mark_launch_failed_if_provisional(workspace, launch_identity);
+        !outcome.status.success() && mark_launch_failed_if_provisional(invocation, launch_identity);
 
     let session_name = run_context
         .map(|context| context.session_name.as_str())
-        .unwrap_or(&workspace.session_name);
+        .unwrap_or(&invocation.workspace.session_name);
     let abrupt = outcome.abrupt || cleanup_signal_received();
     let session_accepts_close = !abrupt || session_accepts_agent_close(globals, session_name);
     let deliberate = close_is_deliberate(abrupt, session_accepts_close);
-    if deliberate && should_record_end_trace(args) {
-        record_own_agent_end_trace(workspace, args);
+    if deliberate && should_record_end_trace(request) {
+        record_own_agent_end_trace(invocation, request);
     }
-    if should_drop_to_shell(args, abrupt) {
+    if should_drop_to_shell(request, abrupt) {
         // The trace above stamps the agent ended; gc reclaims any worktree later.
-        drop_to_shell_after_agent_exit(args, &outcome.status, startup_failure);
+        drop_to_shell_after_agent_exit(request, &outcome.status, startup_failure);
     }
     if let Some(path) = entered_worktree
         && deliberate
@@ -238,37 +159,42 @@ fn settle_after_exit(
             "rimz: worktree cleanup did not complete: {err}"
         );
     }
-    if args.close_pane_on_exit {
+    if request.close_pane_on_exit {
         close_own_pane(globals, session_name);
     }
     std::process::exit(outcome.status.code().unwrap_or(1));
 }
 
-pub(super) fn should_exec_agent_directly(args: &ExecArgs) -> bool {
+pub(super) fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRequest) -> bool {
     cfg!(unix)
-        && args.run_id.is_none()
-        && args.worktree_path.is_none()
-        && !args.exit_on_run_completion
-        && !args.close_pane_on_exit
+        && request.run_id.is_none()
+        && request.worktree_path.is_none()
+        && !request.exit_on_run_completion
+        && !request.close_pane_on_exit
 }
 
-pub(super) fn should_record_end_trace(args: &ExecArgs) -> bool {
-    !args.exit_on_run_completion
+pub(super) fn should_record_end_trace(request: &rimz::harness::launch::ExecRequest) -> bool {
+    !request.exit_on_run_completion
 }
 
-pub(super) fn should_drop_to_shell(args: &ExecArgs, abrupt: bool) -> bool {
-    (args.close_pane_on_exit || args.worktree_path.is_some()) && args.run_id.is_none() && !abrupt
+pub(super) fn should_drop_to_shell(
+    request: &rimz::harness::launch::ExecRequest,
+    abrupt: bool,
+) -> bool {
+    (request.close_pane_on_exit || request.worktree_path.is_some())
+        && request.run_id.is_none()
+        && !abrupt
 }
 
-pub(super) fn relaunch_command(args: &ExecArgs) -> String {
+pub(super) fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> String {
     match (
-        args.agent_team.as_deref(),
-        args.agent_role.as_deref(),
-        args.agent_profile.as_deref(),
+        request.identity.params.team.as_deref(),
+        request.identity.params.role.as_deref(),
+        request.identity.params.profile.as_deref(),
     ) {
         (Some(team), Some(role), _) => format!("rimz agents {team}.{role}"),
         (_, _, Some(profile)) => format!("rimz agents {profile}"),
-        _ => format!("rimz agents {}", args.kind),
+        _ => format!("rimz agents {}", request.kind),
     }
 }
 
@@ -286,10 +212,19 @@ pub(super) fn exit_hint(
 }
 
 #[cfg(unix)]
-fn drop_to_shell_after_agent_exit(args: &ExecArgs, status: &ExitStatus, startup_failure: bool) {
+fn drop_to_shell_after_agent_exit(
+    request: &rimz::harness::launch::ExecRequest,
+    status: &ExitStatus,
+    startup_failure: bool,
+) {
     use std::os::unix::process::CommandExt;
 
-    let hint = exit_hint(&args.kind, status, startup_failure, &relaunch_command(args));
+    let hint = exit_hint(
+        request.kind.as_str(),
+        status,
+        startup_failure,
+        &relaunch_command(request),
+    );
     let _ = write!(std::io::stderr().lock(), "{hint}");
     let shell = rimz::harness::launch::user_shell_program();
     let err = Command::new(&shell).exec();
@@ -297,7 +232,12 @@ fn drop_to_shell_after_agent_exit(args: &ExecArgs, status: &ExitStatus, startup_
 }
 
 #[cfg(not(unix))]
-fn drop_to_shell_after_agent_exit(_args: &ExecArgs, _status: &ExitStatus, _startup_failure: bool) {}
+fn drop_to_shell_after_agent_exit(
+    _request: &rimz::harness::launch::ExecRequest,
+    _status: &ExitStatus,
+    _startup_failure: bool,
+) {
+}
 
 /// Non-abrupt exits are deliberate. Abrupt exits are deliberate only while the
 /// mux session still accepts live pane closes; if the mux is gone or wedged,
@@ -459,17 +399,39 @@ fn leave_worktree_before_cleanup(path: &Path) {
     }
 }
 
+struct ExecInvocationContext<'a> {
+    workspace: &'a rimz::ResolvedWorkspace,
+    store: RefCell<Option<rimz::Store>>,
+}
+
+impl<'a> ExecInvocationContext<'a> {
+    fn new(workspace: &'a rimz::ResolvedWorkspace) -> Self {
+        Self {
+            workspace,
+            store: RefCell::new(None),
+        }
+    }
+
+    fn store(&self) -> Result<rimz::Store> {
+        if let Some(store) = self.store.borrow().as_ref() {
+            return Ok(store.clone());
+        }
+        let store = open_store(self.workspace)?;
+        *self.store.borrow_mut() = Some(store.clone());
+        Ok(store)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct RunExecContext {
     pub(super) run_id: rimz::RunId,
-    pub(super) paths: rimz::StatePaths,
-    pub(super) runtime: rimz::RuntimePaths,
+    pub(super) store: rimz::Store,
     pub(super) session_name: String,
 }
 
 impl RunExecContext {
     fn is_terminal(&self) -> bool {
-        match rimz::harness::run::load(&self.paths, &self.run_id) {
+        match rimz::harness::run::load(self.store.paths(), &self.run_id) {
             Ok(record) => record.status.is_terminal(),
             Err(err) => {
                 tracing::debug!(
@@ -484,60 +446,46 @@ impl RunExecContext {
 }
 
 fn run_exec_context(
-    args: &ExecArgs,
-    workspace: &rimz::ResolvedWorkspace,
+    request: &rimz::harness::launch::ExecRequest,
+    invocation: &ExecInvocationContext<'_>,
 ) -> Result<Option<RunExecContext>> {
-    if args.exit_on_run_completion && args.run_id.is_none() {
-        bail!("--exit-on-run-completion requires --run-id");
-    }
-    let Some(run_id) = args.run_id.clone() else {
+    let Some(run_id) = request.run_id.clone() else {
         return Ok(None);
     };
-    let store = open_store(workspace).context("opening supervised run store")?;
+    let store = invocation.store().context("opening supervised run store")?;
     Ok(Some(RunExecContext {
         run_id,
-        paths: store.paths().clone(),
-        runtime: store.runtime_paths().clone(),
-        session_name: workspace.session_name.clone(),
+        store,
+        session_name: invocation.workspace.session_name.clone(),
     }))
 }
 
 pub(super) fn exec_launch_identity(
-    args: &ExecArgs,
-    params: &rimz::agents::LaunchParams,
+    request: &rimz::harness::launch::ExecRequest,
 ) -> Result<Option<LaunchIdentity>> {
-    match (args.launch_id.as_deref(), args.agent_name.as_deref()) {
+    match (
+        request.identity.launch_id.as_deref(),
+        request.identity.name.as_deref(),
+    ) {
         (None, None) => Ok(None),
         (Some(_), None) => bail!("--launch-id requires --agent-name"),
         (None, Some(_)) => Ok(None),
         (Some(launch_id), Some(name)) => {
             validate_agent_name(name)?;
             Ok(Some(LaunchIdentity {
-                kind: AgentKind::new_unchecked(args.kind.clone()),
+                kind: request.kind.clone(),
                 agent_id: AgentSessionId::from(launch_id),
                 name: name.to_owned(),
-                name_explicit: args.agent_name_explicit,
-                launch: params.clone(),
-                run_id: args.run_id.clone(),
-                prompt: args.prompt.clone(),
+                name_explicit: request.identity.name_explicit,
+                launch: request.identity.params.clone(),
+                run_id: request.run_id.clone(),
+                prompt: match &request.action {
+                    rimz::harness::launch::ExecAction::Launch { prompt, .. } => prompt.clone(),
+                    rimz::harness::launch::ExecAction::Resume { .. }
+                    | rimz::harness::launch::ExecAction::Fork { .. } => None,
+                },
             }))
         }
-    }
-}
-
-pub(super) fn launch_params(args: &ExecArgs) -> rimz::agents::LaunchParams {
-    rimz::agents::LaunchParams {
-        profile: args.agent_profile.clone(),
-        mode: args.agent_mode,
-        role: args.agent_role.clone(),
-        model: args.agent_model.clone(),
-        effort: args.agent_effort.clone(),
-        budget: args.agent_budget.clone(),
-        team: args.agent_team.clone(),
-        launch_group: args.launch_group.clone(),
-        launch_ordinal: args.launch_ordinal,
-        channel: args.agent_channel.clone(),
-        kind_ordinal: None,
     }
 }
 
@@ -546,7 +494,7 @@ fn record_own_run_pane(context: &RunExecContext) {
         return;
     };
     if let Err(err) =
-        rimz::harness::run::record_pane(&context.paths, &context.run_id, pane_id.clone())
+        rimz::harness::run::record_pane(context.store.paths(), &context.run_id, pane_id.clone())
     {
         tracing::debug!(
             run_id = %context.run_id,
@@ -557,12 +505,13 @@ fn record_own_run_pane(context: &RunExecContext) {
     }
 }
 
-fn record_own_launch_pane(workspace: &rimz::ResolvedWorkspace, identity: &LaunchIdentity) {
+fn record_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &LaunchIdentity) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
     };
+    let workspace = invocation.workspace;
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
-    match open_store(workspace).and_then(|store| {
+    match invocation.store().and_then(|store| {
         store.bind_agent_launch(identity, &workspace.session_name, &cwd, &pane_id)?;
         Ok(())
     }) {
@@ -576,9 +525,10 @@ fn record_own_launch_pane(workspace: &rimz::ResolvedWorkspace, identity: &Launch
     }
 }
 
-fn record_launch_failed(workspace: &rimz::ResolvedWorkspace, identity: &LaunchIdentity) {
+fn record_launch_failed(invocation: &ExecInvocationContext<'_>, identity: &LaunchIdentity) {
+    let workspace = invocation.workspace;
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
-    if let Err(err) = open_store(workspace).and_then(|store| {
+    if let Err(err) = invocation.store().and_then(|store| {
         store.fail_agent_launch(identity, &workspace.session_name, &cwd)?;
         Ok(())
     }) {
@@ -591,23 +541,26 @@ fn record_launch_failed(workspace: &rimz::ResolvedWorkspace, identity: &LaunchId
 }
 
 fn mark_launch_failed_if_provisional(
-    workspace: &rimz::ResolvedWorkspace,
+    invocation: &ExecInvocationContext<'_>,
     identity: Option<&LaunchIdentity>,
 ) -> bool {
     let Some(identity) = identity else {
         return false;
     };
-    if !launch_is_still_provisional(workspace, identity) {
+    if !launch_is_still_provisional(invocation, identity) {
         return false;
     }
-    record_launch_failed(workspace, identity);
+    record_launch_failed(invocation, identity);
     true
 }
 
-fn record_own_agent_end_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecArgs) {
-    match resolve_own_agent_end_trace(workspace, args) {
+fn record_own_agent_end_trace(
+    invocation: &ExecInvocationContext<'_>,
+    request: &rimz::harness::launch::ExecRequest,
+) {
+    match resolve_own_agent_end_trace(invocation, request) {
         Ok(Some((kind, agent_id))) => append_agent_lifecycle_trace(
-            workspace,
+            invocation,
             kind,
             agent_id,
             rimz::agents::LifecycleSignal::Ended,
@@ -623,11 +576,13 @@ fn record_own_agent_end_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecAr
 }
 
 fn resolve_own_agent_end_trace(
-    workspace: &rimz::ResolvedWorkspace,
-    args: &ExecArgs,
+    invocation: &ExecInvocationContext<'_>,
+    request: &rimz::harness::launch::ExecRequest,
 ) -> Result<Option<(AgentKind, AgentSessionId)>> {
     if let Some(pane_id) = rimz::mux::ambient_pane_id() {
-        let store = open_store(workspace).context("opening store for agent exit end stamp")?;
+        let store = invocation
+            .store()
+            .context("opening store for agent exit end stamp")?;
         let projection = store
             .runtime_projection(rimz::RuntimeScope::Audit)
             .context("reading audit projection for agent exit end stamp")?;
@@ -642,24 +597,29 @@ fn resolve_own_agent_end_trace(
     // A resumed pane owns the resumed session and can safely fall back to its
     // argv id. A fork's provider-assigned id is unknown here; falling back to
     // the source id would stamp the original session ended when the fork exits.
-    Ok(args.resume.as_ref().map(|session_id| {
-        (
-            AgentKind::new_unchecked(args.kind.clone()),
+    Ok(match &request.action {
+        rimz::harness::launch::ExecAction::Resume { session_id, .. } => Some((
+            request.kind.clone(),
             AgentSessionId::from(session_id.as_str()),
-        )
-    }))
+        )),
+        rimz::harness::launch::ExecAction::Launch { .. }
+        | rimz::harness::launch::ExecAction::Fork { .. } => None,
+    })
 }
 
 fn append_agent_lifecycle_trace(
-    workspace: &rimz::ResolvedWorkspace,
+    invocation: &ExecInvocationContext<'_>,
     kind: AgentKind,
     agent_id: AgentSessionId,
     signal: rimz::agents::LifecycleSignal,
     event_name: &'static str,
     label: &'static str,
 ) {
+    let workspace = invocation.workspace;
     let appended = (|| -> Result<()> {
-        let store = open_store(workspace).context("opening store for agent lifecycle trace")?;
+        let store = invocation
+            .store()
+            .context("opening store for agent lifecycle trace")?;
         let observation =
             rimz::agents::AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
         let event = rimz::EventEnvelope::agent_lifecycle(
@@ -683,10 +643,13 @@ fn append_agent_lifecycle_trace(
 }
 
 fn launch_is_still_provisional(
-    workspace: &rimz::ResolvedWorkspace,
+    invocation: &ExecInvocationContext<'_>,
     identity: &LaunchIdentity,
 ) -> bool {
-    match open_store(workspace).and_then(|store| store.snapshot_cached().map_err(Into::into)) {
+    match invocation
+        .store()
+        .and_then(|store| store.snapshot_cached().map_err(Into::into))
+    {
         Ok(snapshot) => snapshot.agents.iter().any(|agent| {
             agent.kind == identity.kind
                 && agent.agent_id == identity.agent_id
@@ -726,9 +689,10 @@ fn fail_run_on_exec_precondition(context: Option<&RunExecContext>) {
 }
 
 fn fail_run_if_nonterminal(context: &RunExecContext, reason: &'static str) {
-    match rimz::harness::run::fail_if_nonterminal(&context.paths, &context.run_id) {
+    match rimz::harness::run::fail_if_nonterminal(context.store.paths(), &context.run_id) {
         Ok(Some(record)) => {
-            if let Err(err) = rimz::store::wakeup::wake_run(&context.runtime, &record) {
+            if let Err(err) = rimz::store::wakeup::wake_run(context.store.runtime_paths(), &record)
+            {
                 tracing::debug!(
                     run_id = %context.run_id,
                     error = %err,
@@ -758,7 +722,7 @@ fn record_own_run_failure_tail(context: &RunExecContext, globals: &GlobalFlags) 
         return;
     };
     if let Err(err) =
-        rimz::harness::run::record_failure_tail(&context.paths, &context.run_id, &tail)
+        rimz::harness::run::record_failure_tail(context.store.paths(), &context.run_id, &tail)
     {
         tracing::debug!(
             run_id = %context.run_id,

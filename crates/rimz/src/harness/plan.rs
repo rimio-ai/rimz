@@ -704,26 +704,25 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
             validate_agent_name(&launch.name)?;
             crate::harness::launch::exec_argv(
                 options.rimz_bin,
-                &crate::harness::launch::ExecInvocation {
-                    kind: cell.kind.as_str(),
+                &crate::harness::launch::ExecRequest {
+                    kind: cell.kind.clone(),
                     action: crate::harness::launch::ExecAction::Launch {
-                        prompt: launch.prompt.as_deref(),
-                        extra_args: &cell.args,
+                        prompt: launch.prompt.clone(),
+                        extra_args: cell.args.clone(),
                     },
-                    provider_account_binding: None,
-                    provider_account_binding_finalized: false,
+                    provider_account: crate::harness::launch::ProviderAccountState::Unbound,
                     run_id: None,
-                    worktree_path: options.cleanup_worktree.then_some(options.cwd),
+                    worktree_path: options.cleanup_worktree.then(|| options.cwd.to_path_buf()),
                     close_pane_on_exit: !options.cleanup_worktree && !options.in_place,
                     exit_on_run_completion: false,
                     identity: crate::harness::launch::ExecIdentity {
-                        name: Some(launch.name.as_str()),
+                        name: Some(launch.name.clone()),
                         name_explicit: launch.name_explicit,
-                        launch_id: Some(launch.agent_id.as_str()),
-                        params: Some(&launch.launch),
+                        launch_id: Some(launch.agent_id.to_string()),
+                        params: launch.launch.clone(),
                     },
                 },
-            )
+            )?
         }
     };
     Ok(PaneCmd { argv })

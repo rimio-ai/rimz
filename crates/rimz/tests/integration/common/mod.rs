@@ -31,3 +31,11 @@ pub use shim::{
     path_with_front, write_env_dump_shim, write_failing_agent_shim, write_fake_bash_shell,
     write_fake_login_shell, write_hook_firing_agent,
 };
+
+pub fn exec_args(request: &rimz::harness::launch::ExecRequest) -> Vec<String> {
+    rimz::harness::launch::exec_argv(std::path::Path::new("rimz"), request)
+        .expect("encode hidden exec request")
+        .into_iter()
+        .skip(1)
+        .collect()
+}

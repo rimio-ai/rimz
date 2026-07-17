@@ -26,7 +26,21 @@ fn tmux_agent_exec_command(
 ) -> Vec<String> {
     let path = path_with_front(agent_bin);
     let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
-    vec![
+    let request = rimz::harness::launch::ExecRequest {
+        kind: rimz::ids::AgentKind::new_unchecked("claude"),
+        action: rimz::harness::launch::ExecAction::Resume {
+            session_id: agent_id.to_owned(),
+            extra_args: Vec::new(),
+        },
+        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: true,
+        exit_on_run_completion: false,
+        identity: rimz::harness::launch::ExecIdentity::default(),
+    };
+    let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &request).expect("exec argv");
+    let mut argv = vec![
         "/usr/bin/env".to_owned(),
         format!("XDG_STATE_HOME={}", env.state_root().display()),
         format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
@@ -38,19 +52,38 @@ fn tmux_agent_exec_command(
         rimz_bin,
         "--mux".to_owned(),
         "tmux".to_owned(),
-        "agents".to_owned(),
-        "exec".to_owned(),
-        "claude".to_owned(),
-        "--resume".to_owned(),
-        agent_id.to_owned(),
-        "--close-pane-on-exit".to_owned(),
-    ]
+    ];
+    argv.extend(exec.into_iter().skip(1));
+    argv
 }
 
 fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str) -> Vec<String> {
     let path = path_with_front(agent_bin);
     let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
-    vec![
+    let request = rimz::harness::launch::ExecRequest {
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        action: rimz::harness::launch::ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: true,
+        exit_on_run_completion: false,
+        identity: rimz::harness::launch::ExecIdentity {
+            name: Some("pruner".to_owned()),
+            launch_id: Some(launch_id.to_owned()),
+            params: rimz::agents::LaunchParams {
+                team: Some("trim".to_owned()),
+                role: Some("pruner".to_owned()),
+                ..rimz::agents::LaunchParams::default()
+            },
+            ..rimz::harness::launch::ExecIdentity::default()
+        },
+    };
+    let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &request).expect("exec argv");
+    let mut argv = vec![
         "/usr/bin/env".to_owned(),
         format!("XDG_STATE_HOME={}", env.state_root().display()),
         format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
@@ -61,19 +94,9 @@ fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str)
         rimz_bin,
         "--mux".to_owned(),
         "tmux".to_owned(),
-        "agents".to_owned(),
-        "exec".to_owned(),
-        "codex".to_owned(),
-        "--launch-id".to_owned(),
-        launch_id.to_owned(),
-        "--agent-name".to_owned(),
-        "pruner".to_owned(),
-        "--agent-team".to_owned(),
-        "trim".to_owned(),
-        "--agent-role".to_owned(),
-        "pruner".to_owned(),
-        "--close-pane-on-exit".to_owned(),
-    ]
+    ];
+    argv.extend(exec.into_iter().skip(1));
+    argv
 }
 
 fn path_with_front(dir: &Path) -> String {

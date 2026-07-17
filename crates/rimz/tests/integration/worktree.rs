@@ -14,6 +14,8 @@ use predicates::str::contains;
 use rimz::EventEnvelope;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 #[cfg(unix)]
+use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
+#[cfg(unix)]
 use rimz::ids::AgentKind;
 use rimz::ids::AgentSessionId;
 use rimz::message::{DeliveryGate, MessageRecord};
@@ -22,6 +24,25 @@ use rimz::store::event::{AgentLaunchPayload, AgentLaunchState};
 use serde_json::Value;
 
 use crate::common::Env;
+#[cfg(unix)]
+use crate::common::exec_args;
+
+#[cfg(unix)]
+fn worktree_exec_request(worktree: &Path) -> ExecRequest {
+    ExecRequest {
+        kind: AgentKind::new_unchecked("codex"),
+        action: ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: Some(worktree.to_path_buf()),
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: ExecIdentity::default(),
+    }
+}
 
 #[test]
 fn worktree_new_list_and_remove_round_trip() {
@@ -995,17 +1016,12 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
     let shim_dir = write_codex_spawn_marker_shim(&env);
     let ready = env.home_root.join("missing.ready");
 
+    let mut request = worktree_exec_request(&missing);
+    request.run_id = Some(run_id.clone());
+    request.identity.name = Some("missing-agent".to_owned());
+    request.identity.launch_id = Some("launch_missing".to_owned());
     env.rimz()
-        .args(["agents", "exec", "codex", "--worktree-path"])
-        .arg(&missing)
-        .args([
-            "--launch-id",
-            "launch_missing",
-            "--agent-name",
-            "missing-agent",
-            "--run-id",
-            run_id.as_str(),
-        ])
+        .args(exec_args(&request))
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_READY", &ready)
         .assert()
@@ -1617,8 +1633,7 @@ fn spawn_agent_exec_once(env: &Env, worktree: &Path, label: &str) -> Child {
     let shim_dir = write_codex_spawn_marker_shim(env);
     let ready = env.home_root.join(format!("{label}.ready"));
     let mut cmd = env.rimz();
-    cmd.args(["agents", "exec", "codex", "--worktree-path"])
-        .arg(worktree)
+    cmd.args(exec_args(&worktree_exec_request(worktree)))
         .current_dir(worktree)
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
@@ -1640,8 +1655,7 @@ fn spawn_agent_exec_command(
     let shim_dir = write_codex_shim(env);
     let ready = env.home_root.join(format!("{label}.ready"));
     let pid_file = env.home_root.join(format!("{label}.pid"));
-    cmd.args(["agents", "exec", "codex", "--worktree-path"])
-        .arg(worktree_arg)
+    cmd.args(exec_args(&worktree_exec_request(worktree_arg)))
         .current_dir(cwd)
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))

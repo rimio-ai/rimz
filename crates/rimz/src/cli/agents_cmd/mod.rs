@@ -411,75 +411,10 @@ enum AgentsSubcmd {
 #[derive(Debug, Args)]
 struct ExecArgs {
     kind: String,
-    /// Fork a prior agent session by id: full history under a new
-    /// provider-assigned session id.
-    #[arg(
-        long,
-        value_name = "SESSION_ID",
-        conflicts_with_all = ["resume", "prompt"]
-    )]
-    fork: Option<String>,
-    /// Resume a prior agent session by id instead of launching fresh — the
-    /// argv resume-on-rebirth panes run ([`rimz::harness::resume::plan_resume`]).
-    #[arg(long, value_name = "SESSION_ID", conflicts_with = "prompt")]
-    resume: Option<String>,
-    #[arg(long)]
-    run_id: Option<rimz::RunId>,
-    #[arg(long)]
-    agent_name: Option<String>,
-    #[arg(long, hide = true)]
-    agent_name_explicit: bool,
-    /// The `[agents.profiles]` profile this agent launched as. The launch
-    /// event makes the rollup answer to `@<profile>`; `RIMZ_AGENT_PROFILE`
-    /// remains the pane's sender-attribution identity.
-    #[arg(long)]
-    agent_profile: Option<String>,
-    /// The permission posture selected for this launch.
-    #[arg(long)]
-    agent_mode: Option<PermissionMode>,
-    /// The `[agents.teams]` role this agent launched as. The launch event
-    /// makes the rollup answer to `@<role>`; `RIMZ_AGENT_ROLE` remains the
-    /// pane's sender-attribution identity.
-    #[arg(long)]
-    agent_role: Option<String>,
-    /// The `[agents.teams]` team this agent launched under. The launch event
-    /// makes in-place members resolve inside `<dir>/<team>`.
-    #[arg(long)]
-    agent_team: Option<String>,
-    /// The inline multi-agent launch cohort this agent belongs to.
-    #[arg(long)]
-    launch_group: Option<String>,
-    /// The agent's order inside its launch cohort.
-    #[arg(long)]
-    launch_ordinal: Option<u32>,
-    /// The named channel this agent launched under.
-    #[arg(long)]
-    agent_channel: Option<String>,
-    /// The profile/CLI-selected model to stamp into lifecycle observations.
-    #[arg(long)]
-    agent_model: Option<String>,
-    /// The profile/CLI-selected reasoning effort to stamp into lifecycle observations.
-    #[arg(long)]
-    agent_effort: Option<String>,
-    /// The launch-selected canonical budget to stamp into lifecycle observations.
-    #[arg(long)]
-    agent_budget: Option<String>,
-    #[arg(long)]
-    launch_id: Option<String>,
-    #[arg(long, hide = true)]
-    exit_on_run_completion: bool,
-    #[arg(long, hide = true)]
-    close_pane_on_exit: bool,
     #[arg(long)]
     worktree_path: Option<PathBuf>,
-    #[arg(long)]
-    prompt: Option<String>,
-    #[arg(long, hide = true)]
-    provider_account_binding: Option<String>,
-    #[arg(long, hide = true)]
-    provider_account_binding_finalized: bool,
-    #[arg(last = true)]
-    extra_args: Vec<String>,
+    #[arg(long, hide = true, value_name = "JSON")]
+    request: String,
 }
 
 pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {

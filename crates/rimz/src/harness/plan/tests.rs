@@ -38,12 +38,65 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
     })
 }
 
-fn assert_arg_pair(argv: &[String], flag: &str, value: &str) {
+#[derive(Clone, Copy, Debug)]
+enum RequestField {
+    Resume,
+    Prompt,
+    Name,
+    LaunchId,
+    Profile,
+    Role,
+    Team,
+    LaunchGroup,
+    LaunchOrdinal,
+    Channel,
+    Model,
+    Effort,
+}
+
+fn assert_request_field(argv: &[String], field: RequestField, value: &str) {
+    let request = exec_request(argv);
+    let actual = match field {
+        RequestField::Resume => match &request.action {
+            crate::harness::launch::ExecAction::Resume { session_id, .. } => {
+                Some(session_id.as_str())
+            }
+            _ => None,
+        },
+        RequestField::Prompt => match &request.action {
+            crate::harness::launch::ExecAction::Launch { prompt, .. } => prompt.as_deref(),
+            _ => None,
+        },
+        RequestField::Name => request.identity.name.as_deref(),
+        RequestField::LaunchId => request.identity.launch_id.as_deref(),
+        RequestField::Profile => request.identity.params.profile.as_deref(),
+        RequestField::Role => request.identity.params.role.as_deref(),
+        RequestField::Team => request.identity.params.team.as_deref(),
+        RequestField::LaunchGroup => request.identity.params.launch_group.as_deref(),
+        RequestField::Channel => request.identity.params.channel.as_deref(),
+        RequestField::Model => request.identity.params.model.as_deref(),
+        RequestField::Effort => request.identity.params.effort.as_deref(),
+        RequestField::LaunchOrdinal => {
+            assert_eq!(request.identity.params.launch_ordinal, value.parse().ok());
+            return;
+        }
+    };
     assert!(
-        argv.windows(2)
-            .any(|pair| pair[0] == flag && pair[1] == value),
-        "missing `{flag} {value}` in {argv:?}"
+        actual == Some(value),
+        "missing `{field:?}={value}` in {argv:?}"
     );
+}
+
+fn exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
+    let payload = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
+        .expect("exec request payload");
+    let worktree = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--worktree-path").then(|| Path::new(pair[1].as_str())));
+    crate::harness::launch::decode_exec_request(&argv[3], worktree, payload)
+        .expect("decode exec request")
 }
 
 fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
@@ -1076,13 +1129,15 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
     )
     .unwrap();
 
-    assert!(
-        !panes.columns[0].panes[0]
-            .argv
-            .iter()
-            .any(|arg| arg == "--prompt")
+    assert!(matches!(
+        &exec_request(&panes.columns[0].panes[0].argv).action,
+        crate::harness::launch::ExecAction::Launch { prompt: None, .. }
+    ));
+    assert_request_field(
+        &panes.columns[1].panes[1].argv,
+        RequestField::Prompt,
+        "lead this",
     );
-    assert_arg_pair(&panes.columns[1].panes[1].argv, "--prompt", "lead this");
 }
 
 #[test]
@@ -1131,11 +1186,11 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     .expect("mixed panes");
 
     let panes = &panes.columns[0].panes;
-    assert_arg_pair(&panes[0].argv, "--resume", "sess-resume");
-    assert_arg_pair(&panes[0].argv, "--agent-channel", "fallback");
+    assert_request_field(&panes[0].argv, RequestField::Resume, "sess-resume");
+    assert_request_field(&panes[0].argv, RequestField::Channel, "fallback");
     assert_eq!(panes[1].argv, vec!["watch"]);
-    assert_arg_pair(&panes[2].argv, "--agent-name", "bright-river");
-    assert_arg_pair(&panes[2].argv, "--prompt", "fresh prompt");
+    assert_request_field(&panes[2].argv, RequestField::Name, "bright-river");
+    assert_request_field(&panes[2].argv, RequestField::Prompt, "fresh prompt");
 
     let err = agent_pane_plans(
         &layout,
@@ -1192,21 +1247,24 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     )
     .unwrap();
 
-    for (flag, value) in [
-        ("--agent-name", "swift-otter"),
-        ("--launch-id", "launch_0123456789abcdef0123456789abcdef"),
-        ("--agent-profile", "claude-planner"),
-        ("--agent-role", "planner"),
-        ("--agent-team", "forge"),
-        ("--launch-group", "launch_group_1"),
-        ("--launch-ordinal", "2"),
-        ("--agent-channel", "design"),
-        ("--agent-model", "claude-sonnet"),
-        ("--agent-effort", "high"),
+    for (field, value) in [
+        (RequestField::Name, "swift-otter"),
+        (
+            RequestField::LaunchId,
+            "launch_0123456789abcdef0123456789abcdef",
+        ),
+        (RequestField::Profile, "claude-planner"),
+        (RequestField::Role, "planner"),
+        (RequestField::Team, "forge"),
+        (RequestField::LaunchGroup, "launch_group_1"),
+        (RequestField::LaunchOrdinal, "2"),
+        (RequestField::Channel, "design"),
+        (RequestField::Model, "claude-sonnet"),
+        (RequestField::Effort, "high"),
     ] {
-        assert_arg_pair(&pane.argv, flag, value);
+        assert_request_field(&pane.argv, field, value);
     }
-    assert!(pane.argv.iter().any(|arg| arg == "--close-pane-on-exit"));
+    assert!(exec_request(&pane.argv).close_pane_on_exit);
 
     for (cleanup_worktree, in_place) in [(false, true), (true, false)] {
         let pane = pane_cmd_with_name(
@@ -1220,7 +1278,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
             },
         )
         .unwrap();
-        assert!(!pane.argv.iter().any(|arg| arg == "--close-pane-on-exit"));
+        assert!(!exec_request(&pane.argv).close_pane_on_exit);
     }
 }
 
@@ -1271,23 +1329,26 @@ fn pane_command_resume_replays_prior_identity_without_launch_preset() {
     )
     .unwrap();
 
-    for (flag, value) in [
-        ("--resume", "sess-1"),
-        ("--agent-name", "swift-otter"),
-        ("--agent-profile", "prior-profile"),
-        ("--agent-role", "prior-role"),
-        ("--agent-team", "forge"),
-        ("--launch-group", "launch_group_1"),
-        ("--launch-ordinal", "1"),
-        ("--agent-channel", "design"),
+    for (field, value) in [
+        (RequestField::Resume, "sess-1"),
+        (RequestField::Name, "swift-otter"),
+        (RequestField::Profile, "prior-profile"),
+        (RequestField::Role, "prior-role"),
+        (RequestField::Team, "forge"),
+        (RequestField::LaunchGroup, "launch_group_1"),
+        (RequestField::LaunchOrdinal, "1"),
+        (RequestField::Channel, "design"),
     ] {
-        assert_arg_pair(&pane.argv, flag, value);
+        assert_request_field(&pane.argv, field, value);
     }
-    assert!(pane.argv.iter().any(|arg| arg == "--close-pane-on-exit"));
-    assert!(!pane.argv.iter().any(|arg| matches!(
-        arg.as_str(),
-        "--agent-model" | "--agent-effort" | "--prompt"
-    )));
+    let request = exec_request(&pane.argv);
+    assert!(request.close_pane_on_exit);
+    assert!(request.identity.params.model.is_none());
+    assert!(request.identity.params.effort.is_none());
+    assert!(matches!(
+        request.action,
+        crate::harness::launch::ExecAction::Resume { .. }
+    ));
 }
 
 #[test]

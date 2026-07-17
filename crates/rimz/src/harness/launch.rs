@@ -8,7 +8,9 @@ use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::ids::WorkspaceId;
+use serde::{Deserialize, Serialize};
+
+use crate::ids::{AgentKind, RunId, WorkspaceId};
 
 const ENV_BIN: &str = "/usr/bin/env";
 const POSIX_LOGIN_SHELL_SCRIPT: &str = r#"exec /usr/bin/env "$@""#;
@@ -101,6 +103,38 @@ pub struct CompiledAgentProcess {
     pub env: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentProcessStage {
+    Wrapped(CompiledAgentProcess),
+    FinalizedRaw(CompiledAgentProcess),
+    LoginShellReentry {
+        process: CompiledAgentProcess,
+        argv: Vec<String>,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentProcessStageErr {
+    #[error(transparent)]
+    Compile(#[from] AgentProcessCompileErr),
+    #[error(transparent)]
+    Wire(#[from] ExecWireErr),
+    #[error("provider-account binding applies only to fresh managed Qwen launches")]
+    InvalidProviderBinding,
+    #[error(
+        "Qwen provider account changed after launch preflight; retry the managed run so quota can be checked against the final account"
+    )]
+    FinalizedProviderMismatch,
+    #[error("finalized Qwen launch produced an empty command")]
+    EmptyReentry,
+}
+
+impl AgentProcessStageErr {
+    pub fn is_finalized_provider_mismatch(&self) -> bool {
+        matches!(self, Self::FinalizedProviderMismatch)
+    }
+}
+
 /// Resolve the user's configured shell for launches that should match a
 /// normal terminal. `$SHELL` wins when it names a launchable shell; otherwise
 /// the passwd entry is used. Sentinels such as `nologin` and missing absolute
@@ -159,21 +193,22 @@ pub fn channel_label_shell_argv(
     channel_shell_argv(workspace_id, project_root, worktree_path, channel)
 }
 
-/// The identity a `rimz agents exec` pane carries: rendered as `--agent-*`
-/// flags (parsed back by the CLI's ExecArgs) and as RIMZ_* env
-/// (crate::harness::run::ENV_*) for lifecycle hooks and peer attribution.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ExecIdentity<'a> {
-    pub name: Option<&'a str>,
+/// The identity a `rimz agents exec` pane carries in its structured request
+/// and as RIMZ_* env (crate::harness::run::ENV_*) for lifecycle hooks and peer
+/// attribution.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecIdentity {
+    pub name: Option<String>,
     /// Provenance for `name`: true only for a user-chosen `--name`, false for
-    /// minted and soft names. Rendered as a hidden CLI flag, not an env var.
+    /// minted and soft names. Carried in the hidden request, not an env var.
+    #[serde(default)]
     pub name_explicit: bool,
-    /// Provisional launch row id; rendered only alongside `name`
-    /// (`--launch-id` requires `--agent-name` at the parse side).
-    pub launch_id: Option<&'a str>,
+    /// Provisional launch row id; valid only alongside `name`.
+    pub launch_id: Option<String>,
     /// Canonical launch parameters. `kind_ordinal` remains display-only and is
     /// deliberately absent from wrapper argv and environment wiring.
-    pub params: Option<&'a crate::agents::LaunchParams>,
+    #[serde(default)]
+    pub params: crate::agents::LaunchParams,
 }
 
 #[derive(Clone, Copy)]
@@ -184,16 +219,6 @@ enum LaunchFieldValue<'a> {
 }
 
 impl LaunchFieldValue<'_> {
-    fn push_argv(self, argv: &mut Vec<String>, flag: &'static str) {
-        let value = match self {
-            Self::Text(Some(value)) => value.to_owned(),
-            Self::Mode(Some(value)) => value.to_string(),
-            Self::Ordinal(Some(value)) => value.to_string(),
-            Self::Text(None) | Self::Mode(None) | Self::Ordinal(None) => return,
-        };
-        argv.extend([flag.to_owned(), value]);
-    }
-
     fn into_env(self) -> Option<String> {
         match self {
             Self::Text(value) => value.map(ToOwned::to_owned),
@@ -205,108 +230,186 @@ impl LaunchFieldValue<'_> {
 
 #[derive(Clone, Copy)]
 struct LaunchField<'a> {
-    flag: &'static str,
     env: Option<&'static str>,
     value: LaunchFieldValue<'a>,
 }
 
-fn launch_fields(params: Option<&crate::agents::LaunchParams>) -> [LaunchField<'_>; 10] {
+fn launch_fields(params: &crate::agents::LaunchParams) -> [LaunchField<'_>; 10] {
     let text = |field: fn(&crate::agents::LaunchParams) -> Option<&str>| {
-        LaunchFieldValue::Text(params.and_then(field))
+        LaunchFieldValue::Text(field(params))
     };
     [
         LaunchField {
-            flag: "--agent-profile",
             env: Some(crate::harness::run::ENV_AGENT_PROFILE),
             value: text(|params| params.profile.as_deref()),
         },
         LaunchField {
-            flag: "--agent-mode",
             env: None,
-            value: LaunchFieldValue::Mode(params.and_then(|params| params.mode)),
+            value: LaunchFieldValue::Mode(params.mode),
         },
         LaunchField {
-            flag: "--agent-role",
             env: Some(crate::harness::run::ENV_AGENT_ROLE),
             value: text(|params| params.role.as_deref()),
         },
         LaunchField {
-            flag: "--agent-team",
             env: Some(crate::harness::run::ENV_TEAM),
             value: text(|params| params.team.as_deref()),
         },
         LaunchField {
-            flag: "--launch-group",
             env: Some(crate::harness::run::ENV_LAUNCH_GROUP),
             value: text(|params| params.launch_group.as_deref()),
         },
         LaunchField {
-            flag: "--launch-ordinal",
             env: Some(crate::harness::run::ENV_LAUNCH_ORDINAL),
-            value: LaunchFieldValue::Ordinal(params.and_then(|params| params.launch_ordinal)),
+            value: LaunchFieldValue::Ordinal(params.launch_ordinal),
         },
         LaunchField {
-            flag: "--agent-channel",
             env: Some(crate::harness::run::ENV_CHANNEL),
             value: text(|params| params.channel.as_deref()),
         },
         LaunchField {
-            flag: "--agent-model",
             env: Some(crate::harness::run::ENV_AGENT_MODEL),
             value: text(|params| params.model.as_deref()),
         },
         LaunchField {
-            flag: "--agent-effort",
             env: Some(crate::harness::run::ENV_AGENT_EFFORT),
             value: text(|params| params.effort.as_deref()),
         },
         LaunchField {
-            flag: "--agent-budget",
             env: Some(crate::harness::run::ENV_AGENT_BUDGET),
             value: text(|params| params.budget.as_deref()),
         },
     ]
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum ExecAction<'a> {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ExecAction {
     Launch {
-        prompt: Option<&'a str>,
-        extra_args: &'a [String],
+        prompt: Option<String>,
+        #[serde(default)]
+        extra_args: Vec<String>,
     },
     Resume {
-        session_id: &'a str,
-        extra_args: &'a [String],
+        session_id: String,
+        #[serde(default)]
+        extra_args: Vec<String>,
     },
     Fork {
-        session_id: &'a str,
-        extra_args: &'a [String],
+        session_id: String,
+        #[serde(default)]
+        extra_args: Vec<String>,
     },
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct ExecInvocation<'a> {
-    pub kind: &'a str,
-    pub action: ExecAction<'a>,
-    pub provider_account_binding: Option<&'a crate::agents::ProviderAccountBinding>,
-    pub provider_account_binding_finalized: bool,
-    pub run_id: Option<&'a str>,
-    pub worktree_path: Option<&'a Path>,
+impl ExecAction {
+    pub fn extra_args(&self) -> &[String] {
+        match self {
+            Self::Launch { extra_args, .. }
+            | Self::Resume { extra_args, .. }
+            | Self::Fork { extra_args, .. } => extra_args,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ProviderAccountState {
+    #[default]
+    Unbound,
+    Pending {
+        binding: crate::agents::ProviderAccountBinding,
+    },
+    Finalized {
+        binding: crate::agents::ProviderAccountBinding,
+    },
+}
+
+impl<'de> Deserialize<'de> for ProviderAccountState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "state", rename_all = "snake_case")]
+        enum RawState {
+            Unbound,
+            Pending {
+                binding: crate::agents::ProviderAccountBinding,
+            },
+            Finalized {
+                binding: Option<crate::agents::ProviderAccountBinding>,
+            },
+        }
+
+        match RawState::deserialize(deserializer)? {
+            RawState::Unbound => Ok(Self::Unbound),
+            RawState::Pending { binding } => Ok(Self::Pending { binding }),
+            RawState::Finalized {
+                binding: Some(binding),
+            } => Ok(Self::Finalized { binding }),
+            RawState::Finalized { binding: None } => Err(serde::de::Error::custom(
+                "finalized provider-account launch is missing its expected binding",
+            )),
+        }
+    }
+}
+
+impl ProviderAccountState {
+    pub fn binding(&self) -> Option<&crate::agents::ProviderAccountBinding> {
+        match self {
+            Self::Unbound => None,
+            Self::Pending { binding } | Self::Finalized { binding } => Some(binding),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecRequest {
+    pub kind: AgentKind,
+    pub action: ExecAction,
+    #[serde(default)]
+    pub provider_account: ProviderAccountState,
+    pub run_id: Option<RunId>,
+    pub worktree_path: Option<PathBuf>,
+    #[serde(default)]
     pub close_pane_on_exit: bool,
+    #[serde(default)]
     pub exit_on_run_completion: bool,
-    pub identity: ExecIdentity<'a>,
+    #[serde(default)]
+    pub identity: ExecIdentity,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ExecWireErr {
+    #[error("serializing hidden agent exec request: {0}")]
+    Serialize(#[source] serde_json::Error),
+    #[error("parsing hidden agent exec request: {0}")]
+    Parse(#[source] serde_json::Error),
+    #[error("hidden agent exec kind `{payload}` does not match visible kind `{visible}`")]
+    KindMismatch { visible: String, payload: String },
+    #[error("hidden agent exec worktree does not match visible --worktree-path")]
+    WorktreeMismatch,
+    #[error("--launch-id requires --agent-name")]
+    OrphanLaunchId,
+    #[error("--exit-on-run-completion requires --run-id")]
+    MissingRunId,
+    #[error("hidden provider-account launch binding is empty")]
+    EmptyProviderBinding,
+    #[error("kind_ordinal is display-only and cannot be carried by the agent exec request")]
+    KindOrdinal,
 }
 
 /// Compile the selected adapter action and preserve provider trailing argv.
 pub fn compile_provider_argv(
     adapter: &dyn crate::agents::AgentAdapter,
     kind: &str,
-    action: &ExecAction<'_>,
+    action: &ExecAction,
     cwd: &Path,
 ) -> AgentProcessResult<Vec<String>> {
-    let argv = match *action {
+    let argv = match action {
         ExecAction::Launch { prompt, extra_args } => adapter
-            .launch_command(extra_args, prompt)
+            .launch_command(extra_args, prompt.as_deref())
             .ok_or_else(|| AgentProcessCompileErr::NoLaunch {
                 kind: kind.to_owned(),
             })?,
@@ -347,27 +450,27 @@ pub fn compile_provider_argv(
 pub fn compile_agent_process(
     project_root: &Path,
     rtk: crate::config::RtkMode,
-    invocation: &ExecInvocation<'_>,
+    request: &ExecRequest,
     cwd: &Path,
 ) -> AgentProcessResult<CompiledAgentProcess> {
-    let adapter = crate::agents::find_adapter(invocation.kind).ok_or_else(|| {
-        AgentProcessCompileErr::UnknownAgent {
-            kind: invocation.kind.to_owned(),
-        }
-    })?;
-    let provider_argv = compile_provider_argv(adapter, invocation.kind, &invocation.action, cwd)?;
+    let kind = request.kind.as_str();
+    let adapter =
+        crate::agents::find_adapter(kind).ok_or_else(|| AgentProcessCompileErr::UnknownAgent {
+            kind: kind.to_owned(),
+        })?;
+    let provider_argv = compile_provider_argv(adapter, kind, &request.action, cwd)?;
     let provider_program =
         provider_argv
             .first()
             .cloned()
             .ok_or_else(|| AgentProcessCompileErr::EmptyCommand {
-                kind: invocation.kind.to_owned(),
+                kind: kind.to_owned(),
             })?;
     let env = compose_agent_env(
-        trusted_agent_env(project_root, invocation.kind)?,
+        trusted_agent_env(project_root, kind)?,
         adapter,
         rtk,
-        invocation,
+        request,
     )?;
     let argv = login_shell_argv(&env, &provider_argv);
     Ok(CompiledAgentProcess {
@@ -378,23 +481,73 @@ pub fn compile_agent_process(
     })
 }
 
+/// Compile the wrapper transition for an optional managed provider binding.
+/// Pending bindings re-enter through the login shell once; finalized bindings
+/// execute raw provider argv after verifying the effective account identity.
+pub fn compile_agent_process_stage(
+    project_root: &Path,
+    rtk: crate::config::RtkMode,
+    request: &ExecRequest,
+    cwd: &Path,
+    rimz_bin: &Path,
+) -> Result<AgentProcessStage, AgentProcessStageErr> {
+    let bound = !matches!(&request.provider_account, ProviderAccountState::Unbound);
+    if bound && (request.kind != "qwen" || !matches!(&request.action, ExecAction::Launch { .. })) {
+        return Err(AgentProcessStageErr::InvalidProviderBinding);
+    }
+
+    let process = compile_agent_process(project_root, rtk, request, cwd)?;
+    match &request.provider_account {
+        ProviderAccountState::Unbound => Ok(AgentProcessStage::Wrapped(process)),
+        ProviderAccountState::Pending { binding } => {
+            let mut finalized = request.clone();
+            finalized.provider_account = ProviderAccountState::Finalized {
+                binding: binding.clone(),
+            };
+            let argv = exec_argv(rimz_bin, &finalized)?;
+            let argv = login_shell_argv(&process.env, &argv);
+            if argv.is_empty() {
+                return Err(AgentProcessStageErr::EmptyReentry);
+            }
+            Ok(AgentProcessStage::LoginShellReentry { process, argv })
+        }
+        ProviderAccountState::Finalized { binding } => {
+            let adapter = crate::agents::find_adapter(request.kind.as_str()).ok_or_else(|| {
+                AgentProcessCompileErr::UnknownAgent {
+                    kind: request.kind.to_string(),
+                }
+            })?;
+            let actual = adapter.resolve_managed_launch(
+                cwd,
+                &effective_launch_env(&process.env),
+                request.identity.params.model.as_deref(),
+                &process.provider_argv,
+            );
+            if actual.as_ref() != Some(binding) {
+                return Err(AgentProcessStageErr::FinalizedProviderMismatch);
+            }
+            Ok(AgentProcessStage::FinalizedRaw(process))
+        }
+    }
+}
+
 fn compose_agent_env(
     mut env: BTreeMap<String, String>,
     adapter: &dyn crate::agents::AgentAdapter,
     rtk: crate::config::RtkMode,
-    invocation: &ExecInvocation<'_>,
+    request: &ExecRequest,
 ) -> AgentProcessResult<BTreeMap<String, String>> {
     for (key, value) in adapter.launch_env() {
         env.insert(key.to_owned(), value.to_owned());
     }
-    env.extend(exec_identity_env(invocation));
+    env.extend(exec_identity_env(request));
     env.insert(
         crate::harness::run::ENV_RTK.to_owned(),
         rtk.as_str().to_owned(),
     );
     if let Some(key) = invalid_env_key(&env) {
         return Err(AgentProcessCompileErr::InvalidEnvKey {
-            kind: invocation.kind.to_owned(),
+            kind: request.kind.to_string(),
             key: key.to_owned(),
         });
     }
@@ -424,10 +577,10 @@ fn trusted_agent_env(
 pub fn preflight_agent_process(
     project_root: &Path,
     rtk: crate::config::RtkMode,
-    invocation: &ExecInvocation<'_>,
+    request: &ExecRequest,
     cwd: &Path,
 ) -> AgentProcessResult<()> {
-    compile_agent_process(project_root, rtk, invocation, cwd).map(drop)
+    compile_agent_process(project_root, rtk, request, cwd).map(drop)
 }
 
 /// Preflight one fresh provider launch before detailed pane identity exists.
@@ -440,14 +593,13 @@ pub fn preflight_agent_kind(
     preflight_agent_process(
         project_root,
         rtk,
-        &ExecInvocation {
-            kind,
+        &ExecRequest {
+            kind: AgentKind::new_unchecked(kind),
             action: ExecAction::Launch {
                 prompt: None,
-                extra_args: &[],
+                extra_args: Vec::new(),
             },
-            provider_account_binding: None,
-            provider_account_binding_finalized: false,
+            provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
             close_pane_on_exit: false,
@@ -458,96 +610,84 @@ pub fn preflight_agent_kind(
     )
 }
 
-pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
+pub fn exec_argv(rimz_bin: &Path, request: &ExecRequest) -> Result<Vec<String>, ExecWireErr> {
+    let mut encoded = request.clone();
+    encoded.identity.params.kind_ordinal = None;
+    validate_exec_request(&encoded)?;
+    let payload = serde_json::to_string(&encoded).map_err(ExecWireErr::Serialize)?;
     let mut argv = vec![
         rimz_bin.to_string_lossy().into_owned(),
         "agents".to_owned(),
         "exec".to_owned(),
-        inv.kind.to_owned(),
+        encoded.kind.to_string(),
     ];
-    match inv.action {
-        ExecAction::Resume { session_id, .. } => {
-            argv.extend(["--resume".to_owned(), session_id.to_owned()]);
-        }
-        ExecAction::Fork { session_id, .. } => {
-            argv.extend(["--fork".to_owned(), session_id.to_owned()]);
-        }
-        ExecAction::Launch { .. } => {}
-    }
-    if let Some(binding) = inv
-        .provider_account_binding
-        .and_then(crate::agents::ProviderAccountBinding::encode)
-    {
-        argv.extend(["--provider-account-binding".to_owned(), binding]);
-    }
-    if inv.provider_account_binding_finalized {
-        argv.push("--provider-account-binding-finalized".to_owned());
-    }
-    if let Some(run_id) = inv.run_id {
-        argv.extend(["--run-id".to_owned(), run_id.to_owned()]);
-    }
-    if let Some(name) = inv.identity.name {
-        argv.extend(["--agent-name".to_owned(), name.to_owned()]);
-        if inv.identity.name_explicit {
-            argv.push("--agent-name-explicit".to_owned());
-        }
-        if let Some(launch_id) = inv.identity.launch_id {
-            argv.extend(["--launch-id".to_owned(), launch_id.to_owned()]);
-        }
-    }
-    for field in launch_fields(inv.identity.params) {
-        field.value.push_argv(&mut argv, field.flag);
-    }
-    if inv.exit_on_run_completion {
-        argv.push("--exit-on-run-completion".to_owned());
-    }
-    if inv.close_pane_on_exit {
-        argv.push("--close-pane-on-exit".to_owned());
-    }
-    if let Some(path) = inv.worktree_path {
+    if let Some(path) = encoded.worktree_path.as_deref() {
         argv.extend([
             "--worktree-path".to_owned(),
             path.to_string_lossy().into_owned(),
         ]);
     }
-    if let ExecAction::Launch { prompt, .. } = inv.action
-        && let Some(prompt) = prompt.filter(|value| !value.is_empty())
+    argv.extend(["--request".to_owned(), payload]);
+    Ok(argv)
+}
+
+pub fn decode_exec_request(
+    visible_kind: &str,
+    visible_worktree_path: Option<&Path>,
+    payload: &str,
+) -> Result<ExecRequest, ExecWireErr> {
+    let request: ExecRequest = serde_json::from_str(payload).map_err(ExecWireErr::Parse)?;
+    if request.kind != visible_kind {
+        return Err(ExecWireErr::KindMismatch {
+            visible: visible_kind.to_owned(),
+            payload: request.kind.to_string(),
+        });
+    }
+    if request.worktree_path.as_deref() != visible_worktree_path {
+        return Err(ExecWireErr::WorktreeMismatch);
+    }
+    validate_exec_request(&request)?;
+    Ok(request)
+}
+
+fn validate_exec_request(request: &ExecRequest) -> Result<(), ExecWireErr> {
+    if request.identity.launch_id.is_some() && request.identity.name.is_none() {
+        return Err(ExecWireErr::OrphanLaunchId);
+    }
+    if request.exit_on_run_completion && request.run_id.is_none() {
+        return Err(ExecWireErr::MissingRunId);
+    }
+    if request.identity.params.kind_ordinal.is_some() {
+        return Err(ExecWireErr::KindOrdinal);
+    }
+    if request
+        .provider_account
+        .binding()
+        .is_some_and(|binding| binding.account_key().trim().is_empty())
     {
-        argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
+        return Err(ExecWireErr::EmptyProviderBinding);
     }
-    let extra_args = match inv.action {
-        ExecAction::Launch { extra_args, .. }
-        | ExecAction::Resume { extra_args, .. }
-        | ExecAction::Fork { extra_args, .. } => extra_args,
-    };
-    if !extra_args.is_empty() {
-        argv.push("--".to_owned());
-        argv.extend(extra_args.iter().cloned());
-    }
-    argv
+    Ok(())
 }
 
 /// The RIMZ_* identity env for one invocation (kind, run id, identity fields).
 /// Callers merge trust env, adapter launch env, and rtk around it.
-pub fn exec_identity_env(inv: &ExecInvocation<'_>) -> BTreeMap<String, String> {
+pub fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     env.insert(
         crate::harness::run::ENV_AGENT_KIND.to_owned(),
-        inv.kind.to_owned(),
+        request.kind.to_string(),
     );
-    if let Some(run_id) = inv.run_id {
+    if let Some(run_id) = request.run_id.as_ref() {
         env.insert(
             crate::harness::run::ENV_RUN_ID.to_owned(),
-            run_id.to_owned(),
+            run_id.to_string(),
         );
     }
-    if let Some(name) = inv.identity.name {
-        env.insert(
-            crate::harness::run::ENV_AGENT_NAME.to_owned(),
-            name.to_owned(),
-        );
+    if let Some(name) = request.identity.name.as_ref() {
+        env.insert(crate::harness::run::ENV_AGENT_NAME.to_owned(), name.clone());
     }
-    for field in launch_fields(inv.identity.params) {
+    for field in launch_fields(&request.identity.params) {
         if let (Some(key), Some(value)) = (field.env, field.value.into_env()) {
             env.insert(key.to_owned(), value);
         }

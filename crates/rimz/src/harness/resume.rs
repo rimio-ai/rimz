@@ -1737,28 +1737,30 @@ fn candidate_resume_command(
         // Resume intentionally omits mode, model, effort, and budget.
         ..Default::default()
     };
-    crate::harness::launch::exec_argv(
+    let result = crate::harness::launch::exec_argv(
         rimz_bin,
-        &crate::harness::launch::ExecInvocation {
-            kind: candidate.kind.as_str(),
+        &crate::harness::launch::ExecRequest {
+            kind: candidate.kind.clone(),
             action: crate::harness::launch::ExecAction::Resume {
-                session_id: candidate.session_id.as_str(),
-                extra_args: &[],
+                session_id: candidate.session_id.to_string(),
+                extra_args: Vec::new(),
             },
-            provider_account_binding: None,
-            provider_account_binding_finalized: false,
+            provider_account: crate::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
             close_pane_on_exit: true,
             exit_on_run_completion: false,
             identity: crate::harness::launch::ExecIdentity {
-                name: candidate.name.as_deref(),
+                name: candidate.name.clone(),
                 name_explicit: candidate.name_explicit,
-                params: Some(&params),
+                params,
                 ..crate::harness::launch::ExecIdentity::default()
             },
         },
-    )
+    );
+    // ExecRequest contains only JSON strings, integers, booleans, and enums;
+    // serde_json cannot reject this in-memory shape.
+    result.unwrap_or_else(|err| unreachable!("serializing canonical exec request: {err}"))
 }
 
 /// A short, view-safe label for a resumed agent: `kind:<channel>`, falling back

@@ -3,15 +3,50 @@
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
+use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
+use rimz::ids::AgentKind;
 
-use crate::common::Env;
 #[cfg(unix)]
 use crate::common::{CommandTimeoutExt, path_with_front, write_env_dump_shim};
+use crate::common::{Env, exec_args};
 
 /// A minimal project config carrying one command-executing hook field — the
 /// fixture the trust-surface tests grant against.
 const CLAUDE_HOOK_CONFIG: &str =
     "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n";
+
+fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
+    ExecRequest {
+        kind: AgentKind::new_unchecked(kind),
+        action,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: ExecIdentity::default(),
+    }
+}
+
+fn fresh_exec(kind: &str) -> Vec<String> {
+    exec_args(&exec_request(
+        kind,
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    ))
+}
+
+fn resume_exec(kind: &str, session_id: &str) -> Vec<String> {
+    exec_args(&exec_request(
+        kind,
+        ExecAction::Resume {
+            session_id: session_id.to_owned(),
+            extra_args: Vec::new(),
+        },
+    ))
+}
 
 #[test]
 fn trust_status_grant_revoke_lifecycle() {
@@ -180,7 +215,7 @@ fn trusted_agent_env_reaches_the_spawned_agent() {
     let shim_dir = write_env_dump_shim(&env, "codex");
     let dump = env.home_root.join("codex.env");
     env.rimz()
-        .args(["agents", "exec", "codex"])
+        .args(fresh_exec("codex"))
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -199,7 +234,7 @@ fn untrusted_agent_env_refuses_the_launch() {
     env.write_config(&env.project_root, CODEX_ENV_CONFIG);
 
     env.rimz()
-        .args(["agents", "exec", "codex"])
+        .args(fresh_exec("codex"))
         .assert()
         .failure()
         .stderr(contains("rimz trust grant"));
@@ -220,7 +255,7 @@ fn trusted_claude_agent_view_env_reaches_the_process() {
     let shim_dir = write_env_dump_shim(&env, "claude");
     let dump = env.home_root.join("claude.env");
     env.rimz()
-        .args(["agents", "exec", "claude"])
+        .args(fresh_exec("claude"))
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -252,7 +287,7 @@ fn resumed_agent_env_funnels_through_the_exec_wrapper() {
     let shim_dir = write_env_dump_shim(&env, "claude");
     let dump = env.home_root.join("claude-resume.env");
     env.rimz()
-        .args(["agents", "exec", "claude", "--resume", "sess-1"])
+        .args(resume_exec("claude", "sess-1"))
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -275,7 +310,7 @@ fn untrusted_agent_env_refuses_a_resume_launch() {
     env.write_config(&env.project_root, CODEX_ENV_CONFIG);
 
     env.rimz()
-        .args(["agents", "exec", "codex", "--resume", "sess-1"])
+        .args(resume_exec("codex", "sess-1"))
         .assert()
         .failure()
         .stderr(contains("rimz trust grant"));
