@@ -36,6 +36,7 @@ lcov.info
 /crates/rimz/pricing/litellm-pricing.json
 
 # Agent Harness
+HANDOFF.md
 plan.md
 result.md
 status.md
