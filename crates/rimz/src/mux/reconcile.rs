@@ -155,70 +155,90 @@ where
     }
 
     for (index, verdict) in plan.verdicts.iter().enumerate() {
-        let view = verdict.view();
-        let result = match verdict {
-            ViewVerdict::CloseDuplicates { close: panes, .. } => {
-                for pane in panes {
-                    if let Err(error) = close(pane) {
-                        return reconcile_failure(&plan, report, index, view, error);
-                    }
-                    report.closed += 1;
-                }
-                Ok(())
-            }
-            ViewVerdict::Add { .. } => match if defer_adds {
-                Ok(ReconcileAddOutcome::Deferred)
-            } else {
-                add(view)
-            } {
-                Ok(ReconcileAddOutcome::Verified) => {
-                    report.recovered += 1;
-                    Ok(())
-                }
-                Ok(ReconcileAddOutcome::VerifiedMisdocked) => {
-                    report.recovered += 1;
-                    report.misdocked += 1;
-                    Ok(())
-                }
-                Ok(ReconcileAddOutcome::Deferred) => {
-                    if !defer_adds {
-                        report.deferred += 1;
-                    }
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            },
-            ViewVerdict::Replace { close: panes, .. } => match if defer_adds {
-                Ok(ReconcileAddOutcome::Deferred)
-            } else {
-                add(view)
-            } {
-                Ok(ReconcileAddOutcome::Deferred) => {
-                    if !defer_adds {
-                        report.deferred += 1;
-                    }
-                    Ok(())
-                }
-                Ok(outcome) => {
-                    for pane in panes {
-                        if let Err(error) = close(pane) {
-                            return reconcile_failure(&plan, report, index, view, error);
-                        }
-                        report.closed += 1;
-                    }
-                    report.recovered += 1;
-                    report.misdocked +=
-                        usize::from(outcome == ReconcileAddOutcome::VerifiedMisdocked);
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            },
-        };
-        if let Err(error) = result {
-            return reconcile_failure(&plan, report, index, view, error);
+        if let Err(error) =
+            execute_reconcile_verdict(verdict, report, defer_adds, &mut add, &mut close)
+        {
+            return reconcile_failure(&plan, report, index, verdict.view(), error);
         }
     }
     None
+}
+
+fn execute_reconcile_verdict<Add, Close>(
+    verdict: &ViewVerdict,
+    report: &mut SidebarRecovery,
+    defer_adds: bool,
+    add: &mut Add,
+    close: &mut Close,
+) -> crate::mux::Result<()>
+where
+    Add: FnMut(&str) -> crate::mux::Result<ReconcileAddOutcome>,
+    Close: FnMut(&PaneId) -> crate::mux::Result<()>,
+{
+    match verdict {
+        ViewVerdict::CloseDuplicates { close: panes, .. } => close_panes(panes, report, close),
+        ViewVerdict::Add { view } => {
+            let outcome = run_add(view, defer_adds, add)?;
+            record_add(outcome, defer_adds, report);
+            Ok(())
+        }
+        ViewVerdict::Replace {
+            view, close: panes, ..
+        } => {
+            let outcome = run_add(view, defer_adds, add)?;
+            if outcome != ReconcileAddOutcome::Deferred {
+                close_panes(panes, report, close)?;
+            }
+            record_add(outcome, defer_adds, report);
+            Ok(())
+        }
+    }
+}
+
+fn run_add<Add>(
+    view: &str,
+    defer_adds: bool,
+    add: &mut Add,
+) -> crate::mux::Result<ReconcileAddOutcome>
+where
+    Add: FnMut(&str) -> crate::mux::Result<ReconcileAddOutcome>,
+{
+    if defer_adds {
+        Ok(ReconcileAddOutcome::Deferred)
+    } else {
+        add(view)
+    }
+}
+
+fn close_panes<Close>(
+    panes: &[PaneId],
+    report: &mut SidebarRecovery,
+    close: &mut Close,
+) -> crate::mux::Result<()>
+where
+    Close: FnMut(&PaneId) -> crate::mux::Result<()>,
+{
+    for pane in panes {
+        close(pane)?;
+        report.closed += 1;
+    }
+    Ok(())
+}
+
+fn record_add(
+    outcome: ReconcileAddOutcome,
+    deferred_precounted: bool,
+    report: &mut SidebarRecovery,
+) {
+    match outcome {
+        ReconcileAddOutcome::Verified => report.recovered += 1,
+        ReconcileAddOutcome::VerifiedMisdocked => {
+            report.recovered += 1;
+            report.misdocked += 1;
+        }
+        ReconcileAddOutcome::Deferred if !deferred_precounted => report.deferred += 1,
+        ReconcileAddOutcome::Deferred => {}
+    }
 }
 
 fn reconcile_failure(
