@@ -143,7 +143,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     views.sort_by_key(|view| view.detail.open.since);
 
     if json {
-        return print_json(&views.iter().map(AskJsonView::from).collect::<Vec<_>>());
+        return render::json_pretty(&views.iter().map(AskJsonView::from).collect::<Vec<_>>());
     }
     if views.is_empty() {
         return Ok(());
@@ -191,7 +191,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     }
     let view = view_for_agent(store.paths(), agent, &peers)?;
     if json {
-        return print_json(&AskJsonView::from(&view));
+        return render::json_pretty(&AskJsonView::from(&view));
     }
     let mut out = render::out();
     writeln!(out, "{}  {}", view.detail.open.id, view.agent.handle)?;
@@ -251,12 +251,4 @@ fn first_line(view: &OpenAskView) -> &str {
         .map(|question| question.question.lines().next().unwrap_or_default())
         .or(view.detail.open.detail.as_deref())
         .unwrap_or("waiting for input")
-}
-
-fn print_json(value: &impl Serialize) -> Result<()> {
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    serde_json::to_writer_pretty(&mut out, value)?;
-    writeln!(out)?;
-    Ok(())
 }

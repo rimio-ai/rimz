@@ -117,8 +117,7 @@ fn print_path() -> Result<()> {
 fn get(args: GetArgs) -> Result<()> {
     let selected = ConfigEditor::machine().get(args.key.as_deref())?;
     if args.json {
-        let rendered = serde_json::to_string_pretty(&selected).context("rendering config JSON")?;
-        return print_line(&rendered);
+        return crate::cli::render::json_pretty(&selected).context("rendering config JSON");
     }
     print_text(&render_value(&selected)?)
 }

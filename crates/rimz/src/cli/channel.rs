@@ -142,12 +142,7 @@ fn list_channels(
 
     let entries = entries.into_values().collect::<Vec<_>>();
     if json {
-        let rendered = serde_json::to_string_pretty(&entries)?;
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
-        return Ok(());
+        return render::json_pretty(&entries);
     }
 
     let mut table = render::Table::new(["CHANNEL", "BACKING", "AGENTS"]);

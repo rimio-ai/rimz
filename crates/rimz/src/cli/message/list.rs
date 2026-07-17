@@ -200,11 +200,7 @@ pub(super) fn list_messages(
         messages.truncate(limit);
     }
     if json {
-        let rendered = serde_json::to_string_pretty(&messages)?;
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
+        render::json_pretty(&messages)?;
     } else {
         let agents: Vec<&AgentState> = snapshot.root_agents().collect();
         let mut out = render::out();

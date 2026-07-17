@@ -121,6 +121,40 @@ pub(crate) fn finish(write: std::io::Result<()>) -> anyhow::Result<()> {
     }
 }
 
+/// Emit one compact JSON document followed by one newline.
+pub(crate) fn json<T: serde::Serialize + ?Sized>(value: &T) -> anyhow::Result<()> {
+    write_json(&mut std::io::stdout().lock(), value, false)
+}
+
+/// Emit one pretty-printed JSON document followed by one newline.
+pub(crate) fn json_pretty<T: serde::Serialize + ?Sized>(value: &T) -> anyhow::Result<()> {
+    write_json(&mut std::io::stdout().lock(), value, true)
+}
+
+fn write_json<W: Write, T: serde::Serialize + ?Sized>(
+    writer: &mut W,
+    value: &T,
+    pretty: bool,
+) -> anyhow::Result<()> {
+    let serialized = if pretty {
+        serde_json::to_writer_pretty(&mut *writer, value)
+    } else {
+        serde_json::to_writer(&mut *writer, value)
+    };
+    match serialized {
+        Ok(()) => {}
+        Err(error) if error.io_error_kind() == Some(std::io::ErrorKind::BrokenPipe) => {
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    }
+    match writer.write_all(b"\n") {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Wrap `text` in `style`'s ANSI for inline use inside a larger line — the
 /// `anstream` stream strips it when color is off. Cells in [`Table`]/[`KeyVals`]
 /// carry their own style; reach for this only when one styled span sits within
@@ -712,6 +746,7 @@ impl KeyVals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::ser::Error as _;
 
     fn strip(
         render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> std::io::Result<()>,
@@ -730,6 +765,72 @@ mod tests {
     fn finish_propagates_a_non_broken_pipe_error() {
         let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         assert!(finish(Err(err)).is_err());
+    }
+
+    #[test]
+    fn compact_json_has_one_trailing_newline() {
+        let mut out = Vec::new();
+
+        write_json(&mut out, &serde_json::json!({ "answer": 42 }), false).unwrap();
+
+        assert_eq!(out, b"{\"answer\":42}\n");
+        assert!(!out.ends_with(b"\n\n"));
+    }
+
+    #[test]
+    fn pretty_json_has_one_trailing_newline() {
+        let mut out = Vec::new();
+
+        write_json(&mut out, &serde_json::json!({ "answer": 42 }), true).unwrap();
+
+        assert_eq!(out, b"{\n  \"answer\": 42\n}\n");
+        assert!(!out.ends_with(b"\n\n"));
+    }
+
+    #[test]
+    fn json_propagates_serialization_failure() {
+        struct Fails;
+
+        impl serde::Serialize for Fails {
+            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(S::Error::custom("serialization failed"))
+            }
+        }
+
+        let error = write_json(&mut Vec::new(), &Fails, false).unwrap_err();
+
+        assert!(error.to_string().contains("serialization failed"));
+    }
+
+    #[test]
+    fn json_propagates_ordinary_writer_failure() {
+        let mut writer = FailingWriter(std::io::ErrorKind::PermissionDenied);
+
+        let error = write_json(&mut writer, &true, false).unwrap_err();
+
+        assert!(error.to_string().contains("permission denied"));
+    }
+
+    #[test]
+    fn json_treats_broken_pipe_as_clean() {
+        let mut writer = FailingWriter(std::io::ErrorKind::BrokenPipe);
+
+        assert!(write_json(&mut writer, &true, false).is_ok());
+    }
+
+    struct FailingWriter(std::io::ErrorKind);
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]

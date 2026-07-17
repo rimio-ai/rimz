@@ -174,8 +174,7 @@ pub(super) fn show_agent(
         &store, &workspace, &runtime, &snapshot, &reference, capture, ansi,
     )?;
     if json {
-        supervised::output::print_json(&report)?;
-        return Ok(());
+        return render::json_pretty(&report);
     }
     render_show_report(report, &store, &snapshot, &runtime, deferred_error)
 }

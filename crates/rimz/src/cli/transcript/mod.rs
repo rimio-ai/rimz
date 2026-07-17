@@ -150,7 +150,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         );
     }
     if args.json {
-        print_json(&ChatView {
+        render::json_pretty(&ChatView {
             channel: view.channel.clone(),
             focus: view.focus.clone(),
             entries: selected,
@@ -353,7 +353,7 @@ fn archive_prefix(entries: &[RenderEntry], boundary: Option<jiff::Timestamp>) ->
 
 fn write_empty_chat(json: bool, message: &str) -> Result<()> {
     if json {
-        print_json(&serde_json::json!({ "entries": [] }))?;
+        render::json_pretty(&serde_json::json!({ "entries": [] }))?;
     } else {
         let mut out = render::err();
         writeln!(out, "{}", render::paint(render::palette::FAINT, message))?;
@@ -477,13 +477,6 @@ fn ask_summary_parts(title: &str, body: Option<&str>, options: &[String]) -> Str
         text.push(']');
     }
     text
-}
-
-fn print_json(value: &impl Serialize) -> Result<()> {
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer_pretty(&mut stdout, value)?;
-    writeln!(stdout)?;
-    Ok(())
 }
 
 #[cfg(test)]

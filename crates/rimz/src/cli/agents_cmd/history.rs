@@ -57,7 +57,7 @@ pub(super) fn history_agent(
         turns = turns.split_off(turns.len().saturating_sub(tail));
     }
     if json {
-        return supervised::output::print_json(&turns);
+        return render::json_pretty(&turns);
     }
 
     let mut out = render::out();

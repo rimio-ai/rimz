@@ -981,12 +981,7 @@ fn fmt_duration_compact(duration: Duration) -> String {
 }
 
 fn print_json_report(outcome: &GcOutcome) -> Result<()> {
-    let rendered = serde_json::to_string_pretty(&JsonReport::from(outcome))?;
-    #[expect(clippy::print_stdout, reason = "json emitter")]
-    {
-        println!("{rendered}");
-    }
-    Ok(())
+    render::json_pretty(&JsonReport::from(outcome))
 }
 
 #[derive(Serialize)]

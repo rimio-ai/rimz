@@ -27,12 +27,7 @@ pub struct ListThemesArgs {
 pub fn run(args: ListThemesArgs, _globals: &GlobalFlags) -> Result<()> {
     let names = config::available_scheme_names();
     if args.json {
-        let rendered = serde_json::to_string_pretty(&names).expect("theme name vec serializes");
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
-        return Ok(());
+        return render::json_pretty(&names);
     }
     let is_tty = std::io::stdout().is_terminal();
     let mut out = render::out();

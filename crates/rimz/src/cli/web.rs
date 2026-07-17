@@ -176,7 +176,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     if args.json {
-        return print_json(&outcome.payload);
+        return crate::cli::render::json(&outcome.payload);
     }
     print_url(&outcome.payload.url)?;
     match outcome
@@ -267,7 +267,7 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
     let payload = WebEngine::from(context.mux_name())
         .inspect_session(context.session_name(), &machine_config())?;
     if args.json {
-        print_json(&payload)
+        crate::cli::render::json(&payload)
     } else {
         print_url(&payload.url)
     }
@@ -276,7 +276,7 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
 fn status(args: WebStatusArgs) -> Result<()> {
     let report = rimz::web::status()?;
     if args.json {
-        return print_json(&report.payload);
+        return crate::cli::render::json(&report.payload);
     }
     let mut stdout = std::io::stdout().lock();
     if report.zellij_available {
@@ -428,13 +428,6 @@ fn run_inherited(spec: CommandSpec) -> Result<()> {
     if !status.success() {
         bail!("command `{}` exited with {status}", spec.display_line());
     }
-    Ok(())
-}
-
-fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, value)?;
-    writeln!(stdout)?;
     Ok(())
 }
 

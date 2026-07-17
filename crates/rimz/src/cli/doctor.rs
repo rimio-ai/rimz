@@ -7,7 +7,6 @@
 //! or atomically to a file. Collection lives in the sibling modules; presentation
 //! lives in [`render`]; this file only assembles and emits.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -148,7 +147,8 @@ fn workspace_view(ws: &rimz::ResolvedWorkspace) -> model::Workspace {
 fn emit(report: &DoctorReport, json: bool, output: Option<&Path>) -> Result<()> {
     if let Some(path) = output {
         let bytes = if json {
-            let mut json = serde_json::to_string_pretty(report).expect("DoctorReport serializes");
+            let mut json =
+                serde_json::to_string_pretty(report).context("rendering doctor report JSON")?;
             json.push('\n');
             json.into_bytes()
         } else {
@@ -160,13 +160,10 @@ fn emit(report: &DoctorReport, json: bool, output: Option<&Path>) -> Result<()> 
             .with_context(|| format!("writing doctor report to {}", path.display()));
     }
 
-    let mut out = ui::out();
     if json {
-        let rendered = serde_json::to_string_pretty(report).expect("DoctorReport serializes");
-        writeln!(out, "{rendered}")?;
-    } else {
-        render::render_human(report, &mut out)?;
+        return ui::json_pretty(report);
     }
+    render::render_human(report, &mut ui::out())?;
     Ok(())
 }
 

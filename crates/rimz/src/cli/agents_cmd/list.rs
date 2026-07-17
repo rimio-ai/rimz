@@ -54,8 +54,7 @@ pub(super) fn list_agents(
         })
         .collect();
     if json {
-        supervised::output::print_json(&agent_list_entries(&snapshot, &agents))?;
-        return Ok(());
+        return render::json_pretty(&agent_list_entries(&snapshot, &agents));
     }
 
     let machine_config = crate::cli::machine_config();

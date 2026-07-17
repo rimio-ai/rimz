@@ -201,6 +201,19 @@ pub enum RunStatus {
 }
 
 impl RunStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::VerifyFailed => "verify_failed",
+            Self::TimedOut => "timed_out",
+            Self::BudgetExceeded => "budget_exceeded",
+            Self::Canceled => "canceled",
+        }
+    }
+
     pub const fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -498,24 +511,11 @@ fn require_completed(record: &RunRecord) -> Result<()> {
     if record.status != RunStatus::Completed {
         return Err(RunStoreErr::InvalidStatus {
             run_id: record.run_id.clone(),
-            actual: run_status_name(record.status),
+            actual: record.status.as_str(),
             expected: "completed",
         });
     }
     Ok(())
-}
-
-const fn run_status_name(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Pending => "pending",
-        RunStatus::Running => "running",
-        RunStatus::Completed => "completed",
-        RunStatus::Failed => "failed",
-        RunStatus::VerifyFailed => "verify_failed",
-        RunStatus::TimedOut => "timed_out",
-        RunStatus::BudgetExceeded => "budget_exceeded",
-        RunStatus::Canceled => "canceled",
-    }
 }
 
 fn mark_terminal(

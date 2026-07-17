@@ -38,16 +38,11 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     let now = Timestamp::now();
     let delivery = open_delivery(&workspace, &store, &message, &live_messages, globals, now)?;
     if json {
-        let rendered = serde_json::to_string_pretty(&MessageShowJson {
+        return render::json_pretty(&MessageShowJson {
             message,
             timeline,
             delivery,
-        })?;
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
-        return Ok(());
+        });
     }
 
     let agents: Vec<&AgentState> = cached_snapshot.root_agents().collect();

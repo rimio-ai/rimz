@@ -24,12 +24,7 @@ pub struct ListPetsArgs {
 pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.json {
         let ids = pets::listable_ids();
-        let rendered = serde_json::to_string_pretty(&ids).expect("pet id vec serializes");
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
-        return Ok(());
+        return render::json_pretty(&ids);
     }
 
     let is_tty = std::io::stdout().is_terminal();

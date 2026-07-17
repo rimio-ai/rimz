@@ -53,12 +53,7 @@ struct WorkspaceRow {
 pub fn run(args: ListArgs, _globals: &GlobalFlags) -> Result<()> {
     let rows = collect_rows(args.all).context("listing workspaces")?;
     if args.json {
-        let rendered = serde_json::to_string_pretty(&rows).expect("WorkspaceRow vec serializes");
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
-        return Ok(());
+        return crate::cli::render::json_pretty(&rows);
     }
     print_human(&rows)?;
     Ok(())

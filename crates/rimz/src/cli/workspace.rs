@@ -51,12 +51,7 @@ pub fn run(args: WorkspaceArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         WorkspaceSubcmd::Resolve { path } => {
             let workspace = WorkspaceResolver::resolve(&path, globals.root.clone())?;
-            let rendered = serde_json::to_string_pretty(&workspace)?;
-            #[expect(clippy::print_stdout, reason = "json emitter")]
-            {
-                println!("{rendered}");
-            }
-            Ok(())
+            crate::cli::render::json_pretty(&workspace)
         }
         WorkspaceSubcmd::Migrate { old_root, new_root } => migrate(old_root, new_root),
         WorkspaceSubcmd::RotateEvents(args) => rotate_events(args, globals),

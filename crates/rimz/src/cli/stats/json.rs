@@ -148,10 +148,5 @@ pub(super) fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<
         agents,
         days,
     };
-    let rendered = serde_json::to_string_pretty(&doc).expect("StatsJson serializes");
-    #[expect(clippy::print_stdout, reason = "json emitter")]
-    {
-        println!("{rendered}");
-    }
-    Ok(())
+    crate::cli::render::json_pretty(&doc)
 }

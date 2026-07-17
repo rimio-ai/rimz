@@ -13,22 +13,18 @@ struct ListEntryJson<'a> {
     mux: Option<&'a str>,
 }
 
-pub(super) fn print(entries: &[RemoteAlias], json: bool) -> std::io::Result<()> {
+pub(super) fn print(entries: &[RemoteAlias], json: bool) -> anyhow::Result<()> {
     if json {
-        let rendered = render_list_json(entries);
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
-        return Ok(());
+        return render::json_pretty(&list_json(entries));
     }
     if entries.is_empty() {
         return Ok(());
     }
-    human_table(entries).render(&mut render::out())
+    human_table(entries).render(&mut render::out())?;
+    Ok(())
 }
 
-fn render_list_json(entries: &[RemoteAlias]) -> String {
+fn list_json(entries: &[RemoteAlias]) -> serde_json::Value {
     let rows: Vec<ListEntryJson<'_>> = entries
         .iter()
         .map(|entry| ListEntryJson {
@@ -39,7 +35,7 @@ fn render_list_json(entries: &[RemoteAlias]) -> String {
             mux: entry.mux.map(|mux| mux.as_str()),
         })
         .collect();
-    serde_json::to_string_pretty(&json!({ "remotes": rows })).expect("rendered JSON serializes")
+    json!({ "remotes": rows })
 }
 
 fn human_table(entries: &[RemoteAlias]) -> render::Table {
@@ -79,6 +75,10 @@ fn human_table(entries: &[RemoteAlias]) -> render::Table {
 mod tests {
     use super::*;
     use rimz::ids::MuxName;
+
+    fn render_list_json(entries: &[RemoteAlias]) -> String {
+        serde_json::to_string_pretty(&list_json(entries)).expect("rendered JSON serializes")
+    }
 
     #[test]
     fn list_renderers_emit_public_shapes() {

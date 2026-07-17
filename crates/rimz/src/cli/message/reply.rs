@@ -282,11 +282,7 @@ fn print_json_replies(
             },
         );
     }
-    let mut out = render::out();
-    serde_json::to_writer(&mut out, &replies)?;
-    writeln!(out)?;
-    out.flush()?;
-    Ok(())
+    render::json(&replies)
 }
 
 fn print_timeout(total: usize, timed_out: &[String], wait: WaitSpec) -> Result<()> {

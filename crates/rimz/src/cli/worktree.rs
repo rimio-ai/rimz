@@ -210,12 +210,7 @@ fn list_worktrees(workspace: &ResolvedWorkspace, json: bool) -> Result<()> {
 
 fn render_worktree_json(entries: &[InspectedWorktree]) -> Result<()> {
     let rows = entries.iter().map(worktree_json_row).collect::<Vec<_>>();
-    let rendered = serde_json::to_string_pretty(&rows)?;
-    #[expect(clippy::print_stdout, reason = "json emitter")]
-    {
-        println!("{rendered}");
-    }
-    Ok(())
+    render::json_pretty(&rows)
 }
 
 fn worktree_json_row(entry: &InspectedWorktree) -> WorktreeListJson<'_> {

@@ -113,7 +113,7 @@ pub(in crate::cli) fn run_print(
             let mut stderr = render::err();
             supervised::output::print_run_output(record_ref, &mut stdout, &mut stderr)?
         }
-        OutputFormat::Json => supervised::output::print_json(record_ref)?,
+        OutputFormat::Json => crate::cli::render::json_pretty(record_ref)?,
         // stream-json already emitted its events as the run progressed.
         OutputFormat::StreamJson => {}
     }

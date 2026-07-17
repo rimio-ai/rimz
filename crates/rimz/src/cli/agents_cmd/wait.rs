@@ -488,11 +488,7 @@ fn print_wait_json<'a>(outcomes: impl IntoIterator<Item = &'a TargetOutcome>) ->
         .into_iter()
         .map(|outcome| (outcome.name.as_str(), outcome.entry()))
         .collect::<BTreeMap<_, _>>();
-    let mut out = render::out();
-    serde_json::to_writer(&mut out, &entries)?;
-    writeln!(out)?;
-    out.flush()?;
-    Ok(())
+    render::json(&entries)
 }
 
 fn print_wait_status(out: &mut impl Write, outcome: &TargetOutcome) -> std::io::Result<()> {
@@ -510,13 +506,13 @@ fn print_wait_status(out: &mut impl Write, outcome: &TargetOutcome) -> std::io::
 
 fn print_single_outcome(outcome: &TargetOutcome, json: bool) -> Result<()> {
     match &outcome.payload {
-        TerminalPayload::Run(record) if json => supervised::output::print_json(record),
+        TerminalPayload::Run(record) if json => render::json_pretty(record),
         TerminalPayload::Run(record) => {
             let mut stdout = render::out();
             let mut stderr = render::err();
             supervised::output::print_run_output(record, &mut stdout, &mut stderr)
         }
-        TerminalPayload::Agent(agent) if json => supervised::output::print_json(agent),
+        TerminalPayload::Agent(agent) if json => render::json_pretty(agent),
         TerminalPayload::Agent(_) | TerminalPayload::Disappeared => Ok(()),
     }
 }
@@ -566,11 +562,7 @@ fn print_timeout_json(waits: &WaitSet) -> Result<()> {
             ),
         })
         .collect::<BTreeMap<_, _>>();
-    let mut out = render::out();
-    serde_json::to_writer(&mut out, &entries)?;
-    writeln!(out)?;
-    out.flush()?;
-    Ok(())
+    render::json(&entries)
 }
 
 fn wait_interactive_agent_stream(

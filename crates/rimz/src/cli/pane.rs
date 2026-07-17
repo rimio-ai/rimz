@@ -282,12 +282,7 @@ fn list(
                 })
                 .collect(),
         };
-        let rendered = serde_json::to_string_pretty(&payload)?;
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
-        return Ok(());
+        return render::json_pretty(&payload);
     }
 
     let mut table = render::Table::new(["", "AGENT", "STATUS", "CWD", "PANE"]);
@@ -461,11 +456,7 @@ fn capture(
 ) -> Result<()> {
     let capture = backend.capture_pane(pane, lines, ansi)?;
     if json {
-        let rendered = serde_json::to_string_pretty(&capture)?;
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
+        render::json_pretty(&capture)?;
     } else {
         #[expect(clippy::print_stdout, reason = "raw capture text")]
         {

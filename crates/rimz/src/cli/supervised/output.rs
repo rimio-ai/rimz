@@ -70,24 +70,8 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
     Ok(())
 }
 
-pub(crate) fn print_json(value: &impl serde::Serialize) -> Result<()> {
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer_pretty(&mut stdout, value)?;
-    writeln!(stdout)?;
-    Ok(())
-}
-
 pub(crate) fn status_label(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Pending => "pending",
-        RunStatus::Running => "running",
-        RunStatus::Completed => "completed",
-        RunStatus::Failed => "failed",
-        RunStatus::VerifyFailed => "verify_failed",
-        RunStatus::TimedOut => "timed_out",
-        RunStatus::BudgetExceeded => "budget_exceeded",
-        RunStatus::Canceled => "canceled",
-    }
+    status.as_str()
 }
 
 pub(crate) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {

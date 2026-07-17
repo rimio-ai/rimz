@@ -63,9 +63,9 @@ struct ReportJson<'a> {
     surface_diff: Option<&'a [SurfaceDiffEntry]>,
 }
 
-fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
+fn print_report(report: &TrustReport, as_json: bool) -> Result<()> {
     if as_json {
-        let rendered = serde_json::to_string_pretty(&ReportJson {
+        return render::json_pretty(&ReportJson {
             state: report.state.as_str(),
             workspace_id: report.workspace_id.as_str(),
             project_root: report.project_root.display().to_string(),
@@ -75,13 +75,7 @@ fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
             granted_hash: report.granted_hash.as_deref(),
             granted_at: report.granted_at.map(|t| t.to_string()),
             surface_diff: report.surface_diff.as_deref(),
-        })
-        .expect("trust report serializes");
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
-        return Ok(());
+        });
     }
     let mut out = render::out();
     writeln!(
@@ -130,7 +124,8 @@ fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
         &mut out,
         report.surface_diff.as_deref(),
         render::terminal_columns(100),
-    )
+    )?;
+    Ok(())
 }
 
 fn trust_banner(state: TrustState) -> &'static str {

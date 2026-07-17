@@ -86,13 +86,10 @@ pub fn run(args: CoverageArgs, _globals: &GlobalFlags) -> Result<()> {
         hooks_matrix: collect_hook_matrix(),
     };
 
-    let mut out = ui::out();
     if args.json {
-        let rendered = serde_json::to_string_pretty(&report).expect("CoverageReport serializes");
-        writeln!(out, "{rendered}")?;
-    } else {
-        render_human(&report, &mut out)?;
+        return ui::json_pretty(&report);
     }
+    render_human(&report, &mut ui::out())?;
     Ok(())
 }
 

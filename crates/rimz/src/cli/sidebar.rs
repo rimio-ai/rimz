@@ -7,7 +7,7 @@
 //! alone. The elder renderer produces in process on its fetch worker, so this
 //! arm serves inspection and scripting.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -515,9 +515,7 @@ fn emit_rollup_snapshot(
 
 fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
     if json {
-        let rendered = serde_json::to_string_pretty(snapshot)?;
-        let mut stdout = io::stdout().lock();
-        render::finish(writeln!(stdout, "{rendered}"))
+        render::json_pretty(snapshot)
     } else {
         let waiting = status_tally(snapshot, rimz::agents::AgentStatus::Waiting);
         let failed = status_tally(snapshot, rimz::agents::AgentStatus::Failed);
