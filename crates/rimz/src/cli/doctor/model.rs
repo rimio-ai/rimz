@@ -311,6 +311,7 @@ pub(super) struct TopologyWriterId {
 #[derive(Debug, Serialize)]
 pub(super) struct HookRow {
     pub(super) kind: String,
+    pub(super) detected: bool,
     pub(super) status: HookStatus,
 }
 
@@ -340,6 +341,7 @@ pub(super) enum HookStatus {
     Installed,
     InstalledUntrusted { events: Vec<String>, fix: String },
     NotInstalled { fix: String },
+    NotDetected,
     Unsupported { reason: String },
 }
 
@@ -350,6 +352,7 @@ impl HookStatus {
             Self::Installed => "installed",
             Self::InstalledUntrusted { .. } => "installed, untrusted",
             Self::NotInstalled { .. } => "not installed",
+            Self::NotDetected => "not detected",
             Self::Unsupported { .. } => "unsupported",
         }
     }

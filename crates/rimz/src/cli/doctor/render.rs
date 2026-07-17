@@ -615,8 +615,16 @@ fn floor_cell(tally: &mut Tally, meets: bool, min: (u32, u32, u32)) -> Cell {
 
 fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -> io::Result<()> {
     section(w, "HOOKS")?;
+    let (mut not_detected, table_rows): (Vec<_>, Vec<_>) = report.hooks.iter().partition(|row| {
+        !row.detected
+            && matches!(
+                &row.status,
+                HookStatus::NotDetected | HookStatus::Unsupported { .. }
+            )
+    });
+    let has_table_rows = !table_rows.is_empty();
     let mut table = Table::new(["", "AGENT", "STATUS", "FIX"]);
-    for row in &report.hooks {
+    for row in table_rows {
         let (health, fix) = match &row.status {
             HookStatus::Installed => (Health::Ok, String::new()),
             HookStatus::InstalledUntrusted { events, fix } => (
@@ -627,6 +635,7 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
                 ),
             ),
             HookStatus::NotInstalled { fix } => (Health::Alarm, fix.clone()),
+            HookStatus::NotDetected => (Health::Neutral, String::new()),
             HookStatus::Unsupported { reason } => (Health::Neutral, reason.clone()),
         };
         let fix = if fix.is_empty() { "-".to_owned() } else { fix };
@@ -637,7 +646,29 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
             cell(fix).dash(),
         ]);
     }
-    table.render(w)
+    if has_table_rows {
+        table.render(w)?;
+    }
+    if !not_detected.is_empty() {
+        not_detected.sort_by(|left, right| left.kind.cmp(&right.kind));
+        let kinds = not_detected
+            .iter()
+            .map(|row| row.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        note(
+            tally,
+            w,
+            Health::Neutral,
+            &format!("not detected on this machine: {kinds}"),
+        )?;
+        detail(
+            w,
+            palette::FAINT,
+            "hooks are offered automatically once an agent is installed",
+        )?;
+    }
+    Ok(())
 }
 
 fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -> io::Result<()> {
@@ -1416,30 +1447,50 @@ mod tests {
             hooks: vec![
                 HookRow {
                     kind: "claude".to_owned(),
+                    detected: true,
                     status: HookStatus::Installed,
                 },
                 HookRow {
                     kind: "codex".to_owned(),
+                    detected: true,
                     status: HookStatus::NotInstalled {
                         fix: "run `rimz hooks install codex` to wire codex agents".to_owned(),
                     },
+                },
+                HookRow {
+                    kind: "kiro".to_owned(),
+                    detected: false,
+                    status: HookStatus::Unsupported {
+                        reason: "unsupported hooks".to_owned(),
+                    },
+                },
+                HookRow {
+                    kind: "grok".to_owned(),
+                    detected: false,
+                    status: HookStatus::NotDetected,
                 },
             ],
             ..report_fixture()
         };
         let out = strip(|w| {
             let mut tally = Tally::default();
-            render_hooks(w, &report, &mut tally)
+            render_hooks(w, &report, &mut tally)?;
+            render_tally(w, &tally)
         });
-        assert!(out.contains("HOOKS"), "section title:\n{out}");
-        assert!(out.contains("✓"), "installed carries a check:\n{out}");
-        assert!(out.contains("✗"), "missing carries a cross:\n{out}");
-        assert!(out.contains("installed"), "{out}");
-        assert!(out.contains("not installed"), "{out}");
-        assert!(
-            out.contains("rimz hooks install codex"),
-            "fix command in the table:\n{out}"
-        );
+        for expected in [
+            "HOOKS",
+            "✓",
+            "✗",
+            "installed",
+            "not installed",
+            "rimz hooks install codex",
+            "not detected on this machine: grok, kiro",
+            "hooks are offered automatically once an agent is installed",
+            "✗ 1 problem, ⚠ 0 warnings",
+        ] {
+            assert!(out.contains(expected), "missing {expected}:\n{out}");
+        }
+        assert!(!out.contains("unsupported"), "{out}");
     }
 
     #[test]

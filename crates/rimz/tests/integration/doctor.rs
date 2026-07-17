@@ -150,15 +150,18 @@ fn doctor_json_folds_one_row_per_agent() {
 #[test]
 fn doctor_json_reports_agent_hook_install_and_trust_states() {
     let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["codex", "claude", "kiro"]);
     let report = doctor_json(
         &env.rimz()
             .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
             .output()
             .expect("spawn"),
     );
     let hooks = report["hooks"].as_array().expect("hooks array");
     let codex = hook(hooks, "codex");
     assert_eq!(codex["status"]["state"], "not_installed");
+    assert_eq!(codex["detected"], true);
     assert!(
         fix(codex).contains("rimz hooks install codex"),
         "names the codex wiring command: {codex}"
@@ -175,12 +178,17 @@ fn doctor_json_reports_agent_hook_install_and_trust_states() {
             .is_some_and(|reason| reason.contains("does not execute standalone hook configs")),
         "Kiro reports the verified hook limitation: {kiro}"
     );
+    let grok = hook(hooks, "grok");
+    assert_eq!(grok["status"]["state"], "not_detected");
+    assert_eq!(grok["detected"], false);
 
     let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["codex", "claude"]);
     env.install_agent_hooks("codex");
     let report = doctor_json(
         &env.rimz()
             .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
             .output()
             .expect("spawn"),
     );
@@ -201,11 +209,13 @@ fn doctor_json_reports_agent_hook_install_and_trust_states() {
     );
 
     let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["codex", "claude"]);
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
     let report = doctor_json(
         &env.rimz()
             .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
             .output()
             .expect("spawn"),
     );
@@ -231,7 +241,13 @@ fn fix(hook: &Value) -> &str {
 #[test]
 fn doctor_human_report_renders_titled_sections() {
     let env = Env::new();
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    let stub_dir = stub_agent_binaries(&env, &["claude"]);
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("PATH", &stub_dir)
+        .output()
+        .expect("spawn doctor");
     assert!(
         output.status.success(),
         "doctor failed: {}",
@@ -265,6 +281,17 @@ fn doctor_human_report_renders_titled_sections() {
     assert!(
         stdout.contains("rimz hooks install claude"),
         "the hooks table carries the wiring command:\n{stdout}"
+    );
+    let not_detected = stdout
+        .lines()
+        .find(|line| line.contains("not detected on this machine:"))
+        .expect("absent-agent footer");
+    assert!(not_detected.contains("grok"), "{not_detected}");
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.contains('✗') && line.contains("grok")),
+        "absent grok is not an alarm row:\n{stdout}"
     );
     assert!(
         stdout.contains("problems")
@@ -832,6 +859,18 @@ fn write_claude_settings(env: &Env, text: &str) -> PathBuf {
     let path = env.home_root.join("claude-settings.json");
     std::fs::write(&path, text).expect("write claude settings");
     path
+}
+
+fn stub_agent_binaries(env: &Env, agents: &[&str]) -> PathBuf {
+    let dir = env.home_root.join("bin");
+    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
+    for agent in agents {
+        let path = dir.join(agent);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write agent stub");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod agent stub");
+    }
+    dir
 }
 
 fn stub_claude_version(env: &Env, version: &str) -> PathBuf {

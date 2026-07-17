@@ -62,7 +62,7 @@ rimz doctor [--audit] [--clear] [--json] [--output PATH]
 
 - **Identity and paths** — current OS user, absolute rimz binary path, resolved workspace with absolute paths
 - **Backend** — backend and version, PATH-visible backend binaries, server-log excerpts, server socket, session health, duplicate sidebars
-- **Integration** — hook status, remote-control state, protocol versions, trust state
+- **Integration** — hook status for detected agents, a footer summarizing absent agents whose hooks are offered automatically after installation, remote-control state, protocol versions, trust state
 - **State** — storage footprint, live agent problem rows, message-delivery failures, recent sidebar diagnostics
 - **Last incident** — previous room death cause and time, lost agents, `recovered N of M`, and the crash forensic archive path when a prior incarnation died
 - **Verdict** — the closing summary line

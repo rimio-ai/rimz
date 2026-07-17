@@ -4,7 +4,7 @@ When something looks off, `rimz doctor` is the first move, this page is the symp
 
 ## Start with `rimz doctor`
 
-`rimz doctor` reports the whole room in one pass: the multiplexer backend and whether its version clears the floor, per-machine config parsing, per-agent hook status, workspace and store health, project trust state, terminal color depth, scheduled loop tasks, and the Zellij presence grant. It resolves the workspace, probes each of those surfaces, and prints a verdict. A normal run writes nothing, so you can run it as often as you like.
+`rimz doctor` reports the whole room in one pass: the multiplexer backend and whether its version clears the floor, per-machine config parsing, per-agent hook status, workspace and store health, project trust state, terminal color depth, scheduled loop tasks, and the Zellij presence grant. The `HOOKS` section lists detected agents and summarizes absent agents in a footer; RimZ offers their hooks automatically once the agent is installed. It resolves the workspace, probes each of those surfaces, and prints a verdict. A normal run writes nothing, so you can run it as often as you like.
 
 ```sh
 rimz doctor

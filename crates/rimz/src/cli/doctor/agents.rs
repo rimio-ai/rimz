@@ -63,12 +63,14 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
 
 /// Each adapter's RimZ-hook wiring state. A run in a RimZ room registers nothing
 /// until the agent's own hook system invokes `rimz hooks feed`, so this
-/// distinguishes installed, installable, and known-but-not-installable adapters.
+/// distinguishes installed, present-but-unwired, absent, and
+/// known-but-not-installable adapters.
 pub(super) fn collect_hooks() -> Vec<HookRow> {
     rimz::agents::all_adapters()
         .map(|agent| {
             let descriptor = agent.descriptor();
             let name = descriptor.kind;
+            let detected = rimz::agents::locate_binary(descriptor).is_some();
             let status = if !descriptor.has_wired_hook_install() {
                 HookStatus::Unsupported {
                     reason: descriptor
@@ -86,13 +88,16 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
                         fix: rimz::agents::hook_trust_fix(name),
                     }
                 }
-            } else {
+            } else if detected {
                 HookStatus::NotInstalled {
                     fix: format!("run `rimz hooks install {name}` to wire {name} agents"),
                 }
+            } else {
+                HookStatus::NotDetected
             };
             HookRow {
                 kind: name.to_owned(),
+                detected,
                 status,
             }
         })
