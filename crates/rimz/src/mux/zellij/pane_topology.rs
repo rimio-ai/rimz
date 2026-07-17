@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::pane::SIDEBAR_CHROME_TITLE;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneTopologyCache {
     pub session_name: String,
@@ -75,6 +77,55 @@ pub struct PaneTopologyPane {
     pub pane_cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_command: Option<String>,
+}
+
+impl PaneTopologyPane {
+    /// A tiled terminal pane for geometry and sidebar reconcile: not plugin
+    /// chrome, not suppressed, and not a floating overlay. Held and exited panes
+    /// still occupy layout cells until Zellij closes them.
+    pub(super) fn is_terminal(&self) -> bool {
+        !self.is_plugin && !self.is_suppressed && !self.is_floating
+    }
+
+    /// A live terminal pane that belongs in the listing feed. Floating panes are
+    /// included because agent discovery follows visible terminals, while
+    /// geometry and reconcile use [`Self::is_terminal`] to exclude overlays.
+    pub(super) fn is_listed_pane(&self) -> bool {
+        !self.is_plugin && !self.is_suppressed && !self.is_held && !self.exited
+    }
+
+    /// A live tiled terminal pane. Command fields may still be absent for an
+    /// implicit shell; the producer repairs raced-null fields when possible.
+    pub(super) fn is_live_terminal(&self) -> bool {
+        self.is_listed_pane() && !self.is_floating
+    }
+
+    /// The live foreground command last observed by the presence plugin.
+    pub(super) fn foreground_command(&self) -> Option<&str> {
+        self.pane_command
+            .as_deref()
+            .filter(|value| !value.is_empty())
+    }
+
+    /// The launch command Zellij received when the pane was spawned.
+    pub(super) fn spawn_command(&self) -> Option<&str> {
+        self.terminal_command
+            .as_deref()
+            .filter(|command| !command.is_empty())
+    }
+
+    /// The display command for pane projection. Title-identified sidebar
+    /// chrome wins because Zellij can omit its command fields.
+    pub(super) fn display_command(&self) -> Option<String> {
+        if !self.is_plugin && self.title.as_deref() == Some(SIDEBAR_CHROME_TITLE) {
+            return Some(SIDEBAR_CHROME_TITLE.to_owned());
+        }
+        self.foreground_command().map(str::to_owned)
+    }
+
+    pub(super) fn view_position(&self) -> u64 {
+        self.tab_position
+    }
 }
 
 #[cfg(test)]

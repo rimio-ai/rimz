@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use super::pane_topology::PaneTopologyPane;
 use super::parse::{SessionState, session_state_from_line};
 use super::raw_pane::{RawPaneListing, SessionCleanliness, classify_session_panes};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
@@ -20,7 +21,7 @@ impl ZellijBackend {
         session: &str,
         min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
-    ) -> Result<Vec<super::raw_pane::RawPane>> {
+    ) -> Result<Vec<PaneTopologyPane>> {
         self.topology_listing(
             Some(session),
             None,
@@ -37,7 +38,7 @@ impl ZellijBackend {
         workspace_id: &WorkspaceId,
         min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
-    ) -> Result<Vec<super::raw_pane::RawPane>> {
+    ) -> Result<Vec<PaneTopologyPane>> {
         self.topology_listing(
             Some(session),
             None,

@@ -13,7 +13,7 @@ use super::parse::{
     parse_focused_terminal_client_ids, trim_capture,
 };
 use super::raw_pane::{
-    RawPane, RawPaneListing, SessionCleanliness, floating_panes_in_anchor_view, is_sidebar_pane,
+    RawPaneListing, SessionCleanliness, floating_panes_in_anchor_view, is_sidebar_pane,
     own_zellij_pane_id, sidebar_geometry_off_spec, tab_view_cols, views_with_sidebars,
 };
 use super::sidebar::DockOutcome;
@@ -1108,7 +1108,7 @@ impl MuxBackend for ZellijBackend {
 }
 
 fn off_spec_sidebars(
-    panes: &[RawPane],
+    panes: &[PaneTopologyPane],
     closing: &[PaneId],
     width: crate::mux::SidebarWidth,
     width_override: Option<std::num::NonZeroU16>,
@@ -1129,7 +1129,7 @@ fn parse_zellij_raw(pane: &PaneId) -> Option<u64> {
         .flatten()
 }
 
-fn focused_work_panes(panes: &[RawPane]) -> HashMap<u64, u64> {
+fn focused_work_panes(panes: &[PaneTopologyPane]) -> HashMap<u64, u64> {
     let mut focused = HashMap::new();
     for pane in panes
         .iter()

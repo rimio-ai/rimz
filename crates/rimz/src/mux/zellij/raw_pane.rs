@@ -1,11 +1,9 @@
-//! Raw Zellij pane projection, topology-cache reads, and sidebar classification.
+//! Zellij topology projection and sidebar classification.
 
 use std::{
     collections::{HashMap, HashSet},
     env,
 };
-
-use serde::Deserialize;
 
 use crate::ids::{MuxName, PaneId};
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
@@ -26,7 +24,7 @@ pub(super) enum SessionCleanliness {
 
 /// A live, non-plugin sidebar pane is one Zellij still titles with the shared
 /// sidebar chrome title — the same signal `classify_session_panes` trusts.
-pub(super) fn is_sidebar_pane(pane: &RawPane) -> bool {
+pub(super) fn is_sidebar_pane(pane: &PaneTopologyPane) -> bool {
     !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_CHROME_TITLE)
 }
 
@@ -34,7 +32,7 @@ pub(super) fn is_sidebar_pane(pane: &RawPane) -> bool {
 /// each tab's sidebar panes (as normalized [`PaneId`]s) and whether it holds a
 /// user-working terminal pane. Daemon dashboard panes in `rimzd` are not work.
 /// First-seen tab order; pane order within a tab preserved.
-pub(super) fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
+pub(super) fn views_with_sidebars(panes: &[PaneTopologyPane]) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
     let mut index: HashMap<u64, usize> = HashMap::new();
     for pane in panes.iter().filter(|pane| pane.is_terminal()) {
@@ -61,7 +59,10 @@ pub(super) fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
     views
 }
 
-pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_position: u64) -> Option<u64> {
+pub(super) fn leftmost_live_work_pane(
+    panes: &[PaneTopologyPane],
+    tab_position: u64,
+) -> Option<u64> {
     panes
         .iter()
         .filter(|pane| {
@@ -74,7 +75,7 @@ pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_position: u64) -> O
 /// A daemon dashboard pane: any pane in the `rimzd` tab, or one whose spawn or
 /// foreground command carries a host marker. The spawn command is the
 /// authoritative Zellij signal for hosts that re-exec after launch.
-fn is_daemon_host_pane(pane: &RawPane) -> bool {
+fn is_daemon_host_pane(pane: &PaneTopologyPane) -> bool {
     pane.tab_name.as_deref() == Some(crate::daemon_view::VIEW_NAME)
         || pane
             .spawn_command()
@@ -84,7 +85,7 @@ fn is_daemon_host_pane(pane: &RawPane) -> bool {
             .is_some_and(crate::daemon_view::command_is_host)
 }
 
-pub(super) fn classify_session_panes(panes: &[RawPane]) -> SessionCleanliness {
+pub(super) fn classify_session_panes(panes: &[PaneTopologyPane]) -> SessionCleanliness {
     if !has_healthy_sidebar(panes) {
         return SessionCleanliness::MissingSidebar;
     }
@@ -94,7 +95,7 @@ pub(super) fn classify_session_panes(panes: &[RawPane]) -> SessionCleanliness {
     SessionCleanliness::Clean
 }
 
-pub(super) fn has_healthy_sidebar(panes: &[RawPane]) -> bool {
+pub(super) fn has_healthy_sidebar(panes: &[PaneTopologyPane]) -> bool {
     let mut found = false;
     for pane in panes.iter().filter(|pane| is_sidebar_pane(pane)) {
         found = true;
@@ -109,13 +110,13 @@ pub(super) fn has_healthy_sidebar(panes: &[RawPane]) -> bool {
 /// the fingerprint of a resurrected (serialized) room, where every command pane
 /// comes back `start_suspended`. Floating panes count here because a floating
 /// agent is a real command pane, even though geometry ignores overlays.
-pub(super) fn has_suspended_command_pane(panes: &[RawPane]) -> bool {
+pub(super) fn has_suspended_command_pane(panes: &[PaneTopologyPane]) -> bool {
     panes
         .iter()
         .any(|pane| is_session_health_command_pane(pane) && pane.is_held)
 }
 
-fn is_session_health_command_pane(pane: &RawPane) -> bool {
+fn is_session_health_command_pane(pane: &PaneTopologyPane) -> bool {
     !pane.is_plugin && !pane.is_suppressed && !is_sidebar_pane(pane)
 }
 
@@ -133,7 +134,10 @@ pub(super) fn zellij_pane_id(raw: u64) -> PaneId {
     PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw}"))
 }
 
-pub(super) fn floating_panes_in_anchor_view(panes: &[RawPane], anchor: &PaneId) -> Vec<PaneId> {
+pub(super) fn floating_panes_in_anchor_view(
+    panes: &[PaneTopologyPane],
+    anchor: &PaneId,
+) -> Vec<PaneId> {
     let Some(anchor_raw) = parse_terminal_id(anchor.raw()) else {
         return Vec::new();
     };
@@ -163,7 +167,7 @@ pub(super) fn parse_new_pane_id(stdout: &str) -> Option<String> {
 
 /// The tiled width of `tab_position`, derived from the rightmost pane extent.
 /// Floating, suppressed, and plugin panes do not define the tab's view width.
-pub(super) fn tab_view_cols(panes: &[RawPane], tab_position: u64) -> Option<u64> {
+pub(super) fn tab_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
     panes
         .iter()
         .filter(|pane| pane.tab_position == tab_position && pane.is_terminal())
@@ -193,8 +197,8 @@ pub(super) enum SidebarDock {
 /// nested verdict. Missing sidebar geometry stays unknown and never triggers
 /// repair from this predicate.
 pub(super) fn sidebar_dock_verdict(
-    pane: &RawPane,
-    panes: &[RawPane],
+    pane: &PaneTopologyPane,
+    panes: &[PaneTopologyPane],
     excluded: &HashSet<u64>,
 ) -> Option<SidebarDock> {
     let x = pane.pane_x?;
@@ -222,8 +226,8 @@ pub(super) fn sidebar_dock_verdict(
 /// can close and verified-readd the sidebar. A real multi-column work layout is
 /// left untouched and reported as mis-docked.
 pub(super) fn repairable_nested_work_pane_ids(
-    sidebar: &RawPane,
-    panes: &[RawPane],
+    sidebar: &PaneTopologyPane,
+    panes: &[PaneTopologyPane],
     excluded: &HashSet<u64>,
 ) -> Option<Vec<u64>> {
     let sidebar_cols = sidebar.pane_columns?;
@@ -231,7 +235,7 @@ pub(super) fn repairable_nested_work_pane_ids(
         return None;
     }
 
-    let mut work: Vec<&RawPane> = panes
+    let mut work: Vec<&PaneTopologyPane> = panes
         .iter()
         .filter(|pane| {
             pane.tab_position == sidebar.tab_position
@@ -274,8 +278,8 @@ pub(super) fn repairable_nested_work_pane_ids(
 /// column band, or outside the tolerated band around its live per-view target.
 /// Unknown geometry never reads off-spec.
 pub(super) fn sidebar_geometry_off_spec(
-    pane: &RawPane,
-    panes: &[RawPane],
+    pane: &PaneTopologyPane,
+    panes: &[PaneTopologyPane],
     excluded: &HashSet<u64>,
     width: SidebarWidth,
     width_override: Option<std::num::NonZeroU16>,
@@ -301,7 +305,7 @@ pub(super) fn sidebar_geometry_off_spec(
 /// cross-talk duplicate resolves deterministically and reconcile closes the
 /// rest. A hinted pane already present before the add is never accepted.
 pub(super) fn mounted_sidebar_pane(
-    panes: &[RawPane],
+    panes: &[PaneTopologyPane],
     tab_position: u64,
     before: &HashSet<u64>,
     hint: Option<u64>,
@@ -326,7 +330,7 @@ pub(super) fn mounted_sidebar_pane(
 /// it identifies a candidate; otherwise accept exactly one new candidate so a
 /// missing or cross-talked hint still lets repair clean up the wrong-tab mount.
 pub(super) fn wrong_tab_mounted_sidebar_pane(
-    panes: &[RawPane],
+    panes: &[PaneTopologyPane],
     tab_position: u64,
     before: &HashSet<u64>,
     hint: Option<u64>,
@@ -348,135 +352,9 @@ pub(super) fn wrong_tab_mounted_sidebar_pane(
     })
 }
 
-/// Pane fields published by the presence plugin topology cache.
-#[derive(Debug, Deserialize)]
-pub(super) struct RawPane {
-    pub(super) id: u64,
-    pub(super) is_plugin: bool,
-    #[serde(default)]
-    pub(super) is_held: bool,
-    /// Command has exited but Zellij still shows the pane (e.g. hold-on-close).
-    /// A dead pane, not a live process — excluded from the pane listing.
-    #[serde(default)]
-    pub(super) exited: bool,
-    #[serde(default)]
-    pub(super) is_suppressed: bool,
-    #[serde(default)]
-    pub(super) is_floating: bool,
-    #[serde(default)]
-    pub(super) is_focused: bool,
-    /// Positional tab index from the plugin manifest. Zellij's internal tab ids
-    /// are intentionally absent from product runtime.
-    #[serde(alias = "tab_id")]
-    pub(super) tab_position: u64,
-    /// Name of the tab the pane lives in. Routed into [`PaneRef::view_name`];
-    /// also how the `rimzd` daemon view is recognised on Zellij, whose pane list
-    /// reports no command fields a classifier could read instead.
-    #[serde(default)]
-    pub(super) tab_name: Option<String>,
-    /// Column width of the pane, used by in-place sidebar recovery to resize a
-    /// freshly-split sidebar toward the tab's live width target.
-    #[serde(default)]
-    pub(super) pane_columns: Option<u64>,
-    /// Column offset of the pane's left edge — `0` is the left column. Drives
-    /// the tab-width extents math and the off-spec redock in sidebar recovery.
-    #[serde(default)]
-    pub(super) pane_x: Option<u64>,
-    #[serde(default)]
-    pub(super) title: Option<String>,
-    #[serde(default)]
-    pub(super) terminal_command: Option<String>,
-    #[serde(default)]
-    pub(super) pane_command: Option<String>,
-    #[serde(default)]
-    pub(super) pane_cwd: Option<String>,
-}
-
-impl RawPane {
-    /// A tiled terminal pane for geometry and sidebar reconcile: not plugin
-    /// chrome, not suppressed, and not a floating overlay. Held and exited panes
-    /// still occupy layout cells until Zellij closes them.
-    pub(super) fn is_terminal(&self) -> bool {
-        !self.is_plugin && !self.is_suppressed && !self.is_floating
-    }
-
-    /// A live terminal pane that belongs in the listing feed. Floating panes are
-    /// included here because agent discovery and process presence follow visible
-    /// terminals, while geometry and sidebar reconcile keep using
-    /// [`Self::is_terminal`] to exclude overlays from column math.
-    pub(super) fn is_listed_pane(&self) -> bool {
-        !self.is_plugin && !self.is_suppressed && !self.is_held && !self.exited
-    }
-
-    /// A live tiled terminal pane. Excludes held/exited corpses so a dead command
-    /// never drives sidebar recovery or geometry. Zellij can omit command fields
-    /// for a live implicit shell pane, so the projection preserves that as
-    /// `None`; the producer's frame rotation repairs raced-null fields from the
-    /// last good observation when one exists.
-    pub(super) fn is_live_terminal(&self) -> bool {
-        self.is_listed_pane() && !self.is_floating
-    }
-
-    /// The live foreground command the presence plugin last observed.
-    pub(super) fn foreground_command(&self) -> Option<&str> {
-        self.pane_command
-            .as_deref()
-            .filter(|value| !value.is_empty())
-    }
-
-    /// The launch command Zellij was given when the pane was spawned.
-    pub(super) fn spawn_command(&self) -> Option<&str> {
-        self.terminal_command
-            .as_deref()
-            .filter(|command| !command.is_empty())
-    }
-
-    /// The display command the pane's `PaneRef` carries. A title-identified
-    /// sidebar wins: Zellij can omit command fields for the layout pane, and it
-    /// must still be filtered as chrome rather than rendered as an anonymous
-    /// process row. Otherwise the foreground command decides.
-    pub(super) fn display_command(&self) -> Option<String> {
-        if is_sidebar_pane(self) {
-            return Some(SIDEBAR_CHROME_TITLE.to_owned());
-        }
-        self.foreground_command().map(str::to_owned)
-    }
-
-    pub(super) fn view_position(&self) -> u64 {
-        self.tab_position
-    }
-}
-
-impl From<PaneTopologyPane> for RawPane {
-    fn from(pane: PaneTopologyPane) -> Self {
-        Self {
-            id: pane.id,
-            is_plugin: pane.is_plugin,
-            is_held: pane.is_held,
-            exited: pane.exited,
-            is_suppressed: pane.is_suppressed,
-            is_floating: pane.is_floating,
-            is_focused: pane.is_focused,
-            tab_position: pane.tab_position,
-            tab_name: pane.tab_name,
-            pane_columns: pane.pane_columns,
-            pane_x: pane.pane_x,
-            title: pane.title,
-            terminal_command: pane.terminal_command,
-            pane_command: pane.pane_command,
-            pane_cwd: pane.pane_cwd,
-        }
-    }
-}
-
-#[cfg(test)]
-pub(super) fn raw_panes_from_topology(cache: PaneTopologyCache) -> Vec<RawPane> {
-    cache.panes.into_iter().map(Into::into).collect()
-}
-
 #[derive(Debug)]
 pub(super) struct RawPaneListing {
-    pub(super) panes: Vec<RawPane>,
+    pub(super) panes: Vec<PaneTopologyPane>,
     pub(super) observed_at_ms: u64,
     pub(super) authoritative_focus: Option<PaneId>,
     pub(super) client_view: Option<ClientView>,
@@ -492,7 +370,7 @@ impl RawPaneListing {
             ..
         } = cache;
         Self {
-            panes: panes.into_iter().map(Into::into).collect(),
+            panes,
             observed_at_ms: produced_at_ms,
             authoritative_focus: focused_pane.map(zellij_pane_id),
             client_view: clients.map(client_view_from_topology),
@@ -502,7 +380,7 @@ impl RawPaneListing {
     pub(super) fn into_pane_listing(
         self,
         session_name: String,
-        project: impl FnMut(RawPane, &str) -> Option<crate::pane::PaneRef>,
+        project: impl FnMut(PaneTopologyPane, &str) -> Option<crate::pane::PaneRef>,
     ) -> PaneListing {
         let mut project = project;
         PaneListing {

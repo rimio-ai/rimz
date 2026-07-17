@@ -4,14 +4,15 @@ use std::collections::{BTreeSet, HashSet};
 use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
+use super::pane_topology::PaneTopologyPane;
 use super::parse::{
     SessionState, classify_session_not_found, is_session_not_found,
     parse_focused_terminal_client_ids, strip_ansi,
 };
 use super::raw_pane::{
-    RawPane, RawPaneListing, SidebarDock, is_sidebar_pane, leftmost_live_work_pane,
-    mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids,
-    sidebar_dock_verdict, tab_view_cols, wrong_tab_mounted_sidebar_pane,
+    RawPaneListing, SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
+    parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
+    tab_view_cols, wrong_tab_mounted_sidebar_pane,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -60,7 +61,11 @@ enum MountOutcome {
     WrongTab(u64),
 }
 
-fn sidebar_pane(panes: &[RawPane], tab_position: u64, raw_id: u64) -> Option<&RawPane> {
+fn sidebar_pane(
+    panes: &[PaneTopologyPane],
+    tab_position: u64,
+    raw_id: u64,
+) -> Option<&PaneTopologyPane> {
     // Plugin panes share the integer id space (`plugin_1` beside
     // `terminal_1`), so the terminal filter is load-bearing here.
     panes
@@ -796,7 +801,7 @@ impl ZellijBackend {
         opts: &WidthSyncOptions,
         tab_position: u64,
         raw_id: u64,
-        initial: Option<(&[RawPane], u64)>,
+        initial: Option<(&[PaneTopologyPane], u64)>,
     ) -> (Option<u64>, bool) {
         const RESIZE_MAX_STEPS: u32 = 64;
         const TRANSIENT_MAX_RETRIES: u8 = 2;

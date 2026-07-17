@@ -2,7 +2,7 @@ use super::*;
 use std::collections::HashSet;
 
 use crate::ids::{MuxName, PaneId, ViewKind};
-use crate::mux::zellij::pane_topology::PaneTopologyCache;
+use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use crate::pane::PaneRef;
 
 #[test]
@@ -15,7 +15,7 @@ fn raw_pane_position_metadata_accepts_live_and_topology_shapes() {
             "terminal_command": "claude remote-control --spawn worktree"
           }
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
     assert_eq!(parsed[0].tab_position, 1);
     assert_eq!(parsed[0].view_position(), 1);
     assert_eq!(parsed[0].tab_name.as_deref(), Some("rimzd"));
@@ -35,7 +35,7 @@ fn raw_pane_position_metadata_accepts_live_and_topology_shapes() {
         }"#;
     let cache: PaneTopologyCache = serde_json::from_str(json).unwrap();
     assert_eq!(cache.panes[0].tab_position, 3);
-    let panes = raw_panes_from_topology(cache);
+    let panes = cache.panes;
     assert_eq!(panes[0].tab_position, 3);
     assert_eq!(panes[0].view_position(), 3);
 }
@@ -74,7 +74,7 @@ fn raw_pane_splits_foreground_spawn_and_sidebar_title() {
             "terminal_command": "claude remote-control --spawn worktree"
           }
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
 
     assert_eq!(
         parsed[0].display_command().as_deref(),
@@ -130,7 +130,7 @@ fn views_with_sidebars_classifies_working_orphan_and_daemon_tabs() {
             "title": "zsh"
           }
         ]"#;
-    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let panes: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
     let views = views_with_sidebars(&panes);
     assert_eq!(views.len(), 5);
 
@@ -169,7 +169,7 @@ fn listed_pane_includes_live_floating_but_live_terminal_does_not() {
           {"id": 4, "is_plugin": false, "is_suppressed": false, "exited": true, "tab_id": 0},
           {"id": 5, "is_plugin": false, "is_suppressed": false, "is_floating": true, "tab_id": 0}
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
     let listed: Vec<u64> = parsed
         .iter()
         .filter(|p| p.is_listed_pane())
@@ -211,7 +211,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
             "tab_id": 0, "terminal_command": "claude"
           }
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
     let listing = RawPaneListing {
         panes: parsed,
         observed_at_ms: 1,
@@ -270,7 +270,7 @@ fn floating_pane_teardown_targets_only_the_anchor_tab() {
           {"id": 27, "is_plugin": false, "is_suppressed": false, "is_floating": true, "tab_id": 2},
           {"id": 28, "is_plugin": true,  "is_suppressed": false, "is_floating": true, "tab_id": 1}
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
     let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_3");
 
     assert_eq!(
@@ -284,14 +284,14 @@ fn session_panes_classify_clean_sidebar_and_suspended_commands() {
           {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
           {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(clean).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(clean).unwrap();
     assert_eq!(classify_session_panes(&parsed), SessionCleanliness::Clean);
 
     let held_sidebar = r#"[
           {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": true, "tab_id": 0},
           {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(held_sidebar).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(held_sidebar).unwrap();
     assert_eq!(
         classify_session_panes(&parsed),
         SessionCleanliness::MissingSidebar,
@@ -300,7 +300,7 @@ fn session_panes_classify_clean_sidebar_and_suspended_commands() {
     let no_sidebar = r#"[
           {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(no_sidebar).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(no_sidebar).unwrap();
     assert_eq!(
         classify_session_panes(&parsed),
         SessionCleanliness::MissingSidebar,
@@ -310,7 +310,7 @@ fn session_panes_classify_clean_sidebar_and_suspended_commands() {
           {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
           {"id": 1, "is_plugin": false, "title": "claude", "is_held": true, "tab_id": 0}
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(suspended_command).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(suspended_command).unwrap();
     assert_eq!(
         classify_session_panes(&parsed),
         SessionCleanliness::SuspendedCommandPane,
@@ -323,7 +323,7 @@ fn session_panes_classify_clean_sidebar_and_suspended_commands() {
             "title": "codex", "is_held": true, "tab_id": 0
           }
         ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(suspended_floating_command).unwrap();
+    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(suspended_floating_command).unwrap();
     assert_eq!(
         classify_session_panes(&parsed),
         SessionCleanliness::SuspendedCommandPane,
@@ -351,7 +351,7 @@ fn topology_cache_panes_feed_the_existing_classifier() {
         }"#,
     )
     .unwrap();
-    let panes = raw_panes_from_topology(cache);
+    let panes = cache.panes;
 
     assert_eq!(
         classify_session_panes(&panes),
@@ -453,7 +453,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
           {"id": 33, "is_plugin": false, "tab_id": 11, "title": "zsh",
            "pane_x": 86, "pane_columns": 212}
         ]"#;
-    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let panes: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
     let width = crate::mux::SidebarWidth::default();
     let by_id = |id: u64| panes.iter().find(|pane| pane.id == id).unwrap();
     let excluded = HashSet::new();
@@ -606,7 +606,7 @@ fn mounted_sidebar_discovery_prefers_hint_then_new_sidebar() {
           {"id": 10, "is_plugin": false, "tab_id": 2, "title": "rimz-sidebar"},
           {"id": 11, "is_plugin": false, "tab_id": 2, "title": "vim"}
         ]"#;
-    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let panes: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
     let before: HashSet<u64> = [1].into();
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, Some(7)), Some(7));
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, None), Some(7));
@@ -629,7 +629,7 @@ fn mounted_sidebar_discovery_prefers_hint_then_new_sidebar() {
 
 #[test]
 fn wrong_tab_mount_discovery_handles_missing_and_cross_talked_hints() {
-    let panes: Vec<RawPane> = serde_json::from_str(
+    let panes: Vec<PaneTopologyPane> = serde_json::from_str(
         r#"[
           {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh"},
           {"id": 7, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"}
@@ -652,7 +652,7 @@ fn wrong_tab_mount_discovery_handles_missing_and_cross_talked_hints() {
         Some(7),
         "a cross-talked hint does not hide one attributable wrong-tab mount",
     );
-    let ambiguous: Vec<RawPane> = serde_json::from_str(
+    let ambiguous: Vec<PaneTopologyPane> = serde_json::from_str(
         r#"[
           {"id": 7, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"},
           {"id": 8, "is_plugin": false, "tab_id": 2, "title": "rimz-sidebar"}
