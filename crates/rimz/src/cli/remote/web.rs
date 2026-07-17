@@ -29,6 +29,7 @@ struct RemoteTunnel {
     dial_plan: Option<rimz::remote::reachability::DialPlan>,
     child: Option<rimz::child_process::SupervisedChild>,
     started: Instant,
+    outage_started: Option<Instant>,
     wake_tx: mpsc::Sender<()>,
     wake_rx: mpsc::Receiver<()>,
 }
@@ -58,6 +59,7 @@ impl RemoteTunnel {
             dial_plan,
             child: None,
             started: Instant::now(),
+            outage_started: None,
             wake_tx,
             wake_rx,
         };
@@ -143,6 +145,9 @@ impl RemoteTunnel {
 
     fn settle_exit(&mut self, exit_code: Option<i32>) -> Result<TunnelFlow> {
         let established = self.started.elapsed() >= self.policy.gatetime;
+        if established {
+            self.outage_started = None;
+        }
         match tunnel_step(
             self.reconnect_state.settle(exit_code, established),
             self.reconnect,
@@ -154,7 +159,14 @@ impl RemoteTunnel {
                     self.host
                 )
             }
-            TunnelStep::Retry(delay) => {
+            TunnelStep::Retry(ladder_delay) => {
+                let outage_started = *self.outage_started.get_or_insert_with(Instant::now);
+                let delay = super::supervisor::retry_delay(
+                    &self.policy,
+                    self.dial_plan.is_some(),
+                    outage_started.elapsed(),
+                    ladder_delay,
+                );
                 let consecutive_failures = self.reconnect_state.consecutive_failures();
                 let _ = writeln!(
                     std::io::stderr().lock(),
@@ -162,19 +174,29 @@ impl RemoteTunnel {
                     self.host,
                     delay.as_secs(),
                 );
-                if matches!(
-                    super::supervisor::wait_before_retry(
-                        self.dial_plan.as_ref(),
-                        delay,
-                        self.policy.backoff_cap,
-                        &self.host,
-                        None,
-                    ),
-                    rimz::remote::reachability::WaitVerdict::AttachNow {
-                        network_restored: true
+                let mut ui = super::outage_ui::OutageUi::plain_lines(&self.host);
+                match super::supervisor::wait_before_retry(
+                    self.dial_plan.as_ref(),
+                    None,
+                    delay,
+                    self.policy.backoff_cap,
+                    true,
+                    &mut ui,
+                    None,
+                )? {
+                    super::supervisor::WaitOutcome::Verdict(
+                        rimz::remote::reachability::WaitVerdict::AttachNow { network_restored },
+                    ) => {
+                        if network_restored {
+                            self.reconnect_state.network_restored();
+                        }
                     }
-                ) {
-                    self.reconnect_state.network_restored();
+                    super::supervisor::WaitOutcome::Verdict(
+                        rimz::remote::reachability::WaitVerdict::KeepWaiting,
+                    ) => bail!("remote web reconnect wait returned before settling"),
+                    super::supervisor::WaitOutcome::Interrupted => {
+                        return Ok(TunnelFlow::Done);
+                    }
                 }
                 self.spawn_child()?;
                 Ok(TunnelFlow::Running)

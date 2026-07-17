@@ -45,6 +45,41 @@ fn fatal_session_message_keeps_reconnect_tail_for_other_codes() {
 }
 
 #[test]
+fn direct_dial_plan_selects_outage_age_pacing() {
+    let policy = rimz::remote::ReconnectPolicy::default();
+    let ladder = Duration::from_secs(30);
+
+    assert_eq!(
+        retry_delay(&policy, true, Duration::from_secs(30), ladder),
+        Duration::from_secs(2)
+    );
+    assert_eq!(
+        retry_delay(&policy, false, Duration::from_secs(30), ladder),
+        ladder
+    );
+}
+
+#[test]
+fn plain_retry_wait_reports_interruption() {
+    let stop = AtomicBool::new(true);
+    let mut ui = OutageUi::plain_lines("dev-box");
+
+    assert_eq!(
+        wait_before_retry(
+            None,
+            None,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            true,
+            &mut ui,
+            Some(&stop),
+        )
+        .expect("wait result"),
+        WaitOutcome::Interrupted
+    );
+}
+
+#[test]
 fn link_notifications_respect_command_and_terminal_gates() {
     let prefs = rimz::config::NotificationsPrefs {
         enabled: true,

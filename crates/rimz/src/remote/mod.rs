@@ -13,6 +13,7 @@ pub mod aliases;
 pub mod bandwidth;
 pub mod link;
 pub mod reachability;
+pub mod recovery;
 pub mod setup;
 pub mod tty;
 pub mod web;
@@ -598,9 +599,9 @@ fn display_word(word: &str) -> String {
     }
 }
 
-/// Reconnect tuning. Defaults follow autossh: a session must confirm its
-/// transport or live past the gatetime to count as established, and retries
-/// back off exponentially to a ceiling.
+/// Reconnect tuning. A session must confirm its transport or live past the
+/// gatetime to count as established; retries use an autossh-style ladder
+/// without reachability evidence and outage-age pacing with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReconnectPolicy {
     /// How long a session must live to count as established when no probe ack
@@ -612,6 +613,10 @@ pub struct ReconnectPolicy {
     pub backoff_base: Duration,
     /// Backoff ceiling.
     pub backoff_cap: Duration,
+    /// Retry delay while the SSH endpoint remains reachable.
+    pub reachable_retry: Duration,
+    /// Outage window that keeps reachable-endpoint retries flat and fast.
+    pub flat_window: Duration,
 }
 
 impl Default for ReconnectPolicy {
@@ -620,6 +625,8 @@ impl Default for ReconnectPolicy {
             gatetime: Duration::from_secs(30),
             backoff_base: Duration::from_secs(1),
             backoff_cap: Duration::from_secs(30),
+            reachable_retry: Duration::from_secs(2),
+            flat_window: Duration::from_secs(3 * 60),
         }
     }
 }
@@ -627,7 +634,8 @@ impl Default for ReconnectPolicy {
 impl ReconnectPolicy {
     /// Resolve the policy, honoring the hidden test seams
     /// (`RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_MS`,
-    /// `RIMZ_REMOTE_BACKOFF_CAP_MS`).
+    /// `RIMZ_REMOTE_BACKOFF_CAP_MS`, `RIMZ_REMOTE_REACHABLE_RETRY_MS`,
+    /// `RIMZ_REMOTE_FLAT_WINDOW_MS`).
     pub fn from_env() -> Self {
         let mut policy = Self::default();
         if let Some(gatetime) = env_ms("RIMZ_REMOTE_GATETIME_MS") {
@@ -639,7 +647,26 @@ impl ReconnectPolicy {
         if let Some(cap) = env_ms("RIMZ_REMOTE_BACKOFF_CAP_MS") {
             policy.backoff_cap = cap;
         }
+        if let Some(retry) = env_ms("RIMZ_REMOTE_REACHABLE_RETRY_MS") {
+            policy.reachable_retry = retry;
+        }
+        if let Some(window) = env_ms("RIMZ_REMOTE_FLAT_WINDOW_MS") {
+            policy.flat_window = window;
+        }
         policy
+    }
+
+    /// Pace SSH retries from outage age when direct TCP dials prove the
+    /// endpoint remains reachable.
+    pub fn reachable_delay(&self, outage_age: Duration) -> Duration {
+        if outage_age < self.flat_window {
+            return self.reachable_retry.min(self.backoff_cap);
+        }
+        let minutes_past_window = outage_age.saturating_sub(self.flat_window).as_secs() / 60;
+        let exponent = u32::try_from(minutes_past_window)
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        backoff(exponent, self.reachable_retry, self.backoff_cap)
     }
 }
 

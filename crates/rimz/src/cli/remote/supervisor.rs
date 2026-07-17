@@ -18,7 +18,10 @@ use rimz::remote::reachability::{
     DIAL_TIMEOUT, DialGate, DialPlan, WaitVerdict, dial_interval_from_env, parse_dial_plan,
     ssh_config_query_spec,
 };
+use rimz::remote::recovery::{INTERNET_PROBE_TIMEOUT, RecoveryPanel, internet_probe_from_env};
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
+
+use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent};
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -43,6 +46,8 @@ pub(super) fn supervise_remote(
     let mut session_link = SessionLinkState::new(policy.gatetime, zombie_interval);
     let stop = AtomicBool::new(false);
     let mut first_attempt = true;
+    let mut outage_started = None;
+    let mut outage_waits = 0u32;
     report_remote_connect(host, true);
     let guard = super::tty::TtyGuard::acquire();
     loop {
@@ -64,6 +69,10 @@ pub(super) fn supervise_remote(
         )?;
         guard.restore();
         drop(probe);
+        if outcome.established {
+            outage_started = None;
+            outage_waits = 0;
+        }
         if outcome.killed_zombie {
             guard.reset_emulator();
             let _ = writeln!(
@@ -71,6 +80,8 @@ pub(super) fn supervise_remote(
                 "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
             );
             reconnect.settle_zombie_kill();
+            outage_started = Some(Instant::now());
+            outage_waits = 0;
             continue;
         }
         match reconnect.settle(outcome.status.code(), outcome.established) {
@@ -79,36 +90,53 @@ pub(super) fn supervise_remote(
                 guard.reset_emulator();
                 bail!("{}", fatal_session_message(code, host, setup_hint))
             }
-            Verdict::Retry { delay } => {
+            Verdict::Retry {
+                delay: ladder_delay,
+            } => {
                 guard.reset_emulator();
+                let outage_started = *outage_started.get_or_insert_with(Instant::now);
+                let outage_age = outage_started.elapsed();
+                let delay = retry_delay(&policy, dial_plan.is_some(), outage_age, ladder_delay);
+                let first_wait = outage_waits == 0;
+                outage_waits = outage_waits.saturating_add(1);
                 let consecutive_failures = reconnect.consecutive_failures();
-                let mut stderr = std::io::stderr().lock();
-                let _ = writeln!(
-                    stderr,
-                    "rimz: link to {host} lost — reconnecting in {}s (attempt {consecutive_failures}); Ctrl-C stops",
-                    delay.as_secs(),
-                );
-                drop(stderr);
+                let mut ui = OutageUi::auto(host);
+                if ui.is_plain() {
+                    let _ = writeln!(
+                        std::io::stderr().lock(),
+                        "rimz: link to {host} lost — reconnecting in {}s (attempt {consecutive_failures}); Ctrl-C stops",
+                        delay.as_secs(),
+                    );
+                }
                 if let Some(action) = session_link.transport_lost() {
                     render_session_link_action(host, action);
                 }
-                if matches!(
-                    wait_before_retry(
-                        dial_plan.as_ref(),
-                        delay,
-                        policy.backoff_cap,
-                        host,
-                        Some(&stop),
-                    ),
-                    WaitVerdict::AttachNow {
-                        network_restored: true
+                let internet_probe = internet_probe_from_env();
+                match wait_before_retry(
+                    dial_plan.as_ref(),
+                    internet_probe.as_ref(),
+                    delay,
+                    policy.backoff_cap,
+                    first_wait,
+                    &mut ui,
+                    Some(&stop),
+                )? {
+                    WaitOutcome::Verdict(WaitVerdict::AttachNow { network_restored }) => {
+                        if network_restored {
+                            reconnect.network_restored();
+                            let _ = writeln!(
+                                std::io::stderr().lock(),
+                                "rimz: network to {host} restored — reconnecting now",
+                            );
+                        }
                     }
-                ) {
-                    reconnect.network_restored();
-                    let _ = writeln!(
-                        std::io::stderr().lock(),
-                        "rimz: network to {host} restored — reconnecting now",
-                    );
+                    WaitOutcome::Verdict(WaitVerdict::KeepWaiting) => {
+                        bail!("remote reconnect wait returned before settling")
+                    }
+                    WaitOutcome::Interrupted => {
+                        let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped",);
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -254,64 +282,171 @@ fn dial_with_timeout(plan: &DialPlan, timeout: Duration) -> bool {
     false
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WaitOutcome {
+    Verdict(WaitVerdict),
+    Interrupted,
+}
+
+pub(super) fn retry_delay(
+    policy: &rimz::remote::ReconnectPolicy,
+    has_dial_plan: bool,
+    outage_age: Duration,
+    ladder_delay: Duration,
+) -> Duration {
+    if has_dial_plan {
+        policy.reachable_delay(outage_age)
+    } else {
+        ladder_delay
+    }
+}
+
 pub(super) fn wait_before_retry(
     dial_plan: Option<&DialPlan>,
+    internet_probe: Option<&DialPlan>,
     delay: Duration,
     hold: Duration,
-    host: &str,
+    first_wait: bool,
+    ui: &mut OutageUi,
     stop: Option<&AtomicBool>,
-) -> WaitVerdict {
-    let Some(plan) = dial_plan else {
-        sleep_retry_wait(delay, stop);
-        return WaitVerdict::AttachNow {
-            network_restored: false,
-        };
-    };
-    let Some(interval) = dial_interval_from_env() else {
-        sleep_retry_wait(delay, stop);
-        return WaitVerdict::AttachNow {
-            network_restored: false,
-        };
-    };
-
+) -> Result<WaitOutcome> {
+    let host = ui.host().to_owned();
     let started = Instant::now();
-    let mut gate = DialGate::new(started, delay, hold);
+    let interval = dial_interval_from_env();
+    let mut gate = dial_plan
+        .zip(interval)
+        .map(|_| DialGate::new(started, delay, hold));
+    let mut recovery = RecoveryPanel::new(&host, internet_probe, dial_plan, first_wait);
     let mut next_dial = started;
     let mut reported_unreachable = false;
+    let (dial_tx, dial_rx) = mpsc::channel::<DialResult>();
+    let mut internet_pending = false;
+    let mut server_pending = false;
     loop {
         let now = Instant::now();
-        let verdict = gate.verdict(now);
-        if !matches!(verdict, WaitVerdict::KeepWaiting) {
-            return verdict;
+        for result in dial_rx.try_iter() {
+            match result.stage {
+                DialStage::Internet => {
+                    internet_pending = false;
+                    recovery.note_internet(result.reachable);
+                }
+                DialStage::Server => {
+                    server_pending = false;
+                    recovery.note_server(result.reachable);
+                    if let Some(gate) = &mut gate {
+                        gate.note_dial(result.reachable);
+                    }
+                    if !result.reachable && !reported_unreachable {
+                        reported_unreachable = true;
+                        ui.report_unreachable();
+                    }
+                }
+            }
         }
         if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
-            return WaitVerdict::AttachNow {
-                network_restored: false,
-            };
+            ui.release(false)?;
+            return Ok(WaitOutcome::Interrupted);
         }
-        if now >= next_dial {
-            // Unknown reachability keeps the backoff deadline so the first dial cannot delay
-            // an otherwise-ready retry; an unreachable result extends later dials to the hold.
-            let timeout =
-                DIAL_TIMEOUT.min(gate.effective_deadline().saturating_duration_since(now));
-            let reachable = dial_with_timeout(plan, timeout);
-            gate.note_dial(reachable);
-            if !reachable && !reported_unreachable {
-                reported_unreachable = true;
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "rimz: {host} unreachable — holding reconnect until the network returns; Ctrl-C stops",
+        if ui.tick(&mut recovery, started.elapsed())? == UiEvent::Interrupted {
+            ui.release(false)?;
+            return Ok(WaitOutcome::Interrupted);
+        }
+
+        let verdict = gate.as_ref().map_or_else(
+            || {
+                if now >= started + delay {
+                    WaitVerdict::AttachNow {
+                        network_restored: false,
+                    }
+                } else {
+                    WaitVerdict::KeepWaiting
+                }
+            },
+            |gate| gate.verdict(now),
+        );
+        if !matches!(verdict, WaitVerdict::KeepWaiting) && !server_pending {
+            recovery.session_starting();
+            let release_at = recovery.release_at(started.elapsed());
+            while started.elapsed() < release_at {
+                if stop.is_some_and(|stop| stop.load(Ordering::SeqCst))
+                    || ui.tick(&mut recovery, started.elapsed())? == UiEvent::Interrupted
+                {
+                    ui.release(false)?;
+                    return Ok(WaitOutcome::Interrupted);
+                }
+                sleep_retry_wait(
+                    PANEL_TICK.min(release_at.saturating_sub(started.elapsed())),
+                    stop,
                 );
             }
-            let verdict = gate.verdict(Instant::now());
-            if !matches!(verdict, WaitVerdict::KeepWaiting) {
-                return verdict;
-            }
-            next_dial = Instant::now() + interval;
+            ui.release(true)?;
+            return Ok(WaitOutcome::Verdict(verdict));
         }
-        let wake_at = next_dial.min(gate.effective_deadline());
-        sleep_retry_wait(wake_at.saturating_duration_since(Instant::now()), stop);
+
+        if interval.is_some_and(|_| now >= next_dial) {
+            if let Some(plan) = internet_probe
+                && !internet_pending
+            {
+                recovery.checking_internet();
+                spawn_dial(
+                    DialStage::Internet,
+                    plan,
+                    INTERNET_PROBE_TIMEOUT,
+                    dial_tx.clone(),
+                );
+                internet_pending = true;
+            }
+            if let (Some(plan), Some(gate)) = (dial_plan, &gate)
+                && !server_pending
+            {
+                recovery.checking_server();
+                let timeout = DIAL_TIMEOUT.min(
+                    gate.effective_deadline()
+                        .saturating_duration_since(now)
+                        .max(PANEL_TICK),
+                );
+                spawn_dial(DialStage::Server, plan, timeout, dial_tx.clone());
+                server_pending = true;
+            }
+            next_dial = now + interval.unwrap_or_default();
+        }
+        let deadline = gate
+            .as_ref()
+            .map_or(started + delay, DialGate::effective_deadline);
+        let until_deadline = deadline.saturating_duration_since(Instant::now());
+        let wake_in = if until_deadline.is_zero() {
+            PANEL_TICK
+        } else {
+            until_deadline.min(PANEL_TICK)
+        };
+        sleep_retry_wait(wake_in, stop);
     }
+}
+
+#[derive(Clone, Copy)]
+enum DialStage {
+    Internet,
+    Server,
+}
+
+struct DialResult {
+    stage: DialStage,
+    reachable: bool,
+}
+
+fn spawn_dial(
+    stage: DialStage,
+    plan: &DialPlan,
+    timeout: Duration,
+    results: mpsc::Sender<DialResult>,
+) {
+    let plan = plan.clone();
+    std::thread::spawn(move || {
+        let _ = results.send(DialResult {
+            stage,
+            reachable: dial_with_timeout(&plan, timeout),
+        });
+    });
 }
 
 fn sleep_retry_wait(duration: Duration, stop: Option<&AtomicBool>) {

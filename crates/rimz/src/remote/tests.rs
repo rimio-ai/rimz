@@ -611,6 +611,32 @@ fn verdict_and_backoff_classify_reconnects() {
 }
 
 #[test]
+fn reachable_retry_delay_stays_flat_then_doubles_each_minute() {
+    let policy = ReconnectPolicy::default();
+
+    assert_eq!(
+        policy.reachable_delay(Duration::from_secs(2 * 60 + 59)),
+        Duration::from_secs(2)
+    );
+    assert_eq!(
+        policy.reachable_delay(Duration::from_secs(3 * 60)),
+        Duration::from_secs(4)
+    );
+    assert_eq!(
+        policy.reachable_delay(Duration::from_secs(4 * 60)),
+        Duration::from_secs(8)
+    );
+    assert_eq!(
+        policy.reachable_delay(Duration::from_secs(5 * 60)),
+        Duration::from_secs(16)
+    );
+    assert_eq!(
+        policy.reachable_delay(Duration::from_secs(6 * 60)),
+        Duration::from_secs(30)
+    );
+}
+
+#[test]
 fn reconnect_state_settles_established_sessions_and_failures() {
     let policy = ReconnectPolicy::default();
     let mut state = ReconnectState::new(policy);

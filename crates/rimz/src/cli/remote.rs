@@ -19,6 +19,7 @@ use rimz::remote::{
 mod bandwidth;
 mod link_stats;
 mod list;
+mod outage_ui;
 mod setup;
 mod supervisor;
 mod tty;
