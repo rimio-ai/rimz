@@ -195,6 +195,66 @@ fn sidebar_supervisor_reaps_worker_when_its_pane_disappears() {
     ));
 }
 
+#[test]
+#[cfg(target_os = "linux")]
+fn sidebar_supervisor_keeps_pane_watchdog_across_worker_respawns() {
+    let env = Env::new();
+    let instance =
+        rimz::SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da05").expect("instance id");
+    let mut cmd = env.rimz();
+    cmd.args([
+        "sidebar",
+        "serve",
+        "--workspace-id",
+        env.workspace_id.as_str(),
+        "--mux",
+        "tmux",
+        "--session-name",
+        "rimz-test",
+    ])
+    .env("RIMZ_SIDEBAR_INSTANCE_ID", instance.as_str())
+    .env("TMUX_PANE", "%12")
+    .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "abort_after_delay")
+    .env("RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS", "5")
+    .env("RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_BACKOFF_MS", "10")
+    .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS", "100")
+    .env("RIMZ_TEST_SIDEBAR_PANE_PROBE", "absent")
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+
+    let mut child = cmd.spawn().expect("spawn sidebar supervisor");
+    let status = wait_child(&mut child, Duration::from_secs(3));
+
+    assert!(status.success(), "supervisor exited with {status}");
+    let diag_path = rimz::diag::DiagSink::under(
+        env.state_path_for(&env.project_root).root,
+        env.workspace_id.clone(),
+        "rimz-test",
+        Some(instance),
+    )
+    .log_path()
+    .expect("diag path");
+    let records = std::fs::read_to_string(diag_path)
+        .expect("supervisor diagnostics")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<DiagEnvelope>(line).ok())
+        .collect::<Vec<_>>();
+    assert!(
+        records
+            .iter()
+            .any(|record| matches!(record.event, DiagEvent::RendererSignalDeath { .. })),
+        "the first worker must abort before the watchdog can fire",
+    );
+    assert!(records.iter().any(|record| matches!(
+        record.event,
+        DiagEvent::RendererOrphanReaped {
+            ref pane_id,
+            worker_pid,
+        } if pane_id == "tmux:%12" && worker_pid > 0
+    )));
+}
+
 #[cfg(target_os = "linux")]
 fn read_pid_file(path: &Path, timeout: Duration) -> u32 {
     let deadline = Instant::now() + timeout;

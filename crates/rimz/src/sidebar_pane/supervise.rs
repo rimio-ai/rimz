@@ -31,6 +31,8 @@ const TEST_REAP_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS";
 #[cfg(feature = "testkit")]
 const TEST_STRAY_PID_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FILE";
 #[cfg(feature = "testkit")]
+const TEST_RESPAWN_BACKOFF_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_BACKOFF_MS";
+#[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS";
 #[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE";
@@ -90,6 +92,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
         return exec_supervisor(&target.path, &args, &config);
     }
     let mut backoff = RESPAWN_BACKOFF_INITIAL;
+    let mut pane_watchdog = PaneWatchdog::from_config(&config);
     loop {
         // Spawn from the durable room target even when its bytes match this
         // supervisor. The supervisor may still occupy an unlinked temp image;
@@ -109,8 +112,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
             .stderr
             .take()
             .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
-        let worker =
-            wait_for_worker_and_reap_strays(worker_pid, PaneWatchdog::from_config(&config));
+        let worker = wait_for_worker_and_reap_strays(worker_pid, &mut pane_watchdog);
         drop(child);
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
@@ -152,7 +154,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
                     instance = %config.instance_id,
                     "respawning sidebar worker after abnormal termination",
                 );
-                thread::sleep(delay);
+                thread::sleep(respawn_delay(delay));
                 backoff = next;
             }
         }
@@ -325,7 +327,7 @@ fn worker_pid(child: &Child) -> nix::unistd::Pid {
 #[cfg(unix)]
 fn wait_for_worker_and_reap_strays(
     worker_pid: nix::unistd::Pid,
-    mut watchdog: Option<PaneWatchdog>,
+    watchdog: &mut Option<PaneWatchdog>,
 ) -> Result<WaitOutcome> {
     use nix::sys::signal::{Signal, kill};
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
@@ -556,6 +558,20 @@ fn reap_poll_interval() -> Duration {
 }
 
 #[cfg(feature = "testkit")]
+fn respawn_delay(delay: Duration) -> Duration {
+    env::var(TEST_RESPAWN_BACKOFF_MS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(delay)
+}
+
+#[cfg(not(feature = "testkit"))]
+fn respawn_delay(delay: Duration) -> Duration {
+    delay
+}
+
+#[cfg(feature = "testkit")]
 fn pane_probe_interval() -> Duration {
     let Some(value) =
         env::var_os(TEST_PANE_PROBE_INTERVAL_MS_ENV).filter(|value| !value.is_empty())
@@ -597,6 +613,11 @@ fn inject_test_fault_if_requested() {
     match fault.to_string_lossy().as_ref() {
         "abort" => {
             let _ = io::stderr().write_all(b"rimz test sidebar worker abort\n");
+            std::process::abort();
+        }
+        "abort_after_delay" => {
+            thread::sleep(Duration::from_millis(20));
+            let _ = io::stderr().write_all(b"rimz test sidebar worker delayed abort\n");
             std::process::abort();
         }
         "exit_on_file" => exit_when_test_file_appears(),
