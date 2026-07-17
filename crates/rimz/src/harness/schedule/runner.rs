@@ -231,7 +231,7 @@ impl FireScope {
                 .capacity()?
                 .is_some_and(ProviderCapacity::longest_window_lifted)
         {
-            return Ok(Some(format!("{kind} budget window already counting down")));
+            return Ok(Some(format!("{kind} budget window is not enforced")));
         }
         Ok((running == Some(true)).then(|| format!("{kind} budget window already counting down")))
     }
@@ -2003,7 +2003,7 @@ mod tests {
             lifted
                 .ping_gate_reason(&reset_ping, now)
                 .expect("lifted reset window needs no primer"),
-            Some("claude budget window already counting down".to_owned())
+            Some("claude budget window is not enforced".to_owned())
         );
     }
 
