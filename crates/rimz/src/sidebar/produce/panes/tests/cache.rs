@@ -237,8 +237,12 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
     // than an accidental TTL expiry.
     let stamp = unix_now_ms().saturating_add(60_000);
 
+    // Give the replacement a different serialized length so this validation
+    // test does not also depend on the filesystem recording distinct mtimes
+    // for two immediate atomic renames. The parse cache deliberately keys on
+    // `(path, mtime, len)`.
     let missing_own = crate::sidebar::frame::assemble_frame(
-        vec![pane("terminal_2", Some("zsh"), Some("/repo"))],
+        vec![pane("terminal_22", Some("zsh"), Some("/repo"))],
         stamp,
         "s",
     );
