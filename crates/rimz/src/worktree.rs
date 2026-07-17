@@ -336,6 +336,13 @@ pub struct RemovalOutcome {
     branch_deletion: BranchDeletion,
 }
 
+#[must_use = "both independent cleanup results must be handled"]
+#[derive(Debug)]
+pub struct RemovalRetirement {
+    pub session_retirement: crate::store::Result<usize>,
+    pub message_archival: crate::store::Result<usize>,
+}
+
 impl RemovalOutcome {
     pub fn worktree_name(&self) -> &str {
         &self.worktree_name
@@ -355,6 +362,26 @@ impl RemovalOutcome {
 
     pub const fn branch_deletion(&self) -> BranchDeletion {
         self.branch_deletion
+    }
+}
+
+/// Retire every durable consequence of one removed managed worktree.
+///
+/// Session retirement runs first, and message archival still runs when it
+/// fails because Git removal is already irreversible at this boundary.
+pub fn retire_removal(
+    store: &crate::Store,
+    removed: &RemovalOutcome,
+    archive_reason: &str,
+    session_name: &str,
+) -> RemovalRetirement {
+    let session_retirement =
+        store.retire_worktree_sessions(removed.removed_path(), Some(removed.branch()));
+    let message_archival =
+        store.archive_channel_messages(removed.worktree_name(), archive_reason, session_name);
+    RemovalRetirement {
+        session_retirement,
+        message_archival,
     }
 }
 

@@ -320,19 +320,20 @@ fn remove_worktree(
 ) -> Result<()> {
     let store = open_store(workspace)?;
     let removed = rimz::worktree::remove(&workspace.project_root, config, &name, force)?;
-    // Both store cleanups get a chance after the irreversible Git removal.
-    let retirement = store
-        .retire_worktree_sessions(removed.removed_path(), Some(removed.branch()))
+    let retirement = rimz::worktree::retire_removal(
+        &store,
+        &removed,
+        rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
+        &workspace.session_name,
+    );
+    let session_retirement = retirement
+        .session_retirement
         .context("retiring sessions for removed worktree");
-    let archival = store
-        .archive_channel_messages(
-            removed.worktree_name(),
-            rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
-            &workspace.session_name,
-        )
+    let message_archival = retirement
+        .message_archival
         .context("archiving messages for removed worktree channel");
-    retirement?;
-    archival?;
+    session_retirement?;
+    message_archival?;
     #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
     {
         println!("removed {name}");
@@ -395,35 +396,41 @@ fn remove_for_cleanup(
     force: bool,
 ) -> Result<rimz::worktree::RemovalOutcome> {
     let removed = rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)?;
-    if let Err(err) = retire_removed_worktree_sessions(&removed, globals) {
-        tracing::debug!(
+    let store = (|| -> Result<_> {
+        let workspace = WorkspaceResolver::resolve(removed.repo_root(), globals.root.clone())?;
+        let store = open_store(&workspace)?;
+        Ok((workspace, store))
+    })();
+    match store {
+        Ok((workspace, store)) => {
+            let retirement = rimz::worktree::retire_removal(
+                &store,
+                &removed,
+                rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
+                &workspace.session_name,
+            );
+            if let Err(err) = retirement.session_retirement {
+                tracing::debug!(
+                    branch = %marker.branch,
+                    error = %err,
+                    "could not retire sessions for removed worktree",
+                );
+            }
+            if let Err(err) = retirement.message_archival {
+                tracing::debug!(
+                    branch = %marker.branch,
+                    error = %err,
+                    "could not archive messages for removed worktree",
+                );
+            }
+        }
+        Err(err) => tracing::debug!(
             branch = %marker.branch,
             error = %err,
-            "could not retire sessions for removed worktree",
-        );
-    }
-    if let Err(err) = archive_removed_worktree_messages(
-        &removed,
-        globals,
-        rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
-    ) {
-        tracing::debug!(
-            branch = %marker.branch,
-            error = %err,
-            "could not archive messages for removed worktree",
-        );
+            "could not open store for removed worktree cleanup",
+        ),
     }
     Ok(removed)
-}
-
-fn retire_removed_worktree_sessions(
-    removed: &rimz::worktree::RemovalOutcome,
-    globals: &GlobalFlags,
-) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(removed.repo_root(), globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    store.retire_worktree_sessions(removed.removed_path(), Some(removed.branch()))?;
-    Ok(())
 }
 
 fn runtime_protection_set(
@@ -470,17 +477,6 @@ fn runtime_protection_set(
         None => Vec::new(),
     };
     rimz::worktree::protection_set_from_runtime(&panes, &agents, own.as_ref())
-}
-
-fn archive_removed_worktree_messages(
-    removed: &rimz::worktree::RemovalOutcome,
-    globals: &GlobalFlags,
-    reason: &str,
-) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(removed.repo_root(), globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    store.archive_channel_messages(removed.worktree_name(), reason, &workspace.session_name)?;
-    Ok(())
 }
 
 fn report_kept_branch(removed: &rimz::worktree::RemovalOutcome) {

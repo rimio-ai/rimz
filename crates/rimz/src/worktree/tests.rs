@@ -26,6 +26,28 @@ fn launch_checkout_without_flags_keeps_current_worktree() {
 }
 
 #[test]
+fn removal_retirement_returns_both_independent_results() {
+    let state = tempfile::tempdir().expect("state");
+    let runtime = tempfile::tempdir().expect("runtime");
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(Path::new("/repo"));
+    let paths = crate::StatePaths::under(workspace_id.clone(), state.path()).expect("paths");
+    let runtime = crate::RuntimePaths::under(workspace_id, runtime.path()).expect("runtime");
+    let store = crate::Store::open(paths, runtime).expect("store");
+    let removed = RemovalOutcome {
+        worktree_name: "demo".to_owned(),
+        branch: "demo".to_owned(),
+        repo_root: PathBuf::from("/repo"),
+        removed_path: PathBuf::from("/repo-worktrees/demo"),
+        branch_deletion: BranchDeletion::Deleted,
+    };
+
+    let retirement = retire_removal(&store, &removed, "worktree removed", "rimz-test");
+
+    assert_eq!(retirement.session_retirement.expect("sessions"), 0);
+    assert_eq!(retirement.message_archival.expect("messages"), 0);
+}
+
+#[test]
 fn launch_checkout_reports_non_repository_flags_exactly() {
     let workspace = workspace(RootClass::Directory);
     let config = WorktreeConfig::default();

@@ -202,19 +202,20 @@ fn recreate_or_done(
         name,
         false,
     )?;
-    // Both store cleanups get a chance after the irreversible Git removal.
-    let retirement = store
-        .retire_worktree_sessions(removed.removed_path(), Some(removed.branch()))
+    let retirement = rimz::worktree::retire_removal(
+        store,
+        &removed,
+        "worktree recreated",
+        &workspace.session_name,
+    );
+    let session_retirement = retirement
+        .session_retirement
         .context("retiring sessions for recreated worktree");
-    let archival = store
-        .archive_channel_messages(
-            removed.worktree_name(),
-            "worktree recreated",
-            &workspace.session_name,
-        )
+    let message_archival = retirement
+        .message_archival
         .context("archiving messages for recreated worktree channel");
-    retirement?;
-    archival?;
+    session_retirement?;
+    message_archival?;
     Ok(Reconciled::Continue)
 }
 

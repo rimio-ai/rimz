@@ -378,6 +378,83 @@ fn worktree_remove_reports_archive_failure_after_removal() {
     assert!(!path.exists(), "removal completes before archive failure");
 }
 
+#[cfg(unix)]
+#[test]
+fn worktree_cleanup_retires_sessions_and_archives_messages_after_removal() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo", "--branch", "scratch"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let ghost_id = AgentSessionId::from("sess-cleanup-ghost");
+    let mut ghost =
+        AgentLifecycleObservation::new(Some(ghost_id.clone()), LifecycleSignal::Registered);
+    ghost.worktree_path = Some(path.display().to_string());
+    ghost.worktree_branch = Some("scratch".to_owned());
+    ghost.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        ghost_id.as_str(),
+        u32::MAX,
+        None,
+    ));
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionStart",
+            &ghost,
+        ))
+        .expect("append stale worktree session");
+    let message_id = queue_channel_message(&env, "demo", "old work");
+
+    env.rimz()
+        .args([
+            "worktree",
+            "cleanup",
+            path.to_str().expect("utf-8 path"),
+            "--non-interactive",
+        ])
+        .assert()
+        .success();
+
+    assert!(!path.exists(), "cleanup removed worktree");
+    assert!(env.store().list_messages().expect("messages").is_empty());
+    let archived = env
+        .read_events()
+        .into_iter()
+        .find(|event| {
+            event.method == "message.archived"
+                && event.params_value()["message_id"] == message_id.as_str()
+        })
+        .expect("archived message");
+    assert_eq!(archived.params_value()["reason"], "worktree removed");
+    let store = env.store();
+    let audit = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection");
+    assert!(
+        audit
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == ghost_id && agent.ended_at.is_some())
+    );
+    let runtime = store
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .expect("runtime projection");
+    assert!(
+        runtime
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != ghost_id)
+    );
+}
+
 #[test]
 fn worktree_cleanup_downgrades_archive_failure_after_removal() {
     if git_missing() {

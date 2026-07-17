@@ -23,6 +23,7 @@ fn tmux_agent_exec_command(
     agent_bin: &Path,
     ready: &Path,
     agent_id: &str,
+    worktree: &Path,
 ) -> Vec<String> {
     let path = path_with_front(agent_bin);
     let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
@@ -34,7 +35,7 @@ fn tmux_agent_exec_command(
         },
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
-        worktree_path: None,
+        worktree_path: Some(worktree.to_path_buf()),
         close_pane_on_exit: true,
         exit_on_run_completion: false,
         identity: rimz::harness::launch::ExecIdentity::default(),
@@ -247,8 +248,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
         .expect("ensure session");
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("agent-ready-clean");
-    let mut command = tmux_agent_exec_command(&env, &agent_bin, &ready, agent_id);
-    command.extend(["--worktree-path".to_owned(), worktree.display().to_string()]);
+    let command = tmux_agent_exec_command(&env, &agent_bin, &ready, agent_id, &worktree);
     let (_stub_dir, stub) = sidebar_command_stub();
     server
         .backend

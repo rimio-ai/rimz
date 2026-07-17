@@ -6,6 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::ids::AgentSessionId;
+use rimz::message::{DeliveryGate, MessageRecord};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::timing::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
@@ -441,6 +444,7 @@ fn gc_sweeps_worktree_after_agent_dies() {
         &worktree,
         &[("RIMZ_AGENT_PID", &u32::MAX.to_string())],
     );
+    let message_id = queue_channel_message(&env, "demo", "old work");
 
     env.rimz()
         .args(["gc", "--older-than", "1h"])
@@ -451,6 +455,66 @@ fn gc_sweeps_worktree_after_agent_dies() {
         .stdout(contains("removed: demo"));
 
     assert!(!worktree.exists(), "dead agent should release the worktree");
+    assert!(env.store().list_messages().expect("messages").is_empty());
+    let archived = env
+        .read_events()
+        .into_iter()
+        .find(|event| {
+            event.method == "message.archived"
+                && event.params_value()["message_id"] == message_id.as_str()
+        })
+        .expect("archived message");
+    assert_eq!(archived.params_value()["reason"], "worktree removed");
+    let store = env.store();
+    let audit = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection");
+    assert!(audit.agents.iter().any(|agent| {
+        agent.agent_id.as_str() == "sess-worktree-dead" && agent.ended_at.is_some()
+    }));
+    let runtime = store
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .expect("runtime projection");
+    assert!(
+        runtime
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id.as_str() != "sess-worktree-dead")
+    );
+}
+
+fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageId {
+    let session_id = AgentSessionId::from(format!("sess-{channel}-message"));
+    let mut observation =
+        AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Registered);
+    observation.worktree_branch = Some(channel.to_owned());
+    let event = rimz::EventEnvelope::agent_lifecycle(
+        env.workspace_id.clone(),
+        "rimz-test",
+        "claude",
+        "SessionStart",
+        &observation,
+    );
+    env.store().append_event(&event).expect("append agent");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == session_id)
+        .expect("agent");
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        text.to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some(channel.to_owned()));
+    let message_id = message.message_id.clone();
+    env.store()
+        .queue_message(&message, "rimz-test")
+        .expect("queue message");
+    message_id
 }
 
 fn register_running_agent(env: &Env, session_id: &str, branch: &str) {
