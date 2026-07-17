@@ -7,7 +7,7 @@ use crate::agents::{AgentCardRef, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{
     AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
-    claim_expired, gate_open, queue_head_for_message,
+    claim_expired, gate_open, queue_head_for_message, same_delivery_lane,
 };
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 
@@ -304,13 +304,6 @@ fn claim_message(message: &MessageRecord, now: Timestamp) -> MessageRecord {
     claimed.retry_after = None;
     claimed.updated_at = now;
     claimed
-}
-
-fn same_delivery_lane(left: DeliveryGate, right: DeliveryGate) -> bool {
-    match left {
-        DeliveryGate::Resume => right == DeliveryGate::Resume,
-        DeliveryGate::Done | DeliveryGate::Any => right != DeliveryGate::Resume,
-    }
 }
 
 fn batch_compatible(head: &MessageRecord, candidate: &MessageRecord, status: AgentStatus) -> bool {

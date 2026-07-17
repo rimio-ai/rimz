@@ -776,43 +776,7 @@ pub fn older_ready_blocker<'a>(
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
 
-/// Contiguous batchable followers behind `head`, oldest first: the ready FIFO
-/// prefix of the head's card and lane whose members share the head's batch key
-/// and force flag and whose own gate is open. Stops at the first non-matching
-/// record so delivery never reorders the queue.
-pub fn queue_batch_tail<'a>(
-    pending: impl IntoIterator<Item = &'a MessageRecord>,
-    head: &MessageRecord,
-    status: AgentStatus,
-    now: Timestamp,
-) -> Vec<&'a MessageRecord> {
-    if head.gate == DeliveryGate::Resume || !head.batchable() {
-        return Vec::new();
-    }
-    let head_key = head.batch_key();
-    let mut candidates: Vec<&MessageRecord> = pending
-        .into_iter()
-        .filter(|message| {
-            message.status == MessageStatus::Queued
-                && message.gate != DeliveryGate::Resume
-                && message.same_card(head.card_ref())
-                && message.is_deliverable(now)
-                && message.message_id.as_str() > head.message_id.as_str()
-        })
-        .collect();
-    candidates.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
-    candidates
-        .into_iter()
-        .take_while(|message| {
-            message.batchable()
-                && message.batch_key() == head_key
-                && message.force == head.force
-                && gate_open(message.gate, status)
-        })
-        .collect()
-}
-
-fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) -> bool {
+pub(crate) fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) -> bool {
     match candidate {
         DeliveryGate::Resume => queued == DeliveryGate::Resume,
         DeliveryGate::Done | DeliveryGate::Any => queued != DeliveryGate::Resume,
