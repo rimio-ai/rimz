@@ -208,6 +208,18 @@ pub fn write_pane_topology_cache(
     crate::store::atomic::write_temp_then_rename_cache(&pane_topology_cache_path(runtime), cache)
 }
 
+/// Publish the sidebar supervisor's shared authoritative pane observation.
+/// Cache-class: rename atomic, no fsync, and safe to discard between probes.
+pub fn write_authoritative_pane_probe<T: Serialize>(
+    runtime: &RuntimePaths,
+    probe: &T,
+) -> crate::store::atomic::Result<()> {
+    crate::store::atomic::write_temp_then_rename_cache(
+        &runtime.authoritative_pane_probe_path(),
+        probe,
+    )
+}
+
 /// Read a same-session topology cache regardless of freshness. `None` means
 /// absent, unreadable, or for another session.
 pub fn read_pane_topology_cache(

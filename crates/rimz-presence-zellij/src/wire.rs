@@ -169,11 +169,46 @@ fn bool_kdl(value: bool) -> &'static str {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetry {
+    pub plugin_id: Option<u32>,
+    pub loaded_at_ms: u64,
     pub mem_pages: u64,
     pub uptime_ms: u64,
     pub commands_completed: u64,
+    pub commands_succeeded: u64,
     pub commands_failed: u64,
+    pub stale_writer_rejections: u64,
+    pub topology_failures: u64,
+    pub other_failures: u64,
     pub zellij_version: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CommandCounters {
+    pub completed: u64,
+    pub succeeded: u64,
+    pub stale_writer_rejections: u64,
+    pub topology_failures: u64,
+    pub other_failures: u64,
+}
+
+impl CommandCounters {
+    pub fn record(&mut self, exit_code: Option<i32>, published_topology: bool) {
+        self.completed = self.completed.saturating_add(1);
+        match exit_code {
+            Some(0) => self.succeeded = self.succeeded.saturating_add(1),
+            Some(STALE_WRITER_EXIT_CODE) if published_topology => {
+                self.stale_writer_rejections = self.stale_writer_rejections.saturating_add(1);
+            }
+            _ if published_topology => {
+                self.topology_failures = self.topology_failures.saturating_add(1);
+            }
+            _ => self.other_failures = self.other_failures.saturating_add(1),
+        }
+    }
+
+    pub fn failed(self) -> u64 {
+        self.completed.saturating_sub(self.succeeded)
+    }
 }
 
 pub struct WakeContext<'a> {
@@ -235,14 +270,28 @@ pub fn wake_argv(
         }
         WakeRequest::Alive(telemetry) => {
             push_workspace(ctx, &mut argv);
+            if let Some(plugin_id) = telemetry.plugin_id {
+                argv.push("--plugin-id".to_owned());
+                argv.push(plugin_id.to_string());
+            }
+            argv.push("--plugin-loaded-at-ms".to_owned());
+            argv.push(telemetry.loaded_at_ms.to_string());
             argv.push("--plugin-mem-pages".to_owned());
             argv.push(telemetry.mem_pages.to_string());
             argv.push("--plugin-uptime-ms".to_owned());
             argv.push(telemetry.uptime_ms.to_string());
             argv.push("--plugin-commands".to_owned());
             argv.push(telemetry.commands_completed.to_string());
+            argv.push("--plugin-commands-succeeded".to_owned());
+            argv.push(telemetry.commands_succeeded.to_string());
             argv.push("--plugin-commands-failed".to_owned());
             argv.push(telemetry.commands_failed.to_string());
+            argv.push("--plugin-stale-writer-rejections".to_owned());
+            argv.push(telemetry.stale_writer_rejections.to_string());
+            argv.push("--plugin-topology-failures".to_owned());
+            argv.push(telemetry.topology_failures.to_string());
+            argv.push("--plugin-other-failures".to_owned());
+            argv.push(telemetry.other_failures.to_string());
             argv.push("--plugin-zellij-version".to_owned());
             argv.push(telemetry.zellij_version);
             if let Some(session_name) = ctx.session_name {

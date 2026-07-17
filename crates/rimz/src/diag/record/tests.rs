@@ -310,6 +310,7 @@ fn multi_focus_anomaly_keeps_wire_and_subject_regression() {
             "zellij:terminal_1".to_owned(),
             "zellij:terminal_2".to_owned(),
         ],
+        evidence: None,
     };
     assert_eq!(anomaly.key(), "multi_focus_topology");
     assert_eq!(anomaly.subject().as_deref(), Some("7"));
@@ -410,4 +411,30 @@ fn provider_mana_identity_prefers_scope_and_keeps_legacy_duration_wire() {
     }))
     .unwrap();
     assert_eq!(legacy.identity(), "provider_mana:codex:300");
+}
+
+#[test]
+fn pane_drop_and_multi_focus_evidence_default_for_legacy_records() {
+    let drop: DiagEvent = serde_json::from_value(serde_json::json!({
+        "kind": "pane_count_drop",
+        "prior": 3,
+        "new": 1,
+        "removed": ["zellij:terminal_1", "zellij:terminal_2"],
+        "added": []
+    }))
+    .unwrap();
+    assert!(matches!(
+        drop,
+        DiagEvent::PaneCountDrop { evidence: None, .. }
+    ));
+
+    let focus: AnomalyKind = serde_json::from_value(serde_json::json!({
+        "detector": "multi_focus_topology",
+        "pane_ids": ["zellij:terminal_1", "zellij:terminal_2"]
+    }))
+    .unwrap();
+    assert!(matches!(
+        focus,
+        AnomalyKind::MultiFocusTopology { evidence: None, .. }
+    ));
 }

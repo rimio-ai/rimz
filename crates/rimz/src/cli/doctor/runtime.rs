@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -146,6 +146,7 @@ pub(super) fn collect_mux(
         capabilities,
         binaries,
         log,
+        plugin_presence: None,
         zellij_socket: None,
         socket: None,
         session_health: None,
@@ -166,6 +167,7 @@ pub(super) fn collect_mux(
         report.presence = Some(collect_presence(ws, mux));
         if mux == MuxName::Zellij {
             report.topology_writer = collect_topology_writer(ws);
+            report.plugin_presence = collect_plugin_presence(ws);
         }
     }
     model::Probe::Ready(report)
@@ -217,7 +219,14 @@ fn collect_mux_log(mux: MuxName) -> model::MuxLog {
         MuxName::Zellij => {
             let path = zellij_mod::log_file();
             match path.try_exists() {
-                Ok(true) => scan_mux_log(path, zellij_mod::classify_log_line),
+                Ok(true) => scan_mux_log(
+                    path,
+                    model::LogScope::HostUser {
+                        uid: nix::unistd::Uid::current().as_raw(),
+                    },
+                    zellij_mod::parse_log_line,
+                    zellij_mod::diagnose_log_record,
+                ),
                 Ok(false) => model::MuxLog::Missing {
                     path: path.display().to_string(),
                 },
@@ -227,7 +236,12 @@ fn collect_mux_log(mux: MuxName) -> model::MuxLog {
             }
         }
         MuxName::Tmux => match tmux_mod::server_log_file() {
-            Some(path) => scan_mux_log(path, tmux_mod::classify_log_line),
+            Some(path) => scan_mux_log(
+                path,
+                model::LogScope::Server,
+                tmux_mod::parse_log_line,
+                tmux_mod::diagnose_log_record,
+            ),
             None => model::MuxLog::Disabled {
                 hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
             },
@@ -237,20 +251,49 @@ fn collect_mux_log(mux: MuxName) -> model::MuxLog {
 
 fn scan_mux_log(
     path: std::path::PathBuf,
-    classify: fn(&str) -> Option<logtail::LogSeverity>,
+    scope: model::LogScope,
+    parse_line: fn(&str) -> logtail::RecordLine,
+    diagnose: fn(
+        Option<&logtail::LogicalRecord>,
+        &logtail::LogicalRecord,
+        Option<&logtail::LogicalRecord>,
+    ) -> Option<logtail::LogDiagnosis>,
 ) -> model::MuxLog {
-    match logtail::scan_tail(&path, MUX_LOG_WINDOW_BYTES, MUX_LOG_ENTRY_CAP, classify) {
+    match logtail::scan_tail(
+        &path,
+        MUX_LOG_WINDOW_BYTES,
+        MUX_LOG_ENTRY_CAP,
+        parse_line,
+        diagnose,
+    ) {
         Ok(scan) => model::MuxLog::Ready {
             path: path.display().to_string(),
+            scope,
             size_bytes: scan.size_bytes,
             scanned_bytes: scan.scanned_bytes,
-            matched: scan.matched,
-            entries: scan
-                .entries
+            logical_records: scan.logical_records,
+            problem_records: scan.problem_records,
+            omitted_issue_groups: scan.omitted_issue_groups,
+            issues: scan
+                .issues
                 .into_iter()
-                .map(|entry| model::MuxLogEntry {
-                    severity: severity_label(entry.severity).to_owned(),
-                    line: entry.line,
+                .map(|issue| model::MuxLogIssue {
+                    source_severity: severity_label(issue.severity).to_owned(),
+                    state: match issue.state {
+                        logtail::LogState::Investigate => model::DoctorState::Investigate,
+                        logtail::LogState::Expected => model::DoctorState::Expected,
+                    },
+                    impact: match issue.impact {
+                        logtail::LogImpact::Alarm => model::DoctorImpact::Alarm,
+                        logtail::LogImpact::Warn => model::DoctorImpact::Warn,
+                        logtail::LogImpact::Info => model::DoctorImpact::Info,
+                    },
+                    summary: issue.summary,
+                    occurrences: issue.occurrences,
+                    first_occurrence: issue.first_occurrence,
+                    last_occurrence: issue.last_occurrence,
+                    samples: issue.samples,
+                    evidence_truncated: issue.evidence_truncated,
                 })
                 .collect(),
         },
@@ -258,6 +301,35 @@ fn scan_mux_log(
             error: format!("{}: {err}", path.display()),
         },
     }
+}
+
+fn collect_plugin_presence(ws: &rimz::ResolvedWorkspace) -> Option<model::PluginTelemetry> {
+    let runtime = RuntimePaths::for_workspace(ws.workspace_id.clone()).ok()?;
+    let state = StatePaths::for_workspace(ws.workspace_id.clone()).ok()?;
+    let writer = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name)
+        .and_then(|cache| cache.writer)?;
+    let span = rimz::diag::plugin_presence::generation_span(
+        &state.root,
+        &ws.session_name,
+        writer.plugin_id,
+        writer.loaded_at_ms,
+    )?;
+    Some(model::PluginTelemetry {
+        plugin_id: span.plugin_id,
+        loaded_at_ms: span.loaded_at_ms,
+        sample_count: span.sample_count,
+        first_at_ms: span.first_at_ms,
+        last_at_ms: span.last_at_ms,
+        age_secs: rimz::sidebar::timing::unix_now_ms().saturating_sub(span.last_at_ms) / 1000,
+        zellij_version: span.zellij_version,
+        page_growth: span.page_growth,
+        byte_growth: span.byte_growth,
+        commands_completed_delta: span.commands_completed_delta,
+        commands_succeeded_delta: span.commands_succeeded_delta,
+        stale_writer_rejections_delta: span.stale_writer_rejections_delta,
+        topology_failures_delta: span.topology_failures_delta,
+        other_failures_delta: span.other_failures_delta,
+    })
 }
 
 fn severity_label(severity: logtail::LogSeverity) -> &'static str {
@@ -701,63 +773,321 @@ pub(super) fn collect_diagnostics(
     ws: &rimz::ResolvedWorkspace,
     cleared_at: Option<jiff::Timestamp>,
 ) -> model::Diagnostics {
-    const RECENT_DIAG_ROWS: usize = 12;
+    const RECENT_DIAG_INCIDENTS: usize = 12;
     let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), usize::MAX)
     else {
         return model::Diagnostics::Unavailable;
     };
     let cleared_at_ms = cleared_at.and_then(|at| u64::try_from(at.as_millisecond()).ok());
-    let records = diagnostic_rows(records, RECENT_DIAG_ROWS, cleared_at_ms);
+    let incidents = diagnostic_incidents(records, RECENT_DIAG_INCIDENTS, cleared_at_ms);
     model::Diagnostics::Ready {
         path: path.display().to_string(),
-        records,
+        incidents,
     }
 }
 
-fn diagnostic_rows(
-    records: Vec<rimz::diag::record::DiagEnvelope>,
+fn diagnostic_incidents(
+    mut records: Vec<rimz::diag::record::DiagEnvelope>,
     limit: usize,
     cleared_at_ms: Option<u64>,
-) -> Vec<model::DiagRow> {
-    let mut groups: Vec<(String, rimz::diag::record::DiagEnvelope, usize)> = Vec::new();
-    for record in records
-        .into_iter()
-        .filter(|record| cleared_at_ms.is_none_or(|cleared_at| record.at_ms > cleared_at))
-    {
-        let key = record.event.identity_key();
-        match groups.last_mut() {
-            Some((last_key, latest, count)) if last_key == &key => {
-                *latest = record;
-                *count = count.saturating_add(1);
+) -> Vec<model::DiagIncident> {
+    const EPISODE_GAP_MS: u64 = 60_000;
+    records.retain(|record| cleared_at_ms.is_none_or(|cleared_at| record.at_ms > cleared_at));
+    records.sort_by_key(|record| record.at_ms);
+
+    let mut builders = Vec::<IncidentBuilder>::new();
+    let mut latest_by_key = HashMap::<String, usize>::new();
+    for record in records {
+        let (key, exact_frame) = incident_key(&record);
+        let existing = latest_by_key.get(&key).copied().filter(|index| {
+            exact_frame
+                || record.at_ms.saturating_sub(builders[*index].last_at_ms) <= EPISODE_GAP_MS
+        });
+        match existing {
+            Some(index) => builders[index].merge(record),
+            None => {
+                let index = builders.len();
+                builders.push(IncidentBuilder::new(record));
+                latest_by_key.insert(key, index);
             }
-            _ => groups.push((key, record, 1)),
         }
     }
-    if groups.len() > limit {
-        groups.drain(..groups.len() - limit);
+    builders.sort_by_key(|incident| incident.last_at_ms);
+    if builders.len() > limit {
+        builders.drain(..builders.len() - limit);
     }
-    groups
-        .into_iter()
-        .map(|(_, record, count)| diagnostic_row(record, count))
-        .collect()
+    builders.into_iter().map(IncidentBuilder::finish).collect()
 }
 
-fn diagnostic_row(record: rimz::diag::record::DiagEnvelope, count: usize) -> model::DiagRow {
-    let summary = summary_with_record_count(
-        summary_with_suppressed(
-            diagnostic_summary(&record.event),
-            record.suppressed_since_last,
+struct IncidentBuilder {
+    kind: String,
+    source_severity: rimz::diag::record::DiagSeverity,
+    state: model::DoctorState,
+    impact: model::DoctorImpact,
+    first_at_ms: u64,
+    last_at_ms: u64,
+    record_count: usize,
+    observer_ids: BTreeSet<String>,
+    sink_suppressed: u64,
+    observer_suppressed: u64,
+    dropped_messages: u64,
+    summary: String,
+    build: Option<String>,
+    evidence_refs: BTreeSet<String>,
+}
+
+impl IncidentBuilder {
+    fn new(record: rimz::diag::record::DiagEnvelope) -> Self {
+        let at_ms = record.at_ms;
+        let mut incident = Self {
+            kind: incident_kind(&record.event).to_owned(),
+            source_severity: record.severity,
+            state: model::DoctorState::Investigate,
+            impact: model::DoctorImpact::Warn,
+            first_at_ms: at_ms,
+            last_at_ms: at_ms,
+            record_count: 0,
+            observer_ids: BTreeSet::new(),
+            sink_suppressed: 0,
+            observer_suppressed: 0,
+            dropped_messages: 0,
+            summary: String::new(),
+            build: record.build.clone(),
+            evidence_refs: BTreeSet::new(),
+        };
+        incident.merge(record);
+        incident
+    }
+
+    fn merge(&mut self, record: rimz::diag::record::DiagEnvelope) {
+        self.source_severity = max_severity(self.source_severity, record.severity);
+        (self.state, self.impact) = classify_diagnostic(&record.event, self.source_severity);
+        self.last_at_ms = self.last_at_ms.max(record.at_ms);
+        self.record_count = self.record_count.saturating_add(1);
+        if let Some(instance_id) = &record.instance_id {
+            self.observer_ids.insert(instance_id.as_str().to_owned());
+        }
+        self.sink_suppressed = self
+            .sink_suppressed
+            .saturating_add(u64::from(record.suppressed_since_last));
+        if let rimz::diag::record::DiagEvent::FrameAnomaly {
+            suppressed_since_last,
+            dropped_msgs,
+            ..
+        } = &record.event
+        {
+            self.observer_suppressed = self
+                .observer_suppressed
+                .saturating_add(u64::from(*suppressed_since_last));
+            self.dropped_messages = self
+                .dropped_messages
+                .saturating_add(u64::from(*dropped_msgs));
+        }
+        self.summary = diagnostic_summary(&record.event);
+        self.evidence_refs
+            .extend(diagnostic_evidence_refs(&record.event));
+    }
+
+    fn finish(self) -> model::DiagIncident {
+        let stale_build = stale_build(self.build.as_deref(), rimz::build_id::current());
+        let observer_ids = self.observer_ids.into_iter().collect::<Vec<_>>();
+        model::DiagIncident {
+            kind: self.kind,
+            source_severity: self.source_severity,
+            state: self.state,
+            impact: self.impact,
+            first_at_ms: self.first_at_ms,
+            last_at_ms: self.last_at_ms,
+            record_count: self.record_count,
+            distinct_observer_count: observer_ids.len(),
+            observer_ids,
+            sink_suppressed: self.sink_suppressed,
+            observer_suppressed: self.observer_suppressed,
+            dropped_messages: self.dropped_messages,
+            summary: self.summary,
+            build: self.build,
+            stale_build,
+            evidence_refs: self.evidence_refs.into_iter().collect(),
+        }
+    }
+}
+
+fn incident_key(record: &rimz::diag::record::DiagEnvelope) -> (String, bool) {
+    let build = record.build.as_deref().unwrap_or("unknown");
+    if let rimz::diag::record::DiagEvent::FrameAnomaly {
+        frame:
+            rimz::diag::record::FrameStamp {
+                produced_at_ms: Some(produced_at_ms),
+                ..
+            },
+        ..
+    } = &record.event
+    {
+        return (
+            format!(
+                "{}:{build}:{}:{produced_at_ms}",
+                record.session_name,
+                record.event.identity_key(),
+            ),
+            true,
+        );
+    }
+    (
+        format!(
+            "{}:{build}:{}",
+            record.session_name,
+            normalized_incident_identity(&record.event)
         ),
-        count,
-    );
-    let stale_build = stale_build(record.build.as_deref(), rimz::build_id::current());
-    model::DiagRow {
-        severity: record.severity,
-        kind: record.event.kind_name().to_owned(),
-        at_ms: record.at_ms,
-        summary,
-        build: record.build,
-        stale_build,
+        false,
+    )
+}
+
+fn normalized_incident_identity(event: &rimz::diag::record::DiagEvent) -> String {
+    use rimz::diag::record::DiagEvent;
+    match event {
+        DiagEvent::GateHold { rule, .. } | DiagEvent::GateRelease { rule, .. } => {
+            format!("gate:{rule:?}")
+        }
+        DiagEvent::PaneCarryForward { carried, .. }
+        | DiagEvent::PaneCarryRefuted { carried, .. } => format!("pane_carry:{carried:?}"),
+        DiagEvent::FrameRejected { .. } | DiagEvent::FrameShrinkVerified { .. } => {
+            "frame_shrink".to_owned()
+        }
+        DiagEvent::HealthAlert {
+            reason, since_ms, ..
+        } => format!("health:{reason}:{since_ms}"),
+        DiagEvent::LinkAlert { tier, since_ms, .. } => format!("link:{tier:?}:{since_ms}"),
+        DiagEvent::TickBudgetBreach {
+            tick_loop,
+            since_ms,
+            ..
+        } => format!("tick:{tick_loop:?}:{since_ms}"),
+        DiagEvent::TopologyWriteRejected {
+            accepted_plugin_id,
+            accepted_loaded_at_ms,
+            ..
+        }
+        | DiagEvent::TopologyWriterChanged {
+            plugin_id: accepted_plugin_id,
+            loaded_at_ms: accepted_loaded_at_ms,
+            ..
+        } => format!("topology_writer:{accepted_loaded_at_ms}:{accepted_plugin_id}"),
+        _ => event.identity_key(),
+    }
+}
+
+fn incident_kind(event: &rimz::diag::record::DiagEvent) -> &'static str {
+    use rimz::diag::record::DiagEvent;
+    match event {
+        DiagEvent::GateHold { .. } | DiagEvent::GateRelease { .. } => "gate",
+        DiagEvent::PaneCarryForward { .. } | DiagEvent::PaneCarryRefuted { .. } => "pane_carry",
+        DiagEvent::FrameRejected { .. } | DiagEvent::FrameShrinkVerified { .. } => "frame_shrink",
+        _ => event.kind_name(),
+    }
+}
+
+fn classify_diagnostic(
+    event: &rimz::diag::record::DiagEvent,
+    severity: rimz::diag::record::DiagSeverity,
+) -> (model::DoctorState, model::DoctorImpact) {
+    use rimz::diag::record::{AnomalyKind, DiagEvent, RendererExitCause};
+    let state = match event {
+        DiagEvent::FrameRejected { .. }
+        | DiagEvent::PaneCarryForward { .. }
+        | DiagEvent::GateHold { .. }
+        | DiagEvent::TopologyWriteRejected { .. }
+        | DiagEvent::NewbornQuarantined { .. }
+        | DiagEvent::ClientReaped { settled: true, .. } => model::DoctorState::Contained,
+        DiagEvent::FrameShrinkVerified { .. }
+        | DiagEvent::PaneCarryRefuted { .. }
+        | DiagEvent::GateRelease { .. }
+        | DiagEvent::TopologyWriterChanged { .. }
+        | DiagEvent::HealthAlert {
+            recovered_after_ms: Some(_),
+            ..
+        }
+        | DiagEvent::LinkAlert {
+            recovered_after_ms: Some(_),
+            ..
+        }
+        | DiagEvent::TickBudgetBreach {
+            recovered_after_ms: Some(_),
+            ..
+        } => model::DoctorState::Recovered,
+        DiagEvent::PaneCountDrop {
+            evidence: Some(evidence),
+            ..
+        } if pane_drop_is_expected(evidence) => model::DoctorState::Expected,
+        DiagEvent::FrameAnomaly {
+            anomaly:
+                AnomalyKind::MultiFocusTopology {
+                    pane_ids,
+                    evidence: Some(evidence),
+                    ..
+                },
+            ..
+        } if multi_focus_is_expected(pane_ids, evidence) => model::DoctorState::Expected,
+        DiagEvent::RendererExit {
+            cause: RendererExitCause::SelfCloseEmptyTab,
+        }
+        | DiagEvent::ProducerElected { .. }
+        | DiagEvent::ProducerDemoted { .. }
+        | DiagEvent::GroupMigration { .. } => model::DoctorState::Expected,
+        _ => model::DoctorState::Investigate,
+    };
+    let impact = if state == model::DoctorState::Investigate {
+        match severity {
+            rimz::diag::record::DiagSeverity::Error => model::DoctorImpact::Alarm,
+            rimz::diag::record::DiagSeverity::Warn | rimz::diag::record::DiagSeverity::Info => {
+                model::DoctorImpact::Warn
+            }
+        }
+    } else {
+        model::DoctorImpact::Info
+    };
+    (state, impact)
+}
+
+fn pane_drop_is_expected(evidence: &rimz::diag::record::PaneDropEvidence) -> bool {
+    !evidence.mass_shrink
+        && evidence.affected_views.len() == 1
+        && evidence.affected_views[0].removed_completely()
+        && evidence.affected_views[0].managed_panes.is_empty()
+}
+
+fn multi_focus_is_expected(
+    pane_ids: &[String],
+    evidence: &rimz::diag::record::MultiFocusEvidence,
+) -> bool {
+    evidence.human_clients >= 2
+        && pane_ids.iter().all(|candidate| {
+            evidence
+                .viewed_pane_ids
+                .iter()
+                .any(|viewed| viewed.to_string() == *candidate)
+        })
+}
+
+fn diagnostic_evidence_refs(event: &rimz::diag::record::DiagEvent) -> Vec<String> {
+    use rimz::diag::record::DiagEvent;
+    match event {
+        DiagEvent::FrameRejected { frames_ref, .. }
+        | DiagEvent::PaneCountDrop { frames_ref, .. }
+        | DiagEvent::PaneCarryForward { frames_ref, .. }
+        | DiagEvent::PaneCarryRefuted { frames_ref, .. } => frames_ref.iter().cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn max_severity(
+    left: rimz::diag::record::DiagSeverity,
+    right: rimz::diag::record::DiagSeverity,
+) -> rimz::diag::record::DiagSeverity {
+    use rimz::diag::record::DiagSeverity;
+    match (left, right) {
+        (DiagSeverity::Error, _) | (_, DiagSeverity::Error) => DiagSeverity::Error,
+        (DiagSeverity::Warn, _) | (_, DiagSeverity::Warn) => DiagSeverity::Warn,
+        _ => DiagSeverity::Info,
     }
 }
 
@@ -1031,27 +1361,13 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
     }
 }
 
-fn summary_with_suppressed(summary: String, suppressed_since_last: u32) -> String {
-    if suppressed_since_last == 0 {
-        summary
-    } else {
-        format!("{summary}; {suppressed_since_last} suppressed")
-    }
-}
-
-fn summary_with_record_count(summary: String, count: usize) -> String {
-    if count <= 1 {
-        summary
-    } else {
-        format!("{summary}; {count} records")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rimz::diag::record::{
-        DiagEnvelope, DiagEvent, FrameRejectReason, RendererExitCause, TickLoop,
+        AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FrameRejectReason, FrameStamp,
+        MultiFocusEvidence, ObserveRole, PaneDropEvidence, PaneDropViewEvidence, RendererExitCause,
+        TickLoop,
     };
 
     fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
@@ -1113,6 +1429,32 @@ mod tests {
             budget_spawns: 32,
             since_ms,
             recovered_after_ms,
+        }
+    }
+
+    fn frame_anomaly(produced_at_ms: u64) -> DiagEvent {
+        DiagEvent::FrameAnomaly {
+            role: ObserveRole::Consumer,
+            anomaly: AnomalyKind::RosterFlap {
+                rows_before: 2,
+                empty_at_ms: 10,
+                restored_at_ms: 20,
+                rows_after: 2,
+            },
+            window_ms: Some(10),
+            frame: FrameStamp {
+                produced_at_ms: Some(produced_at_ms),
+                rows: 2,
+                agents: 2,
+                processes: 0,
+                pulled_rows: Some(2),
+                pulled_panes_produced_at_ms: Some(produced_at_ms),
+            },
+            events_recent: EventsSig::default(),
+            gate_reject_streak: 0,
+            health_failure_streak: 0,
+            suppressed_since_last: 0,
+            dropped_msgs: 0,
         }
     }
 
@@ -1253,8 +1595,8 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_rows_collapse_consecutive_same_identity_records() {
-        let rows = diagnostic_rows(
+    fn diagnostic_incidents_collapse_same_episode_records() {
+        let incidents = diagnostic_incidents(
             vec![
                 diag_record(1, tick_breach(10, None, 5)),
                 diag_record(2, tick_breach(10, None, 6)),
@@ -1263,14 +1605,14 @@ mod tests {
             None,
         );
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].at_ms, 2);
-        assert!(rows[0].summary.contains("over budget for 6 ticks"));
-        assert!(rows[0].summary.ends_with("; 2 records"));
+        assert_eq!(incidents.len(), 1);
+        assert_eq!(incidents[0].last_at_ms, 2);
+        assert_eq!(incidents[0].record_count, 2);
+        assert!(incidents[0].summary.contains("over budget for 6 ticks"));
     }
 
     #[test]
-    fn diagnostic_rows_group_before_recent_cap_and_keep_distinct_identities() {
+    fn diagnostic_incidents_pair_recovery_and_keep_recurrence_distinct() {
         let mut records = Vec::new();
         for at_ms in 1..=13 {
             records.push(diag_record(at_ms, tick_breach(10, None, at_ms as u32)));
@@ -1278,20 +1620,141 @@ mod tests {
         records.push(diag_record(20, tick_breach(10, Some(10), 13)));
         records.push(diag_record(21, tick_breach(30, None, 5)));
 
-        let rows = diagnostic_rows(records, 12, None);
+        let incidents = diagnostic_incidents(records, 12, None);
 
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].at_ms, 13);
-        assert!(rows[0].summary.ends_with("; 13 records"));
-        assert!(rows[1].summary.contains("recovered after 10ms"));
-        assert!(!rows[1].summary.contains("records"));
-        assert!(rows[2].summary.contains("over budget for 5 ticks"));
-        assert!(!rows[2].summary.contains("records"));
+        assert_eq!(incidents.len(), 2);
+        assert_eq!(incidents[0].record_count, 14);
+        assert_eq!(incidents[0].state, model::DoctorState::Recovered);
+        assert!(incidents[0].summary.contains("recovered after 10ms"));
+        assert!(incidents[1].summary.contains("over budget for 5 ticks"));
     }
 
     #[test]
-    fn diagnostic_rows_drop_records_at_or_before_watermark() {
-        let rows = diagnostic_rows(
+    fn diagnostic_incidents_collapse_cross_observer_frame_copies_only() {
+        let mut first = diag_record(1, frame_anomaly(900));
+        first.instance_id = Some(sidebar("sb_019e8c565bbd708097fce9514f79da04"));
+        let mut second = diag_record(2, frame_anomaly(900));
+        second.instance_id = Some(sidebar("sb_019eb7da41f478b2a84079743e472a87"));
+        let mut recurrence = diag_record(3, frame_anomaly(901));
+        recurrence.instance_id = second.instance_id.clone();
+
+        let incidents = diagnostic_incidents(vec![first, second, recurrence], 12, None);
+
+        assert_eq!(incidents.len(), 2);
+        assert_eq!(incidents[0].record_count, 2);
+        assert_eq!(incidents[0].distinct_observer_count, 2);
+        assert_eq!(incidents[1].record_count, 1);
+    }
+
+    #[test]
+    fn diagnostic_incidents_split_same_identity_after_quiet_gap() {
+        let incidents = diagnostic_incidents(
+            vec![
+                diag_record(1, tick_breach(10, None, 1)),
+                diag_record(60_002, tick_breach(10, None, 2)),
+            ],
+            12,
+            None,
+        );
+
+        assert_eq!(incidents.len(), 2);
+
+        let mut first = frame_anomaly(1);
+        let mut second = frame_anomaly(2);
+        for event in [&mut first, &mut second] {
+            if let DiagEvent::FrameAnomaly { frame, .. } = event {
+                frame.produced_at_ms = None;
+            }
+        }
+        let incidents = diagnostic_incidents(
+            vec![diag_record(1, first), diag_record(60_002, second)],
+            12,
+            None,
+        );
+        assert_eq!(
+            incidents.len(),
+            2,
+            "missing frame identity follows the bounded episode rule"
+        );
+    }
+
+    #[test]
+    fn diagnostic_classification_requires_complete_positive_evidence() {
+        let pane = |raw| rimz::PaneId::from_parts(rimz::MuxName::Zellij, raw);
+        let expected_drop = DiagEvent::PaneCountDrop {
+            prior: 2,
+            new: 1,
+            removed: vec![pane("terminal_1")],
+            added: Vec::new(),
+            evidence: Some(PaneDropEvidence {
+                prior_panes: 2,
+                fresh_panes: 1,
+                mass_shrink: false,
+                affected_views: vec![PaneDropViewEvidence {
+                    view_id: "tab_1".to_owned(),
+                    prior_panes: 1,
+                    remaining_panes: 0,
+                    removed_pane_ids: vec![pane("terminal_1")],
+                    managed_panes: Vec::new(),
+                }],
+            }),
+            frames_ref: None,
+        };
+        let legacy_drop = DiagEvent::PaneCountDrop {
+            prior: 2,
+            new: 1,
+            removed: vec![pane("terminal_1")],
+            added: Vec::new(),
+            evidence: None,
+            frames_ref: None,
+        };
+        assert_eq!(
+            classify_diagnostic(&expected_drop, expected_drop.severity()).0,
+            model::DoctorState::Expected
+        );
+        assert_eq!(
+            classify_diagnostic(&legacy_drop, legacy_drop.severity()).0,
+            model::DoctorState::Investigate
+        );
+
+        let expected_focus = DiagEvent::FrameAnomaly {
+            role: ObserveRole::Consumer,
+            anomaly: AnomalyKind::MultiFocusTopology {
+                tab_name: Some("work".to_owned()),
+                tab_position: Some(1),
+                pane_ids: vec![
+                    "zellij:terminal_1".to_owned(),
+                    "zellij:terminal_2".to_owned(),
+                ],
+                evidence: Some(MultiFocusEvidence {
+                    human_clients: 2,
+                    viewed_pane_ids: vec![pane("terminal_1"), pane("terminal_2")],
+                }),
+            },
+            window_ms: None,
+            frame: FrameStamp {
+                produced_at_ms: Some(1),
+                rows: 0,
+                agents: 0,
+                processes: 0,
+                pulled_rows: Some(0),
+                pulled_panes_produced_at_ms: Some(1),
+            },
+            events_recent: EventsSig::default(),
+            gate_reject_streak: 0,
+            health_failure_streak: 0,
+            suppressed_since_last: 0,
+            dropped_msgs: 0,
+        };
+        assert_eq!(
+            classify_diagnostic(&expected_focus, expected_focus.severity()).0,
+            model::DoctorState::Expected
+        );
+    }
+
+    #[test]
+    fn diagnostic_incidents_drop_records_at_or_before_watermark() {
+        let incidents = diagnostic_incidents(
             vec![
                 diag_record(9, tick_breach(9, None, 1)),
                 diag_record(10, tick_breach(10, None, 2)),
@@ -1301,8 +1764,8 @@ mod tests {
             Some(10),
         );
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].at_ms, 11);
+        assert_eq!(incidents.len(), 1);
+        assert_eq!(incidents[0].last_at_ms, 11);
     }
 
     #[test]
@@ -1312,18 +1775,6 @@ mod tests {
         assert!(!stale_build(None, Some("current")));
         assert!(!stale_build(Some("old"), None));
         assert!(!stale_build(None, None));
-    }
-
-    #[test]
-    fn summary_with_suppressed_appends_nonzero_count() {
-        assert_eq!(
-            summary_with_suppressed("refuted panes".to_owned(), 0),
-            "refuted panes"
-        );
-        assert_eq!(
-            summary_with_suppressed("refuted panes".to_owned(), 3),
-            "refuted panes; 3 suppressed"
-        );
     }
 
     #[test]

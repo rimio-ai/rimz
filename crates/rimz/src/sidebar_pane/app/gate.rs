@@ -8,9 +8,9 @@
 
 use crate::SidebarSnapshot;
 use crate::diag::record::GateRule;
-use crate::ids::PaneId;
+use crate::ids::{AgentKind, PaneId};
 use jiff::Timestamp;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::state::RenderState;
 use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, ACCEPT_REGRESSION_AFTER_REJECTS};
@@ -27,8 +27,15 @@ use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, ACCEPT_REGRESSION_AFTER_RE
 pub struct GateState {
     pub reject_streak: u32,
     pub rejecting_since: Option<Timestamp>,
-    pub spend_carry_since: Option<Timestamp>,
+    pub spend_carry: SpendCarryEpisodes,
     pub rule: Option<GateRule>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SpendCarryEpisodes {
+    pub fleet: Option<Timestamp>,
+    pub workspace: Option<Timestamp>,
+    pub providers: BTreeMap<AgentKind, Timestamp>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,18 +176,17 @@ pub(super) fn apply_gate(
             let next = GateState {
                 reject_streak: gate.reject_streak.saturating_add(1),
                 rejecting_since: gate.rejecting_since.or(Some(now)),
-                spend_carry_since: gate.spend_carry_since,
+                spend_carry: gate.spend_carry.clone(),
                 rule: Some(rule),
             };
             (state, next, true, false)
         }
         CommitDecision::AcceptViaEscapeHatch => {
-            let spend_carry_since =
-                repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
+            let spend_carry = repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
             (
                 state,
                 GateState {
-                    spend_carry_since,
+                    spend_carry,
                     ..GateState::default()
                 },
                 false,
@@ -188,12 +194,11 @@ pub(super) fn apply_gate(
             )
         }
         CommitDecision::Accept => {
-            let spend_carry_since =
-                repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
+            let spend_carry = repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
             (
                 state,
                 GateState {
-                    spend_carry_since,
+                    spend_carry,
                     ..GateState::default()
                 },
                 false,
@@ -208,27 +213,37 @@ fn repair_collapsed_spend(
     incoming: &mut SidebarSnapshot,
     gate: &GateState,
     now: Timestamp,
-) -> Option<Timestamp> {
-    if has_nonzero_tally(&incoming.value_tally) {
-        return None;
+) -> SpendCarryEpisodes {
+    let mut episodes = gate.spend_carry.clone();
+
+    episodes.fleet = carry_episode(
+        has_nonzero_tally(&prev_good.value_tally),
+        has_nonzero_tally(&incoming.value_tally),
+        episodes.fleet,
+        now,
+    );
+    if episodes.fleet.is_some() {
+        incoming.value_tally.clone_from(&prev_good.value_tally);
     }
-    if !has_nonzero_tally(&prev_good.value_tally) {
-        return None;
+
+    episodes.workspace = carry_episode(
+        has_nonzero_tally(&prev_good.workspace_value_tally),
+        has_nonzero_tally(&incoming.workspace_value_tally),
+        episodes.workspace,
+        now,
+    );
+    if episodes.workspace.is_some() {
+        incoming
+            .workspace_value_tally
+            .clone_from(&prev_good.workspace_value_tally);
+        incoming
+            .today_spend_live_usd
+            .clone_from(&prev_good.today_spend_live_usd);
+        incoming
+            .today_spend_epoch_secs
+            .clone_from(&prev_good.today_spend_epoch_secs);
     }
-    let since = gate.spend_carry_since.unwrap_or(now);
-    if now.duration_since(since).as_secs() >= ACCEPT_REGRESSION_AFTER.as_secs() as i64 {
-        return None;
-    }
-    incoming.value_tally.clone_from(&prev_good.value_tally);
-    incoming
-        .workspace_value_tally
-        .clone_from(&prev_good.workspace_value_tally);
-    incoming
-        .today_spend_live_usd
-        .clone_from(&prev_good.today_spend_live_usd);
-    incoming
-        .today_spend_epoch_secs
-        .clone_from(&prev_good.today_spend_epoch_secs);
+
     let prior_spending = prev_good
         .providers
         .iter()
@@ -239,12 +254,46 @@ fn repair_collapsed_spend(
                 .map(|spending| (&panel.kind, spending))
         })
         .collect::<HashMap<_, _>>();
+    let mut present_kinds = HashSet::new();
     for panel in &mut incoming.providers {
-        if let Some(spending) = prior_spending.get(&panel.kind) {
+        let kind = AgentKind::new_unchecked(&panel.kind);
+        present_kinds.insert(kind.clone());
+        let prior = prior_spending.get(&panel.kind).copied();
+        let since = carry_episode(
+            prior.is_some_and(|tally| !tally.is_zero()),
+            has_nonzero_tally(&panel.spending),
+            episodes.providers.get(&kind).copied(),
+            now,
+        );
+        if let Some(since) = since {
+            episodes.providers.insert(kind, since);
+        } else {
+            episodes.providers.remove(&kind);
+        }
+        if since.is_some()
+            && let Some(spending) = prior
+        {
             panel.spending = Some((*spending).clone());
         }
     }
-    Some(since)
+    episodes
+        .providers
+        .retain(|kind, _| present_kinds.contains(kind));
+    episodes
+}
+
+fn carry_episode(
+    prior_nonzero: bool,
+    incoming_nonzero: bool,
+    since: Option<Timestamp>,
+    now: Timestamp,
+) -> Option<Timestamp> {
+    if incoming_nonzero || !prior_nonzero {
+        return None;
+    }
+    let since = since.unwrap_or(now);
+    (now.duration_since(since).as_secs() < ACCEPT_REGRESSION_AFTER.as_secs() as i64)
+        .then_some(since)
 }
 
 fn has_nonzero_tally(tally: &Option<crate::SpendTally>) -> bool {

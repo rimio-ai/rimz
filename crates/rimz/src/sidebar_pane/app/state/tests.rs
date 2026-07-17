@@ -463,7 +463,7 @@ fn diagnostics_scope_group_migrations_to_elder_only() {
     let held_gate = GateState {
         reject_streak: 1,
         rejecting_since: Some(fixed_time(1_700_000_000)),
-        spend_carry_since: None,
+        spend_carry: super::super::gate::SpendCarryEpisodes::default(),
         rule: Some(GateRule::EmptyStampedFrame),
     };
     let active_health = Health {
@@ -1154,7 +1154,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
     let held_gate = GateState {
         reject_streak: 2,
         rejecting_since: Some(fixed_time(1_700_000_000)),
-        spend_carry_since: None,
+        spend_carry: super::super::gate::SpendCarryEpisodes::default(),
         rule: Some(GateRule::EmptyStampedFrame),
     };
 

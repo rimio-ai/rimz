@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use serde::{Deserialize, Serialize};
+
 use crate::diag::record::DiagEvent;
 use crate::ids::SidebarInstanceId;
 use crate::sidebar_pane::app::ServeConfig;
@@ -52,6 +54,8 @@ const STDERR_TAIL_BYTES: usize = 8 * 1024;
 const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PANE_PROBE_INTERVAL: Duration = Duration::from_secs(60);
 const PANE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const PANE_PROBE_WAIT_STEP: Duration = Duration::from_millis(25);
+const PANE_PROBE_WAIT_STEPS: u32 = 20;
 const PANE_GONE_STRIKES: u8 = 3;
 pub const RELOAD_EXIT_CODE: i32 = 100;
 const PANIC_EXIT_CODE: i32 = 101;
@@ -442,9 +446,17 @@ fn worker_build(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PaneProbe {
-    Present,
-    Absent,
+    Present(u64),
+    Absent(u64),
     Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct AuthoritativePaneProbe {
+    mux: crate::ids::MuxName,
+    session_name: String,
+    observed_at_ms: u64,
+    pane_ids: Vec<crate::ids::PaneId>,
 }
 
 #[derive(Debug)]
@@ -455,6 +467,7 @@ struct PaneWatchdog {
     workspace_id: crate::ids::WorkspaceId,
     next_probe: Instant,
     strikes: u8,
+    last_observed_at_ms: Option<u64>,
 }
 
 impl PaneWatchdog {
@@ -466,13 +479,24 @@ impl PaneWatchdog {
             workspace_id: config.workspace_id.clone(),
             next_probe: Instant::now() + pane_probe_interval(),
             strikes: 0,
+            last_observed_at_ms: None,
         })
     }
 
     fn observe(&mut self, probe: PaneProbe) -> bool {
         match probe {
-            PaneProbe::Present => self.strikes = 0,
-            PaneProbe::Absent => self.strikes = self.strikes.saturating_add(1),
+            PaneProbe::Present(observed_at_ms) => {
+                if self.last_observed_at_ms != Some(observed_at_ms) {
+                    self.strikes = 0;
+                    self.last_observed_at_ms = Some(observed_at_ms);
+                }
+            }
+            PaneProbe::Absent(observed_at_ms) => {
+                if self.last_observed_at_ms != Some(observed_at_ms) {
+                    self.strikes = self.strikes.saturating_add(1);
+                    self.last_observed_at_ms = Some(observed_at_ms);
+                }
+            }
             PaneProbe::Unknown => {}
         }
         self.strikes >= PANE_GONE_STRIKES
@@ -488,20 +512,37 @@ impl PaneWatchdog {
     }
 
     fn probe(&self) -> PaneProbe {
+        let Ok(runtime) = crate::RuntimePaths::for_workspace(self.workspace_id.clone()) else {
+            return PaneProbe::Unknown;
+        };
+        shared_authoritative_pane_probe(self, &runtime, || self.produce_probe())
+    }
+
+    fn produce_probe(&self) -> Option<AuthoritativePaneProbe> {
         #[cfg(feature = "testkit")]
         if let Some(probe) = forced_pane_probe() {
-            return probe;
+            let pane_ids = match probe {
+                PaneProbe::Present(_) => vec![self.pane.clone()],
+                PaneProbe::Absent(_) => Vec::new(),
+                PaneProbe::Unknown => return None,
+            };
+            return Some(AuthoritativePaneProbe {
+                mux: self.mux,
+                session_name: self.session_name.clone(),
+                observed_at_ms: crate::sidebar::timing::unix_now_ms(),
+                pane_ids,
+            });
         }
 
-        let options = self.probe_options();
-        match crate::mux::backend_for(self.mux).list_panes(options) {
-            Ok(listing) => {
-                if listing.panes.iter().any(|pane| pane.pane_id == self.pane) {
-                    PaneProbe::Present
-                } else {
-                    PaneProbe::Absent
-                }
-            }
+        match crate::mux::backend_for(self.mux).list_panes(self.probe_options()) {
+            Ok(listing) => Some(AuthoritativePaneProbe {
+                mux: self.mux,
+                session_name: self.session_name.clone(),
+                observed_at_ms: listing
+                    .observed_at_ms
+                    .max(crate::sidebar::timing::unix_now_ms()),
+                pane_ids: listing.panes.into_iter().map(|pane| pane.pane_id).collect(),
+            }),
             Err(err) => {
                 debug!(
                     pane = %self.pane,
@@ -509,7 +550,7 @@ impl PaneWatchdog {
                     error = %err,
                     "sidebar supervisor pane-liveness probe unavailable",
                 );
-                PaneProbe::Unknown
+                None
             }
         }
     }
@@ -632,6 +673,61 @@ fn forced_self_close_confirmation() -> Option<SelfCloseConfirmation> {
             reason: "forced authoritative probe failure".to_owned(),
         }),
         _ => None,
+    }
+}
+
+fn shared_authoritative_pane_probe(
+    watchdog: &PaneWatchdog,
+    runtime: &crate::RuntimePaths,
+    produce: impl FnOnce() -> Option<AuthoritativePaneProbe>,
+) -> PaneProbe {
+    let now_ms = crate::sidebar::timing::unix_now_ms();
+    let read_fresh = || read_authoritative_pane_probe(runtime, watchdog, now_ms);
+    if let Some(probe) = read_fresh() {
+        return pane_probe_for(&probe, &watchdog.pane);
+    }
+
+    match crate::store::single_flight::coordinate(
+        &runtime.authoritative_pane_probe_lock(),
+        PANE_PROBE_WAIT_STEP,
+        PANE_PROBE_WAIT_STEPS,
+        read_fresh,
+    ) {
+        crate::store::single_flight::Coordination::Shared(probe) => {
+            pane_probe_for(&probe, &watchdog.pane)
+        }
+        crate::store::single_flight::Coordination::Produce(_guard) => {
+            let Some(probe) = produce() else {
+                return PaneProbe::Unknown;
+            };
+            if crate::sidebar::cache::write_authoritative_pane_probe(runtime, &probe).is_err() {
+                return PaneProbe::Unknown;
+            }
+            pane_probe_for(&probe, &watchdog.pane)
+        }
+        crate::store::single_flight::Coordination::Unavailable
+        | crate::store::single_flight::Coordination::ContentionTimeout => PaneProbe::Unknown,
+    }
+}
+
+fn read_authoritative_pane_probe(
+    runtime: &crate::RuntimePaths,
+    watchdog: &PaneWatchdog,
+    now_ms: u64,
+) -> Option<AuthoritativePaneProbe> {
+    let bytes = std::fs::read(runtime.authoritative_pane_probe_path()).ok()?;
+    let probe = serde_json::from_slice::<AuthoritativePaneProbe>(&bytes).ok()?;
+    (probe.mux == watchdog.mux
+        && probe.session_name == watchdog.session_name
+        && now_ms.saturating_sub(probe.observed_at_ms) < pane_probe_interval().as_millis() as u64)
+        .then_some(probe)
+}
+
+fn pane_probe_for(probe: &AuthoritativePaneProbe, pane: &crate::ids::PaneId) -> PaneProbe {
+    if probe.pane_ids.contains(pane) {
+        PaneProbe::Present(probe.observed_at_ms)
+    } else {
+        PaneProbe::Absent(probe.observed_at_ms)
     }
 }
 
@@ -1118,8 +1214,8 @@ fn pane_probe_interval() -> Duration {
 #[cfg(feature = "testkit")]
 fn forced_pane_probe() -> Option<PaneProbe> {
     match env::var(TEST_PANE_PROBE_ENV).ok().as_deref() {
-        Some("present") => Some(PaneProbe::Present),
-        Some("absent") => Some(PaneProbe::Absent),
+        Some("present") => Some(PaneProbe::Present(0)),
+        Some("absent") => Some(PaneProbe::Absent(0)),
         Some("unknown") => Some(PaneProbe::Unknown),
         _ => None,
     }
@@ -1288,16 +1384,19 @@ mod tests {
             workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/repo")),
             next_probe: Instant::now(),
             strikes: 0,
+            last_observed_at_ms: None,
         };
 
-        assert!(!watchdog.observe(PaneProbe::Absent));
+        assert!(!watchdog.observe(PaneProbe::Absent(1)));
+        assert!(!watchdog.observe(PaneProbe::Absent(1)));
+        assert_eq!(watchdog.strikes, 1, "a cached absence counts once");
         assert!(!watchdog.observe(PaneProbe::Unknown));
         assert_eq!(watchdog.strikes, 1);
-        assert!(!watchdog.observe(PaneProbe::Present));
+        assert!(!watchdog.observe(PaneProbe::Present(2)));
         assert_eq!(watchdog.strikes, 0);
-        assert!(!watchdog.observe(PaneProbe::Absent));
-        assert!(!watchdog.observe(PaneProbe::Absent));
-        assert!(watchdog.observe(PaneProbe::Absent));
+        assert!(!watchdog.observe(PaneProbe::Absent(3)));
+        assert!(!watchdog.observe(PaneProbe::Absent(4)));
+        assert!(watchdog.observe(PaneProbe::Absent(5)));
     }
 
     #[test]
@@ -1309,6 +1408,7 @@ mod tests {
             workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/repo")),
             next_probe: Instant::now(),
             strikes: 0,
+            last_observed_at_ms: None,
         };
 
         let options = watchdog.probe_options();
@@ -1367,6 +1467,139 @@ mod tests {
                 floating_siblings: 1
             }
         );
+    }
+
+    #[test]
+    fn authoritative_probe_is_shared_across_consumers() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let pane = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1");
+        let watchdog = PaneWatchdog {
+            pane: pane.clone(),
+            mux: crate::ids::MuxName::Tmux,
+            session_name: "rimz-test".to_owned(),
+            workspace_id,
+            next_probe: Instant::now(),
+            strikes: 0,
+            last_observed_at_ms: None,
+        };
+        let calls = std::cell::Cell::new(0);
+        let observed_at_ms = crate::sidebar::timing::unix_now_ms();
+        let first = shared_authoritative_pane_probe(&watchdog, &runtime, || {
+            calls.set(calls.get() + 1);
+            Some(AuthoritativePaneProbe {
+                mux: crate::ids::MuxName::Tmux,
+                session_name: "rimz-test".to_owned(),
+                observed_at_ms,
+                pane_ids: vec![pane],
+            })
+        });
+        let second = shared_authoritative_pane_probe(&watchdog, &runtime, || {
+            calls.set(calls.get() + 1);
+            None
+        });
+
+        assert_eq!(first, PaneProbe::Present(observed_at_ms));
+        assert_eq!(second, first);
+        assert_eq!(calls.get(), 1, "one producer feeds every consumer");
+    }
+
+    #[test]
+    fn authoritative_probe_rejects_malformed_and_mismatched_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let watchdog = PaneWatchdog {
+            pane: crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1"),
+            mux: crate::ids::MuxName::Zellij,
+            session_name: "rimz-test".to_owned(),
+            workspace_id,
+            next_probe: Instant::now(),
+            strikes: 0,
+            last_observed_at_ms: None,
+        };
+        std::fs::write(runtime.authoritative_pane_probe_path(), b"not json").unwrap();
+        assert!(
+            read_authoritative_pane_probe(
+                &runtime,
+                &watchdog,
+                crate::sidebar::timing::unix_now_ms()
+            )
+            .is_none()
+        );
+
+        crate::sidebar::cache::write_authoritative_pane_probe(
+            &runtime,
+            &AuthoritativePaneProbe {
+                mux: crate::ids::MuxName::Tmux,
+                session_name: "other".to_owned(),
+                observed_at_ms: crate::sidebar::timing::unix_now_ms(),
+                pane_ids: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert!(
+            read_authoritative_pane_probe(
+                &runtime,
+                &watchdog,
+                crate::sidebar::timing::unix_now_ms()
+            )
+            .is_none()
+        );
+
+        crate::sidebar::cache::write_authoritative_pane_probe(
+            &runtime,
+            &AuthoritativePaneProbe {
+                mux: watchdog.mux,
+                session_name: watchdog.session_name.clone(),
+                observed_at_ms: 1,
+                pane_ids: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert!(read_authoritative_pane_probe(&runtime, &watchdog, 60_001).is_none());
+    }
+
+    #[test]
+    fn authoritative_probe_cache_accepts_both_mux_identities() {
+        for (mux, pane_raw) in [
+            (crate::ids::MuxName::Zellij, "terminal_1"),
+            (crate::ids::MuxName::Tmux, "%1"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+            let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+            runtime.ensure_dirs().unwrap();
+            let pane = crate::ids::PaneId::from_parts(mux, pane_raw);
+            let watchdog = PaneWatchdog {
+                pane: pane.clone(),
+                mux,
+                session_name: "rimz-test".to_owned(),
+                workspace_id,
+                next_probe: Instant::now(),
+                strikes: 0,
+                last_observed_at_ms: None,
+            };
+            crate::sidebar::cache::write_authoritative_pane_probe(
+                &runtime,
+                &AuthoritativePaneProbe {
+                    mux,
+                    session_name: "rimz-test".to_owned(),
+                    observed_at_ms: 10,
+                    pane_ids: vec![pane],
+                },
+            )
+            .unwrap();
+
+            let probe = read_authoritative_pane_probe(&runtime, &watchdog, 11).unwrap();
+            assert_eq!(
+                pane_probe_for(&probe, &watchdog.pane),
+                PaneProbe::Present(10)
+            );
+        }
     }
 
     #[test]

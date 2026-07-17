@@ -44,7 +44,12 @@ pub struct WorkspaceLock {
 
 impl WorkspaceLock {
     pub fn acquire(path: &Path) -> Result<Self> {
-        Self::acquire_with_deadline(path, LOCK_TIMEOUT)
+        Self::acquire_with_timeout(path, LOCK_TIMEOUT)
+    }
+
+    /// Acquire the lock within a caller-selected bound.
+    pub fn acquire_with_timeout(path: &Path, timeout: Duration) -> Result<Self> {
+        Self::acquire_with_deadline(path, timeout)
     }
 
     /// Attempt one immediate acquisition without sleeping or retrying.
@@ -162,7 +167,7 @@ mod tests {
         let path = dir.path().join("workspace.lock");
         let _held = WorkspaceLock::acquire(&path).unwrap();
 
-        let error = WorkspaceLock::acquire_with_deadline(&path, Duration::from_millis(50))
+        let error = WorkspaceLock::acquire_with_timeout(&path, Duration::from_millis(50))
             .expect_err("held lock should time out");
         assert!(matches!(&error, LockErr::Timeout { .. }));
         let message = error.to_string();
@@ -180,7 +185,7 @@ mod tests {
             drop(held);
         });
 
-        WorkspaceLock::acquire_with_deadline(&path, Duration::from_secs(1)).unwrap();
+        WorkspaceLock::acquire_with_timeout(&path, Duration::from_secs(1)).unwrap();
         releaser.join().unwrap();
     }
 }

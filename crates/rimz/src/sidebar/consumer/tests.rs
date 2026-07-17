@@ -384,14 +384,17 @@ fn read_published_snapshot_folds_caches_without_forking() {
 }
 
 #[test]
-fn read_published_snapshot_binds_exact_local_session_publication() {
+fn read_published_snapshot_binds_safe_local_session_intersection() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     let worktree = dir.path().join("wt");
+    let removed_worktree = dir.path().join("removed-wt");
     std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&removed_worktree).unwrap();
     let wt = worktree.to_string_lossy().into_owned();
+    let removed_wt = removed_worktree.to_string_lossy().into_owned();
     let panes = vec![pane("terminal_kiro", "kiro-cli", &wt)];
     let frame = assemble_frame(panes.clone(), unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
@@ -402,7 +405,11 @@ fn read_published_snapshot_binds_exact_local_session_publication() {
         .with_project_root(Some(worktree.clone()));
     atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
 
-    let inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&panes);
+    let published_panes = vec![
+        panes[0].clone(),
+        pane("terminal_removed", "kiro-cli", &removed_wt),
+    ];
+    let inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&published_panes);
     let now = Timestamp::now();
     let session_id = crate::ids::AgentSessionId::from("kiro-session");
     let observation = crate::agents::LocalSessionObservation {
@@ -416,12 +423,19 @@ fn read_published_snapshot_binds_exact_local_session_publication() {
         last_activity: now,
         projection: crate::agents::LocalSessionProjection::IdentityOnly,
     };
+    let removed_session_id = crate::ids::AgentSessionId::from("removed-kiro-session");
+    let removed_observation = crate::agents::LocalSessionObservation {
+        session_id: removed_session_id.clone(),
+        workspace: removed_worktree.clone(),
+        transcript_path: removed_worktree.join("kiro-session.json"),
+        ..observation.clone()
+    };
     atomic::write_temp_then_rename_cache(
         &runtime.local_sessions_path(),
         &crate::sidebar::local_sessions::PublishedLocalSessions {
             session_name: "rimz-test".to_owned(),
             inputs,
-            observations: vec![observation],
+            observations: vec![observation, removed_observation],
         },
     )
     .unwrap();
@@ -439,6 +453,13 @@ fn read_published_snapshot_binds_exact_local_session_publication() {
             .agents
             .iter()
             .any(|agent| agent.kind == "kiro" && agent.agent_id == session_id),
+    );
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != removed_session_id),
+        "an observation removed from the current pane inputs stays hidden",
     );
 }
 

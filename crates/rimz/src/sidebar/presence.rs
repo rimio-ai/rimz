@@ -6,11 +6,12 @@
 //! mapping. A stale writer returns before any accepted-wake side effect.
 
 use std::path::Path;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::diag::DiagSink;
-use crate::diag::plugin_presence::PluginPresenceSample;
+use crate::diag::plugin_presence::{PluginPresenceSample, WASM_PAGE_BYTES};
 use crate::diag::record::DiagEvent;
 use crate::ids::PaneId;
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, TopologyWriter};
@@ -40,10 +41,16 @@ pub enum ZellijWakeReason {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZellijPluginTelemetry {
+    pub plugin_id: Option<u32>,
+    pub loaded_at_ms: u64,
     pub pages: u64,
     pub uptime_ms: u64,
     pub commands: u64,
+    pub commands_succeeded: Option<u64>,
     pub commands_failed: u64,
+    pub stale_writer_rejections: Option<u64>,
+    pub topology_failures: Option<u64>,
+    pub other_failures: Option<u64>,
     pub zellij_version: Option<String>,
 }
 
@@ -65,25 +72,48 @@ pub enum ZellijWakeOutcome {
     Accepted(Option<SidebarEvent>),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ZellijWakeError {
+    #[error("could not serialize topology writer selection: {0}")]
+    TopologyLock(#[from] crate::store::lock::LockErr),
+    #[error("could not publish accepted topology: {0}")]
+    TopologyWrite(#[source] crate::store::atomic::AtomicErr),
+    #[error("could not publish topology writer conflict: {0}")]
+    ConflictWrite(#[source] crate::store::atomic::AtomicErr),
+    #[error("could not clear topology writer conflict {path}: {source}")]
+    ConflictClear {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
 /// Apply one normalized Zellij presence poke as a single policy transaction.
 pub fn ingest_zellij_wake(
     state: &StatePaths,
     runtime: &RuntimePaths,
     wake: &ZellijWake,
-) -> ZellijWakeOutcome {
+) -> Result<ZellijWakeOutcome, ZellijWakeError> {
     if let Some(incoming) = wake.topology.as_ref() {
+        let _guard = crate::store::lock::WorkspaceLock::acquire_with_timeout(
+            &runtime.topology_writer_lock(),
+            Duration::from_secs(1),
+        )?;
         let now_ms = unix_now_ms();
         let existing = read_pane_topology_cache(runtime, &incoming.session_name);
         if topology_decision(existing.as_ref(), incoming, now_ms) == TopologyDecision::Reject {
             // Reject is reachable only with a fresh same-session cache.
             if let Some(existing) = existing.as_ref() {
-                record_topology_write_rejected(state, runtime, incoming, existing, now_ms);
+                record_topology_write_rejected(state, runtime, incoming, existing, now_ms)?;
             }
-            return ZellijWakeOutcome::RejectedStaleWriter;
+            return Ok(ZellijWakeOutcome::RejectedStaleWriter);
         }
         let writer_changed = existing
             .as_ref()
             .is_none_or(|existing| incoming.writer != existing.writer);
+        let mut cache = incoming.clone();
+        sanitize_topology_cache(&mut cache);
+        write_pane_topology_cache(runtime, &cache).map_err(ZellijWakeError::TopologyWrite)?;
         if let Some(existing) = existing.as_ref()
             && incoming.writer != existing.writer
         {
@@ -94,16 +124,8 @@ pub fn ingest_zellij_wake(
                 incoming.writer.as_ref(),
             );
         }
-        let mut cache = incoming.clone();
-        sanitize_topology_cache(&mut cache);
-        match write_pane_topology_cache(runtime, &cache) {
-            Ok(()) if writer_changed => {
-                clear_superseded_conflict(runtime, incoming.writer.as_ref())
-            }
-            Ok(()) => {}
-            Err(err) => {
-                tracing::debug!(error = %err, "presence poke: topology cache write failed");
-            }
+        if writer_changed {
+            clear_superseded_conflict(runtime, incoming.writer.as_ref())?;
         }
     }
 
@@ -111,7 +133,7 @@ pub fn ingest_zellij_wake(
     if let Some(telemetry) = wake.telemetry.as_ref() {
         write_plugin_presence_sample(state, wake.session_name.clone(), telemetry);
     }
-    ZellijWakeOutcome::Accepted(wake_event(wake))
+    Ok(ZellijWakeOutcome::Accepted(wake_event(wake)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,7 +192,7 @@ fn record_topology_write_rejected(
     incoming: &PaneTopologyCache,
     existing: &PaneTopologyCache,
     now_ms: u64,
-) {
+) -> Result<(), ZellijWakeError> {
     let mut conflict = read_topology_writer_conflict(runtime).unwrap_or_default();
     if conflict.stale_writer != incoming.writer || conflict.accepted_writer != existing.writer {
         conflict.rejected_count = 0;
@@ -183,9 +205,7 @@ fn record_topology_write_rejected(
     if emit_diag {
         conflict.last_diag_ms = now_ms;
     }
-    if let Err(err) = write_topology_writer_conflict(runtime, &conflict) {
-        tracing::debug!(error = %err, "presence poke: topology writer conflict write failed");
-    }
+    write_topology_writer_conflict(runtime, &conflict).map_err(ZellijWakeError::ConflictWrite)?;
     if emit_diag {
         let (loaded_at_ms, plugin_id) = writer_generation(incoming.writer.as_ref());
         let (accepted_loaded_at_ms, accepted_plugin_id) =
@@ -204,23 +224,26 @@ fn record_topology_write_rejected(
             rejected_count: conflict.rejected_count,
         });
     }
+    Ok(())
 }
 
-fn clear_superseded_conflict(runtime: &RuntimePaths, writer: Option<&TopologyWriter>) {
+fn clear_superseded_conflict(
+    runtime: &RuntimePaths,
+    writer: Option<&TopologyWriter>,
+) -> Result<(), ZellijWakeError> {
     let Some(conflict) = read_topology_writer_conflict(runtime) else {
-        return;
+        return Ok(());
     };
     if writer_generation(writer) <= writer_generation(conflict.accepted_writer.as_ref()) {
-        return;
+        return Ok(());
     }
     let path = topology_writer_conflict_path(runtime);
     match std::fs::remove_file(&path) {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
-            tracing::debug!(path = %path.display(), error = %err, "presence poke: superseded topology writer conflict removal failed");
-        }
+        Err(source) => return Err(ZellijWakeError::ConflictClear { path, source }),
     }
+    Ok(())
 }
 
 fn sanitize_topology_cache(cache: &mut PaneTopologyCache) {
@@ -240,15 +263,22 @@ fn write_plugin_presence_sample(
     session_name: Option<String>,
     telemetry: &ZellijPluginTelemetry,
 ) {
-    crate::diag::plugin_presence::log(&state.root).append(&PluginPresenceSample::new(
-        unix_now_ms(),
+    crate::diag::plugin_presence::log(&state.root).append(&PluginPresenceSample {
+        at_ms: unix_now_ms(),
         session_name,
-        telemetry.pages,
-        telemetry.uptime_ms,
-        telemetry.commands,
-        telemetry.commands_failed,
-        telemetry.zellij_version.clone(),
-    ));
+        plugin_id: telemetry.plugin_id,
+        loaded_at_ms: telemetry.loaded_at_ms,
+        pages: telemetry.pages,
+        bytes: telemetry.pages.saturating_mul(WASM_PAGE_BYTES),
+        uptime_ms: telemetry.uptime_ms,
+        commands: telemetry.commands,
+        commands_succeeded: telemetry.commands_succeeded,
+        commands_failed: telemetry.commands_failed,
+        stale_writer_rejections: telemetry.stale_writer_rejections,
+        topology_failures: telemetry.topology_failures,
+        other_failures: telemetry.other_failures,
+        zellij_version: telemetry.zellij_version.clone(),
+    });
 }
 
 /// Map a poke reason onto its typed event. `None` means the poke carries no
@@ -463,7 +493,7 @@ mod tests {
         let incoming = topology(900, Some(writer(3, 300)));
         let existing = topology(900, Some(writer(4, 400)));
 
-        record_topology_write_rejected(&state, &runtime, &incoming, &existing, 1_000);
+        record_topology_write_rejected(&state, &runtime, &incoming, &existing, 1_000).unwrap();
         let conflict = read_topology_writer_conflict(&runtime).expect("updated conflict");
         assert_eq!(conflict.rejected_count, 1);
         assert_eq!(
@@ -471,7 +501,7 @@ mod tests {
             "diagnostic throttle spans incidents"
         );
 
-        record_topology_write_rejected(&state, &runtime, &incoming, &existing, 1_001);
+        record_topology_write_rejected(&state, &runtime, &incoming, &existing, 1_001).unwrap();
         assert_eq!(
             read_topology_writer_conflict(&runtime)
                 .expect("updated conflict")
@@ -501,7 +531,7 @@ mod tests {
         accepted.topology = Some(topology(produced_at_ms, Some(writer(3, 300))));
 
         assert_eq!(
-            ingest_zellij_wake(&state, &runtime, &accepted),
+            ingest_zellij_wake(&state, &runtime, &accepted).unwrap(),
             ZellijWakeOutcome::Accepted(None),
         );
         assert!(read_topology_writer_conflict(&runtime).is_none());
@@ -519,9 +549,9 @@ mod tests {
         };
         write_topology_writer_conflict(&runtime, &conflict).expect("seed writer conflict");
 
-        clear_superseded_conflict(&runtime, Some(&writer(2, 200)));
+        clear_superseded_conflict(&runtime, Some(&writer(2, 200))).unwrap();
         assert!(read_topology_writer_conflict(&runtime).is_some());
-        clear_superseded_conflict(&runtime, Some(&writer(9, 100)));
+        clear_superseded_conflict(&runtime, Some(&writer(9, 100))).unwrap();
         assert!(read_topology_writer_conflict(&runtime).is_some());
     }
 
@@ -599,5 +629,88 @@ mod tests {
         changed.pane_id = Some(zellij_pane("terminal_7"));
         changed.command = Some(launch);
         assert_eq!(wake_event(&changed), Some(SidebarEvent::PanesChanged));
+    }
+
+    #[test]
+    fn topology_write_failure_returns_error_before_accepted_side_effects() {
+        let (_dir, state, runtime) = paths();
+        std::fs::create_dir_all(crate::sidebar::cache::pane_topology_cache_path(&runtime)).unwrap();
+        let mut incoming = wake(ZellijWakeReason::Alive);
+        incoming.topology = Some(topology(unix_now_ms(), Some(writer(2, 200))));
+        incoming.telemetry = Some(ZellijPluginTelemetry {
+            plugin_id: Some(2),
+            loaded_at_ms: 200,
+            pages: 1,
+            uptime_ms: 1,
+            commands: 1,
+            commands_succeeded: Some(1),
+            commands_failed: 0,
+            stale_writer_rejections: Some(0),
+            topology_failures: Some(0),
+            other_failures: Some(0),
+            zellij_version: Some("0.44.3".to_owned()),
+        });
+
+        assert!(matches!(
+            ingest_zellij_wake(&state, &runtime, &incoming),
+            Err(ZellijWakeError::TopologyWrite(_))
+        ));
+        assert!(!crate::sidebar::cache::presence_stamp_path(&runtime).exists());
+        assert!(
+            !crate::diag::plugin_presence::log(&state.root)
+                .path()
+                .exists()
+        );
+    }
+
+    #[test]
+    fn topology_writer_lock_contention_returns_typed_timeout() {
+        let (_dir, state, runtime) = paths();
+        let _held =
+            crate::store::lock::WorkspaceLock::acquire(&runtime.topology_writer_lock()).unwrap();
+        let mut incoming = wake(ZellijWakeReason::Alive);
+        incoming.topology = Some(topology(unix_now_ms(), Some(writer(2, 200))));
+
+        assert!(matches!(
+            ingest_zellij_wake(&state, &runtime, &incoming),
+            Err(ZellijWakeError::TopologyLock(
+                crate::store::lock::LockErr::Timeout { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn concurrent_topology_writers_finish_on_newest_generation() {
+        for round in 0..16 {
+            let (_dir, state, runtime) = paths();
+            let at_ms = unix_now_ms();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+            let run = |plugin_id, loaded_at_ms| {
+                let state = state.clone();
+                let runtime = runtime.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let mut incoming = wake(ZellijWakeReason::Alive);
+                    incoming.topology = Some(topology(
+                        at_ms,
+                        Some(writer(plugin_id, loaded_at_ms + round)),
+                    ));
+                    barrier.wait();
+                    ingest_zellij_wake(&state, &runtime, &incoming)
+                })
+            };
+            let older = run(1, 100);
+            let newer = run(2, 200);
+            barrier.wait();
+            older.join().unwrap().unwrap();
+            newer.join().unwrap().unwrap();
+
+            assert_eq!(
+                read_pane_topology_cache(&runtime, "rimz-test")
+                    .unwrap()
+                    .writer,
+                Some(writer(2, 200 + round))
+            );
+        }
     }
 }

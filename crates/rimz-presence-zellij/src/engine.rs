@@ -782,6 +782,8 @@ impl Engine {
             Poke::Changed => wire::WakeRequest::Changed,
             Poke::Alive => {
                 let mut telemetry = host.telemetry();
+                telemetry.plugin_id = self.plugin_id;
+                telemetry.loaded_at_ms = self.loaded_at_ms;
                 telemetry.uptime_ms = now.saturating_sub(self.loaded_at_ms);
                 wire::WakeRequest::Alive(telemetry)
             }

@@ -12,14 +12,14 @@ use crate::cli::render::{
     Cell, KeyVals, Table, cell, fmt_bytes, home_relative, paint, palette, status,
 };
 use rimz::agents::AgentStatus;
-use rimz::diag::record::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{
-    AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorReport, DuplicateSessions,
-    HookStatus, Host, LoopTasks, MachineConfigHealth, MessageProblemRow, Messages, Mux,
-    MuxBinaryRow, MuxLog, PluginRow, Presence, Probe, Protocols, RemoteAgent, RemoteControl,
-    SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust, Version, Workspace,
+    AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport, DoctorState,
+    DuplicateSessions, HookStatus, Host, LogScope, LoopTasks, MachineConfigHealth,
+    MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow, Presence, Probe, Protocols,
+    RemoteAgent, RemoteControl, SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust,
+    Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -323,6 +323,9 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     if let Some(writer) = &mux.topology_writer {
         push_topology_writer(&mut kv, tally, writer);
     }
+    if let Some(plugin) = &mux.plugin_presence {
+        push_plugin_telemetry(&mut kv, tally, plugin);
+    }
     if let Some(ttyd) = &mux.ttyd {
         match ttyd {
             Probe::Ready(ttyd) => kv.push(
@@ -456,10 +459,72 @@ fn push_topology_writer(kv: &mut KeyVals, tally: &mut Tally, writer: &TopologyWr
             "topology writers",
             verdict(
                 tally,
-                Health::Warn,
+                Health::Info,
                 format!(
-                    "duplicate writers: rejected {stale}, accepted {accepted}; {} rejects, {}s ago — {}",
+                    "contained stale writer: rejected {stale}, accepted {accepted}; {} rejects, {}s ago — {}",
                     conflict.rejected_count, conflict.age_secs, conflict.fix
+                ),
+            ),
+        );
+    }
+}
+
+fn push_plugin_telemetry(
+    kv: &mut KeyVals,
+    tally: &mut Tally,
+    plugin: &super::model::PluginTelemetry,
+) {
+    let version = plugin.zellij_version.as_deref().unwrap_or("unknown");
+    let succeeded = plugin
+        .commands_succeeded_delta
+        .map(|delta| format!("/{delta} succeeded"))
+        .unwrap_or_default();
+    kv.push(
+        "plugin generation",
+        verdict(
+            tally,
+            Health::Info,
+            format!(
+                "{}:{} · Zellij {version} · {} samples · {}s old · pages {:+} · bytes {:+} · commands +{}{}",
+                plugin.loaded_at_ms,
+                plugin.plugin_id,
+                plugin.sample_count,
+                plugin.age_secs,
+                plugin.page_growth,
+                plugin.byte_growth,
+                plugin.commands_completed_delta,
+                succeeded,
+            ),
+        ),
+    );
+    if plugin
+        .stale_writer_rejections_delta
+        .is_some_and(|delta| delta > 0)
+    {
+        kv.push(
+            "plugin stale rejects",
+            verdict(
+                tally,
+                Health::Info,
+                format!(
+                    "{} expected stale-writer rejections",
+                    plugin.stale_writer_rejections_delta.unwrap_or_default()
+                ),
+            ),
+        );
+    }
+    let topology_failures = plugin.topology_failures_delta.unwrap_or_default();
+    let other_failures = plugin.other_failures_delta.unwrap_or_default();
+    if topology_failures > 0 || other_failures > 0 {
+        let recent = plugin.age_secs <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs();
+        kv.push(
+            "plugin failures",
+            verdict(
+                tally,
+                if recent { Health::Warn } else { Health::Info },
+                format!(
+                    "{} writer span: {topology_failures} topology, {other_failures} other failures",
+                    if recent { "current" } else { "historical" }
                 ),
             ),
         );
@@ -564,36 +629,62 @@ fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> 
 
 fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> io::Result<()> {
     let MuxLog::Ready {
-        matched,
+        scope,
+        problem_records,
         scanned_bytes,
-        entries,
+        omitted_issue_groups,
+        issues,
         ..
     } = log
     else {
         return Ok(());
     };
-    if *matched == 0 {
+    match scope {
+        LogScope::HostUser { uid } => note(
+            tally,
+            w,
+            Health::Info,
+            &format!("log scope: host user uid {uid}; records may come from other Zellij sessions"),
+        )?,
+        LogScope::Server => note(tally, w, Health::Info, "log scope: active tmux server")?,
+    }
+    if *problem_records == 0 {
         return note(tally, w, Health::Ok, "log: no recent warnings or errors");
     }
-    note(
-        tally,
-        w,
-        Health::Warn,
-        &format!(
-            "{matched} warn/error/panic problem lines in the last {}",
-            fmt_bytes(*scanned_bytes)
-        ),
-    )?;
-    for entry in entries {
-        let health = if entry.severity == "warn" {
-            Health::Warn
-        } else {
-            Health::Alarm
+    for issue in issues {
+        let health = doctor_health(issue.state, issue.impact);
+        let range = match (&issue.first_occurrence, &issue.last_occurrence) {
+            (Some(first), Some(last)) if first != last => format!(" · {first} to {last}"),
+            (Some(at), _) | (_, Some(at)) => format!(" · at {at}"),
+            (None, None) => String::new(),
         };
+        note(
+            tally,
+            w,
+            health,
+            &format!(
+                "{} {:?}/{:?} · {} occurrences{} in {} · {}",
+                issue.source_severity,
+                issue.state,
+                issue.impact,
+                issue.occurrences,
+                range,
+                fmt_bytes(*scanned_bytes),
+                issue.summary
+            ),
+        )?;
+        for sample in &issue.samples {
+            detail(w, style_of(health), sample)?;
+        }
+        if issue.evidence_truncated {
+            detail(w, palette::MUTED, "evidence truncated at 8 KiB")?;
+        }
+    }
+    if *omitted_issue_groups > 0 {
         detail(
             w,
-            style_of(health),
-            &format!("{}: {}", entry.severity, entry.line),
+            palette::MUTED,
+            &format!("{omitted_issue_groups} older issue groups omitted"),
         )?;
     }
     Ok(())
@@ -1134,27 +1225,40 @@ fn render_diagnostics(
     }
     match diagnostics {
         Diagnostics::Unavailable => writeln!(w, "  {}", paint(palette::FAINT, "unavailable")),
-        Diagnostics::Ready { path, records } if records.is_empty() => writeln!(
+        Diagnostics::Ready { path, incidents } if incidents.is_empty() => writeln!(
             w,
             "  {}",
             paint(palette::FAINT, &format!("no recent records ({path})"))
         ),
-        Diagnostics::Ready { path, records } => {
+        Diagnostics::Ready { path, incidents } => {
             writeln!(
                 w,
                 "  {}",
                 paint(
                     palette::MUTED,
-                    &format!("{} recent records ({path})", records.len())
+                    &format!("{} recent incidents ({path})", incidents.len())
                 )
             )?;
             let now_ms = rimz::sidebar::timing::unix_now_ms();
-            let mut table = Table::new(["", "SEVERITY", "KIND", "SEEN", "SUMMARY"]).right(&[3]);
-            for record in records {
-                let health = severity_health(record.severity);
-                let mut summary = record.summary.clone();
-                if record.stale_build
-                    && let Some(build) = &record.build
+            let mut table =
+                Table::new(["", "STATE", "IMPACT", "KIND", "SEEN", "SUMMARY"]).right(&[4]);
+            for incident in incidents {
+                let health = doctor_health(incident.state, incident.impact);
+                let seen = if incident.first_at_ms == incident.last_at_ms {
+                    age_ms_short(now_ms, incident.last_at_ms)
+                } else {
+                    format!(
+                        "{} to {}",
+                        age_ms_short(now_ms, incident.first_at_ms),
+                        age_ms_short(now_ms, incident.last_at_ms)
+                    )
+                };
+                let mut summary = format!(
+                    "{} · {} observers · {} records",
+                    incident.summary, incident.distinct_observer_count, incident.record_count
+                );
+                if incident.stale_build
+                    && let Some(build) = &incident.build
                 {
                     // ponytail: SUMMARY is the unpadded final column; add styled Cell spans
                     // before giving this table a max width.
@@ -1162,14 +1266,27 @@ fn render_diagnostics(
                 }
                 table.row([
                     badge(tally, health),
-                    cell(severity_label(record.severity)).fg(style_of(health)),
-                    cell(record.kind.as_str()),
-                    cell(age_ms_short(now_ms, record.at_ms)),
+                    cell(format!("{:?}", incident.state).to_ascii_lowercase()).fg(style_of(health)),
+                    cell(format!("{:?}", incident.impact).to_ascii_lowercase())
+                        .fg(style_of(health)),
+                    cell(incident.kind.as_str()),
+                    cell(seen),
                     cell(summary).fg(palette::BODY),
                 ]);
             }
             table.render(w)
         }
+    }
+}
+
+fn doctor_health(state: DoctorState, impact: DoctorImpact) -> Health {
+    if state != DoctorState::Investigate {
+        return Health::Info;
+    }
+    match impact {
+        DoctorImpact::Alarm => Health::Alarm,
+        DoctorImpact::Warn => Health::Warn,
+        DoctorImpact::Info => Health::Info,
     }
 }
 
@@ -1269,22 +1386,6 @@ fn status_health(status: AgentStatus) -> Health {
     }
 }
 
-fn severity_health(severity: DiagSeverity) -> Health {
-    match severity {
-        DiagSeverity::Info => Health::Info,
-        DiagSeverity::Warn => Health::Warn,
-        DiagSeverity::Error => Health::Alarm,
-    }
-}
-
-fn severity_label(severity: DiagSeverity) -> &'static str {
-    match severity {
-        DiagSeverity::Info => "info",
-        DiagSeverity::Warn => "warn",
-        DiagSeverity::Error => "error",
-    }
-}
-
 /// Relative age of `then` from `now`, rendered compactly (`5s ago`, `2m ago`).
 fn age_short(now: Timestamp, then: Timestamp) -> String {
     if now.duration_since(then).is_negative() {
@@ -1351,6 +1452,7 @@ mod tests {
             log: MuxLog::Disabled {
                 hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
             },
+            plugin_presence: None,
             zellij_socket: None,
             socket: Some("/tmp/tmux-1001/default".to_owned()),
             session_health: None,
@@ -1370,6 +1472,7 @@ mod tests {
 
     fn report_fixture() -> DoctorReport {
         DoctorReport {
+            schema: "rimz.doctor.v1",
             version: rimz::build_id::VERSION,
             host: Host {
                 user: None,
@@ -1688,7 +1791,7 @@ mod tests {
         report.history_cleared_at = Some(Timestamp::now());
         report.diagnostics = Some(Diagnostics::Ready {
             path: "/tmp/diagnostics".to_owned(),
-            records: Vec::new(),
+            incidents: Vec::new(),
         });
 
         let out = strip(|w| {

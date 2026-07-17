@@ -124,10 +124,16 @@ fn alive_wake_argv_carries_telemetry_before_session_name() {
         wake_argv(
             &ctx(),
             WakeRequest::Alive(PluginTelemetry {
+                plugin_id: Some(9),
+                loaded_at_ms: 1_000,
                 mem_pages: 12,
                 uptime_ms: 34,
                 commands_completed: 56,
+                commands_succeeded: 49,
                 commands_failed: 7,
+                stale_writer_rejections: 3,
+                topology_failures: 2,
+                other_failures: 2,
                 zellij_version: "0.44.3".to_owned(),
             }),
             None,
@@ -140,20 +146,49 @@ fn alive_wake_argv_carries_telemetry_before_session_name() {
             "alive",
             "--workspace-id",
             "workspace-1",
+            "--plugin-id",
+            "9",
+            "--plugin-loaded-at-ms",
+            "1000",
             "--plugin-mem-pages",
             "12",
             "--plugin-uptime-ms",
             "34",
             "--plugin-commands",
             "56",
+            "--plugin-commands-succeeded",
+            "49",
             "--plugin-commands-failed",
             "7",
+            "--plugin-stale-writer-rejections",
+            "3",
+            "--plugin-topology-failures",
+            "2",
+            "--plugin-other-failures",
+            "2",
             "--plugin-zellij-version",
             "0.44.3",
             "--session-name",
             "session-1",
         ])),
     );
+}
+
+#[test]
+fn command_counters_split_every_exit_bucket() {
+    let mut counters = CommandCounters::default();
+    counters.record(Some(0), true);
+    counters.record(Some(STALE_WRITER_EXIT_CODE), true);
+    counters.record(Some(1), true);
+    counters.record(None, false);
+    counters.record(Some(STALE_WRITER_EXIT_CODE), false);
+
+    assert_eq!(counters.completed, 5);
+    assert_eq!(counters.succeeded, 1);
+    assert_eq!(counters.stale_writer_rejections, 1);
+    assert_eq!(counters.topology_failures, 1);
+    assert_eq!(counters.other_failures, 2);
+    assert_eq!(counters.failed(), 4);
 }
 
 #[test]

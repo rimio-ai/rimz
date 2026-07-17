@@ -141,6 +141,8 @@ pub enum DiagEvent {
         removed: Vec<PaneId>,
         added: Vec<PaneId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<PaneDropEvidence>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         frames_ref: Option<String>,
     },
     PaneCarryForward {
@@ -625,6 +627,45 @@ pub struct GroupIdentity {
     pub key: String,
 }
 
+/// Topology proof attached to a pane-count drop while both frames are present.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneDropEvidence {
+    pub prior_panes: usize,
+    pub fresh_panes: usize,
+    #[serde(default)]
+    pub mass_shrink: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected_views: Vec<PaneDropViewEvidence>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneDropViewEvidence {
+    pub view_id: String,
+    pub prior_panes: usize,
+    pub remaining_panes: usize,
+    pub removed_pane_ids: Vec<PaneId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_panes: Vec<ManagedPaneEvidence>,
+}
+
+impl PaneDropViewEvidence {
+    pub fn removed_completely(&self) -> bool {
+        self.remaining_panes == 0 && self.removed_pane_ids.len() == self.prior_panes
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedPaneEvidence {
+    pub pane_id: PaneId,
+    pub agent_kind: AgentKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiFocusEvidence {
+    pub human_clients: usize,
+    pub viewed_pane_ids: Vec<PaneId>,
+}
+
 /// Whether the writing instance was the elected elder (runs real-world
 /// cross-checks) or a plain consumer at record time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -824,6 +865,8 @@ pub enum AnomalyKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_position: Option<u64>,
         pane_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<MultiFocusEvidence>,
     },
 }
 

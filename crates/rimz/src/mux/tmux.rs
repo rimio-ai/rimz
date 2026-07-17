@@ -62,9 +62,56 @@ pub fn server_log_file() -> Option<PathBuf> {
 }
 
 pub fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
+    match parse_log_line(line) {
+        super::logtail::RecordLine::Start(start) => start.severity,
+        super::logtail::RecordLine::Continuation => None,
+    }
+}
+
+pub fn parse_log_line(line: &str) -> super::logtail::RecordLine {
+    use super::logtail::{LogRecordStart, LogSeverity, RecordLine};
+    if line.is_empty() || line.starts_with([' ', '\t']) {
+        return RecordLine::Continuation;
+    }
     let lower = line.to_ascii_lowercase();
-    (lower.contains("error") || lower.contains("fatal"))
-        .then_some(super::logtail::LogSeverity::Error)
+    let severity = if lower.contains("panic") {
+        Some(LogSeverity::Panic)
+    } else if lower.contains("fatal") || lower.contains("error") {
+        Some(LogSeverity::Error)
+    } else {
+        None
+    };
+    let timestamp = line
+        .split_whitespace()
+        .next()
+        .filter(|token| token.chars().any(|ch| ch.is_ascii_digit()))
+        .map(str::to_owned);
+    RecordLine::Start(LogRecordStart {
+        severity,
+        timestamp,
+        message: line.to_owned(),
+        ..LogRecordStart::default()
+    })
+}
+
+pub fn diagnose_log_record(
+    _previous: Option<&super::logtail::LogicalRecord>,
+    record: &super::logtail::LogicalRecord,
+    _next: Option<&super::logtail::LogicalRecord>,
+) -> Option<super::logtail::LogDiagnosis> {
+    use super::logtail::{LogDiagnosis, LogImpact, LogSeverity, LogState, normalized_issue_key};
+    let severity = record.start.severity?;
+    Some(LogDiagnosis {
+        key: normalized_issue_key(&record.start.message),
+        state: LogState::Investigate,
+        impact: if severity == LogSeverity::Panic {
+            LogImpact::Alarm
+        } else {
+            LogImpact::Warn
+        },
+        summary: record.start.message.clone(),
+        sample: None,
+    })
 }
 
 fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBuf {

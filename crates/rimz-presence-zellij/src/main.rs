@@ -24,13 +24,11 @@ mod shell {
         /// `None` until `load` runs (the `Default` the macro requires).
         engine: Option<Engine>,
         /// The shell owns command counters and feeds them into telemetry.
-        commands_completed: u64,
-        commands_failed: u64,
+        commands: wire::CommandCounters,
     }
 
     struct ShellHost {
-        commands_completed: u64,
-        commands_failed: u64,
+        commands: wire::CommandCounters,
     }
 
     impl Host for ShellHost {
@@ -49,10 +47,16 @@ mod shell {
 
         fn telemetry(&self) -> wire::PluginTelemetry {
             wire::PluginTelemetry {
+                plugin_id: None,
+                loaded_at_ms: 0,
                 mem_pages: wasm_pages(),
                 uptime_ms: 0,
-                commands_completed: self.commands_completed,
-                commands_failed: self.commands_failed,
+                commands_completed: self.commands.completed,
+                commands_succeeded: self.commands.succeeded,
+                commands_failed: self.commands.failed(),
+                stale_writer_rejections: self.commands.stale_writer_rejections,
+                topology_failures: self.commands.topology_failures,
+                other_failures: self.commands.other_failures,
                 zellij_version: get_zellij_version(),
             }
         }
@@ -86,8 +90,7 @@ mod shell {
             };
             let mut engine = Engine::new(now, config);
             let host = ShellHost {
-                commands_completed: self.commands_completed,
-                commands_failed: self.commands_failed,
+                commands: self.commands,
             };
             execute(engine.on_load(now, &host));
             self.engine = Some(engine);
@@ -96,20 +99,16 @@ mod shell {
         fn update(&mut self, event: Event) -> bool {
             let now = now_ms();
             if let Event::RunCommandResult(exit_code, _, _, context) = event {
-                self.commands_completed = self.commands_completed.saturating_add(1);
-                if exit_code != Some(0) {
-                    self.commands_failed = self.commands_failed.saturating_add(1);
-                }
+                let published_topology = context
+                    .get(wire::TOPOLOGY_PUBLISH_CONTEXT)
+                    .is_some_and(|value| value == "1");
+                self.commands.record(exit_code, published_topology);
                 let Some(engine) = self.engine.as_mut() else {
                     return false;
                 };
                 let host = ShellHost {
-                    commands_completed: self.commands_completed,
-                    commands_failed: self.commands_failed,
+                    commands: self.commands,
                 };
-                let published_topology = context
-                    .get(wire::TOPOLOGY_PUBLISH_CONTEXT)
-                    .is_some_and(|value| value == "1");
                 execute(engine.on_run_command_result(exit_code, published_topology, now, &host));
                 return false;
             }
@@ -117,8 +116,7 @@ mod shell {
                 return false;
             };
             let host = ShellHost {
-                commands_completed: self.commands_completed,
-                commands_failed: self.commands_failed,
+                commands: self.commands,
             };
             let effects = match event {
                 Event::PermissionRequestResult(PermissionStatus::Granted) => {
@@ -185,8 +183,7 @@ mod shell {
             }
             if pipe_message.name == DUMP_TOPOLOGY_PIPE {
                 let host = ShellHost {
-                    commands_completed: self.commands_completed,
-                    commands_failed: self.commands_failed,
+                    commands: self.commands,
                 };
                 execute(engine.on_dump_topology_pipe(now, &host));
                 return false;

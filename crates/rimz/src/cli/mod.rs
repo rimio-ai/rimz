@@ -120,7 +120,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
-        Some(Subcmd::Message(args)) => message::run(args, &globals),
+        Some(Subcmd::Message(args)) => message::run(*args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
@@ -523,7 +523,7 @@ enum Subcmd {
     ///
     /// Bare send routes now with `--steer`, or at the next safe turn boundary.
     #[command(visible_alias = "msg")]
-    Message(message::MessageArgs),
+    Message(Box<message::MessageArgs>),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.
     #[command(hide = true)]
     Sidebar(sidebar::SidebarArgs),

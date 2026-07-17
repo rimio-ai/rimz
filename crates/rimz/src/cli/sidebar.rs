@@ -121,34 +121,7 @@ enum SidebarSubcmd {
     /// stamp and wake the sidebar fleet through either an exact-cache shortcut
     /// or a producer refetch. Hidden — plugin infrastructure, not a human verb.
     #[command(hide = true)]
-    Wake {
-        #[arg(long)]
-        workspace_id: Option<String>,
-        #[arg(long, value_enum)]
-        reason: WakeReason,
-        #[arg(long)]
-        session_name: Option<String>,
-        #[arg(long)]
-        pane_id: Option<String>,
-        #[arg(long = "command-arg")]
-        command_args: Vec<String>,
-        #[arg(long = "focused-pane-id")]
-        focused_pane_ids: Vec<String>,
-        #[arg(long = "unfocused-pane-id")]
-        unfocused_pane_ids: Vec<String>,
-        #[arg(long = "topology", hide = true)]
-        topology: Option<String>,
-        #[arg(long, hide = true)]
-        plugin_mem_pages: Option<u64>,
-        #[arg(long, hide = true)]
-        plugin_uptime_ms: Option<u64>,
-        #[arg(long, hide = true)]
-        plugin_commands: Option<u64>,
-        #[arg(long, hide = true)]
-        plugin_commands_failed: Option<u64>,
-        #[arg(long, hide = true)]
-        plugin_zellij_version: Option<String>,
-    },
+    Wake(Box<WakeArgs>),
     /// Write a read receipt for a sidebar row. Hidden — test/API machinery.
     #[command(hide = true)]
     MarkRead {
@@ -192,6 +165,48 @@ enum SidebarSubcmd {
         #[arg(long)]
         no_command: bool,
     },
+}
+
+#[derive(Debug, Args)]
+struct WakeArgs {
+    #[arg(long)]
+    workspace_id: Option<String>,
+    #[arg(long, value_enum)]
+    reason: WakeReason,
+    #[arg(long)]
+    session_name: Option<String>,
+    #[arg(long)]
+    pane_id: Option<String>,
+    #[arg(long = "command-arg")]
+    command_args: Vec<String>,
+    #[arg(long = "focused-pane-id")]
+    focused_pane_ids: Vec<String>,
+    #[arg(long = "unfocused-pane-id")]
+    unfocused_pane_ids: Vec<String>,
+    #[arg(long = "topology", hide = true)]
+    topology: Option<String>,
+    #[arg(long, hide = true)]
+    plugin_mem_pages: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_id: Option<u32>,
+    #[arg(long, hide = true)]
+    plugin_loaded_at_ms: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_uptime_ms: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_commands: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_commands_succeeded: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_commands_failed: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_stale_writer_rejections: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_topology_failures: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_other_failures: Option<u64>,
+    #[arg(long, hide = true)]
+    plugin_zellij_version: Option<String>,
 }
 
 /// Why a presence poke fired. Every reason refreshes the liveness stamp;
@@ -301,62 +316,77 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
         } => fixture(state, width, height, watch, theme_mode, theme_scheme),
         SidebarSubcmd::Gallery { pets } => gallery(globals, pets),
         SidebarSubcmd::GalleryRender { pets } => gallery_render(pets),
-        SidebarSubcmd::Wake {
-            workspace_id,
-            reason,
-            session_name,
-            pane_id,
-            command_args,
-            focused_pane_ids,
-            unfocused_pane_ids,
-            topology,
-            plugin_mem_pages,
-            plugin_uptime_ms,
-            plugin_commands,
-            plugin_commands_failed,
-            plugin_zellij_version,
-        } => wake(
-            globals,
-            workspace_id,
-            ZellijWake {
-                reason: reason.into(),
+        SidebarSubcmd::Wake(args) => {
+            let WakeArgs {
+                workspace_id,
+                reason,
                 session_name,
-                pane_id: pane_id.map(|raw| PaneId::from_parts(MuxName::Zellij, raw)),
-                command: {
-                    let command = command_args
+                pane_id,
+                command_args,
+                focused_pane_ids,
+                unfocused_pane_ids,
+                topology,
+                plugin_mem_pages,
+                plugin_id,
+                plugin_loaded_at_ms,
+                plugin_uptime_ms,
+                plugin_commands,
+                plugin_commands_succeeded,
+                plugin_commands_failed,
+                plugin_stale_writer_rejections,
+                plugin_topology_failures,
+                plugin_other_failures,
+                plugin_zellij_version,
+            } = *args;
+            wake(
+                globals,
+                workspace_id,
+                ZellijWake {
+                    reason: reason.into(),
+                    session_name,
+                    pane_id: pane_id.map(|raw| PaneId::from_parts(MuxName::Zellij, raw)),
+                    command: {
+                        let command = command_args
+                            .iter()
+                            .filter(|arg| !arg.is_empty())
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        (!command.is_empty()).then_some(command)
+                    },
+                    focused_pane_ids: focused_pane_ids
                         .iter()
-                        .filter(|arg| !arg.is_empty())
-                        .map(String::as_str)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    (!command.is_empty()).then_some(command)
+                        .filter(|raw| !raw.is_empty())
+                        .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
+                        .collect(),
+                    unfocused_pane_ids: unfocused_pane_ids
+                        .iter()
+                        .filter(|raw| !raw.is_empty())
+                        .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
+                        .collect(),
+                    topology: topology.and_then(|raw| match serde_json::from_str(&raw) {
+                        Ok(cache) => Some(cache),
+                        Err(err) => {
+                            tracing::debug!(error = %err, "presence poke: topology payload parse failed");
+                            None
+                        }
+                    }),
+                    telemetry: plugin_mem_pages.map(|pages| ZellijPluginTelemetry {
+                        plugin_id,
+                        loaded_at_ms: plugin_loaded_at_ms.unwrap_or_default(),
+                        pages,
+                        uptime_ms: plugin_uptime_ms.unwrap_or_default(),
+                        commands: plugin_commands.unwrap_or_default(),
+                        commands_succeeded: plugin_commands_succeeded,
+                        commands_failed: plugin_commands_failed.unwrap_or_default(),
+                        stale_writer_rejections: plugin_stale_writer_rejections,
+                        topology_failures: plugin_topology_failures,
+                        other_failures: plugin_other_failures,
+                        zellij_version: plugin_zellij_version,
+                    }),
                 },
-                focused_pane_ids: focused_pane_ids
-                    .iter()
-                    .filter(|raw| !raw.is_empty())
-                    .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
-                    .collect(),
-                unfocused_pane_ids: unfocused_pane_ids
-                    .iter()
-                    .filter(|raw| !raw.is_empty())
-                    .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
-                    .collect(),
-                topology: topology.and_then(|raw| match serde_json::from_str(&raw) {
-                    Ok(cache) => Some(cache),
-                    Err(err) => {
-                        tracing::debug!(error = %err, "presence poke: topology payload parse failed");
-                        None
-                    }
-                }),
-                telemetry: plugin_mem_pages.map(|pages| ZellijPluginTelemetry {
-                    pages,
-                    uptime_ms: plugin_uptime_ms.unwrap_or_default(),
-                    commands: plugin_commands.unwrap_or_default(),
-                    commands_failed: plugin_commands_failed.unwrap_or_default(),
-                    zellij_version: plugin_zellij_version,
-                }),
-            },
-        ),
+            )
+        }
         SidebarSubcmd::MarkRead { target, worktree } => mark_read(globals, target, worktree),
         SidebarSubcmd::MarkUnread { target, worktree } => mark_unread(globals, target, worktree),
         SidebarSubcmd::Focus {
@@ -876,7 +906,7 @@ fn wake(globals: &GlobalFlags, workspace_id: Option<String>, wake: ZellijWake) -
     let runtime =
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
-    match ingest_zellij_wake(&state, &runtime, &wake) {
+    match ingest_zellij_wake(&state, &runtime, &wake).context("ingesting Zellij presence wake")? {
         ZellijWakeOutcome::RejectedStaleWriter => {
             std::process::exit(rimz::sidebar::presence::STALE_WRITER_EXIT_CODE)
         }

@@ -350,6 +350,19 @@ impl RuntimePaths {
         self.root.join("local-sessions.json")
     }
 
+    /// Serializes Zellij topology writer fencing and cache publication.
+    pub fn topology_writer_lock(&self) -> PathBuf {
+        self.root.join("topology-writer.lock")
+    }
+
+    pub fn authoritative_pane_probe_path(&self) -> PathBuf {
+        self.root.join("authoritative-pane-probe.json")
+    }
+
+    pub fn authoritative_pane_probe_lock(&self) -> PathBuf {
+        self.root.join("authoritative-pane-probe.lock")
+    }
+
     pub fn diff_stats_path(&self) -> PathBuf {
         self.root.join("diff-stats.json")
     }

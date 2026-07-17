@@ -14,10 +14,16 @@ impl Default for FakeHost {
         Self {
             baselines: BTreeMap::new(),
             telemetry: PluginTelemetry {
+                plugin_id: None,
+                loaded_at_ms: 0,
                 mem_pages: 12,
                 uptime_ms: 0,
                 commands_completed: 34,
+                commands_succeeded: 34,
                 commands_failed: 0,
+                stale_writer_rejections: 0,
+                topology_failures: 0,
+                other_failures: 0,
                 zellij_version: "0.44.3".to_owned(),
             },
         }

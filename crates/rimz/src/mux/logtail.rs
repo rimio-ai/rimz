@@ -1,11 +1,12 @@
-//! Bounded server-log tail scanner for `rimz doctor`.
+//! Bounded logical server-log scanner for `rimz doctor`.
 
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read as _, Seek as _, SeekFrom};
 use std::path::Path;
 
-const ENTRY_TEXT_LIMIT: usize = 200;
+const RECORD_TEXT_LIMIT: usize = 8 * 1024;
+const SAMPLE_CAP: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogSeverity {
@@ -14,161 +15,389 @@ pub enum LogSeverity {
     Panic,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogState {
+    Investigate,
+    Expected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogImpact {
+    Alarm,
+    Warn,
+    Info,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LogRecordStart {
+    pub severity: Option<LogSeverity>,
+    pub timestamp: Option<String>,
+    pub target: Option<String>,
+    pub thread: Option<String>,
+    pub source: Option<String>,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LogEntry {
+pub enum RecordLine {
+    Start(LogRecordStart),
+    Continuation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogicalRecord {
+    pub start: LogRecordStart,
+    pub text: String,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogDiagnosis {
+    pub key: String,
+    pub state: LogState,
+    pub impact: LogImpact,
+    pub summary: String,
+    pub sample: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogIssue {
     pub severity: LogSeverity,
-    pub line: String,
+    pub state: LogState,
+    pub impact: LogImpact,
+    pub summary: String,
+    pub occurrences: usize,
+    pub first_occurrence: Option<String>,
+    pub last_occurrence: Option<String>,
+    pub samples: Vec<String>,
+    pub evidence_truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LogScan {
     pub size_bytes: u64,
     pub scanned_bytes: u64,
-    pub matched: usize,
-    pub entries: Vec<LogEntry>,
+    pub logical_records: usize,
+    pub problem_records: usize,
+    pub omitted_issue_groups: usize,
+    pub issues: Vec<LogIssue>,
 }
 
 pub fn scan_tail(
     path: &Path,
     window: u64,
     cap: usize,
-    classify: impl Fn(&str) -> Option<LogSeverity>,
+    parse_line: impl Fn(&str) -> RecordLine,
+    diagnose: impl Fn(
+        Option<&LogicalRecord>,
+        &LogicalRecord,
+        Option<&LogicalRecord>,
+    ) -> Option<LogDiagnosis>,
 ) -> io::Result<LogScan> {
     let mut file = File::open(path)?;
     let size_bytes = file.metadata()?.len();
     let start = size_bytes.saturating_sub(window);
+    let starts_mid_line = if start > 0 {
+        file.seek(SeekFrom::Start(start - 1))?;
+        let mut previous = [0_u8; 1];
+        file.read_exact(&mut previous)?;
+        previous[0] != b'\n'
+    } else {
+        false
+    };
     file.seek(SeekFrom::Start(start))?;
 
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
-    if start > 0 {
+    if starts_mid_line {
         match buf.iter().position(|byte| *byte == b'\n') {
             Some(pos) => {
                 buf.drain(..=pos);
             }
-            None => {
-                buf.clear();
-            }
+            None => buf.clear(),
         }
     }
 
     let scanned_bytes = size_bytes.saturating_sub(start);
-    let mut matched = 0;
-    let mut entries = VecDeque::new();
     let text = String::from_utf8_lossy(&buf);
+    let mut records = Vec::new();
+    let mut current: Option<RecordBuilder> = None;
     for raw_line in text.lines() {
         let line = raw_line.trim_end_matches('\r');
-        let Some(severity) = classify(line) else {
-            continue;
-        };
-        matched += 1;
-        if cap == 0 {
-            continue;
+        match parse_line(line) {
+            RecordLine::Start(start) => {
+                if let Some(record) = current.take() {
+                    records.push(record.finish());
+                }
+                current = Some(RecordBuilder::new(start, line));
+            }
+            RecordLine::Continuation => {
+                if let Some(record) = current.as_mut() {
+                    record.push(line);
+                }
+            }
         }
-        if entries.len() == cap {
-            entries.pop_front();
-        }
-        entries.push_back(LogEntry {
-            severity,
-            line: truncate_entry(line),
-        });
+    }
+    if let Some(record) = current {
+        records.push(record.finish());
     }
 
+    let logical_records = records.len();
+    let mut problem_records = 0usize;
+    let mut groups = Vec::<(String, usize, LogIssue)>::new();
+    let mut by_key = HashMap::<String, usize>::new();
+    for (record_index, record) in records.iter().enumerate() {
+        let Some(diagnosis) = diagnose(
+            record_index
+                .checked_sub(1)
+                .and_then(|prior| records.get(prior)),
+            record,
+            records.get(record_index + 1),
+        ) else {
+            continue;
+        };
+        let Some(severity) = record.start.severity else {
+            continue;
+        };
+        problem_records = problem_records.saturating_add(1);
+        let group_key = format!(
+            "{:?}:{:?}:{:?}:{}",
+            severity, diagnosis.state, diagnosis.impact, diagnosis.key
+        );
+        if let Some(group_index) = by_key.get(&group_key).copied() {
+            groups[group_index].1 = record_index;
+            let issue = &mut groups[group_index].2;
+            issue.occurrences = issue.occurrences.saturating_add(1);
+            if issue.first_occurrence.is_none() {
+                issue.first_occurrence.clone_from(&record.start.timestamp);
+            }
+            if record.start.timestamp.is_some() {
+                issue.last_occurrence.clone_from(&record.start.timestamp);
+            }
+            issue.evidence_truncated |= record.truncated;
+            let sample = diagnosis.sample.unwrap_or_else(|| record.text.clone());
+            if issue.samples.len() < SAMPLE_CAP && !issue.samples.contains(&sample) {
+                issue.samples.push(sample);
+            }
+            continue;
+        }
+        let group_index = groups.len();
+        by_key.insert(group_key.clone(), group_index);
+        groups.push((
+            group_key,
+            record_index,
+            LogIssue {
+                severity,
+                state: diagnosis.state,
+                impact: diagnosis.impact,
+                summary: diagnosis.summary,
+                occurrences: 1,
+                first_occurrence: record.start.timestamp.clone(),
+                last_occurrence: record.start.timestamp.clone(),
+                samples: vec![diagnosis.sample.unwrap_or_else(|| record.text.clone())],
+                evidence_truncated: record.truncated,
+            },
+        ));
+    }
+
+    groups.sort_by_key(|(_, last_index, _)| *last_index);
+    let omitted_issue_groups = groups.len().saturating_sub(cap);
+    let issues = if cap == 0 {
+        Vec::new()
+    } else {
+        groups
+            .into_iter()
+            .skip(omitted_issue_groups)
+            .map(|(_, _, issue)| issue)
+            .collect()
+    };
     Ok(LogScan {
         size_bytes,
         scanned_bytes,
-        matched,
-        entries: entries.into_iter().collect(),
+        logical_records,
+        problem_records,
+        omitted_issue_groups,
+        issues,
     })
 }
 
-fn truncate_entry(line: &str) -> String {
-    if line.len() <= ENTRY_TEXT_LIMIT {
-        return line.to_owned();
+struct RecordBuilder {
+    start: LogRecordStart,
+    text: String,
+    truncated: bool,
+}
+
+impl RecordBuilder {
+    fn new(start: LogRecordStart, line: &str) -> Self {
+        let mut builder = Self {
+            start,
+            text: String::new(),
+            truncated: false,
+        };
+        builder.push(line);
+        builder
     }
-    let boundary = line
-        .char_indices()
-        .map(|(idx, _)| idx)
-        .take_while(|idx| *idx <= ENTRY_TEXT_LIMIT)
-        .last()
-        .unwrap_or(0);
-    format!("{}...", &line[..boundary])
+
+    fn push(&mut self, line: &str) {
+        if self.truncated {
+            return;
+        }
+        if !self.text.is_empty() {
+            self.push_text("\n");
+        }
+        self.push_text(line);
+    }
+
+    fn push_text(&mut self, value: &str) {
+        let remaining = RECORD_TEXT_LIMIT.saturating_sub(self.text.len());
+        if value.len() <= remaining {
+            self.text.push_str(value);
+            return;
+        }
+        let boundary = value
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= remaining)
+            .last()
+            .unwrap_or(0);
+        self.text.push_str(&value[..boundary]);
+        self.truncated = true;
+    }
+
+    fn finish(self) -> LogicalRecord {
+        LogicalRecord {
+            start: self.start,
+            text: self.text,
+            truncated: self.truncated,
+        }
+    }
+}
+
+pub fn normalized_issue_key(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut in_digits = false;
+    let mut in_space = false;
+    for ch in value.chars() {
+        if ch.is_ascii_digit() {
+            if !in_digits {
+                normalized.push('#');
+            }
+            in_digits = true;
+            in_space = false;
+        } else if ch.is_whitespace() {
+            if !in_space {
+                normalized.push(' ');
+            }
+            in_space = true;
+            in_digits = false;
+        } else {
+            normalized.push(ch.to_ascii_lowercase());
+            in_digits = false;
+            in_space = false;
+        }
+    }
+    normalized.trim().to_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
 
-    fn warn_error(line: &str) -> Option<LogSeverity> {
-        if line.starts_with("WARN") {
-            Some(LogSeverity::Warn)
-        } else if line.starts_with("ERROR") {
-            Some(LogSeverity::Error)
+    fn parse(line: &str) -> RecordLine {
+        let (severity, message) = if let Some(message) = line.strip_prefix("INFO ") {
+            (None, message)
+        } else if let Some(message) = line.strip_prefix("WARN ") {
+            (Some(LogSeverity::Warn), message)
+        } else if let Some(message) = line.strip_prefix("ERROR ") {
+            (Some(LogSeverity::Error), message)
         } else {
-            None
-        }
+            return RecordLine::Continuation;
+        };
+        RecordLine::Start(LogRecordStart {
+            severity,
+            message: message.to_owned(),
+            ..LogRecordStart::default()
+        })
+    }
+
+    fn diagnose(
+        _previous: Option<&LogicalRecord>,
+        record: &LogicalRecord,
+        _next: Option<&LogicalRecord>,
+    ) -> Option<LogDiagnosis> {
+        record.start.severity.map(|_| LogDiagnosis {
+            key: normalized_issue_key(&record.start.message),
+            state: LogState::Investigate,
+            impact: LogImpact::Warn,
+            summary: record.start.message.clone(),
+            sample: None,
+        })
     }
 
     #[test]
-    fn window_seek_drops_partial_first_line() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    fn assembles_records_and_non_problem_start_terminates_error() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mux.log");
         std::fs::write(
             &path,
-            "WARN too old but partly in window\nINFO ok\nERROR recent\n",
+            "orphan continuation\nWARN first\nCaused by: detail\n\nINFO ok\nERROR second\n",
         )
-        .expect("write log");
+        .unwrap();
 
-        let scan = scan_tail(&path, 24, 10, warn_error).expect("scan");
-        assert_eq!(scan.matched, 1);
-        assert_eq!(
-            scan.entries,
-            vec![LogEntry {
-                severity: LogSeverity::Error,
-                line: "ERROR recent".to_owned(),
-            }]
-        );
+        let scan = scan_tail(&path, 1024, 10, parse, diagnose).unwrap();
+        assert_eq!(scan.logical_records, 3);
+        assert_eq!(scan.problem_records, 2);
+        assert_eq!(scan.issues[0].samples[0], "WARN first\nCaused by: detail\n");
     }
 
     #[test]
-    fn cap_keeps_last_entries_while_matched_counts_all() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    fn groups_before_cap_and_keeps_two_samples() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mux.log");
-        std::fs::write(&path, "WARN one\nERROR two\nWARN three\nERROR four\n").expect("write log");
+        std::fs::write(
+            &path,
+            "WARN client 1\nWARN client 2\nERROR other\nWARN client 3\n",
+        )
+        .unwrap();
 
-        let scan = scan_tail(&path, 1024, 2, warn_error).expect("scan");
-        assert_eq!(scan.matched, 4);
-        assert_eq!(
-            scan.entries,
-            vec![
-                LogEntry {
-                    severity: LogSeverity::Warn,
-                    line: "WARN three".to_owned(),
-                },
-                LogEntry {
-                    severity: LogSeverity::Error,
-                    line: "ERROR four".to_owned(),
-                },
-            ]
-        );
+        let scan = scan_tail(&path, 1024, 1, parse, diagnose).unwrap();
+        assert_eq!(scan.problem_records, 4);
+        assert_eq!(scan.omitted_issue_groups, 1);
+        assert_eq!(scan.issues.len(), 1);
     }
 
     #[test]
-    fn long_lines_truncate_on_char_boundary() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    fn window_seek_drops_partial_initial_record() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mux.log");
-        let mut file = File::create(&path).expect("create log");
-        writeln!(file, "ERROR {}", "é".repeat(140)).expect("write log");
+        std::fs::write(&path, "WARN too old\ndetail\nINFO boundary\nERROR recent\n").unwrap();
 
-        let scan = scan_tail(&path, 1024, 10, warn_error).expect("scan");
-        assert_eq!(scan.matched, 1);
-        assert!(scan.entries[0].line.ends_with("..."));
-        assert!(scan.entries[0].line.len() <= ENTRY_TEXT_LIMIT + 3);
-        assert!(
-            scan.entries[0]
-                .line
-                .is_char_boundary(scan.entries[0].line.len())
-        );
+        let scan = scan_tail(&path, 27, 10, parse, diagnose).unwrap();
+        assert_eq!(scan.problem_records, 1);
+        assert_eq!(scan.issues[0].summary, "recent");
+    }
+
+    #[test]
+    fn window_seek_keeps_record_when_start_is_line_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mux.log");
+        let recent = "ERROR recent\n";
+        std::fs::write(&path, format!("WARN old\n{recent}")).unwrap();
+
+        let scan = scan_tail(&path, recent.len() as u64, 10, parse, diagnose).unwrap();
+
+        assert_eq!(scan.problem_records, 1);
+        assert_eq!(scan.issues[0].summary, "recent");
+    }
+
+    #[test]
+    fn record_truncation_is_utf8_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mux.log");
+        std::fs::write(&path, format!("ERROR {}\n", "é".repeat(RECORD_TEXT_LIMIT))).unwrap();
+
+        let scan = scan_tail(&path, 32 * 1024, 10, parse, diagnose).unwrap();
+        assert!(scan.issues[0].evidence_truncated);
+        assert!(scan.issues[0].samples[0].is_char_boundary(scan.issues[0].samples[0].len()));
     }
 }

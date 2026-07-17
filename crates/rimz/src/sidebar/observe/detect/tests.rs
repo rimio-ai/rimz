@@ -461,6 +461,17 @@ fn row_presence_ignores_expected_absence_causes() {
 }
 
 #[test]
+fn row_presence_ignores_same_pane_identity_rebound() {
+    let mut observer = Observer::default();
+    observer.observe(sig(0, Vec::new()));
+    observer.observe(sig(11_000, vec![row("a", "p1", "main")]));
+    observer.observe(sig(12_000, vec![row("b", "p1", "main")]));
+    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]));
+
+    assert_lacks_kind(&drafts, "row_presence_flap", "same-pane rebound");
+}
+
+#[test]
 fn value_oscillation_reports_each_watched_field() {
     struct Case {
         field: WatchedField,

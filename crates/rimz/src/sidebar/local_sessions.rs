@@ -1,8 +1,8 @@
 //! Producer-owned publication of provider-local session discovery.
 //!
 //! Adapters validate provider stores once per represented kind. Every renderer
-//! then folds the normalized observations only when the publication names the
-//! same room session and the exact admitted `(kind, workspace)` input set.
+//! then folds the normalized observations covered by both the publication and
+//! the current room's admitted `(kind, workspace)` input set.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -69,6 +69,20 @@ impl LocalSessionInputs {
         normalize_observations(&mut observations);
         observations
     }
+
+    fn normalized_keys(&self) -> BTreeSet<(AgentKind, PathBuf)> {
+        self.by_kind
+            .iter()
+            .flat_map(|(kind, workspaces)| {
+                workspaces.iter().map(|workspace| {
+                    (
+                        kind.clone(),
+                        crate::worktree::normalize_path_lexical(workspace),
+                    )
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -119,17 +133,37 @@ pub fn refresh_published(
     observations
 }
 
-/// Read only an exact same-session/input publication. Every miss fails closed
-/// to no observations and never invokes an adapter.
+/// Read the safe same-session intersection of published and current inputs.
+/// Newly added inputs stay absent until their producer publishes them, while
+/// removed inputs disappear immediately. Every miss fails closed and never
+/// invokes an adapter.
 pub fn read_published(
     runtime: &RuntimePaths,
     session_name: &str,
     inputs: &LocalSessionInputs,
 ) -> Vec<LocalSessionObservation> {
-    read_cache(&runtime.local_sessions_path())
-        .filter(|published| published.session_name == session_name && &published.inputs == inputs)
-        .map(|published| published.observations.clone())
-        .unwrap_or_default()
+    let Some(published) = read_cache(&runtime.local_sessions_path())
+        .filter(|published| published.session_name == session_name)
+    else {
+        return Vec::new();
+    };
+    let admitted = published
+        .inputs
+        .normalized_keys()
+        .intersection(&inputs.normalized_keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    published
+        .observations
+        .iter()
+        .filter(|observation| {
+            admitted.contains(&(
+                observation.kind.clone(),
+                crate::worktree::normalize_path_lexical(&observation.workspace),
+            ))
+        })
+        .cloned()
+        .collect()
 }
 
 fn normalize_observations(observations: &mut Vec<LocalSessionObservation>) {
@@ -230,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_is_semantic_and_exact_match_reads_only() {
+    fn publication_is_semantic_and_intersection_reads_only() {
         let dir = tempfile::tempdir().unwrap();
         let runtime =
             RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
@@ -278,7 +312,11 @@ mod tests {
             .get_mut(&AgentKind::new_unchecked("kiro"))
             .unwrap()
             .push(dir.path().join("c"));
-        assert!(read_published(&runtime, "room", &changed_inputs).is_empty());
+        assert_eq!(
+            read_published(&runtime, "room", &changed_inputs),
+            publication.observations,
+            "new inputs wait for a matching producer publication"
+        );
 
         let first = read_cache(&runtime.local_sessions_path()).unwrap();
         let second = read_cache(&runtime.local_sessions_path()).unwrap();
@@ -292,8 +330,48 @@ mod tests {
         assert!(publish_if_changed(&runtime.local_sessions_path(), &changed, || {}).unwrap());
         assert_eq!(
             read_published(&runtime, "room", &inputs),
-            changed.observations
+            publication.observations,
+            "observations outside the producer's admitted inputs stay hidden"
         );
+    }
+
+    #[test]
+    fn publication_filters_removed_and_mixed_inputs_without_cross_session_leaks() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let inputs = inputs(dir.path());
+        let publication = PublishedLocalSessions {
+            session_name: "room".to_owned(),
+            inputs: inputs.clone(),
+            observations: vec![
+                observation(&inputs.by_kind[&AgentKind::new_unchecked("kiro")][0], "a"),
+                observation(&inputs.by_kind[&AgentKind::new_unchecked("kiro")][1], "b"),
+            ],
+        };
+        publish_if_changed(&runtime.local_sessions_path(), &publication, || {}).unwrap();
+
+        let mut current = inputs.clone();
+        current
+            .by_kind
+            .get_mut(&AgentKind::new_unchecked("kiro"))
+            .unwrap()
+            .remove(0);
+        current
+            .by_kind
+            .get_mut(&AgentKind::new_unchecked("kiro"))
+            .unwrap()
+            .push(dir.path().join("c"));
+        assert_eq!(
+            read_published(&runtime, "room", &current),
+            vec![observation(
+                &inputs.by_kind[&AgentKind::new_unchecked("kiro")][1],
+                "b"
+            )],
+            "unchanged observations survive a mixed remove/add"
+        );
+        assert!(read_published(&runtime, "other", &current).is_empty());
     }
 
     #[test]

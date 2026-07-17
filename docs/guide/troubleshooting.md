@@ -73,7 +73,9 @@ Each row carries a glyph that sets its tone:
 
 The last line tallies the run (`✗ 2 problems, ⚠ 9 warnings`, or `✓ no problems found`). Work top down and clear the `✗` rows first. The rest of this page expands the common ones.
 
-The tail sections (`AGENTS`, `MESSAGES`, `DIAGNOSTICS`) report live state rather than machine setup: the agents doctor observed, messages that failed to land, and RimZ's own record of transient rendering hiccups. They are mostly context for a bug report, not a to-do list.
+The tail sections (`AGENTS`, `MESSAGES`, `DIAGNOSTICS`) report live state rather than machine setup: the agents doctor observed, messages that failed to land, and RimZ's evidence-folded incidents. An `investigate` incident is unresolved or lacks enough proof and its `warn`/`alarm` impact contributes to the final tally; `contained` means a guard successfully prevented bad state, `recovered` pairs the active episode with its recovery, and `expected` has positive evidence for a normal topology or lifecycle transition. Those last three are informational context for a bug report rather than a to-do list.
+
+The Zellij log source is host-user-wide for the uid Doctor prints, so its grouped issues can include other Zellij sessions owned by that user. The tmux log source is server-scoped. Use the scope and retained samples before attributing a log issue to the current room; incomplete or changed versions of a known benign sequence stay investigative.
 
 The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, `agents.toml`, or `loop.toml` file RimZ cannot parse and includes the precise error. `rimz start` also warns on stderr and opens the room with built-in defaults for every setting in that file; fix it, then restart so RimZ loads the intended values.
 
@@ -131,6 +133,8 @@ If a directly-launched Copilot card has lifecycle but no resolved model or token
 ### Zellij pane discovery stopped
 
 On Zellij, RimZ loads a small presence plugin so the sidebar learns which panes exist and where. Its permission grant is seeded for you on the first attach. Revoking that grant in Zellij's plugin manager stops pane discovery until you restore it, and `rimz doctor` names the fix in the `presence` row. Re-grant the plugin's permissions in Zellij, then run `rimz reload`. The grant lives in Zellij's own permission store, and the plugin ships no pane content anywhere; the full picture is in [security and trust](./security.md#the-zellij-presence-plugin).
+
+Doctor joins presence telemetry to the exact plugin generation accepted as the topology writer. Stale-writer rejections mean the monotonic fence contained an older plugin and stay expected information; a recent increase in topology or other command failures for the accepted writer is a real warning. Legacy telemetry with one unsplit failure counter remains informational because it cannot prove which outcome occurred.
 
 ## The sidebar looks wrong
 

@@ -268,7 +268,7 @@ impl Observer {
                 Some(presence) => {
                     if let Some(gone_at) = presence.gone_at.take()
                         && sig.at_ms.saturating_sub(gone_at) <= window
-                        && !presence.closed_justified
+                        && !presence.absence_justified
                     {
                         drafts.push(AnomalyDraft::from_sig(
                             sig,
@@ -284,7 +284,7 @@ impl Observer {
                     presence.last_seen_at = sig.at_ms;
                     presence.pane_id = row.pane_id.clone();
                     presence.group_key = row.group_key.clone();
-                    presence.closed_justified = false;
+                    presence.absence_justified = false;
                 }
                 None => {
                     self.presence.insert(
@@ -295,7 +295,7 @@ impl Observer {
                             pane_id: row.pane_id.clone(),
                             group_key: row.group_key.clone(),
                             gone_at: None,
-                            closed_justified: false,
+                            absence_justified: false,
                             short_lived_emitted: false,
                         },
                     );
@@ -347,7 +347,7 @@ impl Observer {
                 presence.short_lived_emitted = true;
             }
             presence.gone_at = Some(sig.at_ms);
-            presence.closed_justified = closed;
+            presence.absence_justified = closed || rebound;
         }
 
         self.presence.retain(|_, presence| {
@@ -541,7 +541,7 @@ impl Observer {
                     pane_id: row.pane_id.clone(),
                     group_key: row.group_key.clone(),
                     gone_at: None,
-                    closed_justified: false,
+                    absence_justified: false,
                     short_lived_emitted: false,
                 });
         }
@@ -578,7 +578,7 @@ struct RowPresence {
     pane_id: Option<String>,
     group_key: String,
     gone_at: Option<u64>,
-    closed_justified: bool,
+    absence_justified: bool,
     short_lived_emitted: bool,
 }
 

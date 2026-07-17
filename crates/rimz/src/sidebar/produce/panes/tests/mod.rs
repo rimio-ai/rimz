@@ -109,12 +109,15 @@ fn focused_pane_in_tab(id: &str, tab: &str, tab_name: &str) -> crate::pane::Pane
 fn multi_focus_topology_detects_multiple_focused_tiled_panes_per_tab() {
     let mut floating = focused_pane_in_tab("terminal_3", "tab_7", "work");
     floating.is_floating = true;
-    let anomalies = multi_focus_topology_anomalies(&[
-        focused_pane_in_tab("terminal_1", "tab_7", "work"),
-        focused_pane_in_tab("terminal_2", "tab_7", "work"),
-        floating,
-        focused_pane_in_tab("terminal_4", "tab_8", "other"),
-    ]);
+    let anomalies = multi_focus_topology_anomalies(
+        &[
+            focused_pane_in_tab("terminal_1", "tab_7", "work"),
+            focused_pane_in_tab("terminal_2", "tab_7", "work"),
+            floating,
+            focused_pane_in_tab("terminal_4", "tab_8", "other"),
+        ],
+        None,
+    );
 
     assert_eq!(
         anomalies,
@@ -125,8 +128,64 @@ fn multi_focus_topology_detects_multiple_focused_tiled_panes_per_tab() {
                 "zellij:terminal_1".to_owned(),
                 "zellij:terminal_2".to_owned(),
             ],
+            evidence: None,
         }],
     );
+}
+
+#[test]
+fn pane_drop_evidence_distinguishes_plain_managed_partial_and_mass_loss() {
+    let in_tab = |id: &str, tab: &str, command: &str| crate::pane::PaneRef {
+        view_id: Some(tab.to_owned()),
+        ..pane(id, Some(command), Some("/repo/main"))
+    };
+    let prior = frame(vec![
+        in_tab("terminal_1", "tab_1", "zsh"),
+        in_tab("terminal_2", "tab_2", "zsh"),
+    ]);
+    let fresh = frame(vec![in_tab("terminal_2", "tab_2", "zsh")]);
+    let removed = vec![crate::PaneId::from_parts(
+        crate::MuxName::Zellij,
+        "terminal_1",
+    )];
+    let evidence = pane_drop_evidence(&prior, &fresh, &removed);
+    assert!(evidence.affected_views[0].removed_completely());
+    assert!(evidence.affected_views[0].managed_panes.is_empty());
+    assert!(!evidence.mass_shrink);
+
+    let managed_prior = frame(vec![
+        in_tab("terminal_1", "tab_1", "codex"),
+        in_tab("terminal_2", "tab_2", "zsh"),
+    ]);
+    let managed = pane_drop_evidence(&managed_prior, &fresh, &removed);
+    assert_eq!(
+        managed.affected_views[0].managed_panes[0].agent_kind,
+        "codex"
+    );
+
+    let partial_prior = frame(vec![
+        in_tab("terminal_1", "tab_1", "zsh"),
+        in_tab("terminal_3", "tab_1", "zsh"),
+    ]);
+    let partial_fresh = frame(vec![in_tab("terminal_3", "tab_1", "zsh")]);
+    let partial = pane_drop_evidence(&partial_prior, &partial_fresh, &removed);
+    assert!(!partial.affected_views[0].removed_completely());
+
+    let mass_prior = frame(vec![
+        in_tab("terminal_1", "tab_1", "zsh"),
+        in_tab("terminal_2", "tab_2", "zsh"),
+        in_tab("terminal_3", "tab_3", "zsh"),
+    ]);
+    let mass_fresh = frame(vec![in_tab("terminal_3", "tab_3", "zsh")]);
+    let mass = pane_drop_evidence(
+        &mass_prior,
+        &mass_fresh,
+        &[
+            crate::PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
+            crate::PaneId::from_parts(crate::MuxName::Zellij, "terminal_2"),
+        ],
+    );
+    assert!(mass.mass_shrink);
 }
 
 #[test]

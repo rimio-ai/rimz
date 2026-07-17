@@ -27,6 +27,7 @@ pub(super) enum Probe<T> {
 /// could not be resolved at all.
 #[derive(Debug, Serialize)]
 pub(super) struct DoctorReport {
+    pub(super) schema: &'static str,
     pub(super) version: &'static str,
     pub(super) host: Host,
     pub(super) workspace: Probe<Workspace>,
@@ -136,6 +137,8 @@ pub(super) struct Mux {
     pub(super) binaries: MuxBinaries,
     pub(super) log: MuxLog,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) plugin_presence: Option<PluginTelemetry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) zellij_socket: Option<ZellijSocket>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) socket: Option<String>,
@@ -182,10 +185,13 @@ pub(super) struct ServerMismatchRow {
 pub(super) enum MuxLog {
     Ready {
         path: String,
+        scope: LogScope,
         size_bytes: u64,
         scanned_bytes: u64,
-        matched: usize,
-        entries: Vec<MuxLogEntry>,
+        logical_records: usize,
+        problem_records: usize,
+        omitted_issue_groups: usize,
+        issues: Vec<MuxLogIssue>,
     },
     Missing {
         path: String,
@@ -199,9 +205,47 @@ pub(super) enum MuxLog {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct MuxLogEntry {
-    pub(super) severity: String,
-    pub(super) line: String,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(super) enum LogScope {
+    HostUser { uid: u32 },
+    Server,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MuxLogIssue {
+    pub(super) source_severity: String,
+    pub(super) state: DoctorState,
+    pub(super) impact: DoctorImpact,
+    pub(super) summary: String,
+    pub(super) occurrences: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) first_occurrence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) last_occurrence: Option<String>,
+    pub(super) samples: Vec<String>,
+    pub(super) evidence_truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PluginTelemetry {
+    pub(super) plugin_id: u32,
+    pub(super) loaded_at_ms: u64,
+    pub(super) sample_count: usize,
+    pub(super) first_at_ms: u64,
+    pub(super) last_at_ms: u64,
+    pub(super) age_secs: u64,
+    pub(super) zellij_version: Option<String>,
+    pub(super) page_growth: i64,
+    pub(super) byte_growth: i64,
+    pub(super) commands_completed_delta: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) commands_succeeded_delta: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) stale_writer_rejections_delta: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) topology_failures_delta: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) other_failures_delta: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -530,16 +574,47 @@ pub(super) struct MessageProblemRow {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(super) enum Diagnostics {
     Unavailable,
-    Ready { path: String, records: Vec<DiagRow> },
+    Ready {
+        path: String,
+        incidents: Vec<DiagIncident>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DoctorState {
+    Investigate,
+    Contained,
+    Recovered,
+    Expected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DoctorImpact {
+    Alarm,
+    Warn,
+    Info,
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct DiagRow {
-    pub(super) severity: DiagSeverity,
+pub(super) struct DiagIncident {
     pub(super) kind: String,
-    pub(super) at_ms: u64,
+    pub(super) source_severity: DiagSeverity,
+    pub(super) state: DoctorState,
+    pub(super) impact: DoctorImpact,
+    pub(super) first_at_ms: u64,
+    pub(super) last_at_ms: u64,
+    pub(super) record_count: usize,
+    pub(super) distinct_observer_count: usize,
+    pub(super) observer_ids: Vec<String>,
+    pub(super) sink_suppressed: u64,
+    pub(super) observer_suppressed: u64,
+    pub(super) dropped_messages: u64,
     pub(super) summary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) build: Option<String>,
     pub(super) stale_build: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) evidence_refs: Vec<String>,
 }

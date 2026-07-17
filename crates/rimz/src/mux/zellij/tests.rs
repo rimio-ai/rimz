@@ -913,12 +913,128 @@ fn log_classifier_matches_zellij_levels() {
         ("Panic occured: unknown messages", Some(LogSeverity::Panic)),
         ("Panic occurred: unknown messages", Some(LogSeverity::Panic)),
         ("ERROR failed to decode", Some(LogSeverity::Error)),
+        (
+            "ERROR  |zellij_utils::errors::not| 2026-07-17 04:06:02.158 [screen] zellij-utils/src/errors.rs:819: Panic occured:",
+            Some(LogSeverity::Panic),
+        ),
         ("WARN slow client", Some(LogSeverity::Warn)),
         ("INFO later WARN text is not a level", None),
         ("WARNING is not WARN token", None),
     ] {
         assert_eq!(classify_log_line(line), expected, "{line}");
     }
+}
+
+#[test]
+fn log_diagnosis_requires_complete_known_lifecycle_evidence() {
+    use crate::mux::logtail::{LogImpact, LogState, LogicalRecord};
+
+    let unknown_line = "ERROR  |zellij_server::route     | 2026-07-17 12:23:34.169 [server_router] zellij-server/src/route.rs:2642: Received unknown message from client.";
+    let unknown_start = match parse_log_line(unknown_line) {
+        crate::mux::logtail::RecordLine::Start(start) => start,
+        crate::mux::logtail::RecordLine::Continuation => panic!("record start"),
+    };
+    assert_eq!(
+        unknown_start.target.as_deref(),
+        Some("zellij_server::route")
+    );
+    assert_eq!(
+        unknown_start.timestamp.as_deref(),
+        Some("2026-07-17 12:23:34.169")
+    );
+    assert_eq!(unknown_start.thread.as_deref(), Some("server_router"));
+    assert_eq!(
+        unknown_start.source.as_deref(),
+        Some("zellij-server/src/route.rs:2642")
+    );
+    let broken_line = "ERROR  |???                      | 2026-07-17 12:23:34.169 [unnamed] zellij-server/src/os_input_output.rs:231: a non-fatal error occured";
+    let broken_start = match parse_log_line(broken_line) {
+        crate::mux::logtail::RecordLine::Start(start) => start,
+        crate::mux::logtail::RecordLine::Continuation => panic!("record start"),
+    };
+    let unknown = LogicalRecord {
+        start: unknown_start,
+        text: unknown_line.to_owned(),
+        truncated: false,
+    };
+    let broken_pipe = LogicalRecord {
+        start: broken_start,
+        text: format!(
+            "{broken_line}\n\nCaused by:\n    0: failed to send message to client 2\n    1: Broken pipe (os error 32)"
+        ),
+        truncated: false,
+    };
+
+    let expected = diagnose_log_record(None, &unknown, Some(&broken_pipe)).unwrap();
+    assert_eq!(expected.state, LogState::Expected);
+    assert_eq!(expected.impact, LogImpact::Info);
+    assert!(expected.sample.unwrap().contains("Broken pipe"));
+    assert!(diagnose_log_record(Some(&unknown), &broken_pipe, None).is_none());
+    let investigate = diagnose_log_record(None, &unknown, None).unwrap();
+    assert_eq!(investigate.state, LogState::Investigate);
+    assert_eq!(investigate.impact, LogImpact::Alarm);
+
+    let cli_pipe = match parse_log_line(
+        "ERROR  |zellij_server::route| 2026-07-17 12:23:44.875 [server_router] zellij-server/src/route.rs:75: Action CliPipe did not complete within 1s timeout",
+    ) {
+        crate::mux::logtail::RecordLine::Start(start) => LogicalRecord {
+            text: start.message.clone(),
+            start,
+            truncated: false,
+        },
+        crate::mux::logtail::RecordLine::Continuation => panic!("record start"),
+    };
+    assert_eq!(
+        diagnose_log_record(None, &cli_pipe, None).unwrap().state,
+        LogState::Expected
+    );
+}
+
+#[test]
+fn logical_log_scan_groups_complete_0443_artifacts_conservatively() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("zellij.log");
+    std::fs::write(
+        &path,
+        concat!(
+            "ERROR  |zellij_server::route     | 2026-07-17 12:23:34.169 [server_router] zellij-server/src/route.rs:2642: Received unknown message from client.\n",
+            "ERROR  |???                      | 2026-07-17 12:23:34.169 [unnamed] zellij-server/src/os_input_output.rs:231: a non-fatal error occured\n",
+            "\nCaused by:\n    0: failed to send message to client 2\n    1: Broken pipe (os error 32)\n",
+            "INFO   |zellij_server            | 2026-07-17 12:23:35.000 [main] zellij-server/src/lib.rs:1: healthy\n",
+            "ERROR  |zellij_server::route     | 2026-07-17 12:23:44.875 [server_router] zellij-server/src/route.rs:75: Action CliPipe did not complete within 1s timeout\n",
+            "ERROR  |zellij_server::route     | 2026-07-17 12:23:45.875 [server_router] zellij-server/src/route.rs:75: Action CliPipe did not complete within 1s timeout\n",
+            "ERROR  |zellij_server::pty       | 2026-07-17 12:23:46.000 [pty] zellij-server/src/pty.rs:9: pane query failed\n",
+            "ERROR  |zellij_utils::errors::not| 2026-07-17 12:23:47.000 [screen] zellij-utils/src/errors.rs:819: Panic occurred:\n",
+            "    thread: screen\n    message: fatal\n",
+        ),
+    )
+    .unwrap();
+
+    let scan =
+        crate::mux::logtail::scan_tail(&path, 64 * 1024, 10, parse_log_line, diagnose_log_record)
+            .unwrap();
+
+    assert_eq!(scan.logical_records, 7);
+    assert_eq!(scan.problem_records, 5);
+    assert_eq!(scan.issues.len(), 4);
+    assert_eq!(
+        scan.issues[0].state,
+        crate::mux::logtail::LogState::Expected
+    );
+    assert!(scan.issues[0].samples[0].contains("Broken pipe"));
+    assert_eq!(scan.issues[1].occurrences, 2);
+    assert_eq!(
+        scan.issues[1].state,
+        crate::mux::logtail::LogState::Expected
+    );
+    assert_eq!(
+        scan.issues[2].state,
+        crate::mux::logtail::LogState::Investigate
+    );
+    assert_eq!(
+        scan.issues[3].severity,
+        crate::mux::logtail::LogSeverity::Panic
+    );
 }
 
 #[test]

@@ -8,9 +8,10 @@ use std::time::Duration;
 
 use super::Result;
 use crate::diag::record::{
-    AnomalyKind, DiagEvent, EventsSig, FrameRejectReason, FrameStamp, ObserveRole,
+    AnomalyKind, DiagEvent, EventsSig, FrameRejectReason, FrameStamp, ManagedPaneEvidence,
+    MultiFocusEvidence, ObserveRole, PaneDropEvidence, PaneDropViewEvidence,
 };
-use crate::ids::{AgentSessionId, MuxName, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::sidebar::cache::{
     effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched,
@@ -640,7 +641,6 @@ impl PaneFrameProducer<'_, '_> {
             client_view: pushed_client_view,
         } = listing;
         let panes = filter_foreign_session_panes(panes, self.cache.session, self.cache.diag);
-        let topology_anomalies = multi_focus_topology_anomalies(&panes);
         let prior = self.cache.prior();
         // Renderer paint gating depends on fresh client focus. Zellij's
         // topology push carries it; backends without pushed presence fall back
@@ -651,20 +651,32 @@ impl PaneFrameProducer<'_, '_> {
                 |prior| (prior.viewed_panes.clone(), prior.presence),
             )
         };
-        let (viewed_panes, presence) = match pushed_client_view {
+        let (viewed_panes, presence, client_view_resolved) = match pushed_client_view {
             Some(client_view) => {
                 let presence = presence_sample_from_client_view(&client_view);
-                (client_view.viewed_panes, Some(presence))
+                (client_view.viewed_panes, Some(presence), true)
             }
             None => match client_view(self.mux, self.cache.session) {
                 Ok(client_view) => {
                     let presence = presence_sample_from_client_view(&client_view);
-                    (client_view.viewed_panes, Some(presence))
+                    (client_view.viewed_panes, Some(presence), true)
                 }
-                Err(_) if self.mux == MuxName::Zellij => prior_client_view(),
-                Err(_) => (Vec::new(), None),
+                Err(_) if self.mux == MuxName::Zellij => {
+                    let (viewed, presence) = prior_client_view();
+                    (viewed, presence, false)
+                }
+                Err(_) => (Vec::new(), None, false),
             },
         };
+        let topology_anomalies = multi_focus_topology_anomalies(
+            &panes,
+            client_view_resolved.then(|| MultiFocusEvidence {
+                human_clients: presence
+                    .as_ref()
+                    .map_or(0, |presence| presence.human_clients),
+                viewed_pane_ids: viewed_panes.clone(),
+            }),
+        );
         let (mut frame, diagnostics) =
             crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
                 panes,
@@ -804,7 +816,10 @@ struct FocusedTopologyTab {
     pane_ids: Vec<String>,
 }
 
-fn multi_focus_topology_anomalies(panes: &[crate::pane::PaneRef]) -> Vec<AnomalyKind> {
+fn multi_focus_topology_anomalies(
+    panes: &[crate::pane::PaneRef],
+    evidence: Option<MultiFocusEvidence>,
+) -> Vec<AnomalyKind> {
     let mut focused_by_tab = BTreeMap::<String, FocusedTopologyTab>::new();
     for pane in panes
         .iter()
@@ -834,6 +849,7 @@ fn multi_focus_topology_anomalies(panes: &[crate::pane::PaneRef]) -> Vec<Anomaly
             tab_name: tab.tab_name,
             tab_position: tab.tab_position,
             pane_ids: tab.pane_ids,
+            evidence: evidence.clone(),
         })
         .collect()
 }
@@ -1185,14 +1201,84 @@ fn emit_pane_count_drop(
         return;
     }
     let (removed, added) = pane_set_delta(prior, fresh);
+    let evidence = Some(pane_drop_evidence(prior, fresh, &removed));
     let frames_ref = diag.capture_frame_pair("pane_count_drop", prior, fresh, at_ms);
     diag.emit(DiagEvent::PaneCountDrop {
         prior: prior_count,
         new: fresh_count,
         removed,
         added,
+        evidence,
         frames_ref,
     });
+}
+
+fn pane_drop_evidence(
+    prior: &PaneFrame,
+    fresh: &PaneFrame,
+    removed: &[PaneId],
+) -> PaneDropEvidence {
+    let removed = removed.iter().collect::<HashSet<_>>();
+    let fresh_ids = fresh
+        .pane_states()
+        .map(|pane| &pane.pane_id)
+        .collect::<HashSet<_>>();
+    let mut affected_views = prior
+        .tabs
+        .iter()
+        .filter_map(|tab| {
+            let removed_panes = tab
+                .panes
+                .iter()
+                .filter(|pane| removed.contains(&pane.pane_id))
+                .collect::<Vec<_>>();
+            if removed_panes.is_empty() {
+                return None;
+            }
+            let managed_panes = removed_panes
+                .iter()
+                .filter_map(|pane| {
+                    pane.current
+                        .hosted_agent_kind
+                        .clone()
+                        .or_else(|| {
+                            pane.current
+                                .command
+                                .as_deref()
+                                .and_then(crate::store::snapshot::command_agent_kind)
+                                .map(AgentKind::new_unchecked)
+                        })
+                        .map(|agent_kind| ManagedPaneEvidence {
+                            pane_id: pane.pane_id.clone(),
+                            agent_kind,
+                        })
+                })
+                .collect();
+            Some(PaneDropViewEvidence {
+                view_id: tab.view_id.to_string(),
+                prior_panes: tab.panes.len(),
+                remaining_panes: tab
+                    .panes
+                    .iter()
+                    .filter(|pane| fresh_ids.contains(&pane.pane_id))
+                    .count(),
+                removed_pane_ids: removed_panes
+                    .into_iter()
+                    .map(|pane| pane.pane_id.clone())
+                    .collect(),
+                managed_panes,
+            })
+        })
+        .collect::<Vec<_>>();
+    affected_views.sort_by(|left, right| left.view_id.cmp(&right.view_id));
+    let prior_panes = pane_count(prior);
+    let fresh_panes = pane_count(fresh);
+    PaneDropEvidence {
+        prior_panes,
+        fresh_panes,
+        mass_shrink: prior_panes > 0 && fresh_panes.saturating_mul(2) < prior_panes,
+        affected_views,
+    }
 }
 
 fn pane_set_delta(prior: &PaneFrame, fresh: &PaneFrame) -> (Vec<PaneId>, Vec<PaneId>) {

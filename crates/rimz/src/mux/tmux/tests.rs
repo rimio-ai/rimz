@@ -49,6 +49,10 @@ fn log_classifier_matches_error_and_fatal_mentions() {
         classify_log_line("fatal: control socket closed"),
         Some(LogSeverity::Error)
     );
+    assert_eq!(
+        classify_log_line("server panic: invariant failed"),
+        Some(LogSeverity::Panic)
+    );
     assert_eq!(classify_log_line("normal redraw"), None);
 }
 

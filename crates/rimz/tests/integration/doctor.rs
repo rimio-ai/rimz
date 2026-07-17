@@ -110,6 +110,7 @@ fn doctor_json_folds_one_row_per_agent() {
         .output()
         .expect("spawn doctor");
     let report = doctor_json(&output);
+    assert_eq!(report["schema"], "rimz.doctor.v1");
 
     let agents = &report["agents"];
     assert_eq!(agents["state"], "observed");
@@ -423,15 +424,22 @@ fn doctor_reports_zellij_server_log_excerpt() {
     let log = &report["mux"]["ready"]["log"];
     assert_eq!(log["state"], "ready");
     assert_eq!(log["path"], log_path.display().to_string());
-    assert_eq!(log["matched"], 3);
-    let entries = log["entries"].as_array().expect("entries");
-    assert_eq!(entries.len(), 3, "{entries:?}");
-    assert_eq!(entries[0]["severity"], "warn");
-    assert_eq!(entries[0]["line"], "WARN first warning");
-    assert_eq!(entries[1]["severity"], "error");
-    assert_eq!(entries[1]["line"], "ERROR failed");
-    assert_eq!(entries[2]["severity"], "panic");
-    assert_eq!(entries[2]["line"], "Panic occured: boom");
+    assert_eq!(log["scope"]["kind"], "host_user");
+    assert_eq!(log["scope"]["uid"], uid);
+    assert_eq!(log["logical_records"], 5);
+    assert_eq!(log["problem_records"], 3);
+    assert_eq!(log["omitted_issue_groups"], 0);
+    let issues = log["issues"].as_array().expect("issues");
+    assert_eq!(issues.len(), 3, "{issues:?}");
+    assert_eq!(issues[0]["source_severity"], "warn");
+    assert_eq!(issues[0]["state"], "investigate");
+    assert_eq!(issues[0]["impact"], "warn");
+    assert_eq!(issues[0]["samples"][0], "WARN first warning");
+    assert_eq!(issues[1]["source_severity"], "error");
+    assert_eq!(issues[1]["samples"][0], "ERROR failed");
+    assert_eq!(issues[2]["source_severity"], "panic");
+    assert_eq!(issues[2]["impact"], "alarm");
+    assert_eq!(issues[2]["samples"][0], "Panic occured: boom");
 
     std::fs::write(&log_path, "INFO boot\nINFO WARN still ignored\n").expect("rewrite zellij log");
     let clean = doctor_json(
@@ -443,11 +451,11 @@ fn doctor_reports_zellij_server_log_excerpt() {
             .expect("spawn doctor"),
     );
     assert_eq!(clean["mux"]["ready"]["log"]["state"], "ready");
-    assert_eq!(clean["mux"]["ready"]["log"]["matched"], 0);
+    assert_eq!(clean["mux"]["ready"]["log"]["problem_records"], 0);
     assert_eq!(
-        clean["mux"]["ready"]["log"]["entries"]
+        clean["mux"]["ready"]["log"]["issues"]
             .as_array()
-            .expect("entries")
+            .expect("issues")
             .len(),
         0
     );
@@ -593,9 +601,9 @@ fn doctor_clear_dismisses_recorded_history() {
         .parse()
         .expect("watermark timestamp");
     assert!(
-        report["diagnostics"]["records"]
+        report["diagnostics"]["incidents"]
             .as_array()
-            .expect("diagnostic records")
+            .expect("diagnostic incidents")
             .is_empty(),
         "old diagnostics are dismissed: {report}"
     );
@@ -628,9 +636,9 @@ fn doctor_clear_dismisses_recorded_history() {
     );
     assert_eq!(next["history_cleared_at"], report["history_cleared_at"]);
     assert!(
-        next["diagnostics"]["records"]
+        next["diagnostics"]["incidents"]
             .as_array()
-            .expect("diagnostic records")
+            .expect("diagnostic incidents")
             .is_empty()
     );
     assert!(next.get("last_incident").is_none());
@@ -653,9 +661,9 @@ fn doctor_clear_dismisses_recorded_history() {
             .expect("spawn doctor with fresh diagnostic"),
     );
     assert_eq!(
-        fresh["diagnostics"]["records"]
+        fresh["diagnostics"]["incidents"]
             .as_array()
-            .expect("diagnostic records")
+            .expect("diagnostic incidents")
             .len(),
         1,
         "post-clear records remain visible: {fresh}"
@@ -677,9 +685,9 @@ fn doctor_labels_stale_build_diagnostics() {
             .output()
             .expect("spawn doctor"),
     );
-    let rows = report["diagnostics"]["records"]
+    let rows = report["diagnostics"]["incidents"]
         .as_array()
-        .expect("diagnostic records");
+        .expect("diagnostic incidents");
     assert_eq!(rows.len(), 1, "one diagnostic row: {rows:?}");
     assert_eq!(rows[0]["build"], "stale-build");
     assert_eq!(rows[0]["stale_build"], true);

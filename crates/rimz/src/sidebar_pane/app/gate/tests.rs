@@ -232,7 +232,7 @@ fn gate_releases_held_regression_by_count_or_timeout() {
     let gate = GateState {
         reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
         rejecting_since: Some(gate_now()),
-        spend_carry_since: None,
+        spend_carry: SpendCarryEpisodes::default(),
         rule: Some(GateRule::AgentDemotedToProcess),
     };
     assert_eq!(
@@ -250,7 +250,7 @@ fn gate_releases_held_regression_by_count_or_timeout() {
     let gate = GateState {
         reject_streak: 1,
         rejecting_since: Some(Timestamp::from_second(base).unwrap()),
-        spend_carry_since: None,
+        spend_carry: SpendCarryEpisodes::default(),
         rule: Some(GateRule::AgentDemotedToProcess),
     };
     let ceiling = ACCEPT_REGRESSION_AFTER.as_secs() as i64;
@@ -388,7 +388,12 @@ fn accept_carries_collapsed_spend_without_touching_roster() {
         state.snapshot.worktree_groups[0].rows[0].id,
         incoming_row_id
     );
-    assert_eq!(gate.spend_carry_since, Some(gate_now()));
+    assert_eq!(gate.spend_carry.fleet, Some(gate_now()));
+    assert_eq!(gate.spend_carry.workspace, Some(gate_now()));
+    assert_eq!(
+        gate.spend_carry.providers[&crate::ids::AgentKind::new_unchecked("codex")],
+        gate_now()
+    );
 }
 
 #[test]
@@ -422,6 +427,122 @@ fn accept_keeps_different_nonzero_spend() {
 }
 
 #[test]
+fn spend_carry_repairs_only_collapsed_families_and_recovers_independently() {
+    let ws = workspace();
+    let mut prior = spend_snapshot(&ws, Some(12.50), Some(7.25), Some(4.00), 50);
+    prior.today_spend_live_usd = Some(8.25);
+    prior.today_spend_epoch_secs = Some(7);
+    prior
+        .providers
+        .push(provider("claude", Some(spend_tally(3.00)), 40));
+
+    let mut incoming = spend_snapshot(&ws, Some(13.00), None, None, 0);
+    incoming.today_spend_live_usd = Some(1.00);
+    incoming.today_spend_epoch_secs = Some(8);
+    incoming
+        .providers
+        .push(provider("claude", Some(spend_tally(3.50)), 0));
+    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let (state, gate, _, _) = apply_gate(computed, true, &prior, &GateState::default(), gate_now());
+
+    assert_eq!(state.snapshot.value_tally.as_ref().unwrap().year.usd, 13.00);
+    assert_eq!(
+        state
+            .snapshot
+            .workspace_value_tally
+            .as_ref()
+            .unwrap()
+            .year
+            .usd,
+        7.25
+    );
+    assert_eq!(state.snapshot.today_spend_live_usd, Some(8.25));
+    assert_eq!(state.snapshot.today_spend_epoch_secs, Some(7));
+    assert_eq!(
+        state.snapshot.providers[0]
+            .spending
+            .as_ref()
+            .unwrap()
+            .year
+            .usd,
+        4.00
+    );
+    assert_eq!(
+        state.snapshot.providers[1]
+            .spending
+            .as_ref()
+            .unwrap()
+            .year
+            .usd,
+        3.50
+    );
+    assert!(gate.spend_carry.fleet.is_none());
+    assert_eq!(gate.spend_carry.workspace, Some(gate_now()));
+    assert_eq!(gate.spend_carry.providers.len(), 1);
+
+    let mut recovered = spend_snapshot(&ws, Some(14.00), Some(8.00), None, 0);
+    recovered.today_spend_live_usd = Some(9.00);
+    recovered.today_spend_epoch_secs = Some(9);
+    recovered
+        .providers
+        .push(provider("claude", Some(spend_tally(4.00)), 0));
+    let computed = compute_next_state(Ok(recovered), &state.snapshot, &Health::default());
+    let (state, gate, _, _) = apply_gate(computed, true, &state.snapshot, &gate, gate_now());
+
+    assert_eq!(state.snapshot.workspace_value_tally.unwrap().year.usd, 8.00);
+    assert_eq!(state.snapshot.today_spend_live_usd, Some(9.00));
+    assert_eq!(
+        state.snapshot.providers[0]
+            .spending
+            .as_ref()
+            .unwrap()
+            .year
+            .usd,
+        4.00
+    );
+    assert!(gate.spend_carry.workspace.is_none());
+    assert_eq!(gate.spend_carry.providers.len(), 1);
+}
+
+#[test]
+fn spend_carry_expires_each_family_without_coupling_mana_zero() {
+    let ws = workspace();
+    let prior = spend_snapshot(&ws, Some(12.50), Some(7.25), Some(4.00), 50);
+    let incoming = spend_snapshot(&ws, None, None, None, 0);
+    let base_ms = 1_700_000_000_000;
+    let old = Timestamp::from_millisecond(base_ms).unwrap();
+    let fresh = Timestamp::from_millisecond(
+        base_ms + i64::try_from(ACCEPT_REGRESSION_AFTER.as_millis() / 2).unwrap(),
+    )
+    .unwrap();
+    let gate = GateState {
+        spend_carry: SpendCarryEpisodes {
+            fleet: Some(old),
+            workspace: Some(fresh),
+            providers: BTreeMap::from([(crate::ids::AgentKind::new_unchecked("codex"), old)]),
+        },
+        ..GateState::default()
+    };
+    let now = Timestamp::from_millisecond(
+        base_ms + i64::try_from(ACCEPT_REGRESSION_AFTER.as_millis()).unwrap(),
+    )
+    .unwrap();
+    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let (state, gate, _, _) = apply_gate(computed, true, &prior, &gate, now);
+
+    assert!(state.snapshot.value_tally.is_none());
+    assert_eq!(state.snapshot.workspace_value_tally.unwrap().year.usd, 7.25);
+    assert!(state.snapshot.providers[0].spending.is_none());
+    assert_eq!(
+        state.snapshot.providers[0].windows[0].used_percentage,
+        Some(0)
+    );
+    assert!(gate.spend_carry.fleet.is_none());
+    assert!(gate.spend_carry.workspace.is_some());
+    assert!(gate.spend_carry.providers.is_empty());
+}
+
+#[test]
 fn spend_carry_escape_hatch_commits_sustained_zero() {
     let ws = workspace();
     let prior = spend_snapshot(&ws, Some(12.50), Some(7.25), Some(4.00), 50);
@@ -429,7 +550,14 @@ fn spend_carry_escape_hatch_commits_sustained_zero() {
     let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
     let base = 1_700_000_000;
     let prev_gate = GateState {
-        spend_carry_since: Some(Timestamp::from_second(base).unwrap()),
+        spend_carry: SpendCarryEpisodes {
+            fleet: Some(Timestamp::from_second(base).unwrap()),
+            workspace: Some(Timestamp::from_second(base).unwrap()),
+            providers: BTreeMap::from([(
+                crate::ids::AgentKind::new_unchecked("codex"),
+                Timestamp::from_second(base).unwrap(),
+            )]),
+        },
         ..GateState::default()
     };
     let now = Timestamp::from_second(base + ACCEPT_REGRESSION_AFTER.as_secs() as i64).unwrap();
@@ -461,7 +589,7 @@ fn failed_fetch_keeps_a_gate_episode_open() {
     let prev_gate = GateState {
         reject_streak: 1,
         rejecting_since: Some(gate_now()),
-        spend_carry_since: None,
+        spend_carry: SpendCarryEpisodes::default(),
         rule: Some(GateRule::EmptyStampedFrame),
     };
 
@@ -486,7 +614,7 @@ fn accept_resets_the_gate() {
     let prev_gate = GateState {
         reject_streak: 2,
         rejecting_since: Some(gate_now()),
-        spend_carry_since: None,
+        spend_carry: SpendCarryEpisodes::default(),
         rule: Some(GateRule::AgentDemotedToProcess),
     };
     let (state, gate, rejected, released_via_escape_hatch) =
@@ -506,7 +634,7 @@ fn escape_release_reports_escape_hatch() {
     let prev_gate = GateState {
         reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
         rejecting_since: Some(gate_now()),
-        spend_carry_since: None,
+        spend_carry: SpendCarryEpisodes::default(),
         rule: Some(GateRule::AgentDemotedToProcess),
     };
 

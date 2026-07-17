@@ -153,14 +153,166 @@ pub fn log_file() -> PathBuf {
 }
 
 pub fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
+    match parse_log_line(line) {
+        super::logtail::RecordLine::Start(start) => start.severity,
+        super::logtail::RecordLine::Continuation => None,
+    }
+}
+
+pub fn parse_log_line(line: &str) -> super::logtail::RecordLine {
+    use super::logtail::{LogRecordStart, LogSeverity, RecordLine};
+
     if line.starts_with("Panic occured") || line.starts_with("Panic occurred") {
-        return Some(super::logtail::LogSeverity::Panic);
+        return RecordLine::Start(LogRecordStart {
+            severity: Some(LogSeverity::Panic),
+            message: line.to_owned(),
+            ..LogRecordStart::default()
+        });
     }
-    match line.split_whitespace().next() {
-        Some("ERROR") => Some(super::logtail::LogSeverity::Error),
-        Some("WARN") => Some(super::logtail::LogSeverity::Warn),
+    let Some((severity_name, rest)) = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]
+        .into_iter()
+        .find_map(|severity| {
+            line.strip_prefix(severity)
+                .filter(|rest| rest.chars().next().is_none_or(char::is_whitespace))
+                .map(|rest| (severity, rest))
+        })
+    else {
+        return RecordLine::Continuation;
+    };
+    let mut severity = match severity_name {
+        "WARN" => Some(LogSeverity::Warn),
+        "ERROR" => Some(LogSeverity::Error),
         _ => None,
+    };
+    if let Some(header) = parse_zellij_structured_header(rest) {
+        if header.message.starts_with("Panic occured")
+            || header.message.starts_with("Panic occurred")
+        {
+            severity = Some(LogSeverity::Panic);
+        }
+        return RecordLine::Start(LogRecordStart {
+            severity,
+            timestamp: Some(header.timestamp),
+            target: Some(header.target),
+            thread: Some(header.thread),
+            source: Some(header.source),
+            message: header.message,
+        });
     }
+    let message = rest.trim_start().to_owned();
+    RecordLine::Start(LogRecordStart {
+        severity,
+        message,
+        ..LogRecordStart::default()
+    })
+}
+
+struct ZellijLogHeader {
+    target: String,
+    timestamp: String,
+    thread: String,
+    source: String,
+    message: String,
+}
+
+fn parse_zellij_structured_header(rest: &str) -> Option<ZellijLogHeader> {
+    let rest = rest.trim_start().strip_prefix('|')?;
+    let (target, rest) = rest.split_once('|')?;
+    let (timestamp, rest) = rest.trim_start().split_once(" [")?;
+    let (thread, rest) = rest.split_once(']')?;
+    let (source, message) = rest.trim_start().split_once(": ")?;
+    let target = target.trim();
+    let timestamp = timestamp.trim();
+    let thread = thread.trim();
+    let source = source.trim();
+    if target.is_empty() || timestamp.is_empty() || thread.is_empty() || source.is_empty() {
+        return None;
+    }
+    Some(ZellijLogHeader {
+        target: target.to_owned(),
+        timestamp: timestamp.to_owned(),
+        thread: thread.to_owned(),
+        source: source.to_owned(),
+        message: message.trim_end().to_owned(),
+    })
+}
+
+pub fn diagnose_log_record(
+    previous: Option<&super::logtail::LogicalRecord>,
+    record: &super::logtail::LogicalRecord,
+    next: Option<&super::logtail::LogicalRecord>,
+) -> Option<super::logtail::LogDiagnosis> {
+    use super::logtail::{LogDiagnosis, LogImpact, LogSeverity, LogState, normalized_issue_key};
+
+    let severity = record.start.severity?;
+    let lower = record.text.to_ascii_lowercase();
+    let closed_client_start = record.start.message == "Received unknown message from client.";
+    let paired_broken_pipe = next.filter(|next| {
+        next.start.message == "a non-fatal error occured"
+            && next.text.contains("Caused by:")
+            && next.text.contains("failed to send message to client")
+            && next.text.contains("Broken pipe (os error 32)")
+    });
+    let follows_closed_client = previous.is_some_and(|previous| {
+        previous.start.message == "Received unknown message from client."
+            && record.start.message == "a non-fatal error occured"
+            && record.text.contains("Caused by:")
+            && record.text.contains("failed to send message to client")
+            && record.text.contains("Broken pipe (os error 32)")
+    });
+    if follows_closed_client {
+        return None;
+    }
+    let expected = if closed_client_start {
+        paired_broken_pipe.map(|next| LogDiagnosis {
+            key: "closed_client_unknown_message".to_owned(),
+            state: LogState::Expected,
+            impact: LogImpact::Info,
+            summary: "closed Zellij client lifecycle".to_owned(),
+            sample: Some(format!("{}\n{}", record.text, next.text)),
+        })
+    } else if lower.contains("closed terminal")
+        && lower.contains("resize")
+        && lower.contains("caused by")
+    {
+        Some(LogDiagnosis {
+            key: "closed_terminal_resize".to_owned(),
+            state: LogState::Expected,
+            impact: LogImpact::Info,
+            summary: "closed-terminal resize lifecycle".to_owned(),
+            sample: None,
+        })
+    } else if record.start.target.as_deref() == Some("zellij_server::route")
+        && record.start.message == "Action CliPipe did not complete within 1s timeout"
+    {
+        Some(LogDiagnosis {
+            key: "cli_pipe_completion_timeout".to_owned(),
+            state: LogState::Expected,
+            impact: LogImpact::Info,
+            summary: "completed CliPipe timeout artifact".to_owned(),
+            sample: None,
+        })
+    } else {
+        None
+    };
+    if let Some(expected) = expected {
+        return Some(expected);
+    }
+    let impact = match severity {
+        LogSeverity::Warn => LogImpact::Warn,
+        LogSeverity::Error | LogSeverity::Panic => LogImpact::Alarm,
+    };
+    let summary = record.start.message.trim().to_owned();
+    Some(LogDiagnosis {
+        key: normalized_issue_key(&format!(
+            "{}:{summary}",
+            record.start.target.as_deref().unwrap_or_default()
+        )),
+        state: LogState::Investigate,
+        impact,
+        summary,
+        sample: None,
+    })
 }
 
 /// Parse `"zellij 0.41.2"` (and tolerant of leading/trailing whitespace).

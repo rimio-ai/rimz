@@ -63,6 +63,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         .as_ref()
         .and_then(watermark::read);
     DoctorReport {
+        schema: "rimz.doctor.v1",
         version: rimz::build_id::VERSION,
         host: runtime::collect_host(),
         workspace: match &workspace {
