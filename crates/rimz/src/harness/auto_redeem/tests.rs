@@ -254,6 +254,28 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
 }
 
 #[test]
+fn spawn_failure_cancels_only_its_matching_reservation() {
+    let now = ts(1_700_000_000);
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.shared_auto_redeem_path(CODEX_KIND);
+
+    assert!(reserve_attempt(
+        &runtime,
+        RedeemReason::ExpiryRescue,
+        now,
+        "request-a"
+    ));
+    cancel_attempt_reservation(&runtime, "request-b");
+    assert_eq!(read_stamp(&path).unwrap().request_id, "request-a");
+
+    cancel_attempt_reservation(&runtime, "request-a");
+    assert!(read_stamp(&path).is_none());
+}
+
+#[test]
 fn credit_selection_prefers_the_soonest_known_expiry() {
     let details = vec![
         ResetCreditDetail {
