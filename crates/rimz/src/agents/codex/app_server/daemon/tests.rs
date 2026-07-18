@@ -24,7 +24,7 @@ fn missing_standalone_guidance_uses_official_install_command() {
 }
 
 #[test]
-fn updater_skew_guidance_names_risk_and_deliberate_recycle() {
+fn updater_skew_guidance_names_auto_refresh_and_provider_bootstrap() {
     let skew = UpdaterSkew {
         updater_pid: 1_643_110,
         updater_exe: "/home/u/.codex/packages/standalone/releases/0.144.4/bin/codex".into(),
@@ -37,12 +37,20 @@ fn updater_skew_guidance_names_risk_and_deliberate_recycle() {
     updater pid: 1643110
     updater exe: /home/u/.codex/packages/standalone/releases/0.144.4/bin/codex
     managed exe: /home/u/.codex/packages/standalone/releases/0.144.5/bin/codex
-    The next hourly update tick can restart the shared app-server and disconnect every daemon-backed Codex session.
+    The next successful hourly updater pass will restart the shared app-server, then replace the updater with the managed binary. This should clear the skew automatically, but it disconnects every daemon-backed Codex session.
 
-    Schedule one deliberate recycle while no valuable Codex turns are running:
-        cd ~; codex remote-control stop; sleep 3; codex remote-control start
-    (a start immediately after stop races the daemon teardown and fails with "connection is errored"). This disconnects daemon-backed Codex sessions once; resume them afterwards.
+    To choose the timing, run one provider-owned bootstrap while no valuable Codex turns are running:
+        cd ~; /home/u/.codex/packages/standalone/releases/0.144.5/bin/codex app-server daemon bootstrap --remote-control
+    This restarts both provider processes and disconnects daemon-backed Codex sessions once; resume them afterwards. A `remote-control stop` / `start` pair restarts only the app-server and does not clear updater skew.
     "###);
+}
+
+#[test]
+fn updater_skew_recycle_quotes_the_exact_managed_executable() {
+    assert_eq!(
+        recycle_command(Path::new("/home/space cadet/.codex/current/codex")),
+        "cd ~; '/home/space cadet/.codex/current/codex' app-server daemon bootstrap --remote-control"
+    );
 }
 
 #[test]

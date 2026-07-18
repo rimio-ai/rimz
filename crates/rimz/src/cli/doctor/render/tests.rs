@@ -675,7 +675,7 @@ fn remote_agent_fields_render_as_key_and_verdict() {
                 refusals: vec!["disableRemoteControl: true".to_owned()],
                 skipped: vec!["managed standalone Codex install is missing".to_owned()],
                 advisories: vec![
-                    "Codex remote-control updater version skew:\n    codex remote-control stop; sleep 3; codex remote-control start"
+                    "Codex remote-control updater version skew:\n    codex app-server daemon bootstrap --remote-control"
                         .to_owned(),
                 ],
             },
@@ -698,7 +698,7 @@ fn remote_agent_fields_render_as_key_and_verdict() {
     assert!(
         out.contains("provider daemon advisory (no start impact)")
             && out.contains("Codex remote-control updater version skew")
-            && out.contains("sleep 3"),
+            && out.contains("bootstrap --remote-control"),
         "{out}"
     );
 }

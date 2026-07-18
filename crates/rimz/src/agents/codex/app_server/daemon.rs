@@ -23,14 +23,8 @@ const START_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 /// Official managed-standalone installer surfaced by readiness guidance.
 const INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
-/// Human-facing recycle. The leading `cd` anchors the restarted daemon in a
-/// durable directory: the detached app-server inherits the spawning shell's
-/// working directory, so a recycle run from a worktree that is later removed
-/// leaves the daemon resolving config against a deleted path, failing every
-/// `thread/start` with "failed to load configuration". RimZ's own spawn passes
-/// `CODEX_HOME` as cwd for the same reason.
-const RECYCLE_COMMAND: &str =
-    "cd ~; codex remote-control stop; sleep 3; codex remote-control start";
+/// Provider lifecycle command that refreshes both the app-server and updater.
+const RECYCLE_ARGS: &str = "app-server daemon bootstrap --remote-control";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Readiness {
@@ -83,25 +77,38 @@ impl std::fmt::Display for UpdaterSkew {
         } else {
             ""
         };
+        let recycle_command = recycle_command(&self.managed_exe);
         write!(
             f,
             "Codex remote-control updater version skew:\n\
                  updater pid: {}\n\
                  updater exe: {}{}\n\
                  managed exe: {}\n\
-             The next hourly update tick can restart the shared app-server and disconnect every \
-             daemon-backed Codex session.\n\n\
-             Schedule one deliberate recycle while no valuable Codex turns are running:\n    \
-             {RECYCLE_COMMAND}\n\
-             (a start immediately after stop races the daemon teardown and fails with \
-             \"connection is errored\"). This disconnects daemon-backed Codex sessions once; \
-             resume them afterwards.",
+             The next successful hourly updater pass will restart the shared app-server, then \
+             replace the updater with the managed binary. This should clear the skew \
+             automatically, but it disconnects every daemon-backed Codex session.\n\n\
+             To choose the timing, run one provider-owned bootstrap while no valuable Codex turns \
+             are running:\n    {recycle_command}\n\
+             This restarts both provider processes and disconnects daemon-backed Codex sessions \
+             once; resume them afterwards. A `remote-control stop` / `start` pair restarts only the \
+             app-server and does not clear updater skew.",
             self.updater_pid,
             self.updater_exe.display(),
             deleted,
             self.managed_exe.display(),
         )
     }
+}
+
+/// Render the exact managed binary so a different `codex` on PATH cannot own
+/// the repair. The leading `cd` anchors detached provider processes in a
+/// durable directory rather than a worktree that can later disappear.
+fn recycle_command(managed_exe: &Path) -> String {
+    let raw = managed_exe.display().to_string();
+    let bin = shlex::try_quote(&raw)
+        // Filesystem paths cannot contain the NUL byte rejected by shlex.
+        .expect("managed executable path is shell-quotable");
+    format!("cd ~; {bin} {RECYCLE_ARGS}")
 }
 
 pub fn readiness(enabled: bool) -> Readiness {
@@ -118,8 +125,8 @@ pub fn readiness(enabled: bool) -> Readiness {
 /// managed standalone target while the daemon control socket is present.
 ///
 /// This is diagnostic only. A healthy but skewed daemon keeps serving until
-/// the user schedules a provider-owned recycle; RimZ does not replace it and
-/// reproduce the session loss this warning exists to explain.
+/// its next successful update pass or a user-scheduled provider bootstrap;
+/// RimZ does not choose the disruptive timing this warning exists to explain.
 pub fn updater_skew() -> Option<UpdaterSkew> {
     let home = codex_home()?;
     updater_skew_under(&home)

@@ -128,7 +128,7 @@ If a directly-launched Copilot card has lifecycle but no resolved model or token
 
 ### Codex sessions drop with a WebSocket reset about hourly
 
-`WebSocket protocol error: Connection reset without closing handshake` can mean Codex's updater is running a different executable from its managed standalone install and restarting the shared app-server on each hourly update tick. Check the REMOTE CONTROL section of `rimz doctor`; when it reports the provider daemon advisory, schedule `cd ~; codex remote-control stop; sleep 3; codex remote-control start` while no valuable Codex turns are running, then resume the sessions this deliberate recycle disconnects.
+`WebSocket protocol error: Connection reset without closing handshake` can mean Codex's updater is running a different executable from its managed standalone install. Its next successful hourly pass restarts the shared app-server before refreshing its own process image, which normally clears the skew but disconnects active sessions once. Check the REMOTE CONTROL section of `rimz doctor`; when it reports the provider daemon advisory, either leave the automatic one-time refresh to its next pass or schedule the printed managed-binary `codex app-server daemon bootstrap --remote-control` command while no valuable Codex turns are running, then resume the sessions this deliberate recycle disconnects. A `codex remote-control stop` / `start` pair does not recycle the updater and does not fix this advisory.
 
 ### Zellij pane discovery stopped
 
