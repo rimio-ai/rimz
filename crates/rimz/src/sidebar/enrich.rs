@@ -21,7 +21,7 @@ use crate::{
     SidebarSnapshot, SidebarWorktreeKind, WorktreeTrunkSync,
 };
 use jiff::Timestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::frame::{PaneFrame, PaneMetrics};
 use super::refresh::accounts::{cached_accounts_for_snapshot, read_accounts_cache};
@@ -302,6 +302,18 @@ struct LazyPairingLogKey {
 
 static LOGGED_LAZY_PAIRINGS: OnceLock<Mutex<HashMap<LazyPairingLogKey, u64>>> = OnceLock::new();
 
+/// Renderer-independent sidebar projection. Call [`project_local`] before a
+/// snapshot reaches rendering or notification evaluation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WorkspaceSnapshot(SidebarSnapshot);
+
+impl WorkspaceSnapshot {
+    pub(crate) fn snapshot(&self) -> &SidebarSnapshot {
+        &self.0
+    }
+}
+
 /// Fold the enrichments onto a base snapshot — one ordered spine for the
 /// producer and every consumer, so the two paths can never drift. `frame` is
 /// the live pane frame (panes plus the observed-or-produced pane stamp): the
@@ -313,11 +325,82 @@ static LOGGED_LAZY_PAIRINGS: OnceLock<Mutex<HashMap<LazyPairingLogKey, u64>>> = 
 /// The fold reads only runtime caches and sidecars unless `opts.lanes` supplies
 /// freshly refreshed account, spending, and PR values for projection.
 pub fn enrich(
+    snapshot: SidebarSnapshot,
+    frame: Option<&PaneFrame>,
+    runtime: &RuntimePaths,
+    messages_dir: Option<&Path>,
+    exclude: Option<&PaneId>,
+    opts: FoldOpts<'_>,
+    diag: &crate::diag::DiagSink,
+) -> SidebarSnapshot {
+    project_local(
+        enrich_workspace(snapshot, frame, runtime, messages_dir, opts, diag),
+        frame,
+        exclude,
+    )
+}
+
+pub fn enrich_workspace(
+    snapshot: SidebarSnapshot,
+    frame: Option<&PaneFrame>,
+    runtime: &RuntimePaths,
+    messages_dir: Option<&Path>,
+    opts: FoldOpts<'_>,
+    diag: &crate::diag::DiagSink,
+) -> WorkspaceSnapshot {
+    WorkspaceSnapshot(enrich_core(
+        snapshot,
+        frame,
+        runtime,
+        messages_dir,
+        None,
+        false,
+        opts,
+        diag,
+    ))
+}
+
+/// Apply the renderer-owned pane exclusion, own-view, and presence verdict.
+pub fn project_local(
+    workspace: WorkspaceSnapshot,
+    frame: Option<&PaneFrame>,
+    exclude: Option<&PaneId>,
+) -> SidebarSnapshot {
+    let mut snapshot = workspace.0;
+    let Some(frame) = frame else {
+        snapshot.presence = None;
+        snapshot.own_view = None;
+        return snapshot;
+    };
+
+    let idle_threshold_ms = snapshot.sidebar.afk_after_ms();
+    let now_ms = snapshot.now.as_millisecond().max(0) as u64;
+    snapshot.presence = frame
+        .presence
+        .map(|sample| SidebarPresence::classify(sample, now_ms, idle_threshold_ms));
+    snapshot.own_view = exclude.and_then(|own| SidebarOwnView::from_frame(own, frame));
+    if let Some(excluded) = exclude {
+        snapshot
+            .agent_panes
+            .retain(|agent| agent.pane_id != *excluded);
+        // `remove_pane_rows` also clears the session focus register when the
+        // excluded pane owns it. Exclusion has always hidden only the row, so
+        // retain the pre-exclusion focus truth for fusion and watched-state.
+        let focused_pane = snapshot.focused_pane.clone();
+        snapshot.remove_pane_rows(excluded);
+        snapshot.focused_pane = focused_pane;
+        snapshot.sort_groups_for_presentation();
+    }
+    snapshot
+}
+
+fn enrich_core(
     mut snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
     runtime: &RuntimePaths,
     messages_dir: Option<&Path>,
     exclude: Option<&PaneId>,
+    classify_local: bool,
     mut opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
@@ -449,13 +532,15 @@ pub fn enrich(
         snapshot.focused_pane = frame.focused_pane.clone();
         // tmux `client_activity` is the idle signal for local and remote rooms;
         // Zellij self-suppresses idle through an absent `last_input_ms`.
-        let idle_threshold_ms = machine_config.sidebar.afk_after_ms();
-        let now_ms = snapshot.now.as_millisecond().max(0) as u64;
-        snapshot.presence = frame
-            .presence
-            .map(|sample| SidebarPresence::classify(sample, now_ms, idle_threshold_ms));
+        if classify_local {
+            let idle_threshold_ms = machine_config.sidebar.afk_after_ms();
+            let now_ms = snapshot.now.as_millisecond().max(0) as u64;
+            snapshot.presence = frame
+                .presence
+                .map(|sample| SidebarPresence::classify(sample, now_ms, idle_threshold_ms));
+        }
         snapshot.truth_degraded = truth_notice_for_frame(frame);
-        if let Some(own) = exclude {
+        if classify_local && let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_frame(own, frame);
         }
         let metrics = frame.pane_metrics().collect::<Vec<_>>();
@@ -532,6 +617,28 @@ pub fn enrich(
     // so publish the spine once both ranking inputs are present.
     snapshot.sort_groups_for_presentation();
     snapshot
+}
+
+#[cfg(test)]
+fn enrich_legacy(
+    snapshot: SidebarSnapshot,
+    frame: Option<&PaneFrame>,
+    runtime: &RuntimePaths,
+    messages_dir: Option<&Path>,
+    exclude: Option<&PaneId>,
+    opts: FoldOpts<'_>,
+    diag: &crate::diag::DiagSink,
+) -> SidebarSnapshot {
+    enrich_core(
+        snapshot,
+        frame,
+        runtime,
+        messages_dir,
+        exclude,
+        true,
+        opts,
+        diag,
+    )
 }
 
 fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<crate::TruthNotice> {

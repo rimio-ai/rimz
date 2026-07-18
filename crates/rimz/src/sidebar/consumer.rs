@@ -127,9 +127,7 @@ pub fn read_published_snapshot(
     let cache = read_snapshot_cache(&runtime.pane_frame_path(), session);
     let local_sessions = cache
         .as_deref()
-        .map(|frame| {
-            read_published_local_sessions(frame.to_pane_refs(), runtime, session, exclude).1
-        })
+        .map(|frame| read_published_local_sessions(frame.to_pane_refs(), runtime, session, None).1)
         .unwrap_or_default();
     let wiring = super::agent_wiring::read_published(runtime, session);
     Ok(enrich(

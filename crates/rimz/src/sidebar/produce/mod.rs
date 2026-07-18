@@ -486,7 +486,7 @@ fn refresh_local_sessions(
     let Some(frame) = frame else {
         return Vec::new();
     };
-    let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), opts.exclude);
+    let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
     let inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&panes);
     crate::sidebar::local_sessions::refresh_published(opts.runtime, &frame.session_name, inputs)
 }

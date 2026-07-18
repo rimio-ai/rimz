@@ -1034,6 +1034,89 @@ fn enrich_presence_with_default_config(
     )
 }
 
+fn assert_workspace_split_matches_legacy(
+    snapshot: SidebarSnapshot,
+    frame: Option<&crate::sidebar::frame::PaneFrame>,
+    runtime: &RuntimePaths,
+    exclude: Option<&PaneId>,
+) {
+    let legacy = enrich_legacy(
+        snapshot.clone(),
+        frame,
+        runtime,
+        None,
+        exclude,
+        cached_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
+    let split = project_local(
+        enrich_workspace(
+            snapshot,
+            frame,
+            runtime,
+            None,
+            cached_opts(),
+            &crate::diag::DiagSink::disabled(),
+        ),
+        frame,
+        exclude,
+    );
+    assert_eq!(
+        serde_json::to_value(split).expect("serialize split snapshot"),
+        serde_json::to_value(legacy).expect("serialize legacy snapshot")
+    );
+}
+
+#[test]
+fn workspace_split_is_behavior_equivalent_for_renderer_inputs() {
+    let (_dir, runtime, mut snapshot) = runtime();
+    snapshot.now = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
+
+    assert_workspace_split_matches_legacy(snapshot.clone(), None, &runtime, None);
+
+    let own = pane(
+        "terminal_sidebar",
+        crate::pane::SIDEBAR_CHROME_TITLE,
+        "/repo",
+    );
+    let own_id = own.pane_id.clone();
+    let working = pane("terminal_work", "zsh", "/repo");
+    let mut frame =
+        crate::sidebar::frame::assemble_frame(vec![own, working], 1_700_000_000_000, "rimz-test");
+    frame.presence = Some(crate::PresenceSample {
+        human_clients: 1,
+        last_input_ms: Some(1_699_999_999_000),
+        sampled_at_ms: 1_700_000_000_000,
+    });
+
+    assert_workspace_split_matches_legacy(snapshot.clone(), Some(&frame), &runtime, None);
+    assert_workspace_split_matches_legacy(snapshot.clone(), Some(&frame), &runtime, Some(&own_id));
+
+    let workspace = enrich_workspace(
+        snapshot,
+        Some(&frame),
+        &runtime,
+        None,
+        cached_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
+    assert!(
+        workspace
+            .snapshot()
+            .rows()
+            .all(|row| row.pane.as_ref().is_none_or(|pane| pane.pane_id != own_id)),
+        "sidebar chrome is rejected before shared pairing and admission"
+    );
+    assert!(
+        workspace
+            .snapshot()
+            .agent_panes
+            .iter()
+            .all(|agent| agent.pane_id != own_id)
+    );
+    assert_eq!(workspace.snapshot().presence, None);
+}
+
 #[test]
 fn local_tmux_presence_keeps_idle_detection() {
     let (_dir, runtime, snapshot) = runtime();
