@@ -812,8 +812,10 @@ fn fresh_cache_hit_skips_election_mux_and_publication() {
     // A future stamp keeps the cache inside the freshness TTL across CI
     // scheduler stalls (freshness saturates future stamps to age 0); a stale
     // miss here would fork a real mux produce and fail the expect below.
+    // Leave the pane unsampleable so the independent metrics cadence cannot
+    // legitimately republish the otherwise-fresh topology during this test.
     let cached = crate::sidebar::frame::assemble_frame(
-        vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
+        vec![pane("terminal_1", None, Some("/repo"))],
         unix_now_ms().saturating_add(60_000),
         "s",
     );
