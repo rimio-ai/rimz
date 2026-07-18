@@ -150,7 +150,7 @@ impl SessionCandidate {
 #[derive(Clone)]
 enum ParsedCandidate {
     Invalid,
-    Valid(Option<LocalSessionObservation>),
+    Valid(Option<Box<LocalSessionObservation>>),
 }
 
 #[derive(Default)]
@@ -541,7 +541,7 @@ impl KiroDiscoverySnapshot {
             invalidated |= result.kind() == ValueRefreshKind::Invalidated
                 || (prior_observation && !current_observation);
             if let Some(ParsedCandidate::Valid(Some(observation))) = result.into_current() {
-                observations.push(observation);
+                observations.push(*observation);
             }
         }
         (observations, invalidated)
@@ -550,7 +550,9 @@ impl KiroDiscoverySnapshot {
 
 fn parse_candidate(candidate: &SessionCandidate) -> ParsedCandidate {
     match validate_session(&candidate.bucket, &candidate.session, &candidate.workspace) {
-        Some(session) => ParsedCandidate::Valid(observation(session, &candidate.workspace)),
+        Some(session) => {
+            ParsedCandidate::Valid(observation(session, &candidate.workspace).map(Box::new))
+        }
         None => ParsedCandidate::Invalid,
     }
 }

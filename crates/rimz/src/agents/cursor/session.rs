@@ -420,8 +420,8 @@ impl CursorDiscoverySnapshot {
         forced: bool,
     ) -> Option<LocalSessionObservation> {
         let optional_paths_are_safe = dependencies.iter().all(|(path, stamp)| {
-            if path == &candidate.session.join("store.db-wal")
-                || path == &candidate.session.join("store.db-journal")
+            if path == candidate.session.join("store.db-wal")
+                || path == candidate.session.join("store.db-journal")
             {
                 matches!(
                     stamp.state,

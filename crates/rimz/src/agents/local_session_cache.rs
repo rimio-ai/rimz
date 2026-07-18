@@ -533,7 +533,7 @@ mod tests {
             vec![root.clone()]
         });
         assert!(first.attempted() && first.stable());
-        assert_eq!(catalog.entries(), [root.clone()]);
+        assert_eq!(catalog.entries(), std::slice::from_ref(&root));
         assert!(
             !catalog
                 .refresh(1, start + Duration::from_secs(29), |_| unreachable!())
