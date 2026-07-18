@@ -2,12 +2,15 @@
 source: crates/rimz/src/cli/providers/tests.rs
 expression: pretty
 ---
-Claude — Claude Max · v1.2.3 · logged in
+Claude — Claude Max · logged in
+  version:  v1.2.3
   account:  acct_123
   5h:       62% used · resets in 1h23m
   7d:       14% used · resets in 4d02h
   extra:    $12.40 used · $50.00 limit
-  resets:   2 credits · soonest expires in 3d00h
+  resets:   2 credits
+            - 2023-11-17 17:13:20 -05:00 · in 3d00h
+            - 2023-11-19 17:13:20 -05:00 · in 5d00h
   spend:    7d $31.20 · 30d $118.75
   budget:   $8.10 of $25.00/day
   sessions: 2

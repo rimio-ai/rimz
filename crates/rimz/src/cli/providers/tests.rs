@@ -1,5 +1,5 @@
 use super::*;
-use jiff::SignedDuration;
+use jiff::{SignedDuration, tz::TimeZone};
 use rimz::agents::{AgentAccount, SpendWindow};
 use rimz::{RemoteControlBadge, SidebarProviderPanel};
 
@@ -148,7 +148,10 @@ fn protocol_fixture(
     provider.reset_credits = Some(ResetCredits {
         count: 2,
         soonest_expiry: Some(now + SignedDuration::from_secs(3 * 86_400)),
-        expiries: Vec::new(),
+        expiries: vec![
+            now + SignedDuration::from_secs(3 * 86_400),
+            now + SignedDuration::from_secs(5 * 86_400),
+        ],
     });
     provider.spending = Some(SpendTally {
         week: SpendWindow {
@@ -206,12 +209,113 @@ fn pretty_and_json_reports_are_stable() {
     let (accounts, panel, spending) = protocol_fixture(now);
     let reports = assemble_reports(&accounts, vec![panel], &spending, None, false);
     let mut out = anstream::StripStream::new(Vec::new());
-    write_pretty(&mut out, &reports, now).unwrap();
+    let time_zone = TimeZone::get("America/New_York").unwrap();
+    write_pretty(&mut out, &reports, now, &time_zone).unwrap();
     let pretty = String::from_utf8(out.into_inner()).unwrap();
     insta::assert_snapshot!("provider_report_pretty", pretty);
 
     let json = serde_json::to_string_pretty(&reports).unwrap();
     insta::assert_snapshot!("provider_report_json", json);
+}
+
+fn rendered_resets(reset: &ResetCredits, now: Timestamp) -> String {
+    let mut rows = KeyVals::new().indent(2);
+    rows.push_lines("resets", reset_credit_lines(reset, now, &TimeZone::UTC));
+    let mut out = anstream::StripStream::new(Vec::new());
+    rows.render(&mut out).unwrap();
+    String::from_utf8(out.into_inner()).unwrap()
+}
+
+#[test]
+fn reset_rendering_sorts_preserves_duplicates_and_caps_detail() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let day = |days: i64| now + SignedDuration::from_secs(days * 86_400);
+    let reset = ResetCredits {
+        count: 5,
+        soonest_expiry: Some(day(1)),
+        expiries: vec![day(4), day(1), day(3), day(1), day(2)],
+    };
+
+    assert_eq!(
+        rendered_resets(&reset, now),
+        "  resets: 5 credits\n          - 2023-11-15 22:13:20 +00:00 · in 1d00h\n          - 2023-11-15 22:13:20 +00:00 · in 1d00h\n          - 2023-11-16 22:13:20 +00:00 · in 2d00h\n"
+    );
+}
+
+#[test]
+fn reset_rendering_respects_count_falls_back_to_summary_and_marks_due() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let hour = |hours: i64| now + SignedDuration::from_hours(hours);
+    assert_eq!(
+        rendered_resets(
+            &ResetCredits {
+                count: 1,
+                soonest_expiry: Some(hour(1)),
+                expiries: vec![hour(2), hour(1)],
+            },
+            now,
+        ),
+        "  resets: 1 credit\n          - 2023-11-14 23:13:20 +00:00 · in 1h00m\n"
+    );
+    assert_eq!(
+        rendered_resets(
+            &ResetCredits {
+                count: 4,
+                soonest_expiry: Some(hour(6)),
+                expiries: Vec::new(),
+            },
+            now,
+        ),
+        "  resets: 4 credits\n          - 2023-11-15 04:13:20 +00:00 · in 6h00m\n"
+    );
+    assert_eq!(
+        rendered_resets(
+            &ResetCredits {
+                count: 2,
+                soonest_expiry: Some(now),
+                expiries: vec![now - SignedDuration::from_secs(1), now],
+            },
+            now,
+        ),
+        "  resets: 2 credits\n          - 2023-11-14 22:13:19 +00:00 · due\n          - 2023-11-14 22:13:20 +00:00 · due\n"
+    );
+}
+
+#[test]
+fn provider_money_style_covers_only_dollar_tokens() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let (accounts, panel, spending) = protocol_fixture(now);
+    let reports = assemble_reports(&accounts, vec![panel], &spending, None, false);
+    let mut raw = Vec::new();
+    write_pretty(&mut raw, &reports, now, &TimeZone::UTC).unwrap();
+    let raw = String::from_utf8(raw).unwrap();
+    let style = render::palette::money();
+    let painted = |value: &str| format!("{}{value}{}", style.render(), style.render_reset());
+
+    assert!(
+        raw.contains(&format!(
+            "{} used · {} limit",
+            painted("$12.40"),
+            painted("$50.00")
+        )),
+        "{raw:?}"
+    );
+    assert!(
+        raw.contains(&format!(
+            "7d {} · 30d {}",
+            painted("$31.20"),
+            painted("$118.75")
+        )),
+        "{raw:?}"
+    );
+    assert!(
+        raw.contains(&format!(
+            "{} of {}/day",
+            painted("$8.10"),
+            painted("$25.00")
+        )),
+        "{raw:?}"
+    );
 }
 
 #[test]

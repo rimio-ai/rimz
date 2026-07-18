@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use jiff::Timestamp;
+use jiff::{Timestamp, tz::TimeZone};
 use serde::Serialize;
 
 use super::GlobalFlags;
@@ -91,7 +91,12 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
         return render::json_pretty(&reports);
     }
     let mut out = render::out();
-    render::finish(write_pretty(&mut out, &reports, Timestamp::now()))
+    render::finish(write_pretty(
+        &mut out,
+        &reports,
+        Timestamp::now(),
+        &config.time_zone(),
+    ))
 }
 
 fn validate_kind(kind: Option<&str>) -> Result<()> {
@@ -269,6 +274,7 @@ fn write_pretty(
     out: &mut impl Write,
     reports: &[ProviderReport],
     now: Timestamp,
+    time_zone: &TimeZone,
 ) -> std::io::Result<()> {
     for (index, report) in reports.iter().enumerate() {
         if index > 0 {
@@ -283,8 +289,6 @@ fn write_pretty(
             )
         )?;
         write_optional(out, report.plan_label.as_deref(), "")?;
-        write!(out, " · ")?;
-        write_optional(out, report.version.as_deref(), "v")?;
         writeln!(
             out,
             " · {}",
@@ -295,6 +299,15 @@ fn write_pretty(
         )?;
 
         let mut rows = KeyVals::new().indent(2);
+        rows.push(
+            "version",
+            report
+                .version
+                .as_deref()
+                .map_or_else(unknown_cell, |version| {
+                    cell(format!("v{}", render::one_line(version)))
+                }),
+        );
         if let Some(account_id) = &report.account_id {
             rows.push("account", cell(render::one_line(account_id)));
         }
@@ -318,44 +331,38 @@ fn write_pretty(
             rows.push("usage", cell("∞"));
         }
         if let Some(extra) = &report.extra_credits {
-            let value = value_cell(extra_credits_label(extra));
-            rows.push(
-                "extra",
-                if matches!(extra, ExtraCredits::Known { .. }) {
-                    value.fg(render::palette::money())
-                } else {
-                    value
-                },
-            );
+            match extra_credit_spans(extra) {
+                Some(spans) => rows.push_spans("extra", spans),
+                None => rows.push("extra", unknown_cell()),
+            }
         }
         if let Some(reset) = &report.reset_credits {
-            rows.push("resets", cell(reset_credits_label(reset, now)));
+            rows.push_lines("resets", reset_credit_lines(reset, now, time_zone));
         }
-        rows.push(
-            "spend",
-            report
-                .spending
-                .as_ref()
-                .map_or_else(unknown_cell, |spending| {
-                    cell(format!(
-                        "7d {} · 30d {}",
-                        rimz::theme::fmt::dollars2(spending.week.usd),
-                        rimz::theme::fmt::dollars2(spending.month.usd)
-                    ))
-                    .fg(render::palette::money())
-                }),
-        );
-        if let Some(budget) = report.day_budget {
-            let parked = if budget.parked { " · parked" } else { "" };
-            rows.push(
-                "budget",
-                cell(format!(
-                    "{} of {}/day{parked}",
-                    rimz::theme::fmt::dollars2(budget.spend_usd),
-                    rimz::theme::fmt::dollars2(budget.cap_usd)
-                ))
-                .fg(render::palette::money()),
+        if let Some(spending) = &report.spending {
+            rows.push_spans(
+                "spend",
+                [
+                    cell("7d "),
+                    money_cell(spending.week.usd),
+                    cell(" · 30d "),
+                    money_cell(spending.month.usd),
+                ],
             );
+        } else {
+            rows.push("spend", unknown_cell());
+        }
+        if let Some(budget) = report.day_budget {
+            let mut spans = vec![
+                money_cell(budget.spend_usd),
+                cell(" of "),
+                money_cell(budget.cap_usd),
+                cell("/day"),
+            ];
+            if budget.parked {
+                spans.push(cell(" · parked"));
+            }
+            rows.push_spans("budget", spans);
         }
         if report.active_sessions > 0 {
             rows.push("sessions", cell(report.active_sessions.to_string()));
@@ -409,48 +416,71 @@ fn window_value(window: &RateLimitWindow, now: Timestamp) -> Option<String> {
     Some(format!("{used}% used · {reset}"))
 }
 
-fn extra_credits_label(extra: &ExtraCredits) -> Option<String> {
+fn money_cell(value: f64) -> render::Cell {
+    cell(rimz::theme::fmt::dollars2(value)).fg(render::palette::money())
+}
+
+fn extra_credit_spans(extra: &ExtraCredits) -> Option<Vec<render::Cell>> {
     match extra {
-        ExtraCredits::Disabled => Some("disabled".to_owned()),
+        ExtraCredits::Disabled => Some(vec![cell("disabled")]),
         ExtraCredits::Known {
             used_usd,
             remaining_usd,
             limit_usd,
         } => {
-            let mut fields = Vec::new();
-            if let Some(used) = used_usd {
-                fields.push(format!("{} used", rimz::theme::fmt::dollars2(*used)));
+            let mut spans = Vec::new();
+            for (value, label) in [
+                (*used_usd, " used"),
+                (*remaining_usd, " remaining"),
+                (*limit_usd, " limit"),
+            ] {
+                let Some(value) = value else {
+                    continue;
+                };
+                if !spans.is_empty() {
+                    spans.push(cell(" · "));
+                }
+                spans.push(money_cell(value));
+                spans.push(cell(label));
             }
-            if let Some(remaining) = remaining_usd {
-                fields.push(format!(
-                    "{} remaining",
-                    rimz::theme::fmt::dollars2(*remaining)
-                ));
-            }
-            if let Some(limit) = limit_usd {
-                fields.push(format!("{} limit", rimz::theme::fmt::dollars2(*limit)));
-            }
-            (!fields.is_empty()).then(|| fields.join(" · "))
+            (!spans.is_empty()).then_some(spans)
         }
     }
 }
 
-fn reset_credits_label(reset: &ResetCredits, now: Timestamp) -> String {
+fn reset_credit_lines(
+    reset: &ResetCredits,
+    now: Timestamp,
+    time_zone: &TimeZone,
+) -> Vec<Vec<render::Cell>> {
     let noun = if reset.count == 1 {
         "credit"
     } else {
         "credits"
     };
-    let expiry = reset
-        .soonest_expiry
-        .map(|deadline| {
-            format!(
-                " · soonest expires in {}",
-                rimz::theme::fmt::reset_countdown(deadline, now)
-            )
-        })
-        .unwrap_or_default();
-    format!("{} {noun}{expiry}", reset.count)
+    let mut lines = vec![vec![cell(format!("{} {noun}", reset.count))]];
+    let mut expiries = if reset.expiries.is_empty() {
+        reset.soonest_expiry.into_iter().collect::<Vec<_>>()
+    } else {
+        reset.expiries.clone()
+    };
+    expiries.sort_unstable();
+    for deadline in expiries
+        .into_iter()
+        .take(usize::try_from(reset.count).unwrap_or(usize::MAX).min(3))
+    {
+        let local = deadline.to_zoned(time_zone.clone());
+        let relative = if deadline <= now {
+            "due".to_owned()
+        } else {
+            format!("in {}", rimz::theme::fmt::reset_countdown(deadline, now))
+        };
+        lines.push(vec![cell(format!(
+            "- {} · {relative}",
+            local.strftime("%Y-%m-%d %H:%M:%S %:z")
+        ))]);
+    }
+    lines
 }
 
 #[cfg(test)]

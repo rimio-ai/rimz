@@ -39,7 +39,11 @@ expression: json
     },
     "reset_credits": {
       "count": 2,
-      "soonest_expiry": "2023-11-17T22:13:20Z"
+      "soonest_expiry": "2023-11-17T22:13:20Z",
+      "expiries": [
+        "2023-11-17T22:13:20Z",
+        "2023-11-19T22:13:20Z"
+      ]
     },
     "spending": {
       "today": {

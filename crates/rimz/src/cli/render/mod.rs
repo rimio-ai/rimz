@@ -736,7 +736,7 @@ pub(crate) fn clip_to_width(text: &str, max_width: usize) -> String {
 /// value column aligns to the widest key, and each value keeps its own style.
 /// Reports that nest pairs under a heading set an [`KeyVals::indent`].
 pub(crate) struct KeyVals {
-    rows: Vec<(String, Cell)>,
+    rows: Vec<(String, Vec<Vec<Cell>>)>,
     indent: usize,
 }
 
@@ -755,7 +755,26 @@ impl KeyVals {
     }
 
     pub(crate) fn push(&mut self, key: impl Into<String>, value: Cell) {
-        self.rows.push((key.into(), value));
+        self.push_spans(key, [value]);
+    }
+
+    /// Add one value line composed of independently styled adjacent spans.
+    pub(crate) fn push_spans(
+        &mut self,
+        key: impl Into<String>,
+        spans: impl IntoIterator<Item = Cell>,
+    ) {
+        self.rows
+            .push((key.into(), vec![spans.into_iter().collect()]));
+    }
+
+    /// Add a value block whose follow-on lines align to the value column.
+    pub(crate) fn push_lines(
+        &mut self,
+        key: impl Into<String>,
+        lines: impl IntoIterator<Item = Vec<Cell>>,
+    ) {
+        self.rows.push((key.into(), lines.into_iter().collect()));
     }
 
     pub(crate) fn render(&self, w: &mut impl Write) -> std::io::Result<()> {
@@ -766,14 +785,22 @@ impl KeyVals {
             .map(|(key, _)| key.width() + 1)
             .max()
             .unwrap_or(0);
-        for (key, value) in &self.rows {
+        for (key, lines) in &self.rows {
             let label = format!("{key}:");
             let pad = label_w.saturating_sub(label.width());
-            write!(w, "{:indent$}", "", indent = self.indent)?;
-            cell(label).fg(palette::muted()).write_styled(w)?;
-            write!(w, "{:pad$} ", "", pad = pad)?;
-            value.write_styled(w)?;
-            writeln!(w)?;
+            for (line_index, spans) in lines.iter().enumerate() {
+                write!(w, "{:indent$}", "", indent = self.indent)?;
+                if line_index == 0 {
+                    cell(label.clone()).fg(palette::muted()).write_styled(w)?;
+                    write!(w, "{:pad$} ", "", pad = pad)?;
+                } else {
+                    write!(w, "{:value_indent$}", "", value_indent = label_w + 1)?;
+                }
+                for span in spans {
+                    span.write_styled(w)?;
+                }
+                writeln!(w)?;
+            }
         }
         Ok(())
     }
@@ -1139,6 +1166,42 @@ mod tests {
             strip(|w| kv.render(w)),
             "  name:    right-yard\n  session: 0d52\n"
         );
+    }
+
+    #[test]
+    fn keyvals_scopes_span_styles_and_aligns_continuations() {
+        let mut kv = KeyVals::new().indent(2);
+        kv.push_spans(
+            "money",
+            [
+                cell("used "),
+                cell("$12.00").fg(palette::money()),
+                cell(" today"),
+            ],
+        );
+        kv.push_lines(
+            "reset",
+            [
+                vec![cell("2 credits")],
+                vec![cell("- first")],
+                vec![cell("- second")],
+            ],
+        );
+
+        assert_eq!(
+            strip(|w| kv.render(w)),
+            "  money: used $12.00 today\n  reset: 2 credits\n         - first\n         - second\n"
+        );
+
+        let mut raw = Vec::new();
+        kv.render(&mut raw).unwrap();
+        let raw = String::from_utf8(raw).unwrap();
+        let styled_money = format!(
+            "used {}$12.00{} today",
+            palette::money().render(),
+            palette::money().render_reset()
+        );
+        assert!(raw.contains(&styled_money), "{raw:?}");
     }
 
     #[test]
