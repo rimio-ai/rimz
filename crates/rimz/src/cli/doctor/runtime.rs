@@ -17,6 +17,7 @@ use super::model;
 
 const MUX_LOG_WINDOW_BYTES: u64 = 256 * 1024;
 const MUX_LOG_ENTRY_CAP: usize = 10;
+const TOPOLOGY_CONFLICT_FRESH_MS: u64 = 10 * 60 * 1000;
 
 pub(super) fn collect_terminal() -> model::Terminal {
     let theme_mode = MachineConfig::load()
@@ -147,7 +148,7 @@ pub(super) fn collect_mux(
         binaries,
         log,
         room: None,
-        plugin_presence: None,
+        presence_plugins: None,
         zellij_socket: None,
         socket: None,
         session_health: None,
@@ -177,7 +178,7 @@ pub(super) fn collect_mux(
         report.presence = Some(collect_presence(ws, mux, &ownership));
         if mux == MuxName::Zellij {
             report.topology_writer = collect_topology_writer(ws);
-            report.plugin_presence = collect_plugin_presence(ws);
+            report.presence_plugins = collect_plugin_presence(ws);
         }
     }
     model::Probe::Ready(report)
@@ -337,33 +338,135 @@ fn scan_mux_log(
     }
 }
 
-fn collect_plugin_presence(ws: &rimz::ResolvedWorkspace) -> Option<model::PluginTelemetry> {
+fn collect_plugin_presence(ws: &rimz::ResolvedWorkspace) -> Option<model::PresencePlugins> {
     let runtime = RuntimePaths::for_workspace(ws.workspace_id.clone()).ok()?;
     let state = StatePaths::for_workspace(ws.workspace_id.clone()).ok()?;
-    let writer = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name)
-        .and_then(|cache| cache.writer)?;
-    let span = rimz::diag::plugin_presence::generation_span(
-        &state.root,
-        &ws.session_name,
-        writer.plugin_id,
-        writer.loaded_at_ms,
-    )?;
-    Some(model::PluginTelemetry {
-        plugin_id: span.plugin_id,
-        loaded_at_ms: span.loaded_at_ms,
-        sample_count: span.sample_count,
-        first_at_ms: span.first_at_ms,
-        last_at_ms: span.last_at_ms,
-        age_secs: rimz::sidebar::timing::unix_now_ms().saturating_sub(span.last_at_ms) / 1000,
-        zellij_version: span.zellij_version,
-        page_growth: span.page_growth,
-        byte_growth: span.byte_growth,
-        commands_completed_delta: span.commands_completed_delta,
-        commands_succeeded_delta: span.commands_succeeded_delta,
-        stale_writer_rejections_delta: span.stale_writer_rejections_delta,
-        topology_failures_delta: span.topology_failures_delta,
-        other_failures_delta: span.other_failures_delta,
+    let now_ms = rimz::sidebar::timing::unix_now_ms();
+    let cache = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name);
+    let cache_writer = cache.as_ref().and_then(|cache| cache.writer.as_ref());
+    let conflict = fresh_topology_writer_conflict(&runtime, cache_writer, now_ms);
+    let desired = rimz::sidebar::cache::read_presence_desired(&runtime);
+    presence_plugins_view(
+        rimz::diag::plugin_presence::recent_generations(&state.root, &ws.session_name),
+        cache.as_ref(),
+        conflict.as_ref(),
+        desired.as_ref(),
+        now_ms,
+    )
+}
+
+fn presence_plugins_view(
+    spans: Vec<rimz::diag::plugin_presence::PluginPresenceSpan>,
+    cache: Option<&rimz::mux::zellij::pane_topology::PaneTopologyCache>,
+    conflict: Option<&rimz::sidebar::presence::TopologyWriterConflict>,
+    desired: Option<&rimz::sidebar::cache::PresenceDesired>,
+    now_ms: u64,
+) -> Option<model::PresencePlugins> {
+    type Generation = (u32, u64);
+
+    let mut rows = BTreeMap::<Generation, model::PresencePluginRow>::new();
+    for span in spans {
+        rows.insert(
+            (span.plugin_id, span.loaded_at_ms),
+            model::PresencePluginRow {
+                plugin_id: span.plugin_id,
+                loaded_at_ms: span.loaded_at_ms,
+                build: span.build,
+                sample_count: span.sample_count,
+                first_at_ms: span.first_at_ms,
+                last_at_ms: span.last_at_ms,
+                last_seen_age_secs: now_ms.saturating_sub(span.last_at_ms) / 1000,
+                status: model::PresencePluginStatus::Inactive,
+                rejected_count: None,
+                outdated: false,
+                zellij_version: span.zellij_version,
+                page_growth: span.page_growth,
+                byte_growth: span.byte_growth,
+                commands_completed_delta: span.commands_completed_delta,
+                commands_succeeded_delta: span.commands_succeeded_delta,
+                stale_writer_rejections_delta: span.stale_writer_rejections_delta,
+                topology_failures_delta: span.topology_failures_delta,
+                other_failures_delta: span.other_failures_delta,
+            },
+        );
+    }
+
+    let cache_writer = cache.and_then(|cache| cache.writer.as_ref());
+    if let (Some(cache), Some(writer)) = (cache, cache_writer) {
+        upsert_presence_writer(&mut rows, writer, cache.produced_at_ms, now_ms);
+    }
+    let rejected_writer = conflict.and_then(|conflict| conflict.stale_writer.as_ref());
+    if let (Some(conflict), Some(writer)) = (conflict, rejected_writer) {
+        upsert_presence_writer(&mut rows, writer, conflict.last_ms, now_ms);
+    }
+
+    let active = cache
+        .filter(|cache| rimz::sidebar::cache::pane_topology_cache_is_fresh(cache, now_ms, None))
+        .and_then(|cache| cache.writer.as_ref())
+        .map(writer_generation_key);
+    let rejected = rejected_writer.map(writer_generation_key);
+    for (generation, row) in &mut rows {
+        if Some(*generation) == active {
+            row.status = model::PresencePluginStatus::Active;
+        } else if Some(*generation) == rejected {
+            row.status = model::PresencePluginStatus::Rejected;
+            row.rejected_count = conflict.map(|conflict| conflict.rejected_count);
+        }
+        row.outdated =
+            desired.is_some_and(|desired| row.build.as_deref() != Some(desired.build.as_str()));
+    }
+
+    let mut rows = rows.into_values().collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .loaded_at_ms
+            .cmp(&left.loaded_at_ms)
+            .then_with(|| right.plugin_id.cmp(&left.plugin_id))
+    });
+    if rows.is_empty() && desired.is_none() {
+        return None;
+    }
+    Some(model::PresencePlugins {
+        desired_build: desired.map(|desired| desired.build.clone()),
+        rows,
     })
+}
+
+fn upsert_presence_writer(
+    rows: &mut BTreeMap<(u32, u64), model::PresencePluginRow>,
+    writer: &rimz::mux::zellij::pane_topology::TopologyWriter,
+    seen_at_ms: u64,
+    now_ms: u64,
+) {
+    let row = rows
+        .entry(writer_generation_key(writer))
+        .or_insert_with(|| model::PresencePluginRow {
+            plugin_id: writer.plugin_id,
+            loaded_at_ms: writer.loaded_at_ms,
+            build: writer.build.clone(),
+            sample_count: 0,
+            first_at_ms: seen_at_ms,
+            last_at_ms: seen_at_ms,
+            last_seen_age_secs: now_ms.saturating_sub(seen_at_ms) / 1000,
+            status: model::PresencePluginStatus::Inactive,
+            rejected_count: None,
+            outdated: false,
+            zellij_version: None,
+            page_growth: 0,
+            byte_growth: 0,
+            commands_completed_delta: 0,
+            commands_succeeded_delta: None,
+            stale_writer_rejections_delta: None,
+            topology_failures_delta: None,
+            other_failures_delta: None,
+        });
+    if row.build.is_none() {
+        row.build.clone_from(&writer.build);
+    }
+}
+
+fn writer_generation_key(writer: &rimz::mux::zellij::pane_topology::TopologyWriter) -> (u32, u64) {
+    (writer.plugin_id, writer.loaded_at_ms)
 }
 
 fn severity_label(severity: logtail::LogSeverity) -> &'static str {
@@ -717,8 +820,6 @@ fn tmux_poll_presence(
 }
 
 fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::TopologyWriterHealth> {
-    const CONFLICT_FRESH_MS: u64 = 10 * 60 * 1000;
-
     let recorded_bin = StatePaths::for_workspace(ws.workspace_id.clone())
         .ok()
         .and_then(|state| rimz::store::workspace_record::read(&state.workspace_record).ok())
@@ -738,30 +839,37 @@ fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::Topolo
             let cache_writer =
                 rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name)
                     .and_then(|cache| cache.writer);
-            rimz::sidebar::presence::read_topology_writer_conflict(&runtime).and_then(|conflict| {
-                if topology_conflict_superseded(
-                    cache_writer.as_ref(),
-                    conflict.accepted_writer.as_ref(),
-                ) {
-                    return None;
-                }
-                let age_ms = now_ms.saturating_sub(conflict.last_ms);
-                (age_ms <= CONFLICT_FRESH_MS).then(|| model::TopologyWriterConflict {
+            fresh_topology_writer_conflict(&runtime, cache_writer.as_ref(), now_ms).map(
+                |conflict| model::TopologyWriterConflict {
                     stale: conflict.stale_writer.map(topology_writer_id),
                     accepted: conflict
                         .accepted_writer
                         .or(cache_writer)
                         .map(topology_writer_id),
                     rejected_count: conflict.rejected_count,
-                    age_secs: age_ms / 1000,
+                    age_secs: now_ms.saturating_sub(conflict.last_ms) / 1000,
                     fix: "run `rimz reload`".to_owned(),
-                })
-            })
+                },
+            )
         });
     (recorded_bin.is_some() || conflict.is_some()).then_some(model::TopologyWriterHealth {
         recorded_bin,
         conflict,
     })
+}
+
+fn fresh_topology_writer_conflict(
+    runtime: &RuntimePaths,
+    cache_writer: Option<&rimz::mux::zellij::pane_topology::TopologyWriter>,
+    now_ms: u64,
+) -> Option<rimz::sidebar::presence::TopologyWriterConflict> {
+    let conflict = rimz::sidebar::presence::read_topology_writer_conflict(runtime)?;
+    if topology_conflict_superseded(cache_writer, conflict.accepted_writer.as_ref())
+        || now_ms.saturating_sub(conflict.last_ms) > TOPOLOGY_CONFLICT_FRESH_MS
+    {
+        return None;
+    }
+    Some(conflict)
 }
 
 fn topology_conflict_superseded(
@@ -1561,6 +1669,43 @@ mod tests {
         }
     }
 
+    fn identified_topology_writer(
+        plugin_id: u32,
+        loaded_at_ms: u64,
+        build: &str,
+    ) -> rimz::mux::zellij::pane_topology::TopologyWriter {
+        rimz::mux::zellij::pane_topology::TopologyWriter {
+            plugin_id,
+            loaded_at_ms,
+            build: Some(build.to_owned()),
+            config: Some(format!("{build}-config")),
+        }
+    }
+
+    fn plugin_span(
+        plugin_id: u32,
+        loaded_at_ms: u64,
+        build: Option<&str>,
+        last_at_ms: u64,
+    ) -> rimz::diag::plugin_presence::PluginPresenceSpan {
+        rimz::diag::plugin_presence::PluginPresenceSpan {
+            plugin_id,
+            loaded_at_ms,
+            build: build.map(str::to_owned),
+            sample_count: 2,
+            first_at_ms: last_at_ms.saturating_sub(100),
+            last_at_ms,
+            zellij_version: Some("0.44.3".to_owned()),
+            page_growth: 1,
+            byte_growth: rimz::diag::plugin_presence::WASM_PAGE_BYTES as i64,
+            commands_completed_delta: 2,
+            commands_succeeded_delta: Some(1),
+            stale_writer_rejections_delta: Some(0),
+            topology_failures_delta: Some(0),
+            other_failures_delta: Some(0),
+        }
+    }
+
     fn tick_breach(since_ms: u64, recovered_after_ms: Option<u64>, over_ticks: u32) -> DiagEvent {
         DiagEvent::TickBudgetBreach {
             tick_loop: TickLoop::Fetch,
@@ -1629,6 +1774,65 @@ mod tests {
                 other => panic!("expected poll verdict, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn presence_plugins_classify_active_rejected_and_inactive_generations() {
+        let now_ms = 1_000_000;
+        let active = identified_topology_writer(49, 300, "desired-build");
+        let rejected = identified_topology_writer(41, 200, "old-build");
+        let cache = rimz::mux::zellij::pane_topology::PaneTopologyCache {
+            session_name: "rimz-test".to_owned(),
+            produced_at_ms: now_ms,
+            writer: Some(active),
+            focused_pane: None,
+            clients: None,
+            panes: Vec::new(),
+        };
+        let conflict = rimz::sidebar::presence::TopologyWriterConflict {
+            stale_writer: Some(rejected),
+            accepted_writer: cache.writer.clone(),
+            rejected_count: 4,
+            last_ms: now_ms.saturating_sub(1_000),
+            last_diag_ms: now_ms.saturating_sub(1_000),
+        };
+        let desired = rimz::sidebar::cache::PresenceDesired {
+            build: "desired-build".to_owned(),
+            config: "desired-config".to_owned(),
+            recorded_at_ms: now_ms,
+        };
+
+        let plugins = presence_plugins_view(
+            vec![
+                plugin_span(49, 300, None, now_ms.saturating_sub(2_000)),
+                plugin_span(31, 100, Some("old-build"), now_ms.saturating_sub(3_000)),
+            ],
+            Some(&cache),
+            Some(&conflict),
+            Some(&desired),
+            now_ms,
+        )
+        .expect("presence plugins");
+
+        assert_eq!(plugins.desired_build.as_deref(), Some("desired-build"));
+        assert_eq!(plugins.rows.len(), 3);
+        assert_eq!(plugins.rows[0].plugin_id, 49);
+        assert_eq!(plugins.rows[0].status, model::PresencePluginStatus::Active);
+        assert_eq!(plugins.rows[0].build.as_deref(), Some("desired-build"));
+        assert!(!plugins.rows[0].outdated);
+        assert_eq!(plugins.rows[1].plugin_id, 41);
+        assert_eq!(
+            plugins.rows[1].status,
+            model::PresencePluginStatus::Rejected
+        );
+        assert_eq!(plugins.rows[1].rejected_count, Some(4));
+        assert!(plugins.rows[1].outdated);
+        assert_eq!(plugins.rows[2].plugin_id, 31);
+        assert_eq!(
+            plugins.rows[2].status,
+            model::PresencePluginStatus::Inactive
+        );
+        assert!(plugins.rows[2].outdated);
     }
 
     #[test]

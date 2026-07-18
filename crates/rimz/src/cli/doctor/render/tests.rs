@@ -1,7 +1,8 @@
 use super::*;
 use crate::cli::doctor::model::{
     HookRow, Host, IncidentAgent, LastIncident, LoopTaskRow, MessageProblemRow, MuxBinaries,
-    OpenCounts, RemoteAgent, StorageRootView, TmuxCaps,
+    OpenCounts, PresencePluginRow, PresencePluginStatus, PresencePlugins, RemoteAgent,
+    StorageRootView, TmuxCaps,
 };
 use rimz::ids::MuxName;
 
@@ -46,7 +47,7 @@ fn mux_fixture() -> Mux {
             hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
         },
         room: None,
-        plugin_presence: None,
+        presence_plugins: None,
         zellij_socket: None,
         socket: Some("/tmp/tmux-1001/default".to_owned()),
         session_health: None,
@@ -242,6 +243,111 @@ fn mux_section_shows_backend_socket() {
     });
     assert!(out.contains("MULTIPLEXER"), "{out}");
     assert!(out.contains("/tmp/tmux-1001/default"), "{out}");
+}
+
+#[test]
+fn mux_section_renders_multiple_presence_plugin_generations() {
+    let row = |plugin_id, loaded_at_ms, build: &str, status, rejected_count| PresencePluginRow {
+        plugin_id,
+        loaded_at_ms,
+        build: Some(build.to_owned()),
+        sample_count: 2,
+        first_at_ms: loaded_at_ms,
+        last_at_ms: loaded_at_ms,
+        last_seen_age_secs: 3,
+        status,
+        rejected_count,
+        outdated: build != "desired-build",
+        zellij_version: Some("0.44.3".to_owned()),
+        page_growth: 1,
+        byte_growth: 65_536,
+        commands_completed_delta: 2,
+        commands_succeeded_delta: Some(2),
+        stale_writer_rejections_delta: Some(0),
+        topology_failures_delta: Some(0),
+        other_failures_delta: Some(0),
+    };
+    let mut mux = mux_fixture();
+    mux.presence_plugins = Some(PresencePlugins {
+        desired_build: Some("desired-build".to_owned()),
+        rows: vec![
+            row(
+                49,
+                1_000,
+                "desired-build",
+                PresencePluginStatus::Active,
+                None,
+            ),
+            row(
+                41,
+                2_000,
+                "old-build",
+                PresencePluginStatus::Rejected,
+                Some(3),
+            ),
+        ],
+    });
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+
+    for expected in [
+        "presence plugins",
+        "desired desired-",
+        "2 active/rejected",
+        "plugin 49",
+        "loaded 00:00:01",
+        "build desired-",
+        "zellij 0.44.3",
+        "active",
+        "plugin 41",
+        "rejected ×3",
+        "rimz reload",
+        "outdated",
+        "! 1 warning",
+    ] {
+        assert!(out.contains(expected), "missing {expected}:\n{out}");
+    }
+}
+
+#[test]
+fn mux_section_warns_on_recent_presence_plugin_failures() {
+    let mut mux = mux_fixture();
+    mux.presence_plugins = Some(PresencePlugins {
+        desired_build: Some("desired-build".to_owned()),
+        rows: vec![PresencePluginRow {
+            plugin_id: 49,
+            loaded_at_ms: 1_000,
+            build: Some("desired-build".to_owned()),
+            sample_count: 2,
+            first_at_ms: 1_000,
+            last_at_ms: 2_000,
+            last_seen_age_secs: 3,
+            status: PresencePluginStatus::Active,
+            rejected_count: None,
+            outdated: false,
+            zellij_version: Some("0.44.3".to_owned()),
+            page_growth: 0,
+            byte_growth: 0,
+            commands_completed_delta: 1,
+            commands_succeeded_delta: Some(0),
+            stale_writer_rejections_delta: Some(0),
+            topology_failures_delta: Some(1),
+            other_failures_delta: Some(0),
+        }],
+    });
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+
+    assert!(out.contains("failures 1/0"), "{out}");
+    assert!(out.contains("! 1 warning"), "{out}");
 }
 
 #[test]

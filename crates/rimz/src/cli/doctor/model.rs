@@ -139,7 +139,7 @@ pub(super) struct Mux {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) room: Option<Room>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) plugin_presence: Option<PluginTelemetry>,
+    pub(super) presence_plugins: Option<PresencePlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) zellij_socket: Option<ZellijSocket>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -248,13 +248,26 @@ pub(super) struct MuxLogIssue {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct PluginTelemetry {
+pub(super) struct PresencePlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) desired_build: Option<String>,
+    pub(super) rows: Vec<PresencePluginRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PresencePluginRow {
     pub(super) plugin_id: u32,
     pub(super) loaded_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) build: Option<String>,
     pub(super) sample_count: usize,
     pub(super) first_at_ms: u64,
     pub(super) last_at_ms: u64,
-    pub(super) age_secs: u64,
+    pub(super) last_seen_age_secs: u64,
+    pub(super) status: PresencePluginStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) rejected_count: Option<u64>,
+    pub(super) outdated: bool,
     pub(super) zellij_version: Option<String>,
     pub(super) page_growth: i64,
     pub(super) byte_growth: i64,
@@ -267,6 +280,14 @@ pub(super) struct PluginTelemetry {
     pub(super) topology_failures_delta: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) other_failures_delta: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PresencePluginStatus {
+    Active,
+    Rejected,
+    Inactive,
 }
 
 #[derive(Debug, Serialize)]

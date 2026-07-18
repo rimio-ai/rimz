@@ -17,9 +17,9 @@ use rimz::trust::TrustState;
 use super::model::{
     AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport, DoctorState,
     DuplicateSessions, HookStatus, Host, LogScope, LoopTasks, MachineConfigHealth,
-    MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow, Presence, Probe, Protocols,
-    RemoteAgent, RemoteControl, Room, RoomState, SessionHealth, Storage, Terminal,
-    TopologyWriterHealth, Trust, Version, Workspace,
+    MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow, Presence,
+    PresencePluginStatus, PresencePlugins, Probe, Protocols, RemoteAgent, RemoteControl, Room,
+    RoomState, SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -327,8 +327,8 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     if let Some(writer) = &mux.topology_writer {
         push_topology_writer(&mut kv, tally, writer);
     }
-    if let Some(plugin) = &mux.plugin_presence {
-        push_plugin_telemetry(&mut kv, tally, plugin);
+    if let Some(plugins) = &mux.presence_plugins {
+        push_presence_plugins(&mut kv, tally, plugins);
     }
     if let Some(ttyd) = &mux.ttyd {
         match ttyd {
@@ -513,66 +513,114 @@ fn push_topology_writer(kv: &mut KeyVals, tally: &mut Tally, writer: &TopologyWr
     }
 }
 
-fn push_plugin_telemetry(
-    kv: &mut KeyVals,
-    tally: &mut Tally,
-    plugin: &super::model::PluginTelemetry,
-) {
-    let version = plugin.zellij_version.as_deref().unwrap_or("unknown");
-    let succeeded = plugin
-        .commands_succeeded_delta
-        .map(|delta| format!("/{delta} succeeded"))
-        .unwrap_or_default();
+fn push_presence_plugins(kv: &mut KeyVals, tally: &mut Tally, plugins: &PresencePlugins) {
+    let non_inactive = plugins
+        .rows
+        .iter()
+        .filter(|row| row.status != PresencePluginStatus::Inactive)
+        .count();
+    let desired = plugins
+        .desired_build
+        .as_deref()
+        .map(short_build)
+        .unwrap_or_else(|| "unknown".to_owned());
+    let header = format!(
+        "desired {desired} · {} recent generations",
+        plugins.rows.len()
+    );
     kv.push(
-        "plugin generation",
+        "presence plugins",
         verdict(
             tally,
-            Health::Info,
-            format!(
-                "{}:{} · Zellij {version} · {} samples · {}s old · pages {:+} · bytes {:+} · commands +{}{}",
-                plugin.loaded_at_ms,
-                plugin.plugin_id,
-                plugin.sample_count,
-                plugin.age_secs,
-                plugin.page_growth,
-                plugin.byte_growth,
-                plugin.commands_completed_delta,
-                succeeded,
-            ),
+            if non_inactive > 1 {
+                Health::Warn
+            } else {
+                Health::Info
+            },
+            if non_inactive > 1 {
+                format!("{header} · {non_inactive} active/rejected — run `rimz reload`")
+            } else {
+                header
+            },
         ),
     );
-    if plugin
-        .stale_writer_rejections_delta
-        .is_some_and(|delta| delta > 0)
-    {
+
+    for row in &plugins.rows {
+        let version = row.zellij_version.as_deref().unwrap_or("unknown");
+        let build = row
+            .build
+            .as_deref()
+            .map(short_build)
+            .unwrap_or_else(|| "unknown".to_owned());
+        let status = match row.status {
+            PresencePluginStatus::Active => "active".to_owned(),
+            PresencePluginStatus::Rejected => format!(
+                "rejected ×{} — run `rimz reload`",
+                row.rejected_count.unwrap_or_default()
+            ),
+            PresencePluginStatus::Inactive => "inactive".to_owned(),
+        };
+        let outdated = if row.outdated { " · outdated" } else { "" };
+        let topology_failures = row.topology_failures_delta.unwrap_or_default();
+        let other_failures = row.other_failures_delta.unwrap_or_default();
+        let recent_failures = row.last_seen_age_secs
+            <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs()
+            && (topology_failures > 0 || other_failures > 0);
+        let telemetry = if row.sample_count == 0 {
+            format!("no telemetry · seen {}s ago", row.last_seen_age_secs)
+        } else {
+            let succeeded = row
+                .commands_succeeded_delta
+                .map(|delta| format!("/{delta} succeeded"))
+                .unwrap_or_default();
+            let rejects = row
+                .stale_writer_rejections_delta
+                .filter(|delta| *delta > 0)
+                .map(|delta| format!(" · stale rejects +{delta}"))
+                .unwrap_or_default();
+            let failures = (topology_failures > 0 || other_failures > 0)
+                .then(|| format!(" · failures {topology_failures}/{other_failures}"))
+                .unwrap_or_default();
+            format!(
+                "{} samples · seen {}s ago · pages {:+} · bytes {:+} · commands +{}{}{rejects}{failures}",
+                row.sample_count,
+                row.last_seen_age_secs,
+                row.page_growth,
+                row.byte_growth,
+                row.commands_completed_delta,
+                succeeded,
+            )
+        };
         kv.push(
-            "plugin stale rejects",
+            format!("plugin {}", row.plugin_id),
             verdict(
                 tally,
-                Health::Info,
+                if recent_failures {
+                    Health::Warn
+                } else if row.status == PresencePluginStatus::Active && !row.outdated {
+                    Health::Ok
+                } else {
+                    Health::Info
+                },
                 format!(
-                    "{} expected stale-writer rejections",
-                    plugin.stale_writer_rejections_delta.unwrap_or_default()
+                    "loaded {} · build {build} · zellij {version} · {status}{outdated} · {telemetry}",
+                    plugin_loaded_time(row.loaded_at_ms),
                 ),
             ),
         );
     }
-    let topology_failures = plugin.topology_failures_delta.unwrap_or_default();
-    let other_failures = plugin.other_failures_delta.unwrap_or_default();
-    if topology_failures > 0 || other_failures > 0 {
-        let recent = plugin.age_secs <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs();
-        kv.push(
-            "plugin failures",
-            verdict(
-                tally,
-                if recent { Health::Warn } else { Health::Info },
-                format!(
-                    "{} writer span: {topology_failures} topology, {other_failures} other failures",
-                    if recent { "current" } else { "historical" }
-                ),
-            ),
-        );
-    }
+}
+
+fn plugin_loaded_time(loaded_at_ms: u64) -> String {
+    i64::try_from(loaded_at_ms)
+        .ok()
+        .and_then(|millis| Timestamp::from_millisecond(millis).ok())
+        .map(|timestamp| timestamp.strftime("%H:%M:%S").to_string())
+        .unwrap_or_else(|| loaded_at_ms.to_string())
+}
+
+fn short_build(build: &str) -> String {
+    build.chars().take(8).collect()
 }
 
 fn render_duplicate_session_notes(

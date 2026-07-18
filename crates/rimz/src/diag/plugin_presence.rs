@@ -78,7 +78,6 @@ pub fn generation_span(
 ) -> Option<PluginPresenceSpan> {
     let samples = recent_samples(state_root, session_name)
         .into_iter()
-        .filter(|sample| sample.session_name.as_deref() == Some(session_name))
         .filter(|sample| sample.plugin_id == Some(plugin_id) && sample.loaded_at_ms == loaded_at_ms)
         .collect::<Vec<_>>();
     span_from_samples(plugin_id, loaded_at_ms, samples)
