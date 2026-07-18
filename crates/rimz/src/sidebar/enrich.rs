@@ -267,9 +267,9 @@ pub struct FoldOpts<'a> {
 }
 
 #[derive(Clone, Copy)]
-enum LocalProjection<'a> {
-    Deferred,
-    Inline(Option<&'a PaneId>),
+struct LocalProjection<'a> {
+    exclude: Option<&'a PaneId>,
+    classify: bool,
 }
 
 /// Probed managed-server liveness for the rc badge. `None` means no probe was
@@ -359,7 +359,10 @@ pub fn enrich_workspace(
         frame,
         runtime,
         messages_dir,
-        LocalProjection::Deferred,
+        LocalProjection {
+            exclude: None,
+            classify: false,
+        },
         opts,
         diag,
     ))
@@ -408,10 +411,10 @@ fn enrich_core(
     mut opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
-    let (exclude, classify_local) = match local_projection {
-        LocalProjection::Deferred => (None, false),
-        LocalProjection::Inline(exclude) => (exclude, true),
-    };
+    let LocalProjection {
+        exclude,
+        classify: classify_local,
+    } = local_projection;
     let producing = opts.producing;
     let machine_config = opts
         .config
@@ -642,7 +645,10 @@ fn enrich_legacy(
         frame,
         runtime,
         messages_dir,
-        LocalProjection::Inline(exclude),
+        LocalProjection {
+            exclude,
+            classify: true,
+        },
         opts,
         diag,
     )
