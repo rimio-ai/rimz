@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
+use crate::ids::MuxName;
 use crate::mux::zellij::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
@@ -108,9 +109,13 @@ pub fn published_frame_unwatched(runtime: &RuntimePaths, session: &str) -> bool 
 /// ([`SNAPSHOT_CACHE_TTL`]). Cache-class JSON in the workspace runtime root;
 /// the explicit millisecond field (over a bare mtime stamp) lets `rimz doctor`
 /// render a stamp age from the same value the producer's verdict reads.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PresenceStamp {
     pub written_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mux: Option<MuxName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 /// Timestamp of the latest tmux presence probe attempt. This cache-class hint
@@ -149,9 +154,11 @@ pub fn read_presence_probe_stamp(runtime: &RuntimePaths) -> Option<u64> {
 /// Refresh the presence stamp. Best-effort and cache-class (rename atomicity,
 /// no fsync — it is rewritten every poke and survives no power cut by design);
 /// a failed write only delays the channel reading as alive by one poke.
-pub fn write_presence_stamp(runtime: &RuntimePaths) {
+pub fn write_presence_stamp(runtime: &RuntimePaths, mux: MuxName, session_name: Option<&str>) {
     let stamp = PresenceStamp {
         written_at_ms: unix_now_ms(),
+        mux: Some(mux),
+        session_name: session_name.map(ToOwned::to_owned),
     };
     let path = presence_stamp_path(runtime);
     if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(&path, &stamp) {
@@ -164,10 +171,13 @@ pub fn write_presence_stamp(runtime: &RuntimePaths) {
 /// is a cold fork per tick, so the stamp lives in the file, never process
 /// memory. Saturating, so a stamp written by a clock ahead of this reader
 /// reads as age 0 (fresh) rather than wrapping into poll mode.
-pub fn presence_stamp_age_ms(runtime: &RuntimePaths) -> Option<u64> {
+pub fn read_presence_stamp(runtime: &RuntimePaths) -> Option<PresenceStamp> {
     let bytes = std::fs::read(presence_stamp_path(runtime)).ok()?;
-    let stamp: PresenceStamp = serde_json::from_slice(&bytes).ok()?;
-    Some(unix_now_ms().saturating_sub(stamp.written_at_ms))
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub fn presence_stamp_age_ms(runtime: &RuntimePaths) -> Option<u64> {
+    read_presence_stamp(runtime).map(|stamp| unix_now_ms().saturating_sub(stamp.written_at_ms))
 }
 
 /// Whether the presence push channel is alive: the stamp exists and is younger

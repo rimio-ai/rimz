@@ -623,6 +623,17 @@ pub enum SessionHealth {
     Stuck,
 }
 
+/// Read-only liveness of one named session on a backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionLiveness {
+    /// Running and attachable.
+    Live,
+    /// Present only as a backend resurrection record.
+    Exited,
+    /// No session by this name exists.
+    Absent,
+}
+
 /// Backend-neutral mux operations. Every Zellij/tmux command lives behind
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
@@ -638,6 +649,17 @@ pub trait MuxBackend: Send + Sync {
         self.list_sessions_within(LIST_SESSIONS_TIMEOUT)
     }
     fn list_sessions_within(&self, timeout: Duration) -> Result<Vec<String>>;
+    /// Classify one named session without folding backend failures into
+    /// absence. Backends without a resurrection state use their live-session
+    /// list as the liveness truth.
+    fn session_liveness(&self, name: &str) -> Result<SessionLiveness> {
+        let sessions = self.list_sessions_within(LIST_SESSIONS_TIMEOUT)?;
+        Ok(if sessions.iter().any(|session| session == name) {
+            SessionLiveness::Live
+        } else {
+            SessionLiveness::Absent
+        })
+    }
     /// Read a backend push-channel roster as a liveness latency hint. `None` or
     /// a missing pane id permits escalation to mux truth; neither proves pane
     /// absence for a destructive decision.

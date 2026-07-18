@@ -57,13 +57,38 @@ fn presence_stamp_round_trips_through_the_runtime_root() {
         None,
         "no stamp yet: poll mode"
     );
-    write_presence_stamp(&runtime);
+    write_presence_stamp(&runtime, crate::MuxName::Tmux, Some("rimz-test"));
     let age = presence_stamp_age_ms(&runtime).expect("stamp written and readable");
     assert!(
         age < 1_000,
         "a just-written stamp reads as young, got {age}ms"
     );
     assert!(presence_event_mode(Some(age)));
+    assert_eq!(
+        read_presence_stamp(&runtime),
+        Some(PresenceStamp {
+            written_at_ms: read_presence_stamp(&runtime).unwrap().written_at_ms,
+            mux: Some(crate::MuxName::Tmux),
+            session_name: Some("rimz-test".to_owned()),
+        })
+    );
+}
+
+#[test]
+fn presence_stamp_identity_is_backward_compatible() {
+    let legacy: PresenceStamp = serde_json::from_str(r#"{"written_at_ms":42}"#).unwrap();
+    assert_eq!(
+        legacy,
+        PresenceStamp {
+            written_at_ms: 42,
+            mux: None,
+            session_name: None,
+        }
+    );
+    assert_eq!(
+        serde_json::to_string(&legacy).unwrap(),
+        r#"{"written_at_ms":42}"#
+    );
 }
 
 #[test]
@@ -73,6 +98,8 @@ fn presence_stamp_age_handles_clock_skew_and_bad_files() {
     let future_runtime = RuntimePaths::under(future_workspace, future_dir.path()).unwrap();
     let future = PresenceStamp {
         written_at_ms: unix_now_ms() + 60_000,
+        mux: None,
+        session_name: None,
     };
     atomic::write_temp_then_rename_cache(&presence_stamp_path(&future_runtime), &future).unwrap();
     assert_eq!(

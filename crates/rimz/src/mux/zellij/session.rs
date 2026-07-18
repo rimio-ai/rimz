@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::pane_topology::PaneTopologyPane;
-use super::parse::{SessionState, session_state_from_line};
+use super::parse::{SessionState, is_no_active_sessions, session_state_from_line};
 use super::raw_pane::{RawPaneListing, SessionCleanliness, classify_session_panes};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::config::{MachineConfig, MultiplexerConfig};
@@ -234,18 +234,28 @@ impl ZellijBackend {
             .map(|panes| classify_session_panes(&panes))
     }
 
-    /// Classify `name`'s liveness from `zellij list-sessions`. A present session
-    /// always lists with exit code 0; the command only fails ("No active zellij
-    /// sessions found.", exit 1) when there are none, so any failure here means
-    /// the session is absent and a fresh birth should proceed.
+    /// Lossy birth-path classification. A probe failure leaves the existing
+    /// fail-open birth behaviour intact by reading as absence.
     pub(super) fn session_state(&self, name: &str) -> SessionState {
-        let Ok(output) = self.cmd().args(["list-sessions", "--no-formatting"]).run() else {
-            return SessionState::Absent;
+        self.session_state_checked(name)
+            .unwrap_or(SessionState::Absent)
+    }
+
+    /// Classify `name` from `zellij list-sessions` while preserving command
+    /// failures. Zellij's exit-1 no-sessions response is definitive absence;
+    /// timeouts and every other failure remain unavailable to callers.
+    pub(super) fn session_state_checked(&self, name: &str) -> Result<SessionState> {
+        let output = match self.cmd().args(["list-sessions", "--no-formatting"]).run() {
+            Ok(output) => output,
+            Err(MuxErr::Command { ref stderr, .. }) if is_no_active_sessions(stderr.as_bytes()) => {
+                return Ok(SessionState::Absent);
+            }
+            Err(err) => return Err(err),
         };
-        String::from_utf8_lossy(&output.stdout)
+        Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
             .find_map(|line| session_state_from_line(line, name))
-            .unwrap_or(SessionState::Absent)
+            .unwrap_or(SessionState::Absent))
     }
 
     /// Force-delete a session (exited or live) so the next create births a clean

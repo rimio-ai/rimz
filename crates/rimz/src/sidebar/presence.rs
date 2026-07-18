@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::diag::DiagSink;
 use crate::diag::plugin_presence::{PluginPresenceSample, WASM_PAGE_BYTES};
 use crate::diag::record::DiagEvent;
-use crate::ids::PaneId;
+use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, TopologyWriter};
 use crate::sidebar::cache::{
     pane_topology_cache_is_fresh, read_pane_topology_cache, write_pane_topology_cache,
@@ -129,7 +129,7 @@ pub fn ingest_zellij_wake(
         }
     }
 
-    write_presence_stamp(runtime);
+    write_presence_stamp(runtime, MuxName::Zellij, wake.session_name.as_deref());
     if let Some(telemetry) = wake.telemetry.as_ref() {
         write_plugin_presence_sample(state, wake.session_name.clone(), telemetry);
     }

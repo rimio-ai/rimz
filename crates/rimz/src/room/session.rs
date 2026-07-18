@@ -44,6 +44,73 @@ pub struct LiveSessions {
     tmux: HashSet<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BackendRoomState {
+    Live,
+    Exited,
+    Absent,
+    Unavailable { error: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomOwnership {
+    pub selected: MuxName,
+    pub zellij: BackendRoomState,
+    pub tmux: BackendRoomState,
+}
+
+impl RoomOwnership {
+    pub fn selected_state(&self) -> &BackendRoomState {
+        match self.selected {
+            MuxName::Zellij => &self.zellij,
+            MuxName::Tmux => &self.tmux,
+        }
+    }
+
+    pub fn live_on(&self) -> Vec<MuxName> {
+        [(MuxName::Zellij, &self.zellij), (MuxName::Tmux, &self.tmux)]
+            .into_iter()
+            .filter_map(|(mux, state)| matches!(state, BackendRoomState::Live).then_some(mux))
+            .collect()
+    }
+
+    pub fn conflict(&self) -> bool {
+        matches!(self.zellij, BackendRoomState::Live) && matches!(self.tmux, BackendRoomState::Live)
+    }
+
+    pub fn legacy_stamp_acceptable(&self) -> bool {
+        matches!(self.selected_state(), BackendRoomState::Live)
+            && definitively_not_live(match self.selected {
+                MuxName::Zellij => &self.tmux,
+                MuxName::Tmux => &self.zellij,
+            })
+    }
+}
+
+fn definitively_not_live(state: &BackendRoomState) -> bool {
+    matches!(state, BackendRoomState::Absent | BackendRoomState::Exited)
+}
+
+/// Probe the workspace room on both backends without collapsing command
+/// failures into absence.
+pub fn probe_room_ownership(selected: MuxName, session_name: &str) -> RoomOwnership {
+    let probe = |mux| match crate::mux::backend_for(mux).session_liveness(session_name) {
+        Ok(crate::mux::SessionLiveness::Live) => BackendRoomState::Live,
+        Ok(crate::mux::SessionLiveness::Exited) => BackendRoomState::Exited,
+        Ok(crate::mux::SessionLiveness::Absent) | Err(crate::mux::MuxErr::NotInstalled { .. }) => {
+            BackendRoomState::Absent
+        }
+        Err(err) => BackendRoomState::Unavailable {
+            error: err.to_string(),
+        },
+    };
+    RoomOwnership {
+        selected,
+        zellij: probe(MuxName::Zellij),
+        tmux: probe(MuxName::Tmux),
+    }
+}
+
 impl LiveSessions {
     pub fn probe() -> Self {
         let names = |mux| -> HashSet<String> {
@@ -369,6 +436,81 @@ mod tests {
         assert_eq!(live.mux_of("zellij"), Some(MuxName::Zellij));
         assert_eq!(live.mux_of("tmux"), Some(MuxName::Tmux));
         assert_eq!(live.mux_of("missing"), None);
+    }
+
+    fn ownership(
+        selected: MuxName,
+        zellij: BackendRoomState,
+        tmux: BackendRoomState,
+    ) -> RoomOwnership {
+        RoomOwnership {
+            selected,
+            zellij,
+            tmux,
+        }
+    }
+
+    #[test]
+    fn room_ownership_derives_live_owners_and_conflicts() {
+        let neither = ownership(
+            MuxName::Zellij,
+            BackendRoomState::Absent,
+            BackendRoomState::Exited,
+        );
+        assert!(neither.live_on().is_empty());
+        assert!(!neither.conflict());
+
+        let zellij = ownership(
+            MuxName::Tmux,
+            BackendRoomState::Live,
+            BackendRoomState::Absent,
+        );
+        assert_eq!(zellij.live_on(), vec![MuxName::Zellij]);
+        assert!(!zellij.conflict());
+
+        let both = ownership(
+            MuxName::Tmux,
+            BackendRoomState::Live,
+            BackendRoomState::Live,
+        );
+        assert_eq!(both.live_on(), vec![MuxName::Zellij, MuxName::Tmux]);
+        assert!(both.conflict());
+    }
+
+    #[test]
+    fn legacy_presence_requires_one_definitive_selected_owner() {
+        let states = [
+            BackendRoomState::Live,
+            BackendRoomState::Exited,
+            BackendRoomState::Absent,
+            BackendRoomState::Unavailable {
+                error: "probe failed".to_owned(),
+            },
+        ];
+        for selected in [MuxName::Zellij, MuxName::Tmux] {
+            for selected_state in &states {
+                for rival_state in &states {
+                    let room = match selected {
+                        MuxName::Zellij => {
+                            ownership(selected, selected_state.clone(), rival_state.clone())
+                        }
+                        MuxName::Tmux => {
+                            ownership(selected, rival_state.clone(), selected_state.clone())
+                        }
+                    };
+                    let expected = matches!(selected_state, BackendRoomState::Live)
+                        && matches!(
+                            rival_state,
+                            BackendRoomState::Absent | BackendRoomState::Exited
+                        );
+                    assert_eq!(
+                        room.legacy_stamp_acceptable(),
+                        expected,
+                        "selected={selected:?}, selected_state={selected_state:?}, rival={rival_state:?}",
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -137,6 +137,8 @@ pub(super) struct Mux {
     pub(super) binaries: MuxBinaries,
     pub(super) log: MuxLog,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) room: Option<Room>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) plugin_presence: Option<PluginTelemetry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) zellij_socket: Option<ZellijSocket>,
@@ -152,6 +154,25 @@ pub(super) struct Mux {
     pub(super) topology_writer: Option<TopologyWriterHealth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) ttyd: Option<Probe<TtydWeb>>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct Room {
+    pub(super) session_name: String,
+    pub(super) selected_state: RoomState,
+    pub(super) live_on: Vec<MuxName>,
+    pub(super) conflict: bool,
+    pub(super) zellij: RoomState,
+    pub(super) tmux: RoomState,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(super) enum RoomState {
+    Live,
+    Exited,
+    Absent,
+    Unavailable { error: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -304,6 +325,7 @@ pub(super) struct DuplicateSessions {
 
 #[derive(Debug, Serialize)]
 pub(super) struct SidebarGroup {
+    pub(super) mux: MuxName,
     pub(super) session_name: String,
     pub(super) is_current: bool,
     pub(super) sidebar_count: usize,
@@ -315,6 +337,7 @@ pub(super) struct SidebarGroup {
 pub(super) enum Presence {
     Event { poked_secs: u64 },
     Poll { reason: String, expected: bool },
+    NotApplicable { reason: String },
     Unavailable { error: String },
 }
 

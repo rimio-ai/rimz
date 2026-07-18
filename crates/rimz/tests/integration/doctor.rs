@@ -921,6 +921,214 @@ fn stub_mux_version(
     dir
 }
 
+#[derive(Clone, Copy)]
+enum StubRoomState {
+    Live,
+    Exited,
+    Absent,
+    Unavailable,
+}
+
+fn workspace_session_name(env: &Env) -> String {
+    let hash = env.workspace_id.as_str().trim_start_matches("ws_");
+    format!("rimz-project-{}", &hash[..6])
+}
+
+fn stub_mux_rooms(env: &Env, zellij: StubRoomState, tmux: StubRoomState) -> PathBuf {
+    let dir = env.home_root.join("mux-rooms");
+    std::fs::create_dir_all(&dir).expect("mkdir mux rooms");
+    let session = workspace_session_name(env);
+    let zellij_list = match zellij {
+        StubRoomState::Live => format!("printf '%s [Created 1m ago]\\n' '{session}'; exit 0"),
+        StubRoomState::Exited => format!(
+            "printf '%s [Created 1m ago] (EXITED - attach to resurrect)\\n' '{session}'; exit 0"
+        ),
+        StubRoomState::Absent => {
+            "printf '%s\\n' 'No active zellij sessions found.' >&2; exit 1".to_owned()
+        }
+        StubRoomState::Unavailable => "printf '%s\\n' 'permission denied' >&2; exit 1".to_owned(),
+    };
+    write_executable(
+        &dir.join("zellij"),
+        &format!(
+            "#!/bin/sh\nif [ \"${{1:-}}\" = \"--version\" ]; then printf '%s\\n' 'zellij 0.44.3'; exit 0; fi\nif [ \"${{1:-}}\" = \"list-sessions\" ]; then {zellij_list}; fi\nexit 1\n"
+        ),
+    );
+
+    let tmux_list = match tmux {
+        StubRoomState::Live | StubRoomState::Exited => {
+            format!("printf '%s\\n' '{session}'; exit 0")
+        }
+        StubRoomState::Absent => "printf '%s\\n' 'no server running' >&2; exit 1".to_owned(),
+        StubRoomState::Unavailable => "printf '%s\\n' 'permission denied' >&2; exit 1".to_owned(),
+    };
+    write_executable(
+        &dir.join("tmux"),
+        &format!(
+            "#!/bin/sh\nif [ \"${{1:-}}\" = \"-V\" ]; then printf '%s\\n' 'tmux 3.5'; exit 0; fi\nif [ \"${{1:-}}\" = \"list-sessions\" ]; then {tmux_list}; fi\nexit 1\n"
+        ),
+    );
+    dir
+}
+
+fn write_executable(path: &Path, contents: &str) {
+    std::fs::write(path, contents).expect("write executable stub");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod executable stub");
+}
+
+fn doctor_with_mux(env: &Env, stub_dir: &Path, flag: &str) -> Value {
+    doctor_json(
+        &env.rimz()
+            .args([flag, "doctor", "--json"])
+            .env("PATH", path_with_only(&[stub_dir.to_path_buf()]))
+            .output()
+            .expect("spawn doctor with mux stubs"),
+    )
+}
+
+fn write_presence_stamp(env: &Env, mux: Option<MuxName>, session_name: Option<&str>) {
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    let stamp = rimz::sidebar::cache::PresenceStamp {
+        written_at_ms: rimz::sidebar::timing::unix_now_ms(),
+        mux,
+        session_name: session_name.map(ToOwned::to_owned),
+    };
+    rimz::store::atomic::write_temp_then_rename_cache(
+        &rimz::sidebar::cache::presence_stamp_path(&runtime),
+        &stamp,
+    )
+    .expect("write presence stamp");
+}
+
+#[test]
+fn doctor_scopes_room_health_and_presence_to_selected_backend() {
+    let env = Env::new();
+    let stub_dir = stub_mux_rooms(&env, StubRoomState::Live, StubRoomState::Absent);
+
+    let report = doctor_with_mux(&env, &stub_dir, "--tmux");
+    let mux = &report["mux"]["ready"];
+    assert_eq!(mux["room"]["selected_state"]["state"], "absent");
+    assert_eq!(mux["room"]["live_on"], serde_json::json!(["zellij"]));
+    assert!(mux.get("session_health").is_none(), "{mux}");
+    assert_eq!(mux["presence"]["mode"], "not_applicable");
+    assert!(
+        mux["presence"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("live on zellij, not tmux")),
+        "{mux}"
+    );
+    assert_eq!(mux["version"]["state"], "reported");
+    assert!(mux.get("capabilities").is_some(), "{mux}");
+    assert!(mux.get("binaries").is_some(), "{mux}");
+    assert!(mux.get("log").is_some(), "{mux}");
+}
+
+#[test]
+fn doctor_accepts_only_matching_or_unambiguous_legacy_presence_stamps() {
+    let env = Env::new();
+    let stub_dir = stub_mux_rooms(&env, StubRoomState::Live, StubRoomState::Absent);
+    let session = workspace_session_name(&env);
+
+    write_presence_stamp(&env, Some(MuxName::Zellij), Some(&session));
+    let report = doctor_with_mux(&env, &stub_dir, "--zellij");
+    assert_eq!(
+        report["mux"]["ready"]["room"]["selected_state"]["state"],
+        "live"
+    );
+    assert_eq!(report["mux"]["ready"]["presence"]["mode"], "event");
+
+    write_presence_stamp(&env, Some(MuxName::Zellij), None);
+    let report = doctor_with_mux(&env, &stub_dir, "--zellij");
+    assert_eq!(report["mux"]["ready"]["presence"]["mode"], "event");
+
+    for (mux, stamp_session) in [
+        (Some(MuxName::Tmux), Some(session.as_str())),
+        (Some(MuxName::Zellij), Some("rimz-wrong")),
+    ] {
+        write_presence_stamp(&env, mux, stamp_session);
+        let report = doctor_with_mux(&env, &stub_dir, "--zellij");
+        assert_ne!(
+            report["mux"]["ready"]["presence"]["mode"], "event",
+            "mismatched stamp must not enable event mode: {report}"
+        );
+    }
+
+    write_presence_stamp(&env, None, None);
+    let report = doctor_with_mux(&env, &stub_dir, "--zellij");
+    assert_eq!(report["mux"]["ready"]["presence"]["mode"], "event");
+}
+
+#[test]
+fn doctor_reports_cross_backend_room_conflicts_and_duplicate_groups() {
+    let env = Env::new();
+    let stub_dir = stub_mux_rooms(&env, StubRoomState::Live, StubRoomState::Live);
+    let runtime = env.runtime_paths();
+    let session = workspace_session_name(&env);
+    for (name, mux, pane) in [
+        ("zellij", MuxName::Zellij, "zellij:terminal_1"),
+        ("tmux", MuxName::Tmux, "tmux:%2"),
+    ] {
+        let heartbeat = SidebarHeartbeat::new(
+            env.workspace_id.clone(),
+            SidebarInstanceId::new(),
+            mux,
+            &session,
+            runtime.sock_dir.join(format!("sidebar.{name}.sock")),
+            Some(PaneId::parse(pane).expect("pane id")),
+        );
+        rimz::store::atomic::write_temp_then_rename(
+            &runtime.heartbeat_dir.join(format!("sidebar.{name}.json")),
+            &heartbeat,
+        )
+        .expect("write heartbeat");
+    }
+
+    let report = doctor_with_mux(&env, &stub_dir, "--tmux");
+    let mux = &report["mux"]["ready"];
+    assert_eq!(mux["room"]["conflict"], true);
+    assert_eq!(
+        mux["room"]["live_on"],
+        serde_json::json!(["zellij", "tmux"])
+    );
+    let groups = mux["duplicate_sessions"]["ready"]["groups"]
+        .as_array()
+        .expect("duplicate groups");
+    assert_eq!(groups.len(), 2, "{groups:?}");
+    assert!(groups.iter().any(|group| group["mux"] == "zellij"));
+    assert!(groups.iter().any(|group| group["mux"] == "tmux"));
+}
+
+#[test]
+fn doctor_keeps_rival_probe_failures_unavailable() {
+    let env = Env::new();
+    let stub_dir = stub_mux_rooms(&env, StubRoomState::Unavailable, StubRoomState::Absent);
+
+    let report = doctor_with_mux(&env, &stub_dir, "--tmux");
+    let room = &report["mux"]["ready"]["room"];
+    assert_eq!(room["selected_state"]["state"], "absent");
+    assert_eq!(room["zellij"]["state"], "unavailable");
+    assert!(
+        room["zellij"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("permission denied")),
+        "{room}"
+    );
+}
+
+#[test]
+fn doctor_reports_exited_zellij_room_preflight_health() {
+    let env = Env::new();
+    let stub_dir = stub_mux_rooms(&env, StubRoomState::Exited, StubRoomState::Absent);
+
+    let report = doctor_with_mux(&env, &stub_dir, "--zellij");
+    let mux = &report["mux"]["ready"];
+    assert_eq!(mux["room"]["selected_state"]["state"], "exited");
+    assert_eq!(mux["session_health"]["ready"]["state"], "stuck");
+    assert_eq!(mux["presence"]["mode"], "not_applicable");
+}
+
 fn path_with_stub_first(stub_dir: &Path) -> String {
     let current = std::env::var_os("PATH").unwrap_or_default();
     format!("{}:{}", stub_dir.display(), current.to_string_lossy())

@@ -146,6 +146,7 @@ pub(super) fn collect_mux(
         capabilities,
         binaries,
         log,
+        room: None,
         plugin_presence: None,
         zellij_socket: None,
         socket: None,
@@ -159,18 +160,51 @@ pub(super) fn collect_mux(
         report.socket = Some(tmux_mod::default_server_socket_path().display().to_string());
     }
     if let Some(ws) = ws {
+        let ownership = rimz::room::session::probe_room_ownership(mux, &ws.session_name);
+        report.room = Some(room_view(&ws.session_name, &ownership));
         if mux == MuxName::Zellij {
             report.zellij_socket = Some(collect_zellij_socket_headroom(ws));
         }
-        report.session_health = Some(collect_session_health(backend.as_ref(), &ws.session_name));
-        report.duplicate_sessions = Some(collect_duplicate_sessions(ws));
-        report.presence = Some(collect_presence(ws, mux));
+        if matches!(
+            ownership.selected_state(),
+            rimz::room::session::BackendRoomState::Live
+                | rimz::room::session::BackendRoomState::Exited
+        ) {
+            report.session_health =
+                Some(collect_session_health(backend.as_ref(), &ws.session_name));
+        }
+        report.duplicate_sessions = Some(collect_duplicate_sessions(ws, mux));
+        report.presence = Some(collect_presence(ws, mux, &ownership));
         if mux == MuxName::Zellij {
             report.topology_writer = collect_topology_writer(ws);
             report.plugin_presence = collect_plugin_presence(ws);
         }
     }
     model::Probe::Ready(report)
+}
+
+fn room_view(session_name: &str, ownership: &rimz::room::session::RoomOwnership) -> model::Room {
+    model::Room {
+        session_name: session_name.to_owned(),
+        selected_state: room_state_view(ownership.selected_state()),
+        live_on: ownership.live_on(),
+        conflict: ownership.conflict(),
+        zellij: room_state_view(&ownership.zellij),
+        tmux: room_state_view(&ownership.tmux),
+    }
+}
+
+fn room_state_view(state: &rimz::room::session::BackendRoomState) -> model::RoomState {
+    match state {
+        rimz::room::session::BackendRoomState::Live => model::RoomState::Live,
+        rimz::room::session::BackendRoomState::Exited => model::RoomState::Exited,
+        rimz::room::session::BackendRoomState::Absent => model::RoomState::Absent,
+        rimz::room::session::BackendRoomState::Unavailable { error } => {
+            model::RoomState::Unavailable {
+                error: error.clone(),
+            }
+        }
+    }
 }
 
 fn collect_ttyd() -> model::Probe<model::TtydWeb> {
@@ -402,6 +436,7 @@ fn collect_zellij_socket_headroom(ws: &rimz::ResolvedWorkspace) -> model::Zellij
 /// shared pane cache and make the current room's renderer hold updates.
 fn collect_duplicate_sessions(
     ws: &rimz::ResolvedWorkspace,
+    selected: MuxName,
 ) -> model::Probe<model::DuplicateSessions> {
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
         Ok(runtime) => runtime,
@@ -422,7 +457,8 @@ fn collect_duplicate_sessions(
     let groups: Vec<model::SidebarGroup> = duplicate_sidebar_session_groups(&heartbeats)
         .into_iter()
         .map(|group| model::SidebarGroup {
-            is_current: group.session_name == ws.session_name,
+            is_current: group.mux == selected && group.session_name == ws.session_name,
+            mux: group.mux,
             session_name: group.session_name,
             sidebar_count: group.sidebar_count,
             pane_ids: group.pane_ids,
@@ -435,6 +471,7 @@ fn collect_duplicate_sessions(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SidebarSessionGroup {
+    mux: MuxName,
     session_name: String,
     sidebar_count: usize,
     pane_ids: Vec<String>,
@@ -443,11 +480,13 @@ struct SidebarSessionGroup {
 fn duplicate_sidebar_session_groups(
     heartbeats: &[rimz::sidebar::heartbeat::SidebarHeartbeat],
 ) -> Vec<SidebarSessionGroup> {
-    let mut by_session: BTreeMap<String, Vec<&rimz::sidebar::heartbeat::SidebarHeartbeat>> =
-        BTreeMap::new();
+    let mut by_session: BTreeMap<
+        (MuxName, String),
+        Vec<&rimz::sidebar::heartbeat::SidebarHeartbeat>,
+    > = BTreeMap::new();
     for heartbeat in heartbeats {
         by_session
-            .entry(heartbeat.session_name.clone())
+            .entry((heartbeat.mux, heartbeat.session_name.clone()))
             .or_default()
             .push(heartbeat);
     }
@@ -456,7 +495,7 @@ fn duplicate_sidebar_session_groups(
     }
     by_session
         .into_iter()
-        .map(|(session_name, mut heartbeats)| {
+        .map(|((mux, session_name), mut heartbeats)| {
             heartbeats
                 .sort_by(|left, right| left.instance_id.as_str().cmp(right.instance_id.as_str()));
             let sidebar_count = heartbeats.len();
@@ -467,6 +506,7 @@ fn duplicate_sidebar_session_groups(
             pane_ids.sort();
             pane_ids.dedup();
             SidebarSessionGroup {
+                mux,
                 session_name,
                 sidebar_count,
                 pane_ids,
@@ -507,8 +547,21 @@ fn heartbeat_mtime_is_fresh(path: &Path) -> bool {
 /// backend's presence channel pokes. Zellij treats a missing plugin as a
 /// failed precondition; tmux names whether polling is expected for the current
 /// sidebar state.
-fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presence {
-    use rimz::sidebar::cache::{presence_event_mode, presence_stamp_age_ms};
+fn collect_presence(
+    ws: &rimz::ResolvedWorkspace,
+    mux: MuxName,
+    ownership: &rimz::room::session::RoomOwnership,
+) -> model::Presence {
+    use rimz::sidebar::cache::read_presence_stamp;
+
+    if !matches!(
+        ownership.selected_state(),
+        rimz::room::session::BackendRoomState::Live
+    ) {
+        return model::Presence::NotApplicable {
+            reason: presence_not_applicable_reason(mux, ownership),
+        };
+    }
 
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
         Ok(runtime) => runtime,
@@ -518,8 +571,11 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
             };
         }
     };
-    let age = presence_stamp_age_ms(&runtime);
-    if presence_event_mode(age) {
+    let stamp = read_presence_stamp(&runtime);
+    let age = stamp
+        .as_ref()
+        .map(|stamp| rimz::sidebar::timing::unix_now_ms().saturating_sub(stamp.written_at_ms));
+    if presence_stamp_is_event(stamp.as_ref(), age, mux, &ws.session_name, ownership) {
         return model::Presence::Event {
             poked_secs: age.unwrap_or(0) / 1000,
         };
@@ -556,6 +612,58 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
             .to_owned(),
     };
     model::Presence::Unavailable { error: reason }
+}
+
+fn presence_not_applicable_reason(
+    selected: MuxName,
+    ownership: &rimz::room::session::RoomOwnership,
+) -> String {
+    if let Some(owner) = ownership
+        .live_on()
+        .into_iter()
+        .find(|owner| *owner != selected)
+    {
+        return format!("this workspace room is live on {owner}, not {selected}");
+    }
+    match ownership.selected_state() {
+        rimz::room::session::BackendRoomState::Exited => {
+            format!("this workspace room is exited on {selected}")
+        }
+        rimz::room::session::BackendRoomState::Absent => {
+            format!("this workspace room is absent on {selected}")
+        }
+        rimz::room::session::BackendRoomState::Unavailable { error } => {
+            format!("{selected} room probe unavailable: {error}")
+        }
+        rimz::room::session::BackendRoomState::Live => {
+            unreachable!("caller handles live selected rooms")
+        }
+    }
+}
+
+fn presence_stamp_is_event(
+    stamp: Option<&rimz::sidebar::cache::PresenceStamp>,
+    age_ms: Option<u64>,
+    selected: MuxName,
+    session_name: &str,
+    ownership: &rimz::room::session::RoomOwnership,
+) -> bool {
+    if !rimz::sidebar::cache::presence_event_mode(age_ms) {
+        return false;
+    }
+    let Some(stamp) = stamp else {
+        return false;
+    };
+    match stamp.mux {
+        Some(mux) => {
+            mux == selected
+                && stamp
+                    .session_name
+                    .as_deref()
+                    .is_none_or(|stamp_session| stamp_session == session_name)
+        }
+        None => ownership.legacy_stamp_acceptable(),
+    }
 }
 
 fn tmux_watch_client_attached(session: &str) -> bool {
@@ -1411,10 +1519,19 @@ mod tests {
         instance_id: &str,
         pane: Option<&str>,
     ) -> rimz::sidebar::heartbeat::SidebarHeartbeat {
+        heartbeat_on(rimz::MuxName::Zellij, session_name, instance_id, pane)
+    }
+
+    fn heartbeat_on(
+        mux: rimz::MuxName,
+        session_name: &str,
+        instance_id: &str,
+        pane: Option<&str>,
+    ) -> rimz::sidebar::heartbeat::SidebarHeartbeat {
         rimz::sidebar::heartbeat::SidebarHeartbeat::new(
             rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
             sidebar(instance_id),
-            rimz::MuxName::Zellij,
+            mux,
             session_name,
             "/tmp/sidebar.sock".into(),
             pane.map(|pane| rimz::PaneId::parse(pane).unwrap()),
@@ -1810,7 +1927,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_sidebar_sessions_require_multiple_session_names() {
+    fn duplicate_sidebar_sessions_group_by_backend_and_session() {
         let same_session = vec![
             heartbeat(
                 "rimz-current",
@@ -1827,6 +1944,25 @@ mod tests {
             duplicate_sidebar_session_groups(&same_session).is_empty(),
             "multiple sidebars in one session are normal"
         );
+
+        let cross_backend = vec![
+            heartbeat_on(
+                rimz::MuxName::Zellij,
+                "rimz-current",
+                "sb_019eb7da41f478b2a84079743e472a87",
+                Some("zellij:terminal_1"),
+            ),
+            heartbeat_on(
+                rimz::MuxName::Tmux,
+                "rimz-current",
+                "sb_019eb7da43787c6081a474afb02c2067",
+                Some("tmux:%2"),
+            ),
+        ];
+        let groups = duplicate_sidebar_session_groups(&cross_backend);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].mux, rimz::MuxName::Zellij);
+        assert_eq!(groups[1].mux, rimz::MuxName::Tmux);
 
         let duplicate_sessions = vec![
             heartbeat(
@@ -1846,11 +1982,13 @@ mod tests {
             groups,
             vec![
                 SidebarSessionGroup {
+                    mux: rimz::MuxName::Zellij,
                     session_name: "rimz-current".to_owned(),
                     sidebar_count: 1,
                     pane_ids: vec!["zellij:terminal_1".to_owned()],
                 },
                 SidebarSessionGroup {
+                    mux: rimz::MuxName::Zellij,
                     session_name: "rimz-old".to_owned(),
                     sidebar_count: 2,
                     pane_ids: vec!["zellij:terminal_7".to_owned()],

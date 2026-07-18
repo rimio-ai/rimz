@@ -45,6 +45,7 @@ fn mux_fixture() -> Mux {
         log: MuxLog::Disabled {
             hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
         },
+        room: None,
         plugin_presence: None,
         zellij_socket: None,
         socket: Some("/tmp/tmux-1001/default".to_owned()),
@@ -273,6 +274,47 @@ fn mux_section_tallies_poll_presence_by_expectedness() {
         "{out}"
     );
     assert!(out.contains("! 1 warning"), "{out}");
+}
+
+#[test]
+fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        let mut mux = mux_fixture();
+        mux.room = Some(Room {
+            session_name: "rimz-test".to_owned(),
+            selected_state: RoomState::Absent,
+            live_on: vec![MuxName::Zellij],
+            conflict: false,
+            zellij: RoomState::Live,
+            tmux: RoomState::Absent,
+        });
+        mux.presence = Some(Presence::NotApplicable {
+            reason: "this workspace room is live on zellij, not tmux".to_owned(),
+        });
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+    assert!(out.contains("absent here; live on zellij"), "{out}");
+    assert!(out.contains("not applicable"), "{out}");
+    assert!(out.contains("✓ no problems found"), "{out}");
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        let mut mux = mux_fixture();
+        mux.room = Some(Room {
+            session_name: "rimz-test".to_owned(),
+            selected_state: RoomState::Live,
+            live_on: vec![MuxName::Zellij, MuxName::Tmux],
+            conflict: true,
+            zellij: RoomState::Live,
+            tmux: RoomState::Live,
+        });
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+    assert!(out.contains("room ownership conflict"), "{out}");
+    assert!(out.contains("✗ 1 problem"), "{out}");
 }
 
 #[test]

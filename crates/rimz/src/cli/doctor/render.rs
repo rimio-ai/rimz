@@ -18,8 +18,8 @@ use super::model::{
     AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport, DoctorState,
     DuplicateSessions, HookStatus, Host, LogScope, LoopTasks, MachineConfigHealth,
     MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow, Presence, Probe, Protocols,
-    RemoteAgent, RemoteControl, SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust,
-    Version, Workspace,
+    RemoteAgent, RemoteControl, Room, RoomState, SessionHealth, Storage, Terminal,
+    TopologyWriterHealth, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -315,6 +315,9 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
             kv.push("fix", verdict(tally, Health::Warn, fix));
         }
     }
+    if let Some(room) = &mux.room {
+        kv.push("room", room_cell(tally, mux.name, room));
+    }
     if let Some(health) = &mux.session_health {
         kv.push("session health", session_health_cell(tally, health));
     }
@@ -352,6 +355,43 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     render_mux_binary_notes(w, mux, tally)?;
     render_mux_log_notes(w, &mux.log, tally)?;
     render_duplicate_session_notes(w, &mux.duplicate_sessions, tally)
+}
+
+fn room_cell(tally: &mut Tally, selected: rimz::MuxName, room: &Room) -> Cell {
+    let here = room_state_label(&room.selected_state);
+    let rival = selected.other();
+    let rival_state = match rival {
+        rimz::MuxName::Zellij => &room.zellij,
+        rimz::MuxName::Tmux => &room.tmux,
+    };
+    let elsewhere = if matches!(rival_state, RoomState::Live) {
+        format!("live on {rival}")
+    } else {
+        format!("{rival} {}", room_state_label(rival_state))
+    };
+    let label = format!("{here} here; {elsewhere}");
+    if room.conflict {
+        verdict(
+            tally,
+            Health::Alarm,
+            format!("{label} (room ownership conflict)"),
+        )
+    } else if matches!(room.selected_state, RoomState::Unavailable { .. }) {
+        verdict(tally, Health::Warn, label)
+    } else if matches!(room.selected_state, RoomState::Live) {
+        verdict(tally, Health::Ok, label)
+    } else {
+        cell(label).fg(palette::faint())
+    }
+}
+
+fn room_state_label(state: &RoomState) -> String {
+    match state {
+        RoomState::Live => "live".to_owned(),
+        RoomState::Exited => "exited".to_owned(),
+        RoomState::Absent => "absent".to_owned(),
+        RoomState::Unavailable { error } => format!("unavailable ({error})"),
+    }
 }
 
 fn mux_version_cell(tally: &mut Tally, version: &Version) -> Cell {
@@ -427,6 +467,9 @@ fn presence_cell(tally: &mut Tally, presence: &Presence) -> Cell {
         Presence::Poll { reason, expected } => {
             let health = if *expected { Health::Ok } else { Health::Warn };
             verdict(tally, health, format!("polling — {reason}"))
+        }
+        Presence::NotApplicable { reason } => {
+            cell(format!("not applicable — {reason}")).fg(palette::faint())
         }
         Presence::Unavailable { error } => unavailable(tally, Health::Alarm, error),
     }
@@ -561,8 +604,8 @@ fn render_duplicate_session_notes(
                     w,
                     palette::body(),
                     &format!(
-                        "{here}{}: {} sidebars ({panes})",
-                        group.session_name, group.sidebar_count
+                        "{here}{}/{}: {} sidebars ({panes})",
+                        group.mux, group.session_name, group.sidebar_count
                     ),
                 )?;
             }

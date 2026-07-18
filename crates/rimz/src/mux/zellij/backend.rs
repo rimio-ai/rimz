@@ -23,8 +23,8 @@ use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
     CachedPaneRoster, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
     MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome,
-    Result, SessionHealth, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
-    SplitDirection, SplitPaneOptions, TabOptions, WidthStep, ensure_pane_backend,
+    Result, SessionHealth, SessionLiveness, SessionOptions, SidebarLiveness, SidebarPaneOptions,
+    SidebarRecovery, SplitDirection, SplitPaneOptions, TabOptions, WidthStep, ensure_pane_backend,
     execute_reconcile_plan, memoized_version,
 };
 use crate::pane::PaneRef;
@@ -456,6 +456,14 @@ impl MuxBackend for ZellijBackend {
             .lines()
             .filter_map(live_session_name_from_line)
             .collect())
+    }
+
+    fn session_liveness(&self, name: &str) -> Result<SessionLiveness> {
+        Ok(match self.session_state_checked(name)? {
+            SessionState::Live => SessionLiveness::Live,
+            SessionState::Exited => SessionLiveness::Exited,
+            SessionState::Absent => SessionLiveness::Absent,
+        })
     }
 
     fn cached_pane_roster(

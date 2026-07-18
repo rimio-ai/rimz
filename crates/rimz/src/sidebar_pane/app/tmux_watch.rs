@@ -19,6 +19,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::RuntimePaths;
+use crate::ids::MuxName;
 use crate::mux::tmux::{PresenceRoster, PresenceWatch, control_socket_from_env};
 use crate::sidebar::ProducerElectionTracker;
 use tracing::debug;
@@ -53,7 +54,11 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
         }
         match PresenceWatch::attach(control_socket.as_deref(), session_name) {
             Ok(mut watch) => {
-                crate::sidebar::cache::write_presence_stamp(runtime);
+                crate::sidebar::cache::write_presence_stamp(
+                    runtime,
+                    MuxName::Tmux,
+                    Some(session_name),
+                );
                 let mut roster = PresenceRoster::default();
                 let mut seed_deadline = None;
                 while let Some(line) = watch.next_line() {
@@ -72,7 +77,11 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
                             event,
                         );
                     }
-                    crate::sidebar::cache::write_presence_stamp(runtime);
+                    crate::sidebar::cache::write_presence_stamp(
+                        runtime,
+                        MuxName::Tmux,
+                        Some(session_name),
+                    );
                 }
             }
             Err(err) => {

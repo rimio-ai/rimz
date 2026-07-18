@@ -61,7 +61,7 @@ rimz doctor [--audit] [--clear] [--json] [--output PATH]
 `rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. It reads and reports only unless you pass `--clear`. Each check prints as a titled section with a status glyph, and each failing check prints the next fix where RimZ knows one. The report covers:
 
 - **Identity and paths** — current OS user, absolute rimz binary path, resolved workspace with absolute paths
-- **Backend** — backend and version, PATH-visible backend binaries, scoped and grouped logical server-log issues, accepted Zellij plugin-generation telemetry, server socket, session health, duplicate sidebars
+- **Backend** — backend and version, PATH-visible backend binaries, scoped and grouped logical server-log issues, room ownership and liveness per backend, owner-scoped presence, accepted Zellij plugin-generation telemetry, server socket, session health, duplicate sidebars
 - **Integration** — hook status for detected agents, a footer summarizing absent agents whose hooks are offered automatically after installation, remote-control state, protocol versions, trust state
 - **State** — storage footprint, live agent problem rows, message-delivery failures, and evidence-folded sidebar incidents with independent source severity, state, and impact
 - **Last incident** — previous room death cause and time, lost agents, `recovered N of M`, and the crash forensic archive path when a prior incarnation died
