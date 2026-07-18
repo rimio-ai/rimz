@@ -629,6 +629,15 @@ fn resumes_root_agents_most_recent_first() {
         single_column(&plan.tabs[1]),
         vec![exec_resume("codex", "c1")]
     );
+    assert_eq!(
+        plan.resumed,
+        [
+            (AgentKind::new_unchecked("claude"), "a1".into()),
+            (AgentKind::new_unchecked("codex"), "c1".into()),
+        ]
+        .into_iter()
+        .collect()
+    );
 }
 
 #[test]
@@ -977,6 +986,12 @@ fn caps_and_reports_the_overflow() {
     );
     assert_eq!(plan.skipped.len(), 1);
     assert_eq!(plan.skipped[0].reason, ResumeSkipReason::OverCap);
+    assert_eq!(
+        plan.resumed,
+        [(AgentKind::new_unchecked("claude"), "a1".into())]
+            .into_iter()
+            .collect()
+    );
 }
 
 #[test]

@@ -23,7 +23,7 @@ mod metrics;
 mod panes;
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -34,8 +34,7 @@ use crate::sidebar::enrich::{FoldOpts, WiredAgentProjection, enrich, wired_agent
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::{RefreshedLanes, refresh_heavy_lanes};
 use crate::sidebar::timing::unix_now_ms;
-use crate::store::runtime::{AgentLiveness, agent_liveness};
-use crate::{ResolvedWorkspace, RuntimePaths, SidebarSnapshot, StatePaths, Store};
+use crate::{ResolvedWorkspace, RowCard, RuntimePaths, SidebarSnapshot, StatePaths, Store};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProduceErr {
@@ -123,12 +122,23 @@ pub fn produce_snapshot(
 pub fn live_roster_from_snapshot(
     snapshot: &SidebarSnapshot,
 ) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    let rendered_agent_panes = snapshot
+        .rows()
+        .filter(|row| matches!(&row.card, RowCard::Agent(_)))
+        .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.clone()))
+        .collect::<HashSet<_>>();
     snapshot
-        .root_agents()
-        .filter(|agent| !agent.agent_id.is_provisional())
-        .filter(|agent| !agent.agent_id.as_str().is_empty())
-        .filter(|agent| !matches!(agent_liveness(agent), AgentLiveness::Dead))
-        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        .agent_panes
+        .iter()
+        .filter(|agent| rendered_agent_panes.contains(&agent.pane_id))
+        .filter_map(|agent| {
+            agent
+                .agent_id
+                .clone()
+                .map(|agent_id| (agent.kind.clone(), agent_id))
+        })
+        .filter(|(_, agent_id)| !agent_id.is_provisional())
+        .filter(|(_, agent_id)| !agent_id.as_str().is_empty())
         .collect()
 }
 
@@ -529,7 +539,7 @@ mod tests {
     use super::*;
     use crate::agents::{AgentState, AgentStatus};
     use crate::ids::WorkspaceId;
-    use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
+    use crate::pane::RuntimeOwnerKind;
     use jiff::Timestamp;
 
     #[test]
@@ -581,29 +591,57 @@ mod tests {
     }
 
     #[test]
-    fn live_roster_keeps_visible_root_agents_only() {
+    fn live_roster_keeps_only_pane_backed_root_agents() {
         let now = Timestamp::now();
+        let live_pane = test_support::pane("live", Some("claude"), Some("/repo/live"));
+        let daemon_pane = test_support::pane("daemon", Some("codex"), Some("/repo/daemon"));
+        let provisional_pane =
+            test_support::pane("provisional", Some("codex"), Some("/repo/provisional"));
+        let empty_pane = test_support::pane("empty", Some("codex"), Some("/repo/empty"));
+        let wired_pane = test_support::pane("wired", Some("pi"), Some("/repo/wired"));
         let mut live = agent("claude", "live", now);
-        live.runtime_owner = Some(crate::store::runtime::current_process_owner(
-            RuntimeOwnerKind::Agent,
-            "live",
-        ));
+        live.pane = Some(live_pane.clone());
         let unknown = agent("codex", "unknown", now);
-        let mut dead = agent("claude", "dead", now);
-        dead.runtime_owner = Some(RuntimeOwner::new(
-            RuntimeOwnerKind::Agent,
-            "dead",
-            u32::MAX,
-            None,
+        let mut daemon = agent("codex", "daemon", now);
+        daemon.pane = Some(daemon_pane.clone());
+        daemon.runtime_owner = Some(crate::store::runtime::current_process_owner(
+            RuntimeOwnerKind::Daemon,
+            "daemon",
+        ));
+        let mut paneless_daemon = agent("codex", "paneless-daemon", now);
+        paneless_daemon.runtime_owner = Some(crate::store::runtime::current_process_owner(
+            RuntimeOwnerKind::Daemon,
+            "paneless-daemon",
         ));
         let mut child = agent("claude", "child", now);
         child.parent_agent_id = Some("live".into());
-        let provisional = agent("codex", "launch_abc", now);
-        let empty = agent("codex", "", now);
-        let snapshot = SidebarSnapshot::build_with_agents(
+        let mut provisional = agent("codex", "launch_abc", now);
+        provisional.pane = Some(provisional_pane.clone());
+        let mut empty = agent("codex", "", now);
+        empty.pane = Some(empty_pane.clone());
+        let mut snapshot = SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(std::path::Path::new("/repo")),
-            vec![live, unknown, dead, child, provisional, empty],
+            vec![
+                live,
+                unknown,
+                daemon,
+                paneless_daemon,
+                child,
+                provisional,
+                empty,
+            ],
             now,
+        );
+        snapshot.wired_kinds.push("pi".to_owned());
+        let snapshot = snapshot.with_live_panes(
+            vec![
+                live_pane,
+                daemon_pane,
+                provisional_pane,
+                empty_pane,
+                wired_pane,
+            ],
+            None,
         );
 
         let roster = live_roster_from_snapshot(&snapshot);
@@ -612,7 +650,7 @@ mod tests {
             roster,
             [
                 (AgentKind::new_unchecked("claude"), "live".into()),
-                (AgentKind::new_unchecked("codex"), "unknown".into()),
+                (AgentKind::new_unchecked("codex"), "daemon".into()),
             ]
             .into_iter()
             .collect()

@@ -211,6 +211,8 @@ pub struct ResumePlan {
     /// The tabs to seed, ordered by their freshest pane activity (the lead is
     /// the focus target). Panes inside each tab are freshest-first.
     pub tabs: Vec<ResumeTab>,
+    /// Prior sessions whose resume commands were seeded into those tabs.
+    pub resumed: BTreeSet<(AgentKind, AgentSessionId)>,
     /// Candidates not resumed, each with its reason — the start report names them.
     pub skipped: Vec<ResumeSkip>,
     /// Candidates whose worktree disappeared; the caller records these as
@@ -1250,15 +1252,18 @@ fn plan_resume_candidates(
         let command = candidate_resume_command(rimz_bin, &candidate, channel.as_deref());
         let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
         let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);
+        let resumed = (candidate.kind.clone(), candidate.session_id.clone());
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
                 column.panes.push(crate::mux::PaneCmd { argv: command });
+                plan.resumed.insert(resumed);
             }
         } else {
             tabs.push(PlannedResumeTab {
                 identity,
                 tab: ResumeTab::flat(tab_label, candidate.cwd, vec![command]),
             });
+            plan.resumed.insert(resumed);
         }
     }
     disambiguate_resume_tab_labels(&mut tabs);

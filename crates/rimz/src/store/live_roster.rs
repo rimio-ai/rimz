@@ -1,8 +1,9 @@
 //! Persisted sidebar live roster for rebirth recovery.
 //!
-//! The elected sidebar producer writes the root-agent set it currently sees as
-//! live. The next room birth reads this snapshot before the new producer starts,
-//! scopes recovery to it, then clears it at the rebirth boundary.
+//! The elected sidebar producer writes the pane-backed root-agent set its mux
+//! session would lose if it died. The next room birth reads this snapshot before
+//! the new producer starts, scopes recovery to it, then clears it at the rebirth
+//! boundary.
 
 use std::collections::BTreeSet;
 use std::path::Path;

@@ -110,6 +110,30 @@ impl Fixture {
     }
 }
 
+fn ended_events(fixture: &Fixture) -> Vec<(String, AgentSessionId)> {
+    Store::open(fixture.paths.clone(), fixture.runtime.clone())
+        .expect("store")
+        .read_events()
+        .expect("events")
+        .into_iter()
+        .filter_map(|event| {
+            let crate::store::event::EventKind::AgentLifecycle(payload) = event.kind() else {
+                return None;
+            };
+            matches!(payload.observation.signal, LifecycleSignal::Ended).then(|| {
+                (
+                    payload.event_name.clone().expect("ended event name"),
+                    payload
+                        .observation
+                        .agent_id
+                        .clone()
+                        .expect("ended agent id"),
+                )
+            })
+        })
+        .collect()
+}
+
 #[test]
 fn inspection_is_read_only_and_scopes_to_live_roster() {
     let dir = tempfile::tempdir().expect("worktrees");
@@ -222,6 +246,85 @@ fn fresh_archives_crash_and_records_zero_recovered_without_tabs() {
         String::from_utf8_lossy(&std::fs::read(&fixture.paths.events_log).unwrap()).into_owned();
     assert!(events.find("session.death").unwrap() < events.find("session.rebirth").unwrap());
     assert!(!events.contains("rimz.worktree-gone"));
+    assert_eq!(
+        ended_events(&fixture),
+        vec![("rimz.recovery-declined".to_owned(), "live".into())]
+    );
+    let projection = Store::open(fixture.paths.clone(), fixture.runtime.clone())
+        .expect("store")
+        .runtime_projection(crate::RuntimeScope::Audit)
+        .expect("projection");
+    assert!(
+        projection
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == "live")
+            .is_some_and(|agent| agent.ended_at.is_some())
+    );
+
+    crate::store::live_roster::publish(
+        &fixture.paths.live_roster,
+        [(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("live"),
+        )]
+        .into_iter()
+        .collect(),
+    )
+    .expect("replant stale roster");
+    assert_eq!(fixture.inspect(false).preview().pane_count(), 0);
+}
+
+#[test]
+fn recover_ends_only_agents_not_resumed_without_overwriting_worktree_gone_reason() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let newest = dir.path().join("newest");
+    let older = dir.path().join("older");
+    let missing = dir.path().join("missing");
+    let fixture = Fixture::new(&[
+        ("newest", &newest, true),
+        ("older", &older, true),
+        ("missing", &missing, false),
+    ]);
+    let mut machine = MachineConfig::default();
+    machine.resume.max = 1;
+    let plan = fixture.inspect_with(&machine, false);
+    let resumed = plan.planned.flat.resumed.clone();
+    assert_eq!(resumed.len(), 1);
+
+    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+
+    assert_eq!(outcome.resume.resumed, resumed);
+    let projection = Store::open(fixture.paths.clone(), fixture.runtime.clone())
+        .expect("store")
+        .runtime_projection(crate::RuntimeScope::Audit)
+        .expect("projection");
+    for agent in &projection.agents {
+        let key = (agent.kind.clone(), agent.agent_id.clone());
+        if ["newest", "older", "missing"].contains(&agent.agent_id.as_str()) {
+            assert_eq!(agent.ended_at.is_none(), resumed.contains(&key), "{key:?}");
+        }
+    }
+    let ended = ended_events(&fixture);
+    assert_eq!(
+        ended
+            .iter()
+            .filter(|(event, _)| event == "rimz.not-resumed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ended
+            .iter()
+            .filter(|(event, agent_id)| {
+                event == "rimz.worktree-gone" && agent_id.as_str() == "missing"
+            })
+            .count(),
+        1
+    );
+    assert!(!ended.iter().any(|(event, agent_id)| {
+        event == "rimz.not-resumed" && agent_id.as_str() == "missing"
+    }));
 }
 
 #[test]
@@ -324,6 +427,31 @@ fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() 
             && events.find("agent.launched").unwrap() < events.find("session.rebirth").unwrap(),
         "{events}"
     );
+}
+
+#[test]
+fn failed_team_materialization_ends_its_resume_seeds() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let worktree = dir.path().join("forge");
+    let fixture = Fixture::new(&[("planner", &worktree, true)]);
+    fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+    let mut plan = fixture.inspect_with(&team_machine(), false);
+    assert!(matches!(
+        plan.planned.team[0].cohort.seeds.first(),
+        Some(CohortSeed::Resume(agent)) if agent.agent_id == "planner"
+    ));
+    plan.planned.team[0].cohort.seeds.truncate(1);
+
+    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+
+    assert!(outcome.resume.tabs.is_empty());
+    assert_eq!(
+        ended_events(&fixture),
+        vec![("rimz.not-resumed".to_owned(), "planner".into())]
+    );
+    let events =
+        String::from_utf8_lossy(&std::fs::read(&fixture.paths.events_log).unwrap()).into_owned();
+    assert!(events.find("rimz.not-resumed").unwrap() < events.find("session.rebirth").unwrap());
 }
 
 #[test]

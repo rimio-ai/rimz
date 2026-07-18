@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::resume::{
-    PlannedTeamTab, ResumePlan, materialize_team_restore_tab, resume_session_present,
+    CohortSeed, PlannedTeamTab, ResumePlan, materialize_team_restore_tab, resume_session_present,
     split_team_and_flat,
 };
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
@@ -183,7 +183,7 @@ impl RebirthPlan {
             tracing::debug!(workspace = %self.paths.workspace_id, error = %err, "crash archive skipped");
         }
 
-        let resume = if choice == RebirthChoice::Recover {
+        let (resume, resumed) = if choice == RebirthChoice::Recover {
             materialize_recovery(
                 store.as_ref(),
                 &self.paths,
@@ -193,8 +193,33 @@ impl RebirthPlan {
                 self.empty_tabs,
             )
         } else {
-            ResumePlan::default()
+            (ResumePlan::default(), BTreeSet::new())
         };
+        let worktree_gone = resume
+            .agents_to_end
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let unrecovered = self
+            .crash_roster
+            .iter()
+            .filter(|agent| agent.ended_at.is_none())
+            .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+            .filter(|key| !resumed.contains(key))
+            .filter(|key| choice == RebirthChoice::Fresh || !worktree_gone.contains(key))
+            .collect::<BTreeSet<_>>();
+        if let Some(store) = store.as_ref() {
+            record_unrecovered_agents_ended(
+                store,
+                &self.paths.workspace_id,
+                session_name,
+                &unrecovered,
+                match choice {
+                    RebirthChoice::Fresh => "rimz.recovery-declined",
+                    RebirthChoice::Recover => "rimz.not-resumed",
+                },
+            );
+        }
         let recovered = resume.tabs.iter().map(ResumeTab::pane_count).sum();
         let death = self.death.map(|mut death| {
             death.recovered = Some(recovered);
@@ -352,9 +377,11 @@ fn materialize_recovery(
     teams: &TeamsConfig,
     planned: PlannedResume,
     empty_tabs: Vec<ResumeTab>,
-) -> ResumePlan {
+) -> (ResumePlan, BTreeSet<(AgentKind, AgentSessionId)>) {
+    let mut resumed = planned.flat.resumed.clone();
     let mut final_plan = ResumePlan {
         tabs: Vec::new(),
+        resumed: planned.flat.resumed,
         skipped: planned.flat.skipped,
         agents_to_end: planned.flat.agents_to_end,
     };
@@ -364,10 +391,16 @@ fn materialize_recovery(
             continue;
         };
         match materialize_team_restore_tab(store, session_name, teams, team) {
-            Ok(tab) => tabs.push(MaterializedTab {
-                freshest: Some(team.freshest),
-                tab,
-            }),
+            Ok(tab) => {
+                resumed.extend(team.cohort.seeds.iter().filter_map(|seed| match seed {
+                    CohortSeed::Resume(agent) => Some((agent.kind.clone(), agent.agent_id.clone())),
+                    CohortSeed::Fresh => None,
+                }));
+                tabs.push(MaterializedTab {
+                    freshest: Some(team.freshest),
+                    tab,
+                });
+            }
             Err(err) => {
                 tracing::warn!(workspace = %paths.workspace_id, team = %team.team, error = %err, "team resume materialization skipped")
             }
@@ -393,7 +426,7 @@ fn materialize_recovery(
     if let Some(store) = store {
         record_worktree_gone_agents_ended(store, &paths.workspace_id, session_name, &final_plan);
     }
-    final_plan
+    (final_plan, resumed)
 }
 
 struct MaterializedTab {
@@ -487,6 +520,31 @@ fn record_worktree_gone_agents_ended(
         );
         if let Err(err) = store.append_event(&event) {
             tracing::warn!(workspace = %workspace_id, kind = %kind, agent_id = %agent_id, error = %err, "resume: could not stamp missing-worktree agent ended");
+        }
+    }
+}
+
+fn record_unrecovered_agents_ended(
+    store: &Store,
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    agents: &BTreeSet<(AgentKind, AgentSessionId)>,
+    event_name: &str,
+) {
+    for (kind, agent_id) in agents {
+        let observation = crate::agents::AgentLifecycleObservation::new(
+            Some(agent_id.clone()),
+            crate::agents::LifecycleSignal::Ended,
+        );
+        let event = crate::EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            session_name,
+            kind.as_str(),
+            event_name,
+            &observation,
+        );
+        if let Err(err) = store.append_event(&event) {
+            tracing::warn!(workspace = %workspace_id, kind = %kind, agent_id = %agent_id, error = %err, "rebirth: could not stamp unrecovered agent ended");
         }
     }
 }
