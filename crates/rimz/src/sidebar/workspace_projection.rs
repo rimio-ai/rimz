@@ -36,12 +36,22 @@ impl WorkspaceProjectionSource {
 
     pub fn current(state: &StatePaths, frame: &PaneFrame) -> Option<Self> {
         let before = StampedPath::of(&state.events_log);
-        let extent = read_latest_extent(&state.latest_snapshot)?;
+        let published_extent = read_latest_extent(&state.latest_snapshot)?;
         let after = StampedPath::of(&state.events_log);
-        if before != after || extent.offset != after.stamp.len {
+        if before != after || published_extent.offset > after.stamp.len {
             return None;
         }
-        Some(Self::new(extent, frame))
+        // `latest.json` may trail an active log between debounced publishes;
+        // its generation remains authoritative while the live log length is
+        // the event-fresh offset. Rotation retracts latest before replacing
+        // the log, and the before/after file identity rejects that race.
+        Some(Self::new(
+            LogExtent {
+                generation: published_extent.generation,
+                offset: after.stamp.len,
+            },
+            frame,
+        ))
     }
 
     fn new(extent: LogExtent, frame: &PaneFrame) -> Self {

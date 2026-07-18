@@ -49,7 +49,14 @@ fn current_source_requires_fresh_latest_and_section_stamps() {
     );
 
     std::fs::write(&state.events_log, b"moved").unwrap();
-    assert_eq!(WorkspaceProjectionSource::current(&state, &frame), None);
+    let advanced = WorkspaceProjectionSource::current(&state, &frame).expect("advanced log");
+    assert_eq!(advanced.rollup_generation, 2);
+    assert_eq!(advanced.rollup_offset, 5);
+    assert_ne!(
+        Some(advanced),
+        WorkspaceProjectionSource::from_fold(&workspace, &frame),
+        "a stale latest snapshot still supplies the live log generation, while the live log length supplies its event-fresh offset",
+    );
 }
 
 #[test]

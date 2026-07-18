@@ -1149,6 +1149,38 @@ fn consumer_falls_back_for_stale_truth_or_legacy_frame() {
 }
 
 #[test]
+fn consumer_adopts_an_event_fresh_projection_while_latest_publish_trails() {
+    let fixture = AdoptionFixture::new();
+    crate::store::event_log::append(
+        &fixture.state.events_log,
+        &crate::store::event::EventEnvelope::session_rebirth(
+            fixture.runtime.workspace_id.clone(),
+            "rimz-test",
+        ),
+    )
+    .unwrap();
+    let mut projected: SidebarSnapshot =
+        serde_json::from_slice(&std::fs::read(&fixture.state.latest_snapshot).unwrap()).unwrap();
+    projected.display_name = "event-fresh projection".to_owned();
+    projected.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: std::fs::metadata(&fixture.state.events_log).unwrap().len(),
+    });
+    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
+        .publish(
+            &fixture.runtime,
+            "rimz-test",
+            &WorkspaceSnapshot(projected),
+            &fixture.frame,
+        )
+        .unwrap();
+
+    let read = fixture.read();
+    assert_eq!(read.source, ConsumerSnapshotSource::Adoption);
+    assert_eq!(read.snapshot.display_name, "event-fresh projection");
+}
+
+#[test]
 fn presence_only_frame_publication_keeps_projection_match() {
     let mut fixture = AdoptionFixture::new();
     let source = (
