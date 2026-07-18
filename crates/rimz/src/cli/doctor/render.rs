@@ -369,12 +369,11 @@ fn room_cell(tally: &mut Tally, selected: rimz::MuxName, room: &Room) -> Cell {
         rimz::MuxName::Zellij => &room.zellij,
         rimz::MuxName::Tmux => &room.tmux,
     };
-    let elsewhere = if matches!(rival_state, RoomState::Live) {
-        format!("live on {rival}")
+    let label = if matches!(rival_state, RoomState::Live) {
+        format!("{here} here; live on {rival}")
     } else {
-        format!("{rival} {}", room_state_label(rival_state))
+        here
     };
-    let label = format!("{here} here; {elsewhere}");
     if room.conflict {
         verdict(
             tally,

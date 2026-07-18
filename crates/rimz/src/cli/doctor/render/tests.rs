@@ -445,6 +445,29 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
     let out = strip(|w| {
         let mut tally = Tally::default();
         let mut mux = mux_fixture();
+        mux.name = MuxName::Zellij;
+        mux.room = Some(Room {
+            session_name: "rimz-test".to_owned(),
+            selected_state: RoomState::Live,
+            live_on: vec![MuxName::Zellij],
+            conflict: false,
+            zellij: RoomState::Live,
+            tmux: RoomState::Absent,
+        });
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+    assert!(
+        out.lines()
+            .any(|line| line.trim_start().starts_with("room:") && line.ends_with("✓ live")),
+        "{out}"
+    );
+    assert!(!out.contains("tmux absent"), "{out}");
+    assert!(out.contains("✓ no problems found"), "{out}");
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        let mut mux = mux_fixture();
         mux.room = Some(Room {
             session_name: "rimz-test".to_owned(),
             selected_state: RoomState::Absent,
