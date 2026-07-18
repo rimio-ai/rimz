@@ -90,7 +90,7 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
         args.all,
     );
     if args.json {
-        return super::supervised::output::print_json(&reports);
+        return render::json_pretty(&reports);
     }
     let mut out = render::out();
     render::finish(write_pretty(&mut out, &reports, Timestamp::now()))
