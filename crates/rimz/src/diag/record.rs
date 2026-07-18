@@ -84,6 +84,29 @@ pub enum TickLoop {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum FetchFoldCause {
+    StoreDelta,
+    Topology,
+    Metrics,
+    Presence,
+    Backstop,
+    WatchTransition,
+    HardRefresh,
+    Recovery,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FetchFoldCauseStats {
+    pub cause: FetchFoldCause,
+    pub memo_skips: u64,
+    pub full_folds: u64,
+    pub adoptions: u64,
+    pub fallbacks: u64,
+    pub fold_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RendererExitCause {
     SelfCloseEmptyTab,
     DegradedGaveUp,
@@ -341,6 +364,10 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recovered_after_ms: Option<u64>,
     },
+    FetchFoldStats {
+        interval_ms: u64,
+        causes: Vec<FetchFoldCauseStats>,
+    },
     ProducerElected {
         prior_elder: SidebarInstanceId,
     },
@@ -479,6 +506,7 @@ impl DiagEvent {
             | Self::SidebarWidthIntent { .. }
             | Self::SidebarWidthNudge { .. }
             | Self::SidebarWidthSettle { .. }
+            | Self::FetchFoldStats { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
             | Self::ProducerElected { .. }
@@ -532,6 +560,7 @@ impl DiagEvent {
             Self::SidebarWidthNudge { .. } => "sidebar_width_nudge",
             Self::SidebarWidthSettle { .. } => "sidebar_width_settle",
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
+            Self::FetchFoldStats { .. } => "fetch_fold_stats",
             Self::ProducerElected { .. } => "producer_elected",
             Self::ProducerDemoted { .. } => "producer_demoted",
             Self::RowConflict { .. } => "row_conflict",
@@ -657,6 +686,7 @@ impl DiagEvent {
                 };
                 format!("{}:{tick_loop:?}:{phase}:{since_ms}", self.kind_name())
             }
+            Self::FetchFoldStats { .. } => self.kind_name().to_owned(),
             Self::RowConflict {
                 agent_kind,
                 agent_session_id,

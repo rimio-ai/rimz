@@ -351,7 +351,7 @@ impl LoopState {
         // last-known-good cache heals to the next good frame. Single-flight
         // bounds this to one extra run.
         if !self.should_exit && saw_final && rejected {
-            fetch.request(FetchRequest::default(), false);
+            fetch.request(FetchRequest::recovery(), false);
         }
     }
 
@@ -546,20 +546,25 @@ impl LoopState {
 
                 match publication {
                     PaneFramePublicationKind::Presence => {
-                        fetch.request(FetchRequest::pane_frame_published(), true)
+                        fetch.request(FetchRequest::pane_frame_published(publication), true)
                     }
                     PaneFramePublicationKind::Topology => fetch.request_or_defer(
-                        FetchRequest::pane_frame_published(),
+                        FetchRequest::pane_frame_published(publication),
                         self.identity_free_fetch_immediate(),
                         crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
                     ),
                     PaneFramePublicationKind::Metrics => fetch.request_or_defer(
-                        FetchRequest::pane_frame_published(),
+                        FetchRequest::pane_frame_published(publication),
                         self.identity_free_fetch_immediate(),
                         crate::sidebar::timing::UNWATCHED_METRICS_FOLD_CLAMP,
                     ),
                 }
             }
+            SidebarEvent::StoreDelta { .. } => fetch.request_or_defer(
+                FetchRequest::store_delta(),
+                self.identity_free_fetch_immediate(),
+                crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
+            ),
             event @ SidebarEvent::Notify { .. } => {
                 self.handle_notification(config, terminal, event, diag);
             }
@@ -1101,7 +1106,7 @@ impl LoopState {
         wake_room(runtime);
         self.dirty = true;
         self.next_frame = Instant::now();
-        fetch.request(FetchRequest::default(), true);
+        fetch.request(FetchRequest::store_delta(), true);
     }
 
     pub(super) fn run_maintenance(

@@ -1482,6 +1482,13 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             format!("self-close rejected ({siblings} siblings): {reason}")
         }
         DiagEvent::RendererExit { cause } => format!("renderer exited: {}", cause.as_str()),
+        DiagEvent::FetchFoldStats {
+            interval_ms,
+            causes,
+        } => format!(
+            "fetch fold totals over {interval_ms}ms across {} causes",
+            causes.len()
+        ),
         DiagEvent::FrameAnomaly {
             anomaly,
             suppressed_since_last,

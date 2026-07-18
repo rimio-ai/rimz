@@ -12,7 +12,7 @@
 use std::time::{Duration, Instant};
 
 use crate::diag::DiagSink;
-use crate::diag::record::{DiagEvent, TickLoop};
+use crate::diag::record::{DiagEvent, FetchFoldCause, FetchFoldCauseStats, TickLoop};
 use crate::lane::WorkLane;
 
 /// Lifecycle frames are pinned under 1KiB; a 100-agent burst folds about 100KiB,
@@ -27,6 +27,102 @@ pub(crate) const TICK_MUX_WAIT_BUDGET_MS: u64 = 5_000;
 /// Consecutive over-budget ticks required before a diagnostic. The streak window
 /// filters one-off IO stalls like the health-alert and observer windows do.
 pub(crate) const TICK_BUDGET_BREACH_TICKS: u32 = 5;
+const FETCH_FOLD_REPORT_INTERVAL_MS: u64 = 30_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FetchFoldOutcome {
+    MemoSkip,
+    Full,
+    Adoption,
+    Fallback,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FetchFoldCounts {
+    memo_skips: u64,
+    full_folds: u64,
+    adoptions: u64,
+    fallbacks: u64,
+    fold_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct FetchFoldMeter {
+    since_ms: u64,
+    counts: [FetchFoldCounts; 8],
+}
+
+impl FetchFoldMeter {
+    fn record(
+        &mut self,
+        causes: impl Iterator<Item = FetchFoldCause>,
+        outcome: FetchFoldOutcome,
+        fold_ms: u64,
+    ) {
+        for cause in causes {
+            let counts = &mut self.counts[fetch_fold_cause_index(cause)];
+            match outcome {
+                FetchFoldOutcome::MemoSkip => counts.memo_skips += 1,
+                FetchFoldOutcome::Full => counts.full_folds += 1,
+                FetchFoldOutcome::Adoption => counts.adoptions += 1,
+                FetchFoldOutcome::Fallback => {
+                    counts.full_folds += 1;
+                    counts.fallbacks += 1;
+                }
+            }
+            counts.fold_ms = counts.fold_ms.saturating_add(fold_ms);
+        }
+    }
+
+    fn take_report(&mut self, at_ms: u64) -> Option<DiagEvent> {
+        if self.since_ms == 0 {
+            self.since_ms = at_ms;
+            return None;
+        }
+        let interval_ms = at_ms.saturating_sub(self.since_ms);
+        if interval_ms < FETCH_FOLD_REPORT_INTERVAL_MS {
+            return None;
+        }
+        let causes = FETCH_FOLD_CAUSES
+            .into_iter()
+            .zip(std::mem::take(&mut self.counts))
+            .filter_map(|(cause, counts)| {
+                (counts.memo_skips + counts.full_folds + counts.adoptions + counts.fallbacks > 0)
+                    .then_some(FetchFoldCauseStats {
+                        cause,
+                        memo_skips: counts.memo_skips,
+                        full_folds: counts.full_folds,
+                        adoptions: counts.adoptions,
+                        fallbacks: counts.fallbacks,
+                        fold_ms: counts.fold_ms,
+                    })
+            })
+            .collect();
+        self.since_ms = at_ms;
+        Some(DiagEvent::FetchFoldStats {
+            interval_ms,
+            causes,
+        })
+    }
+}
+
+const FETCH_FOLD_CAUSES: [FetchFoldCause; 8] = [
+    FetchFoldCause::StoreDelta,
+    FetchFoldCause::Topology,
+    FetchFoldCause::Metrics,
+    FetchFoldCause::Presence,
+    FetchFoldCause::Backstop,
+    FetchFoldCause::WatchTransition,
+    FetchFoldCause::HardRefresh,
+    FetchFoldCause::Recovery,
+];
+
+fn fetch_fold_cause_index(cause: FetchFoldCause) -> usize {
+    FETCH_FOLD_CAUSES
+        .iter()
+        .position(|candidate| *candidate == cause)
+        .unwrap_or_default()
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TickSample {
@@ -72,6 +168,7 @@ pub(crate) struct TickMeter {
     since_ms: u64,
     last: TickSample,
     worst: TickSample,
+    fetch_folds: Option<FetchFoldMeter>,
 }
 
 impl TickMeter {
@@ -88,7 +185,28 @@ impl TickMeter {
             since_ms: 0,
             last: TickSample::default(),
             worst: TickSample::default(),
+            fetch_folds: (tick_loop == TickLoop::Fetch).then(|| FetchFoldMeter {
+                since_ms: 0,
+                counts: Default::default(),
+            }),
         }
+    }
+
+    pub(crate) fn record_fetch_fold(
+        &mut self,
+        causes: impl Iterator<Item = FetchFoldCause>,
+        outcome: FetchFoldOutcome,
+        duration: Duration,
+    ) {
+        if let Some(fetch_folds) = &mut self.fetch_folds {
+            fetch_folds.record(causes, outcome, duration_ms(duration));
+        }
+    }
+
+    pub(crate) fn take_fetch_fold_report(&mut self, at_ms: u64) -> Option<DiagEvent> {
+        self.fetch_folds
+            .as_mut()
+            .and_then(|fetch_folds| fetch_folds.take_report(at_ms))
     }
 
     pub(crate) fn begin(&self) -> TickStart {
