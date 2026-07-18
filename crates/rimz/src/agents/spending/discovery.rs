@@ -702,7 +702,7 @@ impl DirectoryScanner<'_, '_> {
     ) -> bool {
         let prior = node.clone();
         count_read_dir(self.stats.as_deref_mut());
-        let Ok(entries) = std::fs::read_dir(&path) else {
+        let Ok(entries) = std::fs::read_dir(path) else {
             node.due = true;
             return false;
         };
@@ -715,7 +715,7 @@ impl DirectoryScanner<'_, '_> {
             self.visit_entry(relative, node, entry, &mut snapshot);
         }
         count_directory_stat(self.stats.as_deref_mut());
-        let after_stamp = std::fs::metadata(&path)
+        let after_stamp = std::fs::metadata(path)
             .ok()
             .and_then(|meta| meta.modified().ok());
         let Some(after_stamp) = after_stamp else {

@@ -660,21 +660,21 @@ impl<'de> Deserialize<'de> for CodexRawUsage {
             .or(fields.reasoning_tokens)
             .unwrap_or(0);
         let computed = input + output + reasoning;
-        let reported = u8::from(
+        let reported = (u8::from(
             fields.input_tokens.is_some()
                 || fields.prompt_tokens.is_some()
                 || fields.input.is_some(),
-        ) * INPUT_REPORTED
-            | u8::from(
+        ) * INPUT_REPORTED)
+            | (u8::from(
                 fields.cached_input_tokens.is_some()
                     || fields.cache_read_input_tokens.is_some()
                     || fields.cached_tokens.is_some(),
-            ) * CACHED_REPORTED
-            | u8::from(
+            ) * CACHED_REPORTED)
+            | (u8::from(
                 fields.output_tokens.is_some()
                     || fields.completion_tokens.is_some()
                     || fields.output.is_some(),
-            ) * OUTPUT_REPORTED
+            ) * OUTPUT_REPORTED)
             | u8::from(fields.total_tokens.is_some()) * TOTAL_REPORTED;
         Ok(Self {
             input_tokens: input,
@@ -743,7 +743,7 @@ fn schema_error<'a>(raw: Option<&'a RawValue>) -> Option<RolloutError<'a>> {
     let error = parse_raw::<ErrorObject<'a>>(raw)?;
     let kinds = error_kinds(error.error_info());
     let label = raw_string(error.message.raw());
-    (label.is_some() || !kinds.is_empty()).then(|| RolloutError { label, kinds })
+    (label.is_some() || !kinds.is_empty()).then_some(RolloutError { label, kinds })
 }
 
 fn error_is_present(raw: Option<&RawValue>) -> bool {
