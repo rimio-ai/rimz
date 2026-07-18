@@ -19,7 +19,7 @@ The multiplexer needs no configuration for RimZ: every room sets its own options
 curl -fsSL https://raw.githubusercontent.com/rimio-ai/rimz/main/scripts/install.sh | sh
 ```
 
-The script detects the platform, downloads the latest release, verifies it against `SHA256SUMS`, and installs RimZ to `/usr/local/bin` when that directory is writable or `~/.local/bin` otherwise.
+The script detects the platform, downloads the latest release, verifies it against `SHA256SUMS`, and installs RimZ to `/usr/local/bin` when that directory is writable or `~/.local/bin` otherwise. Interactive terminals show a short control-room boot animation; non-interactive terminals, redirected output, `NO_COLOR`, and `TERM=dumb` use the same plain progress output.
 
 Pass `RIMZ_INSTALL_DIR` or `RIMZ_VERSION` to the `sh` command on the right side of the pipe to choose the destination or install a specific tag such as `v0.3` or the rolling `latest-main` build. Unsupported prebuilt platforms, including ARM Linux and musl Linux, are directed to the [Cargo install](#install-with-cargo).
 
