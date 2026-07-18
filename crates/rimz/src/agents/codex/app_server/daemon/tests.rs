@@ -40,16 +40,16 @@ fn updater_skew_guidance_names_auto_refresh_and_provider_bootstrap() {
     The next successful hourly updater pass will restart the shared app-server, then replace the updater with the managed binary. This should clear the skew automatically, but it disconnects every daemon-backed Codex session.
 
     To choose the timing, run one provider-owned bootstrap while no valuable Codex turns are running:
-        cd ~; /home/u/.codex/packages/standalone/releases/0.144.5/bin/codex app-server daemon bootstrap --remote-control
+        cd ~; "${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/codex" app-server daemon bootstrap --remote-control
     This restarts both provider processes and disconnects daemon-backed Codex sessions once; resume them afterwards. A `remote-control stop` / `start` pair restarts only the app-server and does not clear updater skew.
     "###);
 }
 
 #[test]
-fn updater_skew_recycle_quotes_the_exact_managed_executable() {
+fn updater_skew_recycle_expands_the_managed_home_without_path_lookup() {
     assert_eq!(
-        recycle_command(Path::new("/home/space cadet/.codex/current/codex")),
-        "cd ~; '/home/space cadet/.codex/current/codex' app-server daemon bootstrap --remote-control"
+        RECYCLE_COMMAND,
+        "cd ~; \"${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/codex\" app-server daemon bootstrap --remote-control"
     );
 }
 

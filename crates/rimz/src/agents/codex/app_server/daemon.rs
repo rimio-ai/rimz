@@ -24,7 +24,11 @@ const START_RETRY_DELAY: Duration = Duration::from_secs(3);
 /// Official managed-standalone installer surfaced by readiness guidance.
 const INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
 /// Provider lifecycle command that refreshes both the app-server and updater.
-const RECYCLE_ARGS: &str = "app-server daemon bootstrap --remote-control";
+/// Shell expansion preserves non-UTF-8 environment bytes and mirrors
+/// [`codex_home`]'s empty-value fallback without trusting `codex` on PATH.
+const RECYCLE_COMMAND: &str = "cd ~; \
+    \"${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/codex\" \
+    app-server daemon bootstrap --remote-control";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Readiness {
@@ -77,7 +81,6 @@ impl std::fmt::Display for UpdaterSkew {
         } else {
             ""
         };
-        let recycle_command = recycle_command(&self.managed_exe);
         write!(
             f,
             "Codex remote-control updater version skew:\n\
@@ -88,7 +91,7 @@ impl std::fmt::Display for UpdaterSkew {
              replace the updater with the managed binary. This should clear the skew \
              automatically, but it disconnects every daemon-backed Codex session.\n\n\
              To choose the timing, run one provider-owned bootstrap while no valuable Codex turns \
-             are running:\n    {recycle_command}\n\
+             are running:\n    {RECYCLE_COMMAND}\n\
              This restarts both provider processes and disconnects daemon-backed Codex sessions \
              once; resume them afterwards. A `remote-control stop` / `start` pair restarts only the \
              app-server and does not clear updater skew.",
@@ -98,17 +101,6 @@ impl std::fmt::Display for UpdaterSkew {
             self.managed_exe.display(),
         )
     }
-}
-
-/// Render the exact managed binary so a different `codex` on PATH cannot own
-/// the repair. The leading `cd` anchors detached provider processes in a
-/// durable directory rather than a worktree that can later disappear.
-fn recycle_command(managed_exe: &Path) -> String {
-    let raw = managed_exe.display().to_string();
-    let bin = shlex::try_quote(&raw)
-        // Filesystem paths cannot contain the NUL byte rejected by shlex.
-        .expect("managed executable path is shell-quotable");
-    format!("cd ~; {bin} {RECYCLE_ARGS}")
 }
 
 pub fn readiness(enabled: bool) -> Readiness {
