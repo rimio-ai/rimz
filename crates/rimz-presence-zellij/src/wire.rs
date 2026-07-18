@@ -178,6 +178,7 @@ fn bool_kdl(value: bool) -> &'static str {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetry {
     pub plugin_id: Option<u32>,
+    pub plugin_build: Option<String>,
     pub loaded_at_ms: u64,
     pub mem_pages: u64,
     pub uptime_ms: u64,
@@ -284,6 +285,10 @@ pub fn wake_argv(
             if let Some(plugin_id) = telemetry.plugin_id {
                 argv.push("--plugin-id".to_owned());
                 argv.push(plugin_id.to_string());
+            }
+            if let Some(plugin_build) = telemetry.plugin_build {
+                argv.push("--plugin-build".to_owned());
+                argv.push(plugin_build);
             }
             argv.push("--plugin-loaded-at-ms".to_owned());
             argv.push(telemetry.loaded_at_ms.to_string());

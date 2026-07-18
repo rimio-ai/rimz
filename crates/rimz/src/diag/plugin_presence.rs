@@ -5,6 +5,7 @@
 //! Zellij-native RSS growth. The log is diagnostic state: append-only within a
 //! size cap, never read by correctness code.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,8 @@ pub struct PluginPresenceSample {
     pub session_name: Option<String>,
     #[serde(default)]
     pub plugin_id: Option<u32>,
+    #[serde(default)]
+    pub build: Option<String>,
     #[serde(default)]
     pub loaded_at_ms: u64,
     pub pages: u64,
@@ -53,6 +56,7 @@ pub fn log(state_root: &Path) -> JsonlLog {
 pub struct PluginPresenceSpan {
     pub plugin_id: u32,
     pub loaded_at_ms: u64,
+    pub build: Option<String>,
     pub sample_count: usize,
     pub first_at_ms: u64,
     pub last_at_ms: u64,
@@ -72,20 +76,55 @@ pub fn generation_span(
     plugin_id: u32,
     loaded_at_ms: u64,
 ) -> Option<PluginPresenceSpan> {
-    let current = log(state_root).path().to_owned();
-    let rotated = current.with_file_name("plugin-presence.log.1.jsonl");
-    let mut samples = [rotated, current]
+    let samples = recent_samples(state_root, session_name)
         .into_iter()
-        .flat_map(read_samples)
         .filter(|sample| sample.session_name.as_deref() == Some(session_name))
         .filter(|sample| sample.plugin_id == Some(plugin_id) && sample.loaded_at_ms == loaded_at_ms)
         .collect::<Vec<_>>();
+    span_from_samples(plugin_id, loaded_at_ms, samples)
+}
+
+pub fn recent_generations(state_root: &Path, session_name: &str) -> Vec<PluginPresenceSpan> {
+    let mut grouped = BTreeMap::<(u32, u64), Vec<PluginPresenceSample>>::new();
+    for sample in recent_samples(state_root, session_name) {
+        let Some(plugin_id) = sample.plugin_id else {
+            continue;
+        };
+        grouped
+            .entry((plugin_id, sample.loaded_at_ms))
+            .or_default()
+            .push(sample);
+    }
+    grouped
+        .into_iter()
+        .filter_map(|((plugin_id, loaded_at_ms), samples)| {
+            span_from_samples(plugin_id, loaded_at_ms, samples)
+        })
+        .collect()
+}
+
+fn recent_samples(state_root: &Path, session_name: &str) -> Vec<PluginPresenceSample> {
+    let current = log(state_root).path().to_owned();
+    let rotated = current.with_file_name("plugin-presence.log.1.jsonl");
+    [rotated, current]
+        .into_iter()
+        .flat_map(read_samples)
+        .filter(|sample| sample.session_name.as_deref() == Some(session_name))
+        .collect()
+}
+
+fn span_from_samples(
+    plugin_id: u32,
+    loaded_at_ms: u64,
+    mut samples: Vec<PluginPresenceSample>,
+) -> Option<PluginPresenceSpan> {
     samples.sort_by_key(|sample| sample.at_ms);
     let first = samples.first()?;
     let last = samples.last()?;
     Some(PluginPresenceSpan {
         plugin_id,
         loaded_at_ms,
+        build: last.build.clone(),
         sample_count: samples.len(),
         first_at_ms: first.at_ms,
         last_at_ms: last.at_ms,
@@ -137,6 +176,7 @@ mod tests {
                 at_ms,
                 session_name: Some("room".to_owned()),
                 plugin_id: Some(7),
+                build: Some("wasm-build".to_owned()),
                 loaded_at_ms: 100,
                 pages,
                 bytes: pages.saturating_mul(WASM_PAGE_BYTES),
@@ -156,6 +196,7 @@ mod tests {
 
         let span = generation_span(dir.path(), "room", 7, 100).unwrap();
         assert_eq!(span.sample_count, 2);
+        assert_eq!(span.build.as_deref(), Some("wasm-build"));
         assert_eq!(span.page_growth, 3);
         assert_eq!(span.topology_failures_delta, Some(2));
         assert!(generation_span(dir.path(), "other", 7, 100).is_none());
@@ -168,6 +209,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sample.plugin_id, None);
+        assert_eq!(sample.build, None);
         assert_eq!(sample.topology_failures, None);
+    }
+
+    #[test]
+    fn recent_generations_groups_mixed_writers_and_accepts_buildless_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = log(dir.path()).path().to_owned();
+        std::fs::write(
+            current,
+            concat!(
+                "{\"at_ms\":100,\"session_name\":\"room\",\"plugin_id\":1,\"loaded_at_ms\":10,\"pages\":2,\"bytes\":131072,\"uptime_ms\":1,\"commands\":1,\"commands_failed\":0}\n",
+                "{\"at_ms\":200,\"session_name\":\"room\",\"plugin_id\":2,\"build\":\"new-build\",\"loaded_at_ms\":20,\"pages\":3,\"bytes\":196608,\"uptime_ms\":1,\"commands\":2,\"commands_failed\":0}\n",
+                "{\"at_ms\":300,\"session_name\":\"room\",\"plugin_id\":1,\"loaded_at_ms\":10,\"pages\":4,\"bytes\":262144,\"uptime_ms\":2,\"commands\":3,\"commands_failed\":0}\n",
+            ),
+        )
+        .unwrap();
+
+        let spans = recent_generations(dir.path(), "room");
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].plugin_id, 1);
+        assert_eq!(spans[0].sample_count, 2);
+        assert_eq!(spans[0].build, None);
+        assert_eq!(spans[1].plugin_id, 2);
+        assert_eq!(spans[1].build.as_deref(), Some("new-build"));
     }
 }

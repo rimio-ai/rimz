@@ -18,6 +18,7 @@ impl Default for FakeHost {
             pid_calls: RefCell::new(Vec::new()),
             telemetry: PluginTelemetry {
                 plugin_id: None,
+                plugin_build: None,
                 loaded_at_ms: 0,
                 mem_pages: 12,
                 uptime_ms: 0,

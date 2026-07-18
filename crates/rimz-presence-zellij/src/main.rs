@@ -44,6 +44,7 @@ mod shell {
         fn telemetry(&self) -> wire::PluginTelemetry {
             wire::PluginTelemetry {
                 plugin_id: None,
+                plugin_build: None,
                 loaded_at_ms: 0,
                 mem_pages: wasm_pages(),
                 uptime_ms: 0,

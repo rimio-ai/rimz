@@ -42,6 +42,7 @@ pub enum ZellijWakeReason {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZellijPluginTelemetry {
     pub plugin_id: Option<u32>,
+    pub build: Option<String>,
     pub loaded_at_ms: u64,
     pub pages: u64,
     pub uptime_ms: u64,
@@ -288,6 +289,7 @@ fn write_plugin_presence_sample(
         at_ms: unix_now_ms(),
         session_name,
         plugin_id: telemetry.plugin_id,
+        build: telemetry.build.clone(),
         loaded_at_ms: telemetry.loaded_at_ms,
         pages: telemetry.pages,
         bytes: telemetry.pages.saturating_mul(WASM_PAGE_BYTES),
@@ -762,6 +764,7 @@ mod tests {
         incoming.topology = Some(topology(unix_now_ms(), Some(writer(2, 200))));
         incoming.telemetry = Some(ZellijPluginTelemetry {
             plugin_id: Some(2),
+            build: Some("wasm-build".to_owned()),
             loaded_at_ms: 200,
             pages: 1,
             uptime_ms: 1,

@@ -206,6 +206,8 @@ struct WakeArgs {
     #[arg(long, hide = true)]
     plugin_id: Option<u32>,
     #[arg(long, hide = true)]
+    plugin_build: Option<String>,
+    #[arg(long, hide = true)]
     plugin_loaded_at_ms: Option<u64>,
     #[arg(long, hide = true)]
     plugin_uptime_ms: Option<u64>,
@@ -384,6 +386,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 topology,
                 plugin_mem_pages,
                 plugin_id,
+                plugin_build,
                 plugin_loaded_at_ms,
                 plugin_uptime_ms,
                 plugin_commands,
@@ -436,6 +439,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     }),
                     telemetry: plugin_mem_pages.map(|pages| ZellijPluginTelemetry {
                         plugin_id,
+                        build: plugin_build,
                         loaded_at_ms: plugin_loaded_at_ms.unwrap_or_default(),
                         pages,
                         uptime_ms: plugin_uptime_ms.unwrap_or_default(),

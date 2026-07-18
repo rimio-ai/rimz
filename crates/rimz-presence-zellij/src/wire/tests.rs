@@ -167,6 +167,7 @@ fn alive_wake_argv_carries_telemetry_before_session_name() {
             &ctx(),
             WakeRequest::Alive(PluginTelemetry {
                 plugin_id: Some(9),
+                plugin_build: Some("wasm-build".to_owned()),
                 loaded_at_ms: 1_000,
                 mem_pages: 12,
                 uptime_ms: 34,
@@ -190,6 +191,8 @@ fn alive_wake_argv_carries_telemetry_before_session_name() {
             "workspace-1",
             "--plugin-id",
             "9",
+            "--plugin-build",
+            "wasm-build",
             "--plugin-loaded-at-ms",
             "1000",
             "--plugin-mem-pages",
