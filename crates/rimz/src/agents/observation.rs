@@ -119,6 +119,89 @@ pub struct SpawnedSubagent {
     pub total_tokens: Option<u64>,
 }
 
+/// Durable provider-neutral token and context-window enrichment.
+///
+/// Providers may report any subset. Reduction carries each reported value
+/// forward and derives the gauge from the resolved input-side occupancy and
+/// window when no provider supplied an authoritative percentage.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentUsageSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_pct: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+}
+
+impl AgentUsageSummary {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Current input-side context composition, when a provider reports the
+    /// fresh-input anchor that makes the split meaningful.
+    pub fn input_context_tokens(&self) -> Option<u64> {
+        let fresh = self.fresh_input_tokens?;
+        Some(
+            self.cache_read_input_tokens.unwrap_or(0)
+                + self.cache_write_input_tokens.unwrap_or(0)
+                + fresh,
+        )
+    }
+
+    /// Gauge numerator: the input-side call split when known, else the latest
+    /// cumulative token reading.
+    pub fn context_used_tokens(&self) -> Option<u64> {
+        self.input_context_tokens().or(self.total_tokens)
+    }
+
+    pub fn resolved_context_window(&self, default_window: Option<u64>) -> Option<u64> {
+        self.context_window.or(default_window)
+    }
+
+    pub fn resolved_context_pct(&self, default_window: Option<u64>) -> Option<u8> {
+        self.context_pct.or_else(|| {
+            let used = self.context_used_tokens()?;
+            let window = self.resolved_context_window(default_window)?;
+            (window > 0).then(|| (used.saturating_mul(100) / window).min(100) as u8)
+        })
+    }
+
+    /// Carry sparse enrichment forward. An explicit incoming percentage wins;
+    /// otherwise derive from the merged numerator/window before retaining the
+    /// prior percentage.
+    pub fn merge(&self, prior: Option<&Self>, default_window: Option<u64>) -> Self {
+        let prior = prior.cloned().unwrap_or_default();
+        let mut merged = Self {
+            context_pct: None,
+            context_window: self.context_window.or(prior.context_window),
+            total_tokens: self.total_tokens.or(prior.total_tokens),
+            cache_read_input_tokens: self
+                .cache_read_input_tokens
+                .or(prior.cache_read_input_tokens),
+            cache_write_input_tokens: self
+                .cache_write_input_tokens
+                .or(prior.cache_write_input_tokens),
+            fresh_input_tokens: self.fresh_input_tokens.or(prior.fresh_input_tokens),
+            output_tokens: self.output_tokens.or(prior.output_tokens),
+        };
+        merged.context_pct = self
+            .context_pct
+            .or_else(|| merged.resolved_context_pct(default_window))
+            .or(prior.context_pct);
+        merged
+    }
+}
+
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
 /// event carries plus the enrichment it reports. An adapter's
 /// [`AgentAdapter::decode_hook`](super::AgentAdapter::decode_hook) attaches it
@@ -185,31 +268,10 @@ pub struct AgentLifecycleObservation {
     /// collapse the superseded same-pane `/clear` conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
-    /// Context-window utilization in percent reported by the agent (0..=100).
-    /// Enrich-only / privacy-gated — the no-transcript-correctness rule.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_pct: Option<u8>,
-    /// The model's context window in tokens, as the adapter resolves it at hook
-    /// time (Claude from the `[1m]`-marked payload model, Codex from the
-    /// rollout's `model_context_window`). Carry-forward enrichment like
-    /// `context_pct`; the sidebar's identity line renders it (`258k`, `1M`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<u64>,
-    /// Cumulative token usage for this agent session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<u64>,
-    /// The latest API call's per-call token split — what the agent card's
-    /// composition line legends (`◌` cache-read, `◍` cache-write, `↘` fresh
-    /// input, `↗` output). Carry-forward enrichment for an agent with no richer
-    /// realtime source; Claude's statusline context supersedes it at render.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_write_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fresh_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
+    /// Token and context enrichment, flattened to preserve lifecycle event
+    /// compatibility.
+    #[serde(default, flatten)]
+    pub usage: AgentUsageSummary,
     /// Normalized multiplexer pane id the agent process is running inside,
     /// read from the per-pane env var the mux exports (`TMUX_PANE` or
     /// `ZELLIJ_PANE_ID`). Lets the sidebar bind each agent row to its actual
@@ -246,13 +308,7 @@ impl AgentLifecycleObservation {
             description: None,
             transcript_path: None,
             origin: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
+            usage: AgentUsageSummary::default(),
             pane_id: None,
             pane_stamp: None,
             parent_agent_id: None,
@@ -292,4 +348,67 @@ pub(crate) fn payload_total_tokens(payload: &Value, fallback: Option<u64>) -> Op
         .or_else(|| payload.get("token_count"))
         .and_then(Value::as_u64)
         .or(fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentUsageSummary;
+
+    #[test]
+    fn usage_merge_carries_sparse_values_and_resolves_percentage_once() {
+        let prior = AgentUsageSummary {
+            context_pct: Some(91),
+            context_window: Some(200_000),
+            total_tokens: Some(80_000),
+            cache_read_input_tokens: Some(60_000),
+            cache_write_input_tokens: Some(5_000),
+            fresh_input_tokens: Some(15_000),
+            output_tokens: Some(2_000),
+        };
+        let incoming = AgentUsageSummary {
+            total_tokens: Some(100_000),
+            fresh_input_tokens: Some(35_000),
+            ..AgentUsageSummary::default()
+        };
+
+        let merged = incoming.merge(Some(&prior), Some(1_000_000));
+
+        assert_eq!(merged.context_window, Some(200_000));
+        assert_eq!(merged.context_used_tokens(), Some(100_000));
+        assert_eq!(merged.context_pct, Some(50));
+        assert_eq!(merged.total_tokens, Some(100_000));
+        assert_eq!(merged.output_tokens, Some(2_000));
+    }
+
+    #[test]
+    fn usage_merge_honors_explicit_prior_and_default_window_precedence() {
+        let explicit = AgentUsageSummary {
+            context_pct: Some(7),
+            total_tokens: Some(100_000),
+            ..AgentUsageSummary::default()
+        }
+        .merge(None, Some(200_000));
+        assert_eq!(explicit.context_pct, Some(7));
+
+        let derived = AgentUsageSummary {
+            total_tokens: Some(100_000),
+            ..AgentUsageSummary::default()
+        }
+        .merge(None, Some(200_000));
+        assert_eq!(derived.context_pct, Some(50));
+        assert_eq!(derived.context_window, None);
+
+        let prior = AgentUsageSummary {
+            context_pct: Some(63),
+            ..AgentUsageSummary::default()
+        };
+        assert_eq!(
+            AgentUsageSummary::default()
+                .merge(Some(&prior), None)
+                .context_pct,
+            Some(63)
+        );
+        assert!(AgentUsageSummary::default().is_empty());
+        assert!(!prior.is_empty());
+    }
 }

@@ -81,7 +81,10 @@ fn stock_kiro_session_bootstraps_only_when_a_live_pane_binds() {
         .with_live_panes(vec![pane], None);
     assert_eq!(snapshot.agents.len(), 1);
     assert_eq!(row(&snapshot, "sess-live").name, "kiro");
-    assert_eq!(rollup_agent(&snapshot, "sess-live").context_pct, Some(12));
+    assert_eq!(
+        rollup_agent(&snapshot, "sess-live").usage.context_pct,
+        Some(12)
+    );
 
     let paneless =
         room(Vec::new()).with_local_sessions(&[], vec![event_observation("sess-disk", 20, 10)]);
@@ -202,7 +205,7 @@ fn recordless_current_session_binds_only_to_its_live_process_incarnation() {
     assert_eq!(agent.phase, TurnPhase::Idle);
     assert!(agent.turn_started_at.is_none());
     assert!(agent.prompt.is_none());
-    assert!(agent.context_pct.is_none());
+    assert!(agent.usage.context_pct.is_none());
     assert!(row(&snapshot, "sess-newborn").is_agent());
 
     let mut stale_pane = pane("%2", "kiro-cli-chat", "/repo/main");
@@ -591,7 +594,7 @@ fn newer_identity_only_observation_preserves_running_lifecycle_and_clocks() {
     durable.turn_started_at = Some(turn_started_at);
     durable.last_seen = last_activity;
     durable.last_activity = last_activity;
-    durable.context_pct = Some(42);
+    durable.usage.context_pct = Some(42);
 
     let snapshot = room(vec![durable])
         .with_local_sessions(
@@ -609,7 +612,7 @@ fn newer_identity_only_observation_preserves_running_lifecycle_and_clocks() {
     );
     assert_eq!(agent.turn_started_at, Some(turn_started_at));
     assert_eq!(agent.last_activity, last_activity);
-    assert_eq!(agent.context_pct, Some(42));
+    assert_eq!(agent.usage.context_pct, Some(42));
 }
 
 #[test]

@@ -406,7 +406,7 @@ fn live_status_joins_agent_state() {
     let mut agent = agent_state("claude", "sess-1", AgentStatus::Waiting);
     agent.phase = TurnPhase::Idle;
     agent.pane = Some(pane);
-    agent.context_pct = Some(42);
+    agent.usage.context_pct = Some(42);
     agent.waiting_since = Some(Timestamp::UNIX_EPOCH);
     let snapshot =
         SidebarSnapshot::build_with_agents(workspace_id, vec![agent], Timestamp::UNIX_EPOCH);

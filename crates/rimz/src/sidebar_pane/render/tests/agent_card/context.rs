@@ -274,7 +274,7 @@ fn selected_agent_without_context_keeps_bare_token_total() {
         Some("add tests"),
     );
     codex.model = Some("GPT-5.5".to_owned());
-    codex.total_tokens = Some(5_000);
+    codex.usage.total_tokens = Some(5_000);
     assert!(codex.context.is_none());
     let snapshot = snapshot_with(vec![codex]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -321,12 +321,12 @@ fn codex_card_renders_the_per_call_composition() {
         Some("add tests"),
     );
     codex.model = Some("GPT-5.5".to_owned());
-    codex.context_pct = Some(50);
-    codex.context_window = Some(258_400);
-    codex.total_tokens = Some(130_000);
-    codex.cache_read_input_tokens = Some(120_000);
-    codex.fresh_input_tokens = Some(9_200);
-    codex.output_tokens = Some(800);
+    codex.usage.context_pct = Some(50);
+    codex.usage.context_window = Some(258_400);
+    codex.usage.total_tokens = Some(130_000);
+    codex.usage.cache_read_input_tokens = Some(120_000);
+    codex.usage.fresh_input_tokens = Some(9_200);
+    codex.usage.output_tokens = Some(800);
     assert!(codex.context.is_none());
     let snapshot = snapshot_with(vec![codex]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -364,12 +364,12 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
         Some("inspect adapter"),
     );
     qwen.model = Some("[DeepSeek] deepseek-v4-pro".to_owned());
-    qwen.context_pct = Some(4);
-    qwen.context_window = Some(1_000_000);
-    qwen.total_tokens = Some(38_812);
-    qwen.cache_read_input_tokens = Some(38_656);
-    qwen.fresh_input_tokens = Some(71);
-    qwen.output_tokens = Some(85);
+    qwen.usage.context_pct = Some(4);
+    qwen.usage.context_window = Some(1_000_000);
+    qwen.usage.total_tokens = Some(38_812);
+    qwen.usage.cache_read_input_tokens = Some(38_656);
+    qwen.usage.fresh_input_tokens = Some(71);
+    qwen.usage.output_tokens = Some(85);
     let mut context = codex_context(fixed_now());
     context.source = "qwen".to_owned();
     context.model_id = None;
@@ -420,7 +420,7 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
     assert!(!first.contains("↘ 38k"), "{first}");
     assert!(!first.contains('◍'), "{first}");
 
-    qwen.context_pct = None;
+    qwen.usage.context_pct = None;
     let tokens = qwen
         .context
         .as_mut()
@@ -452,7 +452,7 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
     // This matches Codex app-server context: the sidecar carries current usage
     // and its window, while `used_percentage` is absent. A stale rollout scalar
     // of 0 must not make the bar look empty when the token line is filled.
-    codex.context_pct = Some(0);
+    codex.usage.context_pct = Some(0);
     let mut context = codex_context(fixed_now());
     context.tokens = Some(AgentTokenUsage {
         context_window_size: Some(258_400),
@@ -506,9 +506,9 @@ fn context_meter_can_restore_linear_fill_geometry() {
         Some("main"),
         Some("use the large window"),
     );
-    codex.context_pct = Some(40);
-    codex.context_window = Some(1_000_000);
-    codex.total_tokens = Some(400_000);
+    codex.usage.context_pct = Some(40);
+    codex.usage.context_window = Some(1_000_000);
+    codex.usage.total_tokens = Some(400_000);
     let snapshot = snapshot_with(vec![codex]);
     let theme = Theme::fixed(false);
     let meter_geometry = |snapshot: &SidebarSnapshot| {
@@ -559,7 +559,7 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         Some("review telemetry"),
     );
     copilot.model = Some("auto".to_owned());
-    copilot.context_pct = Some(0);
+    copilot.usage.context_pct = Some(0);
     let mut context = codex_context(fixed_now());
     context.source = "copilot".to_owned();
     context.model_id = Some("gpt-5-mini".to_owned());
@@ -672,11 +672,11 @@ fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
         Some("main"),
         Some("add tests"),
     );
-    codex.context_pct = Some(50);
-    codex.context_window = Some(258_400);
-    codex.total_tokens = Some(130_000);
-    codex.cache_read_input_tokens = Some(120_000);
-    codex.fresh_input_tokens = Some(9_200);
+    codex.usage.context_pct = Some(50);
+    codex.usage.context_window = Some(258_400);
+    codex.usage.total_tokens = Some(130_000);
+    codex.usage.cache_read_input_tokens = Some(120_000);
+    codex.usage.fresh_input_tokens = Some(9_200);
     let snapshot = snapshot_with(vec![codex]);
 
     let render = |theme: &Theme, pixels: &mut MeterPixels| {
@@ -744,13 +744,13 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
         Some("main"),
         Some("add tests"),
     );
-    pi.context_pct = Some(54);
-    pi.context_window = Some(258_400);
-    pi.total_tokens = Some(140_000);
-    pi.cache_read_input_tokens = Some(120_000);
-    pi.cache_write_input_tokens = Some(10_000);
-    pi.fresh_input_tokens = Some(9_200);
-    pi.output_tokens = Some(800);
+    pi.usage.context_pct = Some(54);
+    pi.usage.context_window = Some(258_400);
+    pi.usage.total_tokens = Some(140_000);
+    pi.usage.cache_read_input_tokens = Some(120_000);
+    pi.usage.cache_write_input_tokens = Some(10_000);
+    pi.usage.fresh_input_tokens = Some(9_200);
+    pi.usage.output_tokens = Some(800);
     let snapshot = snapshot_with(vec![pi]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -813,11 +813,11 @@ fn calm_context_bar_orders_segments_left_to_right() {
         Some("main"),
         Some("add tests"),
     );
-    codex.context_pct = Some(50);
-    codex.context_window = Some(258_400);
-    codex.cache_read_input_tokens = Some(120_000);
-    codex.fresh_input_tokens = Some(9_200);
-    codex.output_tokens = Some(800);
+    codex.usage.context_pct = Some(50);
+    codex.usage.context_window = Some(258_400);
+    codex.usage.cache_read_input_tokens = Some(120_000);
+    codex.usage.fresh_input_tokens = Some(9_200);
+    codex.usage.output_tokens = Some(800);
     let bar_styles = bar_styles_for(codex);
     assert!(
         bar_styles.contains(&input),
@@ -898,8 +898,8 @@ fn context_line_age_tone_slides_with_the_clock_age() {
             Some("main"),
             Some("add tests"),
         );
-        codex.context_pct = Some(21);
-        codex.total_tokens = Some(5_000);
+        codex.usage.context_pct = Some(21);
+        codex.usage.total_tokens = Some(5_000);
         codex.last_activity = fixed_now() - Duration::from_secs(idle_secs);
         let snapshot = snapshot_with(vec![codex]);
         group_lines(&snapshot, &theme, usize::MAX)
@@ -958,8 +958,8 @@ fn codex_app_server_context_links_to_rich_card() {
     );
     // Rollout scalars are the coarse fallback the app-server context upgrades.
     codex.model = Some("gpt-5.5-codex".to_owned());
-    codex.context_pct = Some(21);
-    codex.total_tokens = Some(48_000);
+    codex.usage.context_pct = Some(21);
+    codex.usage.total_tokens = Some(48_000);
     codex.context = Some(codex_context(fixed_now()));
     let snapshot = snapshot_with(vec![codex]);
     let rendered = snapshot_to_screen_with_alert_and_ui(

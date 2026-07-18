@@ -81,15 +81,15 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     // Capability survives the prompt.
     assert_eq!(agent.model.as_deref(), Some("GPT-5.5"));
     assert_eq!(agent.effort.as_deref(), Some("high"));
-    assert_eq!(agent.context_window, Some(258_400));
+    assert_eq!(agent.usage.context_window, Some(258_400));
     // The gauge percentage is derived from the carried window and used split
     // (cache_read + fresh_input = 10_200 of 258_400 ≈ 3%), so it stays
     // consistent with the window label across an event that omits it.
-    assert_eq!(agent.context_pct, Some(3));
-    assert_eq!(agent.total_tokens, Some(12_400));
-    assert_eq!(agent.cache_read_input_tokens, Some(9_000));
-    assert_eq!(agent.fresh_input_tokens, Some(1_200));
-    assert_eq!(agent.output_tokens, Some(800));
+    assert_eq!(agent.usage.context_pct, Some(3));
+    assert_eq!(agent.usage.total_tokens, Some(12_400));
+    assert_eq!(agent.usage.cache_read_input_tokens, Some(9_000));
+    assert_eq!(agent.usage.fresh_input_tokens, Some(1_200));
+    assert_eq!(agent.usage.output_tokens, Some(800));
     assert_eq!(agent.profile.as_deref(), Some("codex-coder"));
     assert_eq!(agent.mode, Some(crate::harness::run::PermissionMode::Yolo));
     assert_eq!(agent.role.as_deref(), Some("coder"));
@@ -261,9 +261,9 @@ fn context_gauge_tracks_the_carried_window_across_a_marker_drop() {
     let agents = reduce_agent_states(&[start, stop]);
     assert_eq!(agents.len(), 1);
     let agent = &agents[0];
-    assert_eq!(agent.context_window, Some(1_000_000));
-    assert_eq!(agent.context_pct, Some(16));
-    assert_eq!(agent.total_tokens, Some(164_270));
+    assert_eq!(agent.usage.context_window, Some(1_000_000));
+    assert_eq!(agent.usage.context_pct, Some(16));
+    assert_eq!(agent.usage.total_tokens, Some(164_270));
 }
 
 #[test]
@@ -285,8 +285,8 @@ fn context_gauge_derives_from_the_descriptor_default_when_no_window_reported() {
     let agents = reduce_agent_states(&[stop]);
     assert_eq!(agents.len(), 1);
     let agent = &agents[0];
-    assert_eq!(agent.context_window, None);
-    assert_eq!(agent.context_pct, Some(50));
+    assert_eq!(agent.usage.context_window, None);
+    assert_eq!(agent.usage.context_pct, Some(50));
 }
 
 #[test]

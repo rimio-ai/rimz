@@ -359,19 +359,19 @@ fn auto_compact_triggers_from_supported_context_readings() {
     assert!(!AutoCompact::Percent(70).triggered(&a));
     assert!(!AutoCompact::Tokens(1).triggered(&a));
 
-    a.context_pct = Some(75);
+    a.usage.context_pct = Some(75);
     assert!(AutoCompact::Percent(70).triggered(&a));
     assert!(AutoCompact::Percent(75).triggered(&a));
     assert!(!AutoCompact::Percent(76).triggered(&a));
 
-    a.cache_read_input_tokens = Some(100_000);
-    a.fresh_input_tokens = Some(20_000);
+    a.usage.cache_read_input_tokens = Some(100_000);
+    a.usage.fresh_input_tokens = Some(20_000);
     assert!(AutoCompact::Tokens(120_000).triggered(&a));
     assert!(!AutoCompact::Tokens(120_001).triggered(&a));
 
     let mut carried = agent("s2", None);
-    carried.total_tokens = Some(120_000);
-    carried.context_window = Some(200_000);
+    carried.usage.total_tokens = Some(120_000);
+    carried.usage.context_window = Some(200_000);
     assert!(AutoCompact::Tokens(100_000).triggered(&carried));
     assert!(AutoCompact::Tokens(120_000).triggered(&carried));
     assert!(!AutoCompact::Tokens(120_001).triggered(&carried));

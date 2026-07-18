@@ -43,13 +43,10 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             team: agent.team.clone(),
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,
-            context_pct: agent.context_pct,
-            context_window: agent_context_window(agent),
-            total_tokens: agent.total_tokens,
-            cache_read_input_tokens: agent.cache_read_input_tokens,
-            cache_write_input_tokens: agent.cache_write_input_tokens,
-            fresh_input_tokens: agent.fresh_input_tokens,
-            output_tokens: agent.output_tokens,
+            usage: crate::agents::AgentUsageSummary {
+                context_window: agent_context_window(agent),
+                ..agent.usage.clone()
+            },
             context: agent.context.clone(),
             context_severity: None,
             registered_at: agent.registered_at,
@@ -62,7 +59,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
 }
 
 fn agent_context_window(agent: &AgentState) -> Option<u64> {
-    agent.context_window.or_else(|| {
+    agent.usage.context_window.or_else(|| {
         crate::agents::descriptor_by_kind(agent.kind.as_str())
             .and_then(|descriptor| descriptor.default_context_window)
     })

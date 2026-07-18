@@ -268,10 +268,10 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
         (0_u64, 0_u64, 0_u64, 0_u64),
         |(total, input, output, cache_read), (_, agent)| {
             (
-                total.saturating_add(agent.total_tokens.unwrap_or(0)),
-                input.saturating_add(agent.fresh_input_tokens.unwrap_or(0)),
-                output.saturating_add(agent.output_tokens.unwrap_or(0)),
-                cache_read.saturating_add(agent.cache_read_input_tokens.unwrap_or(0)),
+                total.saturating_add(agent.usage.total_tokens.unwrap_or(0)),
+                input.saturating_add(agent.usage.fresh_input_tokens.unwrap_or(0)),
+                output.saturating_add(agent.usage.output_tokens.unwrap_or(0)),
+                cache_read.saturating_add(agent.usage.cache_read_input_tokens.unwrap_or(0)),
             )
         },
     );

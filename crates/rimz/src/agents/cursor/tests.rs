@@ -496,9 +496,9 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         .lifecycle()
         .expect("compaction observation");
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
-    assert_eq!(compacting.context_pct, Some(84));
-    assert_eq!(compacting.context_window, Some(200_000));
-    assert_eq!(compacting.total_tokens, None);
+    assert_eq!(compacting.usage.context_pct, Some(84));
+    assert_eq!(compacting.usage.context_window, Some(200_000));
+    assert_eq!(compacting.usage.total_tokens, None);
     let transition = step(Some(&running), None, &compacting.signal);
     assert!(transition.next.compacting);
     assert_eq!(transition.next.status, AgentStatus::Running);
@@ -1213,11 +1213,11 @@ fn malformed_fields_preserve_identity_response_and_token_composition() {
     assert_eq!(observed.agent_id.as_deref(), Some("conv-1"));
     assert_eq!(observed.launch.model.as_deref(), Some("cursor/model"));
     assert_eq!(observed.launch.effort.as_deref(), Some("high"));
-    assert_eq!(observed.fresh_input_tokens, Some(0));
-    assert_eq!(observed.output_tokens, Some(12));
-    assert_eq!(observed.cache_read_input_tokens, Some(3));
-    assert_eq!(observed.cache_write_input_tokens, None);
-    assert_eq!(observed.total_tokens, None);
+    assert_eq!(observed.usage.fresh_input_tokens, Some(0));
+    assert_eq!(observed.usage.output_tokens, Some(12));
+    assert_eq!(observed.usage.cache_read_input_tokens, Some(3));
+    assert_eq!(observed.usage.cache_write_input_tokens, None);
+    assert_eq!(observed.usage.total_tokens, None);
 
     assert_eq!(
         CursorAdapter
@@ -1255,9 +1255,9 @@ fn stop_input_total_subtracts_cache_without_underflow() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(observed.fresh_input_tokens, Some(14_021));
-    assert_eq!(observed.cache_read_input_tokens, Some(8_704));
-    assert_eq!(observed.output_tokens, Some(26));
+    assert_eq!(observed.usage.fresh_input_tokens, Some(14_021));
+    assert_eq!(observed.usage.cache_read_input_tokens, Some(8_704));
+    assert_eq!(observed.usage.output_tokens, Some(26));
 
     let malformed = CursorAdapter
         .decode_hook(
@@ -1273,7 +1273,7 @@ fn stop_input_total_subtracts_cache_without_underflow() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(malformed.fresh_input_tokens, Some(0));
+    assert_eq!(malformed.usage.fresh_input_tokens, Some(0));
 }
 
 #[test]

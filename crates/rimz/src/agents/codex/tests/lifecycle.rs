@@ -455,11 +455,11 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
     assert_eq!(start.launch.role.as_deref(), Some("explorer"));
     assert_eq!(start.launch.model.as_deref(), Some("child-model"));
     assert_eq!(start.launch.effort.as_deref(), Some("xhigh"));
-    assert_eq!(start.total_tokens, Some(321));
-    assert_eq!(start.context_window, Some(1000));
-    assert_eq!(start.cache_read_input_tokens, Some(200));
-    assert_eq!(start.fresh_input_tokens, Some(100));
-    assert_eq!(start.output_tokens, Some(21));
+    assert_eq!(start.usage.total_tokens, Some(321));
+    assert_eq!(start.usage.context_window, Some(1000));
+    assert_eq!(start.usage.cache_read_input_tokens, Some(200));
+    assert_eq!(start.usage.fresh_input_tokens, Some(100));
+    assert_eq!(start.usage.output_tokens, Some(21));
     assert_eq!(start.transcript_path.as_deref(), child_path.to_str());
 
     let stop = CodexAdapter
@@ -482,7 +482,7 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
     );
     assert_eq!(stop.launch.model.as_deref(), Some("child-model"));
     assert_ne!(stop.launch.model.as_deref(), Some("parent-model"));
-    assert_eq!(stop.total_tokens, Some(321));
+    assert_eq!(stop.usage.total_tokens, Some(321));
 }
 
 #[test]

@@ -792,13 +792,10 @@ fn idle_agent_row(
             team: None,
             launch_group: None,
             launch_ordinal: None,
-            context_pct: None,
-            context_window: descriptor.default_context_window,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
+            usage: crate::agents::AgentUsageSummary {
+                context_window: descriptor.default_context_window,
+                ..crate::agents::AgentUsageSummary::default()
+            },
             context: None,
             context_severity: None,
             // No session yet — the pane's process start is this row's spawn key.

@@ -32,6 +32,15 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Running,
             prompt: Some("fix auth flow".to_owned()),
+            usage: AgentUsageSummary {
+                context_pct: Some(42),
+                context_window: Some(200_000),
+                total_tokens: Some(84_000),
+                cache_read_input_tokens: Some(60_000),
+                cache_write_input_tokens: Some(4_000),
+                fresh_input_tokens: Some(20_000),
+                output_tokens: Some(1_000),
+            },
             ..AgentCard::default()
         })),
     };
@@ -41,6 +50,18 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
     assert_eq!(value["row_kind"], "agent");
     assert!(value.get("card").is_none());
     assert!(value.get("unread").is_none());
+    assert!(value.get("usage").is_none());
+    for key in [
+        "context_pct",
+        "context_window",
+        "total_tokens",
+        "cache_read_input_tokens",
+        "cache_write_input_tokens",
+        "fresh_input_tokens",
+        "output_tokens",
+    ] {
+        assert!(value.get(key).is_some(), "missing flat key {key}");
+    }
     assert_eq!(value["prompt"], "fix auth flow");
     assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), agent);
 
@@ -192,7 +213,10 @@ fn agent_card_session_history_requires_positive_evidence() {
     assert!(!AgentCard::default().has_session_history());
     assert!(
         !AgentCard {
-            total_tokens: Some(0),
+            usage: AgentUsageSummary {
+                total_tokens: Some(0),
+                ..AgentUsageSummary::default()
+            },
             ..AgentCard::default()
         }
         .has_session_history()
@@ -222,7 +246,10 @@ fn agent_card_session_history_requires_positive_evidence() {
     );
     assert!(
         AgentCard {
-            total_tokens: Some(1),
+            usage: AgentUsageSummary {
+                total_tokens: Some(1),
+                ..AgentUsageSummary::default()
+            },
             ..AgentCard::default()
         }
         .has_session_history()
@@ -295,8 +322,11 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
     // fold-derived scalar — which the fold tied to the resolved window — over
     // it, avoiding a bar that disagrees with its window label.
     let untethered = AgentCard {
-        context_pct: Some(16),
-        context_window: Some(1_000_000),
+        usage: AgentUsageSummary {
+            context_pct: Some(16),
+            context_window: Some(1_000_000),
+            ..AgentUsageSummary::default()
+        },
         context: Some(context_with_tokens(AgentTokenUsage {
             context_window_size: None,
             used_percentage: Some(82),
@@ -312,7 +342,10 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
     // With its own window present, the sidecar percentage is authoritative and
     // shares the denominator the identity line shows.
     let tethered = AgentCard {
-        context_pct: Some(16),
+        usage: AgentUsageSummary {
+            context_pct: Some(16),
+            ..AgentUsageSummary::default()
+        },
         context: Some(context_with_tokens(AgentTokenUsage {
             context_window_size: Some(1_000_000),
             used_percentage: Some(40),
@@ -326,7 +359,10 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
     assert_eq!(tethered.context_gauge_percent(), Some(40));
 
     let token_only = AgentCard {
-        context_pct: Some(0),
+        usage: AgentUsageSummary {
+            context_pct: Some(0),
+            ..AgentUsageSummary::default()
+        },
         context: Some(context_with_tokens(AgentTokenUsage {
             current_usage: Some(AgentCurrentUsage {
                 input_tokens: Some(20),
@@ -344,7 +380,10 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
 #[test]
 fn context_gauge_percent_derives_from_sidecar_usage_when_percentage_is_absent() {
     let derived = AgentCard {
-        context_pct: Some(0),
+        usage: AgentUsageSummary {
+            context_pct: Some(0),
+            ..AgentUsageSummary::default()
+        },
         context: Some(context_with_tokens(AgentTokenUsage {
             context_window_size: Some(258_400),
             used_percentage: None,
@@ -371,10 +410,13 @@ fn context_gauge_percent_derives_from_sidecar_usage_when_percentage_is_absent() 
 #[test]
 fn current_context_scalar_controls_total_and_lifecycle_split_correlation() {
     let mut card = AgentCard {
-        cache_read_input_tokens: Some(80),
-        cache_write_input_tokens: Some(5),
-        fresh_input_tokens: Some(15),
-        output_tokens: Some(9),
+        usage: AgentUsageSummary {
+            cache_read_input_tokens: Some(80),
+            cache_write_input_tokens: Some(5),
+            fresh_input_tokens: Some(15),
+            output_tokens: Some(9),
+            ..AgentUsageSummary::default()
+        },
         context: Some(context_with_tokens(AgentTokenUsage {
             context_window_size: Some(1_000),
             current_context_tokens: Some(100),

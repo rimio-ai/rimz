@@ -1217,17 +1217,17 @@ fn build_codex_observation(
     observation.launch.effort = payload_reasoning_effort(payload)
         .or(usage_effort)
         .or_else(|| is_subagent.then(configured_reasoning_effort).flatten());
-    observation.context_window = reported_context_window;
-    observation.total_tokens = if is_subagent {
+    observation.usage.context_window = reported_context_window;
+    observation.usage.total_tokens = if is_subagent {
         usage.total_tokens
     } else {
         payload_total_tokens(payload, usage.total_tokens)
     };
-    observation.cache_read_input_tokens = usage.last_cached_input_tokens;
-    observation.fresh_input_tokens = usage
+    observation.usage.cache_read_input_tokens = usage.last_cached_input_tokens;
+    observation.usage.fresh_input_tokens = usage
         .last_input_tokens
         .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0)));
-    observation.output_tokens = usage.last_output_tokens;
+    observation.usage.output_tokens = usage.last_output_tokens;
     observation
 }
 

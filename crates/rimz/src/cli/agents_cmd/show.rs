@@ -339,23 +339,23 @@ fn render_context_section(
     );
     kv.push(
         "total_tokens",
-        render::cell(opt_count(agent.total_tokens)).dash(),
+        render::cell(opt_count(agent.usage.total_tokens)).dash(),
     );
     kv.push(
         "fresh_input_tokens",
-        render::cell(opt_count(agent.fresh_input_tokens)).dash(),
+        render::cell(opt_count(agent.usage.fresh_input_tokens)).dash(),
     );
     kv.push(
         "cache_read_tokens",
-        render::cell(opt_count(agent.cache_read_input_tokens)).dash(),
+        render::cell(opt_count(agent.usage.cache_read_input_tokens)).dash(),
     );
     kv.push(
         "cache_write_tokens",
-        render::cell(opt_count(agent.cache_write_input_tokens)).dash(),
+        render::cell(opt_count(agent.usage.cache_write_input_tokens)).dash(),
     );
     kv.push(
         "output_tokens",
-        render::cell(opt_count(agent.output_tokens)).dash(),
+        render::cell(opt_count(agent.usage.output_tokens)).dash(),
     );
     kv.push(
         "compactions",

@@ -116,7 +116,7 @@ fn sample(
                 handle,
                 status: agent.status,
                 context_pct: agent.context_fill_pct(),
-                tokens: agent.total_tokens.unwrap_or(0),
+                tokens: agent.usage.total_tokens.unwrap_or(0),
                 age: render::age_short(agent.last_seen, now),
                 metrics,
             },

@@ -279,7 +279,7 @@ fn render_scroll_pins_tall_expanded_card_top() {
         child.subagent_description = Some(format!("survey area {i}"));
         child.subagent_started_at = Some(now - Duration::from_secs(240 - i * 30));
         child.last_activity = now;
-        child.total_tokens = Some(1_000 * (i + 1));
+        child.usage.total_tokens = Some(1_000 * (i + 1));
         agents.push(child);
     }
     let snapshot = snapshot_with(agents);

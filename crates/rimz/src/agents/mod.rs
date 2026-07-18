@@ -105,8 +105,8 @@ pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use managed_source::ManagedSource;
 pub use observation::{
-    AgentLifecycleObservation, LaunchParams, SessionOrigin, SpawnedSubagent, SubagentCorrelation,
-    SubagentCorrelationInput, SubagentSpawnInput,
+    AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin, SpawnedSubagent,
+    SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub(crate) use payload::{

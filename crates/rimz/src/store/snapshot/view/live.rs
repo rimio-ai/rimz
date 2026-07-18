@@ -404,7 +404,7 @@ fn merge_bound_local_session(
                 state.task = None;
                 state.prompt = None;
                 state.recent_prompts.clear();
-                state.context_pct = None;
+                state.usage.context_pct = None;
                 state.turn_started_at = None;
                 state.waiting_since = None;
                 state.open_ask = None;
@@ -437,7 +437,7 @@ fn apply_local_lifecycle(
         state.prompt = Some(prompt.to_owned());
         append_recent_prompt(&mut state.recent_prompts, prompt);
     }
-    state.context_pct = projection.context_pct;
+    state.usage.context_pct = projection.context_pct;
     state.waiting_since = projection.waiting_since;
     // Provider-native approvals are observable but remain pane-only.
     state.open_ask = None;

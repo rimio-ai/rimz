@@ -201,6 +201,7 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
     used.worktree_groups[0].rows[0]
         .as_agent_mut()
         .expect("agent row")
+        .usage
         .total_tokens = Some(1);
     assert!(!selection_awaiting_first_prompt(
         &used,

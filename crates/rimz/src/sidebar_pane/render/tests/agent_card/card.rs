@@ -62,7 +62,7 @@ fn render_agent_capability_and_window() {
     claude.model = Some("Opus".to_owned());
     claude.effort = Some("xhigh".to_owned());
     // The hook-derived window renders as the identity line's `1m` token.
-    claude.context_window = Some(1_000_000);
+    claude.usage.context_window = Some(1_000_000);
     claude.last_activity = fixed_now() - Duration::from_secs(4 * 60);
     let snapshot = snapshot_with(vec![claude]);
 
@@ -169,7 +169,7 @@ fn render_agent_capability_uses_descriptor_default_window() {
     );
     codex.model = Some("gpt-5.5-codex".to_owned());
     codex.effort = Some("xhigh".to_owned());
-    assert!(codex.context_window.is_none());
+    assert!(codex.usage.context_window.is_none());
     assert!(codex.context.is_none());
     let snapshot = snapshot_with(vec![codex]);
 
@@ -472,8 +472,8 @@ fn selected_idle_agent_with_history_keeps_existing_shape() {
         Some("main"),
         None,
     );
-    idle.context_pct = Some(0);
-    idle.total_tokens = Some(1);
+    idle.usage.context_pct = Some(0);
+    idle.usage.total_tokens = Some(1);
     let snapshot = snapshot_with(vec![idle]);
     let theme = Theme::fixed(true);
 
@@ -503,7 +503,7 @@ fn idle_agent_omits_window_token() {
             Some("resting"),
         );
         claude.model = Some("Opus".to_owned());
-        claude.context_window = Some(200_000);
+        claude.usage.context_window = Some(200_000);
         claude
     };
     let theme = Theme::fixed(true);
@@ -543,7 +543,7 @@ fn capability_cluster_requires_a_resolved_model() {
     );
     assert!(codex.model.is_none());
     codex.effort = Some("xhigh".to_owned());
-    codex.context_window = Some(272_000);
+    codex.usage.context_window = Some(272_000);
     let snapshot = snapshot_with(vec![codex]);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 15);
@@ -604,8 +604,8 @@ fn render_enriched_selected_agent_card() {
     // effort (`high`) over the launch scalar (`xhigh`).
     claude.model = Some("Opus".to_owned());
     claude.effort = Some("xhigh".to_owned());
-    claude.context_pct = Some(38);
-    claude.total_tokens = Some(12_400);
+    claude.usage.context_pct = Some(38);
+    claude.usage.total_tokens = Some(12_400);
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(vec![claude]);
     snapshot.worktree_groups[0].diff_added = Some(127);

@@ -511,9 +511,9 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
     );
     assert_eq!(started.launch.model.as_deref(), Some("gpt-5.5"));
     assert_eq!(started.launch.effort.as_deref(), Some("medium"));
-    assert_eq!(started.context_pct, Some(100));
-    assert_eq!(started.context_window, Some(272_000));
-    assert_eq!(started.total_tokens, Some(8160));
+    assert_eq!(started.usage.context_pct, Some(100));
+    assert_eq!(started.usage.context_window, Some(272_000));
+    assert_eq!(started.usage.total_tokens, Some(8160));
     assert_eq!(started.parent_agent_id, None);
 
     let prompt = PiAdapter
@@ -576,11 +576,11 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
         }
     );
     assert_eq!(clean.launch.model.as_deref(), Some("gpt-5"));
-    assert_eq!(clean.total_tokens, Some(4200));
-    assert_eq!(clean.fresh_input_tokens, Some(100));
-    assert_eq!(clean.cache_write_input_tokens, Some(40));
-    assert_eq!(clean.cache_read_input_tokens, Some(30));
-    assert_eq!(clean.output_tokens, Some(20));
+    assert_eq!(clean.usage.total_tokens, Some(4200));
+    assert_eq!(clean.usage.fresh_input_tokens, Some(100));
+    assert_eq!(clean.usage.cache_write_input_tokens, Some(40));
+    assert_eq!(clean.usage.cache_read_input_tokens, Some(30));
+    assert_eq!(clean.usage.output_tokens, Some(20));
 
     for (payload, expected) in [
         (
@@ -952,7 +952,7 @@ fn pi_observes_normalized_subagent_lifecycle() {
     assert_eq!(started.signal, LifecycleSignal::SubagentStarted);
     assert_eq!(started.task.as_deref(), Some("reviewer"));
     assert_eq!(started.worktree_path.as_deref(), Some("/work/project"));
-    assert_eq!(started.total_tokens, None);
+    assert_eq!(started.usage.total_tokens, None);
 
     let stopped = PiAdapter
         .decode_hook(
@@ -977,7 +977,7 @@ fn pi_observes_normalized_subagent_lifecycle() {
         LifecycleSignal::SubagentStopped { errored: true }
     );
     assert_eq!(stopped.task.as_deref(), Some("reviewer"));
-    assert_eq!(stopped.total_tokens, Some(1234));
+    assert_eq!(stopped.usage.total_tokens, Some(1234));
 }
 
 #[test]

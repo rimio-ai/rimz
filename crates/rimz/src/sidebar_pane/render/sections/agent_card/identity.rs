@@ -184,7 +184,7 @@ pub(super) fn display_context_window(row: &SidebarRow) -> Option<u64> {
                 .as_ref()
                 .and_then(|context| context.tokens.as_ref())
                 .and_then(|tokens| tokens.context_window_size)
-                .or(agent.context_window)
+                .or(agent.usage.context_window)
                 .or_else(|| {
                     crate::agents::descriptor_by_kind(row.name.as_str())
                         .and_then(|descriptor| descriptor.default_context_window)

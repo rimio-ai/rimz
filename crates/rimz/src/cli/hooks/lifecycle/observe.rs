@@ -265,7 +265,7 @@ fn reconcile_spawned_subagents(
         observation.launch.model = child.model.clone();
         observation.task = child.role.or_else(|| child.prompt.clone());
         observation.prompt = child.prompt;
-        observation.total_tokens = child.total_tokens;
+        observation.usage.total_tokens = child.total_tokens;
         observation.pane_id = parent_observation.pane_id.clone();
         if child_state.is_some_and(|state| state.parent_agent_id.is_some()) {
             append_subagent_reconciliation(
@@ -328,8 +328,9 @@ fn append_subagent_reconciliation(
         .as_ref()
         .is_some_and(|model| child_state.model.as_ref() != Some(model));
     let tokens_changed = observation
+        .usage
         .total_tokens
-        .is_some_and(|tokens| child_state.total_tokens != Some(tokens));
+        .is_some_and(|tokens| child_state.usage.total_tokens != Some(tokens));
     if !model_changed && !tokens_changed {
         return;
     }

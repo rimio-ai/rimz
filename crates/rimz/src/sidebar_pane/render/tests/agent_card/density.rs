@@ -100,7 +100,7 @@ fn compact_density_running_waiting_render_placeholder_meter() {
         Some("running task"),
         0,
     );
-    running.context_pct = None;
+    running.usage.context_pct = None;
 
     let mut waiting = density_agent(
         "wait-1",
@@ -109,7 +109,7 @@ fn compact_density_running_waiting_render_placeholder_meter() {
         Some("waiting task"),
         0,
     );
-    waiting.context_pct = None;
+    waiting.usage.context_pct = None;
 
     let mut selected = density_agent(
         "selected-1",
@@ -266,13 +266,13 @@ fn density_agent(
     let mut agent = agent(id, kind, status, Some("/repo/main"), Some("main"), task);
     agent.model = Some("opus".to_owned());
     agent.effort = Some("high".to_owned());
-    agent.context_pct = Some(context_pct);
-    agent.context_window = Some(200_000);
+    agent.usage.context_pct = Some(context_pct);
+    agent.usage.context_window = Some(200_000);
     if context_pct > 0 {
-        agent.cache_read_input_tokens = Some(24_000);
-        agent.fresh_input_tokens = Some(6_000);
-        agent.output_tokens = Some(1_000);
-        agent.total_tokens = Some(31_000);
+        agent.usage.cache_read_input_tokens = Some(24_000);
+        agent.usage.fresh_input_tokens = Some(6_000);
+        agent.usage.output_tokens = Some(1_000);
+        agent.usage.total_tokens = Some(31_000);
     }
     agent
 }

@@ -677,7 +677,7 @@ fn agent_context_pct(agent: &AgentState) -> Option<u8> {
         // consistent reading.
         .filter(|tokens| tokens.context_window_size.is_some())
         .and_then(|tokens| tokens.used_percentage)
-        .or(agent.context_pct)
+        .or(agent.usage.context_pct)
 }
 
 /// Terminal run status produced by one agent lifecycle signal.

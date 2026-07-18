@@ -83,14 +83,14 @@ fn row_preserves_unknown_context_percentage() {
     let cursor = agent("cursor", "sess-1", AgentStatus::Running, 0);
     let row = row_from_agent(&cursor, epoch());
     let card = row.as_agent().expect("agent card");
-    assert_eq!(card.context_pct, None);
+    assert_eq!(card.usage.context_pct, None);
     assert_eq!(card.context_gauge_percent(), None);
 }
 
 #[test]
 fn capacity_and_session_usage_do_not_fabricate_a_context_percentage() {
     let mut state = agent("droid", "sess", AgentStatus::Running, 0);
-    state.context_pct = None;
+    state.usage.context_pct = None;
     let mut context = crate::store::agent_context::empty_context("droid", epoch());
     context.tokens = Some(crate::agents::AgentTokenUsage {
         context_window_size: Some(200_000),
@@ -106,7 +106,7 @@ fn capacity_and_session_usage_do_not_fabricate_a_context_percentage() {
     state.context = Some(context);
 
     let row = row_from_agent(&state, epoch());
-    assert_eq!(row.as_agent().unwrap().context_pct, None);
+    assert_eq!(row.as_agent().unwrap().usage.context_pct, None);
     assert_eq!(row.context_gauge_percent(), None);
     assert_eq!(row.context_used_tokens(), None);
 }

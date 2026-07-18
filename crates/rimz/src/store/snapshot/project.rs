@@ -19,8 +19,6 @@ use crate::store::event::{
     MessageEventPayload,
 };
 
-use super::row::derive_percent;
-
 mod identity;
 
 pub(crate) use identity::AgentIdentityState;
@@ -472,13 +470,7 @@ fn carried_base(
         state.model = prior.model.clone();
         state.effort = prior.effort.clone();
         state.budget = prior.budget.clone();
-        state.context_pct = prior.context_pct;
-        state.context_window = prior.context_window;
-        state.total_tokens = prior.total_tokens;
-        state.cache_read_input_tokens = prior.cache_read_input_tokens;
-        state.cache_write_input_tokens = prior.cache_write_input_tokens;
-        state.fresh_input_tokens = prior.fresh_input_tokens;
-        state.output_tokens = prior.output_tokens;
+        state.usage = prior.usage.clone();
         state.compaction_count = prior.compaction_count;
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
         state.registered_at = prior.registered_at.or(Some(event_ts));
@@ -530,7 +522,12 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
     let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
-    let enrichment = enrichment_projection(input.observation, input.prior, input.kind);
+    let default_window = crate::agents::descriptor_by_kind(input.kind.as_str())
+        .and_then(|descriptor| descriptor.default_context_window);
+    let usage = input
+        .observation
+        .usage
+        .merge(input.prior.map(|prior| &prior.usage), default_window);
     // Established lineage stays authoritative. The explicit adoption event is
     // the one path that converts a provisional root after provider evidence
     // became readable later than the child's own hooks.
@@ -577,13 +574,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     if let Some(origin) = input.observation.origin {
         state.origin = Some(origin);
     }
-    state.context_pct = enrichment.context_pct;
-    state.context_window = enrichment.context_window;
-    state.total_tokens = enrichment.total_tokens;
-    state.cache_read_input_tokens = enrichment.cache_read_input_tokens;
-    state.cache_write_input_tokens = enrichment.cache_write_input_tokens;
-    state.fresh_input_tokens = enrichment.fresh_input_tokens;
-    state.output_tokens = enrichment.output_tokens;
+    state.usage = usage;
     state.turn_started_at = lifecycle.turn_started_at;
     state.waiting_since = lifecycle.waiting_since;
     state.open_ask = lifecycle.open_ask;
@@ -747,96 +738,6 @@ fn lifecycle_projection(
         waiting_since,
         open_ask,
     }
-}
-
-struct EnrichmentProjection {
-    context_pct: Option<u8>,
-    context_window: Option<u64>,
-    total_tokens: Option<u64>,
-    cache_read_input_tokens: Option<u64>,
-    cache_write_input_tokens: Option<u64>,
-    fresh_input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-}
-
-fn enrichment_projection(
-    observation: &AgentLifecycleObservation,
-    prior: Option<&AgentState>,
-    kind: &AgentKind,
-) -> EnrichmentProjection {
-    let context_window = observation
-        .context_window
-        .or_else(|| prior.and_then(|p| p.context_window));
-    let total_tokens = observation
-        .total_tokens
-        .or_else(|| prior.and_then(|p| p.total_tokens));
-    let cache_read_input_tokens = observation
-        .cache_read_input_tokens
-        .or_else(|| prior.and_then(|p| p.cache_read_input_tokens));
-    let cache_write_input_tokens = observation
-        .cache_write_input_tokens
-        .or_else(|| prior.and_then(|p| p.cache_write_input_tokens));
-    let fresh_input_tokens = observation
-        .fresh_input_tokens
-        .or_else(|| prior.and_then(|p| p.fresh_input_tokens));
-    let output_tokens = observation
-        .output_tokens
-        .or_else(|| prior.and_then(|p| p.output_tokens));
-    // One denominator for the gauge: the percentage is derived from the same
-    // window that is stored and displayed, so the bar can never disagree with
-    // the window label. An adapter that stamps an authoritative percentage (pi,
-    // from its in-process gauge) overrides; otherwise derive from the resolved
-    // window (folded, else the kind's descriptor default). Carry the prior
-    // value only when neither the explicit stamp nor a numerator exists.
-    let resolved_window = context_window.or_else(|| {
-        crate::agents::descriptor_by_kind(kind.as_str())
-            .and_then(|descriptor| descriptor.default_context_window)
-    });
-    let used_tokens = context_used_tokens(
-        cache_read_input_tokens,
-        cache_write_input_tokens,
-        fresh_input_tokens,
-        total_tokens,
-    );
-    let context_pct = observation
-        .context_pct
-        .or_else(|| derive_context_pct(used_tokens, resolved_window))
-        .or_else(|| prior.and_then(|p| p.context_pct));
-    EnrichmentProjection {
-        context_pct,
-        context_window,
-        total_tokens,
-        cache_read_input_tokens,
-        cache_write_input_tokens,
-        fresh_input_tokens,
-        output_tokens,
-    }
-}
-
-/// Tokens currently occupying the window: the per-call context split
-/// (`cache_read + cache_write + fresh_input`) when the adapter persists it,
-/// else the latest turn's token total. This is the gauge numerator the
-/// percentage scales.
-fn context_used_tokens(
-    cache_read_input_tokens: Option<u64>,
-    cache_write_input_tokens: Option<u64>,
-    fresh_input_tokens: Option<u64>,
-    total_tokens: Option<u64>,
-) -> Option<u64> {
-    match fresh_input_tokens {
-        Some(fresh) => Some(
-            cache_read_input_tokens.unwrap_or(0) + cache_write_input_tokens.unwrap_or(0) + fresh,
-        ),
-        None => total_tokens,
-    }
-}
-
-/// The integer context-fill percentage (0..=100) of `used` tokens over the
-/// resolved `window`. `None` when either input is unknown so the gauge falls
-/// back rather than rendering a fabricated 0%.
-fn derive_context_pct(used: Option<u64>, window: Option<u64>) -> Option<u8> {
-    let (used, window) = (used?, window?);
-    derive_percent(used, window)
 }
 
 struct WorktreeProjection {

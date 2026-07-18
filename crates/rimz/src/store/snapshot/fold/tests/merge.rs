@@ -43,7 +43,7 @@ fn live_winner_backfills_trimmed_carryover_enrichment() {
     carried.profile = Some("claude-coder".into());
     carried.model = Some("opus".into());
     carried.effort = Some("high".into());
-    carried.context_window = Some(200_000);
+    carried.usage.context_window = Some(200_000);
     carried.last_compact_command_tokens = Some(180_000);
     let live = agent("claude", "agent-1", AgentStatus::Running, 2_000);
 
@@ -61,7 +61,7 @@ fn live_winner_backfills_trimmed_carryover_enrichment() {
     assert_eq!(agent.profile, carried.profile);
     assert_eq!(agent.model, carried.model);
     assert_eq!(agent.effort, carried.effort);
-    assert_eq!(agent.context_window, carried.context_window);
+    assert_eq!(agent.usage.context_window, carried.usage.context_window);
     assert_eq!(
         agent.last_compact_command_tokens,
         carried.last_compact_command_tokens

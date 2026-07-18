@@ -354,7 +354,8 @@ impl AgentAdapter for PiAdapter {
             observation.task = optional_payload_string(payload, &["subagent_label"])
                 .and_then(|value| non_empty_trimmed(&value));
             if event_name == "subagent_stopped" {
-                observation.total_tokens = payload.get("total_tokens").and_then(Value::as_u64);
+                observation.usage.total_tokens =
+                    payload.get("total_tokens").and_then(Value::as_u64);
             }
             decoded.attach_lifecycle(observation);
             return Ok(decoded);
@@ -415,13 +416,13 @@ impl AgentAdapter for PiAdapter {
         observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.launch.model = parsed.model;
         observation.launch.effort = parsed.effort;
-        observation.context_pct = payload_context_pct(payload, None);
-        observation.context_window = parsed.context_window;
-        observation.total_tokens = parsed.total_tokens;
-        observation.cache_read_input_tokens = parsed.cache_read_input_tokens;
-        observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
-        observation.fresh_input_tokens = parsed.input_tokens;
-        observation.output_tokens = parsed.output_tokens;
+        observation.usage.context_pct = payload_context_pct(payload, None);
+        observation.usage.context_window = parsed.context_window;
+        observation.usage.total_tokens = parsed.total_tokens;
+        observation.usage.cache_read_input_tokens = parsed.cache_read_input_tokens;
+        observation.usage.cache_write_input_tokens = parsed.cache_write_input_tokens;
+        observation.usage.fresh_input_tokens = parsed.input_tokens;
+        observation.usage.output_tokens = parsed.output_tokens;
         decoded.set_final_message(
             (event_name == "agent_settled")
                 .then_some(parsed.last_assistant_message)

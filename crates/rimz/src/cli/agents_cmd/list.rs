@@ -359,6 +359,7 @@ fn model_cell(agent: &AgentState) -> render::Cell {
 
 fn tokens_label(agent: &AgentState) -> String {
     agent
+        .usage
         .total_tokens
         .map(render::compact_count)
         .unwrap_or_else(|| "-".to_owned())

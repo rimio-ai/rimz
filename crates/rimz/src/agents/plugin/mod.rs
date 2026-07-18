@@ -169,14 +169,14 @@ impl AgentAdapter for PluginAdapter {
         observation.parent_agent_id = parent_agent_id;
         observation.launch.model = envelope.model;
         observation.launch.effort = envelope.effort;
-        observation.context_pct =
+        observation.usage.context_pct =
             payload_context_pct(payload, envelope.context_pct.map(|pct| pct.min(100) as u8));
-        observation.context_window = envelope.context_window;
-        observation.total_tokens = payload_total_tokens(payload, envelope.total_tokens);
-        observation.fresh_input_tokens = envelope.input_tokens;
-        observation.output_tokens = envelope.output_tokens;
-        observation.cache_read_input_tokens = envelope.cache_read_input_tokens;
-        observation.cache_write_input_tokens = envelope.cache_write_input_tokens;
+        observation.usage.context_window = envelope.context_window;
+        observation.usage.total_tokens = payload_total_tokens(payload, envelope.total_tokens);
+        observation.usage.fresh_input_tokens = envelope.input_tokens;
+        observation.usage.output_tokens = envelope.output_tokens;
+        observation.usage.cache_read_input_tokens = envelope.cache_read_input_tokens;
+        observation.usage.cache_write_input_tokens = envelope.cache_write_input_tokens;
         observation.transcript_path = envelope.transcript_path;
         if observation.worktree_path.is_none() {
             observation.worktree_path = envelope.cwd;

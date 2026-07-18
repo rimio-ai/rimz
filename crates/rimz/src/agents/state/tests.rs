@@ -19,9 +19,9 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     assert!(running.pane.is_none());
     assert!(running.runtime_owner.is_none());
     assert!(running.recent_prompts.is_empty());
-    assert!(running.context_pct.is_none());
-    assert!(running.context_window.is_none());
-    assert!(running.total_tokens.is_none());
+    assert!(running.usage.context_pct.is_none());
+    assert!(running.usage.context_window.is_none());
+    assert!(running.usage.total_tokens.is_none());
     assert!(running.context.is_none());
     assert!(running.budget_park.is_none());
     assert!(running.subagent_description.is_none());
@@ -98,6 +98,41 @@ fn legacy_agent_pid_deserializes_to_runtime_owner() {
     assert!(encoded.get("agent_pid").is_none());
     assert!(encoded.get("agent_process_start").is_none());
     assert!(encoded.get("ended_at").is_none());
+}
+
+#[test]
+fn usage_summary_stays_flat_in_persisted_state_wire() {
+    let mut agent = AgentState::seed(
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("sess-usage"),
+        AgentStatus::Running,
+        Timestamp::from_second(1_700_000_000).unwrap(),
+    );
+    agent.usage = AgentUsageSummary {
+        context_pct: Some(42),
+        context_window: Some(200_000),
+        total_tokens: Some(84_000),
+        cache_read_input_tokens: Some(60_000),
+        cache_write_input_tokens: Some(4_000),
+        fresh_input_tokens: Some(20_000),
+        output_tokens: Some(1_000),
+    };
+
+    let encoded = serde_json::to_value(&agent).expect("encode state");
+    assert!(encoded.get("usage").is_none());
+    for key in [
+        "context_pct",
+        "context_window",
+        "total_tokens",
+        "cache_read_input_tokens",
+        "cache_write_input_tokens",
+        "fresh_input_tokens",
+        "output_tokens",
+    ] {
+        assert!(encoded.get(key).is_some(), "missing flat key {key}");
+    }
+    let decoded: AgentState = serde_json::from_value(encoded).expect("decode persisted state");
+    assert_eq!(decoded.usage, agent.usage);
 }
 
 #[test]

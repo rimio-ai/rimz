@@ -1850,13 +1850,15 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarRow {
         launch_group: spec.launch_group,
         launch_ordinal: spec.launch_ordinal,
 
-        context_pct,
-        context_window,
-        total_tokens,
-        cache_read_input_tokens: split.map(|tokens| tokens.0),
-        cache_write_input_tokens: split.map(|tokens| tokens.1),
-        fresh_input_tokens: split.map(|tokens| tokens.2),
-        output_tokens: split.map(|tokens| tokens.3),
+        usage: rimz::agents::AgentUsageSummary {
+            context_pct,
+            context_window,
+            total_tokens,
+            cache_read_input_tokens: split.map(|tokens| tokens.0),
+            cache_write_input_tokens: split.map(|tokens| tokens.1),
+            fresh_input_tokens: split.map(|tokens| tokens.2),
+            output_tokens: split.map(|tokens| tokens.3),
+        },
         context_severity: context_pct.map(|pct| {
             rimz::agents::ContextSeverity::classify(
                 pct,

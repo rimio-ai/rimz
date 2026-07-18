@@ -10,7 +10,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     running.phase = TurnPhase::Reasoning;
     running.subagent_description = Some("locate the render seam".to_owned());
     running.subagent_started_at = Some(started);
-    running.total_tokens = Some(12_400);
+    running.usage.total_tokens = Some(12_400);
     running.model = Some("claude-opus-4-8".to_owned());
     running.effort = Some("high".to_owned());
     let sub = sub_agent_from_state(&running, now);

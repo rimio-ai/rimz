@@ -407,8 +407,8 @@ fn maps_lifecycle_context_background_and_subagents() {
             parked_on_background: true
         }
     );
-    assert_eq!(parked.context_pct, Some(100));
-    assert_eq!(parked.context_window, Some(131072));
+    assert_eq!(parked.usage.context_pct, Some(100));
+    assert_eq!(parked.usage.context_window, Some(131072));
     let child = adapter
         .decode_hook(
             "SubagentStart",
@@ -445,8 +445,8 @@ fn transcript_tail_and_statusline_supply_context() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(observation.total_tokens, Some(420));
-    assert_eq!(observation.context_window, Some(131072));
+    assert_eq!(observation.usage.total_tokens, Some(420));
+    assert_eq!(observation.usage.context_window, Some(131072));
     assert_eq!(
         observation.description.as_deref(),
         Some("Stable Qwen title")
@@ -705,11 +705,11 @@ fn rewound_transcript_supplies_active_hook_boundary_usage() {
             observation.launch.model.as_deref(),
             Some("qwen-active-final")
         );
-        assert_eq!(observation.total_tokens, Some(555));
-        assert_eq!(observation.context_window, Some(333_333));
-        assert_eq!(observation.cache_read_input_tokens, Some(50));
-        assert_eq!(observation.fresh_input_tokens, Some(400));
-        assert_eq!(observation.output_tokens, Some(105));
+        assert_eq!(observation.usage.total_tokens, Some(555));
+        assert_eq!(observation.usage.context_window, Some(333_333));
+        assert_eq!(observation.usage.cache_read_input_tokens, Some(50));
+        assert_eq!(observation.usage.fresh_input_tokens, Some(400));
+        assert_eq!(observation.usage.output_tokens, Some(105));
     }
 }
 
@@ -736,10 +736,10 @@ fn successive_stops_publish_correlated_small_call_splits() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(first.total_tokens, Some(38_812));
-    assert_eq!(first.cache_read_input_tokens, Some(38_656));
-    assert_eq!(first.fresh_input_tokens, Some(71));
-    assert_eq!(first.output_tokens, Some(85));
+    assert_eq!(first.usage.total_tokens, Some(38_812));
+    assert_eq!(first.usage.cache_read_input_tokens, Some(38_656));
+    assert_eq!(first.usage.fresh_input_tokens, Some(71));
+    assert_eq!(first.usage.output_tokens, Some(85));
 
     let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
     writeln!(file, r#"{{"uuid":"u2","parentUuid":"a1","type":"user"}}"#).unwrap();
@@ -752,10 +752,10 @@ fn successive_stops_publish_correlated_small_call_splits() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(second.total_tokens, Some(38_827));
-    assert_eq!(second.cache_read_input_tokens, Some(38_656));
-    assert_eq!(second.fresh_input_tokens, Some(79));
-    assert_eq!(second.output_tokens, Some(92));
+    assert_eq!(second.usage.total_tokens, Some(38_827));
+    assert_eq!(second.usage.cache_read_input_tokens, Some(38_656));
+    assert_eq!(second.usage.fresh_input_tokens, Some(79));
+    assert_eq!(second.usage.output_tokens, Some(92));
 }
 
 #[test]
@@ -776,9 +776,9 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(cached.cache_read_input_tokens, Some(100));
-    assert_eq!(cached.fresh_input_tokens, Some(0));
-    assert_eq!(cached.output_tokens, Some(5));
+    assert_eq!(cached.usage.cache_read_input_tokens, Some(100));
+    assert_eq!(cached.usage.fresh_input_tokens, Some(0));
+    assert_eq!(cached.usage.output_tokens, Some(5));
 
     fs::write(&path, "").unwrap();
     let fresh = adapter
@@ -789,10 +789,10 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(fresh.total_tokens, Some(0));
-    assert_eq!(fresh.cache_read_input_tokens, None);
-    assert_eq!(fresh.fresh_input_tokens, None);
-    assert_eq!(fresh.output_tokens, None);
+    assert_eq!(fresh.usage.total_tokens, Some(0));
+    assert_eq!(fresh.usage.cache_read_input_tokens, None);
+    assert_eq!(fresh.usage.fresh_input_tokens, None);
+    assert_eq!(fresh.usage.output_tokens, None);
 
     fs::write(
         &path,
@@ -807,12 +807,12 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(stopped.total_tokens, Some(200));
+    assert_eq!(stopped.usage.total_tokens, Some(200));
     assert_eq!(stopped.launch.model, None);
-    assert_eq!(stopped.context_window, None);
-    assert_eq!(stopped.cache_read_input_tokens, None);
-    assert_eq!(stopped.fresh_input_tokens, None);
-    assert_eq!(stopped.output_tokens, None);
+    assert_eq!(stopped.usage.context_window, None);
+    assert_eq!(stopped.usage.cache_read_input_tokens, None);
+    assert_eq!(stopped.usage.fresh_input_tokens, None);
+    assert_eq!(stopped.usage.output_tokens, None);
 
     let explicit = adapter
         .decode_hook(
@@ -820,7 +820,7 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
             &json!({"session_id":"s2","transcript_path":path,"input_tokens":200,"total_tokens":999}),
         ).expect("test hook decodes").lifecycle()
         .unwrap();
-    assert_eq!(explicit.total_tokens, Some(999));
+    assert_eq!(explicit.usage.total_tokens, Some(999));
 }
 
 #[test]

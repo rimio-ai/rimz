@@ -415,9 +415,9 @@ fn gallery_fixtures_build_with_coherent_context() {
         let Some(card) = row.as_agent() else { continue };
         if row.status() == Some(rimz::agents::AgentStatus::Idle) {
             assert_eq!(card.task, None, "{}", row.id);
-            assert_eq!(card.context_pct, None, "{}", row.id);
-            assert_eq!(card.context_window, None, "{}", row.id);
-            assert_eq!(card.total_tokens, None, "{}", row.id);
+            assert_eq!(card.usage.context_pct, None, "{}", row.id);
+            assert_eq!(card.usage.context_window, None, "{}", row.id);
+            assert_eq!(card.usage.total_tokens, None, "{}", row.id);
             assert!(card.context.is_none(), "{}", row.id);
             continue;
         }
@@ -426,17 +426,23 @@ fn gallery_fixtures_build_with_coherent_context() {
         } else {
             272_000
         };
-        assert_eq!(card.context_window, Some(expected_window), "{}", row.id);
+        assert_eq!(
+            card.usage.context_window,
+            Some(expected_window),
+            "{}",
+            row.id
+        );
         assert!(
-            card.total_tokens
+            card.usage
+                .total_tokens
                 .is_some_and(|total| total < expected_window),
             "{}",
             row.id,
         );
-        let split = card.cache_read_input_tokens.unwrap_or(0)
-            + card.cache_write_input_tokens.unwrap_or(0)
-            + card.fresh_input_tokens.unwrap_or(0);
-        assert_eq!(card.total_tokens, Some(split), "{}", row.id);
+        let split = card.usage.cache_read_input_tokens.unwrap_or(0)
+            + card.usage.cache_write_input_tokens.unwrap_or(0)
+            + card.usage.fresh_input_tokens.unwrap_or(0);
+        assert_eq!(card.usage.total_tokens, Some(split), "{}", row.id);
     }
 }
 

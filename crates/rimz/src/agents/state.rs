@@ -11,6 +11,7 @@ use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 use super::context::{AgentContext, AgentTokenUsage, AgentTurnError, TurnErrorClass};
 use super::lifecycle::{AskKind, LifecycleState, TurnPhase};
+use super::observation::AgentUsageSummary;
 
 /// Durable identity and summary for the blocking prompt currently owning an
 /// agent's input. Structured question detail stays in the transcript and joins
@@ -497,34 +498,10 @@ pub struct AgentState {
     /// Canonical launch-carried budget (`$5.00` or `$20.00/day`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<String>,
-    /// Context-window utilization in percent (0..=100). Reported by the
-    /// agent's hooks when available; `None` while the agent hasn't surfaced
-    /// it. Display-only — never drives a decision (the no-transcript-correctness
-    /// rule). Sidebar row projection renders that unknown state as the visible
-    /// 0% baseline, but the reduced agent state keeps the distinction.
-    #[serde(default)]
-    pub context_pct: Option<u8>,
-    /// The model's context window in tokens (`258_400`, `1_000_000`), resolved
-    /// by the adapter at hook time. Same enrich-only, carry-forward discipline
-    /// as `context_pct`; the card's identity line renders it (`258k`, `1M`).
-    #[serde(default)]
-    pub context_window: Option<u64>,
-    /// Cumulative token usage for this agent session. Same enrich-only
-    /// discipline as `context_pct`.
-    #[serde(default)]
-    pub total_tokens: Option<u64>,
-    /// The latest API call's per-call token split (`◌` cache-read, `◍`
-    /// cache-write, `↘` fresh input, `↗` output), carried forward like
-    /// `total_tokens`. The card's composition line falls back to it when no
-    /// richer realtime context (Claude's statusline) is present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_write_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fresh_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
+    /// Durable token and context enrichment. Flattening preserves the persisted
+    /// state wire and sidebar JSON keys.
+    #[serde(default, flatten)]
+    pub usage: AgentUsageSummary,
     /// Rich session-scoped enrichment from a high-frequency out-of-band source
     /// (Claude's statusline). Folded in at snapshot time by
     /// `SidebarSnapshot::with_agent_context`, never reduced from the event log.
@@ -651,13 +628,8 @@ struct AgentStateWire {
     effort: Option<String>,
     #[serde(default)]
     budget: Option<String>,
-    context_pct: Option<u8>,
-    context_window: Option<u64>,
-    total_tokens: Option<u64>,
-    cache_read_input_tokens: Option<u64>,
-    cache_write_input_tokens: Option<u64>,
-    fresh_input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
+    #[serde(default, flatten)]
+    usage: AgentUsageSummary,
     context: Option<AgentContext>,
     #[serde(default)]
     budget_park: Option<crate::harness::budget::BudgetPark>,
@@ -720,13 +692,7 @@ impl From<AgentStateWire> for AgentState {
             model: wire.model,
             effort: wire.effort,
             budget: wire.budget,
-            context_pct: wire.context_pct,
-            context_window: wire.context_window,
-            total_tokens: wire.total_tokens,
-            cache_read_input_tokens: wire.cache_read_input_tokens,
-            cache_write_input_tokens: wire.cache_write_input_tokens,
-            fresh_input_tokens: wire.fresh_input_tokens,
-            output_tokens: wire.output_tokens,
+            usage: wire.usage,
             context: wire.context,
             budget_park: wire.budget_park,
             subagent_description: wire.subagent_description,
@@ -789,13 +755,7 @@ impl AgentState {
             model: None,
             effort: None,
             budget: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
+            usage: AgentUsageSummary::default(),
             context: None,
             budget_park: None,
             subagent_description: None,
@@ -950,14 +910,7 @@ impl AgentState {
             .as_ref()
             .and_then(|context| context.tokens.as_ref())
             .and_then(AgentTokenUsage::used_tokens)
-            .or_else(|| {
-                let fresh = self.fresh_input_tokens?;
-                Some(
-                    self.cache_read_input_tokens.unwrap_or(0)
-                        + self.cache_write_input_tokens.unwrap_or(0)
-                        + fresh,
-                )
-            })
+            .or_else(|| self.usage.input_context_tokens())
     }
 
     /// Tokens occupying the window for a `--smart-compact <tokens>` threshold: the
@@ -968,7 +921,7 @@ impl AgentState {
     /// transcript-derived session that reports only a running total — matching
     /// `--smart-compact 70%`, which already reads that total through the gauge.
     pub fn occupied_context_tokens(&self) -> Option<u64> {
-        self.context_used_tokens().or(self.total_tokens)
+        self.context_used_tokens().or(self.usage.total_tokens)
     }
 
     /// The window denominator: the folded statusline's `context_window_size`,
@@ -979,7 +932,7 @@ impl AgentState {
             .as_ref()
             .and_then(|context| context.tokens.as_ref())
             .and_then(|tokens| tokens.context_window_size)
-            .or(self.context_window)
+            .or(self.usage.context_window)
             .or_else(|| {
                 crate::agents::descriptor_by_kind(self.kind.as_str())
                     .and_then(|descriptor| descriptor.default_context_window)
@@ -1001,7 +954,7 @@ impl AgentState {
                 .as_ref()
                 .and_then(|context| context.tokens.as_ref())
                 .and_then(|tokens| tokens.used_percentage)
-                .or(self.context_pct)
+                .or(self.usage.context_pct)
                 .map(f64::from),
         }
     }
@@ -1039,8 +992,8 @@ impl AgentState {
         if self.budget.is_none() {
             self.budget = base.budget.clone();
         }
-        if self.context_window.is_none() {
-            self.context_window = base.context_window;
+        if self.usage.context_window.is_none() {
+            self.usage.context_window = base.usage.context_window;
         }
         if self.last_compact_command_tokens.is_none() {
             self.last_compact_command_tokens = base.last_compact_command_tokens;

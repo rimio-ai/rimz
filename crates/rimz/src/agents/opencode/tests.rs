@@ -167,12 +167,12 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         Some("claude-sonnet-4.5")
     );
     assert_eq!(registered.launch.effort.as_deref(), Some("xhigh"));
-    assert_eq!(registered.context_window, Some(200_000));
-    assert_eq!(registered.fresh_input_tokens, Some(100));
-    assert_eq!(registered.cache_write_input_tokens, Some(40));
-    assert_eq!(registered.cache_read_input_tokens, Some(30));
-    assert_eq!(registered.output_tokens, Some(20));
-    assert_eq!(registered.total_tokens, Some(190));
+    assert_eq!(registered.usage.context_window, Some(200_000));
+    assert_eq!(registered.usage.fresh_input_tokens, Some(100));
+    assert_eq!(registered.usage.cache_write_input_tokens, Some(40));
+    assert_eq!(registered.usage.cache_read_input_tokens, Some(30));
+    assert_eq!(registered.usage.output_tokens, Some(20));
+    assert_eq!(registered.usage.total_tokens, Some(190));
 
     // A non-Claude session has no local fallback window; the plugin resolves it
     // from the model catalog — the model's max input tokens (`Model.limit.input`,
@@ -191,7 +191,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         .expect("test hook decodes")
         .lifecycle()
         .expect("observation");
-    assert_eq!(catalog_window.context_window, Some(272_000));
+    assert_eq!(catalog_window.usage.context_window, Some(272_000));
     // Without a stamped window, a non-Claude model stays unknown (Claude-only fallback).
     let unknown_window = OpencodeAdapter
         .decode_hook(
@@ -201,7 +201,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         .expect("test hook decodes")
         .lifecycle()
         .expect("observation");
-    assert_eq!(unknown_window.context_window, None);
+    assert_eq!(unknown_window.usage.context_window, None);
 
     let prompt = OpencodeAdapter
         .decode_hook(

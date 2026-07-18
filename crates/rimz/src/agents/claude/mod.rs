@@ -920,8 +920,8 @@ fn build_claude_observation(
     observation.transcript_path = transcript_path;
     observation.launch.model = model;
     observation.launch.effort = claude_effort(payload, parts);
-    observation.context_window = context_window;
-    observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+    observation.usage.context_window = context_window;
+    observation.usage.total_tokens = payload_total_tokens(payload, usage.total_tokens);
     observation
 }
 

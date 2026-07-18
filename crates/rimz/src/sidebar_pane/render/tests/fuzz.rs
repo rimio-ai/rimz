@@ -74,9 +74,9 @@ fn build_adversarial_snapshot(
             state.description = Some(row.text.clone());
             state.model = Some(row.text.clone());
             state.effort = Some(row.text.clone());
-            state.context_pct = Some((idx % 101) as u8);
-            state.context_window = Some(200_000);
-            state.total_tokens = Some((idx as u64).saturating_mul(1000));
+            state.usage.context_pct = Some((idx % 101) as u8);
+            state.usage.context_window = Some(200_000);
+            state.usage.total_tokens = Some((idx as u64).saturating_mul(1000));
             state
         })
         .collect::<Vec<_>>();

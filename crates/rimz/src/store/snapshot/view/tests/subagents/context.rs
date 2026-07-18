@@ -61,7 +61,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         child.subagent_description.as_deref(),
         Some("locate the render path")
     );
-    assert_eq!(child.total_tokens, Some(12_400));
+    assert_eq!(child.usage.total_tokens, Some(12_400));
     assert_eq!(child.subagent_started_at, Some(started));
 
     let fork = rollup_agent(&folded, "fork-1");

@@ -336,11 +336,11 @@ fn qwen_lifecycle(
             .and_then(|meta| meta.description.as_deref())
             .and_then(non_empty_trimmed)
     });
-    observation.context_pct = stop
+    observation.usage.context_pct = stop
         .as_ref()
         .and_then(|value| value.context_usage)
         .map(|ratio| (ratio * 100.0).round().clamp(0.0, 100.0) as u8);
-    observation.context_window = stop
+    observation.usage.context_window = stop
         .as_ref()
         .and_then(|value| value.context_limit)
         .or_else(|| accepted_usage.and_then(|usage| usage.context_window));
@@ -349,11 +349,12 @@ fn qwen_lifecycle(
         .filter(|total| *total > 0)
         .or_else(|| stop.as_ref().and_then(|value| value.input_tokens))
         .or(transcript_total);
-    observation.total_tokens = payload_total_tokens(payload, fallback_total);
-    observation.cache_read_input_tokens =
+    observation.usage.total_tokens = payload_total_tokens(payload, fallback_total);
+    observation.usage.cache_read_input_tokens =
         accepted_usage.and_then(|usage| usage.cache_read_input_tokens);
-    observation.fresh_input_tokens = accepted_usage.and_then(|usage| usage.fresh_input_tokens);
-    observation.output_tokens = accepted_usage.and_then(|usage| usage.output_tokens);
+    observation.usage.fresh_input_tokens =
+        accepted_usage.and_then(|usage| usage.fresh_input_tokens);
+    observation.usage.output_tokens = accepted_usage.and_then(|usage| usage.output_tokens);
     if event_name == "SessionStart"
         && start.as_ref().is_some_and(|value| {
             matches!(value.source, SessionSource::Startup | SessionSource::Clear)

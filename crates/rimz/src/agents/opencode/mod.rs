@@ -478,14 +478,14 @@ impl AgentAdapter for OpencodeAdapter {
         observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.launch.model = parsed.model.clone();
         observation.launch.effort = parsed.effort;
-        observation.context_window = parsed
+        observation.usage.context_window = parsed
             .context_window
             .or_else(|| context_window_for(parsed.model.as_deref()));
-        observation.total_tokens = parsed.total_tokens;
-        observation.cache_read_input_tokens = parsed.cache_read_input_tokens;
-        observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
-        observation.fresh_input_tokens = parsed.input_tokens;
-        observation.output_tokens = parsed.output_tokens;
+        observation.usage.total_tokens = parsed.total_tokens;
+        observation.usage.cache_read_input_tokens = parsed.cache_read_input_tokens;
+        observation.usage.cache_write_input_tokens = parsed.cache_write_input_tokens;
+        observation.usage.fresh_input_tokens = parsed.input_tokens;
+        observation.usage.output_tokens = parsed.output_tokens;
         decoded.set_final_message(if matches!(event_name, "session_idle" | "session_error") {
             observation.agent_id.as_ref().and_then(|session_id| {
                 let path = observation

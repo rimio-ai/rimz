@@ -204,7 +204,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
             .subagent_description
             .clone()
             .or_else(|| child.description.clone()),
-        total_tokens: child.total_tokens,
+        total_tokens: child.usage.total_tokens,
         elapsed_secs,
         started_at,
         last_activity: child.last_activity,

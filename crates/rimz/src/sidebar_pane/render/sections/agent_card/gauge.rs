@@ -411,7 +411,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     } else {
         let total = row
             .context_used_tokens()
-            .or_else(|| agent(row).and_then(|agent| agent.total_tokens))
+            .or_else(|| agent(row).and_then(|agent| agent.usage.total_tokens))
             .unwrap_or(0);
         left.extend(context_total_spans(theme, severity, total, tokens_int));
     }

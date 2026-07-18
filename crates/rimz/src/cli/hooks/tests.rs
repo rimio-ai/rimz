@@ -759,7 +759,7 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
         child_before_completion.model.as_deref(),
         Some("claude-haiku-4.5")
     );
-    assert_eq!(child_before_completion.total_tokens, None);
+    assert_eq!(child_before_completion.usage.total_tokens, None);
     assert_eq!(
         child_before_completion.status,
         rimz::agents::AgentStatus::Success
@@ -793,7 +793,7 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
     assert_eq!(child.name.as_deref(), Some("researcher"));
     assert_eq!(child.task.as_deref(), Some("Inspect auth retry"));
     assert_eq!(child.model.as_deref(), Some("claude-haiku-4.5"));
-    assert_eq!(child.total_tokens, Some(22_116));
+    assert_eq!(child.usage.total_tokens, Some(22_116));
     assert_eq!(child.status, rimz::agents::AgentStatus::Success);
 
     let reconciliation_count = || {
@@ -897,8 +897,8 @@ fn pi_bridge_adopts_an_existing_rich_root_with_the_live_signal() {
     assert_eq!(child.status, rimz::agents::AgentStatus::Running);
     assert_eq!(child.model.as_deref(), Some("gpt-5.6-sol"));
     assert_eq!(child.effort.as_deref(), Some("xhigh"));
-    assert_eq!(child.context_pct, Some(12));
-    assert_eq!(child.total_tokens, Some(24_000));
+    assert_eq!(child.usage.context_pct, Some(12));
+    assert_eq!(child.usage.total_tokens, Some(24_000));
 }
 
 #[test]

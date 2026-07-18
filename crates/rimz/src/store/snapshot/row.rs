@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::state::select_activity_description;
-use crate::agents::{AgentContext, AgentTokenUsage};
+use crate::agents::{AgentContext, AgentTokenUsage, AgentUsageSummary};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
@@ -122,11 +122,11 @@ impl SidebarRow {
     }
 
     pub fn total_tokens(&self) -> Option<u64> {
-        self.as_agent().and_then(|agent| agent.total_tokens)
+        self.as_agent().and_then(|agent| agent.usage.total_tokens)
     }
 
     pub fn context_window(&self) -> Option<u64> {
-        self.as_agent().and_then(|agent| agent.context_window)
+        self.as_agent().and_then(|agent| agent.usage.context_window)
     }
 
     pub fn turn_error_label(&self) -> Option<&str> {
@@ -315,22 +315,8 @@ pub struct AgentCard {
     /// Stable order inside the launch cohort.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_ordinal: Option<u32>,
-    /// Context-window % gauge value (0..=100).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_pct: Option<u8>,
-    /// The model's context window in tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_write_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fresh_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
+    #[serde(default, flatten)]
+    pub usage: AgentUsageSummary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,13 +356,7 @@ impl Default for AgentCard {
             team: None,
             launch_group: None,
             launch_ordinal: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
+            usage: AgentUsageSummary::default(),
             context: None,
             context_severity: None,
             registered_at: None,
@@ -430,7 +410,7 @@ impl AgentCard {
                 let tokens = sidecar_tokens?;
                 derive_percent(tokens.used_tokens()?, tokens.context_window_size?)
             })
-            .or(self.context_pct)
+            .or(self.usage.context_pct)
     }
 
     /// Tokens currently occupying the context window — the authoritative live
@@ -446,12 +426,12 @@ impl AgentCard {
     /// The latest call's composition when the rich `context.tokens.
     /// current_usage` blob is absent.
     pub fn call_split(&self) -> Option<RowCallSplit> {
-        let fresh_input = self.fresh_input_tokens?;
+        let fresh_input = self.usage.fresh_input_tokens?;
         let split = RowCallSplit {
-            cache_read: self.cache_read_input_tokens.unwrap_or(0),
-            cache_write: self.cache_write_input_tokens.unwrap_or(0),
+            cache_read: self.usage.cache_read_input_tokens.unwrap_or(0),
+            cache_write: self.usage.cache_write_input_tokens.unwrap_or(0),
             fresh_input,
-            output: self.output_tokens.unwrap_or(0),
+            output: self.usage.output_tokens.unwrap_or(0),
         };
         let authoritative = self
             .context
@@ -465,7 +445,7 @@ impl AgentCard {
     /// rest at a 0% context gauge, but token, compaction, or spend history keeps
     /// it distinct from a never-started agent.
     pub fn has_session_history(&self) -> bool {
-        self.total_tokens.is_some_and(|total| total > 0)
+        self.usage.total_tokens.is_some_and(|total| total > 0)
             || self.compaction_count > 0
             || self
                 .context

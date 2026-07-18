@@ -370,16 +370,18 @@ impl AgentAdapter for CursorAdapter {
             .or(parsed.model)
             .map(statusline::normalize_model);
         observation.launch.effort = effort;
-        observation.context_pct = parsed
+        observation.usage.context_pct = parsed
             .context_usage_percent
             .filter(|value| value.is_finite())
             .map(|value| value.round().clamp(0.0, 100.0) as u8);
-        observation.context_window = parsed.context_window_size;
+        observation.usage.context_window = parsed.context_window_size;
         if event_name == "stop" {
-            observation.fresh_input_tokens = turn_usage.and_then(|usage| usage.fresh_input);
-            observation.output_tokens = turn_usage.and_then(|usage| usage.output);
-            observation.cache_read_input_tokens = turn_usage.and_then(|usage| usage.cache_read);
-            observation.cache_write_input_tokens = turn_usage.and_then(|usage| usage.cache_write);
+            observation.usage.fresh_input_tokens = turn_usage.and_then(|usage| usage.fresh_input);
+            observation.usage.output_tokens = turn_usage.and_then(|usage| usage.output);
+            observation.usage.cache_read_input_tokens =
+                turn_usage.and_then(|usage| usage.cache_read);
+            observation.usage.cache_write_input_tokens =
+                turn_usage.and_then(|usage| usage.cache_write);
         }
         decoded.attach_lifecycle(observation);
         Ok(decoded)

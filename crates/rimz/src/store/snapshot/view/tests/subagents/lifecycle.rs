@@ -17,7 +17,7 @@ fn pi_session_envelopes_and_bridge_events_converge_on_one_rich_child() {
         );
         child_start.launch.model = Some("gpt-5.6-sol".to_owned());
         child_start.launch.effort = Some("xhigh".to_owned());
-        child_start.total_tokens = Some(12_345);
+        child_start.usage.total_tokens = Some(12_345);
 
         let mut child_settled = AgentLifecycleObservation::new(
             Some("child-session".into()),
@@ -28,7 +28,7 @@ fn pi_session_envelopes_and_bridge_events_converge_on_one_rich_child() {
         );
         child_settled.launch.model = Some("gpt-5.6-sol".to_owned());
         child_settled.launch.effort = Some("xhigh".to_owned());
-        child_settled.total_tokens = Some(12_345);
+        child_settled.usage.total_tokens = Some(12_345);
 
         let mut bridge = AgentLifecycleObservation::new(
             Some("child-session".into()),

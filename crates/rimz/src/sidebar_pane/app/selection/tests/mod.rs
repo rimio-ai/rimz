@@ -61,8 +61,11 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             task: Some("inspect auth".to_owned()),
             model: Some("Opus".to_owned()),
             effort: Some("high".to_owned()),
-            context_pct: Some(38),
-            total_tokens: Some(12_400),
+            usage: crate::agents::AgentUsageSummary {
+                context_pct: Some(38),
+                total_tokens: Some(12_400),
+                ..crate::agents::AgentUsageSummary::default()
+            },
             ..crate::AgentCard::default()
         })),
     };

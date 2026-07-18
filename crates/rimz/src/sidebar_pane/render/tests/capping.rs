@@ -213,6 +213,7 @@ fn finished_group_collapses_unread_success_until_revealed() {
     group.rows[0]
         .as_agent_mut()
         .expect("agent row")
+        .usage
         .total_tokens = Some(1_000);
 
     let snapshot = snapshot_with(Vec::new());
@@ -599,19 +600,19 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
     first.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
     let first_agent = first.as_agent_mut().expect("agent row");
     first_agent.registered_at = Some(fixed_now() - Duration::from_secs(152 * 60));
-    first_agent.total_tokens = Some(700_000);
-    first_agent.fresh_input_tokens = Some(200_000);
-    first_agent.output_tokens = Some(100_000);
-    first_agent.cache_read_input_tokens = Some(400_000);
+    first_agent.usage.total_tokens = Some(700_000);
+    first_agent.usage.fresh_input_tokens = Some(200_000);
+    first_agent.usage.output_tokens = Some(100_000);
+    first_agent.usage.cache_read_input_tokens = Some(400_000);
 
     let mut second = agent_row_with_cost("coder", 0.58);
     second.last_activity = fixed_now() - Duration::from_secs(130 * 60);
     let second_agent = second.as_agent_mut().expect("agent row");
     second_agent.registered_at = Some(fixed_now() - Duration::from_secs(145 * 60));
-    second_agent.total_tokens = Some(500_000);
-    second_agent.fresh_input_tokens = Some(100_000);
-    second_agent.output_tokens = Some(80_000);
-    second_agent.cache_read_input_tokens = Some(300_000);
+    second_agent.usage.total_tokens = Some(500_000);
+    second_agent.usage.fresh_input_tokens = Some(100_000);
+    second_agent.usage.output_tokens = Some(80_000);
+    second_agent.usage.cache_read_input_tokens = Some(300_000);
 
     let mut finished = group(vec![first, second]);
     finished.finished = true;
@@ -661,10 +662,10 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
     row.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
     let agent = row.as_agent_mut().expect("agent row");
     agent.registered_at = Some(fixed_now() - Duration::from_secs(152 * 60));
-    agent.total_tokens = Some(1_200_000);
-    agent.fresh_input_tokens = Some(300_000);
-    agent.output_tokens = Some(180_000);
-    agent.cache_read_input_tokens = Some(700_000);
+    agent.usage.total_tokens = Some(1_200_000);
+    agent.usage.fresh_input_tokens = Some(300_000);
+    agent.usage.output_tokens = Some(180_000);
+    agent.usage.cache_read_input_tokens = Some(700_000);
     let mut finished = group(vec![row]);
     finished.finished = true;
 

@@ -30,7 +30,7 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     child.subagent_started_at = Some(fixed_now() - Duration::from_secs(90));
     child.last_activity = fixed_now() - Duration::from_secs(30);
     child.last_seen = fixed_now() - Duration::from_secs(30);
-    child.total_tokens = Some(12_400);
+    child.usage.total_tokens = Some(12_400);
     // A bare model id — the renderer prettifies it through `model_label`.
     child.model = Some("claude-opus-4-8".to_owned());
     // Claude reports the child's effort on its `SubagentStop`.
@@ -50,7 +50,7 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     fresh.phase = crate::agents::TurnPhase::Reasoning;
     fresh.subagent_description = Some("audit the trust hash".to_owned());
     fresh.subagent_started_at = Some(fixed_now() - Duration::from_secs(30));
-    fresh.total_tokens = Some(3_100);
+    fresh.usage.total_tokens = Some(3_100);
     // A sibling on a different model — the per-child label tells them apart.
     fresh.model = Some("claude-haiku-4-5".to_owned());
 
@@ -195,7 +195,7 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
     );
     spender.parent_agent_id = Some("claude-1".into());
     spender.subagent_started_at = Some(fixed_now() - Duration::from_secs(90));
-    spender.total_tokens = Some(12_400);
+    spender.usage.total_tokens = Some(12_400);
     spender.model = Some("claude-opus-4-8".to_owned());
     spender.effort = Some("high".to_owned());
 
@@ -273,7 +273,7 @@ fn codex_subagent_renders_nickname_nested_path_and_current_context() {
     child.parent_agent_id = Some("codex-root".into());
     child.name = Some("Atlas".to_owned());
     child.name_explicit = true;
-    child.total_tokens = Some(32_100);
+    child.usage.total_tokens = Some(32_100);
     child.model = Some("gpt-5.5-codex".to_owned());
     child.effort = Some("xhigh".to_owned());
 

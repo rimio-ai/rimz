@@ -477,7 +477,7 @@ impl SidebarSnapshot {
                 agent.subagent_description = context.description;
                 agent.subagent_started_at = context.started_at;
                 if context.token_count.is_some() {
-                    agent.total_tokens = context.token_count;
+                    agent.usage.total_tokens = context.token_count;
                 }
             }
         }

@@ -221,10 +221,10 @@ fn call_split_projects_only_with_known_input_sides() {
     // scales — stands in for the severity axis's absolute-token read when no
     // rich blob exists.
     let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
-    codex.cache_read_input_tokens = Some(120_000);
-    codex.cache_write_input_tokens = Some(10_000);
-    codex.fresh_input_tokens = Some(9_200);
-    codex.output_tokens = Some(800);
+    codex.usage.cache_read_input_tokens = Some(120_000);
+    codex.usage.cache_write_input_tokens = Some(10_000);
+    codex.usage.fresh_input_tokens = Some(9_200);
+    codex.usage.output_tokens = Some(800);
     let snapshot = room_with_agent_panes(vec![codex]);
 
     let projected = row(&snapshot, "sess-1");
@@ -241,8 +241,8 @@ fn call_split_projects_only_with_known_input_sides() {
     // Until the input side of a call is known the row keeps the bare total —
     // a pre-first-turn agent never legends a partial composition.
     let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
-    codex.total_tokens = Some(5_000);
-    codex.cache_read_input_tokens = Some(99);
+    codex.usage.total_tokens = Some(5_000);
+    codex.usage.cache_read_input_tokens = Some(99);
     let snapshot = room_with_agent_panes(vec![codex]);
 
     let projected = row(&snapshot, "sess-1");

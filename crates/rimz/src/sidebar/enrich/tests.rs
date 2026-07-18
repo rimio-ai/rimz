@@ -1224,7 +1224,10 @@ fn config_fold_stamps_agent_context_severity() {
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
             status: AgentStatus::Running,
             phase: TurnPhase::Idle,
-            context_pct: pct,
+            usage: crate::agents::AgentUsageSummary {
+                context_pct: pct,
+                ..crate::agents::AgentUsageSummary::default()
+            },
             ..crate::AgentCard::default()
         })),
     };

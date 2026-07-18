@@ -21,8 +21,8 @@ fn transcript_tail_drives_context_window_and_tokens() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(obs.total_tokens, Some(100_500));
-    assert_eq!(obs.context_window, None);
+    assert_eq!(obs.usage.total_tokens, Some(100_500));
+    assert_eq!(obs.usage.context_window, None);
     assert_eq!(obs.launch.model.as_deref(), Some("claude-opus-4-7"));
 
     // The 1M beta is signalled by a `[1m]` marker that rides only the hook
@@ -47,8 +47,8 @@ fn transcript_tail_drives_context_window_and_tokens() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(obs.context_window, Some(1_000_000));
-    assert_eq!(obs.total_tokens, Some(100_500));
+    assert_eq!(obs.usage.context_window, Some(1_000_000));
+    assert_eq!(obs.usage.total_tokens, Some(100_500));
     assert_eq!(obs.launch.model.as_deref(), Some("claude-opus-4-8[1m]"));
 }
 
@@ -235,8 +235,8 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(obs.total_tokens, Some(0));
-    assert_eq!(obs.context_window, None);
+    assert_eq!(obs.usage.total_tokens, Some(0));
+    assert_eq!(obs.usage.context_window, None);
 
     // No readable transcript means unknown (None), not a false 0%.
     let obs = ClaudeAdapter
@@ -247,8 +247,8 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(obs.total_tokens, None);
-    assert_eq!(obs.context_window, None);
+    assert_eq!(obs.usage.total_tokens, None);
+    assert_eq!(obs.usage.context_window, None);
 
     // Transcript reads are keyed by the agent's own session identity: a path
     // with no session id stays unknown even when the file carries usage.
@@ -267,6 +267,6 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         .expect("test hook decodes")
         .lifecycle()
         .unwrap();
-    assert_eq!(obs.total_tokens, None);
-    assert_eq!(obs.context_window, None);
+    assert_eq!(obs.usage.total_tokens, None);
+    assert_eq!(obs.usage.context_window, None);
 }

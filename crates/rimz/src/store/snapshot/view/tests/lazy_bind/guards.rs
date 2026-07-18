@@ -85,7 +85,7 @@ fn stale_codex_ghosts_predating_pane_start_render_idle_live_pane() {
             ghost.prompt = Some("does using sidebar plugin increase performance?".to_owned());
         }
         ghost.status = AgentStatus::Success;
-        ghost.total_tokens = Some(126_621);
+        ghost.usage.total_tokens = Some(126_621);
         ghost.model = Some("gpt-5.5".to_owned());
 
         let mut snapshot = room(vec![ghost]);

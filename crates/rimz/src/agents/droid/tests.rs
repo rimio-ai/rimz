@@ -263,11 +263,11 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
         Some("custom:DeepSeek-V4-Pro-0")
     );
     assert_eq!(observation.launch.effort.as_deref(), Some("medium"));
-    assert_eq!(observation.context_pct, None);
-    assert_eq!(observation.context_window, None);
-    assert_eq!(observation.total_tokens, None);
-    assert_eq!(observation.fresh_input_tokens, None);
-    assert_eq!(observation.output_tokens, None);
+    assert_eq!(observation.usage.context_pct, None);
+    assert_eq!(observation.usage.context_window, None);
+    assert_eq!(observation.usage.total_tokens, None);
+    assert_eq!(observation.usage.fresh_input_tokens, None);
+    assert_eq!(observation.usage.output_tokens, None);
     assert_eq!(
         decoded.final_message(),
         Some("pong\nsecond block".to_owned())
