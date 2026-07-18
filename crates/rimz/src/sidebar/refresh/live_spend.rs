@@ -127,8 +127,7 @@ mod tests {
             fresh_roots: None,
             config: None,
             lanes: None,
-            local_sessions: Vec::new(),
-            wiring: Default::default(),
+            agent_projection: Default::default(),
         }
     }
 

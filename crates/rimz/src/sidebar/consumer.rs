@@ -200,11 +200,11 @@ fn read_published_workspace_snapshot(
 )> {
     let base = rollup_snapshot(state, cursor)?;
     let cache = read_snapshot_cache(&runtime.pane_frame_path(), session);
-    let local_sessions = cache
+    let panes = cache
         .as_deref()
-        .map(|frame| read_published_local_sessions(frame.to_pane_refs(), runtime, session, None).1)
+        .map(|frame| SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None))
         .unwrap_or_default();
-    let wiring = super::agent_wiring::read_published(runtime, session);
+    let agent_projection = super::agent_projection::read_published(runtime, session, &panes);
     let workspace = enrich_workspace(
         base,
         cache.as_deref(),
@@ -215,8 +215,7 @@ fn read_published_workspace_snapshot(
             fresh_roots: None,
             config: None,
             lanes: None,
-            local_sessions,
-            wiring,
+            agent_projection,
         },
         &crate::diag::DiagSink::disabled(),
     );
@@ -233,9 +232,9 @@ pub fn cached_alive_snapshot(
         read_snapshot_cache(&runtime.pane_frame_path(), session).map(|frame| frame.to_pane_refs());
     reap_cached_daemon_sessions_with(&mut base, runtime, frame_panes.as_deref());
     if let Some(frame_panes) = frame_panes {
-        let (panes, observations) =
-            read_published_local_sessions(frame_panes, runtime, session, None);
-        base = base.with_local_sessions(&panes, observations);
+        let (panes, projection) =
+            read_published_agent_projection(frame_panes, runtime, session, None);
+        base = base.with_local_sessions(&panes, projection.local_sessions);
     }
     base
 }
@@ -266,19 +265,18 @@ fn reap_cached_daemon_sessions_with(
     });
 }
 
-fn read_published_local_sessions(
+fn read_published_agent_projection(
     frame_panes: Vec<crate::pane::PaneRef>,
     runtime: &RuntimePaths,
     session: &str,
     exclude: Option<&PaneId>,
 ) -> (
     Vec<crate::pane::PaneRef>,
-    Vec<crate::agents::LocalSessionObservation>,
+    super::agent_projection::AgentProjection,
 ) {
     let panes = SidebarSnapshot::card_admitted_live_panes(frame_panes, exclude);
-    let inputs = super::local_sessions::LocalSessionInputs::from_panes(&panes);
-    let observations = super::local_sessions::read_published(runtime, session, &inputs);
-    (panes, observations)
+    let projection = super::agent_projection::read_published(runtime, session, &panes);
+    (panes, projection)
 }
 
 /// Cheap identity of the files a consumer fold reads. A matching stamp lets a
@@ -306,8 +304,7 @@ pub fn consumer_fold_inputs_stamp(
         runtime.shared_rate_limits_path(),
         runtime.shared_credits_path(),
         runtime.shared_provider_spending_path(),
-        runtime.local_sessions_path(),
-        runtime.agent_wiring_path(),
+        runtime.agent_projection_path(),
         runtime.root.join("metrics-sample.json"),
         super::refresh::daemon_reap::codex_daemon_reap_path(runtime),
     ];

@@ -262,8 +262,7 @@ pub struct FoldOpts<'a> {
     pub fresh_roots: Option<Vec<PathBuf>>,
     pub config: Option<Arc<crate::config::MachineConfig>>,
     pub lanes: Option<&'a crate::sidebar::refresh::RefreshedLanes>,
-    pub local_sessions: Vec<crate::agents::LocalSessionObservation>,
-    pub wiring: crate::sidebar::agent_wiring::WiredAgentProjection,
+    pub agent_projection: crate::sidebar::agent_projection::AgentProjection,
 }
 
 #[derive(Clone, Copy)]
@@ -461,15 +460,15 @@ fn enrich_core(
 
     // Wiring state gates the live-pane fold (idle synthesis), so set it before
     // any pane-backed projection.
-    snapshot.wired_kinds = opts.wiring.kinds;
-    snapshot.wired_default_models = opts.wiring.default_models;
+    snapshot.wired_kinds = opts.agent_projection.wiring.kinds;
+    snapshot.wired_default_models = opts.agent_projection.wiring.default_models;
 
     // Bind caller-supplied provider-local observations before context/activity
     // enrichment. Discovery belongs to the room producer; every renderer keeps
     // the strict live-pane binding and discards paneless observations.
     if let Some(frame) = frame {
         let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude);
-        snapshot = snapshot.with_local_sessions(&panes, opts.local_sessions);
+        snapshot = snapshot.with_local_sessions(&panes, opts.agent_projection.local_sessions);
     }
 
     // Fold each session's rich statusline context onto its agent state

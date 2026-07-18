@@ -174,8 +174,7 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
                 fresh_roots: None,
                 config: Some(Arc::new(crate::config::MachineConfig::default())),
                 lanes: None,
-                local_sessions: Vec::new(),
-                wiring: Default::default(),
+                agent_projection: Default::default(),
             },
             &crate::diag::DiagSink::disabled(),
         )

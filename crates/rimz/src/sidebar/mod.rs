@@ -11,7 +11,7 @@
 //! lock keeps concurrent attaches from each spawning a daemon, and the orphan
 //! sweep reaps a SIGKILLed instance's runtime files.
 
-pub mod agent_wiring;
+pub mod agent_projection;
 pub mod cache;
 pub mod consumer;
 pub mod enrich;
@@ -20,7 +20,6 @@ pub mod focus_anchor;
 pub mod frame;
 pub mod fuse;
 pub mod heartbeat;
-pub mod local_sessions;
 pub mod meter;
 pub mod notify;
 pub mod observe;

@@ -345,14 +345,9 @@ impl RuntimePaths {
         self.root.join("snapshot.json")
     }
 
-    /// Producer-published provider-local session observations for this room.
-    pub fn local_sessions_path(&self) -> PathBuf {
-        self.root.join("local-sessions.json")
-    }
-
-    /// Producer-published adapter wiring and launch defaults for this room.
-    pub fn agent_wiring_path(&self) -> PathBuf {
-        self.root.join("agent-wiring.json")
+    /// Producer-published adapter wiring and provider-local sessions.
+    pub fn agent_projection_path(&self) -> PathBuf {
+        self.root.join("agent-projection.json")
     }
 
     /// Serializes Zellij topology writer fencing and cache publication.

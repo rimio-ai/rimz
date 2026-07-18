@@ -18,8 +18,7 @@ fn cached_opts() -> FoldOpts<'static> {
         fresh_roots: None,
         config: None,
         lanes: None,
-        local_sessions: Vec::new(),
-        wiring: Default::default(),
+        agent_projection: Default::default(),
     }
 }
 
@@ -75,8 +74,7 @@ fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'stati
         ("rate_limits", runtime.shared_rate_limits_path()),
         ("credits", runtime.shared_credits_path()),
         ("provider_spending", runtime.shared_provider_spending_path()),
-        ("local_sessions", runtime.local_sessions_path()),
-        ("agent_wiring", runtime.agent_wiring_path()),
+        ("agent_projection", runtime.agent_projection_path()),
         ("metrics_sample", runtime.root.join("metrics-sample.json")),
         (
             "codex_daemon_reap",
@@ -162,7 +160,7 @@ fn cached_alive_snapshot_binds_safe_local_session_intersection() {
     );
     let frame = assemble_frame(vec![live_pane.clone()], unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
-    let published_inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&[
+    let published_inputs = crate::sidebar::agent_projection::LocalSessionInputs::from_panes(&[
         live_pane.clone(),
         removed_pane,
     ]);
@@ -170,9 +168,10 @@ fn cached_alive_snapshot_binds_safe_local_session_intersection() {
     let live_observation = local_observation("kiro-live", &live_worktree, now);
     let removed_observation = local_observation("kiro-removed", &removed_worktree, now);
     atomic::write_temp_then_rename_cache(
-        &runtime.local_sessions_path(),
-        &crate::sidebar::local_sessions::PublishedLocalSessions {
+        &runtime.agent_projection_path(),
+        &crate::sidebar::agent_projection::AgentProjectionPublication {
             session_name: "rimz-test".to_owned(),
+            wiring: Default::default(),
             inputs: published_inputs,
             observations: vec![live_observation.clone(), removed_observation.clone()],
         },
@@ -306,8 +305,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
         "rate_limits",
         "credits",
         "provider_spending",
-        "local_sessions",
-        "agent_wiring",
+        "agent_projection",
         "metrics_sample",
         "codex_daemon_reap",
     ] {
@@ -571,7 +569,7 @@ fn read_published_snapshot_binds_safe_local_session_intersection() {
         panes[0].clone(),
         pane("terminal_removed", "kiro-cli", &removed_wt),
     ];
-    let inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&published_panes);
+    let inputs = crate::sidebar::agent_projection::LocalSessionInputs::from_panes(&published_panes);
     let now = Timestamp::now();
     let session_id = crate::ids::AgentSessionId::from("kiro-session");
     let observation = crate::agents::LocalSessionObservation {
@@ -593,9 +591,10 @@ fn read_published_snapshot_binds_safe_local_session_intersection() {
         ..observation.clone()
     };
     atomic::write_temp_then_rename_cache(
-        &runtime.local_sessions_path(),
-        &crate::sidebar::local_sessions::PublishedLocalSessions {
+        &runtime.agent_projection_path(),
+        &crate::sidebar::agent_projection::AgentProjectionPublication {
             session_name: "rimz-test".to_owned(),
+            wiring: Default::default(),
             inputs,
             observations: vec![observation, removed_observation],
         },
@@ -645,16 +644,18 @@ fn published_wiring_admits_a_hook_only_idle_pane_without_provider_config() {
         .with_project_root(Some(worktree));
     atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
     atomic::write_temp_then_rename_cache(
-        &runtime.agent_wiring_path(),
-        &crate::sidebar::agent_wiring::PublishedAgentWiring {
+        &runtime.agent_projection_path(),
+        &crate::sidebar::agent_projection::AgentProjectionPublication {
             session_name: "rimz-test".to_owned(),
-            projection: crate::sidebar::agent_wiring::WiredAgentProjection {
+            wiring: crate::sidebar::agent_projection::WiredAgentProjection {
                 kinds: vec!["droid".to_owned()],
                 default_models: std::collections::BTreeMap::from([(
                     "droid".to_owned(),
                     "fixture-model".to_owned(),
                 )]),
             },
+            inputs: Default::default(),
+            observations: Vec::new(),
         },
     )
     .unwrap();

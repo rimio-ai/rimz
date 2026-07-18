@@ -989,7 +989,7 @@ fn cursor_ask_local_store_waits_in_pane_without_creating_a_structured_ask() {
     assert_eq!(discovered.len(), 1, "Cursor fixture must be discoverable");
     let waiting = env.snapshot_json_with_panes(std::slice::from_ref(&pane));
     let published_local_sessions =
-        std::fs::read_to_string(env.runtime_paths().local_sessions_path())
+        std::fs::read_to_string(env.runtime_paths().agent_projection_path())
             .unwrap_or_else(|error| format!("<unreadable: {error}>"));
     let agent = waiting["agents"]
         .as_array()

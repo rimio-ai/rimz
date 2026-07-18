@@ -28,7 +28,7 @@ use std::{
 };
 
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use crate::sidebar::agent_wiring::WiredAgentProjection;
+use crate::sidebar::agent_projection::{AgentProjection, WiredAgentProjection};
 use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
 use crate::sidebar::enrich::{
     FoldOpts, WorkspaceSnapshot, enrich, enrich_workspace, project_local,
@@ -205,7 +205,7 @@ pub fn produce_resolution_snapshot(
         snapshot,
         frame,
         opts.exclude.as_ref(),
-        crate::sidebar::agent_wiring::probe_current(),
+        crate::sidebar::agent_projection::probe_current(),
     ))
 }
 
@@ -434,8 +434,7 @@ fn enrich_producing_workspace(
 ) -> WorkspaceSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
-    let local_sessions = refresh_local_sessions(frame, &opts);
-    let wiring = refresh_agent_wiring(frame, &opts);
+    let agent_projection = refresh_agent_projection(frame, &opts);
     enrich_workspace(
         snapshot,
         frame,
@@ -446,8 +445,7 @@ fn enrich_producing_workspace(
             fresh_roots: roots,
             config: Some(config),
             lanes: None,
-            local_sessions,
-            wiring,
+            agent_projection,
         },
         opts.diag,
     )
@@ -460,8 +458,7 @@ fn enrich_with_refresh(
 ) -> SidebarSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
-    let local_sessions = refresh_local_sessions(frame.as_ref(), &opts);
-    let wiring = refresh_agent_wiring(frame.as_ref(), &opts);
+    let agent_projection = refresh_agent_projection(frame.as_ref(), &opts);
     let folded = enrich_producing_with(
         snapshot.clone(),
         frame.clone(),
@@ -471,8 +468,7 @@ fn enrich_with_refresh(
             fresh_roots: roots.clone(),
             config: Some(config.clone()),
             lanes: None,
-            local_sessions: local_sessions.clone(),
-            wiring: wiring.clone(),
+            agent_projection: agent_projection.clone(),
         },
     );
     // The intermediate fold applies the published daemon-reap cache. Probe from
@@ -497,31 +493,23 @@ fn enrich_with_refresh(
             fresh_roots: roots,
             config: Some(config),
             lanes: Some(&refreshed),
-            local_sessions,
-            wiring,
+            agent_projection,
         },
     )
 }
 
-fn refresh_local_sessions(
+fn refresh_agent_projection(
     frame: Option<&PaneFrame>,
     opts: &ProducerEnrich<'_>,
-) -> Vec<crate::agents::LocalSessionObservation> {
+) -> AgentProjection {
     let Some(frame) = frame else {
-        return Vec::new();
+        return AgentProjection {
+            wiring: crate::sidebar::agent_projection::probe_current(),
+            local_sessions: Vec::new(),
+        };
     };
     let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
-    let inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&panes);
-    crate::sidebar::local_sessions::refresh_published(opts.runtime, &frame.session_name, inputs)
-}
-
-fn refresh_agent_wiring(
-    frame: Option<&PaneFrame>,
-    opts: &ProducerEnrich<'_>,
-) -> WiredAgentProjection {
-    frame.map_or_else(crate::sidebar::agent_wiring::probe_current, |frame| {
-        crate::sidebar::agent_wiring::refresh_published(opts.runtime, &frame.session_name)
-    })
+    crate::sidebar::agent_projection::refresh_published(opts.runtime, &frame.session_name, &panes)
 }
 
 fn producer_roots(
