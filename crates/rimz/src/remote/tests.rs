@@ -672,6 +672,27 @@ fn reachable_retry_delay_stays_flat_then_doubles_each_minute() {
 }
 
 #[test]
+fn transport_failures_are_classified_conservatively() {
+    for summary in [
+        "Operation timed out",
+        "Connection refused",
+        "No route to host",
+        "Network is unreachable",
+        "Could not resolve hostname dev",
+        "Temporary failure in name resolution",
+        "Connection reset by peer",
+    ] {
+        assert!(transport_failure(summary), "{summary}");
+    }
+    for summary in [
+        "Permission denied (publickey).",
+        "Host key verification failed.",
+    ] {
+        assert!(!transport_failure(summary), "{summary}");
+    }
+}
+
+#[test]
 fn unreachable_retry_delay_uses_the_user_safety_ladder() {
     let policy = ReconnectPolicy::default();
     assert_eq!(

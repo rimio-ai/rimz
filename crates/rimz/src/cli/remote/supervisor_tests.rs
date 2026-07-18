@@ -61,7 +61,7 @@ fn plain_retry_wait_reports_interruption() {
 
 #[test]
 fn plain_retry_wait_omits_the_internet_checkpoint() {
-    let ui = OutageUi::plain_lines("dev-box");
+    let ui = OutageUi::plain_lines(ConnectStage::Recovery, "dev-box");
 
     assert_eq!(internet_probe_for_wait(&ui), None);
 }

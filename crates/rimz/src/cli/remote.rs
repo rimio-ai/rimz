@@ -407,7 +407,6 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                     .context("checking SSH ControlMaster socket path")?;
                 supervisor::supervise_remote(&plan, &control, remote.origin.as_str())
             } else {
-                supervisor::report_remote_connect(plan.target().host_display(), false);
                 let plain_spec = plan.initial().plain();
                 tty::sanitize_local_tty();
                 exec_attach_command(&plain_spec)

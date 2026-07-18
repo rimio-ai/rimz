@@ -215,8 +215,31 @@ fn run_exec_with_term(colorterm: Option<&str>, infocmp: InfocmpFixture) -> Vec<S
         String::from_utf8_lossy(&out.stderr)
     );
     let invocations = shim_invocations(&log);
-    assert_eq!(invocations.len(), 1, "one ssh run");
-    invocations.into_iter().next().expect("ssh invocation")
+    let master_index = invocations
+        .iter()
+        .position(|argv| is_master_invocation(argv))
+        .expect("initial master invocation");
+    let main_index = invocations
+        .iter()
+        .position(|argv| is_main_invocation(argv))
+        .expect("main ssh invocation");
+    assert!(
+        master_index < main_index,
+        "the confirmed master precedes the main attach: {invocations:?}"
+    );
+    assert_eq!(
+        invocations
+            .iter()
+            .filter(|argv| is_main_invocation(argv))
+            .count(),
+        1,
+        "one main ssh run: {invocations:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("attaching to"),
+        "the panel owns supervised connection presentation"
+    );
+    invocations[main_index].clone()
 }
 
 fn snippet(argv: &[String]) -> &str {
@@ -280,6 +303,16 @@ fn main_invocation_count(log: &Path) -> usize {
         .filter(|line| !line.trim().is_empty())
         .map(|line| line.split('\t').map(ToOwned::to_owned).collect::<Vec<_>>())
         .filter(|argv| is_main_invocation(argv))
+        .count()
+}
+
+fn master_invocation_count(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.split('\t').map(ToOwned::to_owned).collect::<Vec<_>>())
+        .filter(|argv| is_master_invocation(argv))
         .count()
 }
 
@@ -537,9 +570,154 @@ fn one_shot_connect_repairs_a_raw_tty_before_exec() {
 
     let mut cmd = remote_connect_pty_command(&env, &log);
     cmd.arg("--no-reconnect");
-    let (_, settings) = run_pty_command(pair, cmd);
+    let (output, settings) = run_pty_command(pair, cmd);
 
     assert_shell_tty(&settings);
+    assert!(
+        !output.contains("attaching to"),
+        "one-shot exec leaves presentation to ssh: {output}"
+    );
+}
+
+#[test]
+fn supervised_initial_auth_failure_falls_back_to_one_interactive_attach() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let master_plan = env.project_root.join("ssh-master.plan");
+    std::fs::write(&plan, "2\n").expect("write main plan");
+    std::fs::write(&master_plan, "255\n").expect("write master plan");
+
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_MASTER_PLAN", &master_plan)
+        .env(
+            "RIMZ_TEST_SSH_MASTER_STDERR",
+            "Permission denied (publickey).\n",
+        )
+        .bounded_output()
+        .expect("run supervised remote connect");
+
+    assert!(
+        !out.status.success(),
+        "the foreground failure remains fatal"
+    );
+    assert_eq!(master_invocation_count(&log), 1);
+    assert_eq!(main_invocation_count(&log), 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("connect to dev-box failed — Permission denied (publickey)."),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("ssh to dev-box exited with status 2; not reconnecting"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn supervised_initial_transport_failure_retries_before_main_attach() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let master_plan = env.project_root.join("ssh-master.plan");
+    std::fs::write(&master_plan, "255\n0\n").expect("write master plan");
+
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_MASTER_PLAN", &master_plan)
+        .env(
+            "RIMZ_TEST_SSH_MASTER_STDERR",
+            "ssh: connect to host dev-box port 22: Connection refused\n",
+        )
+        .bounded_output()
+        .expect("run supervised remote connect");
+
+    assert!(
+        out.status.success(),
+        "transport retry reaches the main attach\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let invocations = shim_invocations(&log);
+    let main_index = invocations
+        .iter()
+        .position(|argv| is_main_invocation(argv))
+        .expect("main attach");
+    assert_eq!(
+        invocations[..main_index]
+            .iter()
+            .filter(|argv| is_master_invocation(argv))
+            .count(),
+        2,
+        "both masters precede the main attach: {invocations:?}"
+    );
+}
+
+#[test]
+fn supervised_master_deadline_kills_and_repaces_a_hung_attempt() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let ready = env.project_root.join("control-master-ready");
+    let master_plan = env.project_root.join("ssh-master.plan");
+    let ready_plan = env.project_root.join("ssh-master-ready.plan");
+    std::fs::write(&master_plan, "0\n255\n").expect("write master plan");
+    std::fs::write(&ready_plan, "0\n").expect("write ready plan");
+
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_MASTER_PLAN", &master_plan)
+        .env("RIMZ_TEST_SSH_MASTER_READY_PLAN", &ready_plan)
+        .env(
+            "RIMZ_TEST_SSH_MASTER_STDERR",
+            "Permission denied (publickey).\n",
+        )
+        .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
+        .env("RIMZ_REMOTE_MASTER_TIMEOUT_MS", "50")
+        .bounded_output()
+        .expect("run supervised remote connect");
+
+    assert!(
+        out.status.success(),
+        "the replacement attempt reaches interactive fallback\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(master_invocation_count(&log), 2);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("SSH connect timed out after 0s"),
+        "the attempt timeout is visible"
+    );
+}
+
+#[test]
+fn tun_route_skips_dead_tcp_checkpoint_and_keeps_ssh_retries_fast() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let master_plan = env.project_root.join("ssh-master.plan");
+    let (ssh_config, _) = closed_ssh_endpoint(&env);
+    std::fs::write(&master_plan, "255\n0\n").expect("write master plan");
+
+    let started = Instant::now();
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
+        .env("RIMZ_TEST_SSH_MASTER_PLAN", &master_plan)
+        .env(
+            "RIMZ_TEST_SSH_MASTER_STDERR",
+            "ssh: connect to host dev-box port 22: Connection refused\n",
+        )
+        .env("RIMZ_REMOTE_DIAL_MS", "10")
+        .env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "20")
+        .env("RIMZ_REMOTE_TUN", "utun3")
+        .bounded_output()
+        .expect("run TUN-routed remote connect");
+
+    assert!(out.status.success());
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "TUN bypass keeps the retry on reachable pacing"
+    );
+    assert_eq!(master_invocation_count(&log), 2);
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("server route to dev-box uses TUN utun3 — TCP check skipped"),
+        "the skipped checkpoint is visible"
+    );
 }
 
 #[test]
@@ -648,17 +826,17 @@ fn probe_stream_waits_for_control_master_before_starting() {
         "probe stream must not start before ControlMaster is ready"
     );
     let invocations = shim_invocations(&log);
-    let main_index = invocations
-        .iter()
-        .position(|argv| is_main_invocation(argv))
-        .expect("main ssh invocation");
     let probe_index = invocations
         .iter()
         .position(|argv| is_probe_invocation(argv))
         .expect("probe stream invocation");
+    let master_index = invocations
+        .iter()
+        .position(|argv| is_master_invocation(argv))
+        .expect("master invocation");
     assert!(
-        probe_index > main_index,
-        "probe stream starts only after the main ssh begins: {invocations:?}"
+        probe_index > master_index,
+        "probe stream starts only after the master begins: {invocations:?}"
     );
     assert!(
         invocations[..probe_index]
@@ -700,8 +878,8 @@ fn established_link_drop_reconnects_and_notifies_once() {
             .iter()
             .filter(|argv| is_master_invocation(argv))
             .count(),
-        1,
-        "one background master proves the retry"
+        2,
+        "the initial and recovery masters prove both connections"
     );
     assert!(
         !snippet(&invocations[0]).contains("RIMZ_REMOTE_RECONNECT"),
@@ -874,8 +1052,8 @@ fn reachable_endpoint_retries_failed_masters_without_stderr_spam() {
             .iter()
             .filter(|argv| is_master_invocation(argv))
             .count(),
-        3,
-        "two failed masters precede the successful one: {invocations:?}"
+        4,
+        "two initial failures, one initial success, and one recovery master: {invocations:?}"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(

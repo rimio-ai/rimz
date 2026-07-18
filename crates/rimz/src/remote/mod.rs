@@ -628,9 +628,9 @@ fn display_word(word: &str) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReconnectPolicy {
     /// How long a session must live to count as established when no probe ack
-    /// confirms the transport first (autossh's `AUTOSSH_GATETIME`). A
-    /// transport failure before any session establishes is an auth/host
-    /// problem, not a drop — fatal, never a password-prompt loop.
+    /// confirms the transport first (autossh's `AUTOSSH_GATETIME`). A failed
+    /// foreground interactive fallback before establishment remains fatal so
+    /// RimZ never loops a password prompt.
     pub gatetime: Duration,
     /// Backoff ceiling.
     pub backoff_cap: Duration,
@@ -638,6 +638,8 @@ pub struct ReconnectPolicy {
     pub reachable_retry: Duration,
     /// Outage window that keeps reachable-endpoint retries flat and fast.
     pub flat_window: Duration,
+    /// Maximum lifetime of one background ControlMaster connection attempt.
+    pub master_deadline: Duration,
 }
 
 impl Default for ReconnectPolicy {
@@ -647,6 +649,7 @@ impl Default for ReconnectPolicy {
             backoff_cap: Duration::from_secs(30),
             reachable_retry: Duration::from_secs(2),
             flat_window: Duration::from_secs(3 * 60),
+            master_deadline: Duration::from_secs(30),
         }
     }
 }
@@ -654,7 +657,8 @@ impl Default for ReconnectPolicy {
 impl ReconnectPolicy {
     /// Resolve the policy, honoring the hidden test seams
     /// (`RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_CAP_MS`,
-    /// `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`).
+    /// `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`,
+    /// `RIMZ_REMOTE_MASTER_TIMEOUT_MS`).
     pub fn from_env() -> Self {
         let mut policy = Self::default();
         if let Some(gatetime) = env_ms("RIMZ_REMOTE_GATETIME_MS") {
@@ -668,6 +672,9 @@ impl ReconnectPolicy {
         }
         if let Some(window) = env_ms("RIMZ_REMOTE_FLAT_WINDOW_MS") {
             policy.flat_window = window;
+        }
+        if let Some(deadline) = env_ms("RIMZ_REMOTE_MASTER_TIMEOUT_MS") {
+            policy.master_deadline = deadline;
         }
         policy
     }
@@ -695,6 +702,25 @@ impl ReconnectPolicy {
         };
         Duration::from_secs(seconds).min(self.backoff_cap)
     }
+}
+
+/// Whether an OpenSSH error summary describes a transport failure.
+///
+/// Unknown initial-connect errors fall back to interactive SSH so the user
+/// can see and answer the real authentication or host-key prompt.
+pub fn transport_failure(summary: &str) -> bool {
+    let summary = summary.to_ascii_lowercase();
+    [
+        "timed out",
+        "connection refused",
+        "no route to host",
+        "network is unreachable",
+        "could not resolve hostname",
+        "temporary failure in name resolution",
+        "connection reset",
+    ]
+    .iter()
+    .any(|needle| summary.contains(needle))
 }
 
 /// Extract the useful tail of OpenSSH stderr for the recovery panel.

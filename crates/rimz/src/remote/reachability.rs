@@ -38,6 +38,14 @@ pub struct DialPlan {
     pub port: u16,
 }
 
+/// Whether a route interface bypasses reliable direct TCP reachability checks.
+pub fn is_tun_interface(name: &str, point_to_point: bool) -> bool {
+    point_to_point
+        || ["tun", "utun", "wg", "tailscale"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+
 /// Parse the relevant subset of lowercase `ssh -G` output.
 ///
 /// Proxy-based connections opt out because their reachable endpoint differs
@@ -244,6 +252,17 @@ mod tests {
         );
         assert_eq!(parse_dial_plan("this is not ssh config\n"), None);
         assert_eq!(parse_dial_plan("hostname dev\nport nope\n"), None);
+    }
+
+    #[test]
+    fn tun_interfaces_include_point_to_point_and_known_families() {
+        assert!(is_tun_interface("ppp0", true));
+        for name in ["tun0", "utun3", "wg0", "tailscale0"] {
+            assert!(is_tun_interface(name, false), "{name}");
+        }
+        for name in ["en0", "eth0"] {
+            assert!(!is_tun_interface(name, false), "{name}");
+        }
     }
 
     #[test]

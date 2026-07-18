@@ -46,6 +46,13 @@ pub enum RecoveryStage {
     Session,
 }
 
+/// Which connection transition the panel presents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectStage {
+    Initial,
+    Recovery,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StageFrame {
     pub stage: RecoveryStage,
@@ -56,6 +63,7 @@ pub struct StageFrame {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveryFrame {
+    pub connect_stage: ConnectStage,
     pub host: String,
     pub outage_for: Duration,
     pub attempt: u32,
@@ -68,10 +76,12 @@ pub struct RecoveryFrame {
 struct Checkpoint {
     endpoint_label: String,
     result: Option<StageStatus>,
+    tun: Option<String>,
 }
 
 /// Checkpoint state for one transport outage.
 pub struct RecoveryPanel {
+    connect_stage: ConnectStage,
     host: String,
     grace: Duration,
     min_display: Duration,
@@ -87,11 +97,13 @@ pub struct RecoveryPanel {
 
 impl RecoveryPanel {
     pub fn new(
+        connect_stage: ConnectStage,
         host: impl Into<String>,
         internet: Option<&InternetProbe>,
         server: Option<&DialPlan>,
     ) -> Self {
         Self::with_timing(
+            connect_stage,
             host,
             internet,
             server,
@@ -101,6 +113,7 @@ impl RecoveryPanel {
     }
 
     fn with_timing(
+        connect_stage: ConnectStage,
         host: impl Into<String>,
         internet: Option<&InternetProbe>,
         server: Option<&DialPlan>,
@@ -108,6 +121,7 @@ impl RecoveryPanel {
         min_display: Duration,
     ) -> Self {
         Self {
+            connect_stage,
             host: host.into(),
             grace,
             min_display,
@@ -117,6 +131,7 @@ impl RecoveryPanel {
             internet: internet.map(|probe| Checkpoint {
                 endpoint_label: probe.host().to_owned(),
                 result: None,
+                tun: None,
             }),
             server: server.map(checkpoint),
             session: StageStatus::Waiting,
@@ -146,6 +161,14 @@ impl RecoveryPanel {
     pub fn note_server(&mut self, reachable: bool) {
         if let Some(checkpoint) = &mut self.server {
             checkpoint.result = Some(checkpoint_status(reachable));
+            checkpoint.tun = None;
+        }
+    }
+
+    pub fn note_server_tun(&mut self, ifname: &str) {
+        if let Some(checkpoint) = &mut self.server {
+            checkpoint.result = Some(StageStatus::Ok);
+            checkpoint.tun = Some(ifname.to_owned());
         }
     }
 
@@ -191,10 +214,25 @@ impl RecoveryPanel {
         }
         if let Some(checkpoint) = &self.server {
             let mut status = checkpoint.result.unwrap_or(StageStatus::Checking);
-            let mut detail = checkpoint.endpoint_label.clone();
+            let mut detail = checkpoint.tun.as_ref().map_or_else(
+                || checkpoint.endpoint_label.clone(),
+                |tun| {
+                    format!(
+                        "{} · via TUN {tun} · TCP check skipped",
+                        checkpoint.endpoint_label
+                    )
+                },
+            );
             if status == StageStatus::Ok && self.attempt >= 2 {
                 status = StageStatus::Suspect;
-                detail.push_str(" · answers TCP · SSH failing");
+                if let Some(tun) = &checkpoint.tun {
+                    detail = format!(
+                        "{} · via TUN {tun} · SSH failing",
+                        checkpoint.endpoint_label
+                    );
+                } else {
+                    detail.push_str(" · answers TCP · SSH failing");
+                }
             }
             rows.push(StageFrame {
                 stage: RecoveryStage::Server,
@@ -217,6 +255,7 @@ impl RecoveryPanel {
             },
         });
         RecoveryFrame {
+            connect_stage: self.connect_stage,
             host: self.host.clone(),
             outage_for,
             attempt: self.attempt,
@@ -270,6 +309,7 @@ fn checkpoint(plan: &DialPlan) -> Checkpoint {
     Checkpoint {
         endpoint_label: endpoint_label(plan),
         result: None,
+        tun: None,
     }
 }
 
@@ -298,12 +338,32 @@ mod tests {
 
     fn panel(server: Option<&DialPlan>) -> RecoveryPanel {
         RecoveryPanel::with_timing(
+            ConnectStage::Recovery,
             "dev-box",
             Some(&internet()),
             server,
             Duration::from_millis(500),
             Duration::from_millis(1_500),
         )
+    }
+
+    #[test]
+    fn initial_frame_carries_its_connection_stage() {
+        let panel = RecoveryPanel::with_timing(
+            ConnectStage::Initial,
+            "dev-box",
+            None,
+            None,
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+
+        assert_eq!(
+            panel
+                .frame(Duration::ZERO, FooterPhase::Connecting)
+                .connect_stage,
+            ConnectStage::Initial
+        );
     }
 
     #[test]
@@ -429,6 +489,29 @@ mod tests {
         assert_eq!(
             panel.frame(Duration::ZERO, FooterPhase::Connecting).rows[1].status,
             StageStatus::Ok
+        );
+    }
+
+    #[test]
+    fn tun_server_skips_tcp_wording_and_becomes_suspect() {
+        let server = plan("dev-box");
+        let mut panel = panel(Some(&server));
+        panel.note_server_tun("utun3");
+
+        panel.note_attempt(1);
+        let reachable = panel.frame(Duration::ZERO, FooterPhase::Connecting);
+        assert_eq!(reachable.rows[1].status, StageStatus::Ok);
+        assert_eq!(
+            reachable.rows[1].detail,
+            "dev-box:22 · via TUN utun3 · TCP check skipped"
+        );
+
+        panel.note_attempt(2);
+        let suspect = panel.frame(Duration::ZERO, FooterPhase::Connecting);
+        assert_eq!(suspect.rows[1].status, StageStatus::Suspect);
+        assert_eq!(
+            suspect.rows[1].detail,
+            "dev-box:22 · via TUN utun3 · SSH failing"
         );
     }
 

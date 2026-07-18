@@ -179,7 +179,7 @@ png = "0.18"
 crc32fast = "1"
 
 # OS integration (cfg(unix))
-nix = { version = "0.31", features = ["feature", "fs", "hostname", "poll", "process", "signal", "socket", "term", "user"] }
+nix = { version = "0.31", features = ["feature", "fs", "hostname", "net", "poll", "process", "signal", "socket", "term", "user"] }
 # Safe FIONREAD wraps the best-effort ignored-stdin hint without admitting
 # unsafe code into the binary; rustix 1.x is already in the dependency tree.
 rustix = "1"

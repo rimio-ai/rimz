@@ -11,6 +11,8 @@
 //! shell flags before that transition.
 //! `$RIMZ_TEST_SSH_MASTER_PLAN` scripts background ControlMaster failures and
 //! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
+//! `$RIMZ_TEST_SSH_MASTER_READY_PLAN` controls whether each successful master
+//! publishes the control socket marker before parking.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -184,7 +186,12 @@ fn run_control_master() -> ! {
     if code != 0 {
         std::process::exit(code);
     }
-    publish_control_master_if_requested();
+    let publish_ready = pop_exit_plan("RIMZ_TEST_SSH_MASTER_READY_PLAN")
+        .map(|value| value != 0)
+        .unwrap_or(true);
+    if publish_ready {
+        publish_control_master_if_requested();
+    }
     loop {
         std::thread::park_timeout(std::time::Duration::from_secs(60));
     }

@@ -11,7 +11,7 @@ use ratatui::crossterm::style::{
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
 use ratatui::crossterm::{execute, queue};
 use rimz::remote::reachability::FooterPhase;
-use rimz::remote::recovery::{RecoveryFrame, RecoveryPanel, StageStatus};
+use rimz::remote::recovery::{ConnectStage, RecoveryFrame, RecoveryPanel, StageStatus};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::cli::spinner::{SPINNER_FRAMES, SPINNER_TICK, animation_allowed, format_elapsed};
@@ -24,6 +24,7 @@ pub(super) enum UiEvent {
 }
 
 pub(super) struct OutageUi {
+    connect_stage: ConnectStage,
     host: String,
     state: UiState,
 }
@@ -32,10 +33,11 @@ enum UiState {
     PendingPanel,
     Panel(OutagePanel),
     PlainLines,
+    Released,
 }
 
 impl OutageUi {
-    pub(super) fn auto(host: impl Into<String>) -> Self {
+    pub(super) fn auto(connect_stage: ConnectStage, host: impl Into<String>) -> Self {
         let panel = panel_allowed(
             std::io::stdout().is_terminal(),
             std::env::var("RIMZ_NO_PROGRESS").ok().as_deref(),
@@ -45,6 +47,7 @@ impl OutageUi {
             std::env::var("TERM").ok().as_deref(),
         );
         Self {
+            connect_stage,
             host: host.into(),
             state: if panel {
                 UiState::PendingPanel
@@ -54,8 +57,9 @@ impl OutageUi {
         }
     }
 
-    pub(super) fn plain_lines(host: impl Into<String>) -> Self {
+    pub(super) fn plain_lines(connect_stage: ConnectStage, host: impl Into<String>) -> Self {
         Self {
+            connect_stage,
             host: host.into(),
             state: UiState::PlainLines,
         }
@@ -65,11 +69,25 @@ impl OutageUi {
         matches!(self.state, UiState::PlainLines)
     }
 
-    pub(super) fn report_unreachable(&self) {
-        if self.is_plain() {
+    pub(super) fn report_connecting(&self) {
+        if self.is_plain() && self.connect_stage == ConnectStage::Initial {
             let _ = writeln!(
                 std::io::stderr().lock(),
-                "rimz: network to {} lost — waiting for network; Ctrl-C stops",
+                "rimz: connecting to {}…",
+                self.host,
+            );
+        }
+    }
+
+    pub(super) fn report_unreachable(&self) {
+        if self.is_plain() {
+            let state = match self.connect_stage {
+                ConnectStage::Initial => "unavailable",
+                ConnectStage::Recovery => "lost",
+            };
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: network to {} {state} — waiting for network; Ctrl-C stops",
                 self.host,
             );
         }
@@ -77,9 +95,13 @@ impl OutageUi {
 
     pub(super) fn report_network_restored(&self) {
         if self.is_plain() {
+            let (state, action) = match self.connect_stage {
+                ConnectStage::Initial => ("available", "connecting"),
+                ConnectStage::Recovery => ("restored", "reconnecting"),
+            };
             let _ = writeln!(
                 std::io::stderr().lock(),
-                "rimz: network to {} restored — reconnecting now",
+                "rimz: network to {} {state} — {action} now",
                 self.host,
             );
         }
@@ -88,9 +110,23 @@ impl OutageUi {
     pub(super) fn report_attempt_failed(&self, error: Option<&str>) {
         if self.is_plain() {
             let detail = error.unwrap_or("SSH attempt failed");
+            let action = match self.connect_stage {
+                ConnectStage::Initial => "connect",
+                ConnectStage::Recovery => "reconnect",
+            };
             let _ = writeln!(
                 std::io::stderr().lock(),
-                "rimz: reconnect to {} failed — {detail}",
+                "rimz: {action} to {} failed — {detail}",
+                self.host,
+            );
+        }
+    }
+
+    pub(super) fn report_server_tun(&self, ifname: &str) {
+        if self.is_plain() {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: server route to {} uses TUN {ifname} — TCP check skipped",
                 self.host,
             );
         }
@@ -98,11 +134,11 @@ impl OutageUi {
 
     pub(super) fn report_reattached(&self) {
         if self.is_plain() {
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "rimz: reattached to {}",
-                self.host,
-            );
+            let action = match self.connect_stage {
+                ConnectStage::Initial => "connected",
+                ConnectStage::Recovery => "reattached",
+            };
+            let _ = writeln!(std::io::stderr().lock(), "rimz: {action} to {}", self.host,);
         }
     }
 
@@ -137,10 +173,14 @@ impl OutageUi {
     }
 
     pub(super) fn release(&mut self) -> io::Result<()> {
-        let UiState::Panel(panel) = std::mem::replace(&mut self.state, UiState::PlainLines) else {
-            return Ok(());
-        };
-        panel.release()
+        match std::mem::replace(&mut self.state, UiState::Released) {
+            UiState::Panel(panel) => panel.release(),
+            UiState::PlainLines => {
+                self.state = UiState::PlainLines;
+                Ok(())
+            }
+            UiState::PendingPanel | UiState::Released => Ok(()),
+        }
     }
 }
 
@@ -246,14 +286,21 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
     let spinner = SPINNER_FRAMES[frame_index % SPINNER_FRAMES.len()];
     let mut rows = Vec::with_capacity(frame.rows.len() + 6);
     rows.push(DisplayRow {
-        text: format!("⚡ Connection to {} lost", frame.host),
+        text: match frame.connect_stage {
+            ConnectStage::Initial => format!("⚡ Connecting to {}", frame.host),
+            ConnectStage::Recovery => format!("⚡ Connection to {} lost", frame.host),
+        },
         color: Color::Yellow,
         bold: true,
         dim: false,
     });
     rows.push(DisplayRow {
         text: format!(
-            "down {} · attempt {}",
+            "{} {} · attempt {}",
+            match frame.connect_stage {
+                ConnectStage::Initial => "waiting",
+                ConnectStage::Recovery => "down",
+            },
             format_elapsed(frame.outage_for).replace('m', "m "),
             frame.attempt
         ),
@@ -300,7 +347,11 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
         text: match frame.phase {
             FooterPhase::WaitingForNetwork => format!("{spinner} waiting for network"),
             FooterPhase::Connecting => {
-                format!("{spinner} reconnecting… (attempt {})", frame.attempt)
+                let action = match frame.connect_stage {
+                    ConnectStage::Initial => "connecting",
+                    ConnectStage::Recovery => "reconnecting",
+                };
+                format!("{spinner} {action}… (attempt {})", frame.attempt)
             }
             FooterPhase::NextAttemptIn(remaining) => format!(
                 "{spinner} next attempt in {}s",
@@ -415,6 +466,7 @@ mod tests {
     #[test]
     fn display_rows_align_stage_columns_and_show_outage_context() {
         let frame = RecoveryFrame {
+            connect_stage: ConnectStage::Recovery,
             host: "dev-box".to_owned(),
             outage_for: Duration::from_secs(133),
             attempt: 7,
@@ -453,6 +505,7 @@ mod tests {
     #[test]
     fn display_rows_distinguish_network_wait_from_fast_reconnect() {
         let mut frame = RecoveryFrame {
+            connect_stage: ConnectStage::Recovery,
             host: "dev-box".to_owned(),
             outage_for: Duration::from_secs(2),
             attempt: 3,
@@ -466,5 +519,23 @@ mod tests {
         frame.phase = FooterPhase::Connecting;
         let connecting = display_rows(&frame, 0);
         assert_eq!(connecting[4].text, "⠋ reconnecting… (attempt 3)");
+    }
+
+    #[test]
+    fn display_rows_present_the_initial_connection_stage() {
+        let frame = RecoveryFrame {
+            connect_stage: ConnectStage::Initial,
+            host: "dev-box".to_owned(),
+            outage_for: Duration::from_secs(2),
+            attempt: 1,
+            phase: FooterPhase::Connecting,
+            last_error: None,
+            rows: Vec::new(),
+        };
+
+        let rows = display_rows(&frame, 0);
+        assert_eq!(rows[0].text, "⚡ Connecting to dev-box");
+        assert_eq!(rows[1].text, "waiting 2s · attempt 1");
+        assert_eq!(rows[4].text, "⠋ connecting… (attempt 1)");
     }
 }
