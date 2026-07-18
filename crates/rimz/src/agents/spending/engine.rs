@@ -52,9 +52,10 @@ pub(super) fn serve_request(
         worktree_roots: &request.worktree_roots,
         worktree_home: request.worktree_home.as_deref(),
         origin_overrides: request.origin_overrides.clone(),
+        headline: &request.headline,
         allow_local_fallback: false,
     };
-    compute_fleet_spending(walker, runtime, &context, &request.headline, progress)
+    compute_fleet_spending(walker, runtime, &context, progress)
 }
 
 pub(super) fn serve_direct(
@@ -67,9 +68,10 @@ pub(super) fn serve_direct(
         worktree_roots: &request.worktree_roots,
         worktree_home: request.worktree_home.as_deref(),
         origin_overrides: request.origin_overrides.clone(),
+        headline: &request.headline,
         allow_local_fallback: true,
     };
-    compute_fleet_spending(walker, runtime, &context, &request.headline, &mut |_| {})
+    compute_fleet_spending(walker, runtime, &context, &mut |_| {})
 }
 
 /// Serve a fully fresh durable result without waiting for the warm walker. The
@@ -92,6 +94,7 @@ struct SpendingRequestContext<'a> {
     worktree_roots: &'a [PathBuf],
     worktree_home: Option<&'a std::path::Path>,
     origin_overrides: HashMap<PathBuf, PathBuf>,
+    headline: &'a crate::agents::spending::HeadlineSpec,
     allow_local_fallback: bool,
 }
 
@@ -99,11 +102,8 @@ fn compute_fleet_spending(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     context: &SpendingRequestContext<'_>,
-    spec: &crate::agents::spending::HeadlineSpec,
     progress: &mut dyn FnMut(SpendProgress),
 ) -> SpendingCaches {
-    use crate::agents::spending::{SpendScope, read_provider_spending_cache};
-
     let scope = SpendScope::for_workspace(
         context.project_root,
         context.worktree_roots,
@@ -154,19 +154,19 @@ fn compute_fleet_spending(
                     &scope,
                     scope_hash.as_deref(),
                     &files,
-                    spec,
+                    context.headline,
                     &context.origin_overrides,
                     true,
                     now_secs,
                 )
             {
-                crate::agents::spending::SpendingCaches {
+                SpendingCaches {
                     provider,
                     workspace,
                 }
             } else {
                 walk_fleet_spending_files(
-                    walker, runtime, context, spec, true, progress, &files, now_secs,
+                    walker, runtime, context, true, progress, &files, now_secs,
                 )
             }
         }
@@ -182,13 +182,13 @@ fn compute_fleet_spending(
                     &scope,
                     scope_hash.as_deref(),
                     &files,
-                    spec,
+                    context.headline,
                     &context.origin_overrides,
                     false,
                     now_secs,
                 )
             {
-                crate::agents::spending::SpendingCaches {
+                SpendingCaches {
                     provider,
                     workspace,
                 }
@@ -202,7 +202,7 @@ fn compute_fleet_spending(
             } else {
                 served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
                     walk_fleet_spending_files(
-                        walker, runtime, context, spec, false, progress, &files, now_secs,
+                        walker, runtime, context, false, progress, &files, now_secs,
                     )
                 })
             }
@@ -261,15 +261,12 @@ fn walk_fleet_spending_context(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     context: &SpendingRequestContext<'_>,
-    spec: &crate::agents::spending::HeadlineSpec,
     publish: bool,
     progress: &mut dyn FnMut(SpendProgress),
 ) -> crate::agents::spending::SpendingCaches {
     let now_secs = crate::agents::spending::unix_secs_now();
     let files = walker.discover_spending_files(now_secs);
-    walk_fleet_spending_files(
-        walker, runtime, context, spec, publish, progress, &files, now_secs,
-    )
+    walk_fleet_spending_files(walker, runtime, context, publish, progress, &files, now_secs)
 }
 
 #[cfg(test)]
@@ -284,27 +281,16 @@ fn walk_request_for_test(
         worktree_roots: &request.worktree_roots,
         worktree_home: request.worktree_home.as_deref(),
         origin_overrides: request.origin_overrides.clone(),
+        headline: &request.headline,
         allow_local_fallback: true,
     };
-    walk_fleet_spending_context(
-        walker,
-        runtime,
-        &context,
-        &request.headline,
-        publish,
-        &mut |_| {},
-    )
+    walk_fleet_spending_context(walker, runtime, &context, publish, &mut |_| {})
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one request carries its single discovery/time snapshot through publication"
-)]
 fn walk_fleet_spending_files(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     context: &SpendingRequestContext<'_>,
-    spec: &crate::agents::spending::HeadlineSpec,
     publish: bool,
     progress: &mut dyn FnMut(SpendProgress),
     files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
@@ -344,7 +330,7 @@ fn walk_fleet_spending_files(
             &user_inputs,
             &scope,
             now_secs,
-            spec,
+            context.headline,
         );
         let workspace = WorkspaceSpendingCache {
             version: WORKSPACE_SPENDING_VERSION,
@@ -404,7 +390,7 @@ fn walk_fleet_spending_files(
         origin_overrides: &context.origin_overrides,
         user_inputs: &user_inputs,
         scope: Some(&scope),
-        spec,
+        spec: context.headline,
     };
     let result = if publish {
         let mut observer = PublishingWalkObserver {
@@ -415,7 +401,7 @@ fn walk_fleet_spending_files(
             now_secs,
             scope: Some(&scope),
             scope_hash: scope_hash.clone(),
-            spec,
+            spec: context.headline,
             progress,
         };
         walker.walk(&cache_path, &req, &mut observer)
