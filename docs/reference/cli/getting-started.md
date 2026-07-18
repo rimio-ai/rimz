@@ -16,7 +16,7 @@ rimz                       # open the room and drop in
 | Find known rooms and their live backend | `rimz list` |
 | Bootstrap this machine's config | `rimz setup` |
 | Diagnose backend, hook, trust, and room health | `rimz doctor` |
-| Connect to a room on another host | `rimz remote connect <alias-or-target>` |
+| Connect to a room on another host | `rimz remote connect <alias-or-target> [--force-version]` |
 
 Enable command, flag, and live room completion from the [shell completion setup](../../guide/setup.md#shell-completion).
 
