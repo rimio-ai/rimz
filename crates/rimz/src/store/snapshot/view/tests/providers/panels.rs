@@ -105,6 +105,20 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
     assert_eq!(panel.color, 173);
     assert_eq!(panel.color_rgb, Some((0xd9, 0x77, 0x57)));
 
+    let grok = room(vec![agent("grok", "g1", AgentStatus::Idle, 10)])
+        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new())
+        .providers
+        .into_iter()
+        .next()
+        .expect("grok panel");
+    assert_eq!(grok.color, 15, "descriptor's tuned xterm index survives");
+    assert_eq!(grok.color_rgb, Some((0xff, 0xff, 0xff)));
+    assert_ne!(
+        grok.color,
+        crate::config::nearest_xterm_index(0xff, 0xff, 0xff),
+        "brand colors are not re-quantized from RGB"
+    );
+
     let mut snapshot = room(vec![agent("claude", "c1", AgentStatus::Idle, 10)]);
     snapshot.theme.providers.insert(
         "claude".to_owned(),

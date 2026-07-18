@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::agents::{EmblemTint, descriptor_by_kind, emblem_for};
-use crate::config::{PaletteRole, ThemeColor, ThemeProviderStyle, nearest_xterm_index};
+use crate::config::{ColorDepth, PaletteRole, ThemeColor, ThemeProviderStyle, nearest_xterm_index};
 
 use super::{Palette, Tone};
 
@@ -20,6 +20,11 @@ pub enum BrandColor {
     Role(PaletteRole),
     Indexed(u8),
     Rgb(u8, u8, u8),
+    /// A registered descriptor's hand-tuned xterm index and truecolor tone.
+    Brand {
+        index: u8,
+        rgb: (u8, u8, u8),
+    },
 }
 
 impl BrandColor {
@@ -28,6 +33,10 @@ impl BrandColor {
             Self::Role(role) => palette.role_tone(role),
             Self::Indexed(index) => Tone::Indexed(index),
             Self::Rgb(red, green, blue) => palette.rgb_tone((red, green, blue)),
+            Self::Brand { index, rgb } => match palette.depth {
+                ColorDepth::Indexed => Tone::Indexed(index),
+                ColorDepth::Truecolor => Tone::Rgb(rgb.0, rgb.1, rgb.2),
+            },
         }
     }
 
@@ -36,6 +45,7 @@ impl BrandColor {
             Self::Role(_) => 7,
             Self::Indexed(index) => index,
             Self::Rgb(red, green, blue) => nearest_xterm_index(red, green, blue),
+            Self::Brand { index, .. } => index,
         }
     }
 }
@@ -56,11 +66,10 @@ pub fn resolve_provider_identity(
             product_name: descriptor.display_name.to_owned(),
             art: emblem.lines.clone(),
             art_tints: emblem.tints.clone(),
-            brand: BrandColor::Rgb(
-                descriptor.brand.color_rgb.0,
-                descriptor.brand.color_rgb.1,
-                descriptor.brand.color_rgb.2,
-            ),
+            brand: BrandColor::Brand {
+                index: descriptor.brand.color,
+                rgb: descriptor.brand.color_rgb,
+            },
         },
     );
     let Some(style) = styles.get(kind) else {
@@ -130,7 +139,7 @@ mod tests {
     fn descriptor_and_unknown_fallbacks_are_stable() {
         let claude = resolve_provider_identity("claude", &BTreeMap::new());
         assert_eq!(claude.product_name, "Claude");
-        assert!(matches!(claude.brand, BrandColor::Rgb(..)));
+        assert!(matches!(claude.brand, BrandColor::Brand { .. }));
         let unknown = resolve_provider_identity("new_agent", &BTreeMap::new());
         assert_eq!(unknown.product_name, "New Agent");
         assert_eq!(unknown.brand, BrandColor::Indexed(244));
@@ -149,5 +158,11 @@ mod tests {
             BrandColor::Role(PaletteRole::Green).tone(&rgb),
             Tone::Rgb(0x9e, 0xce, 0x6a)
         );
+
+        let grok = resolve_provider_identity("grok", &BTreeMap::new()).brand;
+        assert_eq!(grok.indexed(), 15);
+        assert_ne!(nearest_xterm_index(0xff, 0xff, 0xff), 15);
+        assert_eq!(grok.tone(&indexed), Tone::Indexed(15));
+        assert_eq!(grok.tone(&rgb), Tone::Rgb(0xff, 0xff, 0xff));
     }
 }

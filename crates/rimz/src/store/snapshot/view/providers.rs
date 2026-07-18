@@ -142,6 +142,7 @@ impl SidebarSnapshot {
                 BrandColor::Rgb(red, green, blue) => {
                     (identity.brand.indexed(), Some((red, green, blue)), None)
                 }
+                BrandColor::Brand { index, rgb } => (index, Some(rgb), None),
             };
             let remote_control = remote_control.get(&kind).copied().unwrap_or_default();
             let window_placeholders = crate::agents::descriptor_by_kind(&kind)

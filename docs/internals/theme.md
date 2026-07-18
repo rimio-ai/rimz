@@ -17,6 +17,8 @@ Resolution follows one direction:
 
 `resolve_provider_identity` supplies the name, emblem, emblem tints, and brand color for a provider. `[theme.providers.<kind>]` fields win over the registered agent descriptor; an unregistered kind falls back to a title-cased name and neutral xterm color 244.
 
+A registered descriptor carries both its truecolor RGB and its hand-tuned xterm index. Truecolor rendering uses the RGB value, while indexed rendering preserves the authored index instead of re-quantizing it.
+
 Identity resolution depends on the provider kind and theme configuration, not on whether the provider dashboard currently displays a panel. Human provider names, agent handles, tabs, and emblems use this resolved identity; stable JSON fields retain their descriptor values.
 
 ## Interface language
