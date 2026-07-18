@@ -1513,7 +1513,10 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     })
     .expect("changed transcript refresh");
     assert!(interrupted.context.turn_interrupted.as_set().is_some());
-    assert!(interrupted.context.tokens.as_value().is_none());
+    assert_eq!(
+        interrupted.context.tokens,
+        crate::agents::LocalTokenPatch::PreserveEstablished(None)
+    );
     assert!(interrupted.context.cost.as_set().is_none());
 }
 

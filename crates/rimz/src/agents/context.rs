@@ -264,6 +264,7 @@ pub struct LocalContextPatch {
 impl LocalContextPatch {
     pub fn authoritative_current() -> Self {
         Self {
+            tokens: LocalTokenPatch::PreserveEstablished(None),
             turn_complete: FieldPatch::Clear,
             plan_proposed: FieldPatch::Clear,
             native_permission_wait: FieldPatch::Clear,
@@ -1146,6 +1147,28 @@ mod tests {
         assert_eq!(cleared.context_window_size, None);
         assert_eq!(cleared.current_usage, None);
         assert!(cleared.session_usage.is_some());
+    }
+
+    #[test]
+    fn authoritative_current_clears_unestablished_tokens_but_preserves_a_real_gauge() {
+        let descriptor =
+            crate::agents::descriptor_by_kind("cursor").expect("Cursor descriptor is registered");
+        let mut fresh = AgentContext::new("cursor", Timestamp::now());
+        fresh.tokens = Some(AgentTokenUsage {
+            current_usage: Some(AgentCurrentUsage::default()),
+            ..AgentTokenUsage::default()
+        });
+
+        LocalContextPatch::authoritative_current().apply(&mut fresh, descriptor);
+        assert_eq!(fresh.tokens, None);
+
+        let established = AgentTokenUsage {
+            used_percentage: Some(42),
+            ..AgentTokenUsage::default()
+        };
+        fresh.tokens = Some(established.clone());
+        LocalContextPatch::authoritative_current().apply(&mut fresh, descriptor);
+        assert_eq!(fresh.tokens, Some(established));
     }
 
     #[test]
