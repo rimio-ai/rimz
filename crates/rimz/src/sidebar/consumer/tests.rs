@@ -19,6 +19,7 @@ fn cached_opts() -> FoldOpts<'static> {
         config: None,
         lanes: None,
         local_sessions: Vec::new(),
+        wiring: Default::default(),
     }
 }
 
@@ -75,6 +76,7 @@ fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'stati
         ("credits", runtime.shared_credits_path()),
         ("provider_spending", runtime.shared_provider_spending_path()),
         ("local_sessions", runtime.local_sessions_path()),
+        ("agent_wiring", runtime.agent_wiring_path()),
         ("metrics_sample", runtime.root.join("metrics-sample.json")),
         (
             "codex_daemon_reap",
@@ -305,6 +307,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
         "credits",
         "provider_spending",
         "local_sessions",
+        "agent_wiring",
         "metrics_sample",
         "codex_daemon_reap",
     ] {
@@ -619,6 +622,63 @@ fn read_published_snapshot_binds_safe_local_session_intersection() {
             .iter()
             .all(|agent| agent.agent_id != removed_session_id),
         "an observation removed from the current pane inputs stays hidden",
+    );
+}
+
+#[test]
+fn published_wiring_admits_a_hook_only_idle_pane_without_provider_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+    let worktree = dir.path().join("wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let frame = assemble_frame(
+        vec![pane("terminal_droid", "droid", &worktree.to_string_lossy())],
+        unix_now_ms(),
+        "rimz-test",
+    );
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+    let rollup = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
+        .with_project_root(Some(worktree));
+    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    atomic::write_temp_then_rename_cache(
+        &runtime.agent_wiring_path(),
+        &crate::sidebar::agent_wiring::PublishedAgentWiring {
+            session_name: "rimz-test".to_owned(),
+            projection: crate::sidebar::agent_wiring::WiredAgentProjection {
+                kinds: vec!["droid".to_owned()],
+                default_models: std::collections::BTreeMap::from([(
+                    "droid".to_owned(),
+                    "fixture-model".to_owned(),
+                )]),
+            },
+        },
+    )
+    .unwrap();
+
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .unwrap();
+    assert!(
+        snapshot
+            .agent_panes
+            .iter()
+            .any(|pane| pane.kind == "droid" && pane.agent_id.is_none())
+    );
+    assert_eq!(
+        snapshot
+            .wired_default_models
+            .get("droid")
+            .map(String::as_str),
+        Some("fixture-model")
     );
 }
 

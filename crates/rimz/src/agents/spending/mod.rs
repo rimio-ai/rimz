@@ -490,7 +490,17 @@ pub fn session_cost_usd(
         return None;
     }
     let parsed = adapter.parse_spend(transcript_path, None, prices);
-    let total = session_entries(&parsed.entries, session_id)
+    session_cost_from_entries(&parsed.entries, session_id)
+}
+
+/// Compute one live session's cumulative cost from an already parsed provider
+/// projection without reopening its backing store.
+pub fn session_cost_from_entries(entries: &[CachedEntry], session_id: &str) -> Option<AgentCost> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    let total = session_entries(entries, session_id)
         .into_iter()
         .map(|entry| entry.cost_usd)
         .filter(|cost| cost.is_finite() && *cost > 0.0)

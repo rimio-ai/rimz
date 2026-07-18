@@ -272,7 +272,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
         prior_spend_fold: None,
         shared_pricing_cache_path: &pricing,
     };
-    let initial = refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &ctx).unwrap();
+    let initial = refresh_resolved_context(&updates, Some(&events), &ctx).unwrap();
     assert!(initial.native_permission_wait.is_none());
 
     let requested_at = "2026-07-18T04:21:46.248Z";
@@ -291,8 +291,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
         prior_spend_fold: None,
         ..ctx
     };
-    let requested =
-        refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &requested_ctx).unwrap();
+    let requested = refresh_resolved_context(&updates, Some(&events), &requested_ctx).unwrap();
     assert_eq!(requested.native_permission_wait, requested_at.parse().ok());
 
     let unchanged_ctx = LocalContextRefreshCtx {
@@ -300,9 +299,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
         prior_spend_fold: None,
         ..ctx
     };
-    assert!(
-        refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &unchanged_ctx).is_none()
-    );
+    assert!(refresh_resolved_context(&updates, Some(&events), &unchanged_ctx).is_none());
 
     let resolved_at = "2026-07-18T04:22:00Z";
     std::fs::write(
@@ -322,8 +319,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
         ),
     )
     .unwrap();
-    let resolved =
-        refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &unchanged_ctx).unwrap();
+    let resolved = refresh_resolved_context(&updates, Some(&events), &unchanged_ctx).unwrap();
     assert!(resolved.native_permission_wait.is_none());
     assert!(
         GrokAdapter

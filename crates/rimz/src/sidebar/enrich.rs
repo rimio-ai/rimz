@@ -254,39 +254,6 @@ pub(crate) fn classify_trunk_sync(
     Some(WorktreeTrunkSync::Diverged)
 }
 
-/// Agent kinds with an active observation path, eligible for sessionless idle
-/// synthesis. Hook adapters require their hooks to be installed. Local-session
-/// adapters already have a provider-store observation path, so their recognized
-/// panes render as identity-less idle agent cards until strict session binding
-/// supplies the provider identity. Environment, not store.
-#[derive(Debug, Default)]
-pub struct WiredAgentProjection {
-    pub(crate) kinds: Vec<String>,
-    pub(crate) default_models: BTreeMap<String, String>,
-}
-
-/// Agent-card admission and launch defaults from one adapter traversal. Hook
-/// adapters evaluate their installed state once; default-model reads happen
-/// only after the adapter is admitted.
-pub fn wired_agent_projection() -> WiredAgentProjection {
-    let mut projection = WiredAgentProjection::default();
-    for agent in crate::agents::ADAPTERS {
-        let descriptor = agent.descriptor();
-        let wired = descriptor.capabilities.local_session_discovery
-            || (descriptor.has_wired_hook_install() && agent.hooks_installed());
-        if !wired {
-            continue;
-        }
-        projection.kinds.push(descriptor.kind.to_owned());
-        if let Some(model) = agent.default_launch_model() {
-            projection
-                .default_models
-                .insert(descriptor.kind.to_owned(), model);
-        }
-    }
-    projection
-}
-
 /// Producer-vs-consumer inputs for one fold. The spine stays single: producer
 /// flags only gate producer-owned side effects, and heavy lanes are plain data
 /// supplied by `sidebar::refresh` or read from published caches.
@@ -296,6 +263,7 @@ pub struct FoldOpts<'a> {
     pub config: Option<Arc<crate::config::MachineConfig>>,
     pub lanes: Option<&'a crate::sidebar::refresh::RefreshedLanes>,
     pub local_sessions: Vec<crate::agents::LocalSessionObservation>,
+    pub wiring: crate::sidebar::agent_wiring::WiredAgentProjection,
 }
 
 /// Probed managed-server liveness for the rc badge. `None` means no probe was
@@ -399,9 +367,8 @@ pub fn enrich(
 
     // Wiring state gates the live-pane fold (idle synthesis), so set it before
     // any pane-backed projection.
-    let wired = wired_agent_projection();
-    snapshot.wired_kinds = wired.kinds;
-    snapshot.wired_default_models = wired.default_models;
+    snapshot.wired_kinds = opts.wiring.kinds;
+    snapshot.wired_default_models = opts.wiring.default_models;
 
     // Bind caller-supplied provider-local observations before context/activity
     // enrichment. Discovery belongs to the room producer; every renderer keeps

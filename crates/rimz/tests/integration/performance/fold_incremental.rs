@@ -242,6 +242,7 @@ fn auto_continue_tick(
             config: Some(std::sync::Arc::new(config)),
             lanes: None,
             local_sessions: Vec::new(),
+            wiring: Default::default(),
         },
         &rimz::diag::DiagSink::disabled(),
     )

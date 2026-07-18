@@ -536,6 +536,9 @@ impl AgentAdapter for KimiAdapter {
     fn hooks_installed(&self) -> bool {
         install::config_path().is_ok_and(|path| install::installed(&path))
     }
+    fn wiring_input_paths(&self) -> Vec<PathBuf> {
+        install::config_path().into_iter().collect()
+    }
     fn managed_hook_artifacts_present(&self) -> bool {
         install::config_path().is_ok_and(|path| install::managed(&path))
     }
@@ -689,17 +692,17 @@ fn refresh_wire_path(
     if ctx.prior_transcript_stat == Some(&stat) {
         return None;
     }
-    let tail = super::read_transcript_tail(path)?;
-    let records = wire::records_from_bytes(tail.as_bytes());
-    let attribution = wire::effective_attribution(&records);
-    let latest_usage = wire::latest_turn_usage(&records);
+    let snapshot = wire::WireSnapshot::read(path)?;
+    let records = snapshot.tail_records();
+    let attribution = wire::effective_attribution(records);
+    let latest_usage = wire::latest_turn_usage(records);
     let configured = spend::configured_model().map(|model| wire::normalize_model_alias(&model));
     let model_id = attribution
         .display_model()
         .or_else(|| ctx.model_hint.map(wire::normalize_model_alias))
         .or(configured);
     let context_window_size = configured_context_window(model_id.as_deref()).or(Some(262_144));
-    let tokens = if let Some(input) = wire::latest_context_tokens(&records) {
+    let tokens = if let Some(input) = wire::latest_context_tokens(records) {
         Some(AgentTokenUsage {
             context_window_size,
             used_percentage: context_window_size.map(|window| percentage(input, window)),
@@ -735,7 +738,8 @@ fn refresh_wire_path(
         })
     };
     let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
-    let cost = super::spending::session_cost_usd(&KimiAdapter, session_id, path, &prices);
+    let spend = spend::parse_snapshot(path, &snapshot, &prices);
+    let cost = super::spending::session_cost_from_entries(&spend.entries, session_id);
     let session_preview = path
         .parent()
         .and_then(Path::parent)

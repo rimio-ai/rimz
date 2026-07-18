@@ -87,6 +87,22 @@ struct SpendingFixture {
     walker: rimz::agents::spending::SpendingWalker,
 }
 
+struct ChangedSessionFixture {
+    _tempdir: TempDir,
+    refresh: rimz::testkit::ChangedSessionRefreshFixture,
+}
+
+fn changed_session_fixture(
+    build: impl FnOnce(&std::path::Path, usize) -> rimz::testkit::ChangedSessionRefreshFixture,
+) -> ChangedSessionFixture {
+    let tempdir = TempDir::new().expect("tempdir");
+    let refresh = build(tempdir.path(), 500);
+    ChangedSessionFixture {
+        _tempdir: tempdir,
+        refresh,
+    }
+}
+
 fn snapshot_fixture() -> SnapshotFixture {
     let workspace = BenchWorkspace::new();
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
@@ -411,10 +427,32 @@ fn enrich_cached(bencher: Bencher) {
                     config: None,
                     lanes: None,
                     local_sessions: Vec::new(),
+                    wiring: Default::default(),
                 },
                 &rimz::diag::DiagSink::disabled(),
             ));
         });
+}
+
+#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
+fn kimi_changed_session_refresh(bencher: Bencher) {
+    bencher
+        .with_inputs(|| changed_session_fixture(rimz::testkit::changed_kimi_session_fixture))
+        .bench_local_values(|fixture| divan::black_box(fixture.refresh.refresh()));
+}
+
+#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
+fn grok_changed_session_refresh(bencher: Bencher) {
+    bencher
+        .with_inputs(|| changed_session_fixture(rimz::testkit::changed_grok_session_fixture))
+        .bench_local_values(|fixture| divan::black_box(fixture.refresh.refresh()));
+}
+
+#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
+fn droid_changed_session_refresh(bencher: Bencher) {
+    bencher
+        .with_inputs(|| changed_session_fixture(rimz::testkit::changed_droid_session_fixture))
+        .bench_local_values(|fixture| divan::black_box(fixture.refresh.refresh()));
 }
 
 #[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]

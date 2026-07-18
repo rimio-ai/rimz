@@ -454,6 +454,74 @@ pub fn records_from_bytes(bytes: &[u8]) -> Vec<WireRecord> {
         .collect()
 }
 
+/// One torn-write-safe full read of a live Kimi wire. The full record set owns
+/// cumulative spend while the logical tail preserves bounded context semantics.
+#[derive(Debug)]
+pub struct WireSnapshot {
+    records: Vec<WireRecord>,
+    tail_start: usize,
+    consumed_offset: u64,
+}
+
+impl WireSnapshot {
+    pub fn read(path: &Path) -> Option<Self> {
+        let (bytes, consumed_offset) = read_spend_lines(path, 0)?;
+        let tail_byte_start = record_aligned_tail_start(&bytes);
+        let mut records = Vec::new();
+        let mut tail_start = 0;
+        let mut offset = 0;
+        for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+            let record_start = offset;
+            offset += line.len();
+            let Some(record) = record_from_slice(line.strip_suffix(b"\n").unwrap_or(line)) else {
+                continue;
+            };
+            if matches!(record.event, WireEvent::Metadata) {
+                continue;
+            }
+            if record_start < tail_byte_start {
+                tail_start += 1;
+            }
+            records.push(record);
+        }
+        Some(Self {
+            records,
+            tail_start,
+            consumed_offset,
+        })
+    }
+
+    pub fn records(&self) -> &[WireRecord] {
+        &self.records
+    }
+
+    pub fn tail_records(&self) -> &[WireRecord] {
+        &self.records[self.tail_start..]
+    }
+
+    pub fn consumed_offset(&self) -> u64 {
+        self.consumed_offset
+    }
+}
+
+fn record_aligned_tail_start(bytes: &[u8]) -> usize {
+    const TAIL_BYTES: usize = 64 * 1024;
+    let normal_start = bytes.len().saturating_sub(TAIL_BYTES);
+    if normal_start == 0 || bytes.get(normal_start.wrapping_sub(1)) == Some(&b'\n') {
+        return normal_start;
+    }
+    if let Some(newline) = bytes[normal_start..].iter().position(|byte| *byte == b'\n') {
+        let candidate = normal_start + newline + 1;
+        if candidate < bytes.len() {
+            return candidate;
+        }
+    }
+    bytes[..normal_start]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |newline| newline + 1)
+}
+
 pub(super) fn records_from_str(input: &str) -> Vec<WireRecord> {
     input
         .lines()

@@ -622,19 +622,27 @@ pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionO
     observations
 }
 
-pub(super) fn transcript_files() -> Vec<PathBuf> {
-    let Some(home) = super::install::home() else {
-        return Vec::new();
-    };
+pub(super) fn transcript_for_session_under(home: &Path, session_id: &str) -> Option<PathBuf> {
+    valid_session_id(session_id).then_some(())?;
     let sessions_root = home.join("sessions");
     if !regular_dir(&sessions_root) {
-        return Vec::new();
+        return None;
     }
     let Ok(buckets) = fs::read_dir(&sessions_root) else {
-        return Vec::new();
+        return None;
     };
-    let mut paths = Vec::new();
-    for bucket in buckets.filter_map(Result::ok) {
+    let canonical_root = fs::canonicalize(&sessions_root).ok()?;
+    let mut buckets = buckets
+        .filter_map(Result::ok)
+        .filter(|bucket| {
+            bucket
+                .file_name()
+                .to_str()
+                .is_some_and(valid_workspace_bucket)
+        })
+        .collect::<Vec<_>>();
+    buckets.sort_by_key(fs::DirEntry::file_name);
+    for bucket in buckets {
         let Ok(file_type) = bucket.file_type() else {
             continue;
         };
@@ -645,36 +653,20 @@ pub(super) fn transcript_files() -> Vec<PathBuf> {
         if fs::canonicalize(&bucket_path)
             .ok()
             .and_then(|bucket| bucket.parent().map(Path::to_path_buf))
-            != fs::canonicalize(&sessions_root).ok()
+            != Some(canonical_root.clone())
         {
             continue;
         }
-        let Ok(sessions) = fs::read_dir(bucket.path()) else {
-            continue;
-        };
-        for session in sessions.filter_map(Result::ok) {
-            let path = session.path();
-            if session
-                .file_type()
-                .is_ok_and(|file_type| file_type.is_dir())
-                && let Some(validated) = validate_unscoped_session(&bucket_path, &path)
-            {
-                paths.push(validated.messages);
-            }
+        let candidate = bucket_path.join(session_id);
+        if let Some(validated) = validate_unscoped_session(&bucket_path, &candidate) {
+            return Some(validated.messages);
         }
     }
-    paths.sort();
-    paths
+    None
 }
 
 pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
-    valid_session_id(session_id).then_some(())?;
-    transcript_files().into_iter().find(|path| {
-        path.parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-            == Some(session_id)
-    })
+    transcript_for_session_under(&super::install::home()?, session_id)
 }
 
 pub(super) fn valid_transcript(path: &Path, session_id: &str) -> bool {
@@ -843,6 +835,10 @@ fn regular_dir(path: &Path) -> bool {
 fn valid_session_id(id: &str) -> bool {
     id.strip_prefix("sess_")
         .is_some_and(|uuid| Uuid::parse_str(uuid).is_ok())
+}
+
+fn valid_workspace_bucket(name: &str) -> bool {
+    name.len() == 16 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn parse_records(lines: &str) -> impl Iterator<Item = (Timestamp, Payload)> + '_ {

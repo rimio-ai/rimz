@@ -441,6 +441,10 @@ impl AgentAdapter for CodexAdapter {
         configured_model().or_else(|| self.descriptor().default_model.map(ToOwned::to_owned))
     }
 
+    fn wiring_input_paths(&self) -> Vec<PathBuf> {
+        codex_config_path().into_iter().collect()
+    }
+
     fn configured_identity(&self) -> (Option<String>, Option<String>) {
         (configured_model(), configured_reasoning_effort())
     }

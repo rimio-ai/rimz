@@ -465,12 +465,7 @@ impl AgentAdapter for AntigravityAdapter {
         if event_name != "Stop" {
             return None;
         }
-        let transcript = std::fs::read_to_string(observation.transcript_path.as_deref()?).ok()?;
-        self.parse_transcript_messages(&transcript)
-            .into_iter()
-            .rev()
-            .find(|message| message.role == super::TranscriptRole::Assistant)
-            .map(|message| message.text)
+        session::last_assistant_message(Path::new(observation.transcript_path.as_deref()?))
     }
 
     fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {

@@ -191,9 +191,9 @@ pub(super) fn record_conversation(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
-    event_name: &str,
-    payload: &Value,
     recorded: &RecordedLifecycle,
+    assistant_message: Option<&str>,
+    questions: &[rimz::transcript::AskQuestion],
     delivered: &[rimz::message::MessageRecord],
 ) -> rimz::transcript::Result<()> {
     let observation = &recorded.observation;
@@ -280,32 +280,31 @@ pub(super) fn record_conversation(
             }
         }
         LifecycleSignal::TurnEnded { .. } => {
-            if let Some(message) = agent
-                .last_assistant_message(event_name, payload, observation)
-                .map(|message| message.trim().to_owned())
+            if let Some(message) = assistant_message
+                .map(str::trim)
                 .filter(|message| !message.is_empty())
             {
-                let mut entry = entry_base(rimz::transcript::TranscriptKind::Assistant, message);
+                let mut entry = entry_base(
+                    rimz::transcript::TranscriptKind::Assistant,
+                    message.to_owned(),
+                );
                 entry.reply_to = turn_opened_by(store, agent, &agent_id);
                 rimz::transcript::append(store.paths(), &entry)?;
             }
         }
         LifecycleSignal::TurnInterrupted => {}
         LifecycleSignal::AwaitingInput { ask_id, .. } => {
-            let questions = agent
-                .ask_question_detail(event_name, payload)
-                .unwrap_or_default();
             if questions.is_empty() {
                 return Ok(());
             }
-            let last = agent
-                .last_assistant_message(event_name, payload, observation)
-                .map(|message| message.trim().to_owned())
+            let last = assistant_message
+                .map(str::trim)
                 .filter(|message| !message.is_empty())
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .to_owned();
             let mut entry = entry_base(rimz::transcript::TranscriptKind::Ask, last);
             entry.id = ask_id.clone();
-            entry.questions = questions;
+            entry.questions = questions.to_vec();
             entry.reply_to = turn_opened_by(store, agent, &agent_id);
             rimz::transcript::append(store.paths(), &entry)?;
         }

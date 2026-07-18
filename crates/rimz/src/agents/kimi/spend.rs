@@ -31,13 +31,37 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
             ..SpendParse::default()
         };
     };
+    fold_records(path, &records, next, resume, prices)
+}
+
+pub fn parse_snapshot(
+    path: &Path,
+    snapshot: &wire::WireSnapshot,
+    prices: &PriceBook,
+) -> SpendParse {
+    fold_records(
+        path,
+        snapshot.records(),
+        snapshot.consumed_offset(),
+        None,
+        prices,
+    )
+}
+
+fn fold_records(
+    path: &Path,
+    records: &[wire::WireRecord],
+    next: u64,
+    resume: Option<&SpendCursor>,
+    prices: &PriceBook,
+) -> SpendParse {
     let mut state: KimiSpendState = resume
         .and_then(|cursor| cursor.state.clone())
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default();
     let mut entries = Vec::new();
     let mut unknown_models = BTreeMap::new();
-    for wire_record in &records {
+    for wire_record in records {
         let record = match &wire_record.event {
             wire::WireEvent::LlmRequest(request) => {
                 state.request = Some(request.clone());

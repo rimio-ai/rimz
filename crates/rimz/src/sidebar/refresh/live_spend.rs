@@ -128,6 +128,7 @@ mod tests {
             config: None,
             lanes: None,
             local_sessions: Vec::new(),
+            wiring: Default::default(),
         }
     }
 

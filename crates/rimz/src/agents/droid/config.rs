@@ -8,6 +8,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+#[cfg(test)]
 use super::transcript;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +65,7 @@ impl From<LegacyCustomModel> for CustomModel {
 /// hierarchy. Any unreadable or malformed present source makes the result
 /// unknown; enrichment abstains rather than borrowing stale identity from a
 /// lower-precedence file.
+#[cfg(test)]
 pub(super) fn resolve_custom_model(
     selector: &str,
     session_path: &Path,
@@ -74,7 +76,19 @@ pub(super) fn resolve_custom_model(
         return None;
     }
     let cwd = transcript::session_cwd(session_path)?;
-    let layers = current_layers(user_settings, &cwd)?;
+    resolve_custom_model_from_cwd(selector, &cwd, user_settings)
+}
+
+pub(super) fn resolve_custom_model_from_cwd(
+    selector: &str,
+    cwd: &Path,
+    user_settings: &Path,
+) -> Option<ResolvedCustomModel> {
+    let selector = non_empty(selector)?;
+    if !selector.starts_with("custom:") || !cwd.is_absolute() {
+        return None;
+    }
+    let layers = current_layers(user_settings, cwd)?;
 
     // Stable ids are authoritative. A duplicate at one precedence tier is a
     // conflict; a lower tier cannot override a proven higher-tier match.

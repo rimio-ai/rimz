@@ -785,6 +785,21 @@ pub trait AgentAdapter: Send + Sync {
         self.descriptor().default_model.map(ToOwned::to_owned)
     }
 
+    /// Provider-owned files whose contents determine sidebar wiring admission
+    /// or the default launch model. The list covers every file read by
+    /// [`Self::hooks_installed`] and [`Self::default_launch_model`]. Resolving a
+    /// path performs no provider-file I/O.
+    fn wiring_input_paths(&self) -> Vec<PathBuf> {
+        let descriptor = self.descriptor();
+        if descriptor.capabilities.local_session_discovery || !descriptor.has_wired_hook_install() {
+            return Vec::new();
+        }
+        self.managed_source()
+            .and_then(|source| source.resolved_path().ok())
+            .into_iter()
+            .collect()
+    }
+
     /// The agent's configured launch model and reasoning effort, used only as
     /// the lowest-priority card-identity fallback after native payloads and the
     /// launcher-selected preset env.
@@ -1207,12 +1222,10 @@ pub trait AgentAdapter: Send + Sync {
         probe_descriptor_version(self.descriptor())
     }
 
-    /// Every conversation/spend JSONL this agent has on disk, fleet-wide — the
-    /// discovery walk for the full-history spending pass
-    /// ([`spending::SpendingWalker`]). Distinct from the bounded tail read in
-    /// [`observe_lifecycle`](Self::observe_lifecycle): this walks the whole
-    /// history for spend. Defaults to none for an agent with no transcript
-    /// surface.
+    /// Every full-history spending source this agent has on disk, fleet-wide —
+    /// the discovery walk for [`spending::SpendingWalker`]. This remains empty
+    /// when historical spend is unsupported, independently of conversation
+    /// parsing, local-session discovery, and [`Self::session_transcript`].
     fn transcript_files(&self) -> Vec<PathBuf> {
         Vec::new()
     }

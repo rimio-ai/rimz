@@ -62,10 +62,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, _prices: &PriceBo
         .parent()
         .and_then(Path::file_name)
         .and_then(|value| value.to_str());
-    let entries = completions
-        .iter()
-        .flat_map(|completion| entries_for_completion(completion, fallback_session_id))
-        .collect();
+    let entries = entries_for_completions(&completions, fallback_session_id);
     let origin =
         transcript::read_summary(path).and_then(|summary| origin_path(summary.info.cwd.as_deref()));
     SpendParse {
@@ -75,6 +72,32 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, _prices: &PriceBo
         unknown_models: Default::default(),
         replace_entries: rewound,
     }
+}
+
+/// Price an already authoritative rewind-aware fold without reopening either
+/// the transcript or its summary companion.
+pub(super) fn cost_from_folded(
+    path: &Path,
+    folded: &transcript::FoldedSession,
+    session_id: &str,
+) -> Option<crate::agents::AgentCost> {
+    let fallback_session_id = path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|value| value.to_str());
+    let completions = folded.completions().cloned().collect::<Vec<_>>();
+    let entries = entries_for_completions(&completions, fallback_session_id);
+    crate::agents::spending::session_cost_from_entries(&entries, session_id)
+}
+
+fn entries_for_completions(
+    completions: &[TurnCompletion],
+    fallback_session_id: Option<&str>,
+) -> Vec<CachedEntry> {
+    completions
+        .iter()
+        .flat_map(|completion| entries_for_completion(completion, fallback_session_id))
+        .collect()
 }
 
 fn entries_for_completion(
@@ -294,6 +317,13 @@ mod tests {
         assert_eq!(parsed.entries[0].cache_read, 40);
         assert_eq!(parsed.entries[0].output, 10);
         assert_eq!(parsed.entries[0].cost_usd, 0.25);
+        let folded = transcript::read(&path).unwrap();
+        assert_eq!(
+            cost_from_folded(&path, &folded, "s1")
+                .unwrap()
+                .total_cost_usd,
+            Some(0.25)
+        );
     }
 
     #[test]
@@ -370,6 +400,27 @@ mod tests {
         assert_eq!(
             parsed.entries.iter().map(|entry| entry.output).sum::<u64>(),
             10
+        );
+    }
+
+    #[test]
+    fn terminal_message_uses_certified_tail_then_branch_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("updates.jsonl");
+        let completion = row("p1", 1_000_000_000).replace(
+            "\"stop_reason\":\"end_turn\"",
+            "\"stop_reason\":\"end_turn\",\"agent_result\":\"done\"",
+        );
+        let padding = serde_json::json!({ "padding": "x".repeat(70_000) }).to_string();
+        std::fs::write(&path, format!("{padding}\n{}", with_prompt(&completion))).unwrap();
+        assert_eq!(
+            transcript::last_assistant_message(&path).as_deref(),
+            Some("done")
+        );
+        std::fs::write(&path, format!("{}{padding}\n", with_prompt(&completion))).unwrap();
+        assert_eq!(
+            transcript::last_assistant_message(&path).as_deref(),
+            Some("done")
         );
     }
 }

@@ -440,6 +440,27 @@ fn visible_transcript_contract_exposes_only_normalized_messages() {
         );
     }
 }
+
+#[test]
+fn final_assistant_uses_tail_then_full_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("transcript.jsonl");
+    let assistant = r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-07-13T23:23:09Z","content":"tail answer"}"#;
+    let padding = format!(
+        "{{\"step_index\":2,\"source\":\"SYSTEM\",\"type\":\"CHECKPOINT\",\"status\":\"DONE\",\"created_at\":\"2026-07-13T23:23:10Z\",\"content\":{}}}",
+        serde_json::to_string(&"x".repeat(70_000)).unwrap()
+    );
+    std::fs::write(&path, format!("{padding}\n{assistant}\n")).unwrap();
+    assert_eq!(
+        session::last_assistant_message(&path).as_deref(),
+        Some("tail answer")
+    );
+    std::fs::write(&path, format!("{assistant}\n{padding}\n")).unwrap();
+    assert_eq!(
+        session::last_assistant_message(&path).as_deref(),
+        Some("tail answer")
+    );
+}
 #[test]
 fn transcript_questions_project_and_clear_native_waits() {
     let dir = tempfile::tempdir().unwrap();

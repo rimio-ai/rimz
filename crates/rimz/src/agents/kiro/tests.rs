@@ -76,6 +76,58 @@ fn stock_store_transcript_context_and_lifecycle_are_normalized() {
 }
 
 #[test]
+fn unsupported_history_stays_out_of_spending_discovery() {
+    assert!(KiroAdapter.transcript_files().is_empty());
+    assert!(
+        crate::agents::spending::discover_spending_files()
+            .into_iter()
+            .all(|(adapter, _)| adapter.descriptor().kind != "kiro")
+    );
+}
+
+#[test]
+fn targeted_transcript_lookup_checks_only_exact_candidates_across_sorted_buckets() {
+    let home = tempfile::tempdir().unwrap();
+    let session_id = "sess_33333333-3333-4333-8333-333333333333";
+    let other_id = "sess_44444444-4444-4444-8444-444444444444";
+    let first_workspace = Path::new("/workspace/first");
+    let second_workspace = Path::new("/workspace/second");
+    let first = home
+        .path()
+        .join("sessions")
+        .join(session::workspace_bucket(first_workspace).unwrap());
+    let second = home
+        .path()
+        .join("sessions")
+        .join(session::workspace_bucket(second_workspace).unwrap());
+    std::fs::create_dir_all(first.join(other_id)).unwrap();
+    std::fs::write(first.join(other_id).join("session.json"), "not json").unwrap();
+    std::fs::write(first.join(other_id).join("messages.jsonl"), "not json").unwrap();
+
+    let target = second.join(session_id);
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(
+        target.join("session.json"),
+        serde_json::json!({
+            "id": session_id,
+            "schemaVersion": "1.0.0",
+            "dataModelVersion": 1,
+            "workspacePaths": [second_workspace],
+            "createdAt": "2025-01-03T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(target.join("messages.jsonl"), "{}").unwrap();
+
+    assert_eq!(
+        session::transcript_for_session_under(home.path(), session_id),
+        Some(target.join("messages.jsonl"))
+    );
+    assert!(session::transcript_for_session_under(home.path(), "../escape").is_none());
+}
+
+#[test]
 fn discovery_validates_layout_and_folds_ordered_records() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("workspace");

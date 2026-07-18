@@ -14,7 +14,7 @@ A provider session replacing a provisional launch row inherits launch-owned name
 
 ## Local store validation
 
-The stock layout is `${KIRO_HOME:-~/.kiro}/sessions/<sha256(cwd)[0..16]>/<sess_uuid>/{session.json,messages.jsonl}`. Discovery inspects direct `sess_*` children of the requested workspace bucket only.
+The stock layout is `${KIRO_HOME:-~/.kiro}/sessions/<sha256(cwd)[0..16]>/<sess_uuid>/{session.json,messages.jsonl}`. Discovery inspects direct `sess_*` children of the requested workspace bucket only. Exact live/conversation lookup validates the requested session candidate across sorted immediate workspace buckets without enumerating sibling sessions, while fleet spending discovery excludes Kiro because it has no spend parser.
 
 The producer batches exact workspaces and retains each requested bucket plus the selected valid sessions' directory, metadata, and message stamps. An unchanged tick reuses the normalized observation; a changed selected dependency re-runs validation and the bounded tail fold for that session, while invalidation reconciles the bucket so another valid child can fill the existing 128-valid-session window. Bucket topology, exact inputs, or the 30-second backstop rescans with validation before the cap; full-history transcript helpers remain uncached.
 

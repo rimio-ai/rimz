@@ -34,6 +34,7 @@ fn cached_opts() -> FoldOpts<'static> {
         config: None,
         lanes: None,
         local_sessions: Vec::new(),
+        wiring: Default::default(),
     }
 }
 
@@ -44,6 +45,7 @@ fn producing_opts() -> FoldOpts<'static> {
         config: Some(std::sync::Arc::new(crate::config::MachineConfig::default())),
         lanes: None,
         local_sessions: Vec::new(),
+        wiring: Default::default(),
     }
 }
 
@@ -90,7 +92,7 @@ fn remote_control_badge_follows_enablement_and_probe_health() {
 
 #[test]
 fn provider_store_adapters_are_wired_for_identityless_idle_cards() {
-    let wired = wired_agent_projection();
+    let wired = crate::sidebar::agent_wiring::probe_current();
     assert!(wired.kinds.iter().any(|kind| kind == "antigravity"));
     assert!(wired.kinds.iter().any(|kind| kind == "kiro"));
 }

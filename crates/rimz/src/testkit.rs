@@ -32,6 +32,131 @@ pub fn agent_state(kind: &str, agent_id: &str, at: jiff::Timestamp) -> crate::ag
     )
 }
 
+/// Provider-local changed-session fixture used only by allocation/time benches.
+pub struct ChangedSessionRefreshFixture {
+    kind: &'static str,
+    session_id: String,
+    transcript: std::path::PathBuf,
+    events: Option<std::path::PathBuf>,
+    pricing: std::path::PathBuf,
+}
+
+impl ChangedSessionRefreshFixture {
+    pub fn refresh(&self) -> Option<crate::agents::LocalContextRefresh> {
+        use crate::agents::AgentAdapter as _;
+
+        let transcript = self.transcript.to_str()?;
+        let ctx = crate::agents::LocalContextRefreshCtx {
+            agent_id: &self.session_id,
+            model_hint: None,
+            current_transcript_path: Some(transcript),
+            prior_transcript_path: Some(transcript),
+            prior_transcript_stat: None,
+            shared_pricing_cache_path: &self.pricing,
+        };
+        match self.kind {
+            "kimi" => crate::agents::KimiAdapter
+                .local_context_refresh(crate::agents::RefreshTrigger::Watch, &ctx),
+            "grok" => crate::agents::grok::refresh_resolved_context(
+                &self.transcript,
+                self.events.as_deref(),
+                &ctx,
+            ),
+            "droid" => crate::agents::DroidAdapter
+                .local_context_refresh(crate::agents::RefreshTrigger::Watch, &ctx),
+            _ => None,
+        }
+    }
+}
+
+pub fn changed_kimi_session_fixture(
+    root: &std::path::Path,
+    records: usize,
+) -> ChangedSessionRefreshFixture {
+    let transcript = root.join("kimi/sessions/wd/s1/agents/main/wire.jsonl");
+    std::fs::create_dir_all(transcript.parent().expect("fixture parent")).expect("fixture dirs");
+    let mut body = String::from("{\"type\":\"metadata\",\"protocol_version\":\"1.4\"}\n");
+    for index in 0..records {
+        body.push_str(&format!(
+            "{{\"type\":\"usage.record\",\"time\":{},\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"turn\",\"usage\":{{\"inputOther\":1000,\"output\":100}}}}\n",
+            1_770_000_000_000_u64 + index as u64
+        ));
+    }
+    std::fs::write(&transcript, body).expect("Kimi fixture");
+    ChangedSessionRefreshFixture {
+        kind: "kimi",
+        session_id: "s1".to_owned(),
+        transcript,
+        events: None,
+        pricing: root.join("prices.json"),
+    }
+}
+
+pub fn changed_grok_session_fixture(
+    root: &std::path::Path,
+    records: usize,
+) -> ChangedSessionRefreshFixture {
+    let transcript = root.join("grok/s1/updates.jsonl");
+    std::fs::create_dir_all(transcript.parent().expect("fixture parent")).expect("fixture dirs");
+    let mut body = String::new();
+    for index in 0..records {
+        body.push_str(&serde_json::json!({
+            "timestamp": 1_770_000_000_u64 + index as u64,
+            "method": "session/update",
+            "params": { "update": { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "prompt" }, "_meta": { "promptIndex": index } } }
+        }).to_string());
+        body.push('\n');
+        body.push_str(&serde_json::json!({
+            "timestamp": 1_770_000_001_u64 + index as u64,
+            "method": "_x.ai/session/update",
+            "params": { "sessionId": "s1", "update": { "sessionUpdate": "turn_completed", "prompt_id": format!("p{index}"), "stop_reason": "end_turn", "usage": { "inputTokens": 1000, "cachedReadTokens": 300, "outputTokens": 100, "costUsdTicks": 10_000_000 } } }
+        }).to_string());
+        body.push('\n');
+    }
+    std::fs::write(&transcript, body).expect("Grok fixture");
+    ChangedSessionRefreshFixture {
+        kind: "grok",
+        session_id: "s1".to_owned(),
+        transcript,
+        events: None,
+        pricing: root.join("prices.json"),
+    }
+}
+
+pub fn changed_droid_session_fixture(
+    root: &std::path::Path,
+    records: usize,
+) -> ChangedSessionRefreshFixture {
+    let transcript = root.join("droid/s1.jsonl");
+    std::fs::create_dir_all(transcript.parent().expect("fixture parent")).expect("fixture dirs");
+    let mut body = format!(
+        "{{\"type\":\"session_start\",\"version\":2,\"cwd\":{}}}\n",
+        serde_json::to_string(&root.to_string_lossy()).expect("cwd")
+    );
+    for index in 0..records {
+        body.push_str(&format!(
+            "{{\"type\":\"message\",\"id\":\"m{index}\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}],\"modelId\":\"gpt-5\"}}}}\n"
+        ));
+    }
+    std::fs::write(&transcript, body).expect("Droid fixture");
+    std::fs::write(
+        transcript.with_file_name("s1.settings.json"),
+        format!(
+            "{{\"model\":\"gpt-5\",\"tokenUsage\":{{\"inputTokens\":{},\"outputTokens\":{}}}}}",
+            records.saturating_mul(1000),
+            records.saturating_mul(100)
+        ),
+    )
+    .expect("Droid settings fixture");
+    ChangedSessionRefreshFixture {
+        kind: "droid",
+        session_id: "s1".to_owned(),
+        transcript,
+        events: None,
+        pricing: root.join("prices.json"),
+    }
+}
+
 pub mod fleet {
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::agents::{AgentLifecycleObservation, LaunchParams};

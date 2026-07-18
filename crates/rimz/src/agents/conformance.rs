@@ -454,6 +454,28 @@ fn realtime_cost_matches_coverage() {
 }
 
 #[test]
+fn wiring_inputs_cover_every_provider_file_used_for_admission() {
+    for adapter in ADAPTERS {
+        let kind = adapter.descriptor().kind;
+        let paths = adapter.wiring_input_paths();
+        match kind {
+            "claude" | "antigravity" | "cursor" | "kiro" => assert!(
+                paths.is_empty(),
+                "{kind} local discovery needs no provider wiring input"
+            ),
+            "codex" => assert_eq!(paths.len(), 1, "Codex model config input"),
+            "copilot" => assert_eq!(paths.len(), 2, "Copilot hook and settings inputs"),
+            _ if !adapter.descriptor().capabilities.local_session_discovery
+                && adapter.descriptor().has_wired_hook_install() =>
+            {
+                assert!(!paths.is_empty(), "{kind} hook admission input")
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
 fn awaiting_input_projects_to_waiting() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;

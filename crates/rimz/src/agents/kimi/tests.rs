@@ -687,6 +687,14 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
     assert_eq!(refresh.transcript_path.as_deref(), path.to_str());
 
     let parsed = spend::parse(&path, None, &super::super::PriceBook::embedded());
+    let snapshot = wire::WireSnapshot::read(&path).unwrap();
+    let snapshot_parsed =
+        spend::parse_snapshot(&path, &snapshot, &super::super::PriceBook::embedded());
+    assert_eq!(snapshot_parsed.entries, parsed.entries);
+    assert_eq!(
+        snapshot.consumed_offset(),
+        std::fs::metadata(&path).unwrap().len()
+    );
     assert_eq!(parsed.entries.len(), 3);
     assert_eq!(
         parsed.entries[1].model.as_deref(),
@@ -694,6 +702,44 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
     );
     assert_eq!(parsed.entries[1].thread_id.as_deref(), Some("s1"));
     assert!(parsed.entries.iter().all(|entry| entry.cost_usd > 0.0));
+}
+
+#[test]
+fn wire_snapshot_tail_is_record_aligned_oversized_and_torn_safe() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wire.jsonl");
+    let usage = |time: u64, padding: usize| {
+        serde_json::json!({
+            "type": "usage.record",
+            "time": time,
+            "model": "moonshot/kimi-k2.5",
+            "usageScope": "turn",
+            "usage": { "inputOther": time },
+            "padding": "x".repeat(padding),
+        })
+        .to_string()
+    };
+    let early = usage(1, 0);
+    let oversized = usage(2, 70_000);
+    let complete = format!("{early}\n{oversized}\n");
+    std::fs::write(&path, format!("{complete}{{\"type\":\"usage.record\"")).unwrap();
+
+    let snapshot = wire::WireSnapshot::read(&path).unwrap();
+    let tail_usage = wire::usage_records(snapshot.tail_records());
+    assert_eq!(tail_usage.len(), 1);
+    assert_eq!(tail_usage[0].1.usage.input_other, Some(2));
+    assert_eq!(snapshot.consumed_offset(), complete.len() as u64);
+    assert_eq!(wire::usage_records(snapshot.records()).len(), 2);
+
+    let latest = usage(3, 0);
+    let complete = format!("{early}\n{oversized}\n{latest}\n");
+    std::fs::write(&path, format!("{complete}{{\"type\":\"usage.record\"")).unwrap();
+    let snapshot = wire::WireSnapshot::read(&path).unwrap();
+    let tail_usage = wire::usage_records(snapshot.tail_records());
+    assert_eq!(tail_usage.len(), 1);
+    assert_eq!(tail_usage[0].1.usage.input_other, Some(3));
+    assert_eq!(snapshot.consumed_offset(), complete.len() as u64);
+    assert_eq!(wire::usage_records(snapshot.records()).len(), 3);
 }
 
 #[test]

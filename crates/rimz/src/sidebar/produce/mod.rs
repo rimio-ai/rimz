@@ -25,14 +25,14 @@ mod panes;
 use std::{
     collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
+use crate::sidebar::agent_wiring::WiredAgentProjection;
 use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
-use crate::sidebar::enrich::{FoldOpts, WiredAgentProjection, enrich, wired_agent_projection};
+use crate::sidebar::enrich::{FoldOpts, enrich};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
-use crate::sidebar::refresh::{RefreshedLanes, refresh_heavy_lanes};
+use crate::sidebar::refresh::refresh_heavy_lanes;
 use crate::sidebar::timing::unix_now_ms;
 use crate::{ResolvedWorkspace, RowCard, RuntimePaths, SidebarSnapshot, StatePaths, Store};
 
@@ -183,7 +183,7 @@ pub fn produce_resolution_snapshot(
         snapshot,
         frame,
         opts.exclude.as_ref(),
-        wired_agent_projection(),
+        crate::sidebar::agent_wiring::probe_current(),
     ))
 }
 
@@ -394,14 +394,19 @@ fn enrich_producing_projecting(
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
     let local_sessions = refresh_local_sessions(frame.as_ref(), &opts);
+    let wiring = refresh_agent_wiring(frame.as_ref(), &opts);
     enrich_producing_with(
         snapshot,
         frame,
         opts,
-        config,
-        roots,
-        ProducerFold::Project,
-        &local_sessions,
+        FoldOpts {
+            producing: true,
+            fresh_roots: roots,
+            config: Some(config),
+            lanes: None,
+            local_sessions,
+            wiring,
+        },
     )
 }
 
@@ -413,14 +418,19 @@ fn enrich_with_refresh(
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
     let local_sessions = refresh_local_sessions(frame.as_ref(), &opts);
+    let wiring = refresh_agent_wiring(frame.as_ref(), &opts);
     let folded = enrich_producing_with(
         snapshot.clone(),
         frame.clone(),
         opts,
-        config.clone(),
-        roots.clone(),
-        ProducerFold::Intermediate,
-        &local_sessions,
+        FoldOpts {
+            producing: false,
+            fresh_roots: roots.clone(),
+            config: Some(config.clone()),
+            lanes: None,
+            local_sessions: local_sessions.clone(),
+            wiring: wiring.clone(),
+        },
     );
     // The intermediate fold applies the published daemon-reap cache. Probe from
     // the unreaped rollup so one-shot CLI refresh keeps the pre-split semantics:
@@ -438,10 +448,14 @@ fn enrich_with_refresh(
         snapshot,
         frame,
         opts,
-        config,
-        roots,
-        ProducerFold::Refreshed(&refreshed),
-        &local_sessions,
+        FoldOpts {
+            producing: true,
+            fresh_roots: roots,
+            config: Some(config),
+            lanes: Some(&refreshed),
+            local_sessions,
+            wiring,
+        },
     )
 }
 
@@ -457,6 +471,15 @@ fn refresh_local_sessions(
     crate::sidebar::local_sessions::refresh_published(opts.runtime, &frame.session_name, inputs)
 }
 
+fn refresh_agent_wiring(
+    frame: Option<&PaneFrame>,
+    opts: &ProducerEnrich<'_>,
+) -> WiredAgentProjection {
+    frame.map_or_else(crate::sidebar::agent_wiring::probe_current, |frame| {
+        crate::sidebar::agent_wiring::refresh_published(opts.runtime, &frame.session_name)
+    })
+}
+
 fn producer_roots(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
@@ -467,39 +490,19 @@ fn producer_roots(
     })
 }
 
-enum ProducerFold<'a> {
-    Project,
-    Intermediate,
-    Refreshed(&'a RefreshedLanes),
-}
-
 fn enrich_producing_with(
     snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
     opts: ProducerEnrich<'_>,
-    config: Arc<crate::config::MachineConfig>,
-    roots: Option<Vec<PathBuf>>,
-    fold: ProducerFold<'_>,
-    local_sessions: &[crate::agents::LocalSessionObservation],
+    fold: FoldOpts<'_>,
 ) -> SidebarSnapshot {
-    let (producing, lanes) = match fold {
-        ProducerFold::Project => (true, None),
-        ProducerFold::Intermediate => (false, None),
-        ProducerFold::Refreshed(lanes) => (true, Some(lanes)),
-    };
     enrich(
         snapshot,
         frame.as_ref(),
         opts.runtime,
         Some(opts.messages_dir),
         opts.exclude,
-        FoldOpts {
-            producing,
-            fresh_roots: roots,
-            config: Some(config),
-            lanes,
-            local_sessions: local_sessions.to_vec(),
-        },
+        fold,
         opts.diag,
     )
 }

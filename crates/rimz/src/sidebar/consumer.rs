@@ -131,6 +131,7 @@ pub fn read_published_snapshot(
             read_published_local_sessions(frame.to_pane_refs(), runtime, session, exclude).1
         })
         .unwrap_or_default();
+    let wiring = super::agent_wiring::read_published(runtime, session);
     Ok(enrich(
         base,
         cache.as_deref(),
@@ -143,6 +144,7 @@ pub fn read_published_snapshot(
             config: None,
             lanes: None,
             local_sessions,
+            wiring,
         },
         &crate::diag::DiagSink::disabled(),
     ))
@@ -232,6 +234,7 @@ pub fn consumer_fold_inputs_stamp(
         runtime.shared_credits_path(),
         runtime.shared_provider_spending_path(),
         runtime.local_sessions_path(),
+        runtime.agent_wiring_path(),
         runtime.root.join("metrics-sample.json"),
         super::refresh::daemon_reap::codex_daemon_reap_path(runtime),
     ];

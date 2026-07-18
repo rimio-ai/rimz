@@ -69,6 +69,11 @@ impl ManagedSource {
         self.install_into(&path)
     }
 
+    /// Resolve the provider-owned path without reading or mutating it.
+    pub fn resolved_path(&self) -> Result<PathBuf> {
+        (self.path)()
+    }
+
     pub fn preview(&self) -> Result<HookInstallPreview> {
         let path = (self.path)()?;
         self.preview_at(&path)

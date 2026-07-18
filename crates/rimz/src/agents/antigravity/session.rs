@@ -530,6 +530,22 @@ pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
         .collect()
 }
 
+pub(super) fn last_assistant_message(path: &Path) -> Option<String> {
+    let tail = read_transcript_tail(path)?;
+    newest_assistant(&tail).or_else(|| {
+        let full = fs::read_to_string(path).ok()?;
+        newest_assistant(&full)
+    })
+}
+
+fn newest_assistant(lines: &str) -> Option<String> {
+    messages(lines)
+        .into_iter()
+        .rev()
+        .find(|message| message.role == TranscriptRole::Assistant)
+        .map(|message| message.text)
+}
+
 pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
     valid_conversation_id(session_id).then_some(())?;
     let home = home()?;

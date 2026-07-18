@@ -235,10 +235,6 @@ impl AgentAdapter for KiroAdapter {
         session::messages(lines)
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        session::transcript_files()
-    }
-
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| session::valid_transcript(path, session_id)) {
             return Some(path.to_path_buf());

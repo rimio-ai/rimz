@@ -370,7 +370,11 @@ impl AgentAdapter for DroidAdapter {
             .filter(|model| model.starts_with("custom:"))
             .and_then(|model| {
                 let user_settings = droid_settings_path().ok()?;
-                config::resolve_custom_model(model, &refresh.settings_path, &user_settings)
+                config::resolve_custom_model_from_cwd(
+                    model,
+                    refresh.session_cwd.as_deref()?,
+                    &user_settings,
+                )
             });
         let model_id = match raw_model {
             Some(model) if !model.starts_with("custom:") && !model.is_empty() => {
@@ -392,6 +396,11 @@ impl AgentAdapter for DroidAdapter {
                     .and_then(|model| prices.exact_price(model))
                     .and_then(|price| price.max_input_tokens)
             });
+        let cost = spend::live_cost(
+            model_id.as_deref(),
+            refresh.telemetry.session_usage.as_ref(),
+            &prices,
+        );
         let has_tokens = context_window_size.is_some()
             || refresh.telemetry.current_usage.is_some()
             || refresh.telemetry.session_usage.is_some();
@@ -403,8 +412,6 @@ impl AgentAdapter for DroidAdapter {
             current_usage: refresh.telemetry.current_usage,
             session_usage: refresh.telemetry.session_usage,
         });
-        let cost =
-            super::spending::session_cost_usd(self, ctx.agent_id, &refresh.settings_path, &prices);
         Some(LocalContextRefresh {
             model_id,
             model_display_name,

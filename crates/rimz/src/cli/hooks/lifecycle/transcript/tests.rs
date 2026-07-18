@@ -36,6 +36,21 @@ fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
 }
 
 #[test]
+fn one_terminal_extraction_is_shared_when_run_and_conversation_both_need_it() {
+    let calls = std::cell::Cell::new(0);
+    let terminal = recorded(LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+    });
+    let message = assistant_message_for_lifecycle(&terminal, true, || {
+        calls.set(calls.get() + 1);
+        Some("  exact run output  ".to_owned())
+    });
+    assert_eq!(message.as_deref(), Some("  exact run output  "));
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
 fn conversation_entries_follow_confirmed_message_turn_causality() {
     let (_dir, store) = store();
     let workspace = workspace();
@@ -63,9 +78,9 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         &workspace,
         &store,
         &rimz::agents::ClaudeAdapter,
-        "UserPromptSubmit",
-        &serde_json::json!({}),
         &started,
+        None,
+        &[],
         &[first.clone(), second.clone()],
     )
     .unwrap();
@@ -87,12 +102,12 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         &workspace,
         &store,
         &rimz::agents::ClaudeAdapter,
-        "Stop",
-        &serde_json::json!({ "last_assistant_message": "done" }),
         &recorded(LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
         }),
+        Some("done"),
+        &[],
         &[],
     )
     .unwrap();
@@ -109,17 +124,19 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         &workspace,
         &store,
         &rimz::agents::ClaudeAdapter,
-        "PreToolUse",
-        &serde_json::json!({
-            "tool_name": "AskUserQuestion",
-            "tool_input": { "questions": [{ "question": "Ship?" }] }
-        }),
         &recorded(LifecycleSignal::AwaitingInput {
             kind: rimz::agents::AskKind::Question,
             ask_id: Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap()),
             detail: None,
             native_key: None,
         }),
+        None,
+        &[rimz::transcript::AskQuestion {
+            question: "Ship?".to_owned(),
+            options: Vec::new(),
+            multi_select: false,
+            has_option_previews: false,
+        }],
         &[],
     )
     .unwrap();
@@ -138,9 +155,9 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         &workspace,
         &store,
         &rimz::agents::ClaudeAdapter,
-        "UserPromptSubmit",
-        &serde_json::json!({}),
         &hand_typed,
+        None,
+        &[],
         &[],
     )
     .unwrap();
@@ -206,12 +223,9 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
             &workspace,
             &store,
             &rimz::agents::CursorAdapter,
-            "stop",
-            &serde_json::json!({
-                "conversation_id": "conv-1",
-                "message": {"content": [{"type": "text", "text": "unsafe transcript text"}]}
-            }),
             &stopped,
+            None,
+            &[],
             &[],
         )
         .unwrap();

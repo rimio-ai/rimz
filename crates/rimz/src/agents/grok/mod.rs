@@ -437,12 +437,9 @@ impl AgentAdapter for GrokAdapter {
         _payload: &Value,
         observation: &AgentLifecycleObservation,
     ) -> Option<String> {
-        (event_name == "Stop")
-            .then_some(())
-            .and_then(|()| {
-                transcript::read(Path::new(observation.transcript_path.as_deref()?)).ok()
-            })
-            .and_then(|folded| folded.latest_assistant())
+        (event_name == "Stop").then_some(()).and_then(|()| {
+            transcript::last_assistant_message(Path::new(observation.transcript_path.as_deref()?))
+        })
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
@@ -487,7 +484,7 @@ impl AgentAdapter for GrokAdapter {
             ctx.prior_transcript_path.map(Path::new),
         )?;
         let events = paths::events_companion(&path, ctx.agent_id);
-        refresh_resolved_context(self, &path, events.as_deref(), ctx)
+        refresh_resolved_context(&path, events.as_deref(), ctx)
     }
 
     fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<AgentSessionId> {
@@ -534,8 +531,7 @@ impl AgentAdapter for GrokAdapter {
     }
 }
 
-fn refresh_resolved_context(
-    adapter: &GrokAdapter,
+pub(crate) fn refresh_resolved_context(
     path: &Path,
     events: Option<&Path>,
     ctx: &LocalContextRefreshCtx<'_>,
@@ -594,8 +590,7 @@ fn refresh_resolved_context(
         .as_ref()
         .and_then(|value| value.current_model_id.clone())
         .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
-    let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
-    let cost = super::spending::session_cost_usd(adapter, ctx.agent_id, path, &prices);
+    let cost = spend::cost_from_folded(path, &folded, ctx.agent_id);
     Some(LocalContextRefresh {
         session_preview: summary.as_ref().and_then(transcript::Summary::title),
         model_display_name: model_id.as_deref().map(super::model_display::display_model),

@@ -630,6 +630,13 @@ impl AgentAdapter for CopilotAdapter {
         Some(&COPILOT_MANAGED_SOURCE)
     }
 
+    fn wiring_input_paths(&self) -> Vec<PathBuf> {
+        [paths::hooks_path(), paths::settings_path()]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
     fn install_hooks(&self) -> Result<HookInstallReport> {
         install::install(&paths::hooks_path()?, &paths::settings_path()?)
     }

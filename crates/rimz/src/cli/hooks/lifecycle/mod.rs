@@ -111,7 +111,17 @@ pub(crate) fn handle_lifecycle_hook(
         });
     }
     if let Some(recorded) = recorded.as_ref() {
-        record_run_lifecycle(store, agent, event_name, payload, recorded);
+        let assistant_message =
+            assistant_message_for_lifecycle(recorded, env_run_id().is_some(), || {
+                agent.last_assistant_message(event_name, payload, &recorded.observation)
+            });
+        record_run_lifecycle(
+            store,
+            agent,
+            event_name,
+            recorded,
+            assistant_message.as_deref(),
+        );
         let delivered =
             confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
         record_user_input_for_lifecycle(
@@ -122,8 +132,20 @@ pub(crate) fn handle_lifecycle_hook(
             env_run_id().is_some(),
             user_input_state_root(store),
         );
+        let questions = match &recorded.observation.signal {
+            LifecycleSignal::AwaitingInput { .. } => agent
+                .ask_question_detail(event_name, payload)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         if let Err(err) = record_conversation(
-            workspace, store, agent, event_name, payload, recorded, &delivered,
+            workspace,
+            store,
+            agent,
+            recorded,
+            assistant_message.as_deref(),
+            &questions,
+            &delivered,
         ) {
             warn!(
                 agent = agent.descriptor().kind,
@@ -170,6 +192,23 @@ pub(crate) fn handle_lifecycle_hook(
         }
     }
     Ok(())
+}
+
+fn assistant_message_for_lifecycle(
+    recorded: &RecordedLifecycle,
+    supervised_run: bool,
+    extract: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    let needs_run_message = supervised_run
+        && rimz::harness::run::terminal_status_for_signal(&recorded.observation.signal).is_some();
+    let needs_conversation_message = recorded.observation.parent_agent_id.is_none()
+        && matches!(
+            recorded.observation.signal,
+            LifecycleSignal::TurnEnded { .. } | LifecycleSignal::AwaitingInput { .. }
+        );
+    (needs_run_message || needs_conversation_message)
+        .then(extract)
+        .flatten()
 }
 
 fn derive_subagent_lifecycle(
@@ -304,22 +343,18 @@ fn record_run_lifecycle(
     store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
-    payload: &Value,
     recorded: &RecordedLifecycle,
+    assistant_message: Option<&str>,
 ) {
     let Some(run_id) = env_run_id() else {
         return;
     };
-    let last_message = rimz::harness::run::terminal_status_for_signal(&recorded.observation.signal)
-        .is_some()
-        .then(|| agent.last_assistant_message(event_name, payload, &recorded.observation))
-        .flatten();
     match rimz::harness::run::record_lifecycle(
         store.paths(),
         &run_id,
         agent.descriptor().kind,
         &recorded.observation,
-        last_message,
+        assistant_message.map(ToOwned::to_owned),
     ) {
         Ok(Some(record)) => {
             let cost_usd = recorded

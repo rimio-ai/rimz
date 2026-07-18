@@ -350,6 +350,11 @@ impl RuntimePaths {
         self.root.join("local-sessions.json")
     }
 
+    /// Producer-published adapter wiring and launch defaults for this room.
+    pub fn agent_wiring_path(&self) -> PathBuf {
+        self.root.join("agent-wiring.json")
+    }
+
     /// Serializes Zellij topology writer fencing and cache publication.
     pub fn topology_writer_lock(&self) -> PathBuf {
         self.root.join("topology-writer.lock")

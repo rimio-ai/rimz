@@ -5,7 +5,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::Deserialize;
 
-use super::super::{TranscriptMessage, TranscriptRole, sanitize_user_prompt};
+use super::super::{TranscriptMessage, TranscriptRole, read_transcript_tail, sanitize_user_prompt};
 
 #[derive(Deserialize)]
 struct EventRecord {
@@ -29,7 +29,15 @@ pub(super) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
 }
 
 pub(super) fn last_assistant_message(path: &Path) -> Option<String> {
-    parse_messages(&std::fs::read_to_string(path).ok()?)
+    let tail = read_transcript_tail(path)?;
+    newest_assistant(&tail).or_else(|| {
+        let full = std::fs::read_to_string(path).ok()?;
+        newest_assistant(&full)
+    })
+}
+
+fn newest_assistant(lines: &str) -> Option<String> {
+    parse_messages(lines)
         .into_iter()
         .rev()
         .find(|message| message.role == TranscriptRole::Assistant)
@@ -141,6 +149,32 @@ not-json
         assert_eq!(
             last_assistant_message(&path).as_deref(),
             Some("second reply")
+        );
+    }
+
+    #[test]
+    fn final_assistant_uses_tail_then_full_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let prefix = format!(
+            "{{\"type\":\"tool.message\",\"data\":{{\"content\":\"{}\"}}}}\n",
+            "x".repeat(70_000)
+        );
+        let assistant = "{\"type\":\"assistant.message\",\"data\":{\"content\":\"tail answer\"}}\n";
+        std::fs::write(&path, format!("{prefix}{assistant}")).unwrap();
+        assert_eq!(
+            last_assistant_message(&path).as_deref(),
+            Some("tail answer")
+        );
+
+        let padding = format!(
+            "{{\"type\":\"tool.message\",\"data\":{{\"content\":\"{}\"}}}}\n",
+            "y".repeat(70_000)
+        );
+        std::fs::write(&path, format!("{assistant}{padding}")).unwrap();
+        assert_eq!(
+            last_assistant_message(&path).as_deref(),
+            Some("tail answer")
         );
     }
 }

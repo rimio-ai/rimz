@@ -464,6 +464,22 @@ pub(super) fn read(path: &Path) -> std::io::Result<FoldedSession> {
     std::fs::read_to_string(path).map(|text| fold(&text))
 }
 
+pub(super) fn last_assistant_message(path: &Path) -> Option<String> {
+    let tail = read_transcript_tail(path)?;
+    if !contains_rewind(&tail)
+        && let Some(message) = physical_completions(&tail)
+            .into_iter()
+            .rev()
+            .find(|completion| completion.stop_reason == "end_turn")
+            .and_then(|completion| completion.agent_result)
+            .map(|message| message.trim().to_owned())
+            .filter(|message| !message.is_empty())
+    {
+        return Some(message);
+    }
+    read(path).ok()?.latest_assistant()
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct Summary {

@@ -131,6 +131,8 @@ pub(super) struct SessionTelemetry {
 pub(super) struct TelemetryRefresh {
     pub transcript_path: PathBuf,
     pub settings_path: PathBuf,
+    pub session_cwd: Option<PathBuf>,
+    transcript_header_valid: bool,
     pub stat: TranscriptStat,
     pub telemetry: SessionTelemetry,
 }
@@ -237,30 +239,34 @@ pub(super) fn telemetry(
     prior_stat: Option<&TranscriptStat>,
 ) -> Option<TelemetryRefresh> {
     let transcript = transcript_path(path)?;
-    if !supported_file(&transcript) {
+    let mut refresh = settings_snapshot(path, None)?;
+    if !refresh.transcript_header_valid {
         return None;
     }
-    let mut refresh = settings_snapshot(path, None)?;
     refresh.stat.companion =
         TranscriptStat::from_path(&transcript).map(TranscriptCompanionStat::from);
     if prior_stat == Some(&refresh.stat) {
         return None;
     }
-    let (tail_model, tail_effort) = latest_assistant_identity(&transcript);
-    refresh.telemetry.model = refresh.telemetry.model.or(tail_model);
-    refresh.telemetry.reasoning_effort = refresh.telemetry.reasoning_effort.or(tail_effort);
-    refresh.telemetry.native_permission_wait = native_permission_wait(&transcript);
+    let tail = tail_projection(&transcript);
+    refresh.telemetry.model = refresh.telemetry.model.or(tail.model);
+    refresh.telemetry.reasoning_effort = refresh.telemetry.reasoning_effort.or(tail.effort);
+    refresh.telemetry.native_permission_wait = tail.native_permission_wait;
     Some(refresh)
 }
 
-/// Typed settings-only read used by the spend-parser seam after the caller has
-/// selected a session snapshot. Custom identity still requires the validated
-/// sibling transcript because its cwd determines project settings.
+/// Typed settings read used by the spend-parser seam after the caller has
+/// selected a session snapshot. The sibling header is optional for exact
+/// built-in pricing; custom identity still requires its validated cwd.
 pub(super) fn settings_snapshot(
     path: &Path,
     prior_stat: Option<&TranscriptStat>,
 ) -> Option<TelemetryRefresh> {
     let settings_path = settings_path(path)?;
+    let transcript_path = transcript_path(path)?;
+    let header = session_header(&transcript_path);
+    let transcript_header_valid = header.is_some();
+    let session_cwd = header.and_then(|header| header.cwd);
     let stat = TranscriptStat::from_path(&settings_path)?;
     if prior_stat == Some(&stat) {
         return None;
@@ -291,8 +297,10 @@ pub(super) fn settings_snapshot(
         (!usage.is_zero()).then_some(usage)
     });
     Some(TelemetryRefresh {
-        transcript_path: transcript_path(path)?,
+        transcript_path,
         settings_path,
+        session_cwd,
+        transcript_header_valid,
         stat,
         telemetry: SessionTelemetry {
             model: non_empty_owned(settings.model),
@@ -306,8 +314,17 @@ pub(super) fn settings_snapshot(
 
 /// Absolute session cwd from the validated version-2 header. Settings sidecar
 /// inputs derive only their exact sibling JSONL for this bounded first-line read.
+#[cfg(test)]
 pub(super) fn session_cwd(path: &Path) -> Option<PathBuf> {
     let transcript = transcript_path(path)?;
+    session_header(&transcript)?.cwd
+}
+
+struct SessionHeader {
+    cwd: Option<PathBuf>,
+}
+
+fn session_header(transcript: &Path) -> Option<SessionHeader> {
     let file = File::open(transcript).ok()?;
     let mut first = String::new();
     BufReader::new(file).read_line(&mut first).ok()?;
@@ -317,8 +334,10 @@ pub(super) fn session_cwd(path: &Path) -> Option<PathBuf> {
     {
         return None;
     }
-    let cwd = PathBuf::from(non_empty_owned(record.cwd)?);
-    cwd.is_absolute().then_some(cwd)
+    let cwd = non_empty_owned(record.cwd)
+        .map(PathBuf::from)
+        .filter(|cwd| cwd.is_absolute());
+    Some(SessionHeader { cwd })
 }
 
 fn supported_lines(lines: &str) -> bool {
@@ -332,46 +351,49 @@ fn supported_lines(lines: &str) -> bool {
         })
 }
 
-fn latest_assistant_identity(path: &Path) -> (Option<String>, Option<String>) {
-    let Some(tail) = read_transcript_tail(path) else {
-        return (None, None);
-    };
-    for record in tail.lines().rev().filter_map(parse_record) {
-        if record.record_type.as_deref() != Some("message")
-            || visible_role(&record) != Some(TranscriptRole::Assistant)
-        {
-            continue;
-        }
-        let Some(message) = record.message else {
-            continue;
-        };
-        return (
-            non_empty_owned(message.model_id),
-            non_empty_owned(message.reasoning_effort),
-        );
-    }
-    (None, None)
+#[derive(Default)]
+struct TailProjection {
+    model: Option<String>,
+    effort: Option<String>,
+    native_permission_wait: Option<Timestamp>,
 }
 
-/// The active conversation leaf is a native AskUser call only while Droid is
-/// displaying its questionnaire. A later user/tool-result or assistant record
-/// becomes the leaf and clears the marker on the next watched refresh.
-fn native_permission_wait(path: &Path) -> Option<Timestamp> {
-    let tail = read_transcript_tail(path)?;
-    tail.lines()
-        .rev()
-        .filter_map(parse_record)
-        .find(|record| visible_role(record).is_some())
-        .filter(|record| {
-            visible_role(record) == Some(TranscriptRole::Assistant)
+fn tail_projection(path: &Path) -> TailProjection {
+    let Some(tail) = read_transcript_tail(path) else {
+        return TailProjection::default();
+    };
+    let mut projection = TailProjection::default();
+    let mut found_visible_leaf = false;
+    let mut found_assistant_identity = false;
+    for record in tail.lines().rev().filter_map(parse_record) {
+        let role = visible_role(&record);
+        if !found_visible_leaf && role.is_some() {
+            found_visible_leaf = true;
+            projection.native_permission_wait = (role == Some(TranscriptRole::Assistant)
                 && record.message.as_ref().is_some_and(|message| {
                     message.content.iter().any(|block| {
                         block.content_type.as_deref() == Some("tool_use")
                             && block.name.as_deref() == Some("AskUser")
                     })
-                })
-        })
-        .and_then(|record| record.timestamp.as_deref()?.parse().ok())
+                }))
+            .then(|| record.timestamp.as_deref()?.parse().ok())
+            .flatten();
+        }
+        if !found_assistant_identity
+            && role == Some(TranscriptRole::Assistant)
+            && let Some(message) = record.message
+        {
+            found_assistant_identity = true;
+            projection.model = non_empty_owned(message.model_id);
+            projection.effort = non_empty_owned(message.reasoning_effort);
+        }
+    }
+    projection
+}
+
+fn latest_assistant_identity(path: &Path) -> (Option<String>, Option<String>) {
+    let projection = tail_projection(path);
+    (projection.model, projection.effort)
 }
 
 fn normalize_record(record: &Record) -> Option<TranscriptMessage> {
