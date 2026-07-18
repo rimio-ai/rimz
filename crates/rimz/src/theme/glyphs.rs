@@ -158,13 +158,14 @@ impl GlyphSet {
             _ => None,
         });
         let kind = GlyphSetKind::from_source(source);
-        let mut glyphs = GLYPH_CATALOG
+        let mut glyphs = GlyphRole::ALL
             .iter()
-            .map(|row| match kind {
-                GlyphSetKind::Unicode => Cow::Borrowed(unicode_glyph(row.role)),
-                GlyphSetKind::NerdFont => Cow::Borrowed(
-                    nerd_font_glyph(row.role).unwrap_or_else(|| unicode_glyph(row.role)),
-                ),
+            .copied()
+            .map(|role| match kind {
+                GlyphSetKind::Unicode => Cow::Borrowed(unicode_glyph(role)),
+                GlyphSetKind::NerdFont => {
+                    Cow::Borrowed(nerd_font_glyph(role).unwrap_or_else(|| unicode_glyph(role)))
+                }
             })
             .collect::<Vec<_>>();
 
