@@ -72,7 +72,7 @@ workspace store   ~/.local/state/rimz/workspaces/<id>/
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<id>/   (or /tmp/rimz-<uid>/… )
   sock/*.sock          per-run and sidebar wakeup sockets
   heartbeat/ · read-marks/ · unread.json             liveness and attention
-  snapshot.json · local-sessions.json · agent-wiring.json · *.json caches
+  snapshot.json · agent-projection.json · *.json caches
   agent_context/ · agent-activity/                   disposable enrichment
   agent-telemetry/                                  private provider export cache
 
