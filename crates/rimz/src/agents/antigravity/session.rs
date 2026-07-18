@@ -364,7 +364,7 @@ impl AntigravityDiscoverySnapshot {
         self.key = Some(key.clone());
         self.last_full_scan = stable.then_some(now);
         self.topology = stamp_paths([brain]);
-        self.catalog = stable.then_some(catalog).unwrap_or_default();
+        self.catalog = if stable { catalog } else { Vec::new() };
     }
 
     fn refresh_conversation(
