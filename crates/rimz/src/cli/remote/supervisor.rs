@@ -140,89 +140,72 @@ pub(super) fn supervise_remote(
         if outcome.established {
             outage = None;
         }
-        if outcome.killed_zombie {
+        let retry_cause = if outcome.killed_zombie {
             guard.reset_emulator();
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
             );
             reconnect.settle_zombie_kill();
-            let mut ui = OutageUi::auto(ConnectStage::Recovery, host);
-            let outage = outage.get_or_insert_with(|| {
-                OutageState::new(
-                    ConnectStage::Recovery,
-                    host,
-                    internet_probe_for_wait(&ui),
-                    dial_plan.as_ref(),
-                )
-            });
-            match wait_for_master(
-                plan,
-                control_path,
+            RetryCause::Zombie
+        } else {
+            match reconnect.settle(outcome.status.code(), outcome.established) {
+                Verdict::CleanExit => return Ok(()),
+                Verdict::Fatal { code } => {
+                    guard.reset_emulator();
+                    bail!("{}", fatal_session_message(code, host, setup_hint))
+                }
+                Verdict::Retry => {
+                    guard.reset_emulator();
+                    RetryCause::Dropped
+                }
+            }
+        };
+        let mut ui = OutageUi::auto(ConnectStage::Recovery, host);
+        let outage = outage.get_or_insert_with(|| {
+            OutageState::new(
+                ConnectStage::Recovery,
+                host,
+                internet_probe_for_wait(&ui),
                 dial_plan.as_ref(),
-                &policy,
-                outage,
-                &mut ui,
-                Some(&stop),
-            )? {
-                WaitOutcome::Connected(master) => ready_master = Some(master),
-                WaitOutcome::Interrupted => {
-                    let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
-                    return Ok(());
-                }
-                // `wait_for_master` only requests an interactive fallback for
-                // an initial connection.
-                WaitOutcome::NeedsInteractive => unreachable!("recovery stays in batch mode"),
+            )
+        });
+        if retry_cause == RetryCause::Dropped {
+            if ui.is_plain() {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: link to {host} lost — reconnecting in the background; Ctrl-C stops",
+                );
             }
-            continue;
+            if let Some(action) = session_link.transport_lost() {
+                render_session_link_action(host, action);
+            }
         }
-        match reconnect.settle(outcome.status.code(), outcome.established) {
-            Verdict::CleanExit => return Ok(()),
-            Verdict::Fatal { code } => {
-                guard.reset_emulator();
-                bail!("{}", fatal_session_message(code, host, setup_hint))
+        match wait_for_master(
+            plan,
+            control_path,
+            dial_plan.as_ref(),
+            &policy,
+            outage,
+            &mut ui,
+            Some(&stop),
+        )? {
+            WaitOutcome::Connected(master) => ready_master = Some(master),
+            WaitOutcome::Interrupted => {
+                let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
+                return Ok(());
             }
-            Verdict::Retry => {
-                guard.reset_emulator();
-                let mut ui = OutageUi::auto(ConnectStage::Recovery, host);
-                let outage = outage.get_or_insert_with(|| {
-                    OutageState::new(
-                        ConnectStage::Recovery,
-                        host,
-                        internet_probe_for_wait(&ui),
-                        dial_plan.as_ref(),
-                    )
-                });
-                if ui.is_plain() {
-                    let _ = writeln!(
-                        std::io::stderr().lock(),
-                        "rimz: link to {host} lost — reconnecting in the background; Ctrl-C stops",
-                    );
-                }
-                if let Some(action) = session_link.transport_lost() {
-                    render_session_link_action(host, action);
-                }
-                match wait_for_master(
-                    plan,
-                    control_path,
-                    dial_plan.as_ref(),
-                    &policy,
-                    outage,
-                    &mut ui,
-                    Some(&stop),
-                )? {
-                    WaitOutcome::Connected(master) => ready_master = Some(master),
-                    WaitOutcome::Interrupted => {
-                        let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped",);
-                        return Ok(());
-                    }
-                    // `wait_for_master` only requests an interactive fallback
-                    // for an initial connection.
-                    WaitOutcome::NeedsInteractive => unreachable!("recovery stays in batch mode"),
-                }
-            }
+            // `wait_for_master` only requests an interactive fallback for an
+            // initial connection.
+            WaitOutcome::NeedsInteractive => unreachable!("recovery stays in batch mode"),
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RetryCause {
+    Zombie,
+    Dropped,
 }
 
 pub(super) fn fatal_session_message(code: i32, host: &str, setup_hint: &str) -> String {
@@ -399,54 +382,17 @@ pub(super) fn wait_for_plain_attempt(
     stop: Option<&AtomicBool>,
 ) -> PlainWaitOutcome {
     let started = Instant::now();
-    let interval = dial_interval_from_env();
-    let mut pacer = AttemptPacer::new(
-        *policy,
-        started,
-        false,
-        dial_plan.is_some() && interval.is_some(),
-    );
-    pacer.note_attempt_failed(started);
-    let mut next_dial = started;
-    let (dial_tx, dial_rx) = mpsc::channel::<DialResult>();
-    let mut server_pending = false;
-    let mut last_network_up = pacer.network_up();
+    let mut reachability = ReachabilityDriver::new(*policy, started, None, dial_plan, false);
+    reachability.note_attempt_failed(started);
     let ui = OutageUi::plain_lines(ConnectStage::Recovery, host);
-    let mut last_tun = None;
     loop {
         let now = Instant::now();
-        for result in dial_rx.try_iter() {
-            server_pending = false;
-            if result.tun.as_ref() != last_tun.as_ref()
-                && let Some(tun) = &result.tun
-            {
-                ui.report_server_tun(tun);
-            }
-            last_tun = result.tun;
-            pacer.note_server(result.reachable, now);
-        }
-        let network_up = pacer.network_up();
-        if network_up != last_network_up {
-            if network_up {
-                ui.report_network_restored();
-            } else {
-                ui.report_unreachable();
-            }
-            last_network_up = network_up;
-        }
+        reachability.poll(now).present(None, &ui);
         if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
             return PlainWaitOutcome::Interrupted;
         }
-        if interval.is_some_and(|_| now >= next_dial) {
-            if let Some(plan) = dial_plan
-                && !server_pending
-            {
-                spawn_dial(DialStage::Server, plan, DIAL_TIMEOUT, dial_tx.clone());
-                server_pending = true;
-            }
-            next_dial = now + interval.unwrap_or_default();
-        }
-        if pacer.may_attempt(now) {
+        reachability.schedule_probes(now);
+        if reachability.attempt_due(now) {
             return PlainWaitOutcome::AttemptNow;
         }
         sleep_retry_wait(PANEL_TICK, stop);
@@ -465,100 +411,47 @@ fn wait_for_master(
     let connect_stage = outage.connect_stage;
     let started = Instant::now();
     outage.panel.begin_wait();
-    let interval = dial_interval_from_env();
-    let mut pacer = AttemptPacer::new(
+    let mut reachability = ReachabilityDriver::new(
         *policy,
         started,
-        outage.internet_probe.is_some() && interval.is_some(),
-        dial_plan.is_some() && interval.is_some(),
+        outage.internet_probe.as_ref(),
+        dial_plan,
+        true,
     );
-    pacer.note_attempt_failed(started);
-    let mut next_dial = started;
-    let (dial_tx, dial_rx) = mpsc::channel::<DialResult>();
-    let mut internet_pending = false;
-    let mut server_pending = false;
-    let mut master: Option<MasterAttempt> = None;
-    let mut master_started = None;
-    let mut master_ready_release = None;
-    let mut next_control_check = started;
-    let mut last_network_up = pacer.network_up();
+    reachability.note_attempt_failed(started);
+    let mut master = MasterState::Idle;
     let mut last_reported_error = None;
-    let mut last_tun = None;
     let mut initial_attempt_due = connect_stage == ConnectStage::Initial;
     loop {
         let now = Instant::now();
-        for result in dial_rx.try_iter() {
-            match result.stage {
-                DialStage::Internet => {
-                    internet_pending = false;
-                    outage.panel.note_internet(result.reachable);
-                    pacer.note_internet(result.reachable, now);
-                }
-                DialStage::Server => {
-                    server_pending = false;
-                    if let Some(tun) = &result.tun {
-                        outage.panel.note_server_tun(tun);
-                        if last_tun.as_ref() != Some(tun) {
-                            ui.report_server_tun(tun);
-                        }
-                    } else {
-                        outage.panel.note_server(result.reachable);
-                    }
-                    last_tun = result.tun;
-                    pacer.note_server(result.reachable, now);
-                }
-            }
-        }
-        let network_up = pacer.network_up();
-        if network_up != last_network_up {
-            if network_up {
-                ui.report_network_restored();
-            } else {
-                ui.report_unreachable();
-            }
-            last_network_up = network_up;
-        }
+        reachability.poll(now).present(Some(&mut outage.panel), ui);
         if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
-            drop(master.take());
+            drop(std::mem::take(&mut master));
             ui.release()?;
             return Ok(WaitOutcome::Interrupted);
         }
+        reachability.schedule_probes(now);
 
-        if interval.is_some_and(|_| now >= next_dial) {
-            pacer.note_fingerprint(network_fingerprint(), now);
-            if let Some(probe) = &outage.internet_probe
-                && !internet_pending
-            {
-                spawn_internet_probe(probe, dial_tx.clone());
-                internet_pending = true;
-            }
-            if let Some(plan) = dial_plan
-                && !server_pending
-            {
-                spawn_dial(DialStage::Server, plan, DIAL_TIMEOUT, dial_tx.clone());
-                server_pending = true;
-            }
-            next_dial = now + interval.unwrap_or_default();
-        }
-
-        if let Some(attempt) = &mut master {
-            if let Some(status) = attempt.try_wait().context("polling SSH ControlMaster")? {
-                let stderr = master
-                    .take()
-                    .expect("master attempt exists")
-                    .finish_failed();
-                let summary =
-                    rimz::remote::ssh_error_summary(&stderr).or_else(|| Some(status.to_string()));
-                master_started = None;
-                master_ready_release = None;
-                let needs_interactive = connect_stage == ConnectStage::Initial
+        match master.advance(
+            now,
+            started.elapsed(),
+            plan,
+            control_path,
+            policy.master_deadline,
+            &outage.panel,
+        )? {
+            MasterTick::Pending(state) => master = state,
+            MasterTick::Failed(summary, may_need_interactive) => {
+                master = MasterState::Idle;
+                let needs_interactive = may_need_interactive
+                    && connect_stage == ConnectStage::Initial
                     && !summary
                         .as_deref()
                         .is_some_and(rimz::remote::transport_failure);
                 note_master_failure(
                     outage,
                     ui,
-                    &mut pacer,
+                    &mut reachability,
                     now,
                     summary,
                     &mut last_reported_error,
@@ -567,75 +460,40 @@ fn wait_for_master(
                     ui.release()?;
                     return Ok(WaitOutcome::NeedsInteractive);
                 }
-            } else if master_ready_release.is_none() && now >= next_control_check {
-                if control_check_spec(plan.target(), control_path)
-                    .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
-                    .is_ok()
-                {
-                    master_ready_release = Some(outage.panel.release_at(started.elapsed()));
-                }
-                next_control_check = now + CONTROL_MASTER_CHECK_INTERVAL;
+            }
+            MasterTick::Connected(guard) => {
+                ui.release()?;
+                ui.report_reattached();
+                return Ok(WaitOutcome::Connected(guard));
             }
         }
 
-        if master.is_some()
-            && master_ready_release.is_none()
-            && master_started.is_some_and(|started: Instant| {
-                now.saturating_duration_since(started) >= policy.master_deadline
-            })
-        {
-            drop(master.take());
-            master_started = None;
-            note_master_failure(
-                outage,
-                ui,
-                &mut pacer,
-                now,
-                Some(format!(
-                    "SSH connect timed out after {}s",
-                    policy.master_deadline.as_secs()
-                )),
-                &mut last_reported_error,
-            );
-        }
-
-        if master_ready_release.is_some_and(|release_at| started.elapsed() >= release_at) {
-            let master = master.take().expect("ready master exists").into_guard();
-            ui.release()?;
-            ui.report_reattached();
-            return Ok(WaitOutcome::Connected(master));
-        }
-
-        if master.is_none() && (initial_attempt_due || pacer.may_attempt(now)) {
+        if master.is_idle() && (initial_attempt_due || reachability.attempt_due(now)) {
             initial_attempt_due = false;
             if let Err(err) = prepare_control_path(control_path) {
-                let summary = Some(format!("preparing SSH control socket: {err}"));
-                outage.panel.note_ssh_error(summary.clone());
-                outage.note_next_attempt();
-                if summary != last_reported_error {
-                    ui.report_attempt_failed(summary.as_deref());
-                    last_reported_error = summary;
-                }
-                pacer.note_attempt_failed(now);
+                note_master_failure(
+                    outage,
+                    ui,
+                    &mut reachability,
+                    now,
+                    Some(format!("preparing SSH control socket: {err}")),
+                    &mut last_reported_error,
+                );
             } else {
                 outage.begin_attempt();
                 outage.panel.session_starting();
-                pacer.begin_attempt(now);
+                reachability.begin_attempt(now);
                 match MasterAttempt::spawn(plan.master(control_path), control_path.to_path_buf()) {
-                    Ok(attempt) => {
-                        master = Some(attempt);
-                        master_started = Some(now);
-                        next_control_check = now;
-                    }
+                    Ok(attempt) => master = MasterState::connecting(attempt, now),
                     Err(err) => {
-                        let summary = Some(format!("starting SSH: {err}"));
-                        outage.panel.note_ssh_error(summary.clone());
-                        outage.note_next_attempt();
-                        if summary != last_reported_error {
-                            ui.report_attempt_failed(summary.as_deref());
-                            last_reported_error = summary;
-                        }
-                        pacer.note_attempt_failed(now);
+                        note_master_failure(
+                            outage,
+                            ui,
+                            &mut reachability,
+                            now,
+                            Some(format!("starting SSH: {err}")),
+                            &mut last_reported_error,
+                        );
                     }
                 }
             }
@@ -647,10 +505,10 @@ fn wait_for_master(
             &mut outage.panel,
             wait_elapsed,
             outage_elapsed,
-            pacer.footer(now, master.is_some()),
+            reachability.footer(now, master.in_flight()),
         )? == UiEvent::Interrupted
         {
-            drop(master.take());
+            drop(std::mem::take(&mut master));
             ui.release()?;
             return Ok(WaitOutcome::Interrupted);
         }
@@ -661,7 +519,7 @@ fn wait_for_master(
 fn note_master_failure(
     outage: &mut OutageState,
     ui: &OutageUi,
-    pacer: &mut AttemptPacer,
+    reachability: &mut ReachabilityDriver,
     now: Instant,
     summary: Option<String>,
     last_reported_error: &mut Option<String>,
@@ -672,7 +530,7 @@ fn note_master_failure(
         ui.report_attempt_failed(summary.as_deref());
         *last_reported_error = summary;
     }
-    pacer.note_attempt_failed(now);
+    reachability.note_attempt_failed(now);
 }
 
 fn network_fingerprint() -> Option<IpAddr> {
@@ -746,6 +604,165 @@ struct DialResult {
     tun: Option<String>,
 }
 
+struct ReachabilityDriver {
+    pacer: AttemptPacer,
+    interval: Option<Duration>,
+    next_dial: Instant,
+    result_tx: mpsc::Sender<DialResult>,
+    result_rx: mpsc::Receiver<DialResult>,
+    internet_pending: bool,
+    server_pending: bool,
+    internet_probe: Option<InternetProbe>,
+    server_plan: Option<DialPlan>,
+    last_network_up: bool,
+    last_tun: Option<String>,
+    sample_fingerprint: bool,
+}
+
+impl ReachabilityDriver {
+    fn new(
+        policy: rimz::remote::ReconnectPolicy,
+        started: Instant,
+        internet_probe: Option<&InternetProbe>,
+        server_plan: Option<&DialPlan>,
+        sample_fingerprint: bool,
+    ) -> Self {
+        let interval = dial_interval_from_env();
+        let pacer = AttemptPacer::new(
+            policy,
+            started,
+            internet_probe.is_some() && interval.is_some(),
+            server_plan.is_some() && interval.is_some(),
+        );
+        let last_network_up = pacer.network_up();
+        let (result_tx, result_rx) = mpsc::channel();
+        Self {
+            pacer,
+            interval,
+            next_dial: started,
+            result_tx,
+            result_rx,
+            internet_pending: false,
+            server_pending: false,
+            internet_probe: internet_probe.cloned(),
+            server_plan: server_plan.cloned(),
+            last_network_up,
+            last_tun: None,
+            sample_fingerprint,
+        }
+    }
+
+    fn poll(&mut self, now: Instant) -> ReachabilityTick {
+        let mut tick = ReachabilityTick::default();
+        for result in self.result_rx.try_iter() {
+            match result.stage {
+                DialStage::Internet => {
+                    self.internet_pending = false;
+                    self.pacer.note_internet(result.reachable, now);
+                    tick.internet = Some(result.reachable);
+                }
+                DialStage::Server => {
+                    self.server_pending = false;
+                    if result.tun.as_ref() != self.last_tun.as_ref() {
+                        tick.tun_edge = result.tun.clone();
+                    }
+                    self.last_tun = result.tun.clone();
+                    self.pacer.note_server(result.reachable, now);
+                    tick.server = Some((result.reachable, result.tun));
+                }
+            }
+        }
+        let network_up = self.pacer.network_up();
+        if network_up != self.last_network_up {
+            tick.network_edge = Some(network_up);
+            self.last_network_up = network_up;
+        }
+        tick
+    }
+
+    fn schedule_probes(&mut self, now: Instant) {
+        let Some(interval) = self.interval.filter(|_| now >= self.next_dial) else {
+            return;
+        };
+        if self.sample_fingerprint {
+            self.pacer.note_fingerprint(network_fingerprint(), now);
+        }
+        if let Some(probe) = &self.internet_probe
+            && !self.internet_pending
+        {
+            spawn_internet_probe(probe, self.result_tx.clone());
+            self.internet_pending = true;
+        }
+        if let Some(plan) = &self.server_plan
+            && !self.server_pending
+        {
+            spawn_dial(
+                DialStage::Server,
+                plan,
+                DIAL_TIMEOUT,
+                self.result_tx.clone(),
+            );
+            self.server_pending = true;
+        }
+        self.next_dial = now + interval;
+    }
+
+    fn begin_attempt(&mut self, now: Instant) {
+        self.pacer.begin_attempt(now);
+    }
+
+    fn note_attempt_failed(&mut self, now: Instant) {
+        self.pacer.note_attempt_failed(now);
+    }
+
+    fn attempt_due(&self, now: Instant) -> bool {
+        self.pacer.may_attempt(now)
+    }
+
+    fn footer(
+        &self,
+        now: Instant,
+        attempt_in_flight: bool,
+    ) -> rimz::remote::reachability::FooterPhase {
+        self.pacer.footer(now, attempt_in_flight)
+    }
+}
+
+#[derive(Default)]
+struct ReachabilityTick {
+    internet: Option<bool>,
+    server: Option<(bool, Option<String>)>,
+    network_edge: Option<bool>,
+    tun_edge: Option<String>,
+}
+
+impl ReachabilityTick {
+    fn present(self, panel: Option<&mut RecoveryPanel>, ui: &OutageUi) {
+        if let Some(panel) = panel {
+            if let Some(reachable) = self.internet {
+                panel.note_internet(reachable);
+            }
+            if let Some((reachable, tun)) = &self.server {
+                if let Some(tun) = tun {
+                    panel.note_server_tun(tun);
+                } else {
+                    panel.note_server(*reachable);
+                }
+            }
+        }
+        if let Some(tun) = &self.tun_edge {
+            ui.report_server_tun(tun);
+        }
+        if let Some(network_up) = self.network_edge {
+            if network_up {
+                ui.report_network_restored();
+            } else {
+                ui.report_unreachable();
+            }
+        }
+    }
+}
+
 fn spawn_dial(
     stage: DialStage,
     plan: &DialPlan,
@@ -791,6 +808,124 @@ struct MasterAttempt {
     remove_control_path_on_drop: bool,
 }
 
+#[derive(Default)]
+enum MasterState {
+    #[default]
+    Idle,
+    Connecting {
+        attempt: MasterAttempt,
+        started: Instant,
+        next_control_check: Instant,
+    },
+    Ready {
+        attempt: MasterAttempt,
+        release_at: Duration,
+    },
+}
+
+impl MasterState {
+    fn connecting(attempt: MasterAttempt, now: Instant) -> Self {
+        Self::Connecting {
+            attempt,
+            started: now,
+            next_control_check: now,
+        }
+    }
+
+    fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+
+    fn in_flight(&self) -> bool {
+        !self.is_idle()
+    }
+
+    fn advance(
+        self,
+        now: Instant,
+        wait_elapsed: Duration,
+        plan: &SshAttachPlan,
+        control_path: &Path,
+        deadline: Duration,
+        panel: &RecoveryPanel,
+    ) -> Result<MasterTick> {
+        match self {
+            Self::Idle => Ok(MasterTick::Pending(Self::Idle)),
+            Self::Connecting {
+                mut attempt,
+                started,
+                mut next_control_check,
+            } => {
+                if let Some(status) = attempt.try_wait().context("polling SSH ControlMaster")? {
+                    return Ok(MasterTick::Failed(
+                        failed_master_summary(attempt, status),
+                        true,
+                    ));
+                }
+                if now >= next_control_check {
+                    if control_check_spec(plan.target(), control_path)
+                        .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
+                        .is_ok()
+                    {
+                        return Ok(MasterTick::Pending(Self::Ready {
+                            attempt,
+                            release_at: panel.release_at(wait_elapsed),
+                        }));
+                    }
+                    next_control_check = now + CONTROL_MASTER_CHECK_INTERVAL;
+                }
+                if now.saturating_duration_since(started) >= deadline {
+                    drop(attempt);
+                    return Ok(MasterTick::Failed(
+                        Some(format!(
+                            "SSH connect timed out after {}s",
+                            deadline.as_secs()
+                        )),
+                        false,
+                    ));
+                }
+                Ok(MasterTick::Pending(Self::Connecting {
+                    attempt,
+                    started,
+                    next_control_check,
+                }))
+            }
+            Self::Ready {
+                mut attempt,
+                release_at,
+            } => {
+                if let Some(status) = attempt.try_wait().context("polling SSH ControlMaster")? {
+                    return Ok(MasterTick::Failed(
+                        failed_master_summary(attempt, status),
+                        true,
+                    ));
+                }
+                if wait_elapsed >= release_at {
+                    return Ok(MasterTick::Connected(attempt.into_guard()));
+                }
+                Ok(MasterTick::Pending(Self::Ready {
+                    attempt,
+                    release_at,
+                }))
+            }
+        }
+    }
+}
+
+enum MasterTick {
+    Pending(MasterState),
+    Failed(Option<String>, bool),
+    Connected(MasterGuard),
+}
+
+fn failed_master_summary(
+    attempt: MasterAttempt,
+    status: std::process::ExitStatus,
+) -> Option<String> {
+    let stderr = attempt.finish_failed();
+    rimz::remote::ssh_error_summary(&stderr).or_else(|| Some(status.to_string()))
+}
+
 impl MasterAttempt {
     fn spawn(spec: rimz::mux::CommandSpec, control_path: PathBuf) -> std::io::Result<Self> {
         let mut child = spec
@@ -815,7 +950,7 @@ impl MasterAttempt {
     }
 
     fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
-        self.child.as_mut().expect("master child exists").try_wait()
+        self.child.as_mut().map_or(Ok(None), Child::try_wait)
     }
 
     fn finish_failed(mut self) -> String {
