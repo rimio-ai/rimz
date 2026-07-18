@@ -78,6 +78,7 @@ fn mark_unread_rows(snapshot: &mut SidebarSnapshot, ids: &[&str]) {
 
 fn opened_rows(snapshot: &mut SidebarSnapshot, ids: &[&str]) -> Vec<OpenedUnread> {
     let mut opened = Vec::new();
+    let viewed = snapshot.viewed_panes.clone();
     for row in snapshot
         .worktree_groups
         .iter_mut()
@@ -85,11 +86,12 @@ fn opened_rows(snapshot: &mut SidebarSnapshot, ids: &[&str]) -> Vec<OpenedUnread
     {
         if ids.iter().any(|id| *id == row.id) {
             row.unread = true;
-            opened.push(opened_unread(
-                row,
-                row.last_activity.as_millisecond(),
-                false,
-            ));
+            let mut unread = opened_unread(row, row.last_activity.as_millisecond(), false);
+            unread.focused = unread
+                .pane_id
+                .as_ref()
+                .is_some_and(|pane| viewed.contains(pane));
+            opened.push(unread);
         }
     }
     opened
@@ -115,7 +117,7 @@ fn link_snapshot(tier: LinkTier, freshness: SidebarLinkFreshness) -> SidebarSnap
     snapshot
 }
 
-fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
+fn agent(id: &str, status: AgentStatus, _focused: bool) -> AgentState {
     let now = Timestamp::now();
     AgentState {
         status,
@@ -126,7 +128,6 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
             view_kind: None,
             view_name: None,
             title: None,
-            is_focused: focused,
             is_floating: false,
             command: Some("claude".to_owned()),
             foreground_cmdline: None,
@@ -265,14 +266,13 @@ fn same_agent_is_debounced_within_window() {
 #[test]
 fn focused_agent_is_suppressed() {
     let mut state = NotificationState::default();
+    let focused = agent("a1", AgentStatus::Waiting, true);
+    let pane_id = focused.pane.as_ref().expect("agent pane").pane_id.clone();
+    let mut snapshot = snapshot(vec![focused]);
+    snapshot.focused_pane = Some(pane_id.clone());
+    snapshot.viewed_panes = vec![pane_id];
 
-    let out = evaluate_opened(
-        &mut state,
-        snapshot(vec![agent("a1", AgentStatus::Waiting, true)]),
-        &["a1"],
-        &prefs(),
-        100,
-    );
+    let out = evaluate_opened(&mut state, snapshot, &["a1"], &prefs(), 100);
     assert!(out.is_empty());
 }
 

@@ -5,7 +5,7 @@ use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::pane::PaneRef;
 use crate::store::snapshot::testkit::agent;
 
-use HookPaneRecoveryMethod::{ClientFocus, OccupiedSoleCandidate, SingleCandidate, TabFocus};
+use HookPaneRecoveryMethod::{ClientFocus, OccupiedSoleCandidate, SingleCandidate};
 use HookPaneRecoveryRejectReason::*;
 
 struct Case {
@@ -23,7 +23,7 @@ fn id(raw: &str) -> PaneId {
     PaneId::from_parts(MuxName::Zellij, raw)
 }
 
-fn pane(raw: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
+fn pane(raw: &str, command: &str, cwd: &str, _focused: bool) -> PaneRef {
     PaneRef {
         pane_id: id(raw),
         session_name: "rimz-test".to_owned(),
@@ -31,7 +31,6 @@ fn pane(raw: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
         view_kind: None,
         view_name: None,
         title: None,
-        is_focused: focused,
         is_floating: false,
         command: Some(command.to_owned()),
         foreground_cmdline: None,
@@ -120,7 +119,7 @@ fn command_reject(command: &str) -> HookPaneRecoveryRejectReason {
 }
 
 #[test]
-fn focused_pane_recovery_selects_or_rejects_by_focus_and_stamp_state() {
+fn hook_recovery_uses_client_focus_singletons_and_occupied_sole_candidates() {
     for case in focus_recovery_cases() {
         let prior_agents = case
             .prior_stamps
@@ -221,17 +220,17 @@ fn focus_recovery_cases() -> Vec<Case> {
             reject_reasons: vec![(0, Ambiguous { n: 2 }), (1, Ambiguous { n: 2 })],
         },
         Case {
-            name: "tab focus fallback",
+            name: "plural candidates without client focus stay ambiguous",
             panes: vec![
                 candidate("terminal_4", false),
                 candidate("terminal_30", true),
             ],
             client_focus: None,
             prior_stamps: vec![],
-            expected_pane: Some("terminal_30"),
+            expected_pane: None,
             candidate_count: 2,
-            method: TabFocus,
-            reject_reasons: vec![(0, NotTabFocused)],
+            method: HookPaneRecoveryMethod::None,
+            reject_reasons: vec![(0, Ambiguous { n: 2 }), (1, Ambiguous { n: 2 })],
         },
         Case {
             name: "codex can share occupied pane when no free candidate",
@@ -274,7 +273,7 @@ fn focus_recovery_cases() -> Vec<Case> {
             prior_stamps: vec![("terminal_42", epoch)],
             expected_pane: Some("terminal_42"),
             candidate_count: 1,
-            method: SingleCandidate,
+            method: OccupiedSoleCandidate,
             reject_reasons: vec![
                 (0, command_reject("claude")),
                 (1, cwd_reject("/repo/other")),
@@ -785,7 +784,6 @@ fn recovery_diagnostic_wire_names_stay_compatible() {
             "occupied_sole_candidate",
         ),
         (HookPaneRecoveryMethod::ClientFocus, "client_focus"),
-        (HookPaneRecoveryMethod::TabFocus, "tab_focus"),
     ] {
         assert_eq!(serde_json::to_value(method).unwrap(), expected);
     }

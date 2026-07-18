@@ -14,6 +14,8 @@ pub(super) fn sidebar_fixture_snapshot(
         panes_observed_at_ms: None,
         focused_pane: None,
         viewed_panes: Vec::new(),
+        client_views: Vec::new(),
+        pane_session_name: None,
         presence: None,
         truth_degraded: None,
         now,
@@ -2023,6 +2025,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarSubAg
 }
 
 fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::PaneRef {
+    let _ = focused;
     rimz::pane::PaneRef {
         pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, raw),
         session_name: "rimz-fixture".to_owned(),
@@ -2030,7 +2033,6 @@ fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::P
         view_kind: Some(rimz::ViewKind::Tab),
         view_name: Some("main".to_owned()),
         title: None,
-        is_focused: focused,
         is_floating: false,
         command: Some(command.to_owned()),
         foreground_cmdline: None,

@@ -299,7 +299,6 @@ mod tests {
             view_kind: None,
             view_name: None,
             title: None,
-            is_focused: false,
             is_floating: false,
             command: Some(command.to_owned()),
             foreground_cmdline: None,

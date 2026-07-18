@@ -384,6 +384,11 @@ impl RuntimePaths {
         self.root.join("focus-anchor.json")
     }
 
+    /// Serializes nonce-gated focus action intent transitions.
+    pub fn focus_anchor_lock(&self) -> PathBuf {
+        self.root.join("focus-anchor.lock")
+    }
+
     /// The per-session Codex app-server broker socket. The broker
     /// ([`crate::agents::codex::broker`]) binds it; the enrichment client
     /// ([`crate::agents::codex::app_server`]) connects to it. Both derive it from

@@ -148,6 +148,13 @@ enum SidebarSubcmd {
         #[arg(long)]
         toggle: bool,
     },
+    /// Append renderer-owned focus-repair evidence. Hidden — detached helper
+    /// infrastructure, not a human verb.
+    #[command(hide = true)]
+    RecordFocusAssist {
+        #[arg(long)]
+        record_json: String,
+    },
     /// Exercise sidebar notification delivery. Hidden — test/API machinery.
     #[command(hide = true)]
     NotifyTest {
@@ -177,6 +184,10 @@ struct WakeArgs {
     session_name: Option<String>,
     #[arg(long)]
     pane_id: Option<String>,
+    #[arg(long, hide = true)]
+    focus_generation: Option<u64>,
+    #[arg(long, hide = true)]
+    focus_clients: Option<String>,
     #[arg(long = "command-arg")]
     command_args: Vec<String>,
     #[arg(long = "focused-pane-id")]
@@ -237,6 +248,43 @@ impl From<WakeReason> for ZellijWakeReason {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ZellijFocusClientWire {
+    client_id: u32,
+    pane_id: ZellijFocusPaneWire,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+enum ZellijFocusPaneWire {
+    Terminal(u64),
+    Plugin(u64),
+}
+
+fn parse_zellij_focus_clients(raw: &str) -> Vec<rimz::mux::ClientPaneView> {
+    let Ok(mut clients) = serde_json::from_str::<Vec<ZellijFocusClientWire>>(raw) else {
+        tracing::debug!("presence poke: focus client evidence parse failed");
+        return Vec::new();
+    };
+    let mut projected = clients
+        .drain(..)
+        .map(|client| rimz::mux::ClientPaneView {
+            client_id: rimz::mux::MuxClientId::Zellij(client.client_id),
+            pane_id: match client.pane_id {
+                ZellijFocusPaneWire::Terminal(id) => {
+                    PaneId::from_parts(MuxName::Zellij, format!("terminal_{id}"))
+                }
+                ZellijFocusPaneWire::Plugin(id) => {
+                    PaneId::from_parts(MuxName::Zellij, format!("plugin_{id}"))
+                }
+            },
+        })
+        .collect::<Vec<_>>();
+    projected.sort();
+    projected.dedup();
+    projected
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum SidebarFixtureState {
     Empty,
@@ -263,6 +311,7 @@ impl SidebarArgs {
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
             SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
             SidebarSubcmd::Focus { .. } => "sidebar focus",
+            SidebarSubcmd::RecordFocusAssist { .. } => "sidebar record-focus-assist",
             SidebarSubcmd::NotifyTest { .. } => "sidebar notify-test",
         }
     }
@@ -322,6 +371,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 reason,
                 session_name,
                 pane_id,
+                focus_generation,
+                focus_clients,
                 command_args,
                 focused_pane_ids,
                 unfocused_pane_ids,
@@ -345,6 +396,11 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     reason: reason.into(),
                     session_name,
                     pane_id: pane_id.map(|raw| PaneId::from_parts(MuxName::Zellij, raw)),
+                    focus_generation,
+                    focus_clients: focus_clients
+                        .as_deref()
+                        .map(parse_zellij_focus_clients)
+                        .unwrap_or_default(),
                     command: {
                         let command = command_args
                             .iter()
@@ -393,6 +449,12 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             session_name,
             toggle,
         } => focus(globals, session_name, toggle),
+        SidebarSubcmd::RecordFocusAssist { record_json } => {
+            let record = rimz::harness::assist_log::parse_focus_repair(&record_json)
+                .context("parsing focus-repair assist record")?;
+            rimz::harness::assist_log::append(&record);
+            Ok(())
+        }
         SidebarSubcmd::NotifyTest {
             target,
             worktree,
@@ -1015,17 +1077,26 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
             session_name: Some(session_name.clone()),
             ..Default::default()
         })
-        .map(|view| view.viewed_panes)
-        .unwrap_or_default()
-        .into_iter()
-        .next()
-        .or_else(|| {
-            listing
-                .panes
-                .iter()
-                .find(|pane| pane.is_focused)
-                .map(|pane| pane.pane_id.clone())
+        .map(|view| {
+            let mut viewed = view.viewed_panes;
+            viewed.sort_by_key(ToString::to_string);
+            viewed.dedup();
+            viewed
         });
+    let focused_pane = match focused_pane {
+        Ok(viewed) => match viewed.as_slice() {
+            [pane] => Some(pane.clone()),
+            _ if toggle => bail!(
+                "sidebar toggle requires one attached client view; found {} distinct views",
+                viewed.len()
+            ),
+            _ => None,
+        },
+        Err(err) if toggle => {
+            return Err(err).context("sampling attached client focus for sidebar toggle");
+        }
+        Err(_) => None,
+    };
     let focused_tab = focused_pane.as_ref().and_then(|pane| {
         listing
             .panes
@@ -1045,13 +1116,7 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
     else {
         bail!("session {session_name} has no sidebar pane to focus");
     };
-    // Zellij's `list-clients` keeps the client terminal id after an external
-    // `focus-pane-id`, while `list-panes` marks the sidebar focused.
-    let on_sidebar = focused_pane.as_ref() == Some(&sidebar)
-        || listing
-            .panes
-            .iter()
-            .any(|pane| pane.pane_id == sidebar && pane.is_focused);
+    let on_sidebar = focused_pane.as_ref() == Some(&sidebar);
     let target = if toggle && on_sidebar {
         let sidebar_tab = listing
             .panes
@@ -1070,9 +1135,18 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
         Some(sidebar)
     };
     if let Some(target) = target {
-        backend
-            .focus_pane(&target, Some(&session_name))
-            .context("focusing pane")?;
+        let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
+            .ok_or_else(|| anyhow::anyhow!("session {session_name} is not a managed RimZ room"))?;
+        let runtime = RuntimePaths::for_workspace(workspace.workspace_id)?;
+        rimz::sidebar::focus_anchor::execute_action(
+            backend.as_ref(),
+            &runtime,
+            &session_name,
+            target,
+            rimz::sidebar::focus_anchor::FocusOrigin::User,
+            None,
+        )
+        .context("focusing pane")?;
     }
     Ok(())
 }

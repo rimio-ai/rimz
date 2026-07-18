@@ -4,7 +4,6 @@ fn pane(id: u32) -> PaneFields {
     PaneFields {
         id,
         is_plugin: false,
-        is_focused: false,
         is_suppressed: false,
         is_floating: false,
         exited: false,
@@ -59,11 +58,6 @@ fn plugin_pane(id: u32) -> PaneFields {
     }
 }
 
-fn focused(mut pane: PaneFields) -> PaneFields {
-    pane.is_focused = true;
-    pane
-}
-
 // --- manifest_hash: the projected stable subset folds; the rest does not ---
 
 #[test]
@@ -78,7 +72,6 @@ fn every_stable_field_changes_the_hash() {
     type Mutate = fn(&mut PaneFields);
     let base = manifest_hash(&tabs(vec![pane(1)]));
     let cases: &[(&str, Mutate)] = &[
-        ("focus", |p| p.is_focused = true),
         ("terminal_command", |p| {
             p.terminal_command = Some("claude".to_owned())
         }),
@@ -151,14 +144,6 @@ fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
         "title-only PaneUpdate events must stay on the cheap path",
     );
 
-    let mut focused = pane(1);
-    focused.is_focused = true;
-    assert_ne!(
-        raw_hash_from_tabs(&base),
-        raw_hash_from_tabs(&tabs(vec![focused])),
-        "focus changes are stable pane state",
-    );
-
     let mut resized = pane(1);
     resized.pane_columns = Some(120);
     assert_ne!(
@@ -169,104 +154,17 @@ fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
 }
 
 #[test]
-fn published_topology_payload_carries_resolved_focus() {
-    let manifest = tabs(vec![pane(1), focused(pane(2))]);
-    let resolved = resolved_focused_pane_id(&manifest, Some(0), None);
-    let payload = published_topology_payload("rimz-test", 42, None, resolved, None, &manifest)
+fn published_topology_payload_carries_session_focus_without_pane_marks() {
+    let manifest = tabs(vec![pane(1), pane(2)]);
+    let payload = published_topology_payload("rimz-test", 42, None, Some(2), None, &manifest)
         .expect("topology payload publishes");
 
     assert_eq!(payload.focused_pane, Some(2));
-}
-
-#[test]
-fn manifest_focused_tiled_ignores_floating_focus() {
-    let mut floating = focused(pane(2));
-    floating.is_floating = true;
-    let manifest = tabs(vec![pane(1), floating]);
-
-    assert_eq!(manifest_focused_tiled(&manifest, Some(0)), None);
-}
-
-#[test]
-fn focus_tiled_pane_clears_siblings_in_the_focused_pane_tab() {
-    let mut manifest = tabs_by_index(vec![
-        (0, vec![focused(pane_in_tab(1, 0))]),
-        (
-            1,
-            vec![focused(pane_in_tab(11, 1)), focused(pane_in_tab(12, 1))],
-        ),
-    ]);
-
-    focus_tiled_pane(&mut manifest, 12);
-
-    assert_eq!(
-        manifest[&0]
-            .iter()
-            .filter(|pane| pane.is_focused)
-            .map(|pane| pane.id)
-            .collect::<Vec<_>>(),
-        vec![1],
-        "per-tab focus memory outside the corrected tab stays intact",
-    );
-    assert_eq!(
-        manifest[&1]
-            .iter()
-            .filter(|pane| pane.is_focused)
-            .map(|pane| pane.id)
-            .collect::<Vec<_>>(),
-        vec![12],
-    );
-}
-
-#[test]
-fn repair_contested_tab_focus_keeps_client_viewed_mark() {
-    let mut manifest = tabs(vec![focused(pane(1)), focused(pane(2)), focused(pane(3))]);
-
-    repair_contested_tab_focus(&mut manifest, &[2], &BTreeMap::new());
-
-    assert_eq!(focused_ids(&manifest, 0), vec![2]);
-}
-
-#[test]
-fn repair_contested_tab_focus_keeps_prior_mark_when_no_client_matches() {
-    let mut manifest = tabs(vec![focused(pane(1)), focused(pane(2))]);
-    let prior = BTreeMap::from([(0, 2)]);
-
-    repair_contested_tab_focus(&mut manifest, &[99], &prior);
-
-    assert_eq!(focused_ids(&manifest, 0), vec![2]);
-}
-
-#[test]
-fn repair_contested_tab_focus_falls_back_to_lowest_id_deterministically() {
-    let mut manifest = tabs(vec![focused(pane(3)), focused(pane(1)), focused(pane(2))]);
-
-    repair_contested_tab_focus(&mut manifest, &[], &BTreeMap::new());
-
-    assert_eq!(focused_ids(&manifest, 0), vec![1]);
-}
-
-#[test]
-fn repair_contested_tab_focus_leaves_floating_and_clean_tabs_alone() {
-    let mut floating = focused(pane(9));
-    floating.is_floating = true;
-    let mut manifest = tabs_by_index(vec![
-        (0, vec![focused(pane_in_tab(1, 0)), floating]),
-        (1, vec![focused(pane_in_tab(11, 1))]),
-    ]);
-
-    repair_contested_tab_focus(&mut manifest, &[], &BTreeMap::new());
-
-    assert_eq!(focused_ids(&manifest, 0), vec![1, 9]);
-    assert_eq!(focused_ids(&manifest, 1), vec![11]);
-}
-
-fn focused_ids(tabs: &BTreeMap<usize, Vec<PaneFields>>, tab: usize) -> Vec<u32> {
-    tabs[&tab]
-        .iter()
-        .filter(|pane| pane.is_focused)
-        .map(|pane| pane.id)
-        .collect()
+    let json = serde_json::to_value(payload).expect("topology serializes");
+    assert!(json["panes"].as_array().unwrap().iter().all(|pane| {
+        pane.as_object()
+            .is_some_and(|pane| !pane.contains_key("is_focused"))
+    }));
 }
 
 #[test]
@@ -418,146 +316,6 @@ fn pane_fields_deserialize_legacy_payload_without_pid() {
     assert_eq!(decoded.pane_pid, None);
 }
 
-// --- focus_shortcut: focus-only moves take the optimistic CLI patch ---
-
-#[test]
-fn focus_shortcut_patches_card_to_card_moves() {
-    let previous = tabs(vec![focused(pane(1)), pane(2)]);
-    let next = tabs(vec![pane(1), focused(pane(2))]);
-
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &next),
-        Some(vec![
-            FocusPatch {
-                id: 1,
-                is_focused: false,
-            },
-            FocusPatch {
-                id: 2,
-                is_focused: true,
-            },
-        ])
-    );
-}
-
-#[test]
-fn focus_shortcut_patches_focus_onto_the_sidebar() {
-    let previous = tabs(vec![focused(pane(1)), sidebar_pane(2)]);
-    let next = tabs(vec![pane(1), focused(sidebar_pane(2))]);
-
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &next),
-        Some(vec![
-            FocusPatch {
-                id: 1,
-                is_focused: false,
-            },
-            FocusPatch {
-                id: 2,
-                is_focused: true,
-            },
-        ])
-    );
-}
-
-#[test]
-fn focus_shortcut_rejects_non_focus_changes() {
-    let previous = tabs(vec![pane(1)]);
-
-    let mut command_changed = pane(1);
-    command_changed.terminal_command = Some("codex".to_owned());
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![command_changed])),
-        None,
-    );
-
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![pane(1), pane(2)])),
-        None,
-        "an opened pane is a topology change, not a focus-only patch",
-    );
-
-    let renamed = PaneFields {
-        title: "new title".to_owned(),
-        ..pane(1)
-    };
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![renamed])),
-        None,
-        "a title-only change is not a focus change",
-    );
-
-    let foreground_changed = PaneFields {
-        pane_command: Some("codex".to_owned()),
-        ..pane(1)
-    };
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![foreground_changed])),
-        None,
-        "a foreground change is not a focus-only patch",
-    );
-
-    let cwd_changed = PaneFields {
-        pane_cwd: Some("/repo/main".to_owned()),
-        ..pane(1)
-    };
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![cwd_changed])),
-        None,
-        "a cwd change is not a focus-only patch",
-    );
-
-    let previous_focus = tabs(vec![focused(pane(1)), pane(2)]);
-    let pid_changed = PaneFields {
-        pane_pid: Some(202),
-        ..focused(pane(2))
-    };
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous_focus, &tabs(vec![pane(1), pid_changed]),),
-        None,
-        "a learned pid is not a focus-only patch",
-    );
-
-    let floating = PaneFields {
-        is_floating: true,
-        ..pane(1)
-    };
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![floating])),
-        None,
-        "a tiled/floating change is a topology change, not a focus-only patch",
-    );
-}
-
-#[test]
-fn focus_shortcut_survives_a_partial_manifest_merge() {
-    let previous = tabs_by_index(vec![
-        (0, vec![focused(pane_in_tab(10, 0)), pane_in_tab(11, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-    let partial = tabs_by_index(vec![(
-        0,
-        vec![pane_in_tab(10, 0), focused(pane_in_tab(11, 0))],
-    )]);
-
-    let merged = merged_room(&previous, &partial);
-
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &merged),
-        Some(vec![
-            FocusPatch {
-                id: 10,
-                is_focused: false,
-            },
-            FocusPatch {
-                id: 11,
-                is_focused: true,
-            },
-        ]),
-        "a focus-only partial still patches after the omitted tab is merged back",
-    );
-}
-
 // --- opened_card_panes: which manifest panes earn a card-create poke ---
 
 #[test]
@@ -606,13 +364,13 @@ fn opened_card_panes_over_a_merged_partial_manifest() {
         (1, vec![pane_in_tab(20, 1)]),
     ]);
 
-    // A partial re-sending only tab 0 (here a focus flip) opens nothing: the
-    // omitted tab 1 is retained, not treated as closed-then-reopened.
-    let focus_only = merged_room(
+    // A partial re-sending only tab 0 opens nothing: the omitted tab 1 is
+    // retained, not treated as closed-then-reopened.
+    let partial = merged_room(
         &previous,
-        &tabs_by_index(vec![(0, vec![focused(pane_in_tab(10, 0))])]),
+        &tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]),
     );
-    assert!(opened_card_panes(&previous, &focus_only).is_empty());
+    assert!(opened_card_panes(&previous, &partial).is_empty());
 
     // A genuinely new pane in the carried tab is the one open reported.
     let with_open = merged_room(
@@ -623,223 +381,6 @@ fn opened_card_panes_over_a_merged_partial_manifest() {
         opened_card_panes(&previous, &with_open),
         vec![pane_in_tab(11, 0)],
     );
-}
-
-// --- stranded_sidebar_pane: tab-switch classification reports the sidebar ---
-
-#[test]
-fn stranded_sidebar_pane_classifies_the_active_tab() {
-    // Sidebar holds focus while a live working sibling exists: stranded.
-    assert_eq!(
-        stranded_sidebar_pane(
-            &tabs(vec![focused(sidebar_pane(1)), pane(2)]),
-            Some(0),
-            Some(1)
-        ),
-        Some(1),
-    );
-    // Work holds focus: nothing to correct.
-    assert_eq!(
-        stranded_sidebar_pane(
-            &tabs(vec![sidebar_pane(1), focused(pane(2))]),
-            Some(0),
-            Some(2)
-        ),
-        None,
-    );
-    // Sidebar holds focus but the only sibling is held, not live work.
-    let mut held = pane(2);
-    held.is_held = true;
-    assert_eq!(
-        stranded_sidebar_pane(
-            &tabs(vec![focused(sidebar_pane(1)), held]),
-            Some(0),
-            Some(1)
-        ),
-        None,
-    );
-}
-
-// --- FocusCorrection: settle-gated tab-switch classification ---
-
-#[test]
-fn focus_correction_does_not_arm_on_load() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(None, Some(0), None, 10);
-
-    assert_eq!(correction.next_deadline(), None);
-    assert_eq!(
-        correction.resolve(&tabs(vec![pane(1)]), Some(0), None, true, 10),
-        CorrectionAction::Wait,
-    );
-}
-
-#[test]
-fn focus_correction_broadcasts_when_a_fresh_switch_lands_on_work() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
-
-    let manifest = tabs_by_index(vec![
-        (0, vec![pane(1)]),
-        (1, vec![sidebar_pane(10), focused(pane(11))]),
-    ]);
-
-    assert_eq!(
-        correction.resolve(&manifest, Some(1), None, true, 1_001),
-        CorrectionAction::FocusWorkingPane {
-            focused: 11,
-            unfocused: None,
-        },
-        "a fresh manifest from a tab switch can publish work focus before the settle deadline",
-    );
-    assert_eq!(correction.next_deadline(), None);
-}
-
-#[test]
-fn focus_correction_broadcasts_the_previous_focused_pane_on_work_switch() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), Some(2), 1_000);
-
-    let manifest = tabs_by_index(vec![
-        (0, vec![focused(pane(2))]),
-        (1, vec![sidebar_pane(10), focused(pane(11))]),
-    ]);
-
-    assert_eq!(
-        correction.resolve(&manifest, Some(1), None, true, 1_001),
-        CorrectionAction::FocusWorkingPane {
-            focused: 11,
-            unfocused: Some(2),
-        },
-    );
-}
-
-#[test]
-fn focus_correction_broadcasts_a_stranded_sidebar_at_the_deadline() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
-
-    let manifest = tabs_by_index(vec![
-        (0, vec![pane(1)]),
-        (1, vec![focused(sidebar_pane(10)), pane(11)]),
-    ]);
-
-    assert_eq!(
-        correction.resolve(
-            &manifest,
-            Some(1),
-            Some(10),
-            false,
-            1_000 + FOCUS_SETTLE_MS - 1
-        ),
-        CorrectionAction::Wait,
-    );
-    assert_eq!(
-        correction.resolve(&manifest, Some(1), Some(10), false, 1_000 + FOCUS_SETTLE_MS),
-        CorrectionAction::StrandedSidebar(10),
-    );
-    assert_eq!(correction.next_deadline(), None);
-}
-
-#[test]
-fn focus_correction_waits_out_the_window_on_a_fresh_sidebar_manifest() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
-
-    let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(10)), pane(11)])]);
-
-    assert_eq!(
-        correction.resolve(&manifest, Some(1), Some(10), true, 1_001),
-        CorrectionAction::Wait,
-        "a fresh manifest still showing sidebar focus may predate an explicit jump's focus mark",
-    );
-    assert_eq!(
-        correction.resolve(&manifest, Some(1), Some(10), false, 1_000 + FOCUS_SETTLE_MS),
-        CorrectionAction::StrandedSidebar(10),
-    );
-}
-
-#[test]
-fn focus_correction_retargets_to_the_latest_switch() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
-    correction.on_active_tab_change(Some(1), Some(2), None, 1_050);
-
-    assert_eq!(correction.next_deadline(), Some(1_050 + FOCUS_SETTLE_MS));
-
-    let manifest = tabs_by_index(vec![
-        (1, vec![focused(sidebar_pane(10)), pane(11)]),
-        (2, vec![focused(sidebar_pane(20)), pane(21)]),
-    ]);
-
-    assert_eq!(
-        correction.resolve(&manifest, Some(2), Some(20), false, 1_050 + FOCUS_SETTLE_MS),
-        CorrectionAction::StrandedSidebar(20),
-    );
-}
-
-#[test]
-fn focus_correction_clears_when_the_target_tab_closes() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
-
-    assert_eq!(
-        correction.resolve(
-            &tabs_by_index(vec![(0, vec![pane(1)])]),
-            Some(1),
-            None,
-            false,
-            1_250
-        ),
-        CorrectionAction::Clear,
-    );
-    assert_eq!(correction.next_deadline(), None);
-}
-
-#[test]
-fn focus_correction_does_not_broadcast_without_live_work() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
-
-    let mut held_work = pane(11);
-    held_work.is_held = true;
-    let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(10)), held_work])]);
-
-    assert_eq!(
-        correction.resolve(&manifest, Some(1), Some(10), false, 1_000 + FOCUS_SETTLE_MS),
-        CorrectionAction::Clear,
-    );
-}
-
-#[test]
-fn focus_correction_clears_when_target_focus_is_not_work() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
-
-    let mut floating = focused(pane(11));
-    floating.is_floating = true;
-    let manifest = tabs_by_index(vec![(1, vec![sidebar_pane(10), floating])]);
-
-    assert_eq!(
-        correction.resolve(&manifest, Some(1), None, true, 1_001),
-        CorrectionAction::Clear,
-    );
-    assert_eq!(correction.next_deadline(), None);
-}
-
-#[test]
-fn focus_correction_clears_on_a_tab_renumber_under_the_same_pane() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(2), Some(1), Some(42), 1_000);
-
-    let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(42)), pane(43)])]);
-
-    assert_eq!(
-        correction.resolve(&manifest, Some(1), None, true, 1_001),
-        CorrectionAction::Clear,
-        "the same focused pane under a new tab position is a renumber, not navigation",
-    );
-    assert_eq!(correction.next_deadline(), None);
 }
 
 // --- PokePolicy: immediate change, duplicate floor, settle, keepalive ---

@@ -49,8 +49,11 @@ pub struct PaneFrame {
     /// enrichment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed_panes: Vec<PaneId>,
-    /// Session-global latest focused pane resolved from client views, prior
-    /// frame state, and backend raw focus marks.
+    /// Full native attached-client observations retained for action fences.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_views: Vec<crate::mux::ClientPaneView>,
+    /// Session-global latest focused pane resolved from fresh client views or
+    /// a backend register derived from those views.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_pane: Option<PaneId>,
     /// Producer-sampled session presence. Absent on fallback paths that could
@@ -197,8 +200,6 @@ impl PaneFrame {
             view_kind: Some(tab.kind),
             view_name: tab.name.clone(),
             title: None,
-            is_focused: self.focused_pane.as_ref() == Some(&pane.pane_id)
-                || self.viewed_panes.contains(&pane.pane_id),
             is_floating: pane.is_floating,
             command: pane.current.command.clone(),
             foreground_cmdline: pane.current.foreground_cmdline.clone(),
@@ -332,8 +333,10 @@ pub struct FrameInputs<'a> {
     pub produced_at_ms: u64,
     pub observed_at_ms: u64,
     pub session_name: String,
-    pub authoritative_focus: Option<PaneId>,
+    pub session_focus: Option<PaneId>,
     pub client_viewed: &'a [PaneId],
+    pub client_views: &'a [crate::mux::ClientPaneView],
+    pub client_view_fresh: bool,
     pub prior: Option<&'a PaneFrame>,
 }
 
@@ -355,8 +358,10 @@ pub fn assemble_frame_with_diagnostics(
         produced_at_ms,
         observed_at_ms: produced_at_ms,
         session_name: session_name.into(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: &[],
+        client_views: &[],
+        client_view_fresh: false,
         prior: None,
     })
 }
@@ -367,14 +372,15 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         produced_at_ms,
         observed_at_ms,
         session_name,
-        authoritative_focus,
+        session_focus,
         client_viewed,
+        client_views,
+        client_view_fresh,
         prior,
     } = inputs;
     let topology_stamp_ms = prior.and_then(|frame| frame.topology_stamp_ms);
     let metrics_stamp_ms = prior.and_then(|frame| frame.metrics_stamp_ms);
     let mut tabs: BTreeMap<ViewId, TabFrame> = BTreeMap::new();
-    let mut raw_focused = Vec::new();
     let mut seen_panes = HashSet::new();
     let mut diagnostics = Vec::new();
     for pane in panes {
@@ -400,9 +406,6 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         });
         if tab.name.is_none() {
             tab.name = pane.view_name.clone();
-        }
-        if pane.is_focused {
-            raw_focused.push(pane.pane_id.clone());
         }
         let resumed_session_id = pane.resumed_session_id.or_else(|| {
             pane.command
@@ -436,10 +439,11 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
         .collect::<HashSet<_>>();
     let focused_pane = resolve_session_focus(
-        authoritative_focus.as_ref(),
+        session_focus.as_ref(),
         prior.and_then(|frame| frame.focused_pane.as_ref()),
         client_viewed,
-        &raw_focused,
+        client_views,
+        client_view_fresh,
         &live,
     );
     (
@@ -453,6 +457,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
             tabs: tabs.into_values().collect(),
             carried_panes: Vec::new(),
             viewed_panes: client_viewed.to_vec(),
+            client_views: client_views.to_vec(),
             focused_pane,
             presence: None,
         },
@@ -461,44 +466,48 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
 }
 
 pub(crate) fn resolve_session_focus(
-    authoritative: Option<&PaneId>,
+    session_focus: Option<&PaneId>,
     prior: Option<&PaneId>,
     client_viewed: &[PaneId],
-    raw_focused: &[PaneId],
+    client_views: &[crate::mux::ClientPaneView],
+    client_view_fresh: bool,
     live: &HashSet<PaneId>,
 ) -> Option<PaneId> {
-    if let Some(pane) = authoritative
+    if let Some(pane) = session_focus
         && live.contains(pane)
     {
         return Some(pane.clone());
     }
 
-    let live_viewed = client_viewed
-        .iter()
-        .filter(|pane| live.contains(*pane))
-        .collect::<Vec<_>>();
-    match live_viewed.as_slice() {
-        [pane] => return Some((*pane).clone()),
-        panes if panes.len() > 1 => {
-            if let Some(prior) = prior.filter(|prior| panes.contains(prior)) {
-                return Some(prior.clone());
+    if client_view_fresh {
+        if !client_views.is_empty() {
+            let live_viewed = client_views
+                .iter()
+                .map(|view| &view.pane_id)
+                .filter(|pane| pane.raw().starts_with("terminal_") && live.contains(*pane))
+                .cloned()
+                .collect::<HashSet<_>>();
+            if live_viewed.len() != 1
+                || client_views
+                    .iter()
+                    .any(|view| !live_viewed.contains(&view.pane_id))
+            {
+                return None;
             }
-            return panes.first().map(|pane| (*pane).clone());
+            return live_viewed.into_iter().next();
         }
-        _ => {}
+        let live_viewed = client_viewed
+            .iter()
+            .filter(|pane| live.contains(*pane))
+            .cloned()
+            .collect::<HashSet<_>>();
+        return match live_viewed.into_iter().collect::<Vec<_>>().as_slice() {
+            [pane] => Some(pane.clone()),
+            _ => None,
+        };
     }
 
-    if let Some(prior) = prior.filter(|prior| live.contains(prior)) {
-        return Some(prior.clone());
-    }
-    let live_raw = raw_focused
-        .iter()
-        .filter(|pane| live.contains(*pane))
-        .collect::<Vec<_>>();
-    match live_raw.as_slice() {
-        [pane] => Some((*pane).clone()),
-        _ => None,
-    }
+    prior.filter(|prior| live.contains(*prior)).cloned()
 }
 
 fn pane_is_sidebar_chrome(pane: &PaneState) -> bool {

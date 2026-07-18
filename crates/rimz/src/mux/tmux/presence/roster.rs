@@ -264,6 +264,8 @@ impl PresenceRoster {
         if self.pane_is_sidebar(&focused) && self.window_has_working_pane(&window) {
             return vec![SidebarEvent::FocusStranded {
                 pane_id: pane_id(&focused),
+                generation: 0,
+                clients: Vec::new(),
             }];
         }
         let unfocused = previous
@@ -479,6 +481,8 @@ mod tests {
             roster.apply(swin("$1", "@2"), false),
             vec![SidebarEvent::FocusStranded {
                 pane_id: pane_id("%9"),
+                generation: 0,
+                clients: Vec::new(),
             }]
         );
     }

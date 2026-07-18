@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::policy::{self, FocusPatch, PaneFields};
+use crate::policy::{self, PaneFields};
 
 /// The pipe message name the focus-sidebar keybind sends to this plugin. The
 /// chord (rimz-injected or a documented `config.kdl` bind) pipes this name, and
@@ -230,13 +230,16 @@ pub enum WakeRequest {
     },
     FocusStranded {
         pane_id: u32,
+        generation: u64,
+        clients: Vec<policy::ClientViewEntry>,
     },
     CommandChanged {
         pane_id: u32,
         args: Vec<String>,
     },
     FocusChanged {
-        patch: Vec<FocusPatch>,
+        previous: Option<u32>,
+        current: Option<u32>,
     },
 }
 
@@ -313,9 +316,17 @@ pub fn wake_argv(
             push_pane_id(&mut argv, pane_id);
             push_workspace(ctx, &mut argv);
         }
-        WakeRequest::FocusStranded { pane_id } => {
+        WakeRequest::FocusStranded {
+            pane_id,
+            generation,
+            clients,
+        } => {
             push_session(ctx, &mut argv)?;
             push_pane_id(&mut argv, pane_id);
+            argv.push("--focus-generation".to_owned());
+            argv.push(generation.to_string());
+            argv.push("--focus-clients".to_owned());
+            argv.push(serde_json::to_string(&clients).ok()?);
             push_workspace(ctx, &mut argv);
         }
         WakeRequest::CommandChanged { pane_id, args } => {
@@ -332,22 +343,19 @@ pub fn wake_argv(
                 return None;
             }
         }
-        WakeRequest::FocusChanged { patch } => {
-            if patch.is_empty() {
+        WakeRequest::FocusChanged { previous, current } => {
+            if previous == current {
                 return None;
             }
             push_session(ctx, &mut argv)?;
             push_workspace(ctx, &mut argv);
-            for pane in patch {
-                argv.push(
-                    if pane.is_focused {
-                        "--focused-pane-id"
-                    } else {
-                        "--unfocused-pane-id"
-                    }
-                    .to_owned(),
-                );
-                argv.push(format!("terminal_{}", pane.id));
+            if let Some(previous) = previous {
+                argv.push("--unfocused-pane-id".to_owned());
+                argv.push(format!("terminal_{previous}"));
+            }
+            if let Some(current) = current {
+                argv.push("--focused-pane-id".to_owned());
+                argv.push(format!("terminal_{current}"));
             }
         }
     }

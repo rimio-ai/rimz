@@ -75,22 +75,23 @@ pub enum SidebarEvent {
     /// working sibling; other renderers ignore it.
     FocusStranded {
         pane_id: PaneId,
+        generation: u64,
+        clients: Vec<crate::mux::ClientPaneView>,
     },
     /// Store-less wakeup for a sidebar-initiated focus jump. The durable focus
     /// anchor carries the intent; this event only makes peer renderers fold it
     /// before the mux switch reveals the destination.
     FocusIntent {
         pane_id: PaneId,
+        nonce: crate::sidebar::focus_anchor::FocusNonce,
     },
     CommandChanged {
         pane_id: PaneId,
         command: String,
     },
-    /// Focus changed. New Zellij presence plugins emit transitions only; old
-    /// plugins and other producers may still send level-style focused/unfocused
-    /// sets. Fusion mirrors the bits onto every row and retargets a renderer's
-    /// own-view baseline only when the patch names one of that view's own
-    /// working panes.
+    /// Session presentation changed. Zellij emits client-derived transitions;
+    /// tmux and compatibility producers may still send level-style sets.
+    /// Fusion updates only the session register; pane rows carry no focus bit.
     FocusChanged {
         focused: Vec<PaneId>,
         unfocused: Vec<PaneId>,
@@ -327,9 +328,12 @@ mod tests {
             },
             SidebarEvent::FocusStranded {
                 pane_id: pane("terminal_2"),
+                generation: 7,
+                clients: Vec::new(),
             },
             SidebarEvent::FocusIntent {
                 pane_id: pane("terminal_2"),
+                nonce: crate::sidebar::focus_anchor::FocusNonce::new(),
             },
             SidebarEvent::FocusChanged {
                 focused: vec![pane("terminal_1")],
@@ -407,6 +411,8 @@ mod tests {
     fn focus_stranded_is_a_renderer_action_not_an_overlay_or_verification_request() {
         let event = SidebarEvent::FocusStranded {
             pane_id: pane("terminal_2"),
+            generation: 7,
+            clients: Vec::new(),
         };
 
         assert!(!event.is_overlay());
@@ -540,6 +546,7 @@ mod tests {
         store.append(
             SidebarEvent::FocusIntent {
                 pane_id: pane("terminal_2"),
+                nonce: crate::sidebar::focus_anchor::FocusNonce::new(),
             },
             13,
             103,

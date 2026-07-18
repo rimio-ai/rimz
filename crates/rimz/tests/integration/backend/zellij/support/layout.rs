@@ -180,27 +180,6 @@ pub(in crate::backend::zellij) fn nonplugin_titles_in_tab(
     PaneSnapshot::expect(xdg, session).terminal_titles_in_tab(tab)
 }
 
-pub(in crate::backend::zellij) fn wait_for_focused_non_sidebar_title_in_tab(
-    xdg: &Path,
-    session: &str,
-    tab: u64,
-) -> Option<String> {
-    poll_until(
-        Duration::from_secs(15),
-        || {
-            Ok(list_panes(xdg, session)?
-                .focused_terminal_in_tab(tab)
-                .and_then(|pane| pane.title.clone()))
-        },
-        |title| {
-            title
-                .as_deref()
-                .is_some_and(|title| title != "rimz-sidebar")
-        },
-        &format!("focused work pane in {session}/tab {tab}"),
-    )
-}
-
 pub(in crate::backend::zellij) fn wait_for_tab_count(
     xdg: &Path,
     session: &str,

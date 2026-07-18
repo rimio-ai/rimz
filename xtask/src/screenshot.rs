@@ -357,31 +357,6 @@ fn select_live_sidebar_pane(panes_json: &[u8]) -> Result<String> {
         );
     }
 
-    let focused_sidebars: Vec<&Value> = sidebars
-        .iter()
-        .copied()
-        .filter(|pane| pane_bool(pane, "is_focused"))
-        .collect();
-    if let [pane] = focused_sidebars.as_slice() {
-        return pane_id(pane);
-    }
-
-    let focused_work_views: Vec<&str> = panes
-        .iter()
-        .filter(|pane| pane_bool(pane, "is_focused") && !pane_is_sidebar(pane))
-        .filter_map(|pane| pane_str(pane, "view_id"))
-        .collect();
-    for view in focused_work_views {
-        let in_view: Vec<&Value> = sidebars
-            .iter()
-            .copied()
-            .filter(|pane| pane_str(pane, "view_id") == Some(view))
-            .collect();
-        if let [pane] = in_view.as_slice() {
-            return pane_id(pane);
-        }
-    }
-
     if let [pane] = sidebars.as_slice() {
         return pane_id(pane);
     }
@@ -406,10 +381,6 @@ fn pane_id(pane: &Value) -> Result<String> {
 
 fn pane_str<'a>(pane: &'a Value, key: &str) -> Option<&'a str> {
     pane.get(key).and_then(Value::as_str)
-}
-
-fn pane_bool(pane: &Value, key: &str) -> bool {
-    pane.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn ensure_screenshot_prerequisites() -> Result<()> {

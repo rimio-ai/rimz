@@ -317,7 +317,6 @@ pub mod fleet {
             view_kind: Some(ViewKind::Tab),
             view_name: None,
             title: None,
-            is_focused: i == 0,
             is_floating: false,
             command: Some("zsh".to_owned()),
             foreground_cmdline: None,

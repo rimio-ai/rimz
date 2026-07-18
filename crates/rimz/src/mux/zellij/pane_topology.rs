@@ -32,6 +32,21 @@ pub struct TopologyClients {
     pub human_clients: u32,
     #[serde(default)]
     pub viewed_panes: Vec<u64>,
+    #[serde(default)]
+    pub views: Vec<TopologyClientView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopologyClientView {
+    pub client_id: u32,
+    pub pane_id: TopologyClientPane,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum TopologyClientPane {
+    Terminal(u64),
+    Plugin(u64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,8 +78,6 @@ pub struct PaneTopologyPane {
     pub is_suppressed: bool,
     #[serde(default)]
     pub is_floating: bool,
-    #[serde(default)]
-    pub is_focused: bool,
     #[serde(alias = "tab_id")]
     pub tab_position: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,7 +226,14 @@ mod tests {
             r#"{
                 "session_name": "rimz-test",
                 "produced_at_ms": 42,
-                "clients": { "human_clients": 2, "viewed_panes": [7, 9] },
+                "clients": {
+                    "human_clients": 2,
+                    "viewed_panes": [7],
+                    "views": [
+                        { "client_id": 3, "pane_id": { "kind": "terminal", "id": 7 } },
+                        { "client_id": 4, "pane_id": { "kind": "plugin", "id": 9 } }
+                    ]
+                },
                 "panes": []
             }"#,
         )
@@ -223,15 +243,23 @@ mod tests {
             cache.clients,
             Some(TopologyClients {
                 human_clients: 2,
-                viewed_panes: vec![7, 9]
+                viewed_panes: vec![7],
+                views: vec![
+                    TopologyClientView {
+                        client_id: 3,
+                        pane_id: TopologyClientPane::Terminal(7),
+                    },
+                    TopologyClientView {
+                        client_id: 4,
+                        pane_id: TopologyClientPane::Plugin(9),
+                    },
+                ],
             }),
         );
         let encoded = serde_json::to_value(&cache).expect("topology serializes");
         assert_eq!(encoded["clients"]["human_clients"], 2);
-        assert_eq!(
-            encoded["clients"]["viewed_panes"],
-            serde_json::json!([7, 9])
-        );
+        assert_eq!(encoded["clients"]["viewed_panes"], serde_json::json!([7]));
+        assert_eq!(encoded["clients"]["views"][1]["pane_id"]["kind"], "plugin");
 
         let legacy: PaneTopologyCache = serde_json::from_str(
             r#"{

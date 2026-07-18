@@ -13,7 +13,6 @@ fn pane(raw: &str) -> PaneRef {
         view_kind: None,
         view_name: None,
         title: None,
-        is_focused: false,
         is_floating: false,
         command: None,
         foreground_cmdline: None,

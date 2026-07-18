@@ -111,6 +111,14 @@ fn own_tab_viewed(
         .any(|pane| pane == own_pane || own_view.working_pane_ids.contains(pane))
 }
 
+#[derive(Clone)]
+struct PendingFocusRepair {
+    pane_id: PaneId,
+    generation: u64,
+    clients: Vec<crate::mux::ClientPaneView>,
+    sent_at_ms: u64,
+}
+
 pub(super) struct LoopState {
     pub(super) current: SidebarSnapshot,
     last_pulled: SidebarSnapshot,
@@ -123,6 +131,7 @@ pub(super) struct LoopState {
     /// siblings. `None` when no dwell is pending.
     pub(super) tab_read_dwell_until: Option<Instant>,
     event_store: EventStore,
+    pending_focus_repair: Option<PendingFocusRepair>,
     confirmed_focus_intent_ms: u64,
     observer: observe::Observer,
     observe_tx: SyncSender<ObserveMsg>,
@@ -210,6 +219,7 @@ impl LoopState {
             optimistic_watch_until: None,
             tab_read_dwell_until: None,
             event_store: EventStore::default(),
+            pending_focus_repair: None,
             confirmed_focus_intent_ms: 0,
             observer: observe::Observer::default(),
             observe_tx,
@@ -451,6 +461,7 @@ impl LoopState {
         let rejected = self.fold_outcome(config, update, anim_start, diag);
         if snapshot_ok {
             self.last_self_close_check = Instant::now();
+            self.retry_pending_focus_repair(config);
         }
         self.release_paint_hold_after_snapshot(rejected, fresh_pane_frame);
         rejected
@@ -575,8 +586,21 @@ impl LoopState {
             event @ SidebarEvent::Notify { .. } => {
                 self.handle_notification(config, terminal, event, diag);
             }
-            SidebarEvent::FocusStranded { pane_id } => {
-                self.handle_focus_stranded(config, pane_id, sent_at_ms, anim_start, diag);
+            SidebarEvent::FocusStranded {
+                pane_id,
+                generation,
+                clients,
+            } => {
+                let repair = PendingFocusRepair {
+                    pane_id,
+                    generation,
+                    clients,
+                    sent_at_ms,
+                };
+                if !self.handle_focus_stranded(config, &repair) {
+                    self.pending_focus_repair = Some(repair);
+                    fetch.request(FetchRequest::producer_fresh_panes(), true);
+                }
             }
             SidebarEvent::FocusIntent { .. } => {
                 self.fold_fused_now(config, anim_start, diag);
@@ -643,29 +667,39 @@ impl LoopState {
         }
     }
 
-    fn handle_focus_stranded(
-        &mut self,
-        config: &ServeConfig,
-        pane_id: PaneId,
-        sent_at_ms: u64,
-        anim_start: Instant,
-        diag: &crate::diag::DiagSink,
-    ) {
+    fn handle_focus_stranded(&mut self, config: &ServeConfig, repair: &PendingFocusRepair) -> bool {
         let now_ms = crate::sidebar::timing::unix_now_ms();
         let own_pane = crate::mux::own_pane_id(config.mux);
         if let Some(target) = focus_stranded_target(
             &self.current,
             &self.ui,
-            &pane_id,
+            &repair.pane_id,
+            &repair.clients,
             own_pane.as_ref(),
-            sent_at_ms,
+            repair.sent_at_ms,
             now_ms,
         ) {
-            // Match sidebar jumps: broadcast the intent before the mux
-            // switch so peer tabs repaint while still hidden.
-            self.record_focus_intent(config, target.clone(), anim_start, diag);
-            spawn_pane_focus(target, &config.session_name);
+            let expected =
+                (repair.pane_id.mux() == MuxName::Zellij).then(|| repair.clients.clone());
+            spawn_pane_focus(
+                target,
+                &config.session_name,
+                self.read_marks.runtime().clone(),
+                crate::sidebar::focus_anchor::FocusOrigin::AutomaticRepair,
+                expected,
+                (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
+                Some(repair.generation),
+            );
+            return true;
         }
+        false
+    }
+
+    fn retry_pending_focus_repair(&mut self, config: &ServeConfig) {
+        let Some(repair) = self.pending_focus_repair.take() else {
+            return;
+        };
+        self.handle_focus_stranded(config, &repair);
     }
 
     fn handle_overlay_event(
@@ -857,11 +891,15 @@ impl LoopState {
         }
         match applied.effect {
             Some(InputEffect::Focus(pane)) => {
-                // A jump records and broadcasts the focus intent so peer tabs
-                // adopt the anchor offset and repaint while still hidden. The
-                // mux focus switch fires last, so the destination tab is ready.
-                self.record_focus_intent(config, pane.clone(), anim_start, diag);
-                spawn_pane_focus(pane, &config.session_name);
+                spawn_pane_focus(
+                    pane,
+                    &config.session_name,
+                    self.read_marks.runtime().clone(),
+                    crate::sidebar::focus_anchor::FocusOrigin::User,
+                    None,
+                    (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
+                    None,
+                );
             }
             Some(InputEffect::Width(dir)) => {
                 if let Some(pane) = config.own_pane.clone() {
@@ -1665,16 +1703,17 @@ impl LoopState {
     }
 
     fn apply_focus_anchor(&mut self) {
-        let Some(selected) = self.ui.selected_pane.clone() else {
-            return;
-        };
         let Some(anchor) = crate::sidebar::focus_anchor::load(self.read_marks.runtime()) else {
             return;
         };
         let now_ms = crate::sidebar::timing::unix_now_ms();
-        if anchor.stamp_ms > self.ui.last_focus_anchor_ms
-            && anchor.pane_id == selected
-            && crate::sidebar::focus_anchor::is_fresh(anchor.stamp_ms, now_ms)
+        let Some(applied_at_ms) = anchor.applied_at_ms else {
+            return;
+        };
+        if self.ui.selected_pane.as_ref() == Some(&anchor.pane_id)
+            && anchor.state == FocusIntentState::Applied
+            && applied_at_ms > self.ui.last_focus_anchor_ms
+            && crate::sidebar::focus_anchor::is_fresh(applied_at_ms, now_ms)
         {
             self.ui.scroll_offset = anchor.offset;
             self.ui.manual_scroll = None;
@@ -1686,56 +1725,87 @@ impl LoopState {
                     &mut self.ui,
                     &mut self.current,
                     order,
-                    anchor.stamp_ms as i64,
+                    applied_at_ms as i64,
                 );
             }
-            self.ui.last_focus_anchor_ms = anchor.stamp_ms;
+            self.ui.last_focus_anchor_ms = applied_at_ms;
+        }
+        if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
+            crate::sidebar::focus_anchor::clear_matching(self.read_marks.runtime(), anchor.nonce);
+            self.confirmed_focus_intent_ms = 0;
         }
     }
 
-    fn pending_focus_intent(&mut self, now_ms: u64) -> Option<FocusAnchor> {
+    fn pending_focus_intent(&mut self, now_ms: u64) -> Option<FocusPresentation> {
         let anchor = crate::sidebar::focus_anchor::load(self.read_marks.runtime())?;
-        if !crate::sidebar::focus_anchor::is_fresh(anchor.stamp_ms, now_ms)
-            || anchor.stamp_ms <= self.confirmed_focus_intent_ms
-        {
-            return None;
+        let outcome =
+            if focus_intent_confirmed(&self.last_pulled, &self.event_store, &anchor, now_ms) {
+                FocusObservationOutcome::Confirmed
+            } else {
+                crate::sidebar::focus_anchor::observation_outcome(
+                    &anchor,
+                    &self.last_pulled,
+                    now_ms,
+                )
+            };
+        match outcome {
+            FocusObservationOutcome::Requested => None,
+            FocusObservationOutcome::Present => Some(FocusPresentation::Target(Box::new(anchor))),
+            FocusObservationOutcome::Fence => Some(FocusPresentation::Fence),
+            FocusObservationOutcome::Confirmed
+            | FocusObservationOutcome::Superseded
+            | FocusObservationOutcome::Invalidated => {
+                if outcome == FocusObservationOutcome::Confirmed
+                    && anchor.origin == FocusOrigin::User
+                {
+                    self.confirmed_focus_intent_ms = anchor.issued_at_ms;
+                    return None;
+                }
+                if crate::sidebar::focus_anchor::clear_matching(
+                    self.read_marks.runtime(),
+                    anchor.nonce,
+                ) {
+                    if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
+                        self.confirmed_focus_intent_ms = 0;
+                    }
+                    self.record_focus_resolution(&anchor, outcome);
+                }
+                None
+            }
         }
-        if focus_intent_confirmed(&self.last_pulled, &self.event_store, &anchor, now_ms) {
-            self.confirmed_focus_intent_ms = anchor.stamp_ms;
-            return None;
-        }
-        Some(anchor)
     }
 
-    fn record_focus_intent(
-        &mut self,
-        config: &ServeConfig,
-        pane: PaneId,
-        anim_start: Instant,
-        diag: &crate::diag::DiagSink,
+    fn record_focus_resolution(
+        &self,
+        anchor: &crate::sidebar::focus_anchor::FocusAnchor,
+        outcome: FocusObservationOutcome,
     ) {
-        let now_ms = crate::sidebar::timing::unix_now_ms();
-        let anchor = FocusAnchor {
-            pane_id: pane.clone(),
-            offset: self.ui.scroll_offset,
-            stamp_ms: now_ms,
-            order: Some(self.ui.last_order.clone()),
+        if anchor.origin != FocusOrigin::AutomaticRepair {
+            return;
+        }
+        use crate::harness::assist_log::{Assist, AssistRecord, FocusRepairOutcome};
+        let outcome = match outcome {
+            FocusObservationOutcome::Confirmed => FocusRepairOutcome::Confirmed,
+            FocusObservationOutcome::Superseded => FocusRepairOutcome::Superseded,
+            FocusObservationOutcome::Invalidated => FocusRepairOutcome::Invalidated,
+            _ => return,
         };
-        if let Err(err) = crate::sidebar::focus_anchor::store(self.read_marks.runtime(), &anchor) {
-            debug!(error = %err, "focus anchor write failed");
-        }
-        self.fold_fused_now(config, anim_start, diag);
-        if let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone())
-            && let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
-                &runtime,
-                Some(&config.session_name),
-                SidebarEvent::FocusIntent {
-                    pane_id: pane.clone(),
+        crate::harness::assist_log::spawn_focus_repair_append(
+            self.read_marks.runtime(),
+            &AssistRecord {
+                at: jiff::Timestamp::now(),
+                assist: Assist::FocusRepair {
+                    nonce: Some(anchor.nonce.to_string()),
+                    workspace_id: self.read_marks.runtime().workspace_id.clone(),
+                    session_name: anchor.session_name.clone(),
+                    generation: anchor.repair_generation.unwrap_or_default(),
+                    evidence: anchor.pre_action.clone(),
+                    target: anchor.pane_id.clone(),
+                    outcome,
+                    error: None,
                 },
-            )
-        {
-            debug!(pane = %pane, error = %err, "renderer focus intent broadcast failed");
-        }
+            },
+        );
     }
 
     fn observe_commit(&mut self) {

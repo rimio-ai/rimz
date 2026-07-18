@@ -73,7 +73,15 @@ pub(super) fn reconcile_cohort_launch(
             if let Some(member) = newest_present_member_with_pane(&members)
                 && let Some(pane) = member.pane.as_ref()
             {
-                backend.focus_pane(&pane.pane_id, Some(&workspace.session_name))?;
+                let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+                rimz::sidebar::focus_anchor::execute_action(
+                    backend,
+                    &runtime,
+                    &workspace.session_name,
+                    pane.pane_id.clone(),
+                    rimz::sidebar::focus_anchor::FocusOrigin::User,
+                    None,
+                )?;
                 writeln!(
                     std::io::stderr().lock(),
                     "{subject} is already running in worktree `{name}`; focused it"

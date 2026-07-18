@@ -12,13 +12,13 @@ rimz pane split
 rimz pane detach
 ```
 
-`list` is the room seen as panes: every pane grouped under its native tab, each row labelled with the agent that lives in it (`@kind#worktree`) or `process` for a plain pane, with status and working directory. RimZ's own sidebar pane is omitted, and a `●` marks the active pane in each tab. On Zellij, listing a named session requires a known RimZ workspace record because the pane roster comes from RimZ's presence-plugin topology cache.
+`list` is the room seen as panes: every pane grouped under its native tab, each row labelled with the agent that lives in it (`@kind#worktree`) or `process` for a plain pane, with status and working directory. RimZ's own sidebar pane is omitted. The topology carries no per-tab active mark; attached selection lives in the optional session register consumed by the sidebar. On Zellij, listing a named session requires a known RimZ workspace record because the pane roster comes from RimZ's presence-plugin topology cache.
 
 ```text
 #auth-refresh
- ●  @claude#auth-refresh   running   ~/code/qe-wt/auth-refresh   zellij:terminal_3
-    @codex#auth-refresh    idle      ~/code/qe-wt/auth-refresh   zellij:terminal_4
-    process                -         ~/code/qe-wt/auth-refresh   zellij:terminal_5
+ @claude#auth-refresh   running   ~/code/qe-wt/auth-refresh   zellij:terminal_3
+ @codex#auth-refresh    idle      ~/code/qe-wt/auth-refresh   zellij:terminal_4
+ process                -         ~/code/qe-wt/auth-refresh   zellij:terminal_5
 ```
 
 The agent labels are a best-effort overlay folded from the workspace snapshot, so a pane the multiplexer has handed back to a shell reads `process`; the tab grouping always works, even with no snapshot reachable. `--json` emits the tab tree with a per-pane `kind`, `command`, `cwd`, and `pid`, and an `agent` object for agent panes.

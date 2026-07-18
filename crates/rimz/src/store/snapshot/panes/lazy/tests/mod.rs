@@ -15,7 +15,6 @@ fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> Pa
         view_kind: Some(crate::ids::ViewKind::Tab),
         view_name: view_name.map(str::to_owned),
         title: None,
-        is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),
         foreground_cmdline: None,

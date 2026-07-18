@@ -59,6 +59,8 @@ pub struct ZellijWake {
     pub reason: ZellijWakeReason,
     pub session_name: Option<String>,
     pub pane_id: Option<PaneId>,
+    pub focus_generation: Option<u64>,
+    pub focus_clients: Vec<crate::mux::ClientPaneView>,
     pub command: Option<String>,
     pub focused_pane_ids: Vec<PaneId>,
     pub unfocused_pane_ids: Vec<PaneId>,
@@ -305,13 +307,14 @@ fn wake_event(wake: &ZellijWake) -> Option<SidebarEvent> {
             },
             None => SidebarEvent::PanesChanged,
         }),
-        ZellijWakeReason::FocusStranded => {
-            wake.pane_id
-                .as_ref()
-                .map(|pane_id| SidebarEvent::FocusStranded {
+        ZellijWakeReason::FocusStranded => wake.pane_id.as_ref().and_then(|pane_id| {
+            wake.focus_generation
+                .map(|generation| SidebarEvent::FocusStranded {
                     pane_id: pane_id.clone(),
+                    generation,
+                    clients: wake.focus_clients.clone(),
                 })
-        }
+        }),
         ZellijWakeReason::CommandChanged => Some(match (&wake.pane_id, &wake.command) {
             (Some(_), Some(command)) if command_is_launch_chrome(command) => {
                 SidebarEvent::PanesChanged
@@ -417,6 +420,8 @@ mod tests {
             reason,
             session_name: Some("rimz-test".to_owned()),
             pane_id: None,
+            focus_generation: None,
+            focus_clients: Vec::new(),
             command: None,
             focused_pane_ids: Vec::new(),
             unfocused_pane_ids: Vec::new(),

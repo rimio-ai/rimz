@@ -13,7 +13,7 @@ fn id(raw: &str) -> PaneId {
     PaneId::from_parts(MuxName::Zellij, raw)
 }
 
-fn pane(raw: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
+fn pane(raw: &str, command: &str, cwd: &str, _focused: bool) -> PaneRef {
     PaneRef {
         pane_id: id(raw),
         session_name: "rimz-test".to_owned(),
@@ -21,7 +21,6 @@ fn pane(raw: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
         view_kind: None,
         view_name: None,
         title: None,
-        is_focused: focused,
         is_floating: false,
         command: Some(command.to_owned()),
         foreground_cmdline: None,

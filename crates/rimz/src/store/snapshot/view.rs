@@ -66,7 +66,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 9;
+pub const SNAPSHOT_VERSION: u32 = 10;
 
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
@@ -94,6 +94,12 @@ pub struct SidebarSnapshot {
     /// tick; the pure reducer leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed_panes: Vec<PaneId>,
+    /// Full native attached-client observations for focus action fencing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_views: Vec<crate::mux::ClientPaneView>,
+    /// Mux session that produced the pane/client frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_session_name: Option<String>,
     /// Session-global latest focused pane, folded from the pane frame and
     /// latency-updated by single-pane focus events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,6 +320,8 @@ impl SidebarSnapshot {
             panes_produced_at_ms: None,
             panes_observed_at_ms: None,
             viewed_panes: Vec::new(),
+            client_views: Vec::new(),
+            pane_session_name: None,
             focused_pane: None,
             presence: None,
             truth_degraded: None,

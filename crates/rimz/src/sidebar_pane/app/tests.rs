@@ -42,6 +42,11 @@ fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
         working_pane_ids: vec![first_work.clone(), second_work.clone()],
         own_view_is_daemon: false,
     });
+    snapshot.presence = Some(crate::SidebarPresence::Active);
+    snapshot.client_views = vec![crate::mux::ClientPaneView {
+        client_id: crate::mux::MuxClientId::Zellij(1),
+        pane_id: sidebar.clone(),
+    }];
     (snapshot, sidebar, first_work, second_work)
 }
 
@@ -713,7 +718,15 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
     };
 
     assert_eq!(
-        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, 1_050),
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
         Some(second_work.clone()),
     );
 
@@ -723,13 +736,29 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
         ..UiState::default()
     };
     assert_eq!(
-        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&foreign), 1_000, 1_050),
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&foreign),
+            1_000,
+            1_050,
+        ),
         None,
     );
 
     let now = 1_000 + duration_millis(FOCUS_STRANDED_EVENT_TTL) + 1;
     assert_eq!(
-        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, now),
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            now,
+        ),
         None,
     );
 }
@@ -743,7 +772,15 @@ fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
     };
 
     assert_eq!(
-        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, 1_050),
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
         Some(first_work),
     );
 
@@ -757,6 +794,7 @@ fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
             &snapshot,
             &UiState::default(),
             &sidebar,
+            &snapshot.client_views,
             Some(&sidebar),
             1_000,
             1_050,
@@ -778,7 +816,15 @@ fn focus_stranded_skips_when_client_focus_is_ambiguous() {
     };
 
     assert_eq!(
-        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, 1_050),
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
         None,
     );
 }

@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
@@ -9,7 +10,7 @@ use tempfile::TempDir;
 use super::support::*;
 
 #[test]
-fn open_tab_unfocused_restores_attached_client_focus() {
+fn open_tab_unfocused_routes_input_back_to_source() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
@@ -20,9 +21,10 @@ fn open_tab_unfocused_restores_attached_client_focus() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus"));
     let sidebar = SidebarPaneOptions {
         session_name: name.clone(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus")),
+        workspace_id: workspace_id.clone(),
         project_root: cwd.path().to_path_buf(),
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
@@ -42,10 +44,11 @@ fn open_tab_unfocused_restores_attached_client_focus() {
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
-    let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);
+    let mut client = AttachedClient::attach(xdg.path(), &name, 200, 50);
     wait_for_attached_client(xdg.path(), &name);
 
     let source_tab = "focus source";
+    let input_log = cwd.path().join("source-input.log");
     backend
         .open_tab(&TabOptions {
             session_name: name.clone(),
@@ -53,7 +56,14 @@ fn open_tab_unfocused_restores_attached_client_focus() {
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
-                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    argv: vec![
+                        "sh".to_owned(),
+                        "-c".to_owned(),
+                        format!(
+                            "while IFS= read -r line; do printf '%s\\n' \"$line\" >> '{}'; done",
+                            input_log.display(),
+                        ),
+                    ],
                 }])],
             },
             focus: true,
@@ -99,11 +109,21 @@ fn open_tab_unfocused_restores_attached_client_focus() {
         "background tab should open one work pane",
     );
 
-    let focused = wait_for_focused_client_pane(&backend, &name, &source_pane);
+    client.send_line("rimz-source-route");
+    let routed = poll_until(
+        Duration::from_secs(5),
+        || std::fs::read_to_string(&input_log).map_err(|err| err.to_string()),
+        |contents| contents.contains("rimz-source-route"),
+        "unfocused tab input routed to source pane",
+    );
+    assert!(routed.contains("rimz-source-route"));
+
+    let runtime = rimz::store::RuntimePaths::under(workspace_id, xdg.path()).expect("runtime");
+    let intent = rimz::sidebar::focus_anchor::load(&runtime).expect("applied focus intent");
+    assert_eq!(intent.pane_id, source_pane);
     assert_eq!(
-        focused,
-        vec![source_pane],
-        "unfocused open_tab must return the attached client to the source pane: {focused:?}",
+        intent.state,
+        rimz::sidebar::focus_anchor::FocusIntentState::Applied,
     );
 }
 #[test]

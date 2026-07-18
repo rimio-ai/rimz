@@ -340,7 +340,6 @@ impl<'a> HookPaneRecoveryContext<'a> {
                 pane_id: evidence.pane.pane_id.clone(),
                 cwd: evidence.pane.cwd.clone(),
                 command: evidence.pane.command.clone(),
-                is_focused: evidence.pane.is_focused,
                 pane_process_start: evidence.process_start,
                 occupied_by_agent_id,
                 reject_reasons,
@@ -390,7 +389,6 @@ pub enum HookPaneRecoveryMethod {
     SingleCandidate,
     OccupiedSoleCandidate,
     ClientFocus,
-    TabFocus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -398,7 +396,6 @@ pub struct HookPaneRecoveryCandidate {
     pane_id: PaneId,
     cwd: Option<String>,
     command: Option<String>,
-    is_focused: bool,
     pane_process_start: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     occupied_by_agent_id: Option<String>,
@@ -413,14 +410,11 @@ pub enum HookPaneRecoveryRejectReason {
     StampedToOther { agent_id: String },
     StartedAfterSession,
     NotInClientFocus,
-    NotTabFocused,
     Ambiguous { n: usize },
 }
 
 fn pane_has_focus_evidence(pane: &PaneRef, client_focus: Option<&[PaneId]>) -> bool {
-    client_focus
-        .map(|focused| focused.iter().any(|pane_id| pane_id == &pane.pane_id))
-        .unwrap_or(pane.is_focused)
+    client_focus.is_some_and(|focused| focused.iter().any(|pane_id| pane_id == &pane.pane_id))
 }
 
 fn selectable_candidate_indices(
@@ -464,37 +458,34 @@ fn select_focused_candidate(
     viable: &[usize],
     client_focus: Option<&[PaneId]>,
 ) -> HookSelectionDecision {
-    let (focused, reject_reason, method) = if let Some(client_focus) = client_focus {
-        (
-            viable
-                .iter()
-                .copied()
-                .filter(|index| {
-                    client_focus
-                        .iter()
-                        .any(|pane_id| pane_id == &candidates[*index].evidence.pane.pane_id)
-                })
-                .collect::<Vec<_>>(),
-            HookPaneRecoveryRejectReason::NotInClientFocus,
-            HookPaneRecoveryMethod::ClientFocus,
-        )
-    } else {
-        (
-            viable
-                .iter()
-                .copied()
-                .filter(|index| candidates[*index].evidence.pane.is_focused)
-                .collect::<Vec<_>>(),
-            HookPaneRecoveryRejectReason::NotTabFocused,
-            HookPaneRecoveryMethod::TabFocus,
-        )
+    let Some(client_focus) = client_focus else {
+        for index in viable {
+            candidates[*index]
+                .record
+                .reject_reasons
+                .push(HookPaneRecoveryRejectReason::Ambiguous { n: viable.len() });
+        }
+        return HookSelectionDecision {
+            pane_index: None,
+            candidate_count: viable.len(),
+            method: HookPaneRecoveryMethod::None,
+        };
     };
+    let focused = viable
+        .iter()
+        .copied()
+        .filter(|index| {
+            client_focus
+                .iter()
+                .any(|pane_id| pane_id == &candidates[*index].evidence.pane.pane_id)
+        })
+        .collect::<Vec<_>>();
     for index in viable {
         if !focused.contains(index) {
             candidates[*index]
                 .record
                 .reject_reasons
-                .push(reject_reason.clone());
+                .push(HookPaneRecoveryRejectReason::NotInClientFocus);
         }
     }
     let pane_index = unique_candidate_index(candidates, &focused);
@@ -509,7 +500,7 @@ fn select_focused_candidate(
     HookSelectionDecision {
         pane_index,
         candidate_count: viable.len(),
-        method,
+        method: HookPaneRecoveryMethod::ClientFocus,
     }
 }
 

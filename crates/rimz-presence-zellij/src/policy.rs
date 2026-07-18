@@ -1,5 +1,5 @@
 //! The plugin's pure decision core: the stable-field manifest hash, poke
-//! policy, foreground overlay, and focus-stranding classifier. Time is injected
+//! policy and foreground overlay. Time is injected
 //! as Unix milliseconds and no `zellij-tile` type appears, so this module
 //! compiles and unit-tests on the host target; `main.rs` is the thin wasm shell
 //! that projects Zellij events into it.
@@ -20,12 +20,8 @@ pub const POKE_FLOOR_MS: u64 = 100;
 /// pane TTL carry the pre-change command.
 pub const SETTLE_POKE_MS: u64 = 250;
 
-/// Settle window after a tab switch before a stale pane manifest may classify
-/// the tab as stranded on its sidebar. A fresh `PaneUpdate` resolves
-/// non-stranded work immediately, but broadcasts still wait for this deadline
-/// because Zellij does not guarantee TabUpdate/PaneUpdate delivery order. A
-/// jump whose focus-mark manifest arrives after the window can still be
-/// misclassified; the window is the correction latency/risk bound.
+/// Settle window after a tab switch before a fresh client observation confirms
+/// whether the destination needs focus repair.
 pub const FOCUS_SETTLE_MS: u64 = 250;
 
 /// Keepalive cadence. One host fork per minute per session keeps an
@@ -38,14 +34,13 @@ pub const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 
 /// The pane fields the plugin projects. The manifest hash folds only the stable
 /// subset whose change means the sidebar should refetch panes. `title` and
-/// `pane_command` are carried for focus correction and topology publication but
+/// `pane_command` are carried for topology publication but
 /// deliberately excluded from the hash: agents mutate titles per output line,
 /// and foreground command changes already publish through `CommandChanged`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneFields {
     pub id: u32,
     pub is_plugin: bool,
-    pub is_focused: bool,
     pub is_suppressed: bool,
     pub is_floating: bool,
     pub exited: bool,
@@ -76,7 +71,6 @@ pub struct PaneFields {
 pub struct RawStablePaneFields<'a> {
     pub id: u32,
     pub is_plugin: bool,
-    pub is_focused: bool,
     pub is_suppressed: bool,
     pub is_floating: bool,
     pub exited: bool,
@@ -93,7 +87,6 @@ impl<'a> RawStablePaneFields<'a> {
         Self {
             id: pane.id,
             is_plugin: pane.is_plugin,
-            is_focused: pane.is_focused,
             is_suppressed: pane.is_suppressed,
             is_floating: pane.is_floating,
             exited: pane.exited,
@@ -105,12 +98,6 @@ impl<'a> RawStablePaneFields<'a> {
             terminal_command: pane.terminal_command.as_deref(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FocusPatch {
-    pub id: u32,
-    pub is_focused: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -130,6 +117,20 @@ pub struct TopologyPayload {
 pub struct ClientSample {
     pub human_clients: u32,
     pub viewed_panes: Vec<u32>,
+    pub views: Vec<ClientViewEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ClientViewEntry {
+    pub client_id: u16,
+    pub pane_id: ClientPaneId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum ClientPaneId {
+    Terminal(u32),
+    Plugin(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,7 +169,6 @@ impl PaneFields {
         Self {
             id: stable.id,
             is_plugin: stable.is_plugin,
-            is_focused: stable.is_focused,
             is_suppressed: stable.is_suppressed,
             is_floating: stable.is_floating,
             exited: stable.exited,
@@ -185,11 +185,11 @@ impl PaneFields {
         }
     }
 
-    fn is_live_terminal(&self) -> bool {
+    pub fn is_live_terminal(&self) -> bool {
         !self.is_plugin && !self.is_suppressed && !self.is_floating && !self.exited && !self.is_held
     }
 
-    fn is_sidebar(&self) -> bool {
+    pub fn is_sidebar(&self) -> bool {
         self.is_live_terminal() && self.title == SIDEBAR_PANE_TITLE
     }
 
@@ -227,63 +227,6 @@ where
         pane.hash(&mut hasher);
     }
     hasher.finish()
-}
-
-/// The focus transitions to publish when the only sidebar-relevant manifest
-/// change is a per-pane focus move onto a pane that can render as an
-/// agent/process card or the sidebar pane itself. `Some(patch)` is the
-/// optimistic focus patch; `None` means no patch is available, so the caller
-/// falls back to an authoritative pane produce. That includes topology,
-/// command, held/exited, suppression changes, and focus moves onto other
-/// chrome.
-pub fn focus_shortcut_if_only_focus_changed(
-    previous: &BTreeMap<usize, Vec<PaneFields>>,
-    next: &BTreeMap<usize, Vec<PaneFields>>,
-) -> Option<Vec<FocusPatch>> {
-    let mut changed = false;
-    let mut focused_card = false;
-    let mut focused_sidebar = false;
-    let mut patch = Vec::new();
-    if previous.len() != next.len() {
-        return None;
-    }
-    for (tab, previous_panes) in previous {
-        let next_panes = next.get(tab)?;
-        if previous_panes.len() != next_panes.len() {
-            return None;
-        }
-        for (previous, next) in previous_panes.iter().zip(next_panes) {
-            let mut previous_stable = RawStablePaneFields::from_projected(previous);
-            let mut next_stable = RawStablePaneFields::from_projected(next);
-            previous_stable.is_focused = false;
-            next_stable.is_focused = false;
-            if previous_stable != next_stable
-                || previous.pane_command != next.pane_command
-                || previous.pane_cwd != next.pane_cwd
-                || previous.pane_pid != next.pane_pid
-            {
-                return None;
-            }
-            changed |= previous.is_focused != next.is_focused;
-            if previous.is_focused != next.is_focused && next.is_focused && next.is_card_pane() {
-                focused_card = true;
-            }
-            if previous.is_focused != next.is_focused && next.is_focused && next.is_sidebar() {
-                focused_sidebar = true;
-            }
-            if previous.is_focused != next.is_focused && (next.is_card_pane() || next.is_sidebar())
-            {
-                patch.push(FocusPatch {
-                    id: next.id,
-                    is_focused: next.is_focused,
-                });
-            }
-        }
-    }
-    if !changed {
-        return None;
-    }
-    (focused_card || focused_sidebar).then_some(patch)
 }
 
 /// The card panes `next` holds that `previous` does not — the genuinely new
@@ -461,251 +404,10 @@ pub fn panes_needing_pid(
         .collect()
 }
 
-/// The focused sidebar pane after switching to `active_tab`, if Zellij restored
-/// the tab's focus to the sidebar while a live working sibling exists. `None`
-/// means the tab is already on work, has no sidebar focus, or has no live
-/// working pane.
-pub fn stranded_sidebar_pane(
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    active_tab: Option<usize>,
-    session_focused_pane: Option<u32>,
-) -> Option<u32> {
-    let active_tab = active_tab?;
-    let panes = tabs.get(&active_tab)?;
-    let focused_id = resolved_focused_pane_id(tabs, Some(active_tab), session_focused_pane)?;
-    let focused = panes
-        .iter()
-        .find(|pane| pane.id == focused_id && pane.is_live_terminal())?;
-    if !focused.is_sidebar() {
-        return None;
-    }
-    panes
-        .iter()
-        .any(|pane| pane.is_live_terminal() && !pane.is_sidebar())
-        .then_some(focused.id)
-}
-
-pub fn resolved_focused_pane_id(
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    active_tab: Option<usize>,
-    session_focused_pane: Option<u32>,
-) -> Option<u32> {
-    resolved_focused_pane(tabs, active_tab, session_focused_pane).map(|pane| pane.id)
-}
-
-pub fn manifest_focused_tiled(
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    active_tab: Option<usize>,
-) -> Option<u32> {
-    tabs.get(&active_tab?)?
-        .iter()
-        .find(|pane| pane.is_live_terminal() && pane.is_focused)
-        .map(|pane| pane.id)
-}
-
-pub fn focus_tiled_pane(tabs: &mut BTreeMap<usize, Vec<PaneFields>>, focused: u32) {
-    let Some(tab) = tabs.iter().find_map(|(tab, panes)| {
-        panes
-            .iter()
-            .any(|pane| pane.id == focused && pane.is_live_terminal())
-            .then_some(*tab)
-    }) else {
-        return;
-    };
-    if let Some(panes) = tabs.get_mut(&tab) {
-        for pane in panes {
-            if pane.is_live_terminal() {
-                pane.is_focused = pane.id == focused;
-            }
-        }
-    }
-}
-
-pub fn repair_contested_tab_focus(
-    tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
-    client_viewed: &[u32],
-    prior_focused_by_tab: &BTreeMap<usize, u32>,
-) {
-    let client_viewed: BTreeSet<u32> = client_viewed.iter().copied().collect();
-    for (tab, panes) in tabs {
-        let focused = panes
-            .iter()
-            .filter(|pane| pane.is_focused && !pane.is_floating)
-            .map(|pane| pane.id)
-            .collect::<Vec<_>>();
-        if focused.len() <= 1 {
-            continue;
-        }
-        let keep = focused
-            .iter()
-            .copied()
-            .filter(|id| client_viewed.contains(id))
-            .min()
-            .or_else(|| {
-                prior_focused_by_tab
-                    .get(tab)
-                    .copied()
-                    .filter(|prior| focused.contains(prior))
-            })
-            .or_else(|| focused.iter().copied().min());
-        if let Some(keep) = keep {
-            for pane in panes {
-                if pane.is_focused && !pane.is_floating && pane.id != keep {
-                    pane.is_focused = false;
-                }
-            }
-        }
-    }
-}
-
 pub fn is_card_pane_id(tabs: &BTreeMap<usize, Vec<PaneFields>>, pane_id: u32) -> bool {
     tabs.values()
         .flatten()
         .any(|pane| pane.id == pane_id && pane.is_card_pane())
-}
-
-fn resolved_focused_pane(
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    active_tab: Option<usize>,
-    session_focused_pane: Option<u32>,
-) -> Option<&PaneFields> {
-    let active_tab = active_tab?;
-    let panes = tabs.get(&active_tab)?;
-    if let Some(resolved) = session_focused_pane
-        && let Some(pane) = panes
-            .iter()
-            .find(|pane| pane.id == resolved && pane.is_live_terminal())
-    {
-        return Some(pane);
-    }
-    panes
-        .iter()
-        .find(|pane| pane.is_live_terminal() && pane.is_focused)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PendingFocusCorrection {
-    tab: usize,
-    deadline: u64,
-    previous_focused_pane: Option<u32>,
-}
-
-/// What the plugin shell should do for a switched-tab focus correction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CorrectionAction {
-    /// The pending classification is not ready, or no classification is armed.
-    Wait,
-    /// The pending classification resolved without a focus event to publish.
-    Clear,
-    /// Broadcast `focus-stranded` for this sidebar pane id.
-    StrandedSidebar(u32),
-    /// Broadcast `focus-changed` for a tab switch that restored work focus.
-    FocusWorkingPane {
-        focused: u32,
-        unfocused: Option<u32>,
-    },
-}
-
-/// Classifies focus transitions caused by a tab switch. Zellij keeps per-tab
-/// focus marks, so a pure switch needs an explicit sidebar wake even when the
-/// pane manifest did not change.
-#[derive(Debug, Default)]
-pub struct FocusCorrection {
-    pending: Option<PendingFocusCorrection>,
-}
-
-impl FocusCorrection {
-    /// Fold an active-tab observation. Loading the plugin (`None -> Some`) is a
-    /// baseline, not navigation; only real tab switches arm classification.
-    pub fn on_active_tab_change(
-        &mut self,
-        previous_active: Option<usize>,
-        next_active: Option<usize>,
-        previous_focused_pane: Option<u32>,
-        now_ms: u64,
-    ) {
-        match (previous_active, next_active) {
-            (_, None) => self.pending = None,
-            (Some(previous), Some(next)) if previous != next => {
-                self.pending = Some(PendingFocusCorrection {
-                    tab: next,
-                    deadline: now_ms + FOCUS_SETTLE_MS,
-                    previous_focused_pane,
-                });
-            }
-            (None, Some(_)) => {}
-            (Some(_), Some(_)) => {}
-        }
-    }
-
-    /// Resolve the pending classification. A fresh manifest is authoritative
-    /// immediately; a stale manifest is consulted only after the settle
-    /// deadline, giving cross-tab explicit jumps time to land their focus mark.
-    pub fn resolve(
-        &mut self,
-        tabs: &BTreeMap<usize, Vec<PaneFields>>,
-        active_tab: Option<usize>,
-        session_focused_pane: Option<u32>,
-        manifest_fresh: bool,
-        now_ms: u64,
-    ) -> CorrectionAction {
-        let Some(pending) = self.pending else {
-            return CorrectionAction::Wait;
-        };
-        if active_tab != Some(pending.tab) || !tabs.contains_key(&pending.tab) {
-            self.pending = None;
-            return CorrectionAction::Clear;
-        }
-        if !manifest_fresh && now_ms < pending.deadline {
-            return CorrectionAction::Wait;
-        }
-        if resolved_focused_pane_id(tabs, Some(pending.tab), session_focused_pane)
-            == pending.previous_focused_pane
-            && pending.previous_focused_pane.is_some()
-        {
-            self.pending = None;
-            return CorrectionAction::Clear;
-        }
-        if manifest_fresh
-            && session_focused_pane.is_some_and(|focused| {
-                pending.previous_focused_pane != Some(focused)
-                    && resolved_focused_pane_id(tabs, Some(pending.tab), Some(focused))
-                        == Some(focused)
-                    && is_card_pane_id(tabs, focused)
-            })
-        {
-            self.pending = None;
-            return CorrectionAction::Clear;
-        }
-        match stranded_sidebar_pane(tabs, Some(pending.tab), session_focused_pane) {
-            Some(_) if now_ms < pending.deadline => CorrectionAction::Wait,
-            Some(pane_id) => {
-                self.pending = None;
-                CorrectionAction::StrandedSidebar(pane_id)
-            }
-            None => {
-                let focused = resolved_focused_pane(tabs, Some(pending.tab), session_focused_pane)
-                    .filter(|pane| pane.is_card_pane())
-                    .map(|pane| pane.id);
-                self.pending = None;
-                match focused {
-                    Some(focused) => CorrectionAction::FocusWorkingPane {
-                        focused,
-                        unfocused: pending.previous_focused_pane,
-                    },
-                    None => CorrectionAction::Clear,
-                }
-            }
-        }
-    }
-
-    pub fn next_deadline(&self) -> Option<u64> {
-        self.pending.map(|pending| pending.deadline)
-    }
-
-    pub fn pending_tab(&self) -> Option<usize> {
-        self.pending.map(|pending| pending.tab)
-    }
 }
 
 /// What the shell should do now.

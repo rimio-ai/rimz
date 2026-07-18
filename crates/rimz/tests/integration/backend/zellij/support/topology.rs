@@ -19,7 +19,6 @@ impl ListedPane {
             exited: self.exited,
             is_suppressed: self.is_suppressed,
             is_floating: self.is_floating,
-            is_focused: self.is_focused,
             tab_position: self
                 .tab_position
                 .or_else(|| fallback_positions.get(&self.tab_id).copied())

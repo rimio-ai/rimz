@@ -268,29 +268,13 @@ impl SidebarSnapshot {
         changed
     }
 
-    /// Apply a fused focus patch. Row `is_focused` bits mirror every listed
-    /// pane. A single focused pane is a session-focus transition, so it updates
+    /// Apply a fused session-focus transition. A single focused pane updates
     /// the register and marks the pane viewed until the next pull.
     pub(crate) fn overlay_focus(&mut self, focused: &[PaneId], unfocused: &[PaneId]) -> bool {
         if focused.is_empty() && unfocused.is_empty() {
             return false;
         }
         let mut changed = false;
-        for group in &mut self.worktree_groups {
-            for row in &mut group.rows {
-                let Some(pane) = row.pane.as_mut() else {
-                    continue;
-                };
-                if focused.iter().any(|pane_id| pane_id == &pane.pane_id) {
-                    changed |= !pane.is_focused;
-                    pane.is_focused = true;
-                }
-                if unfocused.iter().any(|pane_id| pane_id == &pane.pane_id) {
-                    changed |= pane.is_focused;
-                    pane.is_focused = false;
-                }
-            }
-        }
         if let [pane] = focused {
             if self.focused_pane.as_ref() != Some(pane) {
                 self.focused_pane = Some(pane.clone());

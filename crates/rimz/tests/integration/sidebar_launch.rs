@@ -230,7 +230,6 @@ impl MuxBackend for FakeBackend {
                 view_kind: Some(ViewKind::Window),
                 view_name: None,
                 title: None,
-                is_focused: false,
                 is_floating: false,
                 command: Some("sh".to_owned()),
                 foreground_cmdline: None,
@@ -245,7 +244,7 @@ impl MuxBackend for FakeBackend {
                 first_seen_at_ms: None,
             }],
             observed_at_ms: rimz::sidebar::timing::unix_now_ms(),
-            authoritative_focus: None,
+            session_focus: None,
             client_view: None,
         })
     }

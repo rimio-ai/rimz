@@ -22,8 +22,8 @@ use super::{
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::{
-    DaemonView, MuxErr, PresencePluginOptions, Result, SidebarPaneOptions, WidthSyncOptions,
-    sidebar_serve_args,
+    DaemonView, MuxBackend, MuxErr, PresencePluginOptions, Result, SidebarPaneOptions,
+    WidthSyncOptions, sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::timing::RECONCILE_LIST_TIMEOUT;
@@ -32,12 +32,8 @@ use crate::sidebar::timing::unix_now_ms;
 const ADD_DOCK_ATTEMPTS: u32 = 2;
 const DOCK_VERIFY_SETTLE: Duration = Duration::from_millis(100);
 const CLIENT_PROBE_SETTLE: Duration = Duration::from_millis(100);
-// Birth can land Zellij's layout focus on the sidebar in a detached session
-// under load, and a single `focus-pane-id` can lag before it lands. Re-issue
-// and re-check a bounded number of times until the work pane holds focus.
-const BIRTH_FOCUS_ATTEMPTS: u32 = 30;
-const BIRTH_FOCUS_RETRY_DELAY: Duration = Duration::from_millis(100);
-const BIRTH_FOCUS_CLEAN_SAMPLES: u32 = 3;
+// A single `focus-pane-id` can lag during session birth. Re-issue and confirm
+// against the attached client view within a bounded window.
 // Confirmation must outlast Zellij's background-create bootstrap-client linger.
 // A false negative only defers one recoverable add pass; a false positive can
 // leak an unmounted sidebar serve pair.
@@ -174,7 +170,7 @@ impl ZellijBackend {
         let created = spawn()?;
         self.ensure_birth_presence_plugin(opts)?;
         if self.wait_for_sidebar_layout(&opts.session_name, &opts.workspace_id) {
-            self.focus_work_pane_if_sidebar_is_focused(&opts.session_name, &opts.workspace_id);
+            self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);
             drop(layout);
             return Ok(());
         }
@@ -189,7 +185,7 @@ impl ZellijBackend {
             spawn()?;
             self.ensure_birth_presence_plugin(opts)?;
             if self.wait_for_sidebar_layout(&opts.session_name, &opts.workspace_id) {
-                self.focus_work_pane_if_sidebar_is_focused(&opts.session_name, &opts.workspace_id);
+                self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);
                 drop(layout);
                 return Ok(());
             }
@@ -436,51 +432,51 @@ impl ZellijBackend {
             })
     }
 
-    /// Repair birth-time stranded focus: while any tab holds focus on its
-    /// sidebar pane, focus that tab's leftmost live work pane instead. Re-checks
-    /// and re-issues across a bounded window because Zellij can lag a
-    /// `focus-pane-id` before it lands under load. Returns once focus is off the
-    /// sidebar everywhere across a few stable samples, or when no stranded tab
-    /// has a work pane to move to.
-    fn focus_work_pane_if_sidebar_is_focused(&self, session: &str, workspace_id: &WorkspaceId) {
-        let mut clean_samples = 0;
-        for attempt in 0..BIRTH_FOCUS_ATTEMPTS {
-            let Ok(panes) = self.topology_panes_for_workspace(
-                session,
-                workspace_id,
-                None,
-                RECONCILE_LIST_TIMEOUT,
-            ) else {
-                return;
-            };
-            let stranded_tabs: Vec<u64> = panes
-                .iter()
-                .filter(|pane| pane.is_live_terminal() && pane.is_focused && is_sidebar_pane(pane))
-                .map(|pane| pane.tab_position)
-                .collect();
-            if stranded_tabs.is_empty() {
-                clean_samples += 1;
-                if clean_samples >= BIRTH_FOCUS_CLEAN_SAMPLES {
-                    return;
-                }
-                std::thread::sleep(BIRTH_FOCUS_RETRY_DELAY);
-                continue;
-            }
-            clean_samples = 0;
-            let mut acted = false;
-            for tab_position in stranded_tabs {
-                if let Some(raw_id) = leftmost_live_work_pane(&panes, tab_position) {
-                    let _ = self.focus_terminal(session, raw_id);
-                    acted = true;
-                }
-            }
-            if !acted {
-                return;
-            }
-            if attempt + 1 < BIRTH_FOCUS_ATTEMPTS {
-                std::thread::sleep(BIRTH_FOCUS_RETRY_DELAY);
-            }
-        }
+    /// Seed the attached client's initial tab with its deterministic work pane.
+    /// Hidden tabs have no focus state and need no birth-time normalization.
+    fn finalize_birth_focus(&self, session: &str, workspace_id: &WorkspaceId) {
+        let Ok(view) = self.client_view(crate::mux::ClientFocusOptions {
+            session_name: Some(session.to_owned()),
+            command_timeout: Some(RECONCILE_LIST_TIMEOUT),
+        }) else {
+            return;
+        };
+        let [viewed] = view.viewed_panes.as_slice() else {
+            return;
+        };
+        let Some(viewed) = viewed.creation_ordinal() else {
+            return;
+        };
+        let Ok(panes) =
+            self.topology_panes_for_workspace(session, workspace_id, None, RECONCILE_LIST_TIMEOUT)
+        else {
+            return;
+        };
+        let Some(tab_position) = panes
+            .iter()
+            .find(|pane| pane.id == viewed && pane.is_live_terminal())
+            .map(|pane| pane.tab_position)
+        else {
+            return;
+        };
+        let Some(work) = leftmost_live_work_pane(&panes, tab_position) else {
+            return;
+        };
+        let Ok(runtime) = self.runtime_paths_for_workspace(workspace_id.clone()) else {
+            return;
+        };
+        let _ = crate::sidebar::focus_anchor::execute_action_retried(
+            self,
+            &runtime,
+            session,
+            super::raw_pane::zellij_pane_id(work),
+            crate::sidebar::focus_anchor::FocusOrigin::User,
+            None,
+            crate::sidebar::focus_anchor::FocusDispatchRetries {
+                attempts: super::FOCUS_RESTORE_ATTEMPTS,
+                delay: super::FOCUS_RESTORE_RETRY_DELAY,
+            },
+        );
     }
 
     /// Converge one kept sidebar pane onto the layout's dock, in place and

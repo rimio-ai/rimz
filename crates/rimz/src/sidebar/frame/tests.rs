@@ -1,7 +1,7 @@
 use super::*;
 use crate::ids::MuxName;
 
-fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef {
+fn pane(raw: &str, view: &str, command: Option<&str>, _focused: bool) -> PaneRef {
     PaneRef {
         pane_id: PaneId::from_parts(MuxName::Zellij, raw),
         session_name: "rimz-test".to_owned(),
@@ -9,7 +9,6 @@ fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef 
         view_kind: Some(ViewKind::Tab),
         view_name: None,
         title: None,
-        is_focused: focused,
         is_floating: false,
         command: command.map(ToOwned::to_owned),
         foreground_cmdline: None,
@@ -78,8 +77,10 @@ fn client_view_sets_session_focus_register() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: std::slice::from_ref(&viewed),
+        client_views: &[],
+        client_view_fresh: true,
         prior: None,
     });
 
@@ -88,7 +89,7 @@ fn client_view_sets_session_focus_register() {
 }
 
 #[test]
-fn authoritative_focus_wins_when_live() {
+fn session_focus_wins_when_live() {
     let authoritative = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let stale_client = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let prior = PaneFrame {
@@ -111,8 +112,10 @@ fn authoritative_focus_wins_when_live() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: Some(authoritative.clone()),
+        session_focus: Some(authoritative.clone()),
         client_viewed: std::slice::from_ref(&stale_client),
+        client_views: &[],
+        client_view_fresh: true,
         prior: Some(&prior),
     });
 
@@ -121,23 +124,24 @@ fn authoritative_focus_wins_when_live() {
 }
 
 #[test]
-fn authoritative_focus_ignores_dead_pane_and_falls_through() {
-    let raw_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+fn dead_session_focus_and_fresh_empty_clients_clear() {
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
         panes: vec![pane("terminal_1", "tab_0", Some("zsh"), true)],
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: Some(PaneId::from_parts(MuxName::Zellij, "terminal_9")),
+        session_focus: Some(PaneId::from_parts(MuxName::Zellij, "terminal_9")),
         client_viewed: &[],
+        client_views: &[],
+        client_view_fresh: true,
         prior: None,
     });
 
-    assert_eq!(frame.focused_pane, Some(raw_focus));
+    assert_eq!(frame.focused_pane, None);
 }
 
 #[test]
-fn multiple_client_views_stick_to_prior_or_take_freshest_entry() {
+fn distinct_client_views_abstain_and_one_fresh_view_wins() {
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let prior = PaneFrame {
@@ -160,11 +164,13 @@ fn multiple_client_views_stick_to_prior_or_take_freshest_entry() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: &[first.clone(), second.clone()],
+        client_views: &[],
+        client_view_fresh: true,
         prior: Some(&prior),
     });
-    assert_eq!(sticky.focused_pane, Some(second));
+    assert_eq!(sticky.focused_pane, None);
 
     let (freshest, _) = assemble_frame_from_inputs(FrameInputs {
         panes: vec![
@@ -174,11 +180,68 @@ fn multiple_client_views_stick_to_prior_or_take_freshest_entry() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: std::slice::from_ref(&first),
+        client_views: &[],
+        client_view_fresh: true,
         prior: Some(&prior),
     });
     assert_eq!(freshest.focused_pane, Some(first));
+}
+
+#[test]
+fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
+    let terminal = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let plugin = PaneId::from_parts(MuxName::Zellij, "plugin_2");
+    let panes = vec![
+        pane("terminal_1", "tab_0", Some("zsh"), false),
+        PaneRef {
+            pane_id: plugin.clone(),
+            ..pane("terminal_2", "tab_0", Some("compact-bar"), false)
+        },
+    ];
+    let agree = [
+        crate::mux::ClientPaneView {
+            client_id: crate::mux::MuxClientId::Zellij(1),
+            pane_id: terminal.clone(),
+        },
+        crate::mux::ClientPaneView {
+            client_id: crate::mux::MuxClientId::Zellij(2),
+            pane_id: terminal.clone(),
+        },
+    ];
+    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: panes.clone(),
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: std::slice::from_ref(&terminal),
+        client_views: &agree,
+        client_view_fresh: true,
+        prior: None,
+    });
+    assert_eq!(frame.focused_pane, Some(terminal.clone()));
+
+    let distinct = [
+        agree[0].clone(),
+        crate::mux::ClientPaneView {
+            client_id: crate::mux::MuxClientId::Zellij(2),
+            pane_id: plugin,
+        },
+    ];
+    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        panes,
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: std::slice::from_ref(&terminal),
+        client_views: &distinct,
+        client_view_fresh: true,
+        prior: None,
+    });
+    assert_eq!(frame.focused_pane, None);
 }
 
 #[test]
@@ -207,16 +270,18 @@ fn multiple_client_views_ignore_prior_missing_from_live_frame() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: &[first.clone(), second, stale],
+        client_views: &[],
+        client_view_fresh: true,
         prior: Some(&prior),
     });
 
-    assert_eq!(frame.focused_pane, Some(first));
+    assert_eq!(frame.focused_pane, None);
 }
 
 #[test]
-fn detached_focus_uses_prior_then_single_raw_mark() {
+fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
     let prior_focus = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let prior = PaneFrame {
         focused_pane: Some(prior_focus.clone()),
@@ -237,8 +302,10 @@ fn detached_focus_uses_prior_then_single_raw_mark() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: &[],
+        client_views: &[],
+        client_view_fresh: false,
         prior: Some(&prior),
     });
     assert_eq!(carried.focused_pane, Some(prior_focus));
@@ -251,14 +318,13 @@ fn detached_focus_uses_prior_then_single_raw_mark() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: &[],
+        client_views: &[],
+        client_view_fresh: false,
         prior: None,
     });
-    assert_eq!(
-        raw.focused_pane,
-        Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
-    );
+    assert_eq!(raw.focused_pane, None);
 }
 
 #[test]
@@ -271,8 +337,10 @@ fn detached_ambiguous_raw_marks_clear_without_live_prior() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: &[],
+        client_views: &[],
+        client_view_fresh: false,
         prior: None,
     });
 
@@ -290,8 +358,10 @@ fn sidebar_pane_can_be_the_session_focus_register() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: std::slice::from_ref(&own),
+        client_views: &[],
+        client_view_fresh: true,
         prior: None,
     });
 

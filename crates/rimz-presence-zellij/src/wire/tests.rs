@@ -16,7 +16,6 @@ fn pane(id: u32) -> PaneFields {
     PaneFields {
         id,
         is_plugin: false,
-        is_focused: false,
         is_suppressed: false,
         is_floating: false,
         exited: false,
@@ -83,6 +82,10 @@ fn topology_json_carries_clients_when_sampled() {
     let clients = policy::ClientSample {
         human_clients: 2,
         viewed_panes: vec![7, 9],
+        views: vec![policy::ClientViewEntry {
+            client_id: 1,
+            pane_id: policy::ClientPaneId::Terminal(7),
+        }],
     };
     let json = topology_json(Some("session-1"), 42, None, Some(7), Some(&clients), &tabs)
         .expect("topology serializes");
@@ -243,7 +246,18 @@ fn pane_closed_wake_argv_names_terminal_pane() {
 #[test]
 fn focus_stranded_wake_argv_names_terminal_pane() {
     assert_eq!(
-        wake_argv(&ctx(), WakeRequest::FocusStranded { pane_id: 9 }, None),
+        wake_argv(
+            &ctx(),
+            WakeRequest::FocusStranded {
+                pane_id: 9,
+                generation: 3,
+                clients: vec![policy::ClientViewEntry {
+                    client_id: 1,
+                    pane_id: policy::ClientPaneId::Terminal(9),
+                }],
+            },
+            None,
+        ),
         Some(strings(&[
             "/bin/rimz",
             "sidebar",
@@ -254,6 +268,10 @@ fn focus_stranded_wake_argv_names_terminal_pane() {
             "session-1",
             "--pane-id",
             "terminal_9",
+            "--focus-generation",
+            "3",
+            "--focus-clients",
+            r#"[{"client_id":1,"pane_id":{"kind":"terminal","id":9}}]"#,
             "--workspace-id",
             "workspace-1",
         ])),
@@ -294,21 +312,13 @@ fn command_changed_wake_argv_drops_empty_args() {
 }
 
 #[test]
-fn focus_changed_wake_argv_names_patch_entries() {
+fn focus_changed_wake_argv_names_session_transition() {
     assert_eq!(
         wake_argv(
             &ctx(),
             WakeRequest::FocusChanged {
-                patch: vec![
-                    FocusPatch {
-                        id: 1,
-                        is_focused: false,
-                    },
-                    FocusPatch {
-                        id: 2,
-                        is_focused: true,
-                    },
-                ],
+                previous: Some(1),
+                current: Some(2),
             },
             None,
         ),
@@ -362,7 +372,10 @@ fn wake_argv_none_gates_session_bound_and_empty_requests() {
     assert_eq!(
         wake_argv(
             &ctx(),
-            WakeRequest::FocusChanged { patch: Vec::new() },
+            WakeRequest::FocusChanged {
+                previous: Some(1),
+                current: Some(1),
+            },
             None,
         ),
         None,

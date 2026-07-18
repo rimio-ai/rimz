@@ -1019,7 +1019,6 @@ fn write_width_topology(runtime: &RuntimePaths, session: &str) {
         exited: false,
         is_suppressed: false,
         is_floating: false,
-        is_focused: false,
         tab_position: 0,
         tab_name: None,
         pane_columns: Some(pane_columns),
@@ -1495,109 +1494,25 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
     );
 }
 
-#[test]
-fn record_focus_intent_writes_anchor_without_storing_an_overlay() {
-    let ws = workspace();
-    let (dir, mut state) = loop_state(&ws);
-    let config = serve_config(&ws);
-    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
-    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
-    state.last_pulled = snapshot_with_focused_pane(
-        &ws,
-        PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
-    );
-    state.ui.scroll_offset = 11;
-    state.ui.last_order = crate::sidebar_pane::render::FrozenOrder {
-        groups: vec!["main".to_owned()],
-        rows: vec![
-            crate::sidebar_pane::render::FrozenRow {
-                id: "row-2".to_owned(),
-                pane: None,
-            },
-            crate::sidebar_pane::render::FrozenRow {
-                id: "row-1".to_owned(),
-                pane: None,
-            },
-        ],
-        visible: HashSet::from(["row-2".to_owned()]),
-    };
-    let recorded_order = state.ui.last_order.clone();
-
-    state.record_focus_intent(
-        &config,
-        pane.clone(),
-        Instant::now(),
-        &crate::diag::DiagSink::disabled(),
-    );
-
-    let anchor = crate::sidebar::focus_anchor::load(&runtime).expect("focus anchor");
-    assert_eq!(anchor.pane_id, pane);
-    assert_eq!(anchor.offset, 11);
-    assert_eq!(anchor.order, Some(recorded_order));
-    assert!(crate::sidebar::focus_anchor::is_fresh(
-        anchor.stamp_ms,
-        crate::sidebar::timing::unix_now_ms(),
-    ));
-    assert!(state.event_store.is_empty());
-}
-
-#[test]
-fn confirmed_focus_intent_does_not_mask_a_later_focus_change() {
-    let ws = workspace();
-    let (dir, mut state) = loop_state(&ws);
-    let config = serve_config(&ws);
-    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
-    let first = PaneId::from_parts(crate::MuxName::Zellij, "terminal_1");
-    let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
-    let snapshot = snapshot_with_focused_pane(&ws, first.clone());
-    state.last_pulled = snapshot.clone();
-    state.current = snapshot;
-    state.record_focus_intent(
-        &config,
-        target.clone(),
-        Instant::now(),
-        &crate::diag::DiagSink::disabled(),
-    );
-    let anchor = crate::sidebar::focus_anchor::load(&runtime).expect("focus anchor");
-    let mut terminal = fixed_terminal();
-    let (mut fetch, _request_rx) = fetch_dispatcher();
-
-    state.on_event(
-        &config,
-        &mut fetch,
-        &mut terminal,
-        event_envelope(
-            &ws,
-            SidebarEvent::FocusChanged {
-                focused: vec![target],
-                unfocused: vec![first.clone()],
-            },
-        ),
-        Instant::now(),
-        &crate::diag::DiagSink::disabled(),
-    );
-    assert_eq!(state.confirmed_focus_intent_ms, anchor.stamp_ms);
-
-    state.on_event(
-        &config,
-        &mut fetch,
-        &mut terminal,
-        event_envelope(
-            &ws,
-            SidebarEvent::FocusChanged {
-                focused: vec![first.clone()],
-                unfocused: Vec::new(),
-            },
-        ),
-        Instant::now(),
-        &crate::diag::DiagSink::disabled(),
-    );
-
-    assert_eq!(state.current.focused_pane, Some(first));
-    assert!(crate::sidebar::focus_anchor::is_fresh(
-        anchor.stamp_ms,
-        crate::sidebar::timing::unix_now_ms(),
-    ));
+fn applied_focus_anchor(
+    pane_id: PaneId,
+    offset: usize,
+    stamp_ms: u64,
+    order: Option<crate::sidebar_pane::render::FrozenOrder>,
+) -> crate::sidebar::focus_anchor::FocusAnchor {
+    crate::sidebar::focus_anchor::FocusAnchor {
+        nonce: crate::sidebar::focus_anchor::FocusNonce::new(),
+        session_name: "rimz-test".to_owned(),
+        pane_id,
+        origin: crate::sidebar::focus_anchor::FocusOrigin::User,
+        repair_generation: None,
+        issued_at_ms: stamp_ms,
+        applied_at_ms: Some(stamp_ms),
+        state: crate::sidebar::focus_anchor::FocusIntentState::Applied,
+        pre_action: Vec::new(),
+        offset,
+        order,
+    }
 }
 
 #[test]
@@ -1610,12 +1525,7 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     let stamp_ms = crate::sidebar::timing::unix_now_ms();
     crate::sidebar::focus_anchor::store(
         &runtime,
-        &crate::sidebar::focus_anchor::FocusAnchor {
-            pane_id: target.clone(),
-            offset: 7,
-            stamp_ms,
-            order: None,
-        },
+        &applied_focus_anchor(target.clone(), 7, stamp_ms, None),
     )
     .expect("store anchor");
     state.ui.scroll_offset = 2;
@@ -1653,11 +1563,11 @@ fn fresh_focus_anchor_with_order_installs_shared_hold() {
     let stamp_ms = crate::sidebar::timing::unix_now_ms();
     crate::sidebar::focus_anchor::store(
         &runtime,
-        &crate::sidebar::focus_anchor::FocusAnchor {
-            pane_id: target.clone(),
-            offset: 7,
+        &applied_focus_anchor(
+            target.clone(),
+            7,
             stamp_ms,
-            order: Some(crate::sidebar_pane::render::FrozenOrder {
+            Some(crate::sidebar_pane::render::FrozenOrder {
                 groups: vec!["/repo/main".to_owned()],
                 rows: vec![
                     crate::sidebar_pane::render::FrozenRow {
@@ -1671,7 +1581,7 @@ fn fresh_focus_anchor_with_order_installs_shared_hold() {
                 ],
                 visible: HashSet::from([target.to_string()]),
             }),
-        },
+        ),
     )
     .expect("store anchor");
     let (mut fetch, _request_rx) = fetch_dispatcher();
@@ -1741,34 +1651,34 @@ fn external_focus_change_arms_group_reveal_once() {
 }
 
 #[test]
-fn confirmed_focus_anchor_for_other_pane_leaves_scroll_untouched() {
+fn superseding_client_observation_leaves_scroll_untouched() {
     let ws = workspace();
     let config = serve_config(&ws);
     let (dir, mut state) = loop_state(&ws);
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let selected = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
     let stamp_ms = crate::sidebar::timing::unix_now_ms();
-    crate::sidebar::focus_anchor::store(
-        &runtime,
-        &crate::sidebar::focus_anchor::FocusAnchor {
-            pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
-            offset: 7,
-            stamp_ms,
-            order: None,
-        },
-    )
-    .expect("store anchor");
-    state.confirmed_focus_intent_ms = stamp_ms;
+    let mut anchor = applied_focus_anchor(
+        PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
+        7,
+        stamp_ms,
+        None,
+    );
+    anchor.pre_action = vec![crate::mux::ClientPaneView {
+        client_id: crate::mux::MuxClientId::Zellij(7),
+        pane_id: anchor.pane_id.clone(),
+    }];
+    crate::sidebar::focus_anchor::store(&runtime, &anchor).expect("store anchor");
     state.ui.scroll_offset = 3;
     let (mut fetch, _request_rx) = fetch_dispatcher();
 
-    fold_snapshot(
-        &mut state,
-        &config,
-        &mut fetch,
-        snapshot_with_focused_pane(&ws, selected.clone()),
-        true,
-    );
+    let mut snapshot = snapshot_with_focused_pane(&ws, selected.clone());
+    snapshot.presence = Some(crate::SidebarPresence::Active);
+    snapshot.client_views = vec![crate::mux::ClientPaneView {
+        client_id: crate::mux::MuxClientId::Zellij(7),
+        pane_id: selected.clone(),
+    }];
+    fold_snapshot(&mut state, &config, &mut fetch, snapshot, true);
 
     assert_eq!(state.ui.selected_pane, Some(selected));
     assert_eq!(state.ui.scroll_offset, 3);
@@ -1785,12 +1695,7 @@ fn focus_anchor_stamp_applies_once() {
     let stamp_ms = crate::sidebar::timing::unix_now_ms();
     crate::sidebar::focus_anchor::store(
         &runtime,
-        &crate::sidebar::focus_anchor::FocusAnchor {
-            pane_id: target.clone(),
-            offset: 7,
-            stamp_ms,
-            order: None,
-        },
+        &applied_focus_anchor(target.clone(), 7, stamp_ms, None),
     )
     .expect("store anchor");
     let (mut fetch, _request_rx) = fetch_dispatcher();
@@ -1821,7 +1726,7 @@ fn focus_anchor_stamp_applies_once() {
 }
 
 #[test]
-fn stale_focus_anchor_is_ignored() {
+fn stale_focus_anchor_fences_unchanged_observation_to_unknown() {
     let ws = workspace();
     let config = serve_config(&ws);
     let (dir, mut state) = loop_state(&ws);
@@ -1831,12 +1736,7 @@ fn stale_focus_anchor_is_ignored() {
     let stale_stamp = crate::sidebar::timing::unix_now_ms().saturating_sub(ttl_ms + 1);
     crate::sidebar::focus_anchor::store(
         &runtime,
-        &crate::sidebar::focus_anchor::FocusAnchor {
-            pane_id: target.clone(),
-            offset: 7,
-            stamp_ms: stale_stamp,
-            order: None,
-        },
+        &applied_focus_anchor(target.clone(), 7, stale_stamp, None),
     )
     .expect("store anchor");
     state.ui.scroll_offset = 3;
@@ -1850,7 +1750,7 @@ fn stale_focus_anchor_is_ignored() {
         true,
     );
 
-    assert_eq!(state.ui.selected_pane, Some(target));
+    assert_eq!(state.ui.selected_pane, None);
     assert_eq!(state.ui.scroll_offset, 3);
     assert_eq!(state.ui.last_focus_anchor_ms, 0);
 }

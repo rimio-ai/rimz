@@ -101,12 +101,6 @@ pub struct PaneRef {
     /// foreground command can change after spawning a child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Whether the pane is its mux view's active pane — the mux marks exactly
-    /// one per tab/window, defined whether or not a client is viewing it. The
-    /// sidebar derives its selection baseline from it. Advisory UI routing
-    /// metadata; store correctness never depends on focus.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_focused: bool,
     /// Whether this pane is a floating overlay rather than part of the tiled
     /// room. Floating panes stay addressable but are not rendered as room rows.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -162,7 +156,7 @@ pub struct PaneRef {
 impl PaneRef {
     /// A minimal reference carrying just the normalized pane id — the ambient
     /// stamp hooks and script asks record. Live mux truth (command, cwd,
-    /// focus, process start) joins at the pane fold.
+    /// process start) joins at the pane fold.
     pub fn from_id(pane_id: PaneId) -> Self {
         Self {
             pane_id,
@@ -171,7 +165,6 @@ impl PaneRef {
             view_kind: None,
             view_name: None,
             title: None,
-            is_focused: false,
             is_floating: false,
             command: None,
             foreground_cmdline: None,

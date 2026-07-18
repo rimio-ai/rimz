@@ -971,7 +971,7 @@ fn fmt_day_reads_month_and_day() {
 
 #[test]
 fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
-    use rimz::harness::assist_log::{Assist, AssistRecord, AssistWindowReset};
+    use rimz::harness::assist_log::{Assist, AssistRecord, AssistWindowReset, FocusRepairOutcome};
     use rimz::harness::auto_redeem::RedeemReason;
     use rimz::harness::schedule::run_log::{
         LoopRunMode, LoopRunRecord, LoopRunResult, PingWindowOutcome,
@@ -1019,6 +1019,32 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
                 message_id: "msg_2".to_owned(),
             },
         },
+        AssistRecord {
+            at: ts(4_100),
+            assist: Assist::FocusRepair {
+                nonce: Some("nonce-1".to_owned()),
+                workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                session_name: "rimz-test".to_owned(),
+                generation: 7,
+                evidence: Vec::new(),
+                target: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_2"),
+                outcome: FocusRepairOutcome::AcceptedUnconfirmed,
+                error: None,
+            },
+        },
+        AssistRecord {
+            at: ts(4_200),
+            assist: Assist::FocusRepair {
+                nonce: Some("nonce-1".to_owned()),
+                workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                session_name: "rimz-test".to_owned(),
+                generation: 7,
+                evidence: Vec::new(),
+                target: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_2"),
+                outcome: FocusRepairOutcome::Confirmed,
+                error: None,
+            },
+        },
     ];
     let mut ping = LoopRunRecord::new(
         "autoping-codex",
@@ -1047,9 +1073,12 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             resets: 1,
             resumes: 1,
             recovered_secs: 3_600,
+            focus_repairs: 1,
+            focus_confirmed: 1,
+            focus_failed: 0,
         }
     );
-    assert_eq!(stats.events.len(), 4, "failed delivery remains forensic");
+    assert_eq!(stats.events.len(), 6, "every assist outcome stays forensic");
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
@@ -1076,6 +1105,16 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             .iter()
             .any(|line| line.contains("resume held — overload park"))
     );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("focus repair zellij:terminal_2 — accepted"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("focus repair zellij:terminal_2 — confirmed"))
+    );
 
     let json = serde_json::to_value(&stats).unwrap();
     assert_eq!(json["rollup"]["resumes"], 1);
@@ -1097,6 +1136,9 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             resets: 1,
             resumes: 5,
             recovered_secs: 22_320,
+            focus_repairs: 0,
+            focus_confirmed: 0,
+            focus_failed: 0,
         },
         events: Vec::new(),
     };

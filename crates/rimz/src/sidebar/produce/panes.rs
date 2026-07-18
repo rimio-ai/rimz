@@ -2,14 +2,13 @@
 //! process rotation, and the process-start stamp — everything the
 //! producer publishes to `snapshot.json` for consumers to fold in process.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::Result;
 use crate::diag::record::{
-    AnomalyKind, DiagEvent, EventsSig, FrameRejectReason, FrameStamp, ManagedPaneEvidence,
-    MultiFocusEvidence, ObserveRole, PaneDropEvidence, PaneDropViewEvidence,
+    DiagEvent, FrameRejectReason, ManagedPaneEvidence, PaneDropEvidence, PaneDropViewEvidence,
 };
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
@@ -166,9 +165,8 @@ fn fresh_snapshot_cache(
 /// The session's live panes from the mux — the roster read the snapshot cache
 /// amortizes across the fleet. The store rollup is read separately (fresh from
 /// `latest.json`), so this enumerates only the pane set.
-/// The per-view `is_focused` mark rides the pane list itself as a fallback focus
-/// candidate. Zellij topology may carry client focus/presence from the plugin;
-/// other paths keep the direct backend sample fallback.
+/// Zellij topology may carry client focus/presence from the plugin; other paths
+/// keep the direct backend sample fallback.
 fn list_session_panes(
     mux: MuxName,
     session: &str,
@@ -356,7 +354,7 @@ pub fn repaired_pane_frame_for_binding(
         Some(fixture) => PaneListing {
             panes: fixture,
             observed_at_ms: unix_now_ms(),
-            authoritative_focus: None,
+            session_focus: None,
             client_view: None,
         },
         None => list_session_panes(
@@ -375,8 +373,10 @@ pub fn repaired_pane_frame_for_binding(
         produced_at_ms: unix_now_ms(),
         observed_at_ms: listing.observed_at_ms,
         session_name: session.to_owned(),
-        authoritative_focus: None,
+        session_focus: None,
         client_viewed: &[],
+        client_views: &[],
+        client_view_fresh: false,
         prior: prior.as_deref(),
     });
     let diag = crate::diag::DiagSink::for_workspace(
@@ -637,7 +637,7 @@ impl PaneFrameProducer<'_, '_> {
         let PaneListing {
             panes,
             observed_at_ms,
-            authoritative_focus,
+            session_focus,
             client_view: pushed_client_view,
         } = listing;
         let panes = filter_foreign_session_panes(panes, self.cache.session, self.cache.diag);
@@ -647,49 +647,58 @@ impl PaneFrameProducer<'_, '_> {
         // to a direct client sample.
         let prior_client_view = || {
             prior.as_ref().map_or_else(
-                || (Vec::new(), None),
-                |prior| (prior.viewed_panes.clone(), prior.presence),
+                || (Vec::new(), Vec::new(), None),
+                |prior| {
+                    (
+                        prior.viewed_panes.clone(),
+                        prior.client_views.clone(),
+                        prior.presence,
+                    )
+                },
             )
         };
-        let (viewed_panes, presence, client_view_resolved) = match pushed_client_view {
+        let (viewed_panes, client_views, presence, client_view_resolved) = match pushed_client_view
+        {
             Some(client_view) => {
                 let presence = presence_sample_from_client_view(&client_view);
-                (client_view.viewed_panes, Some(presence), true)
+                (
+                    client_view.viewed_panes,
+                    client_view.clients,
+                    Some(presence),
+                    true,
+                )
             }
             None => match client_view(self.mux, self.cache.session) {
                 Ok(client_view) => {
                     let presence = presence_sample_from_client_view(&client_view);
-                    (client_view.viewed_panes, Some(presence), true)
+                    (
+                        client_view.viewed_panes,
+                        client_view.clients,
+                        Some(presence),
+                        true,
+                    )
                 }
                 Err(_) if self.mux == MuxName::Zellij => {
-                    let (viewed, presence) = prior_client_view();
-                    (viewed, presence, false)
+                    let (viewed, clients, presence) = prior_client_view();
+                    (viewed, clients, presence, false)
                 }
-                Err(_) => (Vec::new(), None, false),
+                Err(_) => (Vec::new(), Vec::new(), None, false),
             },
         };
-        let topology_anomalies = multi_focus_topology_anomalies(
-            &panes,
-            client_view_resolved.then(|| MultiFocusEvidence {
-                human_clients: presence
-                    .as_ref()
-                    .map_or(0, |presence| presence.human_clients),
-                viewed_pane_ids: viewed_panes.clone(),
-            }),
-        );
         let (mut frame, diagnostics) =
             crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
                 panes,
                 produced_at_ms: unix_now_ms(),
                 observed_at_ms,
                 session_name: self.cache.session.to_owned(),
-                authoritative_focus,
+                session_focus,
                 client_viewed: &viewed_panes,
+                client_views: &client_views,
+                client_view_fresh: client_view_resolved,
                 prior: prior.as_deref(),
             });
         frame.presence = presence;
         emit_frame_diagnostics(self.cache.diag, diagnostics);
-        emit_topology_anomalies(self.cache.diag, &frame, topology_anomalies);
         let hosted_carry_drops = repair_pane_frame(
             &mut frame,
             self.cache.runtime,
@@ -806,85 +815,6 @@ fn filter_foreign_session_panes(
 fn emit_frame_diagnostics(diag: &crate::diag::DiagSink, events: Vec<DiagEvent>) {
     for event in events {
         diag.emit(event);
-    }
-}
-
-#[derive(Default)]
-struct FocusedTopologyTab {
-    tab_name: Option<String>,
-    tab_position: Option<u64>,
-    pane_ids: Vec<String>,
-}
-
-fn multi_focus_topology_anomalies(
-    panes: &[crate::pane::PaneRef],
-    evidence: Option<MultiFocusEvidence>,
-) -> Vec<AnomalyKind> {
-    let mut focused_by_tab = BTreeMap::<String, FocusedTopologyTab>::new();
-    for pane in panes
-        .iter()
-        .filter(|pane| pane.is_focused && !pane.is_floating)
-    {
-        let Some(view_id) = pane.view_id.as_deref() else {
-            continue;
-        };
-        let entry =
-            focused_by_tab
-                .entry(view_id.to_owned())
-                .or_insert_with(|| FocusedTopologyTab {
-                    tab_name: pane.view_name.clone(),
-                    tab_position: zellij_tab_position(view_id),
-                    pane_ids: Vec::new(),
-                });
-        if entry.tab_name.is_none() {
-            entry.tab_name.clone_from(&pane.view_name);
-        }
-        entry.pane_ids.push(pane.pane_id.to_string());
-    }
-
-    focused_by_tab
-        .into_values()
-        .filter(|tab| tab.pane_ids.len() > 1)
-        .map(|tab| AnomalyKind::MultiFocusTopology {
-            tab_name: tab.tab_name,
-            tab_position: tab.tab_position,
-            pane_ids: tab.pane_ids,
-            evidence: evidence.clone(),
-        })
-        .collect()
-}
-
-fn zellij_tab_position(view_id: &str) -> Option<u64> {
-    view_id.strip_prefix("tab_")?.parse().ok()
-}
-
-fn emit_topology_anomalies(
-    diag: &crate::diag::DiagSink,
-    frame: &PaneFrame,
-    anomalies: Vec<AnomalyKind>,
-) {
-    for anomaly in anomalies {
-        diag.emit_at_ms(
-            DiagEvent::FrameAnomaly {
-                role: ObserveRole::Elder,
-                anomaly,
-                window_ms: None,
-                frame: FrameStamp {
-                    produced_at_ms: Some(frame.produced_at_ms),
-                    rows: pane_count(frame),
-                    agents: 0,
-                    processes: pane_count(frame),
-                    pulled_rows: None,
-                    pulled_panes_produced_at_ms: Some(frame.produced_at_ms),
-                },
-                events_recent: EventsSig::default(),
-                gate_reject_streak: 0,
-                health_failure_streak: 0,
-                suppressed_since_last: 0,
-                dropped_msgs: 0,
-            },
-            frame.produced_at_ms,
-        );
     }
 }
 

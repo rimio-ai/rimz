@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use rimz::ids::WorkspaceId;
-use rimz::mux::{MuxBackend, ZellijBackend, zellij};
+use rimz::ids::{MuxName, PaneId, WorkspaceId};
+use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, ZellijBackend, zellij};
 use tempfile::TempDir;
 
 use super::support::*;
@@ -44,6 +44,8 @@ fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Pa
              if [ \"${{1:-}}\" = \"sidebar\" ] && [ \"${{2:-}}\" = \"focus\" ]; then\n\
                {real_rimz} \"$@\" >> {focus_exec_log} 2>&1\n\
                printf 'exit=%s\\n' \"$?\" >> {focus_exec_log}\n\
+             elif [ \"${{1:-}}\" = \"sidebar\" ] && [ \"${{2:-}}\" = \"serve\" ]; then\n\
+               {real_rimz} \"$@\" >/dev/null 2>> {focus_exec_log}\n\
              else\n\
                {real_rimz} \"$@\" >/dev/null 2>&1\n\
              fi\n",
@@ -138,6 +140,137 @@ fn logged_arg<'a>(line: &'a str, flag: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+fn focus_action_count(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .map(|contents| {
+            contents
+                .lines()
+                .filter(|line| line.contains("action focus-pane-id"))
+                .count()
+        })
+        .unwrap_or_default()
+}
+
+fn wait_for_focus_action(
+    log: &Path,
+    renderer_log: &Path,
+    pane: &PaneId,
+    prior_count: usize,
+) -> String {
+    let raw = pane.raw();
+    let numeric = raw.strip_prefix("terminal_").unwrap_or(raw);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let contents = std::fs::read_to_string(log).unwrap_or_default();
+        if contents
+            .lines()
+            .filter(|line| line.contains("action focus-pane-id"))
+            .skip(prior_count)
+            .any(|line| {
+                line.contains("action focus-pane-id")
+                    && line
+                        .split_whitespace()
+                        .any(|arg| arg == raw || arg == numeric)
+            })
+        {
+            return contents;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for renderer focus action on {pane}; trace: {contents}; renderer: {}",
+                std::fs::read_to_string(renderer_log).unwrap_or_default(),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn accepted_focus_repairs(xdg: &Path, target_pane: &PaneId) -> usize {
+    rimz::harness::assist_log::recent(xdg, None)
+        .iter()
+        .filter(|record| {
+            matches!(
+                &record.assist,
+                rimz::harness::assist_log::Assist::FocusRepair {
+                    target,
+                    outcome: rimz::harness::assist_log::FocusRepairOutcome::AcceptedUnconfirmed,
+                    ..
+                } if target == target_pane
+            )
+        })
+        .count()
+}
+
+fn wait_for_accepted_focus_repair(
+    xdg: &Path,
+    target_pane: &PaneId,
+    prior_count: usize,
+) -> Vec<rimz::harness::assist_log::AssistRecord> {
+    poll_until(
+        Duration::from_secs(10),
+        || Ok(rimz::harness::assist_log::recent(xdg, None)),
+        |records| {
+            records
+                .iter()
+                .filter(|record| {
+                    matches!(
+                        &record.assist,
+                        rimz::harness::assist_log::Assist::FocusRepair {
+                            target,
+                            outcome: rimz::harness::assist_log::FocusRepairOutcome::AcceptedUnconfirmed,
+                            ..
+                        } if target == target_pane
+                    )
+                })
+                .count()
+                > prior_count
+        },
+        "accepted-unconfirmed focus repair assist",
+    )
+}
+
+fn wait_for_reload_baseline(log: &Path, prior_lines: usize, pane: &PaneId) -> Vec<String> {
+    let raw = pane.raw();
+    let numeric = raw.strip_prefix("terminal_").unwrap_or(raw);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let lines = poke_lines(log);
+        let reloaded = lines[prior_lines..]
+            .iter()
+            .any(|line| line.contains("sidebar wake --reason alive"));
+        let observed = lines[prior_lines..].iter().any(|line| {
+            line.contains("\"clients\"")
+                && line.contains(&format!("\"kind\":\"terminal\",\"id\":{numeric}"))
+        });
+        if reloaded && observed {
+            return lines;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "reloaded presence plugin established no client baseline; pokes: {lines:?}",
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_focus_stranded(log: &Path, prior_lines: usize) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let lines = poke_lines(log);
+        if lines[prior_lines..]
+            .iter()
+            .any(|line| line.contains("sidebar wake --reason focus-stranded"))
+        {
+            return lines;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "presence plugin emitted no focus-stranded wake; pokes: {lines:?}",
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// End to end against a live Zellij: the pipe verb loads the presence plugin
@@ -278,6 +411,228 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
             .iter()
             .any(|line| line.contains("--reason alive")),
         "a converged (reloaded-in-place) plugin re-pokes alive; got {lines:?}",
+    );
+}
+
+#[test]
+fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
+    require_zellij!();
+    let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    if !real_rimz.exists() {
+        eprintln!("rimz binary not built; skipping tab-switch repair test");
+        return;
+    }
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|version| version >= zellij::MIN_ZELLIJ_VERSION) => {}
+        _ => {
+            eprintln!("zellij below the presence-plugin floor; skipping test");
+            return;
+        }
+    }
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("switch-repair");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("session cwd tempdir");
+    let poke_log = xdg.path().join("poke.log");
+    let focus_exec_log = xdg.path().join("focus-exec.log");
+    let rimz_shim = write_poke_shim(xdg.path(), &poke_log, &real_rimz, &focus_exec_log);
+    let trace = TempDir::new().expect("zellij trace tempdir");
+    let trace_log = trace.path().join("zellij.log");
+    let zellij_shim = trace.path().join("zellij");
+    let real_zellij = which::which("zellij").expect("zellij path");
+    std::fs::write(
+        &zellij_shim,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexec {} \"$@\"\n",
+            sh_quote(&trace_log.display().to_string()),
+            sh_quote(&real_zellij.display().to_string()),
+        ),
+    )
+    .expect("write zellij trace shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&zellij_shim)
+            .expect("zellij trace shim metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&zellij_shim, permissions).expect("chmod zellij trace shim");
+    }
+
+    let wasm = zellij::ensure_presence_plugin_artifact().expect("materialized presence plugin");
+    let mut sidebar = sidebar_opts(&name, cwd.path(), rimz_shim.clone(), 160);
+    sidebar.extra_env.insert(
+        "RIMZ_ZELLIJ_BIN".to_owned(),
+        zellij_shim.display().to_string(),
+    );
+    sidebar.extra_env.insert(
+        "RIMZ_PRESENCE_PLUGIN".to_owned(),
+        wasm.display().to_string(),
+    );
+    sidebar
+        .extra_env
+        .insert("RUST_LOG".to_owned(), "rimz=debug".to_owned());
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    publish_room_bin(xdg.path(), &sidebar);
+    backend.open_sidebar(&sidebar, None).expect("open sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    let mut client = AttachedClient::attach(xdg.path(), &name, 160, 45);
+    wait_for_attached_client(xdg.path(), &name);
+    let birth_sidebar = raw_sidebar_pane(xdg.path(), &name);
+    let birth_work = expect_list_panes(xdg.path(), &name)
+        .panes
+        .iter()
+        .find(|pane| {
+            pane.is_live_terminal()
+                && pane.tab_id == birth_sidebar.tab_id
+                && pane.id != birth_sidebar.id
+        })
+        .map(|pane| PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id)))
+        .expect("birth work pane");
+    if !client_viewed_panes(&backend, &name)
+        .expect("birth client view")
+        .contains(&birth_work)
+    {
+        client.press_alt('l');
+        wait_for_focused_client_pane(&backend, &name, &birth_work);
+    }
+
+    let target_tab = "switch target";
+    let input_log = cwd.path().join("routed-input.log");
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: target_tab.to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec![
+                        "sh".to_owned(),
+                        "-c".to_owned(),
+                        format!(
+                            "while IFS= read -r line; do printf '%s\\n' \"$line\" >> {}; done",
+                            sh_quote(&input_log.display().to_string()),
+                        ),
+                    ],
+                }])],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar: sidebar.clone(),
+        })
+        .expect("open switch target tab");
+    let target_work = wait_for_named_work_pane_count(xdg.path(), &name, target_tab, 1)[0];
+    let target_sidebar =
+        wait_for_named_sidebar_pane(xdg.path(), &name, target_tab).expect("target tab sidebar");
+    let target_work = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_work.id));
+    let target_sidebar =
+        PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_sidebar.id));
+    client.go_to_tab(2);
+    wait_for_focused_client_pane(&backend, &name, &target_work);
+
+    client.press_alt('h');
+    wait_for_focused_client_pane(&backend, &name, &target_sidebar);
+
+    client.go_to_tab(1);
+    wait_for_focused_client_pane(&backend, &name, &birth_work);
+    let pokes_before = poke_lines(&poke_log).len();
+    let actions_before = focus_action_count(&trace_log);
+    let assists_before = accepted_focus_repairs(xdg.path(), &target_work);
+    client.go_to_tab(2);
+    let stranded = wait_for_focus_stranded(&poke_log, pokes_before);
+    assert!(
+        stranded[pokes_before..].iter().any(|line| {
+            line.contains("--focus-generation") && line.contains("--focus-clients")
+        }),
+        "repair wake lacks generation/client evidence: {stranded:?}",
+    );
+    wait_for_focus_action(&trace_log, &focus_exec_log, &target_work, actions_before);
+    let assists = wait_for_accepted_focus_repair(xdg.path(), &target_work, assists_before);
+
+    client.send_line("rimz-routed-first");
+    let routed = poll_until(
+        Duration::from_secs(10),
+        || std::fs::read_to_string(&input_log).map_err(|err| err.to_string()),
+        |contents| contents.contains("rimz-routed-first"),
+        "terminal input routed to repaired work pane",
+    );
+    assert!(routed.contains("rimz-routed-first"));
+
+    assert!(assists.iter().any(|record| {
+        matches!(
+            &record.assist,
+            rimz::harness::assist_log::Assist::FocusRepair {
+                outcome: rimz::harness::assist_log::FocusRepairOutcome::AcceptedUnconfirmed,
+                ..
+            }
+        )
+    }));
+
+    client.press_alt('h');
+    std::thread::sleep(Duration::from_millis(100));
+    client.go_to_tab(1);
+    wait_for_focused_client_pane(&backend, &name, &birth_work);
+    let pokes_before_reload = poke_lines(&poke_log).len();
+    let room_bin = rimz::StatePaths::under(sidebar.workspace_id.clone(), xdg.path())
+        .expect("room state paths")
+        .room_bin;
+    backend
+        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+            session_name: name.clone(),
+            workspace_id: sidebar.workspace_id.clone(),
+            wasm,
+            rimz_bin: room_bin,
+            converge: true,
+            seed_permissions: false,
+            focus_key: Some("Alt+p".to_owned()),
+            focus_follows_mouse: false,
+            mouse_click_through: true,
+        })
+        .expect("reload presence plugin in place");
+    wait_for_reload_baseline(&poke_log, pokes_before_reload, &birth_work);
+    let pokes_before = poke_lines(&poke_log).len();
+    let actions_before = focus_action_count(&trace_log);
+    let assists_before = accepted_focus_repairs(xdg.path(), &target_work);
+    client.go_to_tab(2);
+    wait_for_focus_stranded(&poke_log, pokes_before);
+    wait_for_focus_action(&trace_log, &focus_exec_log, &target_work, actions_before);
+    wait_for_accepted_focus_repair(xdg.path(), &target_work, assists_before);
+    client.send_line("rimz-routed-after-reload");
+    poll_until(
+        Duration::from_secs(10),
+        || std::fs::read_to_string(&input_log).map_err(|err| err.to_string()),
+        |contents| contents.contains("rimz-routed-after-reload"),
+        "terminal input routed after plugin reload",
+    );
+
+    client.press_alt('h');
+    std::thread::sleep(Duration::from_millis(100));
+    client.go_to_tab(1);
+    wait_for_focused_client_pane(&backend, &name, &birth_work);
+    let actions_before = focus_action_count(&trace_log);
+    client.go_to_tab(2);
+    drop(client);
+    let detached = poll_until(
+        Duration::from_secs(5),
+        || client_viewed_panes(&backend, &name),
+        Vec::is_empty,
+        "detached client view",
+    );
+    assert!(detached.is_empty());
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        focus_action_count(&trace_log),
+        actions_before,
+        "a switch confirmation acted after the client detached; trace: {}",
+        std::fs::read_to_string(&trace_log).unwrap_or_default(),
     );
 }
 
@@ -466,10 +821,6 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
     // Regression shape: the plugin loads from the test process cwd, then the
     // user presses the key from a pane with a different cwd. Url-targeted
     // keybinds miss that running instance; id-targeted keybinds reach it.
-    let tab_id = tab_ids(session.xdg.path(), &name)
-        .into_iter()
-        .next()
-        .expect("session has a tab");
     let before: BTreeSet<u64> = work_pane_geometry(session.xdg.path(), &name)
         .into_iter()
         .map(|pane| pane.id)
@@ -480,12 +831,13 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
         .into_iter()
         .find(|pane| !before.contains(&pane.id))
         .unwrap_or_else(|| panic!("new different-cwd pane not found; before ids were {before:?}"));
-    focus_nonplugin_pane_until(
-        session.xdg.path(),
+    let session_xdg = session.xdg.path().to_path_buf();
+    focus_attached_client_pane_until(
+        &session_xdg,
         &name,
-        tab_id,
         work_pane.id,
         "different-cwd focus-key source pane",
+        || session.press_alt('l'),
     );
 
     let deadline = Instant::now() + SPAWN_TIMEOUT;

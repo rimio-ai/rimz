@@ -14,15 +14,12 @@ fn collapsed_cap_keeps_attention_focused_unread_and_liveness_process_rows() {
         "attention row remains visible past the calm-row cap",
     );
 
-    let mut rows = idle_rows(8);
-    rows[7].pane.as_mut().expect("pane").is_focused = true;
-    assert_visible(
-        &rows,
-        None,
-        false,
-        "idle-7",
-        "focused row remains visible past the calm-row cap",
-    );
+    let rows = idle_rows(8);
+    let focused_pane = rows[7].pane.as_ref().expect("pane").pane_id.clone();
+    let group = group(rows);
+    let visible = visible_ids_with_context(&group, None, false, None, Some(&focused_pane));
+    assert!(visible.contains(&"idle-7"));
+    assert!(visible.len() < group.rows.len(), "tail still trims");
 
     let mut rows = idle_rows(8);
     rows[7].unread = true;
@@ -88,7 +85,8 @@ fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
-    let roster = crate::sidebar_pane::view::VisibleRoster::single(&group, None, false, Some(&held));
+    let roster =
+        crate::sidebar_pane::view::VisibleRoster::single(&group, None, false, Some(&held), None);
     let lines = worktree_group_lines_projected(WorktreeRenderContext {
         row: &ctx,
         roster: &roster,
@@ -124,7 +122,8 @@ fn expanded_group_keeps_less_control_when_hold_makes_all_rows_visible() {
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
-    let roster = crate::sidebar_pane::view::VisibleRoster::single(&group, None, true, Some(&held));
+    let roster =
+        crate::sidebar_pane::view::VisibleRoster::single(&group, None, true, Some(&held), None);
     let block = worktree_group_lines_projected(WorktreeRenderContext {
         row: &ctx,
         roster: &roster,
@@ -196,13 +195,13 @@ fn finished_group_collapses_unread_success_until_revealed() {
         "a status filter reveals the terminal roster"
     );
 
-    group.rows[1].pane.as_mut().expect("pane").is_focused = true;
+    let focused_pane = group.rows[1].pane.as_ref().expect("pane").pane_id.clone();
     assert_eq!(
-        visible_ids(&group, None, false),
+        visible_ids_with_context(&group, None, false, None, Some(&focused_pane)),
         ["success-unread", "success"],
         "a focused member reveals the whole finished roster"
     );
-    let (focused_texts, focused_map, _) = render_group(&group, false);
+    let (focused_texts, focused_map, _) = render_group_with_focus(&group, false, &focused_pane);
     assert!(
         focused_texts.iter().all(|line| !line.contains('▸')),
         "a revealed finished roster renders full cards and no receipt: {focused_texts:?}"
@@ -211,7 +210,6 @@ fn finished_group_collapses_unread_success_until_revealed() {
         focused_map.iter().skip(1).all(Option::is_some),
         "every line after the header belongs to a revealed card: {focused_map:?}"
     );
-    group.rows[1].pane.as_mut().expect("pane").is_focused = false;
     group.rows[0]
         .as_agent_mut()
         .expect("agent row")
@@ -532,7 +530,7 @@ fn held_member_reveals_the_whole_finished_roster() {
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let roster =
-        crate::sidebar_pane::view::VisibleRoster::single(&finished, None, false, Some(&held));
+        crate::sidebar_pane::view::VisibleRoster::single(&finished, None, false, Some(&held), None);
     assert_eq!(
         roster
             .rows()
@@ -701,6 +699,45 @@ fn render_group(
     render_group_at_width(group, expanded, 54)
 }
 
+fn render_group_with_focus(
+    group: &crate::SidebarWorktreeGroup,
+    expanded: bool,
+    focused_pane: &crate::PaneId,
+) -> (Vec<String>, Vec<Option<usize>>, Vec<HitRegion>) {
+    let snapshot = snapshot_with(Vec::new());
+    let theme = Theme::fixed(true);
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let roster = crate::sidebar_pane::view::VisibleRoster::single(
+        group,
+        None,
+        expanded,
+        None,
+        Some(focused_pane),
+    );
+    let block = worktree_group_lines_projected(WorktreeRenderContext {
+        row: &ctx,
+        roster: &roster,
+        group: &roster.groups()[0],
+        meter_pixels: None,
+    });
+    let texts = block
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+    (
+        texts,
+        block.interactions.row_map().to_vec(),
+        block.interactions.regions().to_vec(),
+    )
+}
+
 fn render_group_at_width(
     group: &crate::SidebarWorktreeGroup,
     expanded: bool,
@@ -763,7 +800,17 @@ fn visible_ids_with_held<'a>(
     expanded: bool,
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a str> {
-    crate::sidebar_pane::view::VisibleRoster::single(group, filter, expanded, held)
+    visible_ids_with_context(group, filter, expanded, held, None)
+}
+
+fn visible_ids_with_context<'a>(
+    group: &'a crate::SidebarWorktreeGroup,
+    filter: Option<BodyFilter>,
+    expanded: bool,
+    held: Option<&HashSet<String>>,
+    focused_pane: Option<&crate::PaneId>,
+) -> Vec<&'a str> {
+    crate::sidebar_pane::view::VisibleRoster::single(group, filter, expanded, held, focused_pane)
         .rows()
         .iter()
         .copied()

@@ -1,9 +1,6 @@
 //! Zellij topology projection and sidebar classification.
 
-use std::{
-    collections::{HashMap, HashSet},
-    env,
-};
+use std::collections::{HashMap, HashSet};
 
 use crate::ids::{MuxName, PaneId};
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
@@ -118,12 +115,6 @@ pub(super) fn has_suspended_command_pane(panes: &[PaneTopologyPane]) -> bool {
 
 fn is_session_health_command_pane(pane: &PaneTopologyPane) -> bool {
     !pane.is_plugin && !pane.is_suppressed && !is_sidebar_pane(pane)
-}
-
-/// `ZELLIJ_PANE_ID` is the bare integer of the pane the caller runs in. `rimz
-/// reload` runs in the user's pane, so refocusing it restores their visible tab.
-pub(super) fn own_zellij_pane_id() -> Option<u64> {
-    env::var("ZELLIJ_PANE_ID").ok()?.trim().parse().ok()
 }
 
 pub(super) fn parse_terminal_id(pane_id: &str) -> Option<u64> {
@@ -384,7 +375,7 @@ pub(super) fn wrong_tab_mounted_sidebar_pane(
 pub(super) struct RawPaneListing {
     pub(super) panes: Vec<PaneTopologyPane>,
     pub(super) observed_at_ms: u64,
-    pub(super) authoritative_focus: Option<PaneId>,
+    pub(super) session_focus: Option<PaneId>,
     pub(super) client_view: Option<ClientView>,
 }
 
@@ -400,7 +391,7 @@ impl RawPaneListing {
         Self {
             panes,
             observed_at_ms: produced_at_ms,
-            authoritative_focus: focused_pane.map(zellij_pane_id),
+            session_focus: focused_pane.map(zellij_pane_id),
             client_view: clients.map(client_view_from_topology),
         }
     }
@@ -418,7 +409,7 @@ impl RawPaneListing {
                 .filter_map(|pane| project(pane, &session_name))
                 .collect(),
             observed_at_ms: self.observed_at_ms,
-            authoritative_focus: self.authoritative_focus,
+            session_focus: self.session_focus,
             client_view: self.client_view,
         }
     }
@@ -426,6 +417,19 @@ impl RawPaneListing {
 
 fn client_view_from_topology(clients: TopologyClients) -> ClientView {
     ClientView {
+        clients: clients
+            .views
+            .into_iter()
+            .map(|view| crate::mux::ClientPaneView {
+                client_id: crate::mux::MuxClientId::Zellij(view.client_id),
+                pane_id: match view.pane_id {
+                    super::pane_topology::TopologyClientPane::Terminal(id) => zellij_pane_id(id),
+                    super::pane_topology::TopologyClientPane::Plugin(id) => {
+                        PaneId::from_parts(MuxName::Zellij, format!("plugin_{id}"))
+                    }
+                },
+            })
+            .collect(),
         viewed_panes: clients
             .viewed_panes
             .into_iter()

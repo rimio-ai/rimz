@@ -388,43 +388,6 @@ fn identity_keys_partition_episodes_and_subjects() {
 }
 
 #[test]
-fn multi_focus_anomaly_keeps_wire_and_subject_regression() {
-    let anomaly = AnomalyKind::MultiFocusTopology {
-        tab_name: Some("work".to_owned()),
-        tab_position: Some(7),
-        pane_ids: vec![
-            "zellij:terminal_1".to_owned(),
-            "zellij:terminal_2".to_owned(),
-        ],
-        evidence: None,
-    };
-    assert_eq!(anomaly.key(), "multi_focus_topology");
-    assert_eq!(anomaly.subject().as_deref(), Some("7"));
-
-    let event = DiagEvent::FrameAnomaly {
-        role: ObserveRole::Consumer,
-        anomaly,
-        window_ms: None,
-        frame: frame_stamp(13_000),
-        events_recent: EventsSig::default(),
-        gate_reject_streak: 0,
-        health_failure_streak: 0,
-        suppressed_since_last: 0,
-        dropped_msgs: 0,
-    };
-    let value = serde_json::to_value(&event).expect("encode");
-    assert_eq!(value["kind"], "frame_anomaly");
-    assert_eq!(value["anomaly"]["detector"], "multi_focus_topology");
-    assert_eq!(value["anomaly"]["tab_name"], "work");
-    assert_eq!(value["anomaly"]["tab_position"], 7);
-    assert_eq!(
-        value["anomaly"]["pane_ids"],
-        serde_json::json!(["zellij:terminal_1", "zellij:terminal_2"])
-    );
-    assert_eq!(serde_json::from_value::<DiagEvent>(value).unwrap(), event);
-}
-
-#[test]
 fn representative_events_keep_json_wire_shape() {
     let rows = [
         (
@@ -500,7 +463,7 @@ fn provider_mana_identity_prefers_scope_and_keeps_legacy_duration_wire() {
 }
 
 #[test]
-fn pane_drop_and_multi_focus_evidence_default_for_legacy_records() {
+fn pane_drop_evidence_defaults_for_legacy_records() {
     let drop: DiagEvent = serde_json::from_value(serde_json::json!({
         "kind": "pane_count_drop",
         "prior": 3,
@@ -512,15 +475,5 @@ fn pane_drop_and_multi_focus_evidence_default_for_legacy_records() {
     assert!(matches!(
         drop,
         DiagEvent::PaneCountDrop { evidence: None, .. }
-    ));
-
-    let focus: AnomalyKind = serde_json::from_value(serde_json::json!({
-        "detector": "multi_focus_topology",
-        "pane_ids": ["zellij:terminal_1", "zellij:terminal_2"]
-    }))
-    .unwrap();
-    assert!(matches!(
-        focus,
-        AnomalyKind::MultiFocusTopology { evidence: None, .. }
     ));
 }

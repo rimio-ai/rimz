@@ -865,6 +865,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
         tabs: Vec::new(),
         carried_panes: Vec::new(),
         viewed_panes: vec![pane_id.clone()],
+        client_views: Vec::new(),
         focused_pane: Some(pane_id.clone()),
         presence: None,
     };

@@ -127,12 +127,13 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
         } => {
             let target = resolve_pane_target(&target, globals)?;
             let backend = rimz::mux::backend_for(target.pane.mux());
-            focus(
-                &*backend,
-                &target.pane,
-                session_name.or(target.session_name),
-                pane_process_start,
-            )
+            let session_name = match session_name.or(target.session_name) {
+                Some(session_name) => session_name,
+                None => {
+                    WorkspaceResolver::resolve_participant(".", globals.root.clone())?.session_name
+                }
+            };
+            focus(&*backend, &target.pane, &session_name, pane_process_start)
         }
         PaneSubcmd::Split => {
             let mux = rimz::mux::auto_detect_backend(globals.mux)?;
@@ -155,8 +156,6 @@ enum PaneTarget {
 
 struct ResolvedPaneTarget {
     pane: PaneId,
-    /// Address targets resolve through a workspace, so carry its session for
-    /// Zellij focus validation. Raw pane-id targets keep historical behavior.
     session_name: Option<String>,
 }
 
@@ -285,7 +284,7 @@ fn list(
         return render::json_pretty(&payload);
     }
 
-    let mut table = render::Table::new(["", "AGENT", "STATUS", "CWD", "PANE"]);
+    let mut table = render::Table::new(["AGENT", "STATUS", "CWD", "PANE"]);
     for tab in group_by_tab(&panes) {
         table.section(tab.label());
         for pane in &tab.panes {
@@ -347,14 +346,13 @@ fn group_by_tab(panes: &[PaneRef]) -> Vec<TabGroup<'_>> {
     tabs
 }
 
-/// The styled cells for one pane row: focus dot, occupant (agent handle or the
-/// literal `process`), status, cwd, and the pane id.
+/// The styled cells for one pane row: occupant (agent handle or the literal
+/// `process`), status, cwd, and the pane id.
 fn pane_row(
     pane: &PaneRef,
     agent: Option<&AgentState>,
     peers: &[&AgentState],
 ) -> Vec<render::Cell> {
-    let focus = if pane.is_focused { "●" } else { "" };
     let occupant_cell = match agent {
         Some(agent) => render::cell(rimz::harness::target::agent_handle(agent, peers, true))
             .fg(render::palette::accent()),
@@ -377,7 +375,6 @@ fn pane_row(
         .as_deref()
         .map_or_else(|| "-".to_owned(), render::home_relative);
     vec![
-        render::cell(focus).fg(render::palette::accent()),
         occupant_cell,
         status_cell,
         render::cell(cwd).dash(),
@@ -404,7 +401,6 @@ struct TabJson<'a> {
 #[derive(serde::Serialize)]
 struct PaneJson<'a> {
     pane_id: String,
-    focused: bool,
     /// `agent` when an agent overlay binds to the pane, `process` otherwise.
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -433,7 +429,6 @@ fn pane_json<'a>(
 ) -> PaneJson<'a> {
     PaneJson {
         pane_id: pane.pane_id.to_string(),
-        focused: pane.is_focused,
         kind: if agent.is_some() { "agent" } else { "process" },
         agent: agent.map(|agent| AgentJson {
             kind: agent.kind.to_string(),
@@ -469,18 +464,28 @@ fn capture(
 fn focus(
     backend: &dyn MuxBackend,
     pane: &PaneId,
-    session_name: Option<String>,
+    session_name: &str,
     pane_process_start: Option<String>,
 ) -> Result<()> {
     validate_pane_not_reused(
         backend,
         pane,
-        session_name.as_deref(),
+        Some(session_name),
         pane_process_start.as_deref(),
     )?;
-    backend
-        .focus_pane(pane, session_name.as_deref())
-        .map_err(Into::into)
+    let workspace_id = rimz::room::session::workspace_record_for_session(session_name)?
+        .map(|record| record.workspace_id)
+        .ok_or_else(|| anyhow::anyhow!("pane focus requires a managed RimZ room session"))?;
+    let runtime = rimz::RuntimePaths::for_workspace(workspace_id)?;
+    rimz::sidebar::focus_anchor::execute_action(
+        backend,
+        &runtime,
+        session_name,
+        pane.clone(),
+        rimz::sidebar::focus_anchor::FocusOrigin::User,
+        None,
+    )?;
+    Ok(())
 }
 
 fn validate_pane_not_reused(
@@ -614,11 +619,10 @@ mod tests {
         assert!(message.contains("rimz pane list"));
     }
 
-    fn pane(raw: &str, view: &str, name: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
+    fn pane(raw: &str, view: &str, name: &str, command: &str, cwd: &str) -> PaneRef {
         PaneRef {
             view_id: Some(view.to_owned()),
             view_name: Some(name.to_owned()),
-            is_focused: focused,
             is_floating: false,
             command: Some(command.to_owned()),
             cwd: Some(cwd.to_owned()),
@@ -645,9 +649,9 @@ mod tests {
     #[test]
     fn group_by_tab_buckets_panes_in_first_seen_order() {
         let panes = vec![
-            pane("terminal_1", "tab_0", "#auth", "claude", "/repo/auth", true),
-            pane("terminal_2", "tab_1", "shell", "zsh", "/repo", false),
-            pane("terminal_3", "tab_0", "#auth", "zsh", "/repo/auth", false),
+            pane("terminal_1", "tab_0", "#auth", "claude", "/repo/auth"),
+            pane("terminal_2", "tab_1", "shell", "zsh", "/repo"),
+            pane("terminal_3", "tab_0", "#auth", "zsh", "/repo/auth"),
         ];
         let tabs = group_by_tab(&panes);
         assert_eq!(tabs.len(), 2);
@@ -659,22 +663,23 @@ mod tests {
 
     #[test]
     fn pane_json_annotates_the_bound_agent_with_its_handle() {
-        let pane = pane("terminal_1", "tab_0", "#main", "claude", "/repo/main", true);
+        let pane = pane("terminal_1", "tab_0", "#main", "claude", "/repo/main");
         let agent = agent_on("terminal_1", "claude", "main");
         let peers: Vec<&AgentState> = vec![&agent];
         let json = pane_json(&pane, Some(&agent), &peers);
         assert_eq!(json.kind, "agent");
-        let bound = json.agent.expect("agent bound");
+        let bound = json.agent.as_ref().expect("agent bound");
         assert_eq!(bound.handle, "@claude#main");
         assert_eq!(bound.kind, "claude");
         assert_eq!(bound.worktree.as_deref(), Some("main"));
-        assert!(json.focused);
+        let serialized = serde_json::to_value(&json).expect("pane JSON");
+        assert!(serialized.get("focused").is_none());
         assert_eq!(json.pane_id, "zellij:terminal_1");
     }
 
     #[test]
     fn pane_json_leaves_a_plain_pane_unannotated() {
-        let pane = pane("terminal_2", "tab_1", "shell", "zsh", "/home/x", false);
+        let pane = pane("terminal_2", "tab_1", "shell", "zsh", "/home/x");
         let json = pane_json(&pane, None, &[]);
         assert!(json.agent.is_none(), "a bare shell carries no agent");
         assert_eq!(json.kind, "process");
@@ -702,7 +707,7 @@ mod tests {
         let reused = PaneRef {
             command: Some("zsh".to_owned()),
             pane_process_start: Some(t2),
-            ..pane("terminal_1", "tab_0", "shell", "zsh", "/repo", false)
+            ..pane("terminal_1", "tab_0", "shell", "zsh", "/repo")
         };
         assert!(
             snapshot.agent_bound_to_pane(&reused).is_none(),
@@ -710,7 +715,7 @@ mod tests {
         );
 
         // The same pane still running codex binds as before.
-        let live = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main", true);
+        let live = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
         let bound = snapshot
             .agent_bound_to_pane(&live)
             .expect("the live codex pane still binds");

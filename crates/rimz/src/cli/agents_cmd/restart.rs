@@ -137,9 +137,16 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
 
-    if let Err(err) = backend
-        .focus_pane(&old_pane, Some(&workspace.session_name))
-        .context("focusing the agent pane for restart")
+    let focus_runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    if let Err(err) = rimz::sidebar::focus_anchor::execute_action(
+        backend.as_ref(),
+        &focus_runtime,
+        &workspace.session_name,
+        old_pane.clone(),
+        rimz::sidebar::focus_anchor::FocusOrigin::User,
+        None,
+    )
+    .context("focusing the agent pane for restart")
     {
         mark_fresh_failed(&store, &workspace, fresh_identity, &cwd);
         return Err(err);

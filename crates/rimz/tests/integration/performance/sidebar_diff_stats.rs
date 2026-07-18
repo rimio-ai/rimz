@@ -74,7 +74,6 @@ impl Fixture {
                 view_kind: None,
                 view_name: None,
                 title: None,
-                is_focused: false,
                 is_floating: false,
                 command: Some("bash".to_owned()),
                 foreground_cmdline: None,

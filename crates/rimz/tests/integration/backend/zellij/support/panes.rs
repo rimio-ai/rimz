@@ -33,8 +33,6 @@ pub(in crate::backend::zellij) struct ListedPane {
     pub(in crate::backend::zellij) is_suppressed: bool,
     #[serde(default)]
     pub(in crate::backend::zellij) is_floating: bool,
-    #[serde(default)]
-    pub(in crate::backend::zellij) is_focused: bool,
     pub(in crate::backend::zellij) tab_id: u64,
     #[serde(default)]
     pub(in crate::backend::zellij) tab_position: Option<u64>,
@@ -82,7 +80,6 @@ impl ListedPane {
             view_kind: Some(ViewKind::Tab),
             view_name: self.tab_name.clone(),
             title: self.title.clone(),
-            is_focused: self.is_focused,
             is_floating: self.is_floating,
             command: self
                 .pane_command
@@ -185,15 +182,6 @@ impl PaneSnapshot {
             .iter()
             .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
             .count()
-    }
-
-    pub(in crate::backend::zellij) fn focused_terminal_in_tab(
-        &self,
-        tab_id: u64,
-    ) -> Option<&ListedPane> {
-        self.panes
-            .iter()
-            .find(|pane| !pane.is_plugin && pane.tab_id == tab_id && pane.is_focused)
     }
 
     pub(in crate::backend::zellij) fn terminal_titles_in_tab(&self, tab_id: u64) -> Vec<String> {

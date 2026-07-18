@@ -107,7 +107,13 @@ impl<'a> VisibleRoster<'a> {
         for group in &snapshot.worktree_groups {
             let expanded = expanded_groups.contains(&group.key);
             let start = rows.len();
-            let projection = project_group(group, filter, expanded, held);
+            let projection = project_group(
+                group,
+                filter,
+                expanded,
+                held,
+                snapshot.focused_pane.as_ref(),
+            );
             let hidden_count = if filter.is_none() {
                 group.rows.len().saturating_sub(projection.rows.len())
             } else {
@@ -139,8 +145,9 @@ impl<'a> VisibleRoster<'a> {
         filter: Option<BodyFilter>,
         expanded: bool,
         held: Option<&HashSet<String>>,
+        focused_pane: Option<&PaneId>,
     ) -> Self {
-        let projection = project_group(group, filter, expanded, held);
+        let projection = project_group(group, filter, expanded, held, focused_pane);
         let hidden_count = if filter.is_none() {
             group.rows.len().saturating_sub(projection.rows.len())
         } else {
@@ -231,9 +238,18 @@ fn project_group<'a>(
     filter: Option<BodyFilter>,
     expanded: bool,
     held: Option<&HashSet<String>>,
+    focused_pane: Option<&PaneId>,
 ) -> GroupProjection<'a> {
     let pr_open = group.pr_state == Some(WorktreePrState::Open);
-    project_rows(&group.rows, group.finished, filter, expanded, held, pr_open)
+    project_rows(
+        &group.rows,
+        group.finished,
+        filter,
+        expanded,
+        held,
+        pr_open,
+        focused_pane,
+    )
 }
 
 fn project_rows<'a>(
@@ -243,6 +259,7 @@ fn project_rows<'a>(
     expanded: bool,
     held: Option<&HashSet<String>>,
     pr_open: bool,
+    focused_pane: Option<&PaneId>,
 ) -> GroupProjection<'a> {
     let process_is_only_live_member = process_is_only_live_member(source);
     let liveness_process_id = process_is_only_live_member
@@ -257,8 +274,7 @@ fn project_rows<'a>(
     // member. Once both clear, every row collapses into the receipt together.
     let revealed = finished
         && source.iter().any(|row| {
-            row.pane.as_ref().is_some_and(|pane| pane.is_focused)
-                || held.is_some_and(|ids| ids.contains(&row.id))
+            row_is_focused(row, focused_pane) || held.is_some_and(|ids| ids.contains(&row.id))
         });
     let mut rows = Vec::new();
     let mut natural_visible = 0;
@@ -268,7 +284,7 @@ fn project_rows<'a>(
             || row
                 .status()
                 .is_some_and(|status| status != AgentStatus::Idle)
-            || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
+            || row_is_focused(row, focused_pane)
             || liveness_process_id == Some(row.id.as_str());
         let natural = if finished {
             revealed
@@ -311,7 +327,13 @@ pub fn capped_visible_rows<'a>(
     rows: &'a [SidebarRow],
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a SidebarRow> {
-    project_rows(rows, false, None, false, held, false).rows
+    project_rows(rows, false, None, false, held, false, None).rows
+}
+
+fn row_is_focused(row: &SidebarRow, focused_pane: Option<&PaneId>) -> bool {
+    row.pane
+        .as_ref()
+        .is_some_and(|pane| Some(&pane.pane_id) == focused_pane)
 }
 
 fn row_band(row: &SidebarRow) -> u8 {
@@ -372,12 +394,15 @@ mod tests {
     fn roster_keeps_attention_focus_unread_and_only_live_process_beyond_cap() {
         let mut rows = idle_rows(9);
         rows[6].unread = true;
-        rows[7].pane.as_mut().unwrap().is_focused = true;
         rows[8].card = RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Failed,
             ..AgentCard::default()
         }));
-        let attention_snapshot = snapshot(vec![group(rows)]);
+        let mut attention_snapshot = snapshot(vec![group(rows)]);
+        attention_snapshot.focused_pane = attention_snapshot.worktree_groups[0].rows[7]
+            .pane
+            .as_ref()
+            .map(|pane| pane.pane_id.clone());
         let roster = VisibleRoster::baseline(&attention_snapshot);
         assert!(ids(&roster).contains(&"idle-6"));
         assert!(ids(&roster).contains(&"idle-7"));
@@ -410,11 +435,10 @@ mod tests {
         assert_eq!(collapsed.groups()[0].hidden_count(), 2);
         assert_eq!(collapsed.groups()[1].range(), 0..1);
 
-        snapshot.worktree_groups[0].rows[1]
+        snapshot.focused_pane = snapshot.worktree_groups[0].rows[1]
             .pane
-            .as_mut()
-            .unwrap()
-            .is_focused = true;
+            .as_ref()
+            .map(|pane| pane.pane_id.clone());
         let focused = VisibleRoster::baseline(&snapshot);
         assert_eq!(ids(&focused), ["done-unread", "done-focused", "active"]);
         assert_eq!(focused.ordinal_of_id("active"), Some(2));

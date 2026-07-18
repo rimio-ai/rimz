@@ -106,7 +106,6 @@ fn terminal_pane(
         exited: false,
         is_suppressed: false,
         is_floating: false,
-        is_focused: false,
         tab_position,
         tab_name: Some("work".to_owned()),
         pane_columns: Some(pane_columns),
@@ -222,9 +221,9 @@ fn list_panes_uses_fresh_topology_and_honors_explicit_floor() {
         Some(TopologyClients {
             human_clients: 2,
             viewed_panes: vec![7],
+            views: Vec::new(),
         }),
         vec![PaneTopologyPane {
-            is_focused: true,
             pane_command: Some("zsh".to_owned()),
             pane_cwd: Some(room.project_root.path().to_string_lossy().into_owned()),
             terminal_command: None,
@@ -360,7 +359,7 @@ dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/zellij.log"
 case " $* " in
   *" action list-panes --all --json "*)
-    printf '[{"id":7,"is_plugin":false,"is_focused":true,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","pane_columns":40,"pane_x":0,"title":"rimz-sidebar","terminal_command":"rimz"}]\n'
+    printf '[{"id":7,"is_plugin":false,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","pane_columns":40,"pane_x":0,"title":"rimz-sidebar","terminal_command":"rimz"}]\n'
     exit 0 ;;
 esac
 exit 1
@@ -399,8 +398,8 @@ exit 1
     );
     assert_eq!(background.pane_command.as_deref(), Some("rimz-sidebar"));
     assert_eq!(
-        listing.authoritative_focus.as_ref().map(PaneId::raw),
-        Some("terminal_7")
+        listing.session_focus, None,
+        "pane roster is not focus truth"
     );
     assert!(listing.observed_at_ms >= unix_now_ms().saturating_sub(1_000));
     assert!(shim_log(&temp).contains("action list-panes --all --json"));
@@ -415,7 +414,6 @@ fn authoritative_list_panes_falls_back_unless_required() {
         Some(8),
         None,
         vec![PaneTopologyPane {
-            is_focused: true,
             tab_name: Some("fallback".to_owned()),
             pane_command: Some("zsh".to_owned()),
             ..terminal_pane(8, 1, 80, 0, "zsh")
@@ -660,7 +658,6 @@ fn redock_moves_across_every_adjacent_pane_before_resizing() {
     let room = TestRoom::new();
     let mut stale: Vec<_> = (1..=7)
         .map(|id| PaneTopologyPane {
-            is_focused: id == 1,
             ..terminal_pane(id, 1, 140, (id - 1) * 140, "zsh")
         })
         .collect();
@@ -678,7 +675,7 @@ case " $* " in
     while [ "$i" -lt 7 ]; do
       if [ "$i" -ge "$slot" ]; then x=$(((i + 1) * 140)); else x=$((i * 140)); fi
       if [ "$i" -gt 0 ]; then printf ','; fi
-      printf '{"id":%s,"is_plugin":false,"is_focused":%s,"tab_position":1,"pane_columns":140,"pane_x":%s,"title":"zsh"}' "$((i + 1))" "$(if [ "$i" -eq 0 ]; then printf true; else printf false; fi)" "$x"; i=$((i + 1))
+      printf '{"id":%s,"is_plugin":false,"tab_position":1,"pane_columns":140,"pane_x":%s,"title":"zsh"}' "$((i + 1))" "$x"; i=$((i + 1))
     done
     printf ',{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":%s,"pane_x":%s,"title":"rimz-sidebar"}]\n' "$cols" "$sidebar_x"; exit 0 ;;
   *" action move-pane left --pane-id terminal_8 "*) count=$(cat "$moves" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$moves"; exit 0 ;;
@@ -723,7 +720,7 @@ fn redock_stops_on_authoritative_no_progress() {
         r#"#!/bin/sh
 dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
 case " $* " in
-  *" action list-panes --all --json "*) printf '[{"id":1,"is_plugin":false,"is_focused":true,"tab_position":1,"pane_columns":90,"pane_x":0,"title":"zsh"},{"id":2,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":90,"title":"zsh"},{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":180,"title":"rimz-sidebar"}]\n'; exit 0 ;;
+  *" action list-panes --all --json "*) printf '[{"id":1,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":0,"title":"zsh"},{"id":2,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":90,"title":"zsh"},{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":180,"title":"rimz-sidebar"}]\n'; exit 0 ;;
   *" action move-pane left --pane-id terminal_8 "*) exit 0 ;;
 esac
 exit 1
@@ -768,7 +765,6 @@ fn sidebar_add_never_cleans_cross_talk_hint_and_uses_supported_split() {
         Some(7),
         None,
         vec![PaneTopologyPane {
-            is_focused: true,
             pane_command: Some("zsh".to_owned()),
             terminal_command: Some("zsh".to_owned()),
             ..terminal_pane(7, 1, 120, 0, "zsh")
@@ -785,16 +781,16 @@ case " $* " in
     count=$(cat "$state" 2>/dev/null || printf 0)
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     if [ "$count" -ge 2 ]; then
-      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]}}\n' "$now" > "{cache}"
+      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]}}\n' "$now" > "{cache}"
     else
-      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]}}\n' "$now" > "{cache}"
+      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]}}\n' "$now" > "{cache}"
     fi
     exit 0 ;;
   *" action list-panes --all --json "*)
     count=$(cat "$state" 2>/dev/null || printf 0)
-    if [ "$count" -ge 2 ]; then printf '[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]\n';
-    elif [ "$count" -ge 1 ]; then printf '[{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]\n';
-    else printf '[{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":120}}]\n'; fi
+    if [ "$count" -ge 2 ]; then printf '[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]\n';
+    elif [ "$count" -ge 1 ]; then printf '[{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]\n';
+    else printf '[{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":120}}]\n'; fi
     exit 0 ;;
   *" action new-pane "*) count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; printf 'terminal_7\n'; exit 0 ;;
 esac

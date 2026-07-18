@@ -238,7 +238,7 @@ impl MuxBackend for TmuxBackend {
         Ok(PaneListing {
             panes,
             observed_at_ms,
-            authoritative_focus: None,
+            session_focus: None,
             client_view: None,
         })
     }
@@ -250,7 +250,7 @@ impl MuxBackend for TmuxBackend {
         let mut spec = self.cmd().args([
             "list-clients",
             "-F",
-            "#{pane_id} #{client_activity} #{client_flags}",
+            "#{client_name}\t#{pane_id}\t#{client_activity}\t#{client_flags}",
         ]);
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
@@ -913,7 +913,7 @@ impl TmuxBackend {
     }
 
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
-        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{pane_active},#{s/,/_/g:window_name},#{s/,/_/g:pane_title},#{pane_floating_flag},#{s/,/_/g:pane_start_command}";
+        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{s/,/_/g:window_name},#{s/,/_/g:pane_title},#{pane_floating_flag},#{s/,/_/g:pane_start_command}";
         match session_name {
             Some(session) => self
                 .cmd()

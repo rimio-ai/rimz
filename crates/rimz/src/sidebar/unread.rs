@@ -342,7 +342,7 @@ pub(crate) fn opened_unread(row: &SidebarRow, episode_ms: i64, silent: bool) -> 
         root: row.worktree_path.clone(),
         status,
         episode_ms,
-        focused: row.pane.as_ref().is_some_and(|pane| pane.is_focused),
+        focused: false,
         silent,
     }
 }

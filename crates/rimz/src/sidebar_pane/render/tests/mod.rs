@@ -271,7 +271,6 @@ fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
         view_kind: Some(ViewKind::Window),
         view_name: None,
         title: None,
-        is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),
         foreground_cmdline: None,
@@ -465,7 +464,7 @@ fn worktree_group_block<'render, 'snapshot>(
     expanded: bool,
     meter_pixels: Option<&'render mut MeterPixels>,
 ) -> RenderedBlock {
-    let roster = VisibleRoster::single(group, None, expanded, None);
+    let roster = VisibleRoster::single(group, None, expanded, None, None);
     worktree_group_lines_projected(WorktreeRenderContext {
         row: ctx,
         group: &roster.groups()[0],

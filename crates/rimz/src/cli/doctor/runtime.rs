@@ -1098,7 +1098,7 @@ fn classify_diagnostic(
     event: &rimz::diag::record::DiagEvent,
     severity: rimz::diag::record::DiagSeverity,
 ) -> (model::DoctorState, model::DoctorImpact) {
-    use rimz::diag::record::{AnomalyKind, DiagEvent, RendererExitCause};
+    use rimz::diag::record::{DiagEvent, RendererExitCause};
     let state = match event {
         DiagEvent::FrameRejected { .. }
         | DiagEvent::PaneCarryForward { .. }
@@ -1126,15 +1126,6 @@ fn classify_diagnostic(
             evidence: Some(evidence),
             ..
         } if pane_drop_is_expected(evidence) => model::DoctorState::Expected,
-        DiagEvent::FrameAnomaly {
-            anomaly:
-                AnomalyKind::MultiFocusTopology {
-                    pane_ids,
-                    evidence: Some(evidence),
-                    ..
-                },
-            ..
-        } if multi_focus_is_expected(pane_ids, evidence) => model::DoctorState::Expected,
         DiagEvent::RendererExit {
             cause: RendererExitCause::SelfCloseEmptyTab,
         }
@@ -1164,19 +1155,6 @@ fn pane_drop_is_expected(evidence: &rimz::diag::record::PaneDropEvidence) -> boo
         && evidence.affected_views.len() == 1
         && evidence.affected_views[0].removed_completely()
         && evidence.affected_views[0].managed_panes.is_empty()
-}
-
-fn multi_focus_is_expected(
-    pane_ids: &[String],
-    evidence: &rimz::diag::record::MultiFocusEvidence,
-) -> bool {
-    evidence.human_clients >= 2
-        && pane_ids.iter().all(|candidate| {
-            evidence
-                .viewed_pane_ids
-                .iter()
-                .any(|viewed| viewed.to_string() == *candidate)
-        })
 }
 
 fn diagnostic_evidence_refs(event: &rimz::diag::record::DiagEvent) -> Vec<String> {
@@ -1530,8 +1508,7 @@ mod tests {
     use super::*;
     use rimz::diag::record::{
         AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FrameRejectReason, FrameStamp,
-        MultiFocusEvidence, ObserveRole, PaneDropEvidence, PaneDropViewEvidence, RendererExitCause,
-        TickLoop,
+        ObserveRole, PaneDropEvidence, PaneDropViewEvidence, RendererExitCause, TickLoop,
     };
 
     fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
@@ -1888,40 +1865,6 @@ mod tests {
         assert_eq!(
             classify_diagnostic(&legacy_drop, legacy_drop.severity()).0,
             model::DoctorState::Investigate
-        );
-
-        let expected_focus = DiagEvent::FrameAnomaly {
-            role: ObserveRole::Consumer,
-            anomaly: AnomalyKind::MultiFocusTopology {
-                tab_name: Some("work".to_owned()),
-                tab_position: Some(1),
-                pane_ids: vec![
-                    "zellij:terminal_1".to_owned(),
-                    "zellij:terminal_2".to_owned(),
-                ],
-                evidence: Some(MultiFocusEvidence {
-                    human_clients: 2,
-                    viewed_pane_ids: vec![pane("terminal_1"), pane("terminal_2")],
-                }),
-            },
-            window_ms: None,
-            frame: FrameStamp {
-                produced_at_ms: Some(1),
-                rows: 0,
-                agents: 0,
-                processes: 0,
-                pulled_rows: Some(0),
-                pulled_panes_produced_at_ms: Some(1),
-            },
-            events_recent: EventsSig::default(),
-            gate_reject_streak: 0,
-            health_failure_streak: 0,
-            suppressed_since_last: 0,
-            dropped_msgs: 0,
-        };
-        assert_eq!(
-            classify_diagnostic(&expected_focus, expected_focus.severity()).0,
-            model::DoctorState::Expected
         );
     }
 

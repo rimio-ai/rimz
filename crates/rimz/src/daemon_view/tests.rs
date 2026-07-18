@@ -15,7 +15,6 @@ fn pane_with_id(raw: &str, command: Option<&str>, view_name: Option<&str>) -> Pa
         view_kind: None,
         view_name: view_name.map(ToOwned::to_owned),
         title: None,
-        is_focused: false,
         is_floating: false,
         command: command.map(ToOwned::to_owned),
         foreground_cmdline: None,

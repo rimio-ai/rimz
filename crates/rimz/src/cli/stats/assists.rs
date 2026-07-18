@@ -1,6 +1,8 @@
 use super::*;
 
-use rimz::harness::assist_log::{self, Assist, AssistRecord, AssistWindowReset};
+use rimz::harness::assist_log::{
+    self, Assist, AssistRecord, AssistWindowReset, FocusRepairOutcome,
+};
 use rimz::harness::auto_redeem::RedeemReason;
 use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult, PingWindowOutcome};
 use rimz::ids::{AgentKind, AgentSessionId};
@@ -20,6 +22,9 @@ pub(super) struct AssistRollup {
     pub(super) resets: usize,
     pub(super) resumes: usize,
     pub(super) recovered_secs: u64,
+    pub(super) focus_repairs: usize,
+    pub(super) focus_confirmed: usize,
+    pub(super) focus_failed: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -66,6 +71,19 @@ pub(super) enum AssistEvent {
         parked_since: Option<Timestamp>,
         delivered: bool,
         message_id: String,
+    },
+    FocusRepair {
+        at: Timestamp,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        nonce: Option<String>,
+        workspace_id: rimz::ids::WorkspaceId,
+        session_name: String,
+        generation: u64,
+        evidence: Vec<rimz::mux::ClientPaneView>,
+        target: rimz::ids::PaneId,
+        outcome: FocusRepairOutcome,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
 }
 
@@ -121,6 +139,15 @@ impl AssistStats {
                     if *delivered {
                         rollup.resumes += 1;
                         rollup.recovered_secs += recovered_secs(*parked_since, *at);
+                    }
+                }
+                AssistEvent::FocusRepair { outcome, .. } => {
+                    if *outcome == FocusRepairOutcome::AcceptedUnconfirmed {
+                        rollup.focus_repairs += 1;
+                    } else if *outcome == FocusRepairOutcome::Confirmed {
+                        rollup.focus_confirmed += 1;
+                    } else if *outcome == FocusRepairOutcome::Failed {
+                        rollup.focus_failed += 1;
                     }
                 }
             }
@@ -182,6 +209,26 @@ impl AssistEvent {
                 delivered,
                 message_id,
             },
+            Assist::FocusRepair {
+                nonce,
+                workspace_id,
+                session_name,
+                generation,
+                evidence,
+                target,
+                outcome,
+                error,
+            } => Self::FocusRepair {
+                at: record.at,
+                nonce,
+                workspace_id,
+                session_name,
+                generation,
+                evidence,
+                target,
+                outcome,
+                error,
+            },
         }
     }
 
@@ -204,9 +251,10 @@ impl AssistEvent {
 
     fn at(&self) -> Timestamp {
         match self {
-            Self::Ping { at, .. } | Self::AutoRedeem { at, .. } | Self::AutoContinue { at, .. } => {
-                *at
-            }
+            Self::Ping { at, .. }
+            | Self::AutoRedeem { at, .. }
+            | Self::AutoContinue { at, .. }
+            | Self::FocusRepair { at, .. } => *at,
         }
     }
 }
@@ -283,14 +331,24 @@ pub(super) fn summary(rollup: &AssistRollup) -> String {
         ));
     }
     let recovered = format_hours(rollup.recovered_secs);
-    format!(
+    let mut summary = format!(
         "{} ping{} ${:.2} · {redeem} · {} resume{} +{recovered}",
         rollup.pings,
         plural(rollup.pings),
         rollup.ping_cost_usd,
         rollup.resumes,
         plural(rollup.resumes),
-    )
+    );
+    if rollup.focus_repairs + rollup.focus_confirmed + rollup.focus_failed > 0 {
+        summary.push_str(&format!(
+            " · {} focus repair{} ({} confirmed, {} failed)",
+            rollup.focus_repairs,
+            plural(rollup.focus_repairs),
+            rollup.focus_confirmed,
+            rollup.focus_failed,
+        ));
+    }
+    summary
 }
 
 pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> String {
@@ -349,6 +407,30 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 span.unwrap_or_default()
             )
         }
+        AssistEvent::FocusRepair {
+            target,
+            outcome,
+            error,
+            ..
+        } => {
+            let result = match (outcome, error.as_deref()) {
+                (FocusRepairOutcome::AcceptedUnconfirmed, _) => {
+                    "accepted, awaiting observation".to_owned()
+                }
+                (FocusRepairOutcome::Failed, Some(error)) => {
+                    format!("failed: {}", first_line(error))
+                }
+                (FocusRepairOutcome::Failed, None) => "failed".to_owned(),
+                (FocusRepairOutcome::Confirmed, _) => "confirmed by client observation".to_owned(),
+                (FocusRepairOutcome::Superseded, _) => {
+                    "superseded by newer client observation".to_owned()
+                }
+                (FocusRepairOutcome::Invalidated, _) => {
+                    "invalidated by client/session change".to_owned()
+                }
+            };
+            format!("{time} ⇥ focus repair {target} — {result}")
+        }
     }
 }
 
@@ -400,6 +482,21 @@ fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> String {
             ..
         } => format!(
             "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
+        ),
+        AssistEvent::FocusRepair {
+            nonce,
+            workspace_id,
+            session_name,
+            generation,
+            evidence,
+            ..
+        } => format!(
+            "{at} {benefit} · workspace {workspace_id} · session {session_name} · switch {generation} · clients {}{}",
+            evidence.len(),
+            nonce
+                .as_deref()
+                .map(|nonce| format!(" · nonce {nonce}"))
+                .unwrap_or_default(),
         ),
     }
 }

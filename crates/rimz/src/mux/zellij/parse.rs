@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::MuxErr;
+use crate::mux::{ClientPaneView, ClientPresence, ClientView, MuxClientId, MuxErr};
 
 /// Whether action stdout is the transient empty race rather than a real answer.
 /// Empty or whitespace-only output means the action client raced the session
@@ -120,6 +120,7 @@ pub(super) fn strip_ansi(line: &str) -> String {
     out
 }
 
+#[cfg(test)]
 pub(super) fn parse_focused_client_panes(stdout: &[u8]) -> Vec<PaneId> {
     let mut panes = Vec::new();
     for line in String::from_utf8_lossy(stdout).lines() {
@@ -167,6 +168,64 @@ pub(super) fn parse_focused_terminal_client_ids(stdout: &[u8]) -> BTreeSet<u32> 
         }
     }
     clients
+}
+
+#[cfg(test)]
+pub(super) fn parse_client_count(stdout: &[u8]) -> usize {
+    let mut clients = BTreeSet::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let clean = strip_ansi(line);
+        let mut cols = clean.split_whitespace();
+        let (Some(client), Some(raw_pane)) = (cols.next(), cols.next()) else {
+            continue;
+        };
+        if client == "CLIENT_ID" || raw_pane == "ZELLIJ_PANE_ID" {
+            continue;
+        }
+        if let Ok(client) = client.parse::<u32>() {
+            clients.insert(client);
+        }
+    }
+    clients.len()
+}
+
+pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
+    let mut client_ids = BTreeSet::new();
+    let mut clients = Vec::new();
+    let mut viewed_panes = Vec::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let clean = strip_ansi(line);
+        let mut cols = clean.split_whitespace();
+        let (Some(raw_client), Some(raw_pane)) = (cols.next(), cols.next()) else {
+            continue;
+        };
+        let Ok(client_id) = raw_client.parse::<u32>() else {
+            continue;
+        };
+        client_ids.insert(client_id);
+        if !raw_pane.starts_with("terminal_") && !raw_pane.starts_with("plugin_") {
+            continue;
+        }
+        let pane_id = PaneId::from_parts(MuxName::Zellij, raw_pane);
+        clients.push(ClientPaneView {
+            client_id: MuxClientId::Zellij(client_id),
+            pane_id: pane_id.clone(),
+        });
+        if raw_pane.starts_with("terminal_") && !viewed_panes.iter().any(|known| known == &pane_id)
+        {
+            viewed_panes.push(pane_id);
+        }
+    }
+    clients.sort();
+    clients.dedup();
+    ClientView {
+        clients,
+        viewed_panes,
+        presence: ClientPresence {
+            human_clients: client_ids.len(),
+            last_input_ms: None,
+        },
+    }
 }
 
 pub(super) fn trim_capture(raw_text: String, max_lines: Option<u16>) -> (String, Vec<String>) {
@@ -233,6 +292,52 @@ mod tests {
             parse_focused_terminal_client_ids(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn parse_client_count_includes_plugin_and_unknown_views() {
+        let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
+                       1         terminal_30    codex\n\
+                       1         terminal_30    codex\n\
+                       2         plugin_2       rimz-presence-zellij\n\
+                       3         -              unknown\n\
+                       action    terminal_9     unknown\n";
+
+        assert_eq!(parse_client_count(output), 3);
+    }
+
+    #[test]
+    fn parse_client_view_retains_client_identity_and_plugin_views() {
+        let view = parse_client_view(
+            b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
+              1 terminal_30 codex\n\
+              2 terminal_30 codex\n\
+              3 plugin_2 rimz-presence-zellij\n\
+              4 - unknown\n",
+        );
+
+        assert_eq!(
+            view.viewed_panes,
+            vec![PaneId::from_parts(MuxName::Zellij, "terminal_30")],
+        );
+        assert_eq!(
+            view.clients,
+            vec![
+                ClientPaneView {
+                    client_id: MuxClientId::Zellij(1),
+                    pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_30"),
+                },
+                ClientPaneView {
+                    client_id: MuxClientId::Zellij(2),
+                    pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_30"),
+                },
+                ClientPaneView {
+                    client_id: MuxClientId::Zellij(3),
+                    pane_id: PaneId::from_parts(MuxName::Zellij, "plugin_2"),
+                },
+            ],
+        );
+        assert_eq!(view.presence.human_clients, 4);
     }
 
     #[test]

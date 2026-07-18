@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-use rimz::mux::{SidebarLiveness, SidebarPaneOptions, SidebarWidth};
+use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarWidth};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::RuntimePaths;
 use tempfile::TempDir;
@@ -22,7 +22,6 @@ struct TerminalState {
     y: u64,
     columns: u64,
     rows: u64,
-    focused: bool,
     title: Option<String>,
 }
 
@@ -91,7 +90,6 @@ fn terminal_state(snapshot: &PaneSnapshot) -> BTreeMap<u64, TerminalState> {
                     y: pane.pane_y,
                     columns: pane.pane_columns,
                     rows: pane.pane_rows,
-                    focused: pane.is_focused,
                     title: pane.title.clone(),
                 },
             )
@@ -185,6 +183,9 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     let before_terminals =
         wait_for_stable_terminal_state(xdg.path(), &name, Duration::from_millis(500));
     let before = expect_list_panes(xdg.path(), &name);
+    let backend = rimz::mux::ZellijBackend::with_runtime_dir(xdg.path());
+    let before_client_view =
+        client_viewed_panes(&backend, &name).expect("client view before reload");
     let mut receivers = Vec::new();
     for pane in before.panes.iter().filter(|pane| pane.is_sidebar()) {
         let socket = runtime.sock_dir.join(format!("reload-{}.sock", pane.id));
@@ -283,8 +284,15 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     );
     assert_eq!(
         after_terminals, before_terminals,
-        "bare reload must preserve terminal ids, tabs, geometry, and focus",
+        "bare reload must preserve terminal ids, tabs, and geometry",
     );
+    let after_client_view = poll_until(
+        Duration::from_secs(10),
+        || client_viewed_panes(&backend, &name),
+        |viewed| viewed == &before_client_view,
+        "client view to settle after bare reload",
+    );
+    assert_eq!(after_client_view, before_client_view);
 }
 
 /// An in-place add on a *detached* session is deferred, never attempted:
@@ -396,7 +404,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
 
     // A wide client: the 50% mis-mount must exceed the `max_cols` cap (72) to
     // trip the tolerant width trigger — at 240 columns it lands at ~120.
-    let _client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
+    let mut client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
     let xdg = xdg_dir.path().to_path_buf();
     wait_for_attached_client(&xdg, &name);
     let before = raw_sidebar_pane(&xdg, &name);
@@ -417,12 +425,12 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         .max_by_key(|pane| pane.x)
         .map(|pane| pane.id)
         .expect("rightmost work pane");
-    focus_nonplugin_pane_until(
+    focus_attached_client_pane_until(
         &xdg,
         &name,
-        before.tab_id,
         focused_work_id,
         "rightmost work pane before redock",
+        || client.press_alt('l'),
     );
 
     let project_root = std::env::temp_dir();
@@ -460,10 +468,12 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         after_work_ids, before_work_ids,
         "redock preserves every work pane",
     );
-    assert_eq!(
-        wait_for_focused_nonplugin_id_in_tab(&xdg, &name, before.tab_id, focused_work_id),
-        Some(focused_work_id),
-        "redock restores the original focused work pane",
+    assert_client_input_reaches_pane(
+        &xdg,
+        &name,
+        focused_work_id,
+        "restored work pane after redock",
+        |line| client.send_line(line),
     );
 }
 /// A claimed sidebar can sit at `x=0` while still not being a full-height left
@@ -519,7 +529,7 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         "layout should birth a sidebar and two work panes: {initial:?}",
     );
 
-    let _client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
+    let mut client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
     let xdg = xdg_dir.path().to_path_buf();
     wait_for_attached_client(&xdg, &name);
 
@@ -548,13 +558,12 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         .find(|pane| pane.x >= sidebar_cols)
         .map(|pane| pane.id)
         .expect("right-side work pane");
-    let tab_id = before.tab_id;
-    focus_nonplugin_pane_until(
+    focus_attached_client_pane_until(
         &xdg,
         &name,
-        tab_id,
         original_id,
         "original work pane before reconcile",
+        || client.press_alt('l'),
     );
 
     let opts = reconcile_opts(&name, "/tmp/rimz-nested", cwd.path(), cwd.path(), stub, 160);
@@ -574,11 +583,12 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         sidebar_id,
         "the renderer pane survives the nested-row repair",
     );
-    let focused = wait_for_focused_non_sidebar_title_in_tab(&xdg, &name, tab_id)
-        .unwrap_or_else(|| panic!("tab {tab_id} has no focused terminal pane"));
-    assert_ne!(
-        focused, "rimz-sidebar",
-        "in-place nested repair focuses the sidebar; focus must land on the work area",
+    assert_client_input_reaches_pane(
+        &xdg,
+        &name,
+        original_id,
+        "restored original work pane after nested repair",
+        |line| client.send_line(line),
     );
 }
 /// A nested sidebar beside a user-made multi-column work layout is detected but
@@ -742,7 +752,7 @@ fn reconcile_add_docks_sidebar_in_wide_tab() {
     let initial = wait_for_pane_count(xdg_dir.path(), &name, 6);
     assert_eq!(initial.len(), 6, "fixture should birth six work panes");
 
-    let _client = AttachedClient::attach(xdg_dir.path(), &name, 360, 60);
+    let mut client = AttachedClient::attach(xdg_dir.path(), &name, 360, 60);
     let xdg = xdg_dir.path().to_path_buf();
     wait_for_attached_client(&xdg, &name);
     let before = work_pane_geometry(&xdg, &name);
@@ -752,25 +762,25 @@ fn reconcile_add_docks_sidebar_in_wide_tab() {
         .map(|pane| pane.x)
         .min()
         .expect("leftmost work pane");
-    let (focused_work_id, tab_id) = poll_until(
-        Duration::from_secs(10),
-        || {
-            let snapshot = list_panes(&xdg, &name)?;
-            Ok(snapshot
-                .panes
-                .iter()
-                .find(|pane| {
-                    pane.is_live_terminal()
-                        && !pane.is_sidebar()
-                        && pane.is_focused
-                        && pane.pane_x > leftmost_x
-                })
-                .map(|pane| (pane.id, pane.tab_id)))
-        },
-        Option::is_some,
-        "wide-tab fixture focus away from the left edge",
-    )
-    .expect("poll required a focused work pane");
+    let focused_work_id = before
+        .iter()
+        .max_by_key(|pane| pane.x)
+        .map(|pane| pane.id)
+        .expect("rightmost work pane");
+    assert!(
+        before
+            .iter()
+            .find(|pane| pane.id == focused_work_id)
+            .is_some_and(|pane| pane.x > leftmost_x),
+        "fixture focus must be away from the left edge: {before:?}",
+    );
+    focus_attached_client_pane_until(
+        &xdg,
+        &name,
+        focused_work_id,
+        "rightmost work pane before sidebar add",
+        || client.press_alt('l'),
+    );
 
     let opts = reconcile_opts(
         &name,
@@ -807,10 +817,12 @@ fn reconcile_add_docks_sidebar_in_wide_tab() {
         .map(|pane| pane.id)
         .collect();
     assert_eq!(after_ids, before_ids, "every work pane survives the add");
-    assert_eq!(
-        wait_for_focused_nonplugin_id_in_tab(&xdg, &name, tab_id, focused_work_id),
-        Some(focused_work_id),
-        "the original focused work pane is restored",
+    assert_client_input_reaches_pane(
+        &xdg,
+        &name,
+        focused_work_id,
+        "restored work pane after sidebar add",
+        |line| client.send_line(line),
     );
 }
 /// Adding a sidebar to a tab whose work panes are already row-stacked used to

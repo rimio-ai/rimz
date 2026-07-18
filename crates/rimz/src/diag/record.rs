@@ -865,12 +865,6 @@ pub struct ManagedPaneEvidence {
     pub agent_kind: AgentKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MultiFocusEvidence {
-    pub human_clients: usize,
-    pub viewed_pane_ids: Vec<PaneId>,
-}
-
 /// Whether the writing instance was the elected elder (runs real-world
 /// cross-checks) or a plain consumer at record time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1064,15 +1058,6 @@ pub enum AnomalyKind {
         pid: u32,
         reason: String,
     },
-    MultiFocusTopology {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tab_name: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tab_position: Option<u64>,
-        pane_ids: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        evidence: Option<MultiFocusEvidence>,
-    },
 }
 
 impl AnomalyKind {
@@ -1095,7 +1080,6 @@ impl AnomalyKind {
             Self::CardsExceedPanes { .. } => "cards_exceed_panes",
             Self::RowPaneMissingFromFrame { .. } => "row_pane_missing_from_frame",
             Self::DeadPid { .. } => "dead_pid",
-            Self::MultiFocusTopology { .. } => "multi_focus_topology",
         }
     }
 
@@ -1118,17 +1102,6 @@ impl AnomalyKind {
             Self::SubagentDoubleRender { id } => Some(Cow::Borrowed(id)),
             Self::AggregateOscillation { aggregate, .. }
             | Self::AggregateReset { aggregate, .. } => Some(Cow::Owned(aggregate.identity())),
-            Self::MultiFocusTopology {
-                tab_position: Some(tab_position),
-                ..
-            } => Some(Cow::Owned(tab_position.to_string())),
-            Self::MultiFocusTopology {
-                tab_name: Some(tab_name),
-                ..
-            } => Some(Cow::Borrowed(tab_name)),
-            Self::MultiFocusTopology { pane_ids, .. } => {
-                pane_ids.first().map(|pane| Cow::Borrowed(pane.as_str()))
-            }
             Self::RosterFlap { .. }
             | Self::FramelessRows { .. }
             | Self::CardsExceedPanes { .. } => None,

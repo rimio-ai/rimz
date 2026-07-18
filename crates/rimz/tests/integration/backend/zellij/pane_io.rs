@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use rimz::mux::{
@@ -38,9 +39,11 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         .map(|pane| pane.id)
         .expect("work pane id");
 
-    let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);
+    let mut client = AttachedClient::attach(xdg.path(), &name, 200, 50);
     wait_for_attached_client(xdg.path(), &name);
-    focus_nonplugin_pane_until(xdg.path(), &name, tab_id, work_id, "fixture work pane");
+    focus_attached_client_pane_until(xdg.path(), &name, work_id, "fixture work pane", || {
+        client.press_alt('l')
+    });
 
     let env = Env::new();
     let workspace_root = std::path::PathBuf::from(format!("/tmp/rimz-{name}"));
@@ -51,44 +54,50 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         &name,
     );
     write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
-    let run_focus_toggle = || {
-        let output = env
-            .rimz()
-            .env("XDG_RUNTIME_DIR", xdg.path())
-            .env("XDG_CACHE_HOME", xdg.path())
-            .env("TMPDIR", xdg.path())
-            .args([
-                "--mux",
-                "zellij",
-                "sidebar",
-                "focus",
-                "--toggle",
-                "--session-name",
-                &name,
-            ])
-            .bounded_output()
-            .expect("rimz sidebar focus");
-        assert!(
-            output.status.success(),
-            "rimz sidebar focus failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-    };
-
-    run_focus_toggle();
-    assert_eq!(
-        wait_for_focused_nonplugin_id_in_tab(xdg.path(), &name, tab_id, sidebar_id),
-        Some(sidebar_id),
-        "out-of-session focus should land on the sidebar pane",
+    let trace = TempDir::new().expect("zellij trace tempdir");
+    let trace_log = trace.path().join("zellij.log");
+    let shim = trace.path().join("zellij");
+    let real_zellij = which::which("zellij").expect("zellij path");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            trace_log.display(),
+            real_zellij.display(),
+        ),
+    )
+    .expect("write zellij trace shim");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod zellij trace shim");
+    let output = env
+        .rimz()
+        .env("XDG_RUNTIME_DIR", xdg.path())
+        .env("XDG_CACHE_HOME", xdg.path())
+        .env("TMPDIR", xdg.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim)
+        .args([
+            "--mux",
+            "zellij",
+            "sidebar",
+            "focus",
+            "--session-name",
+            &name,
+        ])
+        .bounded_output()
+        .expect("rimz sidebar focus");
+    assert!(
+        output.status.success(),
+        "rimz sidebar focus failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
-
-    write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
-    run_focus_toggle();
-    assert_eq!(
-        wait_for_focused_nonplugin_id_in_tab(xdg.path(), &name, tab_id, work_id),
-        Some(work_id),
-        "toggle should return focus to the work pane in the sidebar tab",
+    let log = std::fs::read_to_string(trace_log).expect("read zellij trace");
+    assert!(
+        log.lines().any(|line| {
+            line.contains(&format!("--session {name}"))
+                && line.contains(&format!("action focus-pane-id terminal_{sidebar_id}"))
+        }),
+        "out-of-session focus targeted the wrong session or pane:\n{log}",
     );
 }
 #[test]

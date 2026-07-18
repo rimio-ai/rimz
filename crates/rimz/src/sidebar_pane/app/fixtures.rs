@@ -13,7 +13,7 @@ pub(crate) fn snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     SidebarSnapshot::build_with_agents(ws.clone(), Vec::new(), Timestamp::UNIX_EPOCH)
 }
 
-pub(crate) fn pane(raw: &str, view: &str, focused: bool) -> PaneRef {
+pub(crate) fn pane(raw: &str, view: &str, _focused: bool) -> PaneRef {
     PaneRef {
         pane_id: PaneId::from_parts(MuxName::Zellij, raw),
         session_name: "rimz-test".to_owned(),
@@ -21,7 +21,6 @@ pub(crate) fn pane(raw: &str, view: &str, focused: bool) -> PaneRef {
         view_kind: Some(crate::ids::ViewKind::Tab),
         view_name: None,
         title: None,
-        is_focused: focused,
         is_floating: false,
         command: Some("zsh".to_owned()),
         foreground_cmdline: None,
@@ -40,6 +39,7 @@ pub(crate) fn pane(raw: &str, view: &str, focused: bool) -> PaneRef {
 pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
     snapshot.panes_produced_at_ms = Some(1);
+    snapshot.pane_session_name = Some("rimz-test".to_owned());
     snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),

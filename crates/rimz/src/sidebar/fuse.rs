@@ -10,12 +10,12 @@ use std::collections::HashSet;
 use crate::SidebarSnapshot;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::SidebarEvent;
-use crate::sidebar::focus_anchor::FocusAnchor;
+use crate::sidebar::focus_anchor::{FocusAnchor, FocusPresentation};
 
 pub fn fuse(
     pulled: &SidebarSnapshot,
     events: &EventStore,
-    intent: Option<&FocusAnchor>,
+    intent: Option<&FocusPresentation>,
     now_ms: u64,
 ) -> SidebarSnapshot {
     let baseline = pulled
@@ -66,10 +66,12 @@ pub fn fuse(
         fused.overlay_focus(focus.1, focus.2);
     }
 
-    if let Some(intent) = intent
-        && snapshot_has_pane(&fused, &intent.pane_id)
-    {
-        fused.overlay_focus(std::slice::from_ref(&intent.pane_id), &[]);
+    match intent {
+        Some(FocusPresentation::Target(intent)) if snapshot_has_pane(&fused, &intent.pane_id) => {
+            fused.overlay_focus(std::slice::from_ref(&intent.pane_id), &[]);
+        }
+        Some(FocusPresentation::Fence) => fused.focused_pane = None,
+        _ => {}
     }
 
     fused
@@ -81,12 +83,19 @@ pub fn focus_intent_confirmed(
     intent: &FocusAnchor,
     now_ms: u64,
 ) -> bool {
-    let pulled_confirms = pulled.focused_pane.as_ref() == Some(&intent.pane_id)
+    if intent.state != crate::sidebar::focus_anchor::FocusIntentState::Applied {
+        return false;
+    }
+    let pulled_confirms = pulled
+        .panes_observed_at_ms
+        .is_some_and(|observed_at_ms| observed_at_ms >= intent.issued_at_ms)
+        && !pulled.client_views.is_empty()
         && pulled
-            .panes_observed_at_ms
-            .is_some_and(|observed_at_ms| observed_at_ms >= intent.stamp_ms);
+            .client_views
+            .iter()
+            .all(|view| view.pane_id == intent.pane_id);
     let event_confirms = events.active(now_ms).any(|event| {
-        event.sent_at_ms >= intent.stamp_ms
+        event.sent_at_ms >= intent.issued_at_ms
             && matches!(
                 &event.event,
                 SidebarEvent::FocusChanged { focused, .. }
@@ -154,7 +163,6 @@ mod tests {
             view_kind: Some(crate::ids::ViewKind::Tab),
             view_name: None,
             title: None,
-            is_focused: false,
             is_floating: false,
             command: Some(command.to_owned()),
             foreground_cmdline: None,
@@ -199,13 +207,24 @@ mod tests {
         store.append(event, sent_at_ms, sent_at_ms);
     }
 
-    fn intent(pane_id: PaneId, stamp_ms: u64) -> FocusAnchor {
+    fn anchor(pane_id: PaneId, stamp_ms: u64) -> FocusAnchor {
         FocusAnchor {
+            nonce: crate::sidebar::focus_anchor::FocusNonce::new(),
+            session_name: "rimz-test".to_owned(),
             pane_id,
+            origin: crate::sidebar::focus_anchor::FocusOrigin::User,
+            repair_generation: None,
+            issued_at_ms: stamp_ms,
+            applied_at_ms: Some(stamp_ms),
+            state: crate::sidebar::focus_anchor::FocusIntentState::Applied,
+            pre_action: Vec::new(),
             offset: 0,
-            stamp_ms,
             order: None,
         }
+    }
+
+    fn intent(pane_id: PaneId, stamp_ms: u64) -> FocusPresentation {
+        FocusPresentation::Target(Box::new(anchor(pane_id, stamp_ms)))
     }
 
     fn row_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
@@ -368,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_pane_focus_event_mirrors_rows_without_setting_register() {
+    fn ambiguous_focus_event_does_not_change_session_register() {
         let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_9");
@@ -393,16 +412,8 @@ mod tests {
 
         let fused = fuse(&snapshot, &store, None, 11);
         assert_eq!(fused.focused_pane, Some(first));
-        let focused_rows = fused
-            .worktree_groups
-            .iter()
-            .flat_map(|group| &group.rows)
-            .filter_map(|row| row.pane.as_ref())
-            .filter(|pane| pane.is_focused)
-            .map(|pane| pane.pane_id.clone())
-            .collect::<Vec<_>>();
-        assert!(focused_rows.contains(&second));
-        assert!(focused_rows.contains(&foreign));
+        assert!(!fused.viewed_panes.contains(&second));
+        assert!(!fused.viewed_panes.contains(&foreign));
     }
 
     #[test]
@@ -472,11 +483,30 @@ mod tests {
         let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 12);
         snapshot.panes_observed_at_ms = Some(12);
         snapshot.focused_pane = Some(target.clone());
+        snapshot.client_views = vec![crate::mux::ClientPaneView {
+            client_id: crate::mux::MuxClientId::Zellij(1),
+            pane_id: target.clone(),
+        }];
 
         assert!(focus_intent_confirmed(
             &snapshot,
             &EventStore::default(),
-            &intent(target, 11),
+            &anchor(target, 11),
+            12,
+        ));
+    }
+
+    #[test]
+    fn held_session_register_does_not_confirm_intent_without_a_client_observation() {
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 12);
+        snapshot.panes_observed_at_ms = Some(12);
+        snapshot.focused_pane = Some(target.clone());
+
+        assert!(!focus_intent_confirmed(
+            &snapshot,
+            &EventStore::default(),
+            &anchor(target, 11),
             12,
         ));
     }
@@ -498,7 +528,7 @@ mod tests {
         assert!(focus_intent_confirmed(
             &snapshot,
             &store,
-            &intent(target, 11),
+            &anchor(target, 11),
             12,
         ));
     }
@@ -526,7 +556,7 @@ mod tests {
         assert!(!focus_intent_confirmed(
             &snapshot,
             &store,
-            &intent(target, 11),
+            &anchor(target, 11),
             12,
         ));
     }
@@ -552,7 +582,7 @@ mod tests {
         assert!(!focus_intent_confirmed(
             &snapshot,
             &store,
-            &intent(target, 11),
+            &anchor(target, 11),
             12,
         ));
     }

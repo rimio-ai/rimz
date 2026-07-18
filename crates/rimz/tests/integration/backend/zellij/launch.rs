@@ -115,6 +115,23 @@ fn open_sidebar_births_native_layout_and_template() {
         .expect("ordinary work shell")
         .pane_id
         .clone();
+    let initial_tab_id = expect_list_panes(xdg.path(), &name)
+        .panes
+        .iter()
+        .find(|pane| pane.pane_ref(&name).pane_id == work_pane)
+        .map(|pane| pane.tab_id)
+        .expect("initial work tab");
+    let mut client = AttachedClient::attach(xdg.path(), &name, 120, 40);
+    wait_for_attached_client(xdg.path(), &name);
+    wait_for_focused_client_pane(&backend, &name, &work_pane);
+    let initial_work_id = work_pane.creation_ordinal().expect("initial work pane id");
+    assert_client_input_reaches_pane(
+        xdg.path(),
+        &name,
+        initial_work_id,
+        "birth work pane",
+        |line| client.send_line(line),
+    );
     backend
         .send_keys(&work_pane, copilot.to_string_lossy().as_ref())
         .expect("type direct copilot shim");
@@ -151,21 +168,37 @@ fn open_sidebar_births_native_layout_and_template() {
     wait_for_tab_count(xdg.path(), &name, 2);
     assert_sidebars_not_held(xdg.path(), &name, "new tab");
 
-    for tab in tab_ids(xdg.path(), &name) {
-        let terminals = nonplugin_titles_in_tab(xdg.path(), &name, tab);
+    let tabs = tab_ids(xdg.path(), &name);
+    for tab in &tabs {
+        let terminals = nonplugin_titles_in_tab(xdg.path(), &name, *tab);
         let has_sidebar = terminals.iter().any(|t| t == "rimz-sidebar");
         let has_terminal = terminals.iter().any(|t| t != "rimz-sidebar");
         assert!(
             has_sidebar && has_terminal,
             "tab {tab} should carry the sidebar and a right terminal, got {terminals:?}",
         );
-        let focused = wait_for_focused_non_sidebar_title_in_tab(xdg.path(), &name, tab)
-            .unwrap_or_else(|| panic!("tab {tab} has no focused terminal pane"));
-        assert_ne!(
-            focused, "rimz-sidebar",
-            "tab {tab} focuses the sidebar; focus must land on the right terminal",
-        );
     }
+    let new_tab_id = tabs
+        .into_iter()
+        .find(|tab| *tab != initial_tab_id)
+        .expect("new tab id");
+    let new_work = expect_list_panes(xdg.path(), &name)
+        .panes
+        .iter()
+        .find(|pane| pane.tab_id == new_tab_id && pane.is_live_terminal() && !pane.is_sidebar())
+        .map(|pane| pane.id)
+        .expect("new tab work pane");
+    client.go_to_tab(2);
+    let new_work_pane =
+        rimz::PaneId::from_parts(rimz::MuxName::Zellij, format!("terminal_{new_work}"));
+    wait_for_focused_client_pane(&backend, &name, &new_work_pane);
+    assert_client_input_reaches_pane(
+        xdg.path(),
+        &name,
+        new_work,
+        "new-tab template work pane",
+        |line| client.send_line(line),
+    );
 
     let before_reopen = wait_for_pane_count(xdg.path(), &name, 4);
     backend

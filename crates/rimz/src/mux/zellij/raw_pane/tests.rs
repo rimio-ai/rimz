@@ -215,7 +215,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
     let listing = RawPaneListing {
         panes: parsed,
         observed_at_ms: 1,
-        authoritative_focus: None,
+        session_focus: None,
         client_view: None,
     }
     .into_pane_listing("rimz-test".to_owned(), |mut p, session_name| {
@@ -230,7 +230,6 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
             view_kind: Some(ViewKind::Tab),
             view_name: p.tab_name.take(),
             title: p.title.take(),
-            is_focused: p.is_focused,
             is_floating: p.is_floating,
             pane_pid: None,
             pane_process_start: None,
@@ -378,9 +377,9 @@ fn topology_cache_focus_becomes_authoritative_listing_focus() {
 
     let listing = RawPaneListing::from_topology(cache);
 
-    assert!(listing.authoritative_focus.is_some());
+    assert!(listing.session_focus.is_some());
     assert_eq!(
-        listing.authoritative_focus,
+        listing.session_focus,
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_7"))
     );
 }

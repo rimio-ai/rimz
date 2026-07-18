@@ -847,7 +847,6 @@ fn process_pane(mux: MuxName, index: usize, command: &str, cwd: String) -> PaneR
         }),
         view_name: None,
         title: None,
-        is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),
         foreground_cmdline: None,

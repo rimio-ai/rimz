@@ -98,7 +98,7 @@ impl ZellijBackend {
         }
     }
 
-    fn resolve_topology_session(&self, session: Option<&str>) -> Result<String> {
+    pub(super) fn resolve_topology_session(&self, session: Option<&str>) -> Result<String> {
         if let Some(session) = session.filter(|session| !session.is_empty()) {
             return Ok(session.to_owned());
         }
@@ -111,7 +111,7 @@ impl ZellijBackend {
             })
     }
 
-    fn resolve_topology_workspace(
+    pub(super) fn resolve_topology_workspace(
         &self,
         session: &str,
         workspace_id: Option<&WorkspaceId>,

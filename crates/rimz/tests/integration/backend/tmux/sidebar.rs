@@ -282,14 +282,6 @@ fn sidebar_birth_and_first_attach_preserve_work_shell_contract() {
         .iter()
         .find(|pane| pane.pane_id != sidebar.pane_id)
         .expect("work pane");
-    assert!(
-        work.is_focused,
-        "split-window without -d should focus the work pane: {panes:?}",
-    );
-    assert!(
-        !sidebar.is_focused,
-        "respawned sidebar should not keep focus: {panes:?}",
-    );
     let geoms = server.wait_for_panes(session, 2);
     let sidebar_geom = geoms
         .iter()
@@ -401,10 +393,6 @@ fn new_window_hook_respawns_plain_shell_at_final_width_only() {
         .iter()
         .find(|pane| pane.pane_id != plain_sidebar.pane_id)
         .expect("plain work pane");
-    assert!(
-        plain_work.is_focused,
-        "hook keeps focus on the work pane after docking: {plain_panes:?}",
-    );
     let plain_sidebar_geom = plain_geoms
         .iter()
         .find(|pane| pane.id == plain_sidebar.pane_id.raw())

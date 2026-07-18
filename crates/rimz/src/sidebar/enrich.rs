@@ -540,6 +540,8 @@ fn enrich_core(
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
         snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
         snapshot.viewed_panes = frame.viewed_panes.clone();
+        snapshot.client_views = frame.client_views.clone();
+        snapshot.pane_session_name = Some(frame.session_name.clone());
         snapshot.focused_pane = frame.focused_pane.clone();
         // tmux `client_activity` is the idle signal for local and remote rooms;
         // Zellij self-suppresses idle through an absent `last_input_ms`.

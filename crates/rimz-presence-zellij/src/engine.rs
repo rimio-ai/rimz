@@ -7,11 +7,10 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use crate::policy::{
-    self, CorrectionAction, FocusCorrection, FocusPatch, ForegroundCommandUpdate, PaneFields, Poke,
-    PokePolicy, TimerGate,
-};
+use crate::policy::{self, ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, TimerGate};
 use crate::wire::{self, PluginTelemetry};
+
+pub use crate::policy::{ClientPaneId as ProjectedPaneId, ClientViewEntry as ProjectedClientFocus};
 
 /// Host lookups the engine needs mid-decision.
 pub trait Host {
@@ -44,15 +43,40 @@ pub enum Effect {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectedPaneId {
-    Terminal(u32),
-    Plugin(u32),
+enum ClientQueryPurpose {
+    General,
+    SwitchObserve { generation: u64, tab: usize },
+    SwitchConfirm { generation: u64, tab: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectedClientFocus {
-    pub client_id: u16,
-    pub pane_id: u32,
+struct InFlightClientQuery {
+    purpose: ClientQueryPurpose,
+    deadline: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingSwitch {
+    generation: u64,
+    tab: usize,
+    previous: Option<u32>,
+    settle_at: u64,
+    confirmation_requested: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientObservation {
+    Detached,
+    Unique(ProjectedPaneId),
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchObservation {
+    Work(u32),
+    Repairable,
+    Pending,
+    Abstain,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -79,9 +103,12 @@ pub struct Engine {
     pids: BTreeMap<u32, u32>,
     pid_probed: BTreeSet<u32>,
     active_tab: Option<usize>,
-    active_focused_pane: Option<u32>,
     session_focused_pane: Option<u32>,
-    focus_correction: FocusCorrection,
+    switch_generation: u64,
+    pending_switch: Option<PendingSwitch>,
+    in_flight_clients: Option<InFlightClientQuery>,
+    queued_clients: Option<ClientQueryPurpose>,
+    stale_client_replies: u32,
     workspace_id: Option<String>,
     session_name: Option<String>,
     rimz_bin: Option<String>,
@@ -98,8 +125,6 @@ pub struct Engine {
     loaded_at_ms: u64,
     connected_clients: Option<usize>,
     client_sample: Option<policy::ClientSample>,
-    contested_focused_by_tab: BTreeMap<usize, Vec<u32>>,
-    prior_focused_by_tab: BTreeMap<usize, u32>,
     retired: bool,
     wake_fork_failures: u32,
     stale_writer_rejections: u32,
@@ -107,7 +132,6 @@ pub struct Engine {
 
 const WAKE_FORK_FALLBACK_THRESHOLD: u32 = 3;
 const STALE_WRITER_RETIRE_THRESHOLD: u32 = 3;
-
 impl Engine {
     pub fn new(now: u64, config: EngineConfig) -> Self {
         Self {
@@ -121,9 +145,12 @@ impl Engine {
             pids: BTreeMap::new(),
             pid_probed: BTreeSet::new(),
             active_tab: None,
-            active_focused_pane: None,
             session_focused_pane: None,
-            focus_correction: FocusCorrection::default(),
+            switch_generation: 0,
+            pending_switch: None,
+            in_flight_clients: None,
+            queued_clients: None,
+            stale_client_replies: 0,
             workspace_id: config.workspace_id,
             session_name: config.session_name,
             rimz_bin: config.rimz_bin,
@@ -140,8 +167,6 @@ impl Engine {
             loaded_at_ms: now,
             connected_clients: None,
             client_sample: None,
-            contested_focused_by_tab: BTreeMap::new(),
-            prior_focused_by_tab: BTreeMap::new(),
             retired: false,
             wake_fork_failures: 0,
             stale_writer_rejections: 0,
@@ -199,33 +224,21 @@ impl Engine {
         // us: Zellij sends no PermissionRequestResult when the grant comes from
         // the permission cache, so this path is load-bearing.
         self.mark_granted(now, host, &mut effects);
+        // PaneUpdate is Zellij's only prompt signal for some view-local focus
+        // changes. The raw focus bit is deliberately absent from the topology
+        // hash; refresh attached-client truth even when the roster is stable.
+        self.queue_client_query(ClientQueryPurpose::General);
         let stable_unchanged = self.last_raw_stable_hash == Some(raw_hash) && !self.tabs.is_empty();
         self.last_raw_stable_hash = Some(raw_hash);
         if !stable_unchanged {
             let projected = project(&self.tab_names);
-            self.record_contested_focus(&projected);
             // Zellij can deliver partial pane manifests; omitted tabs retain
             // their previous state instead of collapsing the room.
             let mut next_tabs = policy::merged_room(&self.tabs, &projected);
             self.prune_pane_state(&next_tabs);
             self.probe_missing_pids(&mut next_tabs, host);
-            self.repair_contested_focus(&mut next_tabs);
             let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
-            let focus_patch = policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
-            let shortcut_focused = focus_patch
-                .as_ref()
-                .and_then(|patch| focused_patch_id(patch));
-            if let Some(focused) = shortcut_focused {
-                self.session_focused_pane = Some(focused);
-            }
             self.tabs = next_tabs;
-            let pending_correction_tab = self.focus_correction.pending_tab();
-            let correction_will_resolve_active_tab =
-                pending_correction_tab.is_some() && pending_correction_tab == self.active_tab;
-            let reconciled_focus_patch = (!correction_will_resolve_active_tab
-                && shortcut_focused.is_none())
-            .then(|| self.reconcile_manifest_focus_patch())
-            .flatten();
             // Poke every opened pane — `fold`, not `any`, so a manifest carrying
             // two new panes emits both card-create events.
             let emitted_open = opened.iter().fold(false, |emitted, pane| {
@@ -244,26 +257,12 @@ impl Engine {
                     &mut effects,
                 ) || emitted
             });
-            let focus_patch = focus_patch.or(reconciled_focus_patch);
-            let emitted_focus = focus_patch.is_some_and(|patch| {
-                self.run_wake(wire::WakeRequest::FocusChanged { patch }, now, &mut effects)
-            });
-            if emitted_focus {
-                let hash = policy::manifest_hash(&self.tabs);
-                self.policy.accept_manifest(hash);
-                self.policy.on_optimistic_signal(now);
-            } else if emitted_open {
+            if emitted_open {
                 let hash = policy::manifest_hash(&self.tabs);
                 self.policy.accept_manifest(hash);
             } else {
                 self.fold(now);
             }
-            self.resolve_focus_correction(now, true, &mut effects);
-            self.active_focused_pane = policy::resolved_focused_pane_id(
-                &self.tabs,
-                self.active_tab,
-                self.session_focused_pane,
-            );
         }
         self.finish_update(now, host, effects)
     }
@@ -281,28 +280,36 @@ impl Engine {
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         let previous_active = self.active_tab;
-        let previous_focused_pane = self.active_focused_pane.or_else(|| {
-            policy::resolved_focused_pane_id(&self.tabs, previous_active, self.session_focused_pane)
-        });
         self.tab_names = tab_names;
         self.active_tab = active;
-        if previous_active != active {
-            // A tab switch changes which panes attached clients view, but
-            // Zellij sends no client-list event for it. Re-query so the fresh
-            // sample wakes the newly viewed tab's sidebar before keepalive.
-            queue_list_clients(&mut effects);
+        match (previous_active, active) {
+            (Some(previous), Some(next)) if previous != next => {
+                self.switch_generation = self.switch_generation.wrapping_add(1);
+                let generation = self.switch_generation;
+                let previous = self
+                    .pending_switch
+                    .map_or(self.session_focused_pane, |pending| pending.previous);
+                self.session_focused_pane = None;
+                self.pending_switch = Some(PendingSwitch {
+                    generation,
+                    tab: next,
+                    previous,
+                    settle_at: now.saturating_add(policy::FOCUS_SETTLE_MS),
+                    confirmation_requested: false,
+                });
+                self.queue_client_query(ClientQueryPurpose::SwitchObserve {
+                    generation,
+                    tab: next,
+                });
+            }
+            (_, None) => {
+                self.pending_switch = None;
+                self.session_focused_pane = None;
+                self.queue_client_query(ClientQueryPurpose::General);
+            }
+            (None, Some(_)) => self.queue_client_query(ClientQueryPurpose::General),
+            _ => {}
         }
-        self.active_focused_pane = policy::resolved_focused_pane_id(
-            &self.tabs,
-            self.active_tab,
-            self.session_focused_pane,
-        );
-        self.focus_correction.on_active_tab_change(
-            previous_active,
-            active,
-            previous_focused_pane,
-            now,
-        );
         self.finish_update(now, host, effects)
     }
 
@@ -404,11 +411,6 @@ impl Engine {
         {
             self.session_focused_pane = None;
         }
-        self.active_focused_pane = policy::resolved_focused_pane_id(
-            &self.tabs,
-            self.active_tab,
-            self.session_focused_pane,
-        );
         if !closed_terminal.is_some_and(|pane_id| {
             self.run_wake(wire::WakeRequest::PaneClosed { pane_id }, now, &mut effects)
         }) {
@@ -443,7 +445,7 @@ impl Engine {
             && self.connected_clients != Some(connected_clients)
         {
             self.connected_clients = Some(connected_clients);
-            queue_list_clients(&mut effects);
+            self.queue_client_query(ClientQueryPurpose::General);
         }
         self.finish_update(now, host, effects)
     }
@@ -458,11 +460,12 @@ impl Engine {
             return Vec::new();
         }
         let mut effects = Vec::new();
-        let sample = client_sample(clients);
+        let purpose = self.consume_client_reply(now);
+        let sample = client_sample(&clients);
         let changed = self.client_sample.as_ref() != Some(&sample);
         self.client_sample = Some(sample);
-        if changed {
-            self.apply_client_focus_to_recorded_contests();
+        let emitted_focus = self.apply_client_observation(purpose, &clients, now, &mut effects);
+        if changed && !emitted_focus {
             self.run_wake(wire::WakeRequest::Changed, now, &mut effects);
         }
         self.finish_update(now, host, effects)
@@ -500,7 +503,6 @@ impl Engine {
         }
         let mut tabs = std::mem::take(&mut self.tabs);
         self.probe_missing_pids(&mut tabs, host);
-        self.repair_contested_focus(&mut tabs);
         self.tabs = tabs;
         self.poke(Poke::Alive, now, host, &mut effects);
         self.rearm(now, &mut effects);
@@ -514,12 +516,7 @@ impl Engine {
         let Some(generation) = wire::retire_generation(payload) else {
             return Vec::new();
         };
-        let own = policy::TopologyWriter {
-            plugin_id: self.plugin_id.unwrap_or_default(),
-            loaded_at_ms: self.loaded_at_ms,
-            build: self.plugin_build.clone(),
-            config: self.plugin_config.clone(),
-        };
+        let own = self.writer();
         if (own.loaded_at_ms, own.plugin_id) >= (generation.loaded_at_ms, generation.plugin_id) {
             return Vec::new();
         }
@@ -572,92 +569,6 @@ impl Engine {
         effects
     }
 
-    fn repair_contested_focus(&mut self, tabs: &mut BTreeMap<usize, Vec<PaneFields>>) {
-        let repaired_active_tab = self.active_tab.filter(|active_tab| {
-            tabs.get(active_tab).is_some_and(|panes| {
-                panes
-                    .iter()
-                    .filter(|pane| pane.is_focused && !pane.is_floating)
-                    .count()
-                    > 1
-            })
-        });
-        let viewed = self
-            .client_sample
-            .as_ref()
-            .map(|sample| sample.viewed_panes.as_slice())
-            .unwrap_or_default();
-        policy::repair_contested_tab_focus(tabs, viewed, &self.prior_focused_by_tab);
-        self.prior_focused_by_tab = tabs
-            .iter()
-            .filter_map(|(tab, panes)| {
-                panes
-                    .iter()
-                    .find(|pane| pane.is_focused && !pane.is_floating)
-                    .map(|pane| (*tab, pane.id))
-            })
-            .collect();
-        if let Some(active_tab) = repaired_active_tab
-            && let Some(focused) = self.prior_focused_by_tab.get(&active_tab).copied()
-        {
-            self.session_focused_pane = Some(focused);
-        }
-    }
-
-    fn record_contested_focus(&mut self, projected: &BTreeMap<usize, Vec<PaneFields>>) {
-        for (tab, panes) in projected.iter().filter(|(_, panes)| !panes.is_empty()) {
-            let focused = panes
-                .iter()
-                .filter(|pane| pane.is_focused && !pane.is_floating)
-                .map(|pane| pane.id)
-                .collect::<Vec<_>>();
-            if focused.len() > 1 {
-                self.contested_focused_by_tab.insert(*tab, focused);
-            } else {
-                self.contested_focused_by_tab.remove(tab);
-            }
-        }
-    }
-
-    fn apply_client_focus_to_recorded_contests(&mut self) {
-        let Some(sample) = self.client_sample.as_ref() else {
-            return;
-        };
-        let viewed = sample.viewed_panes.iter().copied().collect::<BTreeSet<_>>();
-        let mut repaired_active = None;
-        for (tab, contenders) in &self.contested_focused_by_tab {
-            let Some(keep) = contenders
-                .iter()
-                .copied()
-                .filter(|pane_id| viewed.contains(pane_id))
-                .filter(|pane_id| {
-                    self.tabs.get(tab).is_some_and(|panes| {
-                        panes
-                            .iter()
-                            .any(|pane| pane.id == *pane_id && !pane.is_floating)
-                    })
-                })
-                .min()
-            else {
-                continue;
-            };
-            if let Some(panes) = self.tabs.get_mut(tab) {
-                for pane in panes {
-                    if !pane.is_floating {
-                        pane.is_focused = pane.id == keep;
-                    }
-                }
-            }
-            self.prior_focused_by_tab.insert(*tab, keep);
-            if self.active_tab == Some(*tab) {
-                repaired_active = Some(keep);
-            }
-        }
-        if let Some(focused) = repaired_active {
-            self.session_focused_pane = Some(focused);
-        }
-    }
-
     fn finish_update(
         &mut self,
         now: u64,
@@ -665,7 +576,7 @@ impl Engine {
         mut effects: Vec<Effect>,
     ) -> Vec<Effect> {
         self.dispatch_due(now, host, &mut effects);
-        self.resolve_focus_correction(now, false, &mut effects);
+        self.drive_client_queries(now, &mut effects);
         self.rearm(now, &mut effects);
         effects
     }
@@ -682,7 +593,7 @@ impl Engine {
         }
         self.granted = true;
         effects.push(Effect::HideSelf);
-        queue_list_clients(effects);
+        self.queue_client_query(ClientQueryPurpose::General);
         self.apply_runtime_reconfigure(effects);
         if self.pending_pregrant_change {
             self.flush_pregrant_change(now);
@@ -712,77 +623,228 @@ impl Engine {
         self.policy.on_manifest(hash, now);
     }
 
-    fn reconcile_manifest_focus_patch(&mut self) -> Option<Vec<FocusPatch>> {
-        let focused = policy::manifest_focused_tiled(&self.tabs, self.active_tab)?;
-        let previous = self.session_focused_pane?;
-        if previous == focused {
-            return None;
-        }
-        self.session_focused_pane = Some(focused);
-        policy::focus_tiled_pane(&mut self.tabs, focused);
-
-        let mut patch = Vec::new();
-        if policy::is_card_pane_id(&self.tabs, previous) {
-            patch.push(FocusPatch {
-                id: previous,
-                is_focused: false,
-            });
-        }
-        patch.push(FocusPatch {
-            id: focused,
-            is_focused: true,
+    fn queue_client_query(&mut self, purpose: ClientQueryPurpose) {
+        self.queued_clients = Some(match self.queued_clients {
+            None => purpose,
+            Some(existing) => latest_client_query(existing, purpose),
         });
-        Some(patch)
     }
 
-    /// Resolve a switched-tab focus classification and publish the exact
-    /// overlay the renderer needs before the next producer pull.
-    fn resolve_focus_correction(
-        &mut self,
-        now: u64,
-        manifest_fresh: bool,
-        effects: &mut Vec<Effect>,
-    ) {
-        match self.focus_correction.resolve(
-            &self.tabs,
-            self.active_tab,
-            self.session_focused_pane,
-            manifest_fresh,
-            now,
-        ) {
-            CorrectionAction::StrandedSidebar(pane_id) => {
-                self.session_focused_pane = Some(pane_id);
-                self.run_wake(wire::WakeRequest::FocusStranded { pane_id }, now, effects);
-            }
-            CorrectionAction::FocusWorkingPane { focused, unfocused } => {
-                self.session_focused_pane = Some(focused);
-                policy::focus_tiled_pane(&mut self.tabs, focused);
-                let mut patch = vec![FocusPatch {
-                    id: focused,
-                    is_focused: true,
-                }];
-                if let Some(unfocused) = unfocused {
-                    patch.push(FocusPatch {
-                        id: unfocused,
-                        is_focused: false,
-                    });
-                }
-                if self.run_wake(wire::WakeRequest::FocusChanged { patch }, now, effects) {
-                    let hash = policy::manifest_hash(&self.tabs);
-                    self.policy.accept_manifest(hash);
-                    self.policy.on_optimistic_signal(now);
-                } else {
-                    self.signal_change(now);
-                }
-            }
-            CorrectionAction::Wait | CorrectionAction::Clear => {}
+    fn drive_client_queries(&mut self, now: u64, effects: &mut Vec<Effect>) {
+        if let Some(expired) = self.in_flight_clients.filter(|query| now >= query.deadline) {
+            self.in_flight_clients = None;
+            self.stale_client_replies = self.stale_client_replies.saturating_add(1);
+            self.queue_client_query(expired.purpose);
         }
+
+        if let Some(mut pending) = self.pending_switch
+            && self.active_tab == Some(pending.tab)
+            && now >= pending.settle_at
+            && !pending.confirmation_requested
+        {
+            pending.confirmation_requested = true;
+            self.pending_switch = Some(pending);
+            self.queue_client_query(ClientQueryPurpose::SwitchConfirm {
+                generation: pending.generation,
+                tab: pending.tab,
+            });
+        }
+
+        if self.in_flight_clients.is_none()
+            && let Some(purpose) = self.queued_clients.take()
+        {
+            self.in_flight_clients = Some(InFlightClientQuery {
+                purpose,
+                deadline: now.saturating_add(policy::KEEPALIVE_MS),
+            });
+            effects.push(Effect::ListClients);
+        }
+    }
+
+    fn consume_client_reply(&mut self, now: u64) -> ClientQueryPurpose {
+        if let Some(expired) = self.in_flight_clients.filter(|query| now >= query.deadline) {
+            self.in_flight_clients = None;
+            self.stale_client_replies = self.stale_client_replies.saturating_add(1);
+            self.queue_client_query(expired.purpose);
+        }
+        if self.stale_client_replies > 0 {
+            self.stale_client_replies -= 1;
+            if let Some(query) = self.in_flight_clients.take() {
+                // The untagged reply may be the expired response or the first
+                // response to its replacement. Treat the sample as general,
+                // then re-issue the replacement so either ordering converges.
+                self.queue_client_query(query.purpose);
+            }
+            return ClientQueryPurpose::General;
+        }
+        self.in_flight_clients
+            .take()
+            .map_or(ClientQueryPurpose::General, |query| query.purpose)
+    }
+
+    fn apply_client_observation(
+        &mut self,
+        purpose: ClientQueryPurpose,
+        clients: &[ProjectedClientFocus],
+        now: u64,
+        effects: &mut Vec<Effect>,
+    ) -> bool {
+        match purpose {
+            ClientQueryPurpose::General => {
+                if self.pending_switch.is_some() {
+                    return false;
+                }
+                let current = match unique_client_observation(clients) {
+                    ClientObservation::Unique(ProjectedPaneId::Terminal(id))
+                        if self.live_terminal(id).is_some() =>
+                    {
+                        Some(id)
+                    }
+                    ClientObservation::Detached
+                    | ClientObservation::Unique(_)
+                    | ClientObservation::Ambiguous => None,
+                };
+                self.transition_session_focus(current, now, effects)
+            }
+            ClientQueryPurpose::SwitchObserve { generation, tab }
+            | ClientQueryPurpose::SwitchConfirm { generation, tab } => {
+                let Some(pending) = self.pending_switch else {
+                    return false;
+                };
+                if pending.generation != generation
+                    || pending.tab != tab
+                    || self.active_tab != Some(tab)
+                {
+                    return false;
+                }
+                let observation = self.classify_switch_observation(tab, clients);
+                match (purpose, observation) {
+                    (_, SwitchObservation::Work(pane_id)) => {
+                        self.pending_switch = None;
+                        self.session_focused_pane = Some(pane_id);
+                        self.publish_focus_transition(pending.previous, Some(pane_id), now, effects)
+                    }
+                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Repairable) => {
+                        false
+                    }
+                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Pending) => false,
+                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Abstain) => {
+                        self.pending_switch = None;
+                        false
+                    }
+                    (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Repairable) => {
+                        self.pending_switch = None;
+                        let Some(pane_id) = self.repair_owner(tab) else {
+                            return false;
+                        };
+                        self.run_wake(
+                            wire::WakeRequest::FocusStranded {
+                                pane_id,
+                                generation,
+                                clients: clients.to_vec(),
+                            },
+                            now,
+                            effects,
+                        )
+                    }
+                    (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Pending) => {
+                        self.pending_switch = None;
+                        false
+                    }
+                    (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Abstain) => {
+                        self.pending_switch = None;
+                        false
+                    }
+                    (ClientQueryPurpose::General, _) => false,
+                }
+            }
+        }
+    }
+
+    fn classify_switch_observation(
+        &self,
+        tab: usize,
+        clients: &[ProjectedClientFocus],
+    ) -> SwitchObservation {
+        match unique_client_observation(clients) {
+            ClientObservation::Detached => SwitchObservation::Pending,
+            ClientObservation::Ambiguous => SwitchObservation::Abstain,
+            ClientObservation::Unique(ProjectedPaneId::Plugin(_)) => SwitchObservation::Repairable,
+            ClientObservation::Unique(ProjectedPaneId::Terminal(id)) => {
+                match self.pane_location(id) {
+                    Some((pane_tab, pane)) if pane_tab == tab && pane.is_card_pane() => {
+                        SwitchObservation::Work(id)
+                    }
+                    Some((pane_tab, pane)) if pane_tab != tab && pane.is_live_terminal() => {
+                        SwitchObservation::Repairable
+                    }
+                    Some((pane_tab, pane)) if pane_tab == tab && pane.is_sidebar() => {
+                        SwitchObservation::Repairable
+                    }
+                    Some(_) | None => SwitchObservation::Pending,
+                }
+            }
+        }
+    }
+
+    fn pane_location(&self, id: u32) -> Option<(usize, &PaneFields)> {
+        self.tabs.iter().find_map(|(tab, panes)| {
+            panes
+                .iter()
+                .find(|pane| !pane.is_plugin && pane.id == id)
+                .map(|pane| (*tab, pane))
+        })
+    }
+
+    fn live_terminal(&self, id: u32) -> Option<&PaneFields> {
+        self.pane_location(id)
+            .map(|(_, pane)| pane)
+            .filter(|pane| pane.is_live_terminal())
+    }
+
+    fn repair_owner(&self, tab: usize) -> Option<u32> {
+        let panes = self.tabs.get(&tab)?;
+        let sidebars = panes
+            .iter()
+            .filter(|pane| pane.is_sidebar())
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>();
+        let has_work = panes.iter().any(PaneFields::is_card_pane);
+        matches!(sidebars.as_slice(), [sidebar] if has_work).then(|| sidebars[0])
+    }
+
+    fn transition_session_focus(
+        &mut self,
+        current: Option<u32>,
+        now: u64,
+        effects: &mut Vec<Effect>,
+    ) -> bool {
+        let previous = self.session_focused_pane;
+        self.session_focused_pane = current;
+        self.publish_focus_transition(previous, current, now, effects)
+    }
+
+    fn publish_focus_transition(
+        &self,
+        previous: Option<u32>,
+        current: Option<u32>,
+        now: u64,
+        effects: &mut Vec<Effect>,
+    ) -> bool {
+        if previous == current {
+            return false;
+        }
+        self.run_wake(
+            wire::WakeRequest::FocusChanged { previous, current },
+            now,
+            effects,
+        )
     }
 
     fn dispatch_due(&mut self, now: u64, host: &impl Host, effects: &mut Vec<Effect>) {
         for poke in self.policy.due(now) {
             if poke == Poke::Alive {
-                queue_list_clients(effects);
+                self.queue_client_query(ClientQueryPurpose::General);
             }
             self.poke(poke, now, host, effects);
         }
@@ -793,8 +855,9 @@ impl Engine {
     /// supersedes, and a superseded timer's fire is a harmless no-op.
     fn rearm(&mut self, now: u64, effects: &mut Vec<Effect>) {
         let policy_at = Some(self.policy.next_wake_at());
-        let correction_at = self.focus_correction.next_deadline();
-        let Some(at) = [policy_at, correction_at].into_iter().flatten().min() else {
+        let switch_at = self.pending_switch.map(|pending| pending.settle_at);
+        let query_at = self.in_flight_clients.map(|query| query.deadline);
+        let Some(at) = [policy_at, switch_at, query_at].into_iter().flatten().min() else {
             return;
         };
         if self.timer_gate.should_arm(at) {
@@ -834,11 +897,6 @@ impl Engine {
         if !self.granted {
             return false;
         }
-        let focused = policy::resolved_focused_pane_id(
-            &self.tabs,
-            self.active_tab,
-            self.session_focused_pane,
-        );
         let writer = self.plugin_id.map(|plugin_id| policy::TopologyWriter {
             plugin_id,
             loaded_at_ms: self.loaded_at_ms,
@@ -849,7 +907,7 @@ impl Engine {
             self.session_name.as_deref(),
             now,
             writer,
-            focused,
+            self.session_focused_pane,
             self.client_sample.as_ref(),
             &self.tabs,
         );
@@ -858,6 +916,15 @@ impl Engine {
         };
         effects.push(Effect::RunCommand(argv));
         true
+    }
+
+    fn writer(&self) -> policy::TopologyWriter {
+        policy::TopologyWriter {
+            plugin_id: self.plugin_id.unwrap_or_default(),
+            loaded_at_ms: self.loaded_at_ms,
+            build: self.plugin_build.clone(),
+            config: self.plugin_config.clone(),
+        }
     }
 
     /// Apply rimz-owned runtime config in one `reconfigure(..., false)`.
@@ -976,32 +1043,75 @@ impl Engine {
     }
 }
 
-fn focused_patch_id(patch: &[FocusPatch]) -> Option<u32> {
-    patch
-        .iter()
-        .find(|patch| patch.is_focused)
-        .map(|patch| patch.id)
-}
-
-fn queue_list_clients(effects: &mut Vec<Effect>) {
-    if !effects
-        .iter()
-        .any(|effect| matches!(effect, Effect::ListClients))
-    {
-        effects.push(Effect::ListClients);
+fn latest_client_query(
+    current: ClientQueryPurpose,
+    next: ClientQueryPurpose,
+) -> ClientQueryPurpose {
+    match (current, next) {
+        (current, ClientQueryPurpose::General) => current,
+        (ClientQueryPurpose::General, next) => next,
+        (
+            current @ (ClientQueryPurpose::SwitchObserve {
+                generation: current_generation,
+                ..
+            }
+            | ClientQueryPurpose::SwitchConfirm {
+                generation: current_generation,
+                ..
+            }),
+            ClientQueryPurpose::SwitchObserve {
+                generation: next_generation,
+                ..
+            }
+            | ClientQueryPurpose::SwitchConfirm {
+                generation: next_generation,
+                ..
+            },
+        ) if current_generation > next_generation => current,
+        (
+            current @ ClientQueryPurpose::SwitchConfirm {
+                generation: current_generation,
+                ..
+            },
+            ClientQueryPurpose::SwitchObserve {
+                generation: next_generation,
+                ..
+            },
+        ) if current_generation == next_generation => current,
+        (_, next) => next,
     }
 }
 
-fn client_sample(clients: Vec<ProjectedClientFocus>) -> policy::ClientSample {
+fn client_sample(clients: &[ProjectedClientFocus]) -> policy::ClientSample {
     let mut client_ids = BTreeSet::new();
     let mut viewed_panes = BTreeSet::new();
     for client in clients {
         client_ids.insert(client.client_id);
-        viewed_panes.insert(client.pane_id);
+        if let ProjectedPaneId::Terminal(pane_id) = client.pane_id {
+            viewed_panes.insert(pane_id);
+        }
     }
     policy::ClientSample {
         human_clients: client_ids.len().try_into().unwrap_or(u32::MAX),
         viewed_panes: viewed_panes.into_iter().collect(),
+        views: clients
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn unique_client_observation(clients: &[ProjectedClientFocus]) -> ClientObservation {
+    let panes = clients
+        .iter()
+        .map(|client| client.pane_id)
+        .collect::<BTreeSet<_>>();
+    match panes.iter().copied().collect::<Vec<_>>().as_slice() {
+        [] => ClientObservation::Detached,
+        [pane] => ClientObservation::Unique(*pane),
+        _ => ClientObservation::Ambiguous,
     }
 }
 

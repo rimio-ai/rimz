@@ -93,12 +93,11 @@ const NEW_TAB_CONFIRM_STEP: Duration = Duration::from_millis(50);
 /// alive until the tab reports at least one selectable tiled pane.
 const NEW_TAB_MATERIALIZE_WINDOW: Duration = Duration::from_secs(10);
 const NEW_TAB_MATERIALIZE_STEP: Duration = Duration::from_millis(50);
-/// A freshly opened background tab can report present before client focus has
-/// accepted the return action. Confirm the attached client's pane before
-/// handing control back to the caller.
-const FOCUS_RESTORE_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
-const FOCUS_RESTORE_CONFIRM_STEP: Duration = Duration::from_millis(50);
-const FOCUS_RESTORE_STABLE_FOR: Duration = Duration::from_millis(500);
+/// A freshly opened tab can report materialized before its screen worker
+/// accepts the return action. Retry command acceptance without treating the
+/// unchanged client sample as an acknowledgement.
+const FOCUS_RESTORE_ATTEMPTS: u32 = 5;
+const FOCUS_RESTORE_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Pipe name the presence-plugin launch sends its boot message down.
 const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";
@@ -543,13 +542,6 @@ impl ZellijBackend {
             session.to_owned(),
             "action".to_owned(),
         ])
-    }
-
-    pub(super) fn focus_terminal(&self, session: &str, raw_id: u64) -> Result<()> {
-        self.zellij_action(session)
-            .args(["focus-pane-id".to_owned(), format!("terminal_{raw_id}")])
-            .run()
-            .map(|_| ())
     }
 
     pub(super) fn go_to_tab(&self, session: &str, index: u32) -> Result<()> {

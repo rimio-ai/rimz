@@ -22,7 +22,9 @@ use crate::diag::record::DiagEvent;
 use crate::ids::PaneId;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
-use crate::sidebar::focus_anchor::FocusAnchor;
+use crate::sidebar::focus_anchor::{
+    FocusIntentState, FocusObservationOutcome, FocusOrigin, FocusPresentation,
+};
 use crate::sidebar::fuse::{focus_intent_confirmed, fuse};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
@@ -466,6 +468,7 @@ fn focus_stranded_target(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
     stranded_pane_id: &PaneId,
+    evidence: &[crate::mux::ClientPaneView],
     own_pane_id: Option<&PaneId>,
     sent_at_ms: u64,
     now_ms: u64,
@@ -477,9 +480,22 @@ fn focus_stranded_target(
     if now_ms.saturating_sub(sent_at_ms) > duration_millis(FOCUS_STRANDED_EVENT_TTL) {
         return None;
     }
+    let mut current = snapshot.client_views.clone();
+    let mut evidence = evidence.to_vec();
+    current.sort();
+    current.dedup();
+    evidence.sort();
+    evidence.dedup();
+    if stranded_pane_id.mux() == MuxName::Zellij {
+        if snapshot.presence.is_none() || evidence.is_empty() || current != evidence {
+            return None;
+        }
+    } else if snapshot.viewed_panes.len() > 1 {
+        return None;
+    }
     // `focus-pane-id` is session-global: with clients viewing distinct panes it
     // would yank a client looking elsewhere, switching tabs when the target
-    // lives in another tab. Leave the sidebar stranded while focus ownership is
+    // lives in another tab. Leave the repair pending while focus ownership is
     // ambiguous.
     if snapshot.viewed_panes.len() > 1 {
         return None;
@@ -503,21 +519,82 @@ pub(crate) static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex:
 /// Focus the pane on a detached thread so the keypress/click returns instantly:
 /// `focus_pane` forks the mux client (`zellij action focus-pane-id` / the tmux
 /// equivalent), which must never block the loop. The snapshot-bound pane is
-/// focused directly — no `rimz pane focus` child, no per-click `list-panes`
-/// re-validation; a pane recycled in the sub-second window since the snapshot
-/// self-corrects on the next refresh.
+/// focused directly — no `rimz pane focus` child and no per-click pane roster.
+/// The shared intent helper takes a fresh attached-client sample immediately
+/// before dispatch and serializes concurrent focus actions.
 /// Errors are logged at `debug!`, not surfaced: a pane recycled in the
 /// sub-second window since the snapshot is a benign, self-correcting race, so
 /// the line stays local under `RUST_LOG=debug` and off the off-box error
-/// channel. The command is the whole jump: no local state changes, and the
-/// highlight converges on the next data fold (the backstop tick or a store
-/// wakeup) once the mux reports the new focus.
-fn spawn_pane_focus(pane_id: PaneId, session_name: &str) {
+/// channel. Command acceptance applies the durable intent and wakes every
+/// renderer; later native observations confirm or supersede it.
+fn spawn_pane_focus(
+    pane_id: PaneId,
+    session_name: &str,
+    runtime: crate::store::RuntimePaths,
+    origin: crate::sidebar::focus_anchor::FocusOrigin,
+    expected_pre_action: Option<Vec<crate::mux::ClientPaneView>>,
+    presentation: (usize, Option<crate::sidebar::focus_anchor::FrozenOrder>),
+    repair_generation: Option<u64>,
+) {
     let session_name = session_name.to_owned();
     std::thread::spawn(move || {
         let backend = crate::mux::backend_for(pane_id.mux());
-        if let Err(err) = backend.focus_pane(&pane_id, Some(&session_name)) {
-            debug!(pane = %pane_id, error = %err, "sidebar pane focus failed");
+        let requested = crate::sidebar::focus_anchor::request_action(
+            backend.as_ref(),
+            &runtime,
+            &session_name,
+            crate::sidebar::focus_anchor::FocusActionRequest {
+                pane_id: pane_id.clone(),
+                origin,
+                repair_generation,
+                expected_pre_action: expected_pre_action.as_deref(),
+                offset: presentation.0,
+                order: presentation.1,
+            },
+        );
+        let outcome = match requested {
+            Ok(nonce) => match crate::sidebar::focus_anchor::dispatch_action(
+                backend.as_ref(),
+                &runtime,
+                &session_name,
+                &pane_id,
+                nonce,
+            ) {
+                Ok(true) => (Some(nonce), "accepted_unconfirmed", None),
+                Ok(false) => (
+                    Some(nonce),
+                    "failed",
+                    Some("superseded before focus dispatch".to_owned()),
+                ),
+                Err(err) => (Some(nonce), "failed", Some(err.to_string())),
+            },
+            Err(err) => (None, "failed", Some(err.to_string())),
+        };
+        if let Some(generation) = repair_generation {
+            use crate::harness::assist_log::{Assist, AssistRecord, FocusRepairOutcome};
+            crate::harness::assist_log::spawn_focus_repair_append(
+                &runtime,
+                &AssistRecord {
+                    at: jiff::Timestamp::now(),
+                    assist: Assist::FocusRepair {
+                        nonce: outcome.0.map(|nonce| nonce.to_string()),
+                        workspace_id: runtime.workspace_id.clone(),
+                        session_name: session_name.clone(),
+                        generation,
+                        evidence: expected_pre_action.unwrap_or_default(),
+                        target: pane_id.clone(),
+                        outcome: if outcome.1 == "accepted_unconfirmed" {
+                            FocusRepairOutcome::AcceptedUnconfirmed
+                        } else {
+                            FocusRepairOutcome::Failed
+                        },
+                        error: outcome.2.clone(),
+                    },
+                },
+            );
+        }
+        if let Some(error) = outcome.2 {
+            debug!(pane = %pane_id, error, "sidebar pane focus failed");
         }
     });
 }

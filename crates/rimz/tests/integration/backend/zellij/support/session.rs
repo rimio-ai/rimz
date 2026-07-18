@@ -69,6 +69,20 @@ pub(in crate::backend::zellij) fn publish_room_bin(state_root: &Path, opts: &Sid
         .expect("test room state paths");
     state.ensure_dirs().expect("test room state dirs");
     std::fs::copy(&opts.rimz_bin, &state.room_bin).expect("publish test room binary");
+    rimz::store::workspace_record::write(
+        &state,
+        &rimz::WorkspaceRecord {
+            workspace_id: opts.workspace_id.clone(),
+            project_root: opts.project_root.clone(),
+            worktree_root: None,
+            session_name: opts.session_name.clone(),
+            root_class: rimz::workspace::RootClass::Directory,
+            rimz_bin: Some(state.room_bin.clone()),
+            rimz_build: None,
+            updated_at: jiff::Timestamp::now(),
+        },
+    )
+    .expect("publish test workspace record");
 }
 
 pub(in crate::backend::zellij) fn create_plain_background_session(
@@ -244,6 +258,7 @@ impl Drop for ZellijSession {
 /// the client; session teardown stays with [`ScopedSessionCleanup`].
 pub(in crate::backend::zellij) struct AttachedClient {
     _master: Box<dyn portable_pty::MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -299,6 +314,7 @@ impl AttachedClient {
         }
         let child = pair.slave.spawn_command(cmd).expect("spawn zellij attach");
         drop(pair.slave);
+        let writer = pair.master.take_writer().expect("PTY writer");
         // Drain the PTY in the background so the kernel buffer never fills and
         // stalls the client; the thread exits with the PTY on drop.
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
@@ -313,8 +329,30 @@ impl AttachedClient {
         });
         Self {
             _master: pair.master,
+            writer,
             child,
         }
+    }
+
+    pub(in crate::backend::zellij) fn press_alt(&mut self, key: char) {
+        self.writer
+            .write_all(&[0x1b, key as u8])
+            .expect("write alt key");
+        self.writer.flush().expect("flush alt key");
+    }
+
+    pub(in crate::backend::zellij) fn go_to_tab(&mut self, tab: u8) {
+        assert!((1..=9).contains(&tab), "test helper supports tabs 1-9");
+        self.writer
+            .write_all(&[0x14, b'0' + tab])
+            .expect("write tab-mode key sequence");
+        self.writer.flush().expect("flush tab-mode key sequence");
+    }
+
+    pub(in crate::backend::zellij) fn send_line(&mut self, line: &str) {
+        self.writer.write_all(line.as_bytes()).expect("write line");
+        self.writer.write_all(b"\r").expect("write enter");
+        self.writer.flush().expect("flush line");
     }
 }
 

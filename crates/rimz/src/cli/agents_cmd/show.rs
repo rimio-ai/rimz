@@ -594,9 +594,16 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
     let backend = rimz::mux::backend_for(pane.pane_id.mux());
-    backend
-        .focus_pane(&pane.pane_id, Some(&workspace.session_name))
-        .map_err(Into::into)
+    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    rimz::sidebar::focus_anchor::execute_action(
+        backend.as_ref(),
+        &runtime,
+        &workspace.session_name,
+        pane.pane_id.clone(),
+        rimz::sidebar::focus_anchor::FocusOrigin::User,
+        None,
+    )?;
+    Ok(())
 }
 
 fn push_pane_anchor(kv: &mut render::KeyVals, agent: &AgentState) {

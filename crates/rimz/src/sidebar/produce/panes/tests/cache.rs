@@ -176,6 +176,7 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
             clients: Some(crate::mux::zellij::pane_topology::TopologyClients {
                 human_clients: 1,
                 viewed_panes: vec![7],
+                views: Vec::new(),
             }),
             panes: vec![crate::mux::zellij::pane_topology::PaneTopologyPane {
                 id: 7,
@@ -184,7 +185,6 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
                 exited: false,
                 is_suppressed: false,
                 is_floating: false,
-                is_focused: true,
                 tab_position: 0,
                 tab_name: Some("main".to_owned()),
                 pane_columns: Some(80),

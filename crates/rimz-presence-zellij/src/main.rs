@@ -286,12 +286,9 @@ mod shell {
     fn project_clients(clients: &[ClientInfo]) -> Vec<ProjectedClientFocus> {
         clients
             .iter()
-            .filter_map(|client| match client.pane_id {
-                PaneId::Terminal(pane_id) => Some(ProjectedClientFocus {
-                    client_id: client.client_id,
-                    pane_id,
-                }),
-                PaneId::Plugin(_) => None,
+            .map(|client| ProjectedClientFocus {
+                client_id: client.client_id,
+                pane_id: project_pane_id(client.pane_id),
             })
             .collect()
     }
@@ -329,7 +326,6 @@ mod shell {
         RawStablePaneFields {
             id: pane.id,
             is_plugin: pane.is_plugin,
-            is_focused: pane.is_focused,
             is_suppressed: pane.is_suppressed,
             is_floating: pane.is_floating,
             exited: pane.exited,

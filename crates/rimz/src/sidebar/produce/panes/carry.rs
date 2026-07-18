@@ -762,6 +762,7 @@ mod tests {
             }],
             carried_panes: Vec::new(),
             viewed_panes: Vec::new(),
+            client_views: Vec::new(),
             focused_pane: None,
             presence: None,
         };

@@ -564,7 +564,6 @@ pub(crate) mod test_support {
             view_kind: None,
             view_name: None,
             title: None,
-            is_focused: false,
             is_floating: false,
             command: command.map(ToOwned::to_owned),
             foreground_cmdline: None,

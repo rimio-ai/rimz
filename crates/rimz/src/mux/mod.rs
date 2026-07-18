@@ -212,9 +212,9 @@ pub struct PaneListing {
     /// For a topology-cache hit this is the cache's `produced_at_ms`; other
     /// backends stamp it before the live mux read starts.
     pub observed_at_ms: u64,
-    /// Focus resolved by a backend push source that already owns the full
+    /// Session focus resolved by a backend push source that already owns the full
     /// session topology. Used only when the named pane survives listing filters.
-    pub authoritative_focus: Option<PaneId>,
+    pub session_focus: Option<PaneId>,
     /// Client focus/presence carried by the same source as `panes`. `None`
     /// means the caller must sample the backend directly if it needs it.
     pub client_view: Option<ClientView>,
@@ -245,8 +245,38 @@ pub struct ClientPresence {
     pub last_input_ms: Option<u64>,
 }
 
+/// Backend-native identity for one attached multiplexer client.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "mux", content = "id", rename_all = "snake_case")]
+pub enum MuxClientId {
+    Tmux(String),
+    Zellij(u32),
+}
+
+/// One native observation pairing an attached client with its viewed pane.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ClientPaneView {
+    pub client_id: MuxClientId,
+    pub pane_id: PaneId,
+}
+
+impl Ord for ClientPaneView {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.client_id
+            .cmp(&other.client_id)
+            .then_with(|| self.pane_id.as_str().cmp(other.pane_id.as_str()))
+    }
+}
+
+impl PartialOrd for ClientPaneView {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ClientView {
+    pub clients: Vec<ClientPaneView>,
     pub viewed_panes: Vec<PaneId>,
     pub presence: ClientPresence,
 }
