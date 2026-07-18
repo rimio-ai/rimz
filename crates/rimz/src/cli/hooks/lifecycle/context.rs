@@ -272,7 +272,7 @@ pub(super) fn supplement_realtime_cost(
     let Some(path) = agent.session_transcript(context_agent_id, prior_path) else {
         return;
     };
-    let Some(stat) = rimz::agents::TranscriptStat::from_path(&path) else {
+    let Some(stat) = agent.transcript_stat(&path) else {
         return;
     };
     if !partial

@@ -208,18 +208,19 @@ The walk is **read-only and sidebar-safe** — no store writes — so it sits ap
 
 ### The incremental cache
 
-The read is user-scoped: the persistent shared `$XDG_STATE_HOME/rimz/shared/spending.json` cache stores `(mtime, len, cursor, origin)` per file, dedups retry-write rows within each parsed chunk, and compacts finalized rows older than 8 days into per-day/model/thread rollups. Append-only stores advance incrementally; rewind-prone stores return an authoritative replacement fold. Per file class:
+The read is user-scoped: the persistent shared `$XDG_STATE_HOME/rimz/shared/spending.json` cache stores a high-resolution logical source stamp `(primary mtime seconds+nanos, primary length, optional provider companion mtime seconds+nanos+length)` beside each cursor and origin, dedups retry-write rows within each parsed chunk, and compacts finalized rows older than 8 days into per-day/model/thread rollups. Append-only stores advance incrementally; rewind-prone stores return an authoritative replacement fold. Per source class:
 
-- An unchanged file is one stat.
-- A grown file parses only its appended suffix from the cursor.
+- An exact logical-stamp hit is served from cache.
+- Companion-free primary growth parses only its appended suffix from the cursor.
+- A companion appearance, change, or removal forces a cold parse.
 - A cold changed set parses in a bounded worker pool.
-- A new file whose mtime predates the widest spend window plus a skew margin is skipped without writing a cache record, and dead records past that boundary are evicted.
+- A new source whose newest primary-or-companion mtime predates the widest spend window plus a skew margin is skipped without writing a cache record, and dead records past that boundary are evicted.
 
 Dirty cursor state persists on the first walk, after the five-minute min interval, or after cold-size parse work. The cursor also carries provider-specific resume state: Codex's cumulative-totals fold state and its learned file origin (which survives cold re-parses), Copilot's per-model shutdown baselines plus session-start cwd, and Pi's session header cwd. OpenCode joins rewind-prone stores: every changed SQLite database ignores resume state, cold-folds the whole mutable table, and authoritatively replaces that file's cached entries so in-place row completion cannot lose spend.
 
 The long-lived walker memo retains only `(file index, entry index)` locations for dedup winners into the generation- and file-signature-keyed cache. Aggregation borrows paths and native thread ids from that cache, allocating legacy session strings only when materializing the published live-baseline/session-key outputs; append, truncate, compaction, or file-set changes rebuild the locations once and stable walks reuse them.
 
-Two version stamps keep the cache honest across schema changes. A shape change to the entry split, store-time dedup, or per-file origin metadata bumps `SPENDING_CACHE_VERSION`, so finalized sessions re-parse cleanly; a semantic change to the published aggregate or guaranteed built-in pricing bumps `PROVIDER_SPENDING_VERSION`, so `provider-spending.json` recomputes once from the current entry cache without forcing a store re-parse. Shared spending cache writers also refuse a schema downgrade after a cheap leading-version probe, so an older long-lived build cannot blank a newer build's published aggregate or force persistent cursor cold-walks; a version bump costs one recompute, then the higher-version cache holds.
+Two version stamps keep the cache honest across schema changes. A shape change to the entry split, store-time dedup, per-file origin metadata, or logical source stamp bumps `SPENDING_CACHE_VERSION`, so finalized sessions re-parse cleanly; v19 replaces whole-second primary-only stamps with the high-resolution companion-aware shape and cold-rebuilds every v18 cursor once. A semantic change to the published aggregate or guaranteed built-in pricing bumps `PROVIDER_SPENDING_VERSION`, so `provider-spending.json` recomputes once from the current entry cache without forcing a store re-parse. Shared spending cache writers also refuse a schema downgrade after a cheap leading-version probe, so an older long-lived build cannot blank a newer build's published aggregate or force persistent cursor cold-walks; a version bump costs one recompute, then the higher-version cache holds.
 
 ### One walk per persistent/discovery namespace
 

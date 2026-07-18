@@ -4,12 +4,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::agents::AgentAdapter;
+use crate::agents::{AgentAdapter, TranscriptStat};
 
 use super::aggregate::{
     DedupPayload, SidechainDedup, cold_parse_out_of_window, within_raw_retain_window,
@@ -57,8 +57,10 @@ use super::aggregate::{
 /// Pi token-only records, applies `totalTokens` fallback, and prices an absent
 /// direct cost, which also requires a cold parse of finalized Pi sessions.
 /// v18 corrects candidate/thought overlap in finalized Qwen transcripts, so
-/// their historical output tokens and cost receive one cold reprice.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 18;
+/// their historical output tokens and cost receive one cold reprice. v19
+/// stores nanosecond-precise logical source stamps, including provider-owned
+/// companions such as OpenCode's WAL, so main-file-only cursors rebuild once.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 19;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
@@ -87,17 +89,13 @@ impl SpendingDiskCache {
     }
 }
 
-/// Cached parse of one JSONL file.
+/// Cached parse of one logical transcript or provider store.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileCacheEntry {
-    #[serde(default, rename = "m", skip_serializing_if = "is_zero")]
-    pub mtime_secs: u64,
-    /// File length at the last parse — the growth/truncation detector: a
-    /// longer file parses only its suffix, a shorter (rotated/truncated) one
-    /// re-parses cold, an equal length with a new mtime re-parses cold (an
-    /// in-place rewrite).
-    #[serde(default, rename = "n", skip_serializing_if = "is_zero")]
-    pub len: u64,
+    /// Exact identity captured before the last parse. Companion-free primary
+    /// growth can resume from the cursor; every other change re-parses cold.
+    #[serde(default, rename = "s")]
+    pub stat: TranscriptStat,
     /// Where the last parse left off — the next incremental parse resumes here.
     #[serde(default, rename = "c", skip_serializing_if = "is_default_cursor")]
     pub cursor: SpendCursor,
@@ -284,12 +282,13 @@ pub(crate) fn compact_spending_cache(
         cached_file.entries = retained;
     }
     let before = cache.files.len();
-    // Parsed entry and unknown-model timestamps are not newer than the file mtime
-    // in real transcript stores; once mtime is past the widest window plus skew
-    // margin, the record can no longer affect totals, sessions, or price chases.
+    // Parsed entry and unknown-model timestamps are not newer than the logical
+    // source mtime in real transcript stores; once its newest participant is
+    // past the widest window plus skew margin, the record can no longer affect
+    // totals, sessions, or price chases.
     cache
         .files
-        .retain(|_, file| !cold_parse_out_of_window(file.mtime_secs, now_secs));
+        .retain(|_, file| !cold_parse_out_of_window(file.stat.newest_mtime_secs(), now_secs));
     changed |= cache.files.len() != before;
     changed
 }
@@ -416,19 +415,6 @@ fn merge_rollup(rollups: &mut BTreeMap<RollupKey, CachedEntry>, entry: CachedEnt
             rolled.cache_read += entry.cache_read;
         })
         .or_insert(entry);
-}
-
-pub(crate) fn file_stat(path: &Path) -> (u64, u64) {
-    let Ok(meta) = fs::metadata(path) else {
-        return (0, 0);
-    };
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    (mtime, meta.len())
 }
 
 pub(crate) fn cache_stamp(path: &Path) -> Option<CacheStamp> {

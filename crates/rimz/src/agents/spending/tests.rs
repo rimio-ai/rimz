@@ -299,11 +299,15 @@ fn append_line(path: &Path, line: &str) {
 }
 
 fn set_file_mtime(path: &Path, secs: u64) {
+    set_file_mtime_nanos(path, secs, 0);
+}
+
+fn set_file_mtime_nanos(path: &Path, secs: u64, nanos: u32) {
     std::fs::OpenOptions::new()
         .write(true)
         .open(path)
         .unwrap()
-        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(secs, nanos))
         .unwrap();
 }
 
@@ -352,17 +356,19 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str) -> CachedEntry {
 }
 
 fn cached_file(path: &Path, entries: Vec<CachedEntry>) -> (String, FileCacheEntry) {
-    let (mtime_secs, len) = file_stat(path);
+    let mut stat = crate::agents::TranscriptStat::from_path(path).unwrap_or_default();
     let mtime_secs = entries
         .iter()
         .map(|entry| entry.ts_secs)
         .max()
-        .map_or(mtime_secs, |entry_mtime| mtime_secs.max(entry_mtime));
+        .map_or(stat.newest_mtime_secs(), |entry_mtime| {
+            stat.newest_mtime_secs().max(entry_mtime)
+        });
+    stat.mtime_secs = i64::try_from(mtime_secs).unwrap_or(i64::MAX);
     (
         path.to_string_lossy().into_owned(),
         FileCacheEntry {
-            mtime_secs,
-            len,
+            stat,
             cursor: SpendCursor::default(),
             origin_path: None,
             entries,

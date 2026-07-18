@@ -51,16 +51,8 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, id: &str) -> CachedEntry {
 }
 
 fn file_cache_entry(path: &std::path::Path, entries: Vec<CachedEntry>) -> FileCacheEntry {
-    let metadata = std::fs::metadata(path).expect("transcript metadata");
-    let mtime_secs = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
     FileCacheEntry {
-        mtime_secs,
-        len: metadata.len(),
+        stat: crate::agents::TranscriptStat::from_path(path).expect("transcript stat"),
         cursor: SpendCursor::default(),
         origin_path: None,
         entries,
@@ -364,8 +356,11 @@ fn publishing_walk_observer_checkpoints_workspace_live_baselines() {
         cache.files.insert(
             transcript.to_string_lossy().into_owned(),
             FileCacheEntry {
-                mtime_secs: 1,
-                len: 1,
+                stat: crate::agents::TranscriptStat {
+                    mtime_secs: 1,
+                    len: 1,
+                    ..crate::agents::TranscriptStat::default()
+                },
                 cursor: SpendCursor::default(),
                 origin_path: Some(project),
                 entries: vec![CachedEntry {
@@ -440,8 +435,11 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
     raw.files.insert(
         transcript.to_string_lossy().into_owned(),
         FileCacheEntry {
-            mtime_secs: 1,
-            len: 1,
+            stat: crate::agents::TranscriptStat {
+                mtime_secs: 1,
+                len: 1,
+                ..crate::agents::TranscriptStat::default()
+            },
             cursor: SpendCursor::default(),
             origin_path: Some(project.clone()),
             entries: vec![CachedEntry {
@@ -534,8 +532,11 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
     raw.files.insert(
         transcript.to_string_lossy().into_owned(),
         FileCacheEntry {
-            mtime_secs: 1,
-            len: 1,
+            stat: crate::agents::TranscriptStat {
+                mtime_secs: 1,
+                len: 1,
+                ..crate::agents::TranscriptStat::default()
+            },
             cursor: SpendCursor::default(),
             origin_path: Some(project.clone()),
             entries: vec![CachedEntry {
@@ -618,14 +619,7 @@ fn producer_missing_scope_applies_live_origin_before_reusing_warm_memo() {
     raw.files.insert(
         transcript.to_string_lossy().into_owned(),
         FileCacheEntry {
-            mtime_secs: std::fs::metadata(&transcript)
-                .unwrap()
-                .modified()
-                .unwrap()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            len: 0,
+            stat: crate::agents::TranscriptStat::from_path(&transcript).unwrap(),
             cursor: SpendCursor::default(),
             origin_path: None,
             entries: vec![CachedEntry {
@@ -724,8 +718,10 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
     raw.files.insert(
         transcript.to_string_lossy().into_owned(),
         FileCacheEntry {
-            mtime_secs: 1,
-            len: 0,
+            stat: crate::agents::TranscriptStat {
+                mtime_secs: 1,
+                ..crate::agents::TranscriptStat::default()
+            },
             cursor: SpendCursor::default(),
             origin_path: Some(project),
             entries: Vec::new(),
@@ -879,13 +875,6 @@ fn producer_publishes_compacted_shared_spending_cache() {
     runtime.ensure_dirs().expect("runtime dirs");
     let transcript = dir.path().join("claude.jsonl");
     std::fs::write(&transcript, b"").expect("transcript");
-    let metadata = std::fs::metadata(&transcript).expect("transcript metadata");
-    let mtime_secs = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
     let now_secs = unix_secs_now();
     let old_a = CachedEntry {
         ts_secs: now_secs - 40 * 86_400,
@@ -912,8 +901,7 @@ fn producer_publishes_compacted_shared_spending_cache() {
     raw.files.insert(
         key.clone(),
         FileCacheEntry {
-            mtime_secs,
-            len: metadata.len(),
+            stat: crate::agents::TranscriptStat::from_path(&transcript).unwrap(),
             cursor: SpendCursor::default(),
             origin_path: None,
             entries: vec![old_a, old_b],

@@ -9,6 +9,22 @@ use crate::agents::transcript_fs::{
     deserialize_optional_object_lossy, deserialize_optional_string_lossy,
     deserialize_optional_u64_lossy,
 };
+use crate::agents::{TranscriptCompanionStat, TranscriptStat};
+
+/// Durable identity of the logical SQLite store read through `path`.
+///
+/// SQLite merges committed frames from the optional WAL when opening the main
+/// database, so the WAL participates in invalidation without becoming a
+/// separately discovered parse source. The shared-memory file carries only
+/// coordination state and intentionally stays outside this stamp.
+pub(super) fn logical_stat(path: &Path) -> Option<TranscriptStat> {
+    let mut stat = TranscriptStat::from_path(path)?;
+    let mut wal_path = path.as_os_str().to_os_string();
+    wal_path.push("-wal");
+    stat.companion =
+        TranscriptStat::from_path(Path::new(&wal_path)).map(TranscriptCompanionStat::from);
+    Some(stat)
+}
 
 pub(super) fn files() -> Vec<PathBuf> {
     let mut files = data_dirs()
@@ -203,5 +219,50 @@ mod tests {
             latest_provider_in_file(&path).map(|(_, provider)| provider),
             Some("openai".to_owned())
         );
+    }
+
+    #[test]
+    fn opencode_logical_stat_tracks_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode-channel.db");
+        std::fs::write(&path, b"main").unwrap();
+
+        let primary = TranscriptStat::from_path(&path).unwrap();
+        assert_eq!(logical_stat(&path).unwrap(), primary);
+
+        let wal_path = dir.path().join("opencode-channel.db-wal");
+        std::fs::write(&wal_path, b"a").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&wal_path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(12_345, 100))
+            .unwrap();
+        let appeared = logical_stat(&path).unwrap();
+        assert_eq!(
+            TranscriptStat {
+                companion: None,
+                ..appeared
+            },
+            primary
+        );
+        assert!(appeared.companion.is_some());
+
+        std::fs::write(&wal_path, b"b").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&wal_path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(12_345, 200))
+            .unwrap();
+        let changed = logical_stat(&path).unwrap();
+        assert_ne!(changed, appeared);
+        assert_eq!(changed.companion.unwrap().mtime_nanos, 200);
+
+        std::fs::write(dir.path().join("opencode-channel.db-shm"), b"coordination").unwrap();
+        assert_eq!(logical_stat(&path).unwrap(), changed);
+
+        std::fs::remove_file(&wal_path).unwrap();
+        assert_eq!(logical_stat(&path).unwrap(), primary);
     }
 }

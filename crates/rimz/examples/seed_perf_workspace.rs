@@ -185,13 +185,6 @@ fn seed_spending_history(
         let path = sessions.join(format!("rollout-{file_index:06}.jsonl"));
         std::fs::File::create(&path)
             .with_context(|| format!("creating transcript fixture {}", path.display()))?;
-        let metadata = std::fs::metadata(&path)?;
-        let mtime_secs = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
         let count = base + usize::from(file_index < remainder);
         let entries = (0..count)
             .map(|_| {
@@ -218,8 +211,8 @@ fn seed_spending_history(
         cache.files.insert(
             path.to_string_lossy().into_owned(),
             rimz::agents::spending::FileCacheEntry {
-                mtime_secs,
-                len: metadata.len(),
+                stat: rimz::agents::TranscriptStat::from_path(&path)
+                    .context("reading transcript fixture stat")?,
                 cursor: rimz::agents::spending::SpendCursor::default(),
                 origin_path: Some(project_root.to_path_buf()),
                 entries,

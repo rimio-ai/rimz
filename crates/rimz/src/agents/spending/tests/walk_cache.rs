@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
+    assert_eq!(SPENDING_CACHE_VERSION, 19);
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
     let file = write_jsonl(
@@ -22,12 +23,14 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
 
     let path = dir.path().join("spending.json");
     let stale = SpendingDiskCache {
-        version: SPENDING_CACHE_VERSION - 1,
+        version: 18,
         files: HashMap::from([(
             "/old/chat.jsonl".to_string(),
             FileCacheEntry {
-                mtime_secs: 123,
-                len: 0,
+                stat: crate::agents::TranscriptStat {
+                    mtime_secs: 123,
+                    ..crate::agents::TranscriptStat::default()
+                },
                 cursor: SpendCursor::default(),
                 origin_path: None,
                 entries: vec![CachedEntry {
@@ -219,6 +222,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
         "rewrite.jsonl",
         &[&claude_line(&today, 1.0, "msg-r", "req-r")],
     );
+    set_file_mtime_nanos(&rewrite_file, NOW_SECS, 100);
     let mut cache = SpendingDiskCache::default();
     compute_spending(
         &[(claude_adapter(), rewrite_file.clone())],
@@ -226,17 +230,18 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
         &PriceBook::default(),
         NOW_SECS,
     );
+    let warmed_stat = cache.files[&rewrite_file.to_string_lossy().into_owned()].stat;
     write_jsonl(
         dir.path(),
         "rewrite.jsonl",
         &[&claude_line(&today, 3.0, "msg-r", "req-r")],
     );
-    let f = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&rewrite_file)
-        .unwrap();
-    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
-        .unwrap();
+    set_file_mtime_nanos(&rewrite_file, NOW_SECS, 200);
+    let rewritten_stat = crate::agents::TranscriptStat::from_path(&rewrite_file).unwrap();
+    assert_eq!(warmed_stat.mtime_secs, rewritten_stat.mtime_secs);
+    assert_eq!(warmed_stat.mtime_nanos, 100);
+    assert_eq!(rewritten_stat.mtime_secs, i64::try_from(NOW_SECS).unwrap());
+    assert_eq!(rewritten_stat.mtime_nanos, 200);
     let rewritten = compute_spending(
         &[(claude_adapter(), rewrite_file)],
         &mut cache,
@@ -244,6 +249,59 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
         NOW_SECS,
     );
     assert!((rewritten.total.headline.usd - 3.0).abs() < 1e-9);
+}
+
+#[test]
+fn opencode_wal_commit_refreshes_spending() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("opencode.db");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode = WAL;\
+             PRAGMA wal_autocheckpoint = 0;\
+             CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);",
+        )
+        .unwrap();
+    let initial = r#"{"cost":1.25,"modelID":"gpt","providerID":"openai","time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
+    let updated = r#"{"cost":9.75,"modelID":"gpt","providerID":"openai","time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
+    assert_eq!(initial.len(), updated.len());
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data) VALUES ('msg', 'ses', ?1)",
+            [initial],
+        )
+        .unwrap();
+
+    let files = [(opencode_adapter(), path.clone())];
+    let mut cache = SpendingDiskCache::default();
+    let warmed = compute_spending(&files, &mut cache, &PriceBook::default(), NOW_SECS);
+    assert!((warmed.total.headline.usd - 1.25).abs() < 1e-9);
+    let main_before = crate::agents::TranscriptStat::from_path(&path).unwrap();
+    let logical_before = opencode_adapter().transcript_stat(&path).unwrap();
+    assert!(logical_before.companion.is_some());
+
+    connection
+        .execute("UPDATE message SET data = ?1 WHERE id = 'msg'", [updated])
+        .unwrap();
+
+    let main_after = crate::agents::TranscriptStat::from_path(&path).unwrap();
+    let logical_after = opencode_adapter().transcript_stat(&path).unwrap();
+    assert_eq!(main_after, main_before, "the commit stayed in the held WAL");
+    assert_ne!(
+        logical_after.companion, logical_before.companion,
+        "the WAL identity records the equal-length commit"
+    );
+
+    let refreshed = compute_spending(&files, &mut cache, &PriceBook::default(), NOW_SECS);
+    assert!((refreshed.total.headline.usd - 9.75).abs() < 1e-9);
+    assert_eq!(
+        cache.files[&path.to_string_lossy().into_owned()]
+            .entries
+            .len(),
+        1,
+        "the authoritative table fold replaces rather than double-counts"
+    );
 }
 
 #[test]
@@ -259,13 +317,17 @@ fn cold_parse_skip_ignores_new_files_outside_widest_window() {
 
     let dir = TempDir::new().unwrap();
     let file = write_jsonl(dir.path(), "old.jsonl", &[]);
-    let (mtime, _) = file_stat(&file);
+    let mtime = crate::agents::TranscriptStat::from_path(&file)
+        .unwrap()
+        .newest_mtime_secs();
     std::fs::write(
         &file,
         format!("{}\n", claude_line_ts(&iso_at(mtime), 1.0, "old", "old")),
     )
     .unwrap();
-    let (mtime, _) = file_stat(&file);
+    let mtime = crate::agents::TranscriptStat::from_path(&file)
+        .unwrap()
+        .newest_mtime_secs();
     let files = vec![(claude_adapter(), file.clone())];
     let mut cache = SpendingDiskCache::default();
 
@@ -596,8 +658,7 @@ fn live_origin_updates_share_the_walk_persist_gate() {
     cache.files.insert(
         key.clone(),
         FileCacheEntry {
-            mtime_secs: 0,
-            len: 0,
+            stat: crate::agents::TranscriptStat::default(),
             cursor: SpendCursor::default(),
             origin_path: None,
             entries: Vec::new(),

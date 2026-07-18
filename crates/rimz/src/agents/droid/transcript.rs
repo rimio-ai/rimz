@@ -444,16 +444,6 @@ fn read_settings(path: &Path) -> Option<Settings> {
     serde_json::from_slice(&bytes).ok()
 }
 
-impl From<TranscriptStat> for TranscriptCompanionStat {
-    fn from(stat: TranscriptStat) -> Self {
-        Self {
-            mtime_secs: stat.mtime_secs,
-            mtime_nanos: stat.mtime_nanos,
-            len: stat.len,
-        }
-    }
-}
-
 fn non_empty(raw: Option<&str>) -> Option<&str> {
     raw.map(str::trim).filter(|value| !value.is_empty())
 }

@@ -723,6 +723,83 @@ mod tests {
         assert!(no_downgrade.is_none());
     }
 
+    #[test]
+    fn opencode_wal_commit_refreshes_realtime_cost() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let transcript = dir.path().join("opencode.db");
+        let pricing_cache_path = dir.path().join("pricing-cache.json");
+        let connection = rusqlite::Connection::open(&transcript).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode = WAL;\
+                 PRAGMA wal_autocheckpoint = 0;\
+                 CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);",
+            )
+            .unwrap();
+        let initial = r#"{"cost":1.25,"modelID":"gpt","providerID":"openai","time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
+        let updated = r#"{"cost":9.75,"modelID":"gpt","providerID":"openai","time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
+        assert_eq!(initial.len(), updated.len());
+        connection
+            .execute(
+                "INSERT INTO message (id, session_id, data) VALUES ('msg', 'sess-1', ?1)",
+                [initial],
+            )
+            .unwrap();
+
+        let adapter = &rimz::agents::OpencodeAdapter;
+        let initial_stat = adapter.transcript_stat(&transcript).unwrap();
+        assert!(initial_stat.companion.is_some());
+        let main_before = rimz::agents::TranscriptStat::from_path(&transcript).unwrap();
+        let observed_at = jiff::Timestamp::from_second(1_750_000_000).unwrap();
+        let mut prior = rimz::store::agent_context::new_record(
+            "opencode",
+            "sess-1",
+            rimz::store::agent_context::empty_context("opencode", observed_at),
+        );
+        prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        prior.transcript_stat = Some(initial_stat);
+        prior.context.cost = Some(rimz::agents::AgentCost {
+            total_cost_usd: Some(1.25),
+            ..rimz::agents::AgentCost::default()
+        });
+
+        let mut unchanged = None;
+        supplement_realtime_cost(
+            adapter,
+            "sess-1",
+            &pricing_cache_path,
+            true,
+            Some(&prior),
+            &mut unchanged,
+        );
+        assert!(unchanged.is_none(), "an exact logical stat is a fast hit");
+
+        connection
+            .execute("UPDATE message SET data = ?1 WHERE id = 'msg'", [updated])
+            .unwrap();
+        let main_after = rimz::agents::TranscriptStat::from_path(&transcript).unwrap();
+        let updated_stat = adapter.transcript_stat(&transcript).unwrap();
+        assert_eq!(main_after, main_before, "the commit stayed in the held WAL");
+        assert_ne!(updated_stat.companion, initial_stat.companion);
+
+        let mut refresh = None;
+        supplement_realtime_cost(
+            adapter,
+            "sess-1",
+            &pricing_cache_path,
+            true,
+            Some(&prior),
+            &mut refresh,
+        );
+
+        let refresh = refresh.expect("the WAL change invalidates turn-end cost");
+        assert_eq!(refresh.transcript_stat, Some(updated_stat));
+        assert_eq!(
+            refresh.cost.and_then(|cost| cost.total_cost_usd),
+            Some(9.75)
+        );
+    }
+
     fn test_agent() -> AgentState {
         let now = jiff::Timestamp::now();
         rimz::testkit::agent_state("claude", "sess-1", now)

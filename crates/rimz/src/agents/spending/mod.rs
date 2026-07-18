@@ -51,7 +51,7 @@ pub use cache::{
     write_spending_cache,
 };
 #[cfg(test)]
-pub(crate) use cache::{compact_spending_cache, file_stat, peek_cache_version};
+pub(crate) use cache::{compact_spending_cache, peek_cache_version};
 pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,

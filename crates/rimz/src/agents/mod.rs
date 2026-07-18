@@ -531,6 +531,16 @@ impl TranscriptStat {
             companion: None,
         })
     }
+
+    /// Newest usable whole-second modification time across every file in this
+    /// logical source. Spending age checks operate in Unix seconds, so times
+    /// before the epoch retain the existing best-effort zero fallback.
+    pub fn newest_mtime_secs(&self) -> u64 {
+        let newest = self.companion.map_or(self.mtime_secs, |companion| {
+            self.mtime_secs.max(companion.mtime_secs)
+        });
+        u64::try_from(newest).unwrap_or(0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -539,6 +549,16 @@ pub struct TranscriptCompanionStat {
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub mtime_nanos: u32,
     pub len: u64,
+}
+
+impl From<TranscriptStat> for TranscriptCompanionStat {
+    fn from(stat: TranscriptStat) -> Self {
+        Self {
+            mtime_secs: stat.mtime_secs,
+            mtime_nanos: stat.mtime_nanos,
+            len: stat.len,
+        }
+    }
 }
 
 fn is_zero_u32(value: &u32) -> bool {
@@ -1192,6 +1212,14 @@ pub trait AgentAdapter: Send + Sync {
     /// surface.
     fn transcript_files(&self) -> Vec<PathBuf> {
         Vec::new()
+    }
+
+    /// Read the durable identity of one logical transcript or provider store.
+    /// Adapters attach every provider-owned companion whose bytes participate
+    /// in parsing the primary path; callers use this single boundary for cache
+    /// invalidation without discovering companions as duplicate sources.
+    fn transcript_stat(&self, path: &Path) -> Option<TranscriptStat> {
+        TranscriptStat::from_path(path)
     }
 
     /// Resolve the local conversation/store that carries a live session's spend.

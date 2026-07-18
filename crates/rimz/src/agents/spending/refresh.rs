@@ -7,14 +7,13 @@ use std::sync::{
     mpsc,
 };
 
-use crate::agents::AgentAdapter;
 use crate::agents::pricing::PriceBook;
+use crate::agents::{AgentAdapter, TranscriptStat};
 
 use super::aggregate::stamp_file_origin;
 use super::aggregate::{cold_parse_out_of_window, normalized_absolute_path, within_widest_window};
 use super::cache::{
-    CachedEntry, FileCacheEntry, SpendCursor, SpendParse, SpendingDiskCache,
-    compact_spending_cache, file_stat,
+    CachedEntry, FileCacheEntry, SpendCursor, SpendParse, SpendingDiskCache, compact_spending_cache,
 };
 use super::{SpendProgress, WalkStats};
 
@@ -37,7 +36,7 @@ pub(crate) fn refresh_spending_cache(
     let mut finished_files = 0;
     let mut jobs = Vec::new();
     for (adapter, file) in files {
-        let (mtime, len) = file_stat(file);
+        let stat = adapter.transcript_stat(file).unwrap_or_default();
         let key = file.to_string_lossy().into_owned();
         let entry = cache.files.get(&key);
         let override_origin = origin_overrides
@@ -46,7 +45,7 @@ pub(crate) fn refresh_spending_cache(
         let prior_origin = entry.and_then(|entry| entry.origin_path.clone());
         let parse_origin = override_origin.or(prior_origin);
         let heals = entry.is_some_and(|entry| has_healed_unknown(entry, prices, now_secs));
-        let resume = match refresh_decision(entry, mtime, len, heals, now_secs) {
+        let resume = match refresh_decision(entry, stat, heals, now_secs) {
             RefreshDecision::Unchanged => {
                 let mut changed = false;
                 if let Some(entry) = cache.files.get_mut(&key)
@@ -85,14 +84,13 @@ pub(crate) fn refresh_spending_cache(
         stats.parse_bytes = stats.parse_bytes.saturating_add(
             resume
                 .as_ref()
-                .map_or(len, |cursor| len.saturating_sub(cursor.offset)),
+                .map_or(stat.len, |cursor| stat.len.saturating_sub(cursor.offset)),
         );
         jobs.push(SpendingParseJob {
             adapter: *adapter,
             file,
             key,
-            mtime_secs: mtime,
-            len,
+            stat,
             resume,
             parse_origin,
         });
@@ -122,25 +120,27 @@ pub(crate) enum RefreshDecision {
 
 pub(crate) fn refresh_decision(
     entry: Option<&FileCacheEntry>,
-    mtime: u64,
-    len: u64,
+    stat: TranscriptStat,
     heals: bool,
     now_secs: u64,
 ) -> RefreshDecision {
     if let Some(entry) = entry
         && !heals
-        && entry.mtime_secs == mtime
-        && entry.len == len
+        && entry.stat == stat
     {
         return RefreshDecision::Unchanged;
     }
-    if entry.is_none() && !heals && cold_parse_out_of_window(mtime, now_secs) {
+    if entry.is_none() && !heals && cold_parse_out_of_window(stat.newest_mtime_secs(), now_secs) {
         return RefreshDecision::SkipOutOfWindow;
     }
     RefreshDecision::Parse {
-        resume: entry
-            .filter(|entry| !heals && len > entry.len)
-            .map(|entry| entry.cursor.clone()),
+        resume: entry.and_then(|entry| {
+            (!heals
+                && entry.stat.companion.is_none()
+                && stat.companion.is_none()
+                && stat.len > entry.stat.len)
+                .then(|| entry.cursor.clone())
+        }),
     }
 }
 
@@ -153,8 +153,7 @@ struct SpendingParseJob<'a> {
     adapter: &'static dyn AgentAdapter,
     file: &'a PathBuf,
     key: String,
-    mtime_secs: u64,
-    len: u64,
+    stat: TranscriptStat,
     resume: Option<SpendCursor>,
     parse_origin: Option<PathBuf>,
 }
@@ -237,8 +236,7 @@ fn fold_spending_parse_job(
         entry.entries.extend(parsed.entries);
         entry.unknown_models.extend(parsed.unknown_models);
         entry.cursor = parsed.cursor;
-        entry.mtime_secs = job.mtime_secs;
-        entry.len = job.len;
+        entry.stat = job.stat;
         if let Some(origin) = file_origin.as_deref() {
             stamp_file_origin(entry, origin);
         }
@@ -248,8 +246,7 @@ fn fold_spending_parse_job(
     cache.files.insert(
         job.key.clone(),
         FileCacheEntry {
-            mtime_secs: job.mtime_secs,
-            len: job.len,
+            stat: job.stat,
             cursor: parsed.cursor,
             origin_path: file_origin,
             entries: parsed.entries,
@@ -355,6 +352,38 @@ pub(crate) fn dedup_chunk(entries: &mut Vec<CachedEntry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::TranscriptCompanionStat;
+    use crate::agents::spending::{SKIP_PARSE_MARGIN_SECS, WIDEST_SPEND_WINDOW_SECS};
+
+    fn stat(mtime_secs: i64, mtime_nanos: u32, len: u64) -> TranscriptStat {
+        TranscriptStat {
+            mtime_secs,
+            mtime_nanos,
+            len,
+            companion: None,
+        }
+    }
+
+    fn companion(mtime_secs: i64, mtime_nanos: u32, len: u64) -> TranscriptCompanionStat {
+        TranscriptCompanionStat {
+            mtime_secs,
+            mtime_nanos,
+            len,
+        }
+    }
+
+    fn cached(stat: TranscriptStat) -> FileCacheEntry {
+        FileCacheEntry {
+            stat,
+            cursor: SpendCursor {
+                offset: 10,
+                state: None,
+            },
+            origin_path: None,
+            entries: Vec::new(),
+            unknown_models: BTreeMap::new(),
+        }
+    }
 
     fn entry(ts_secs: u64) -> CachedEntry {
         CachedEntry {
@@ -383,8 +412,11 @@ mod tests {
         cache.files.insert(
             key.clone(),
             FileCacheEntry {
-                mtime_secs: 1,
-                len: 10,
+                stat: TranscriptStat {
+                    mtime_secs: 1,
+                    len: 10,
+                    ..TranscriptStat::default()
+                },
                 cursor: SpendCursor {
                     offset: 10,
                     state: None,
@@ -398,8 +430,11 @@ mod tests {
             adapter: crate::agents::registry::ADAPTERS[0],
             file: &path,
             key,
-            mtime_secs: 2,
-            len: 20,
+            stat: TranscriptStat {
+                mtime_secs: 2,
+                len: 20,
+                ..TranscriptStat::default()
+            },
             resume: Some(SpendCursor {
                 offset: 10,
                 state: None,
@@ -416,5 +451,82 @@ mod tests {
             },
         );
         assert_eq!(cache.files[&job.key].entries, vec![entry(2)]);
+    }
+
+    #[test]
+    fn refresh_decision_tracks_logical_source_changes() {
+        let primary = stat(100, 10, 10);
+        let cached_primary = cached(primary);
+        assert_eq!(
+            refresh_decision(Some(&cached_primary), primary, false, 200),
+            RefreshDecision::Unchanged
+        );
+        assert_eq!(
+            refresh_decision(Some(&cached_primary), stat(100, 11, 10), false, 200),
+            RefreshDecision::Parse { resume: None }
+        );
+        assert_eq!(
+            refresh_decision(Some(&cached_primary), stat(101, 0, 20), false, 200),
+            RefreshDecision::Parse {
+                resume: Some(cached_primary.cursor.clone())
+            }
+        );
+
+        let with_wal = TranscriptStat {
+            companion: Some(companion(102, 1, 30)),
+            ..stat(101, 0, 20)
+        };
+        assert_eq!(
+            refresh_decision(Some(&cached_primary), with_wal, false, 200),
+            RefreshDecision::Parse { resume: None },
+            "companion appearance forces a cold parse"
+        );
+        let cached_wal = cached(with_wal);
+        let changed_wal = TranscriptStat {
+            companion: Some(companion(102, 2, 30)),
+            ..with_wal
+        };
+        assert_eq!(
+            refresh_decision(Some(&cached_wal), changed_wal, false, 200),
+            RefreshDecision::Parse { resume: None }
+        );
+        assert_eq!(
+            refresh_decision(
+                Some(&cached_wal),
+                TranscriptStat {
+                    companion: None,
+                    ..with_wal
+                },
+                false,
+                200
+            ),
+            RefreshDecision::Parse { resume: None },
+            "companion removal forces a cold parse"
+        );
+        assert_eq!(
+            refresh_decision(Some(&cached_primary), primary, true, 200),
+            RefreshDecision::Parse { resume: None },
+            "price healing bypasses an exact stat hit"
+        );
+
+        let now = WIDEST_SPEND_WINDOW_SECS + SKIP_PARSE_MARGIN_SECS + 100;
+        let old = 1;
+        assert_eq!(
+            refresh_decision(None, stat(old, 0, 10), false, now),
+            RefreshDecision::SkipOutOfWindow
+        );
+        assert_eq!(
+            refresh_decision(
+                None,
+                TranscriptStat {
+                    companion: Some(companion(i64::try_from(now - 1).unwrap(), 0, 20)),
+                    ..stat(old, 0, 10)
+                },
+                false,
+                now
+            ),
+            RefreshDecision::Parse { resume: None },
+            "the newer companion keeps the logical source in window"
+        );
     }
 }

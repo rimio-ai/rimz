@@ -219,7 +219,8 @@ fn cache_compaction_evicts_dead_file_records() {
         .unwrap()
         .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(old_mtime))
         .unwrap();
-    let (discovered_mtime, discovered_len) = file_stat(&discovered_old);
+    let discovered_stat = crate::agents::TranscriptStat::from_path(&discovered_old).unwrap();
+    let discovered_len = discovered_stat.len;
     let deleted_old = dir.path().join("deleted.jsonl");
     let recent_absent = dir.path().join("recent.jsonl");
     let discovered_key = discovered_old.to_string_lossy().into_owned();
@@ -230,8 +231,7 @@ fn cache_compaction_evicts_dead_file_records() {
             (
                 discovered_key.clone(),
                 FileCacheEntry {
-                    mtime_secs: discovered_mtime,
-                    len: discovered_len,
+                    stat: discovered_stat,
                     cursor: SpendCursor {
                         offset: discovered_len,
                         state: None,
@@ -244,8 +244,10 @@ fn cache_compaction_evicts_dead_file_records() {
             (
                 deleted_key.clone(),
                 FileCacheEntry {
-                    mtime_secs: old_mtime,
-                    len: 0,
+                    stat: crate::agents::TranscriptStat {
+                        mtime_secs: i64::try_from(old_mtime).unwrap(),
+                        ..crate::agents::TranscriptStat::default()
+                    },
                     cursor: SpendCursor::default(),
                     origin_path: None,
                     entries: vec![cached_entry(old_mtime, 1.0, "deleted-old")],
@@ -255,8 +257,10 @@ fn cache_compaction_evicts_dead_file_records() {
             (
                 recent_key.clone(),
                 FileCacheEntry {
-                    mtime_secs: recent_mtime,
-                    len: 0,
+                    stat: crate::agents::TranscriptStat {
+                        mtime_secs: i64::try_from(recent_mtime).unwrap(),
+                        ..crate::agents::TranscriptStat::default()
+                    },
                     cursor: SpendCursor::default(),
                     origin_path: None,
                     entries: vec![cached_entry(recent_mtime, 2.0, "recent-absent")],

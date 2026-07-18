@@ -187,13 +187,6 @@ fn spending_fixture_scaled(
     for file_index in 0..files_count {
         let transcript = tempdir.path().join(format!("cached-{file_index}.jsonl"));
         std::fs::write(&transcript, b"").expect("transcript");
-        let metadata = std::fs::metadata(&transcript).expect("metadata");
-        let mtime_secs = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
         let entries = (0..entries_per_file)
             .map(|offset| {
                 let index = file_index * entries_per_file + offset;
@@ -219,8 +212,8 @@ fn spending_fixture_scaled(
         cache.files.insert(
             transcript.to_string_lossy().into_owned(),
             rimz::agents::spending::FileCacheEntry {
-                mtime_secs,
-                len: metadata.len(),
+                stat: rimz::agents::TranscriptStat::from_path(&transcript)
+                    .expect("transcript stat"),
                 cursor: rimz::agents::spending::SpendCursor::default(),
                 origin_path: scoped.then(|| tempdir.path().to_path_buf()),
                 entries,

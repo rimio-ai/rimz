@@ -575,6 +575,10 @@ impl AgentAdapter for OpencodeAdapter {
         database::files()
     }
 
+    fn transcript_stat(&self, path: &Path) -> Option<crate::agents::TranscriptStat> {
+        database::logical_stat(path)
+    }
+
     fn session_transcript(&self, _session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| path.is_file()) {
             return Some(path.to_path_buf());

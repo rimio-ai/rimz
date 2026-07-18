@@ -23,7 +23,7 @@ use rimz::agents::spending::{
     CachedEntry, FileCacheEntry, HeadlineSpec, SilentWalk, SpendCursor, SpendingWalker,
     WalkRequest, read_spending_cache, write_spending_cache,
 };
-use rimz::agents::{AgentAdapter, ClaudeAdapter, PriceBook};
+use rimz::agents::{AgentAdapter, ClaudeAdapter, PriceBook, TranscriptStat};
 
 use crate::common::Env;
 
@@ -53,16 +53,8 @@ fn seed_history(dir: &std::path::Path) -> PathBuf {
 }
 
 fn file_cache_entry(path: &std::path::Path, entries: Vec<CachedEntry>) -> FileCacheEntry {
-    let metadata = std::fs::metadata(path).expect("transcript metadata");
-    let mtime_secs = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
     FileCacheEntry {
-        mtime_secs,
-        len: metadata.len(),
+        stat: TranscriptStat::from_path(path).expect("transcript stat"),
         cursor: SpendCursor::default(),
         origin_path: None,
         entries,

@@ -271,8 +271,16 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
     );
 
     let file = FileCacheEntry {
-        mtime_secs: 88_888,
-        len: 123,
+        stat: crate::agents::TranscriptStat {
+            mtime_secs: 88_888,
+            mtime_nanos: 999,
+            len: 123,
+            companion: Some(crate::agents::TranscriptCompanionStat {
+                mtime_secs: 88_889,
+                mtime_nanos: 111,
+                len: 456,
+            }),
+        },
         cursor: SpendCursor {
             offset: 77,
             state: Some(serde_json::json!({"acc": 3})),
@@ -283,8 +291,12 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
     };
     let file_value = serde_json::to_value(&file).unwrap();
     assert!(file_value.get("mtime_secs").is_none());
-    assert_eq!(file_value["m"], 88_888);
-    assert_eq!(file_value["n"], 123);
+    assert_eq!(file_value["s"]["mtime_secs"], 88_888);
+    assert_eq!(file_value["s"]["mtime_nanos"], 999);
+    assert_eq!(file_value["s"]["len"], 123);
+    assert_eq!(file_value["s"]["companion"]["mtime_secs"], 88_889);
+    assert_eq!(file_value["s"]["companion"]["mtime_nanos"], 111);
+    assert_eq!(file_value["s"]["companion"]["len"], 456);
     assert_eq!(file_value["c"]["o"], 77);
     assert_eq!(file_value["c"]["s"], serde_json::json!({"acc": 3}));
     assert_eq!(

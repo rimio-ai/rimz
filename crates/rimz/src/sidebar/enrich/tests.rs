@@ -1377,8 +1377,11 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
     raw.files.insert(
         transcript.to_string_lossy().into_owned(),
         crate::agents::spending::FileCacheEntry {
-            mtime_secs: 1,
-            len: 1,
+            stat: crate::agents::TranscriptStat {
+                mtime_secs: 1,
+                len: 1,
+                ..crate::agents::TranscriptStat::default()
+            },
             cursor: crate::agents::spending::SpendCursor::default(),
             origin_path: Some(project.join("src")),
             entries: vec![crate::agents::spending::CachedEntry {
