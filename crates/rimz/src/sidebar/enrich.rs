@@ -266,6 +266,12 @@ pub struct FoldOpts<'a> {
     pub wiring: crate::sidebar::agent_wiring::WiredAgentProjection,
 }
 
+#[derive(Clone, Copy)]
+enum LocalProjection<'a> {
+    Deferred,
+    Inline(Option<&'a PaneId>),
+}
+
 /// Probed managed-server liveness for the rc badge. `None` means no probe was
 /// available this tick (no pane frame or no reap cache yet).
 #[derive(Clone, Copy, Debug, Default)]
@@ -353,8 +359,7 @@ pub fn enrich_workspace(
         frame,
         runtime,
         messages_dir,
-        None,
-        false,
+        LocalProjection::Deferred,
         opts,
         diag,
     ))
@@ -399,11 +404,14 @@ fn enrich_core(
     frame: Option<&PaneFrame>,
     runtime: &RuntimePaths,
     messages_dir: Option<&Path>,
-    exclude: Option<&PaneId>,
-    classify_local: bool,
+    local_projection: LocalProjection<'_>,
     mut opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
+    let (exclude, classify_local) = match local_projection {
+        LocalProjection::Deferred => (None, false),
+        LocalProjection::Inline(exclude) => (exclude, true),
+    };
     let producing = opts.producing;
     let machine_config = opts
         .config
@@ -634,8 +642,7 @@ fn enrich_legacy(
         frame,
         runtime,
         messages_dir,
-        exclude,
-        true,
+        LocalProjection::Inline(exclude),
         opts,
         diag,
     )
