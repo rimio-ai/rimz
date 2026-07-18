@@ -7,7 +7,9 @@ use crate::agents::AgentState;
 use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
 use crate::config::ProviderTabsMode;
-use crate::theme::{BrandColor, provider_title_case, resolve_provider_identity};
+use crate::theme::{
+    BrandColor, provider_title_case, resolve_provider_brand, resolve_provider_identity,
+};
 
 use super::{RemoteControlBadge, SidebarProviderPanel, SidebarSnapshot};
 
@@ -132,9 +134,7 @@ impl SidebarSnapshot {
             let identity = resolve_provider_identity(&kind, &self.theme.providers);
             let (color, color_rgb, color_role) = match identity.brand {
                 BrandColor::Role(role) => (
-                    resolve_provider_identity(&kind, &BTreeMap::new())
-                        .brand
-                        .indexed(),
+                    resolve_provider_brand(&kind, &BTreeMap::new()).indexed(),
                     None,
                     Some(role),
                 ),

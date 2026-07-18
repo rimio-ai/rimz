@@ -1,11 +1,5 @@
 use super::*;
 
-/// The tone resolves from the shared provider identity independently of whether
-/// the dashboard currently displays a panel for this kind.
-pub(in crate::sidebar_pane::render) fn brand_tone(theme: &Theme, kind: &str) -> Color {
-    theme.provider_brand_tone(kind)
-}
-
 /// The agent handle's spans under the row's card emphasis, sharing the unread
 /// treatment with the lead glyph and description so the three move as one group:
 /// the normal tier wears the matching provider brand color, while the soft tier
@@ -18,7 +12,7 @@ pub(super) fn attention_name_spans(
     kind: &str,
     attention: CardAttention,
 ) -> Vec<Span<'static>> {
-    let brand = brand_tone(theme, kind);
+    let brand = theme.provider_brand_tone(kind);
     let text = ellipsize(display, NAME_MAX);
     match attention.emphasis {
         CardEmphasis::Blink => unread_run_spans(theme, Some(brand), attention.anim, &text),

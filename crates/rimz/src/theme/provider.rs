@@ -27,6 +27,32 @@ pub enum BrandColor {
     },
 }
 
+fn builtin_provider_brand(kind: &str) -> BrandColor {
+    descriptor_by_kind(kind).map_or(BrandColor::Indexed(244), |descriptor| BrandColor::Brand {
+        index: descriptor.brand.color,
+        rgb: descriptor.brand.color_rgb,
+    })
+}
+
+fn configured_brand(color: ThemeColor) -> BrandColor {
+    match color {
+        ThemeColor::Role(role) => BrandColor::Role(role),
+        ThemeColor::Indexed(index) => BrandColor::Indexed(index),
+        ThemeColor::Rgb(red, green, blue) => BrandColor::Rgb(red, green, blue),
+    }
+}
+
+/// Resolve only provider color, without allocating its name or emblem.
+pub fn resolve_provider_brand(
+    kind: &str,
+    styles: &BTreeMap<String, ThemeProviderStyle>,
+) -> BrandColor {
+    styles
+        .get(kind)
+        .and_then(|style| style.color)
+        .map_or_else(|| builtin_provider_brand(kind), configured_brand)
+}
+
 impl BrandColor {
     pub fn tone(self, palette: &Palette) -> Tone {
         match self {
@@ -55,21 +81,19 @@ pub fn resolve_provider_identity(
     styles: &BTreeMap<String, ThemeProviderStyle>,
 ) -> ResolvedProviderIdentity {
     let emblem = emblem_for(kind);
+    let brand = resolve_provider_brand(kind, styles);
     let mut resolved = descriptor_by_kind(kind).map_or_else(
         || ResolvedProviderIdentity {
             product_name: provider_title_case(kind),
             art: emblem.lines.clone(),
             art_tints: emblem.tints.clone(),
-            brand: BrandColor::Indexed(244),
+            brand,
         },
         |descriptor| ResolvedProviderIdentity {
             product_name: descriptor.display_name.to_owned(),
             art: emblem.lines.clone(),
             art_tints: emblem.tints.clone(),
-            brand: BrandColor::Brand {
-                index: descriptor.brand.color,
-                rgb: descriptor.brand.color_rgb,
-            },
+            brand,
         },
     );
     let Some(style) = styles.get(kind) else {
@@ -85,13 +109,6 @@ pub fn resolve_provider_identity(
     if let Some(art) = style.ascii_art.as_deref().filter(|art| !art.is_empty()) {
         resolved.art = art.lines().map(ToOwned::to_owned).collect();
         resolved.art_tints.clear();
-    }
-    if let Some(color) = style.color {
-        resolved.brand = match color {
-            ThemeColor::Role(role) => BrandColor::Role(role),
-            ThemeColor::Indexed(index) => BrandColor::Indexed(index),
-            ThemeColor::Rgb(red, green, blue) => BrandColor::Rgb(red, green, blue),
-        };
     }
     resolved
 }
@@ -143,6 +160,32 @@ mod tests {
         let unknown = resolve_provider_identity("new_agent", &BTreeMap::new());
         assert_eq!(unknown.product_name, "New Agent");
         assert_eq!(unknown.brand, BrandColor::Indexed(244));
+    }
+
+    #[test]
+    fn brand_only_resolution_matches_full_identity() {
+        for (kind, color) in [
+            ("claude", None),
+            ("new_agent", None),
+            ("claude", Some(ThemeColor::Role(PaletteRole::Green))),
+            ("claude", Some(ThemeColor::Indexed(42))),
+            ("claude", Some(ThemeColor::Rgb(1, 2, 3))),
+        ] {
+            let styles = color.map_or_else(BTreeMap::new, |color| {
+                BTreeMap::from([(
+                    kind.to_owned(),
+                    ThemeProviderStyle {
+                        color: Some(color),
+                        ..ThemeProviderStyle::default()
+                    },
+                )])
+            });
+            assert_eq!(
+                resolve_provider_brand(kind, &styles),
+                resolve_provider_identity(kind, &styles).brand,
+                "brand-only and full identity differ for {kind} with {color:?}"
+            );
+        }
     }
 
     #[test]

@@ -6,7 +6,9 @@ use crate::config::{
 use ratatui::style::{Color, Modifier, Style};
 
 use super::compose::lead_unread;
-use super::theme::{GlyphSet, Palette, Theme, tone_color};
+use crate::theme::{GlyphSet, Palette};
+
+use super::theme::{Theme, tone_color};
 use crate::SidebarSnapshot;
 
 const THINKING_FRAMES: &[&str] = &[
@@ -666,15 +668,19 @@ mod tests {
     }
 
     fn resolve_for_test(config: &ThemeAnimationsConfig, palette: &Palette) -> ResolvedAnimations {
-        ResolvedAnimations::resolve(config, &GlyphSet::default(), palette)
+        let glyphs = GlyphSet::resolve(&crate::config::ThemeConfig::default());
+        ResolvedAnimations::resolve(config, &glyphs, palette)
     }
 
     fn nerd_glyph_set() -> GlyphSet {
-        let config = crate::config::ThemeGlyphsConfig {
-            set: Some("nerd_font".to_owned()),
+        let theme = crate::config::ThemeConfig {
+            glyphs: crate::config::ThemeGlyphsConfig {
+                set: Some("nerd_font".to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        GlyphSet::resolve(config.set.as_deref(), &config)
+        GlyphSet::resolve(&theme)
     }
 
     #[test]

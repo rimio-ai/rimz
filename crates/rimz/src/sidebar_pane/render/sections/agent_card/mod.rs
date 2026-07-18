@@ -32,7 +32,6 @@ mod identity;
 mod template;
 
 use self::{description::*, gauge::*};
-pub(in crate::sidebar_pane::render) use identity::brand_tone;
 use identity::{display_context_window, identity_line};
 use template::{CardSlot, CardStage, template};
 

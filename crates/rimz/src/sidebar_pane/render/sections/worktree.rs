@@ -25,7 +25,7 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 use crate::sidebar_pane::render::{HitTarget, RenderedBlock};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
-use super::agent_card::{brand_tone, row_lines, session_cost_usd};
+use super::agent_card::{row_lines, session_cost_usd};
 use super::{Gutter, RowCtx, content_width, pin_right, with_gutter};
 
 /// Inputs needed to render one projected worktree group.
@@ -223,7 +223,8 @@ fn finished_roster_line(
         spans.push(Span::styled(glyph, status_rest_style(ctx.theme, *status)));
         spans.push(Span::styled(
             format!(" {}", row.display_name()),
-            ctx.theme.body_brand(brand_tone(ctx.theme, &row.name)),
+            ctx.theme
+                .body_brand(ctx.theme.provider_brand_tone(&row.name)),
         ));
         roster_width += separator_width + chip_width;
         placed += 1;

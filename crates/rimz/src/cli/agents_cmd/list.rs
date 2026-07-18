@@ -2,6 +2,7 @@ use super::*;
 
 use crate::cli::render;
 use rimz::config::{GlyphRole, ThemeConfig};
+use rimz::theme::theme_glyphs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub(super) struct PrInfo {
@@ -143,7 +144,7 @@ pub(crate) fn render_agents_table(
         .iter()
         .flat_map(|group| group.agents.iter().copied())
         .collect();
-    let glyph = rimz::sidebar_pane::render::theme_glyphs(theme);
+    let glyph = theme_glyphs(theme);
     let mut table = render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"])
         .right(&[3, 4, 5])
         .max_width(max_width);

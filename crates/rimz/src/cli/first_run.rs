@@ -5,6 +5,7 @@ use std::io::{BufRead, Write};
 use anyhow::Result;
 use rimz::config::{CellAspect, ColorDepth, ConfigEditor, MachineConfig, PetsConfig};
 use rimz::sidebar_pane::pets::{self, PetRenderTier};
+use rimz::theme::{nerd_font_probe_glyphs, nerd_font_probe_gradient};
 
 use super::list_pets::{LiveGraphicsPacer, write_pet_row, write_pixel_pet_row_with_pacer};
 use super::render;
@@ -253,7 +254,7 @@ fn header_rule(term_cols: usize) -> String {
 const GRADIENT_WIDTH: usize = 36;
 
 fn gradient_line() -> String {
-    let gradient = rimz::sidebar_pane::render::nerd_font_probe_gradient(GRADIENT_WIDTH)
+    let gradient = nerd_font_probe_gradient(GRADIENT_WIDTH)
         .into_iter()
         .map(|(r, g, b)| format!("\x1b[38;2;{r};{g};{b}m█"))
         .chain(std::iter::once(String::from("\x1b[0m")))
@@ -262,7 +263,7 @@ fn gradient_line() -> String {
 }
 
 fn glyph_line() -> String {
-    let glyphs = rimz::sidebar_pane::render::nerd_font_probe_glyphs().join("    ");
+    let glyphs = nerd_font_probe_glyphs().join("    ");
     format!("  {glyphs}  ← eight distinct icons")
 }
 
@@ -471,7 +472,7 @@ mod tests {
     fn probe_lines_emit_truecolor_and_aligned_sidebar_glyphs() {
         let gradient = gradient_line();
         let glyphs = glyph_line();
-        let sample = rimz::sidebar_pane::render::nerd_font_probe_glyphs()[0];
+        let sample = nerd_font_probe_glyphs()[0];
 
         assert!(gradient.contains("\x1b[38;2;"));
         assert!(gradient.contains('█'));
@@ -487,7 +488,7 @@ mod tests {
 
     #[test]
     fn probe_gradient_steps_smoothly_between_cells() {
-        let stops = rimz::sidebar_pane::render::nerd_font_probe_gradient(GRADIENT_WIDTH);
+        let stops = nerd_font_probe_gradient(GRADIENT_WIDTH);
 
         assert_eq!(stops.len(), GRADIENT_WIDTH);
         // Adjacent cells differ by small perceptual steps: interpolating the

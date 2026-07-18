@@ -1,5 +1,6 @@
 use super::fmt::*;
 use super::*;
+use rimz::theme::theme_glyphs;
 
 pub(super) struct PanelGlyphs {
     pub(super) sessions: String,
@@ -12,7 +13,7 @@ pub(super) struct PanelGlyphs {
 }
 
 pub(super) fn resolve_panel_glyphs(theme: &ThemeConfig) -> PanelGlyphs {
-    let glyph = rimz::sidebar_pane::render::theme_glyphs(theme);
+    let glyph = theme_glyphs(theme);
     PanelGlyphs {
         sessions: glyph(GlyphRole::CockpitSessions),
         total: glyph(GlyphRole::TokensTotal),

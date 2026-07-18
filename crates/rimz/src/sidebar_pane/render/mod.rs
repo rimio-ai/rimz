@@ -46,7 +46,9 @@ pub(crate) use self::ui_state::{
 };
 pub(crate) use crate::sidebar_pane::view::BodyFilter;
 pub use crate::sidebar_pane::view::{WORKTREE_ROW_CAP, capped_visible_rows};
-pub use crate::theme::oklab::blend;
+pub use crate::theme::{
+    nerd_font_probe_glyphs, nerd_font_probe_gradient, oklab::blend, theme_glyphs,
+};
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
 
@@ -78,23 +80,6 @@ fn age_heat_amount_for_test(age_secs: i64) -> f32 {
 
 pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Alert>) {
     draw_with_ui(frame, snapshot, alert, &mut UiState::default());
-}
-
-/// Resolve the glyph set under `theme`, so non-sidebar surfaces honor the same
-/// `[theme] style` / `[theme.glyphs]` config the sidebar reads.
-pub fn theme_glyphs(
-    theme: &crate::config::ThemeConfig,
-) -> impl Fn(crate::config::GlyphRole) -> String {
-    let glyphs = theme::GlyphSet::from_theme(theme);
-    move |role| glyphs.glyph(role).to_owned()
-}
-
-pub fn nerd_font_probe_glyphs() -> [&'static str; 8] {
-    theme::nerd_font_probe_glyphs()
-}
-
-pub fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
-    theme::nerd_font_probe_gradient(width)
 }
 
 pub fn draw_with_ui(

@@ -1,6 +1,6 @@
-//! Capability-aware styling. Picks the palette depth and modifier set the
-//! renderer is allowed to emit, so the grammar stays identical across tiers
-//! while the chrome adapts.
+//! Capability-aware terminal carrier and motion styling. Picks palette depth
+//! and modifiers the renderer may emit, while shared theme resolution owns
+//! semantic palettes, provider brands, and glyph vocabulary.
 //!
 //! The default palette depth is automatic: truecolor terminals get RGB
 //! palette tones, and other terminals get the same tones quantized to xterm
@@ -19,17 +19,16 @@ use crate::config::{
 };
 pub(crate) use crate::theme::Palette;
 use crate::theme::{
-    HEAT_RAMP_WARM_START, Identity, Tone, oklab, ramp_tone, resolve_provider_identity,
+    GlyphSet, GlyphSetKind, HEAT_RAMP_WARM_START, Identity, Tone, oklab, ramp_tone,
+    resolve_provider_brand,
 };
 use ratatui::style::{Color, Modifier, Style};
 
 use super::animation::{BreathSample, ResolvedAnimations};
 
 mod component;
-mod glyphs;
 
 pub(crate) use component::Component;
-pub(crate) use glyphs::{GlyphSet, GlyphSetKind};
 
 /// How far a calm card name's brand lightness dims below full brand, in OKLab L
 /// (`0.0` = full brand). Hue and saturation hold; only the lightness drops, so
@@ -67,50 +66,6 @@ const VALUE_FLASH_INK: Color = Color::Indexed(150);
 #[cfg(test)]
 pub(crate) const DEFAULT_SCHEME: &str = crate::config::DEFAULT_SCHEME;
 
-pub(crate) fn nerd_font_probe_glyphs() -> [&'static str; 8] {
-    [
-        glyphs::nerd_font_glyph(GlyphRole::CockpitWorkspace).expect("workspace icon"),
-        glyphs::nerd_font_glyph(GlyphRole::CockpitAgents).expect("agents icon"),
-        glyphs::nerd_font_glyph(GlyphRole::TokensTotal).expect("tokens icon"),
-        glyphs::nerd_font_glyph(GlyphRole::WorktreeBranch).expect("branch icon"),
-        glyphs::nerd_font_glyph(GlyphRole::ChannelHash).expect("channel icon"),
-        glyphs::nerd_font_glyph(GlyphRole::KeysFocus).expect("focus icon"),
-        glyphs::nerd_font_glyph(GlyphRole::KeysUnread).expect("unread icon"),
-        glyphs::nerd_font_glyph(GlyphRole::ChromeInfinity).expect("infinity icon"),
-    ]
-}
-
-/// The setup probe's color sweep: the sidebar's identity hues resampled to
-/// `width` cells, each cell blended in OKLab from the surrounding anchors so
-/// neighbours step evenly to the eye. Sampling between the anchors is what makes
-/// the bar read as one smooth gradient rather than a row of distinct swatches.
-pub(crate) fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
-    const ANCHORS: &[(u8, u8, u8)] = &[
-        (125, 207, 255),
-        (105, 192, 255),
-        (122, 162, 247),
-        (146, 138, 255),
-        (187, 154, 247),
-        (247, 118, 142),
-        (255, 158, 100),
-        (224, 175, 104),
-        (158, 206, 106),
-        (115, 218, 202),
-        (42, 195, 222),
-        (125, 207, 255),
-    ];
-    (0..width)
-        .map(|cell| {
-            let amount = if width <= 1 {
-                0.0
-            } else {
-                cell as f32 / (width - 1) as f32
-            };
-            ramp_tone(ANCHORS, amount)
-        })
-        .collect()
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
     no_color: bool,
@@ -131,7 +86,7 @@ impl Default for Theme {
 impl Theme {
     fn assemble(no_color: bool, depth: ColorDepth, theme: &ThemeConfig) -> Self {
         let palette = Palette::resolve(theme, depth);
-        let glyphs = GlyphSet::resolve(theme.glyph_set_source().as_deref(), &theme.glyphs);
+        let glyphs = GlyphSet::resolve(theme);
         let animations = ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette);
         Self {
             no_color,
@@ -529,13 +484,9 @@ impl Theme {
         self.brand_rgb_tone(panel.color, panel.color_rgb)
     }
 
-    /// Resolve provider identity independently of dashboard panel visibility.
+    /// Resolve provider brand independently of dashboard panel visibility.
     pub(crate) fn provider_brand_tone(&self, kind: &str) -> Color {
-        tone_color(
-            resolve_provider_identity(kind, &self.provider_styles)
-                .brand
-                .tone(&self.palette),
-        )
+        tone_color(resolve_provider_brand(kind, &self.provider_styles).tone(&self.palette))
     }
 }
 

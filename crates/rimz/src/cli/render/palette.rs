@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use rimz::config::{MachineConfig, ThemeConfig, ThemeProviderStyle};
-use rimz::theme::{Palette, Tone, resolve_provider_identity};
+use rimz::theme::{Palette, Tone, resolve_provider_brand, resolve_provider_identity};
 
 struct CliTheme {
     palette: Palette,
@@ -30,11 +30,7 @@ impl CliTheme {
     }
 
     fn identity(&self, kind: &str) -> anstyle::Style {
-        self.style(
-            resolve_provider_identity(kind, &self.providers)
-                .brand
-                .tone(&self.palette),
-        )
+        self.style(resolve_provider_brand(kind, &self.providers).tone(&self.palette))
     }
 }
 

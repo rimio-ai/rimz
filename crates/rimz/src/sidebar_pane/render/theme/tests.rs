@@ -495,7 +495,7 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 SubagentHeader | ProcIo | CacheWrite => p.meta,
                 RemoteControlDown | WorktreePrClosed | PrCiFailing => p.alarm,
                 Input => p.expense,
-                WorktreeMerged | WindowMedium | UnknownBrand => p.muted,
+                WorktreeMerged | WindowMedium => p.muted,
             };
             let got = theme.component(component);
             assert_eq!(

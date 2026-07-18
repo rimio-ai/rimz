@@ -1,10 +1,12 @@
 //! Renderer-neutral interface theme resolution.
 //!
 //! Schemes become raw palettes, semantic slots resolve at the requested color
-//! depth, and renderer edges convert [`Tone`] into their terminal carrier.
-//! Provider identity and shared value formats live here so human surfaces use
-//! one vocabulary without coupling the core to ratatui or anstyle.
+//! depth, glyph sets resolve from one built-in catalog plus configured
+//! overrides, and renderer edges convert [`Tone`] into their terminal carrier.
+//! Provider identity, setup probes, and shared value formats live here so human
+//! surfaces use one vocabulary without coupling the core to ratatui or anstyle.
 
+mod glyphs;
 mod identity;
 pub(crate) mod oklab;
 mod palette;
@@ -15,10 +17,13 @@ mod tone;
 
 pub mod fmt;
 
+pub(crate) use glyphs::{GlyphSet, GlyphSetKind};
+pub use glyphs::{nerd_font_probe_glyphs, nerd_font_probe_gradient, theme_glyphs};
 pub use identity::Identity;
 pub(crate) use palette::HEAT_RAMP_WARM_START;
 pub use palette::{Palette, ramp_tone};
 pub use provider::{
-    BrandColor, ResolvedProviderIdentity, provider_title_case, resolve_provider_identity,
+    BrandColor, ResolvedProviderIdentity, provider_title_case, resolve_provider_brand,
+    resolve_provider_identity,
 };
 pub use tone::Tone;

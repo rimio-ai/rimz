@@ -1,4 +1,5 @@
 use super::*;
+use rimz::theme::theme_glyphs;
 use std::path::Path;
 
 fn day(tokens: u64, usd: f64) -> DaySpend {
@@ -813,7 +814,7 @@ fn modern_theme_flips_stats_token_glyphs_to_nerd_font() {
         ..Default::default()
     };
 
-    let glyph = rimz::sidebar_pane::render::theme_glyphs(&theme);
+    let glyph = theme_glyphs(&theme);
     assert_ne!(glyph(GlyphRole::TokensTotal), "◇");
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::GlyphRole;
-use crate::sidebar_pane::render::theme::{Component, GlyphSetKind};
+use crate::sidebar_pane::render::theme::Component;
+use crate::theme::GlyphSetKind;
 
 /// Paused: a media `pause` mark carrying the text-presentation selector
 /// (`U+FE0E`) so it renders as a single-cell monochrome glyph, never a

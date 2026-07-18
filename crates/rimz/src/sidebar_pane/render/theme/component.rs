@@ -88,9 +88,6 @@ pub(crate) enum Component {
     RemoteControl,
     /// The `⇅ rc` remote-control flag when its managed server is down.
     RemoteControlDown,
-    /// The unknown-provider fallback retained for neutral renderer fixtures.
-    #[allow(dead_code)]
-    UnknownBrand,
     /// Which-key chord text inside the help overlay.
     HelpKey,
     /// The capability-line window token, by size class: a neutral→cool→accent
@@ -138,7 +135,6 @@ impl Component {
         Component::SubagentHeader,
         Component::RemoteControl,
         Component::RemoteControlDown,
-        Component::UnknownBrand,
         Component::HelpKey,
         Component::WindowSmall,
         Component::WindowMedium,
@@ -164,7 +160,7 @@ impl Component {
             SubagentHeader | ProcIo | CacheWrite => palette.meta,
             RemoteControlDown | WorktreePrClosed | PrCiFailing => palette.alarm,
             Input => palette.expense,
-            WorktreeMerged | WindowMedium | UnknownBrand => palette.muted,
+            WorktreeMerged | WindowMedium => palette.muted,
         })
     }
 }

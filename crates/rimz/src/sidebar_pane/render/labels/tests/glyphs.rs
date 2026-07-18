@@ -499,7 +499,7 @@ fn only_the_lead_unread_row_keeps_the_configured_effect() {
 
     // The name run follows the decision: the lead shimmers across one span per
     // cell, while a non-lead unread name holds a single bright span.
-    let color = Some(theme.component(Component::UnknownBrand));
+    let color = Some(theme.body_tone());
     let lead = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false, true);
     let lead_spans = unread_run_spans(&theme, color, lead.anim, "claude");
     assert!(lead_spans.len() > 1, "the lead name shimmers per cell");
