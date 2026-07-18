@@ -366,7 +366,27 @@ pub fn bind_agent<'a>(
 }
 
 fn root_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
-    snapshot.root_agents().collect()
+    snapshot
+        .root_agents()
+        .filter(|agent| !shadowed_by_pane_owner(snapshot, agent))
+        .collect()
+}
+
+/// Whether a co-resident historical root has yielded its physical agent
+/// instance to the pane's bound owner. One physical instance contributes at
+/// most one recipient; shadowed sessions remain audit records but are not
+/// addressable, including by exact session id.
+pub(crate) fn shadowed_by_pane_owner(snapshot: &SidebarSnapshot, agent: &AgentState) -> bool {
+    let Some(stamped_pane) = agent.pane.as_ref().map(|pane| &pane.pane_id) else {
+        return false;
+    };
+    snapshot.agent_panes.iter().any(|pane| {
+        &pane.pane_id == stamped_pane
+            && pane
+                .agent_id
+                .as_ref()
+                .is_some_and(|owner_id| pane.kind != agent.kind || owner_id != &agent.agent_id)
+    })
 }
 
 /// The shared mention/pane resolution over any candidate source. `candidates`

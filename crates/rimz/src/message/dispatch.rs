@@ -369,7 +369,7 @@ fn resolve_targets(
 ) -> std::result::Result<Vec<ResolvedTarget>, TargetErr> {
     if rollup_only {
         let agents = crate::harness::target::resolve_many(snapshot, raw, scope, channel)
-            .or_else(|err| durable_targets(durable_agents, raw, scope, channel, err))?;
+            .or_else(|err| durable_targets(snapshot, durable_agents, raw, scope, channel, err))?;
         return Ok(combine_targets(snapshot, agents, Vec::new()));
     }
     let agent_result = crate::harness::target::resolve_many(snapshot, raw, scope, channel);
@@ -378,7 +378,7 @@ fn resolve_targets(
         (Ok(agents), Ok(panes)) => Ok(combine_targets(snapshot, agents, panes)),
         (Ok(agents), Err(_)) => Ok(combine_targets(snapshot, agents, Vec::new())),
         (Err(_), Ok(panes)) => Ok(combine_targets(snapshot, Vec::new(), panes)),
-        (Err(err), Err(_)) => durable_targets(durable_agents, raw, scope, channel, err)
+        (Err(err), Err(_)) => durable_targets(snapshot, durable_agents, raw, scope, channel, err)
             .map(|agents| combine_targets(snapshot, agents, Vec::new())),
     }
 }
@@ -393,6 +393,7 @@ fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
 }
 
 fn durable_targets<'a>(
+    snapshot: &SidebarSnapshot,
     durable_agents: Option<&'a [AgentState]>,
     raw: &str,
     scope: Option<&str>,
@@ -402,7 +403,10 @@ fn durable_targets<'a>(
     let Some(durable_agents) = durable_agents else {
         return Err(live_err);
     };
-    let candidates = durable_agents.iter().collect::<Vec<_>>();
+    let candidates = durable_agents
+        .iter()
+        .filter(|agent| !crate::harness::target::shadowed_by_pane_owner(snapshot, agent))
+        .collect::<Vec<_>>();
     crate::harness::target::resolve_agents(raw, scope, channel, &candidates)
 }
 
@@ -990,7 +994,8 @@ mod tests {
     use super::*;
 
     use crate::agents::AgentStatus;
-    use crate::ids::{AgentKind, WorkspaceId};
+    use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+    use crate::pane::PaneRef;
 
     #[test]
     fn condition_broadcast_is_typed_before_resolution() {
@@ -1037,6 +1042,71 @@ mod tests {
         assert!(turn_openers_for_sender(&snapshot, &MessageSender::Human).is_empty());
     }
 
+    #[test]
+    fn co_resident_session_resolves_to_one_pane_backed_recipient() {
+        let older = resident("sess-older", "terminal_1");
+        let owner = resident("sess-owner", "terminal_1");
+        let durable = vec![older.clone(), owner.clone()];
+        let pane = owner_pane("sess-owner", Some("coder"));
+        let snapshot = snapshot_with_panes(vec![older, owner], vec![pane]);
+
+        let targets = resolve_targets(
+            &snapshot,
+            Some(&durable),
+            "@coder",
+            None,
+            Some("project"),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0]
+                .agent
+                .as_ref()
+                .map(|agent| agent.agent_id.as_str()),
+            Some("sess-owner")
+        );
+        assert!(targets[0].pane.is_some());
+    }
+
+    #[test]
+    fn durable_fallback_drops_shadowed_co_resident_session() {
+        let durable = vec![
+            resident("sess-older", "terminal_1"),
+            resident("sess-owner", "terminal_1"),
+        ];
+        // The live pane deliberately lacks the role so resolution falls back
+        // to the audit-scope durable candidates.
+        let snapshot = snapshot_with_panes(Vec::new(), vec![owner_pane("sess-owner", None)]);
+
+        for rollup_only in [false, true] {
+            let targets = resolve_targets(
+                &snapshot,
+                Some(&durable),
+                "@coder",
+                None,
+                Some("project"),
+                rollup_only,
+            )
+            .unwrap();
+            assert_eq!(targets.len(), 1);
+            assert_eq!(
+                targets[0]
+                    .agent
+                    .as_ref()
+                    .map(|agent| agent.agent_id.as_str()),
+                Some("sess-owner")
+            );
+        }
+
+        assert!(matches!(
+            resolve_targets(&snapshot, Some(&durable), "@sess-older", None, None, false,),
+            Err(TargetErr::NoMatch { .. })
+        ));
+    }
+
     fn workspace_id() -> WorkspaceId {
         WorkspaceId::parse("ws_000000000000000000000000").unwrap()
     }
@@ -1052,6 +1122,30 @@ mod tests {
         agent.worktree_path = Some("/repo/project".to_owned());
         agent.worktree_branch = Some("project".to_owned());
         agent
+    }
+
+    fn resident(id: &str, pane: &str) -> AgentState {
+        let mut agent = agent(id, AgentStatus::Running);
+        agent.role = Some("coder".to_owned());
+        agent.pane = Some(PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, pane)));
+        agent
+    }
+
+    fn owner_pane(id: &str, role: Option<&str>) -> PaneAgent {
+        PaneAgent {
+            kind: AgentKind::new_unchecked("claude"),
+            kind_ordinal: Some(2),
+            name: Some("owner".to_owned()),
+            name_explicit: false,
+            profile: None,
+            role: role.map(ToOwned::to_owned),
+            channel: None,
+            agent_id: Some(AgentSessionId::from(id)),
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            pane_pid: None,
+            worktree_path: Some("/repo/project".to_owned()),
+            worktree_branch: Some("project".to_owned()),
+        }
     }
 
     fn now() -> Timestamp {

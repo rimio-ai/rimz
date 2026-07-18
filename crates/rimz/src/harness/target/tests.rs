@@ -190,6 +190,71 @@ fn at_all_fans_to_the_channel_only() {
 }
 
 #[test]
+fn pane_owner_shadows_co_resident_session_from_every_address() {
+    let mut snapshot = empty_snapshot();
+    let mut older = agent("codex", "session-older", Some("main"), "terminal_1");
+    older.role = Some("coder".to_owned());
+    older.origin = Some(crate::agents::SessionOrigin::Fresh);
+    let mut owner = agent("codex", "session-owner", Some("main"), "terminal_1");
+    owner.role = Some("coder".to_owned());
+    owner.origin = Some(crate::agents::SessionOrigin::Fresh);
+    snapshot.agents = vec![older, owner];
+    let mut pane = bound_pane("codex", 2, "owner", "session-owner", "main", "terminal_1");
+    pane.role = Some("coder".to_owned());
+    snapshot.agent_panes = vec![pane];
+
+    let matches = resolve_many(&snapshot, "@coder", None, Some("main")).unwrap();
+    assert_eq!(
+        matches
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["session-owner"]
+    );
+    assert!(matches!(
+        resolve_one(&snapshot, "@session-older", None, None),
+        Err(TargetErr::NoMatch { .. })
+    ));
+    assert_eq!(
+        resolve_many(&snapshot, "@all", None, Some("main"))
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn pane_shadowing_preserves_distinct_and_closed_agents() {
+    let mut snapshot = empty_snapshot();
+    let mut first = agent("codex", "session-first", Some("main"), "terminal_1");
+    first.role = Some("coder".to_owned());
+    let mut second = agent("codex", "session-second", Some("main"), "terminal_2");
+    second.role = Some("coder".to_owned());
+    let mut closed = agent("codex", "session-closed", Some("main"), "terminal_closed");
+    closed.role = Some("coder".to_owned());
+    snapshot.agents = vec![first, second, closed];
+    snapshot.agent_panes = vec![
+        bound_pane("codex", 1, "first", "session-first", "main", "terminal_1"),
+        bound_pane("codex", 2, "second", "session-second", "main", "terminal_2"),
+        lazy_pane("codex", "/repo/main", "terminal_lazy"),
+    ];
+
+    assert_eq!(
+        resolve_many(&snapshot, "@coder", None, Some("main"))
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        resolve_one(&snapshot, "@session-closed", None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-closed"
+    );
+}
+
+#[test]
 fn current_channel_scoping_rules() {
     let mut snapshot = empty_snapshot();
     let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");
