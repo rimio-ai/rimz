@@ -60,7 +60,7 @@ fn pi_activity_filter_excludes_the_blocking_gate_and_launch_commands_build() {
 #[test]
 fn pi_question_detail_normalizes_the_rpiv_schema() {
     let questions = PiAdapter
-        .ask_question_detail(
+        .decode_hook(
             "tool_call",
             &json!({
                 "tool_name": "ask_user_question",
@@ -89,7 +89,8 @@ fn pi_question_detail_normalizes_the_rpiv_schema() {
                 }
             }),
         )
-        .expect("question detail");
+        .expect("test hook decodes")
+        .questions;
     assert_eq!(
         questions,
         vec![AskQuestion {
@@ -122,14 +123,20 @@ fn pi_question_detail_normalizes_the_rpiv_schema() {
             }
         }),
     ] {
-        assert_eq!(PiAdapter.ask_question_detail("tool_call", &payload), None);
+        assert!(
+            PiAdapter
+                .decode_hook("tool_call", &payload)
+                .expect("test hook decodes")
+                .questions
+                .is_empty()
+        );
     }
 }
 
 #[test]
 fn pi_native_answer_detail_maps_rpiv_results_and_ignores_cancellation() {
     let answers = PiAdapter
-        .native_ask_answer(
+        .decode_hook(
             "tool_execution_end",
             &json!({
                 "tool_name": "ask_user_question",
@@ -172,6 +179,8 @@ fn pi_native_answer_detail_maps_rpiv_results_and_ignores_cancellation() {
                 }
             }),
         )
+        .expect("test hook decodes")
+        .native_answers
         .expect("answer detail");
     assert_eq!(
         answers,
@@ -200,31 +209,37 @@ fn pi_native_answer_detail_maps_rpiv_results_and_ignores_cancellation() {
     );
 
     assert_eq!(
-        PiAdapter.native_ask_answer(
-            "tool_execution_end",
-            &json!({
-                "tool_name": "ask_user_question",
-                "tool_details": {
-                    "answers": [{
-                        "question": "Partially answered?",
-                        "kind": "option",
-                        "answer": "Yes"
-                    }],
-                    "cancelled": true
-                }
-            }),
-        ),
+        PiAdapter
+            .decode_hook(
+                "tool_execution_end",
+                &json!({
+                    "tool_name": "ask_user_question",
+                    "tool_details": {
+                        "answers": [{
+                            "question": "Partially answered?",
+                            "kind": "option",
+                            "answer": "Yes"
+                        }],
+                        "cancelled": true
+                    }
+                }),
+            )
+            .expect("test hook decodes")
+            .native_answers,
         None,
         "cancelling after a partial answer must not record that answer"
     );
     assert_eq!(
-        PiAdapter.native_ask_answer(
-            "tool_execution_end",
-            &json!({
-                "tool_name": "ask_user_question",
-                "tool_details": { "answers": [], "cancelled": true, "error": "no_ui" }
-            }),
-        ),
+        PiAdapter
+            .decode_hook(
+                "tool_execution_end",
+                &json!({
+                    "tool_name": "ask_user_question",
+                    "tool_details": { "answers": [], "cancelled": true, "error": "no_ui" }
+                }),
+            )
+            .expect("test hook decodes")
+            .native_answers,
         None
     );
 }
@@ -456,7 +471,7 @@ fn pi_render_preset_maps_model_and_thinking() {
 #[test]
 fn pi_observes_lifecycle_enrichment_and_error_bits() {
     let started = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "session_start",
             &json!({
                 "session_id": "sess-1",
@@ -468,6 +483,8 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
                 "total_tokens": 8160,
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(started.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(started.signal, LifecycleSignal::Registered);
@@ -483,38 +500,42 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
     assert_eq!(started.parent_agent_id, None);
 
     let prompt = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "before_agent_start",
             &json!({ "session_id": "sess-1", "prompt": "  add a dark mode toggle  " }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.prompt.as_deref(), Some("add a dark mode toggle"));
     assert_eq!(prompt.task.as_deref(), Some("add a dark mode toggle"));
 
     let injected = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "before_agent_start",
             &json!({ "session_id": "sess-1", "prompt": "<system-reminder>noise" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(injected.prompt, None);
     assert_eq!(injected.task, None);
 
     let skill = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "before_agent_start",
             &json!({
                 "session_id": "sess-1",
                 "prompt": "<skill name=\"merge\" Location=\"/home/u/.agents/skills/merge/SKILL.md\">\nmerge the branch\n</skill>"
             }),
-        )
+        ).expect("test hook decodes").lifecycle
         .expect("observation");
     assert_eq!(skill.prompt, None);
     assert_eq!(skill.task, None);
 
     let clean = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "agent_settled",
             &json!({
                 "session_id": "sess-1",
@@ -527,6 +548,8 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
                 "output_tokens": 20,
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(
         clean.signal,
@@ -563,7 +586,9 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
         ),
     ] {
         let observation = PiAdapter
-            .observe_lifecycle("agent_settled", &payload)
+            .decode_hook("agent_settled", &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .expect("observation");
         assert_eq!(observation.signal, expected, "payload {payload}",);
     }
@@ -575,18 +600,19 @@ fn pi_carries_final_assistant_text_through_the_settled_boundary() {
         "session_id": "sess-1",
         "last_assistant_message": "  Fixed the parser.  "
     });
-    let observation = PiAdapter
-        .observe_lifecycle("agent_settled", &payload)
-        .expect("settled observation");
-
     assert_eq!(
         PiAdapter
-            .last_assistant_message("agent_settled", &payload, &observation)
+            .decode_hook("agent_settled", &payload)
+            .expect("test hook decodes")
+            .final_message
             .as_deref(),
         Some("Fixed the parser.")
     );
     assert_eq!(
-        PiAdapter.last_assistant_message("agent_end", &payload, &observation),
+        PiAdapter
+            .decode_hook("agent_end", &payload)
+            .expect("test hook decodes")
+            .final_message,
         None,
         "agent_end is enrichment-only and must not complete output early"
     );
@@ -773,12 +799,17 @@ fn pi_rate_limit_wire_is_tolerant_and_compatible() {
 fn model_select_is_enrichment_only() {
     let payload = json!({ "session_id": "s", "model": "gpt-5.5", "effort": "high" });
     assert_eq!(
-        PiAdapter.classify_hook("model_select", &payload).class,
+        PiAdapter
+            .decode_hook("model_select", &payload)
+            .expect("test hook decodes")
+            .class,
         AgentHookClass::Lifecycle
     );
     assert!(
         PiAdapter
-            .observe_lifecycle("model_select", &payload)
+            .decode_hook("model_select", &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .is_none()
     );
     assert_eq!(
@@ -815,7 +846,9 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
     });
     assert_eq!(
         PiAdapter
-            .observe_lifecycle("tool_call", &ask_payload)
+            .decode_hook("tool_call", &ask_payload)
+            .expect("test hook decodes")
+            .lifecycle
             .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Question,
@@ -825,30 +858,43 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
         })
     );
     assert_eq!(
-        PiAdapter.classify_hook("tool_call", &ask_payload).class,
+        PiAdapter
+            .decode_hook("tool_call", &ask_payload)
+            .expect("test hook decodes")
+            .class,
         AgentHookClass::AwaitingUser
     );
     assert_eq!(
         PiAdapter
-            .classify_hook(
+            .decode_hook(
                 "tool_call",
                 &json!({ "session_id": "sess-1", "tool_name": "bash" }),
             )
+            .expect("test hook decodes")
             .class,
         AgentHookClass::Unknown
     );
 
     let mut headless = ask_payload;
     headless["has_ui"] = json!(false);
-    assert_eq!(PiAdapter.observe_lifecycle("tool_call", &headless), None);
     assert_eq!(
-        PiAdapter.classify_hook("tool_call", &headless).class,
+        PiAdapter
+            .decode_hook("tool_call", &headless)
+            .expect("test hook decodes")
+            .lifecycle,
+        None
+    );
+    assert_eq!(
+        PiAdapter
+            .decode_hook("tool_call", &headless)
+            .expect("test hook decodes")
+            .class,
         AgentHookClass::Unknown
     );
 
     assert_eq!(
         PiAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "tool_execution_end",
                 &json!({
                     "session_id": "sess-1",
@@ -857,6 +903,8 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
                     "tool_details": { "answers": [], "cancelled": true }
                 }),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .map(|observation| observation.signal),
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
@@ -869,7 +917,7 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
 #[test]
 fn pi_observes_normalized_subagent_lifecycle() {
     let started = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "subagent_started",
             &json!({
                 "session_id": "parent-1",
@@ -879,6 +927,8 @@ fn pi_observes_normalized_subagent_lifecycle() {
                 "subagent_source": "pi-session"
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("started observation");
     assert_eq!(started.agent_id.as_deref(), Some("run-7#1"));
     assert_eq!(started.parent_agent_id.as_deref(), Some("parent-1"));
@@ -888,7 +938,7 @@ fn pi_observes_normalized_subagent_lifecycle() {
     assert_eq!(started.total_tokens, None);
 
     let stopped = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "subagent_stopped",
             &json!({
                 "session_id": "parent-1",
@@ -900,6 +950,8 @@ fn pi_observes_normalized_subagent_lifecycle() {
                 "total_tokens": 1234
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("stopped observation");
     assert_eq!(stopped.agent_id.as_deref(), Some("run-7#1"));
     assert_eq!(stopped.parent_agent_id.as_deref(), Some("parent-1"));
@@ -925,7 +977,10 @@ fn pi_quarantines_malformed_subagent_identity() {
         }),
     ] {
         assert_eq!(
-            PiAdapter.observe_lifecycle("subagent_started", &payload),
+            PiAdapter
+                .decode_hook("subagent_started", &payload)
+                .expect("test hook decodes")
+                .lifecycle,
             None,
             "payload {payload}"
         );
@@ -953,14 +1008,17 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         ),
         ("read", None),
     ] {
-        let observed = PiAdapter.observe_lifecycle(
-            "tool_execution_end",
-            &json!({
-                "session_id": "sess-1",
-                "tool_call_id": "sibling-call",
-                "tool_name": tool_name
-            }),
-        );
+        let observed = PiAdapter
+            .decode_hook(
+                "tool_execution_end",
+                &json!({
+                    "session_id": "sess-1",
+                    "tool_call_id": "sibling-call",
+                    "tool_name": tool_name
+                }),
+            )
+            .expect("test hook decodes")
+            .lifecycle;
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool_name}");
     }
 
@@ -970,10 +1028,12 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         compacting: false,
     };
     let edit = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "tool_execution_end",
             &json!({ "session_id": "sess-1", "tool_name": "edit" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(
         step(Some(&running), None, &edit.signal).next.phase,
@@ -981,7 +1041,9 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
     );
 
     let compacting = PiAdapter
-        .observe_lifecycle("session_before_compact", &json!({ "session_id": "sess-1" }))
+        .decode_hook("session_before_compact", &json!({ "session_id": "sess-1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
     for (reason, expected) in [
@@ -996,7 +1058,9 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
             payload["compaction_reason"] = json!(reason);
         }
         let compacted = PiAdapter
-            .observe_lifecycle("session_compact", &payload)
+            .decode_hook("session_compact", &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .expect("observation");
         assert_eq!(
             compacted.signal,
@@ -1005,17 +1069,22 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         );
     }
     assert_eq!(
-        PiAdapter.observe_lifecycle(
-            "agent_end",
-            &json!({ "session_id": "sess-1", "stop_reason": "error" }),
-        ),
+        PiAdapter
+            .decode_hook(
+                "agent_end",
+                &json!({ "session_id": "sess-1", "stop_reason": "error" }),
+            )
+            .expect("test hook decodes")
+            .lifecycle,
         None
     );
     let settled = PiAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "agent_settled",
             &json!({ "session_id": "sess-1", "stop_reason": "error" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(
         settled.signal,
@@ -1025,15 +1094,26 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         }
     );
     let ended = PiAdapter
-        .observe_lifecycle("session_shutdown", &json!({ "session_id": "sess-1" }))
+        .decode_hook("session_shutdown", &json!({ "session_id": "sess-1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(ended.signal, LifecycleSignal::Ended);
 
     assert_eq!(
-        PiAdapter.observe_lifecycle("tool_call", &json!({ "session_id": "sess-1" })),
+        PiAdapter
+            .decode_hook("tool_call", &json!({ "session_id": "sess-1" }))
+            .expect("test hook decodes")
+            .lifecycle,
         None
     );
-    assert_eq!(PiAdapter.observe_lifecycle("bogus", &json!({})), None);
+    assert_eq!(
+        PiAdapter
+            .decode_hook("bogus", &json!({}))
+            .expect("test hook decodes")
+            .lifecycle,
+        None
+    );
 
     // Only a real shutdown ends the session.
     assert!(PiAdapter.ends_session("session_shutdown"));
@@ -1042,7 +1122,10 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
 
 #[test]
 fn neutral_decision_shape_is_pinned() {
-    let rendered = PiAdapter.render_neutral("agent_end").unwrap();
+    let rendered = PiAdapter
+        .decode_hook("agent_end", &Value::Null)
+        .expect("test hook decodes")
+        .neutral;
     insta::assert_snapshot!(format!("{rendered:?}"), @"None");
 }
 

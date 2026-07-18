@@ -14,10 +14,12 @@ fn transcript_tail_drives_context_window_and_tokens() {
         )
         .unwrap();
     let obs = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "Stop",
             &json!({ "session_id": "sess-1", "transcript_path": bare.to_str().unwrap() }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(obs.total_tokens, Some(100_500));
     assert_eq!(obs.context_window, None);
@@ -34,7 +36,7 @@ fn transcript_tail_drives_context_window_and_tokens() {
         )
         .unwrap();
     let obs = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "Stop",
             &json!({
                 "session_id": "sess-1",
@@ -42,6 +44,8 @@ fn transcript_tail_drives_context_window_and_tokens() {
                 "transcript_path": extended.to_str().unwrap(),
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(obs.context_window, Some(1_000_000));
     assert_eq!(obs.total_tokens, Some(100_500));
@@ -123,7 +127,7 @@ fn turn_interrupted_reads_the_tail_from_the_payload_path() {
 fn stop_failure_hook_maps_to_turn_error_marker() {
     let marker = |error: &str| {
         ClaudeAdapter
-            .observe_turn_error_from_hook(
+            .decode_hook(
                 "StopFailure",
                 &json!({
                     "session_id": "sess-1",
@@ -131,6 +135,8 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
                     "last_assistant_message": "You've hit your usage limit"
                 }),
             )
+            .expect("test hook decodes")
+            .turn_error
             .expect("marker")
     };
 
@@ -138,7 +144,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
     assert_eq!(marker("overloaded").class, TurnErrorClass::PausedOverloaded);
 
     let transient = ClaudeAdapter
-        .observe_turn_error_from_hook(
+        .decode_hook(
             "StopFailure",
             &json!({
                 "session_id": "sess-1",
@@ -146,12 +152,14 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
                 "last_assistant_message": "API Error: Server Error"
             }),
         )
+        .expect("test hook decodes")
+        .turn_error
         .expect("marker");
     assert_eq!(transient.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(transient.label.as_deref(), Some("API Error: Server Error"));
 
     let failed = ClaudeAdapter
-        .observe_turn_error_from_hook(
+        .decode_hook(
             "StopFailure",
             &json!({
                 "session_id": "sess-1",
@@ -159,25 +167,31 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
                 "last_assistant_message": "API Error: Bad Request"
             }),
         )
+        .expect("test hook decodes")
+        .turn_error
         .expect("marker");
     assert_eq!(failed.class, TurnErrorClass::Failed);
     assert_eq!(failed.label.as_deref(), Some("API Error: Bad Request"));
 
     assert!(
         ClaudeAdapter
-            .observe_turn_error_from_hook("StopFailure", &json!({ "session_id": "sess-1" }))
+            .decode_hook("StopFailure", &json!({ "session_id": "sess-1" }))
+            .expect("test hook decodes")
+            .turn_error
             .is_none(),
         "missing error has no marker"
     );
     assert!(
         ClaudeAdapter
-            .observe_turn_error_from_hook(
+            .decode_hook(
                 "Stop",
                 &json!({
                     "session_id": "sess-1",
                     "error": "rate_limit"
                 }),
             )
+            .expect("test hook decodes")
+            .turn_error
             .is_none(),
         "only StopFailure carries this marker"
     );
@@ -197,20 +211,24 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
     )
     .unwrap();
     let obs = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "SessionStart",
             &json!({ "session_id": "sess-1", "transcript_path": fresh.to_str().unwrap() }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(obs.total_tokens, Some(0));
     assert_eq!(obs.context_window, None);
 
     // No readable transcript means unknown (None), not a false 0%.
     let obs = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "SessionStart",
             &json!({ "session_id": "sess-1", "transcript_path": "/nonexistent/session.jsonl" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(obs.total_tokens, None);
     assert_eq!(obs.context_window, None);
@@ -225,10 +243,12 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
     )
     .unwrap();
     let obs = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "SessionStart",
             &json!({ "transcript_path": usage.to_str().unwrap() }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(obs.total_tokens, None);
     assert_eq!(obs.context_window, None);

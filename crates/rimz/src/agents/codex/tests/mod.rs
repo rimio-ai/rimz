@@ -175,22 +175,25 @@ fn codex_descriptor_declares_lazy_registration() {
 
 #[test]
 fn codex_question_summary_reads_request_user_input_questions() {
-    let questions = CodexAdapter.ask_question_detail(
-        "PreToolUse",
-        &json!({
-            "tool_name": "request_user_input",
-            "tool_input": {
-                "questions": [
-                    { "question": "Pick a migration path?" },
-                    { "question": "Notify users?" }
-                ]
-            }
-        }),
-    );
+    let questions = CodexAdapter
+        .decode_hook(
+            "PreToolUse",
+            &json!({
+                "tool_name": "request_user_input",
+                "tool_input": {
+                    "questions": [
+                        { "question": "Pick a migration path?" },
+                        { "question": "Notify users?" }
+                    ]
+                }
+            }),
+        )
+        .expect("test hook decodes")
+        .questions;
 
     assert_eq!(
         questions,
-        Some(vec![
+        vec![
             crate::transcript::AskQuestion {
                 question: "Pick a migration path?".to_owned(),
                 options: Vec::new(),
@@ -203,18 +206,20 @@ fn codex_question_summary_reads_request_user_input_questions() {
                 multi_select: false,
                 has_option_previews: false,
             },
-        ])
+        ]
     );
     assert!(
         CodexAdapter
-            .ask_question_detail(
+            .decode_hook(
                 "PreToolUse",
                 &json!({
                     "tool_name": "shell",
                     "tool_input": { "questions": [{ "question": "ignored" }] }
                 }),
             )
-            .is_none()
+            .expect("test hook decodes")
+            .questions
+            .is_empty()
     );
 }
 

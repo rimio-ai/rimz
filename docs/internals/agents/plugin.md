@@ -18,7 +18,7 @@ The descriptor owns leaked strings for branding, tools, process names, activity 
 
 ## Ingest and probes
 
-[`protocol.rs`](../../../crates/rimz/src/agents/plugin/protocol.rs) is the structured protocol-1 parser. It checks the envelope event against the feed event, resolves root and child identities through the shared identity helpers, maps one canonical event to one `LifecycleSignal`, and normalizes context fields into `AgentContext`. Valid canonical events omitted from `emits` still ingest with a warning; unknown events drop at debug level, and malformed child identity quarantines through the normal lifecycle diagnostic target.
+[`protocol.rs`](../../../crates/rimz/src/agents/plugin/protocol.rs) is the structured protocol-1 parser. `PluginAdapter::decode_hook` parses each envelope once, checks its event against the feed event, resolves root and child identities through the shared identity helpers, and returns routing, lifecycle, question/final text, context/error evidence, and neutral output together. Valid canonical events omitted from `emits` still ingest with one warning per kind/event; unknown events drop at debug level, and malformed child identity quarantines through the normal lifecycle diagnostic target.
 
 The canonical vocabulary is transport-independent. `rimz hooks feed` supplies the version-1 process delivery path; a resident receiver can carry the same envelopes over a socket without a protocol change.
 

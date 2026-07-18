@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::{
-    ADAPTERS, AgentAdapter, AgentHookClass, AskReply, ClassificationSample, ConcernCoverage,
-    DerivedAskFixture, HookCoverage, IntegrationConcern, PresetArgMatcher, PresetField, PriceBook,
-    SpendFixture, SpendFixtureBody,
+    ADAPTERS, AgentAdapter, AgentHookClass, AskReply, ClassificationSample, ClassifiedHook,
+    ConcernCoverage, DerivedAskFixture, HookCoverage, IntegrationConcern, PresetArgMatcher,
+    PresetField, PriceBook, SpendFixture, SpendFixtureBody,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
@@ -253,7 +253,14 @@ fn classify_matches_corpus() {
         let kind = adapter.descriptor().kind;
         let samples = corpus(*adapter);
         for sample in samples {
-            let actual = adapter.classify_hook(sample.event_name, &sample.payload);
+            let decoded = adapter
+                .decode_hook(sample.event_name, &sample.payload)
+                .expect("corpus payload decodes");
+            let actual = ClassifiedHook {
+                class: decoded.class,
+                ask_kind: decoded.ask_kind,
+                event_name: decoded.event_name,
+            };
             assert_eq!(
                 actual, sample.expected,
                 "{kind} classification sample {}",
@@ -284,7 +291,8 @@ fn native_events_are_covered_by_the_corpus_and_classify_to_a_channel() {
             );
             assert_ne!(
                 adapter
-                    .classify_hook(sample.event_name, &sample.payload)
+                    .decode_hook(sample.event_name, &sample.payload)
+                    .expect("corpus payload decodes")
                     .class,
                 AgentHookClass::Unknown,
                 "{kind} native sample {} classified as unknown",
@@ -763,12 +771,15 @@ fn sample_produces_signal(
     if signal_kind == LifecycleSignalKind::AwaitingInput {
         return adapter.descriptor().capabilities.native_ask_ui
             && adapter
-                .classify_hook(sample.event_name, &sample.payload)
+                .decode_hook(sample.event_name, &sample.payload)
+                .expect("corpus payload decodes")
                 .class
                 == AgentHookClass::AwaitingUser;
     }
     adapter
-        .observe_lifecycle(sample.event_name, &sample.payload)
+        .decode_hook(sample.event_name, &sample.payload)
+        .expect("corpus payload decodes")
+        .lifecycle
         .is_some_and(|observation| observation.signal.kind() == signal_kind)
 }
 
@@ -895,7 +906,9 @@ fn derived_ask_kind(adapter: &dyn AgentAdapter) -> Option<AskKind> {
         serde_json::json!(path.to_string_lossy()),
     );
     let observed = adapter
-        .observe_lifecycle(fixture.event_name, &payload)
+        .decode_hook(fixture.event_name, &payload)
+        .expect("derived ask payload decodes")
+        .lifecycle
         .and_then(|observation| match observation.signal {
             LifecycleSignal::AwaitingInput { kind, .. } => Some(kind),
             _ => None,
@@ -934,7 +947,9 @@ fn observes_turn_lifecycle(adapter: &dyn AgentAdapter, samples: &[Classification
     samples.iter().any(|sample| {
         sample.expected.class == AgentHookClass::Lifecycle
             && adapter
-                .observe_lifecycle(sample.event_name, &sample.payload)
+                .decode_hook(sample.event_name, &sample.payload)
+                .expect("corpus payload decodes")
+                .lifecycle
                 .is_some_and(|obs| {
                     matches!(
                         obs.signal,
@@ -950,7 +965,9 @@ fn observes_compaction(adapter: &dyn AgentAdapter, samples: &[ClassificationSamp
     samples.iter().any(|sample| {
         sample.expected.class == AgentHookClass::Lifecycle
             && adapter
-                .observe_lifecycle(sample.event_name, &sample.payload)
+                .decode_hook(sample.event_name, &sample.payload)
+                .expect("corpus payload decodes")
+                .lifecycle
                 .is_some_and(|obs| {
                     matches!(
                         obs.signal,
@@ -968,7 +985,9 @@ fn observes_subagent_lifecycle(
         sample.expected.class == AgentHookClass::Lifecycle
             && sample.event_name.to_ascii_lowercase().contains("subagent")
             && adapter
-                .observe_lifecycle(sample.event_name, &sample.payload)
+                .decode_hook(sample.event_name, &sample.payload)
+                .expect("corpus payload decodes")
+                .lifecycle
                 .is_some_and(|obs| {
                     obs.parent_agent_id.is_some()
                         && matches!(
@@ -990,7 +1009,8 @@ fn native_event_classifies(
         && samples.iter().any(|sample| {
             sample.event_name == event_name
                 && adapter
-                    .classify_hook(sample.event_name, &sample.payload)
+                    .decode_hook(sample.event_name, &sample.payload)
+                    .expect("corpus payload decodes")
                     .class
                     == AgentHookClass::Lifecycle
         })

@@ -377,7 +377,7 @@ fn pending_ask(prompt: &str, run_async: bool, sentinel: Option<&str>) -> Value {
 #[test]
 fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     let registered = CursorAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "sessionStart",
             &json!({
                 "conversation_id": "conv-1",
@@ -391,6 +391,8 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
                 "transcript_path": "/tmp/transcript.jsonl"
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("registered observation");
     assert_eq!(registered.agent_id.as_deref(), Some("conv-1"));
     assert_eq!(registered.signal, LifecycleSignal::Registered);
@@ -406,10 +408,12 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     );
 
     let prompt = CursorAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "beforeSubmitPrompt",
             &json!({ "conversation_id": "conv-1", "prompt": "  fix auth  " }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("prompt observation");
     assert_eq!(prompt.task.as_deref(), Some("fix auth"));
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
@@ -422,10 +426,13 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         ("Shell", Some(false)),
         ("Read", None),
     ] {
-        let observation = CursorAdapter.observe_lifecycle(
-            "postToolUse",
-            &json!({ "conversation_id": "conv-1", "tool_name": tool, "cwd": "/work" }),
-        );
+        let observation = CursorAdapter
+            .decode_hook(
+                "postToolUse",
+                &json!({ "conversation_id": "conv-1", "tool_name": tool, "cwd": "/work" }),
+            )
+            .expect("test hook decodes")
+            .lifecycle;
         assert_eq!(
             observation.map(|observation| observation.signal),
             edits.map(|edits| LifecycleSignal::ToolUsed {
@@ -438,10 +445,12 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     }
     assert!(
         CursorAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "postToolUseFailure",
                 &json!({ "conversation_id": "conv-1", "tool_name": "Write" }),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .is_none()
     );
 
@@ -463,16 +472,18 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         ),
     ] {
         let observation = CursorAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "stop",
                 &json!({ "conversation_id": "conv-1", "status": status }),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .expect("stop observation");
         assert_eq!(observation.signal, signal);
     }
 
     let compacting = CursorAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "preCompact",
             &json!({
                 "conversation_id": "conv-1",
@@ -481,6 +492,8 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
                 "context_window_size": 200000
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("compaction observation");
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
     assert_eq!(compacting.context_pct, Some(84));
@@ -491,7 +504,9 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     assert_eq!(transition.next.status, AgentStatus::Running);
 
     let ended = CursorAdapter
-        .observe_lifecycle("sessionEnd", &json!({ "conversation_id": "conv-1" }))
+        .decode_hook("sessionEnd", &json!({ "conversation_id": "conv-1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .expect("session end");
     assert_eq!(ended.signal, LifecycleSignal::Ended);
     assert!(CursorAdapter.ends_session("sessionEnd"));
@@ -500,7 +515,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
 #[test]
 fn cursor_subagent_lifecycle_keeps_exact_identity_and_child_only_enrichment() {
     let started = CursorAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "subagentStart",
             &json!({
                 "conversation_id": "parent-common",
@@ -514,6 +529,8 @@ fn cursor_subagent_lifecycle_keeps_exact_identity_and_child_only_enrichment() {
                 "transcript_path": "/tmp/parent.jsonl"
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("subagent start");
     assert_eq!(started.agent_id.as_deref(), Some("child-1"));
     assert_eq!(started.parent_agent_id.as_deref(), Some("parent-1"));
@@ -526,7 +543,7 @@ fn cursor_subagent_lifecycle_keeps_exact_identity_and_child_only_enrichment() {
     assert_eq!(started.transcript_path, None);
 
     let stopped = CursorAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "subagentStop",
             &json!({
                 "conversation_id": "parent-common",
@@ -540,6 +557,8 @@ fn cursor_subagent_lifecycle_keeps_exact_identity_and_child_only_enrichment() {
                 "agent_transcript_path": "/tmp/child-1.jsonl"
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("subagent stop");
     assert_eq!(stopped.agent_id.as_deref(), Some("child-1"));
     assert_eq!(stopped.parent_agent_id.as_deref(), Some("parent-1"));
@@ -574,7 +593,9 @@ fn cursor_subagent_stop_status_fails_closed() {
             payload["status"] = json!(status);
         }
         let observed = CursorAdapter
-            .observe_lifecycle("subagentStop", &payload)
+            .decode_hook("subagentStop", &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .expect("valid child identity");
         assert_eq!(
             observed.signal,
@@ -613,7 +634,10 @@ fn cursor_subagent_malformed_identity_is_quarantined() {
     ] {
         for event in ["subagentStart", "subagentStop"] {
             assert_eq!(
-                CursorAdapter.observe_lifecycle(event, &payload),
+                CursorAdapter
+                    .decode_hook(event, &payload)
+                    .expect("test hook decodes")
+                    .lifecycle,
                 None,
                 "event={event} payload={payload}",
             );
@@ -1129,7 +1153,9 @@ fn malformed_payloads_degrade_without_losing_the_event() {
     .iter()
     .map(|payload| {
         CursorAdapter
-            .observe_lifecycle("sessionStart", payload)
+            .decode_hook("sessionStart", payload)
+            .expect("test hook decodes")
+            .lifecycle
             .expect("event still maps")
     })
     .collect();
@@ -1175,7 +1201,9 @@ fn malformed_fields_preserve_identity_response_and_token_composition() {
         "context_tokens": 999
     });
     let observed = CursorAdapter
-        .observe_lifecycle("stop", &payload)
+        .decode_hook("stop", &payload)
+        .expect("test hook decodes")
+        .lifecycle
         .expect("stop survives malformed siblings");
     assert_eq!(observed.agent_id.as_deref(), Some("conv-1"));
     assert_eq!(observed.launch.model.as_deref(), Some("cursor/model"));
@@ -1187,15 +1215,20 @@ fn malformed_fields_preserve_identity_response_and_token_composition() {
     assert_eq!(observed.total_tokens, None);
 
     assert_eq!(
-        CursorAdapter.observe_assistant_message(
-            "afterAgentResponse",
-            &json!({"conversation_id": "conv-1", "text": "  safe final  ", "input_tokens": 9})
-        ),
+        CursorAdapter
+            .decode_hook(
+                "afterAgentResponse",
+                &json!({"conversation_id": "conv-1", "text": "  safe final  ", "input_tokens": 9})
+            )
+            .expect("test hook decodes")
+            .assistant_message,
         Some("safe final".to_owned())
     );
     assert!(
         CursorAdapter
-            .observe_assistant_message("stop", &json!({"text": "unsafe fallback"}))
+            .decode_hook("stop", &json!({"text": "unsafe fallback"}))
+            .expect("test hook decodes")
+            .assistant_message
             .is_none()
     );
 }
@@ -1203,7 +1236,7 @@ fn malformed_fields_preserve_identity_response_and_token_composition() {
 #[test]
 fn stop_input_total_subtracts_cache_without_underflow() {
     let observed = CursorAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "stop",
             &json!({
                 "conversation_id": "conv-1",
@@ -1214,13 +1247,15 @@ fn stop_input_total_subtracts_cache_without_underflow() {
                 "cache_write_tokens": 0
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(observed.fresh_input_tokens, Some(14_021));
     assert_eq!(observed.cache_read_input_tokens, Some(8_704));
     assert_eq!(observed.output_tokens, Some(26));
 
     let malformed = CursorAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "stop",
             &json!({
                 "conversation_id": "conv-1",
@@ -1230,6 +1265,8 @@ fn stop_input_total_subtracts_cache_without_underflow() {
                 "cache_write_tokens": 5
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(malformed.fresh_input_tokens, Some(0));
 }
@@ -1318,10 +1355,12 @@ fn turn_cost_prices_auto_explicit_and_fast_models() {
     );
     assert!(
         CursorAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "afterAgentResponse",
                 &json!({"conversation_id": "conv-1", "input_tokens": 1}),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .is_none(),
         "response pricing must not become a lifecycle or token source"
     );
@@ -1565,8 +1604,9 @@ fn every_wired_event_returns_cursor_neutral_json() {
             (
                 hook.event,
                 CursorAdapter
-                    .render_neutral(hook.event)
-                    .expect("neutral render")
+                    .decode_hook(hook.event, &Value::Null)
+                    .expect("test hook decodes")
+                    .neutral
                     .expect("wired neutral"),
             )
         })
@@ -1615,7 +1655,13 @@ fn every_wired_event_returns_cursor_neutral_json() {
       ]
     ]
     "###);
-    assert_eq!(CursorAdapter.render_neutral("future").unwrap(), None);
+    assert_eq!(
+        CursorAdapter
+            .decode_hook("future", &Value::Null)
+            .expect("test hook decodes")
+            .neutral,
+        None
+    );
 }
 
 #[test]
@@ -1867,19 +1913,22 @@ fn hook_command_preserves_parent_pid_attribution() {
     assert!(RIMZ_HOOK_COMMAND.contains("--source cursor"));
     assert_eq!(
         CursorAdapter
-            .classify_hook("sessionStart", &json!({}))
+            .decode_hook("sessionStart", &json!({}))
+            .expect("test hook decodes")
             .class,
         AgentHookClass::Lifecycle
     );
     assert_eq!(
         CursorAdapter
-            .classify_hook("subagentStart", &json!({}))
+            .decode_hook("subagentStart", &json!({}))
+            .expect("test hook decodes")
             .class,
         AgentHookClass::Lifecycle
     );
     assert_eq!(
         CursorAdapter
-            .classify_hook("subagentStop", &json!({}))
+            .decode_hook("subagentStop", &json!({}))
+            .expect("test hook decodes")
             .class,
         AgentHookClass::Lifecycle
     );

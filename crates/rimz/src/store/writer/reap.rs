@@ -246,10 +246,12 @@ mod tests {
         pane_id: &str,
     ) -> EventEnvelope {
         let mut observation = AmpAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "session_start",
                 &json!({ "session_id": agent_id, "cwd": "/repo" }),
             )
+            .expect("Amp session start decodes")
+            .lifecycle
             .expect("Amp session start observation");
         observation.agent_pid = Some(std::process::id());
         observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane_id));

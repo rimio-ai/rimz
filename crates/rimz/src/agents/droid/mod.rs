@@ -28,7 +28,7 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, SessionSource, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, ClassifiedHook, FieldPatch,
+    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, DecodedHook, FieldPatch,
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch, ManagedSource,
     RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
     optional_payload_string, read_transcript_lines, sanitize_user_prompt,
@@ -234,8 +234,60 @@ impl AgentAdapter for DroidAdapter {
         }
     }
 
-    fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        classify_catalog_hook(DROID_HOOKS, event_name, None)
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
+        let mut decoded = DecodedHook::new(classify_catalog_hook(DROID_HOOKS, event_name, None));
+        let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
+        let signal = match event_name {
+            "SessionStart" => match session_start.as_ref().map(|start| &start.source) {
+                Some(SessionSource::Compact) => LifecycleSignal::CompactionEnded { auto: None },
+                Some(_) => LifecycleSignal::Registered,
+                None => return Ok(decoded),
+            },
+            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
+            "PostToolUse" => LifecycleSignal::ToolUsed {
+                mutates: self.descriptor().tool_mutates(payload),
+                edits: self.descriptor().tool_edits_files(payload),
+                native_key: None,
+            },
+            "Stop" => LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+            "PreCompact" => LifecycleSignal::Compacting,
+            "SessionEnd" => LifecycleSignal::Ended,
+            _ => return Ok(decoded),
+        };
+        let agent_id = optional_payload_string(payload, &["session_id"]);
+        decoded.agent_id = agent_id.clone();
+        decoded.context_agent_id = agent_id.clone();
+        let mut observation =
+            AgentLifecycleObservation::new(agent_id.as_deref().map(AgentSessionId::from), signal)
+                .with_worktree_from_payload(payload);
+        if event_name == "UserPromptSubmit" {
+            let prompt = parse_user_prompt_submit(payload).prompt;
+            observation.task = sanitize_user_prompt(prompt.as_deref());
+            observation.prompt = sanitize_user_prompt(prompt.as_deref());
+        }
+        observation.transcript_path = optional_payload_string(payload, &["transcript_path"]);
+        if let Some(path) = observation.transcript_path.as_deref() {
+            let (model, effort) = transcript::identity(Path::new(path));
+            observation.launch.model = model;
+            observation.launch.effort = effort;
+        }
+        if matches!(observation.signal, LifecycleSignal::Registered)
+            && session_start.as_ref().is_some_and(|start| {
+                matches!(start.source, SessionSource::Startup | SessionSource::Clear)
+            })
+        {
+            observation.origin = Some(SessionOrigin::Fresh);
+        }
+        decoded.final_message = (event_name == "Stop")
+            .then_some(observation.transcript_path.as_deref())
+            .flatten()
+            .and_then(|path| transcript::last_assistant_message(Path::new(path)));
+        decoded.worktree_path = observation.worktree_path.clone();
+        decoded.lifecycle = Some(observation);
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -264,73 +316,6 @@ impl AgentAdapter for DroidAdapter {
                 r#"{"model":"gpt-5","tokenUsage":{"inputTokens":100,"outputTokens":20,"cacheCreationTokens":10,"cacheReadTokens":30,"thinkingTokens":5}}"#,
             ),
         })
-    }
-
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        Ok(None)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
-        let signal = match event_name {
-            "SessionStart" => match session_start.as_ref()?.source {
-                SessionSource::Compact => LifecycleSignal::CompactionEnded { auto: None },
-                _ => LifecycleSignal::Registered,
-            },
-            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
-            "PostToolUse" => LifecycleSignal::ToolUsed {
-                mutates: self.descriptor().tool_mutates(payload),
-                edits: self.descriptor().tool_edits_files(payload),
-                native_key: None,
-            },
-            // Droid has no structured failure hook. Display status and the
-            // stall window surface failures without guessing from silence.
-            "Stop" => LifecycleSignal::TurnEnded {
-                errored: false,
-                parked_on_background: false,
-            },
-            "PreCompact" => LifecycleSignal::Compacting,
-            "SessionEnd" => LifecycleSignal::Ended,
-            _ => return None,
-        };
-        let agent_id = optional_payload_string(payload, &["session_id"]).map(AgentSessionId::from);
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        if event_name == "UserPromptSubmit" {
-            let prompt = parse_user_prompt_submit(payload).prompt;
-            observation.task = sanitize_user_prompt(prompt.as_deref());
-            observation.prompt = sanitize_user_prompt(prompt.as_deref());
-        }
-        observation.transcript_path = optional_payload_string(payload, &["transcript_path"]);
-        if let Some(path) = observation.transcript_path.as_deref() {
-            let (model, effort) = transcript::identity(Path::new(path));
-            observation.launch.model = model;
-            observation.launch.effort = effort;
-        }
-        if matches!(observation.signal, LifecycleSignal::Registered)
-            && session_start.as_ref().is_some_and(|start| {
-                matches!(start.source, SessionSource::Startup | SessionSource::Clear)
-            })
-        {
-            observation.origin = Some(SessionOrigin::Fresh);
-        }
-        Some(observation)
-    }
-
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        _payload: &Value,
-        observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        (event_name == "Stop")
-            .then_some(observation.transcript_path.as_deref())
-            .flatten()
-            .and_then(|path| transcript::last_assistant_message(Path::new(path)))
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {

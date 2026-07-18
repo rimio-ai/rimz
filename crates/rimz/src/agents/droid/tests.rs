@@ -87,7 +87,7 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
 #[test]
 fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
     let startup = DroidAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "SessionStart",
             &json!({
                 "session_id": "sess-1",
@@ -96,6 +96,8 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
                 "source": "startup"
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(startup.signal, LifecycleSignal::Registered);
     assert_eq!(startup.origin, Some(SessionOrigin::Fresh));
@@ -103,10 +105,12 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
     assert_eq!(startup.transcript_path.as_deref(), Some("/tmp/droid.jsonl"));
 
     let prompt = DroidAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "UserPromptSubmit",
             &json!({"session_id": "sess-1", "prompt": "  fix auth  "}),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
@@ -121,10 +125,12 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
     ] {
         assert_eq!(
             DroidAdapter
-                .observe_lifecycle(
+                .decode_hook(
                     "PostToolUse",
                     &json!({"session_id": "sess-1", "tool_name": tool}),
                 )
+                .expect("test hook decodes")
+                .lifecycle
                 .unwrap()
                 .signal,
             LifecycleSignal::ToolUsed {
@@ -136,7 +142,9 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
     }
 
     let stop = DroidAdapter
-        .observe_lifecycle("Stop", &json!({"session_id": "sess-1"}))
+        .decode_hook("Stop", &json!({"session_id": "sess-1"}))
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(
         stop.signal,
@@ -157,17 +165,21 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
 
     assert_eq!(
         DroidAdapter
-            .observe_lifecycle("PreCompact", &json!({"session_id": "sess-1"}))
+            .decode_hook("PreCompact", &json!({"session_id": "sess-1"}))
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap()
             .signal,
         LifecycleSignal::Compacting
     );
     assert_eq!(
         DroidAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "SessionStart",
                 &json!({"session_id": "sess-1", "source": "compact"}),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap()
             .signal,
         LifecycleSignal::CompactionEnded { auto: None }
@@ -175,7 +187,9 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
     assert!(DroidAdapter.ends_session("SessionEnd"));
     assert_eq!(
         DroidAdapter
-            .observe_lifecycle("SessionEnd", &json!({"session_id": "sess-1"}))
+            .decode_hook("SessionEnd", &json!({"session_id": "sess-1"}))
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap()
             .signal,
         LifecycleSignal::Ended
@@ -228,8 +242,8 @@ fn transcript_v2_abstains_on_unknown_version_and_malformed_graphs() {
 #[test]
 fn final_answer_and_identity_are_version_gated_and_bounded() {
     let (_dir, path) = transcript_fixture();
-    let observation = DroidAdapter
-        .observe_lifecycle(
+    let decoded = DroidAdapter
+        .decode_hook(
             "Stop",
             &json!({
                 "session_id": "sess-1",
@@ -237,6 +251,7 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
             }),
         )
         .unwrap();
+    let observation = decoded.lifecycle.as_ref().unwrap();
 
     assert_eq!(
         observation.launch.model.as_deref(),
@@ -248,12 +263,12 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
     assert_eq!(observation.total_tokens, None);
     assert_eq!(observation.fresh_input_tokens, None);
     assert_eq!(observation.output_tokens, None);
+    assert_eq!(decoded.final_message, Some("pong\nsecond block".to_owned()));
     assert_eq!(
-        DroidAdapter.last_assistant_message("Stop", &Value::Null, &observation),
-        Some("pong\nsecond block".to_owned())
-    );
-    assert_eq!(
-        DroidAdapter.last_assistant_message("SessionEnd", &Value::Null, &observation),
+        DroidAdapter
+            .decode_hook("SessionEnd", &Value::Null)
+            .unwrap()
+            .final_message,
         None
     );
 
@@ -267,10 +282,12 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
     )
     .unwrap();
     let fallback = DroidAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "Stop",
             &json!({"session_id": "sess-1", "transcript_path": path}),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(
         fallback.launch.model.as_deref(),
@@ -471,12 +488,15 @@ fn transcript_positions_abstain_for_missing_or_unknown_headers() {
 #[test]
 fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
     assert_eq!(
-        DroidAdapter.classify_hook("Notification", &json!({})).class,
+        DroidAdapter
+            .decode_hook("Notification", &json!({}))
+            .expect("test hook decodes")
+            .class,
         AgentHookClass::Lifecycle
     );
-    insta::assert_json_snapshot!(DroidAdapter.render_neutral("Stop").unwrap(), @"null");
+    insta::assert_json_snapshot!(DroidAdapter.decode_hook("Stop", &Value::Null).expect("test hook decodes").neutral, @"null");
     insta::assert_json_snapshot!(
-        DroidAdapter.observe_lifecycle("Stop", &json!([])).unwrap(),
+        DroidAdapter.decode_hook("Stop", &json!([])).expect("test hook decodes").lifecycle.unwrap(),
         @r###"
         {
           "signal": {

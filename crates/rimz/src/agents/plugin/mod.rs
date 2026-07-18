@@ -10,7 +10,9 @@ mod manifest;
 mod probes;
 mod protocol;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -34,7 +36,7 @@ use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
-    PriceBook, Result, RootIdentity, SubagentIdentity, resolve_root_identity,
+    DecodedHook, PriceBook, Result, RootIdentity, SubagentIdentity, resolve_root_identity,
     resolve_subagent_identity,
 };
 #[cfg(test)]
@@ -70,32 +72,185 @@ fn build_adapter(manifest: PluginManifest, plugin_dir: PathBuf) -> &'static Plug
     }))
 }
 
+fn warn_undeclared_once(kind: &str, event: &str) {
+    static WARNED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut warned) = warned.lock() else {
+        return;
+    };
+    if warned.insert((kind.to_owned(), event.to_owned())) {
+        warn!(
+            kind,
+            event, "agent plugin emitted an undeclared canonical event"
+        );
+    }
+}
+
 impl AgentAdapter for PluginAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         self.descriptor
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let Some(envelope) = Envelope::parse(event_name, payload) else {
-            return unknown(event_name);
+            return Ok(DecodedHook::new(unknown(event_name)));
         };
         if !self.emits(event_name) {
-            warn!(
-                kind = self.descriptor.kind,
-                event = event_name,
-                "agent plugin emitted an undeclared canonical event"
-            );
+            warn_undeclared_once(self.descriptor.kind, event_name);
         }
         let (class, ask_kind) = match envelope.event {
             CanonicalEvent::Unknown => (AgentHookClass::Unknown, None),
             CanonicalEvent::AwaitingInput { ask, .. } => (AgentHookClass::AwaitingUser, Some(ask)),
             _ => (AgentHookClass::Lifecycle, None),
         };
-        ClassifiedHook {
+        let mut decoded = DecodedHook::new(super::ClassifiedHook {
             class,
             ask_kind,
             event_name: event_name.to_owned(),
+        });
+        decoded.agent_id = envelope
+            .agent_id
+            .clone()
+            .or_else(|| envelope.session_id.clone());
+        decoded.context_agent_id = envelope.session_id.clone();
+        decoded.worktree_path = envelope.cwd.clone();
+        decoded.questions = match &envelope.event {
+            CanonicalEvent::AwaitingInput { question, .. } => question
+                .as_deref()
+                .map(str::trim)
+                .filter(|question| !question.is_empty())
+                .map(|question| {
+                    vec![AskQuestion {
+                        question: question.to_owned(),
+                        options: Vec::new(),
+                        multi_select: false,
+                        has_option_previews: false,
+                    }]
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        decoded.ask_detail = decoded
+            .questions
+            .first()
+            .map(|question| question.question.clone());
+        if let CanonicalEvent::TurnEnd {
+            errored: true,
+            error_message,
+            ..
+        } = &envelope.event
+        {
+            decoded.turn_error = Some(super::AgentTurnError {
+                at: Timestamp::now(),
+                label: error_message.clone(),
+                ..super::AgentTurnError::default()
+            });
         }
+        decoded.final_message = match &envelope.event {
+            CanonicalEvent::TurnEnd {
+                last_assistant_message,
+                ..
+            } => last_assistant_message.clone(),
+            _ => None,
+        };
+        if matches!(envelope.event, CanonicalEvent::Context) {
+            decoded.observed_context = normalize_context(self.descriptor.kind, payload, &envelope);
+        }
+        let signal = match &envelope.event {
+            CanonicalEvent::SessionStart => Some(LifecycleSignal::Registered),
+            CanonicalEvent::TurnStart { .. } => Some(LifecycleSignal::TurnStarted),
+            CanonicalEvent::TurnEnd { errored, .. } => Some(LifecycleSignal::TurnEnded {
+                errored: *errored,
+                parked_on_background: false,
+            }),
+            CanonicalEvent::ToolUse {
+                tool_name,
+                is_error,
+            } => {
+                let mutates = !is_error
+                    && tool_name
+                        .as_deref()
+                        .is_some_and(|name| self.descriptor.tools.mutating.contains(&name));
+                let edits = mutates
+                    && tool_name
+                        .as_deref()
+                        .is_some_and(|name| self.descriptor.tools.editing.contains(&name));
+                Some(LifecycleSignal::ToolUsed {
+                    mutates,
+                    edits,
+                    native_key: None,
+                })
+            }
+            CanonicalEvent::AwaitingInput { ask, .. } => Some(LifecycleSignal::AwaitingInput {
+                kind: *ask,
+                ask_id: None,
+                detail: decoded.ask_detail.clone(),
+                native_key: None,
+            }),
+            CanonicalEvent::CompactionStart => Some(LifecycleSignal::Compacting),
+            CanonicalEvent::CompactionEnd { trigger } => Some(LifecycleSignal::CompactionEnded {
+                auto: trigger.map(|trigger| matches!(trigger, CompactionTrigger::Auto)),
+            }),
+            CanonicalEvent::SubagentStart => Some(LifecycleSignal::SubagentStarted),
+            CanonicalEvent::SubagentEnd { errored } => {
+                Some(LifecycleSignal::SubagentStopped { errored: *errored })
+            }
+            CanonicalEvent::SessionEnd => Some(LifecycleSignal::Ended),
+            CanonicalEvent::Context | CanonicalEvent::Unknown => None,
+        };
+        let Some(signal) = signal else {
+            return Ok(decoded);
+        };
+        let (agent_id, parent_agent_id) = match envelope.event {
+            CanonicalEvent::SubagentStart | CanonicalEvent::SubagentEnd { .. } => {
+                match resolve_subagent_identity(
+                    self.descriptor.kind,
+                    event_name,
+                    envelope.agent_id.as_deref(),
+                    envelope.session_id.as_deref(),
+                    payload,
+                ) {
+                    SubagentIdentity::Resolved {
+                        agent_id,
+                        parent_agent_id,
+                    } => (Some(agent_id), Some(parent_agent_id)),
+                    SubagentIdentity::Quarantined => return Ok(decoded),
+                }
+            }
+            _ => match resolve_root_identity(
+                self.descriptor.kind,
+                event_name,
+                envelope.agent_id.as_deref(),
+                envelope.session_id.as_deref(),
+            ) {
+                RootIdentity::Root { agent_id } => (agent_id, None),
+                RootIdentity::ForeignChild => return Ok(decoded),
+            },
+        };
+        let mut observation =
+            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        observation.parent_agent_id = parent_agent_id;
+        observation.launch.model = envelope.model;
+        observation.launch.effort = envelope.effort;
+        observation.context_pct =
+            payload_context_pct(payload, envelope.context_pct.map(|pct| pct.min(100) as u8));
+        observation.context_window = envelope.context_window;
+        observation.total_tokens = payload_total_tokens(payload, envelope.total_tokens);
+        observation.fresh_input_tokens = envelope.input_tokens;
+        observation.output_tokens = envelope.output_tokens;
+        observation.cache_read_input_tokens = envelope.cache_read_input_tokens;
+        observation.cache_write_input_tokens = envelope.cache_write_input_tokens;
+        observation.transcript_path = envelope.transcript_path;
+        if observation.worktree_path.is_none() {
+            observation.worktree_path = envelope.cwd;
+        }
+        if let CanonicalEvent::TurnStart { prompt } = envelope.event {
+            observation.task = prompt.clone();
+            observation.prompt = prompt;
+        }
+        decoded.worktree_path = observation.worktree_path.clone();
+        decoded.lifecycle = Some(observation);
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -157,156 +312,9 @@ impl AgentAdapter for PluginAdapter {
         samples
     }
 
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        Ok(None)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let envelope = Envelope::parse(event_name, payload)?;
-        let mut turn_error = None;
-        let signal = match &envelope.event {
-            CanonicalEvent::SessionStart => LifecycleSignal::Registered,
-            CanonicalEvent::TurnStart { .. } => LifecycleSignal::TurnStarted,
-            CanonicalEvent::TurnEnd {
-                errored,
-                error_message,
-                ..
-            } => {
-                if *errored {
-                    turn_error = Some(super::AgentTurnError {
-                        at: Timestamp::now(),
-                        label: error_message.clone(),
-                        ..super::AgentTurnError::default()
-                    });
-                }
-                LifecycleSignal::TurnEnded {
-                    errored: *errored,
-                    parked_on_background: false,
-                }
-            }
-            CanonicalEvent::ToolUse {
-                tool_name,
-                is_error,
-            } => {
-                let mutates = !is_error
-                    && tool_name
-                        .as_deref()
-                        .is_some_and(|name| self.descriptor.tools.mutating.contains(&name));
-                let edits = mutates
-                    && tool_name
-                        .as_deref()
-                        .is_some_and(|name| self.descriptor.tools.editing.contains(&name));
-                LifecycleSignal::ToolUsed {
-                    mutates,
-                    edits,
-                    native_key: None,
-                }
-            }
-            CanonicalEvent::AwaitingInput { ask, .. } => LifecycleSignal::AwaitingInput {
-                kind: *ask,
-                ask_id: None,
-                detail: None,
-                native_key: None,
-            },
-            CanonicalEvent::CompactionStart => LifecycleSignal::Compacting,
-            CanonicalEvent::CompactionEnd { trigger } => LifecycleSignal::CompactionEnded {
-                auto: trigger.map(|trigger| matches!(trigger, CompactionTrigger::Auto)),
-            },
-            CanonicalEvent::SubagentStart => LifecycleSignal::SubagentStarted,
-            CanonicalEvent::SubagentEnd { errored } => {
-                LifecycleSignal::SubagentStopped { errored: *errored }
-            }
-            CanonicalEvent::SessionEnd => LifecycleSignal::Ended,
-            CanonicalEvent::Context | CanonicalEvent::Unknown => return None,
-        };
-        let (agent_id, parent_agent_id) = match envelope.event {
-            CanonicalEvent::SubagentStart | CanonicalEvent::SubagentEnd { .. } => {
-                match resolve_subagent_identity(
-                    self.descriptor.kind,
-                    event_name,
-                    envelope.agent_id.as_deref(),
-                    envelope.session_id.as_deref(),
-                    payload,
-                ) {
-                    SubagentIdentity::Resolved {
-                        agent_id,
-                        parent_agent_id,
-                    } => (Some(agent_id), Some(parent_agent_id)),
-                    SubagentIdentity::Quarantined => return None,
-                }
-            }
-            _ => match resolve_root_identity(
-                self.descriptor.kind,
-                event_name,
-                envelope.agent_id.as_deref(),
-                envelope.session_id.as_deref(),
-            ) {
-                RootIdentity::Root { agent_id } => (agent_id, None),
-                RootIdentity::ForeignChild => return None,
-            },
-        };
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.turn_error = turn_error;
-        observation.parent_agent_id = parent_agent_id;
-        observation.launch.model = envelope.model;
-        observation.launch.effort = envelope.effort;
-        observation.context_pct =
-            payload_context_pct(payload, envelope.context_pct.map(|pct| pct.min(100) as u8));
-        observation.context_window = envelope.context_window;
-        observation.total_tokens = payload_total_tokens(payload, envelope.total_tokens);
-        observation.fresh_input_tokens = envelope.input_tokens;
-        observation.output_tokens = envelope.output_tokens;
-        observation.cache_read_input_tokens = envelope.cache_read_input_tokens;
-        observation.cache_write_input_tokens = envelope.cache_write_input_tokens;
-        observation.transcript_path = envelope.transcript_path;
-        if observation.worktree_path.is_none() {
-            observation.worktree_path = envelope.cwd;
-        }
-        if let CanonicalEvent::TurnStart { prompt } = envelope.event {
-            observation.task = prompt.clone();
-            observation.prompt = prompt;
-        }
-        Some(observation)
-    }
-
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
         let envelope = Envelope::parse("context", payload)?;
         normalize_context(source, payload, &envelope)
-    }
-
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        payload: &Value,
-        _observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        let envelope = Envelope::parse(event_name, payload)?;
-        match envelope.event {
-            CanonicalEvent::TurnEnd {
-                last_assistant_message,
-                ..
-            } => last_assistant_message,
-            _ => None,
-        }
-    }
-
-    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        let envelope = Envelope::parse(event_name, payload)?;
-        let CanonicalEvent::AwaitingInput { question, .. } = envelope.event else {
-            return None;
-        };
-        let question = question?.trim().to_owned();
-        (!question.is_empty()).then_some(vec![AskQuestion {
-            question,
-            options: Vec::new(),
-            multi_select: false,
-            has_option_previews: false,
-        }])
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {
@@ -932,7 +940,9 @@ globs = ["history/**/*.jsonl"]
             }
             assert_eq!(
                 adapter
-                    .observe_lifecycle(event, &value)
+                    .decode_hook(event, &value)
+                    .expect("test hook decodes")
+                    .lifecycle
                     .unwrap()
                     .signal
                     .kind(),
@@ -943,7 +953,11 @@ globs = ["history/**/*.jsonl"]
 
         let mut child = payload("subagent_start");
         child["agent_id"] = json!("child");
-        let observed = adapter.observe_lifecycle("subagent_start", &child).unwrap();
+        let observed = adapter
+            .decode_hook("subagent_start", &child)
+            .expect("test hook decodes")
+            .lifecycle
+            .unwrap();
         assert_eq!(observed.signal.kind(), LifecycleSignalKind::SubagentStarted);
         assert_eq!(observed.agent_id.as_deref(), Some("child"));
         assert_eq!(observed.parent_agent_id.as_deref(), Some("root"));
@@ -952,7 +966,9 @@ globs = ["history/**/*.jsonl"]
         child_end["agent_id"] = json!("child");
         assert_eq!(
             adapter
-                .observe_lifecycle("subagent_end", &child_end)
+                .decode_hook("subagent_end", &child_end)
+                .expect("test hook decodes")
+                .lifecycle
                 .unwrap()
                 .signal
                 .kind(),
@@ -971,29 +987,43 @@ globs = ["history/**/*.jsonl"]
         let adapter = adapter();
         let mut ask = payload("awaiting_input");
         ask["ask"] = json!("permission");
+        let decoded = adapter
+            .decode_hook("awaiting_input", &ask)
+            .expect("test hook decodes");
+        assert_eq!(decoded.class, AgentHookClass::AwaitingUser);
+        assert_eq!(decoded.ask_kind, Some(AskKind::Permission));
+        assert_eq!(decoded.event_name, "awaiting_input");
         assert_eq!(
-            adapter.classify_hook("awaiting_input", &ask),
-            ClassifiedHook {
-                class: AgentHookClass::AwaitingUser,
-                ask_kind: Some(AskKind::Permission),
-                event_name: "awaiting_input".into(),
-            }
-        );
-        assert_eq!(
-            adapter.classify_hook("future", &payload("future")).class,
+            adapter
+                .decode_hook("future", &payload("future"))
+                .expect("test hook decodes")
+                .class,
             AgentHookClass::Unknown
         );
         assert_eq!(
             adapter
-                .classify_hook(
+                .decode_hook(
                     "turn_end",
                     &json!({ "protocol": 2, "hook_event_name": "turn_end" })
                 )
+                .expect("test hook decodes")
                 .class,
             AgentHookClass::Unknown
         );
-        assert!(adapter.observe_lifecycle("turn_end", &json!({})).is_none());
-        assert_eq!(adapter.render_neutral("awaiting_input").unwrap(), None);
+        assert!(
+            adapter
+                .decode_hook("turn_end", &json!({}))
+                .expect("test hook decodes")
+                .lifecycle
+                .is_none()
+        );
+        assert_eq!(
+            adapter
+                .decode_hook("awaiting_input", &Value::Null)
+                .expect("test hook decodes")
+                .neutral,
+            None
+        );
     }
 
     #[test]
@@ -1001,12 +1031,17 @@ globs = ["history/**/*.jsonl"]
         let adapter = minimal_adapter();
         let turn = payload("turn_start");
         assert_eq!(
-            adapter.classify_hook("turn_start", &turn).class,
+            adapter
+                .decode_hook("turn_start", &turn)
+                .expect("test hook decodes")
+                .class,
             AgentHookClass::Lifecycle
         );
         assert_eq!(
             adapter
-                .observe_lifecycle("turn_start", &turn)
+                .decode_hook("turn_start", &turn)
+                .expect("test hook decodes")
+                .lifecycle
                 .unwrap()
                 .signal
                 .kind(),

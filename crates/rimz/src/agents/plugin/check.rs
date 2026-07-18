@@ -290,7 +290,9 @@ fn replay(adapter: &PluginAdapter, path: &Path) -> Result<ReplayCheckReport, Str
         };
         let warning = (!adapter.emits(event_name))
             .then(|| format!("event `{event_name}` is absent from manifest emits"));
-        let _classification = adapter.classify_hook(event_name, &payload);
+        let decoded = adapter
+            .decode_hook(event_name, &payload)
+            .map_err(|error| error.to_string())?;
 
         if matches!(envelope.event, CanonicalEvent::Context) {
             let context_agent_id = match resolve_root_identity(
@@ -351,7 +353,7 @@ fn replay(adapter: &PluginAdapter, path: &Path) -> Result<ReplayCheckReport, Str
             continue;
         }
 
-        let Some(observation) = adapter.observe_lifecycle(event_name, &payload) else {
+        let Some(observation) = decoded.lifecycle else {
             rejected += 1;
             rows.push(rejected_row(
                 line_number,

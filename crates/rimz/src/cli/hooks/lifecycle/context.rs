@@ -11,13 +11,13 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     } = ctx;
     let LifecycleEventContext {
         event_name,
+        decoded,
         payload,
         agent_id,
         parent_agent_id,
         model_hint,
         transcript_path,
         turn_ended,
-        observed_turn_error,
     } = context;
     // Remove the session's statusline context sidecar so a retained ended row
     // cannot rejoin stale enrichment.
@@ -54,18 +54,18 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     if parent_agent_id.is_some() {
         return;
     }
-    if let Some(context_agent_id) = payload_context_agent_id(payload) {
+    if let Some(context_agent_id) = decoded.context_agent_id.as_deref() {
         merge_agent_context_sidecars(ContextSidecarInput {
             workspace,
             store,
             agent,
             event_name,
+            decoded,
             payload,
             context_agent_id,
             model_hint,
             transcript_path,
             turn_ended,
-            observed_turn_error,
         });
     }
     // An adapter can request a detached `rimz` helper after a lifecycle event.
@@ -75,7 +75,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         agent_id,
         workspace_id: workspace.workspace_id.as_str(),
         model_hint,
-        server_url: payload.get("server_url").and_then(Value::as_str),
+        server_url: decoded.server_url.as_deref(),
     };
     if let Some(spawn) =
         agent.context_refresh_spawn(rimz::agents::RefreshTrigger::Hook(event_name), &refresh_ctx)
@@ -90,24 +90,15 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         store,
         agent,
         event_name,
+        decoded,
         payload,
         context_agent_id,
         model_hint,
         transcript_path,
         turn_ended,
-        observed_turn_error,
     } = input;
     let mut turn_error_updated = false;
-    if let Some(marker) = observed_turn_error {
-        turn_error_updated |= merge_turn_error_marker_and_transcript(
-            workspace,
-            store,
-            agent,
-            event_name,
-            context_agent_id,
-            marker,
-        );
-    } else if let Some(marker) = agent.observe_turn_error_from_hook(event_name, payload) {
+    if let Some(marker) = decoded.turn_error.clone() {
         turn_error_updated |= merge_turn_error_marker_and_transcript(
             workspace,
             store,
@@ -132,9 +123,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
     }
 
-    if payload_carries_observed_context(payload)
-        && let Some(context) = agent.observe_context(agent.descriptor().kind, payload)
-    {
+    if let Some(context) = decoded.observed_context.clone() {
         let kind = agent.descriptor().kind;
         match rimz::store::agent_context::merge_observed(
             store.runtime_paths(),
@@ -338,24 +327,4 @@ pub(super) fn prior_total_cost(
     prior
         .and_then(|record| record.context.cost.as_ref())
         .and_then(|cost| cost.total_cost_usd)
-}
-
-pub(super) const OBSERVED_CONTEXT_KEYS: &[&str] = &[
-    "model",
-    "effort",
-    "rate_limits",
-    "total_cost_usd",
-    "context_window",
-    "total_tokens",
-    "context_pct",
-];
-
-pub(super) fn payload_carries_observed_context(payload: &Value) -> bool {
-    payload
-        .get("hook_event_name")
-        .and_then(Value::as_str)
-        .is_some_and(|event| event == "context")
-        || OBSERVED_CONTEXT_KEYS
-            .iter()
-            .any(|key| payload.get(*key).is_some())
 }

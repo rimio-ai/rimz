@@ -69,7 +69,7 @@ use serde_json::Value;
 use crate::harness::run::PermissionMode;
 use crate::mux::NamedKey;
 use crate::pane::RuntimeOwnerKind;
-use crate::transcript::{AskAnswer, AskOption, AskQuestion};
+use crate::transcript::{AskOption, AskQuestion};
 
 pub(crate) use account::LongestWindowSignal;
 pub(crate) use account::WindowSurplus;
@@ -94,6 +94,7 @@ pub use descriptor::{
     ToolClassification, program_names_kind,
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
+pub use hook_types::DecodedHook;
 pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };
@@ -849,7 +850,8 @@ pub trait AgentAdapter: Send + Sync {
         (None, None)
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook;
+    /// Decode one native hook payload into every normalized hook output.
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook>;
 
     /// Test-only native payload corpus for registry-wide adapter conformance.
     /// Keeping it on the adapter avoids a parallel per-agent registry. The
@@ -909,22 +911,6 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Render the neutral no-op — the "agent's own UI is the answer" fallback
     /// path. `None` means the hook should print nothing on this event.
-    fn render_neutral(&self, event_name: &str) -> Result<Option<Value>>;
-
-    /// Observe a lifecycle event payload and translate it into the
-    /// [`LifecycleSignal`](lifecycle::LifecycleSignal) (plus enrichment) the
-    /// store should record. The adapter names the intent; the
-    /// shared [`step`](lifecycle::step) table derives the status. Returns `None`
-    /// when the event carries no transition the adapter recognises (a read-only
-    /// tool, a quarantined subagent with no distinct child id).
-    fn observe_lifecycle(
-        &self,
-        _event_name: &str,
-        _payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        None
-    }
-
     /// Derive provider-store-backed subagent lifecycle observations for parents in this workspace.
     /// Hook ingestion owns rollup deduplication and durable appends; adapters only map local truth.
     fn derive_subagent_observations(&self, _workspace: &Path) -> Vec<AgentLifecycleObservation> {
@@ -991,32 +977,6 @@ pub trait AgentAdapter: Send + Sync {
     /// same evidence inside [`observe_lifecycle`](Self::observe_lifecycle) to set
     /// a lifecycle error bit when the native turn-end payload lacks one.
     fn observe_turn_error(&self, _payload: &Value) -> Option<AgentTurnError> {
-        None
-    }
-
-    /// Detect a turn-error marker directly from a hook payload that carries the
-    /// provider's native failure certificate. This is the precise sibling of
-    /// [`observe_turn_error`](Self::observe_turn_error), which recovers the same
-    /// shape from local transcripts when the hook was absent or installed late.
-    /// The adapter returns the display-only marker; the CLI owns merging it
-    /// into the context sidecar.
-    fn observe_turn_error_from_hook(
-        &self,
-        _event_name: &str,
-        _payload: &Value,
-    ) -> Option<AgentTurnError> {
-        None
-    }
-
-    /// Extract the user-facing final assistant text for a completed supervised
-    /// `rimz agents -p`. The adapter owns native payload and transcript shapes; the
-    /// run store receives only this normalized string.
-    fn last_assistant_message(
-        &self,
-        _event_name: &str,
-        _payload: &Value,
-        _observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
         None
     }
 
@@ -1102,30 +1062,6 @@ pub trait AgentAdapter: Send + Sync {
         )
     }
 
-    /// Structured question/options for a blocking ask hook, parsed from the
-    /// agent-native payload. `None` means the hook carries no native question
-    /// text.
-    fn ask_question_detail(&self, _event_name: &str, _payload: &Value) -> Option<Vec<AskQuestion>> {
-        None
-    }
-
-    /// Short summary carried directly on an open ask. Structured questions
-    /// remain in the transcript; this covers prompts such as permissions that
-    /// intentionally do not create transcript ask entries.
-    fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
-        self.ask_question_detail(event_name, payload)
-            .and_then(|questions| questions.into_iter().next())
-            .map(|question| {
-                question
-                    .question
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned()
-            })
-            .filter(|detail| !detail.is_empty())
-    }
-
     /// Canonical options for an ask whose native event does not carry a
     /// structured question list.
     fn ask_options(&self, _kind: AskKind) -> Option<Vec<AskOption>> {
@@ -1140,21 +1076,6 @@ pub trait AgentAdapter: Send + Sync {
         _answers: &[AskReply],
     ) -> std::result::Result<Vec<AnswerStep>, AnswerPlanErr> {
         Err(AnswerPlanErr::Unsupported(self.descriptor().kind))
-    }
-
-    /// Structured answer choices reported when a native ask completes in the
-    /// agent's own UI. `Some` drives both the transcript answer entry and
-    /// pending native ask expiry; `None` means this event carries no native ask
-    /// answer.
-    fn native_ask_answer(&self, _event_name: &str, _payload: &Value) -> Option<Vec<AskAnswer>> {
-        None
-    }
-
-    /// Extract provider-declared final visible assistant output from a native
-    /// content event. Implementations accept only a provider's dedicated final
-    /// response field, never transcript text, reasoning, or partial deltas.
-    fn observe_assistant_message(&self, _event_name: &str, _payload: &Value) -> Option<String> {
-        None
     }
 
     /// A detached `rimz` helper to spawn after a lifecycle event or producer

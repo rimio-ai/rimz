@@ -333,7 +333,7 @@ impl LocalTokenPatch {
         final_model_id: Option<&str>,
     ) {
         match self {
-            Self::Keep => return,
+            Self::Keep => (),
             Self::PreserveEstablished(mut incoming) => {
                 preserve_established_tokens(prior, &mut incoming);
                 preserve_cached_context_window(

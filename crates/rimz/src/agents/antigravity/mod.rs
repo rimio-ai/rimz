@@ -27,7 +27,7 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, classify_catalog_entry, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, DecodedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LocalSessionObservation, Result, SpawnedSubagent,
     SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
     TranscriptMessage, non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
@@ -341,15 +341,34 @@ impl AgentAdapter for AntigravityAdapter {
         })
     }
 
-    fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        classify_catalog_entry(
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
+        let mut decoded = DecodedHook::new(classify_catalog_entry(
             ANTIGRAVITY_HOOKS
                 .iter()
                 .find(|entry| entry.hook.event == event_name)
                 .map(|entry| &entry.hook),
             event_name,
             None,
-        )
+        ));
+        decoded.neutral = match event_name {
+            "Stop" => Some(serde_json::json!({ "decision": "" })),
+            event if ANTIGRAVITY_EVENT_NAMES.contains(&event) => Some(serde_json::json!({})),
+            _ => None,
+        };
+        decoded.lifecycle =
+            observe_lifecycle_with_prompt_reader(event_name, payload, session::latest_prompt);
+        if let Some(observation) = decoded.lifecycle.as_ref() {
+            decoded.agent_id = observation.agent_id.as_ref().map(ToString::to_string);
+            decoded.context_agent_id = decoded.agent_id.clone();
+            decoded.worktree_path = observation.worktree_path.clone();
+            if event_name == "Stop" {
+                decoded.final_message = observation
+                    .transcript_path
+                    .as_deref()
+                    .and_then(|path| session::last_assistant_message(Path::new(path)));
+            }
+        }
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -363,22 +382,6 @@ impl AgentAdapter for AntigravityAdapter {
             .iter()
             .map(|entry| super::hook_types::classification_sample(&entry.hook))
             .collect()
-    }
-
-    fn render_neutral(&self, event_name: &str) -> Result<Option<Value>> {
-        Ok(match event_name {
-            "Stop" => Some(serde_json::json!({ "decision": "" })),
-            event if ANTIGRAVITY_EVENT_NAMES.contains(&event) => Some(serde_json::json!({})),
-            _ => None,
-        })
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        observe_lifecycle_with_prompt_reader(event_name, payload, session::latest_prompt)
     }
 
     fn correlate_subagent(
@@ -454,18 +457,6 @@ impl AgentAdapter for AntigravityAdapter {
         serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
             .ok()?
             .cost(prices)
-    }
-
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        _payload: &Value,
-        observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        if event_name != "Stop" {
-            return None;
-        }
-        session::last_assistant_message(Path::new(observation.transcript_path.as_deref()?))
     }
 
     fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {

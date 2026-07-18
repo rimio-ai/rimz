@@ -36,21 +36,31 @@ fn hook_payload() -> Value {
 fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
     let payload = hook_payload();
     assert_eq!(
-        AntigravityAdapter.render_neutral("PreInvocation").unwrap(),
+        AntigravityAdapter
+            .decode_hook("PreInvocation", &Value::Null)
+            .expect("test hook decodes")
+            .neutral,
         Some(json!({}))
     );
     assert_eq!(
-        AntigravityAdapter.render_neutral("Stop").unwrap(),
+        AntigravityAdapter
+            .decode_hook("Stop", &Value::Null)
+            .expect("test hook decodes")
+            .neutral,
         Some(json!({"decision": ""}))
     );
     assert_eq!(
         AntigravityAdapter
-            .classify_hook("PreToolUse", &payload)
+            .decode_hook("PreToolUse", &payload)
+            .expect("test hook decodes")
             .class,
         AgentHookClass::Unknown
     );
     assert_eq!(
-        AntigravityAdapter.render_neutral("PreToolUse").unwrap(),
+        AntigravityAdapter
+            .decode_hook("PreToolUse", &Value::Null)
+            .expect("test hook decodes")
+            .neutral,
         None
     );
 }
@@ -67,10 +77,12 @@ fn native_hooks_normalize_lifecycle() {
         parked_on_background,
     };
     let started = AntigravityAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "PreInvocation",
             &with(&common, [("invocationNum", json!(0))]),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(started.signal, LifecycleSignal::TurnStarted);
     assert_eq!(started.agent_id.as_deref(), Some(SESSION_ID));
@@ -132,7 +144,9 @@ fn native_hooks_normalize_lifecycle() {
         ("Stop", json!({"fullyIdle": true}), None),
     ] {
         let signal = AntigravityAdapter
-            .observe_lifecycle(event, &payload)
+            .decode_hook(event, &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .map(|value| value.signal);
         assert_eq!(signal, expected);
     }
@@ -153,12 +167,16 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
         );
         assert!(
             AntigravityAdapter
-                .observe_turn_error_from_hook("Stop", &payload)
+                .decode_hook("Stop", &payload)
+                .expect("test hook decodes")
+                .turn_error
                 .is_none()
         );
         assert_eq!(
             AntigravityAdapter
-                .observe_lifecycle("Stop", &payload)
+                .decode_hook("Stop", &payload)
+                .expect("test hook decodes")
+                .lifecycle
                 .unwrap()
                 .signal,
             LifecycleSignal::TurnEnded {

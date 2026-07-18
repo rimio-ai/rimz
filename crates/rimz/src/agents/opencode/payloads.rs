@@ -8,14 +8,14 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub(crate) struct OpencodeQuestion {
     pub question: Option<String>,
     pub options: Option<Vec<OpencodeQuestionOption>>,
     pub multiple: Option<bool>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub(crate) struct OpencodeQuestionOption {
     pub label: Option<String>,
     pub description: Option<String>,

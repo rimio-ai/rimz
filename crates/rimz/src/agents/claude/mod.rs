@@ -41,10 +41,11 @@ use self::install::{
 #[cfg(test)]
 use self::install::{classify_status_line_change, upsert_rimz_status_line};
 use self::payloads::{
-    ClaudeCommon, ClaudePostCompact, ClaudeSessionStart, ClaudeStop, ClaudeSubagentStart,
-    ClaudeSubagentStop, ClaudeUserPromptSubmit, parse_permission_request, parse_post_compact,
-    parse_post_tool_use, parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure,
-    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
+    ClaudeCommon, ClaudePermissionRequest, ClaudePostCompact, ClaudePostToolUse, ClaudePreToolUse,
+    ClaudeSessionStart, ClaudeStop, ClaudeStopFailure, ClaudeSubagentStart, ClaudeSubagentStop,
+    ClaudeUserPromptSubmit, parse_permission_request, parse_post_compact, parse_post_tool_use,
+    parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start,
+    parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::AskKind;
 use super::RemoteControlStatus;
@@ -63,13 +64,13 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, AgentTurnError,
-    ClassifiedHook, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
+    DecodedHook, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
     SubagentObservation, TranscriptMessage, non_empty_trimmed, optional_payload_string,
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
     stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
-use crate::transcript::{AskAnswer, AskQuestion};
+use crate::transcript::AskQuestion;
 
 /// Everything `const` about Claude Code, in one place. See
 /// [`AgentDescriptor`] for the descriptor-vs-trait split.
@@ -414,32 +415,135 @@ impl AgentAdapter for ClaudeAdapter {
         local_sessions::discover(workspaces)
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
+        let parts = ClaudeLifecycleParts::parse(event_name, payload);
         // Cursor can execute Claude-compatible third-party hook commands with
         // Cursor-shaped payloads. Drop those before they can double-record or
         // be misparsed; `cursor_version` is Cursor's common-input discriminator.
-        if payload.get("cursor_version").is_some() {
-            return ClassifiedHook {
+        let classified = if payload.get("cursor_version").is_some() {
+            super::ClassifiedHook {
                 class: AgentHookClass::Unknown,
                 ask_kind: None,
                 event_name: event_name.to_owned(),
+            }
+        } else {
+            let ask_kind = match event_name {
+                "PermissionRequest" => self
+                    .descriptor()
+                    .blocking_tool_kind(
+                        parts
+                            .permission_request
+                            .as_ref()
+                            .and_then(|request| request.tool_name.as_deref()),
+                    )
+                    .is_none()
+                    .then_some(AskKind::Permission),
+                "PreToolUse" => self.descriptor().blocking_tool_kind(
+                    parts
+                        .pre_tool_use
+                        .as_ref()
+                        .and_then(|request| request.tool_name.as_deref()),
+                ),
+                _ => None,
             };
-        }
-        let ask_kind = match event_name {
-            "PermissionRequest" => self
-                .descriptor()
-                .blocking_tool_kind(parse_permission_request(payload).tool_name.as_deref())
-                .is_none()
-                .then_some(AskKind::Permission),
-            // ExitPlanMode / AskUserQuestion self-classify off the tool name on
-            // the broad PreToolUse hook; every other tool call is plain lifecycle.
-            "PreToolUse" => self
-                .descriptor()
-                .blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()),
-            _ => None,
+            classify_catalog_hook(CLAUDE_HOOKS, event_name, ask_kind)
         };
+        let mut decoded = DecodedHook::new(classified);
+        decoded.agent_id = optional_payload_string(payload, &["agent_id", "session_id"]);
+        decoded.context_agent_id = optional_payload_string(payload, &["session_id", "agent_id"]);
+        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
+        decoded.questions = parts
+            .pre_tool_use
+            .as_ref()
+            .and_then(|parsed| {
+                ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
+            })
+            .unwrap_or_default();
+        decoded.ask_detail = if event_name == "PermissionRequest" {
+            ask::permission_detail(payload)
+        } else {
+            decoded
+                .questions
+                .first()
+                .and_then(|question| question.question.lines().next())
+                .map(ToOwned::to_owned)
+                .filter(|detail| !detail.is_empty())
+        };
+        decoded.native_answers = parts.post_tool_use.as_ref().and_then(|parsed| {
+            ask::answer_detail(parsed.tool_name.as_deref()?, parsed.tool_response.as_ref()?)
+        });
+        decoded.turn_error = parts.stop_failure.as_ref().and_then(|parsed| {
+            let error = parsed.error.as_deref()?.trim();
+            if error.is_empty() {
+                return None;
+            }
+            let label = parsed
+                .last_assistant_message
+                .as_deref()
+                .and_then(statusline::cap_turn_error_label);
+            let class = match error {
+                "rate_limit" => TurnErrorClass::PausedRateLimit,
+                "overloaded" => TurnErrorClass::PausedOverloaded,
+                _ => TurnErrorClass::classify_label(label.as_deref()),
+            };
+            Some(AgentTurnError {
+                class,
+                at: Timestamp::now(),
+                label,
+            })
+        });
 
-        classify_catalog_hook(CLAUDE_HOOKS, event_name, ask_kind)
+        let signal = map_claude_lifecycle_signal(self.descriptor(), event_name, payload, &parts);
+        if let Some(signal) = signal
+            && let Some((agent_id, parent_agent_id)) = resolve_claude_observation_identity(
+                self.descriptor().kind,
+                event_name,
+                payload,
+                &parts,
+            )
+        {
+            let mut observation =
+                build_claude_observation(payload, &parts, signal, agent_id, parent_agent_id);
+            if observation.parent_agent_id.is_none()
+                && matches!(observation.signal, LifecycleSignal::Registered)
+                && parts.session_start.as_ref().is_some_and(|start| {
+                    matches!(start.source, SessionSource::Startup | SessionSource::Clear)
+                })
+            {
+                observation.origin = Some(SessionOrigin::Fresh);
+            }
+            decoded.agent_id = observation.agent_id.as_ref().map(ToString::to_string);
+            decoded.worktree_path = observation.worktree_path.clone();
+            decoded.lifecycle = Some(observation);
+        }
+        decoded.final_message =
+            optional_payload_string(payload, &["last_assistant_message", "assistant_message"])
+                .as_deref()
+                .and_then(non_empty_trimmed)
+                .or_else(|| {
+                    let path = decoded
+                        .lifecycle
+                        .as_ref()
+                        .and_then(|observation| observation.transcript_path.as_deref())
+                        .or_else(|| payload.get("transcript_path").and_then(Value::as_str))?;
+                    let tail = read_transcript_tail(Path::new(path))?;
+                    statusline::last_assistant_message(&tail)
+                });
+        if [
+            "model",
+            "effort",
+            "rate_limits",
+            "total_cost_usd",
+            "context_window",
+            "total_tokens",
+            "context_pct",
+        ]
+        .into_iter()
+        .any(|key| payload.get(key).is_some())
+        {
+            decoded.observed_context = self.observe_context(self.descriptor().kind, payload);
+        }
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -492,37 +596,6 @@ impl AgentAdapter for ClaudeAdapter {
         })
     }
 
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // Claude treats stdout as a control/context surface. The safe no-op is
-        // exit 0 with no stdout.
-        Ok(None)
-    }
-
-    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        if event_name != "PreToolUse" {
-            return None;
-        }
-        let parsed = parse_pre_tool_use(payload);
-        ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
-    }
-
-    fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
-        if event_name == "PermissionRequest" {
-            return ask::permission_detail(payload);
-        }
-        self.ask_question_detail(event_name, payload)
-            .and_then(|questions| questions.into_iter().next())
-            .map(|question| {
-                question
-                    .question
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned()
-            })
-            .filter(|detail| !detail.is_empty())
-    }
-
     fn ask_options(&self, kind: AskKind) -> Option<Vec<crate::transcript::AskOption>> {
         match kind {
             AskKind::Permission => Some(ask::permission_options()),
@@ -538,40 +611,6 @@ impl AgentAdapter for ClaudeAdapter {
         answers: &[super::AskReply],
     ) -> std::result::Result<Vec<super::AnswerStep>, super::AnswerPlanErr> {
         ask::answer_plan(kind, questions, answers)
-    }
-
-    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
-        if event_name != "PostToolUse" {
-            return None;
-        }
-        let parsed = parse_post_tool_use(payload);
-        ask::answer_detail(parsed.tool_name.as_deref()?, parsed.tool_response.as_ref()?)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let parts = ClaudeLifecycleParts::parse(event_name, payload);
-        let signal = map_claude_lifecycle_signal(self.descriptor(), event_name, payload, &parts)?;
-        let (agent_id, parent_agent_id) = resolve_claude_observation_identity(
-            self.descriptor().kind,
-            event_name,
-            payload,
-            &parts,
-        )?;
-        let mut observation =
-            build_claude_observation(payload, &parts, signal, agent_id, parent_agent_id);
-        if observation.parent_agent_id.is_none()
-            && matches!(observation.signal, LifecycleSignal::Registered)
-            && parts.session_start.as_ref().is_some_and(|start| {
-                matches!(start.source, SessionSource::Startup | SessionSource::Clear)
-            })
-        {
-            observation.origin = Some(SessionOrigin::Fresh);
-        }
-        Some(observation)
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
@@ -592,54 +631,6 @@ impl AgentAdapter for ClaudeAdapter {
         let path = optional_payload_string(payload, &["transcript_path"])?;
         let tail = read_transcript_tail(Path::new(&path))?;
         statusline::detect_turn_error(&tail)
-    }
-
-    fn observe_turn_error_from_hook(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentTurnError> {
-        if event_name != "StopFailure" {
-            return None;
-        }
-        let parsed = parse_stop_failure(payload);
-        let error = parsed.error.as_deref()?.trim();
-        if error.is_empty() {
-            return None;
-        }
-        let label = parsed
-            .last_assistant_message
-            .as_deref()
-            .and_then(statusline::cap_turn_error_label);
-        let class = match error {
-            "rate_limit" => TurnErrorClass::PausedRateLimit,
-            "overloaded" => TurnErrorClass::PausedOverloaded,
-            _ => TurnErrorClass::classify_label(label.as_deref()),
-        };
-        Some(AgentTurnError {
-            class,
-            at: Timestamp::now(),
-            label,
-        })
-    }
-
-    fn last_assistant_message(
-        &self,
-        _event_name: &str,
-        payload: &Value,
-        observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        optional_payload_string(payload, &["last_assistant_message", "assistant_message"])
-            .as_deref()
-            .and_then(non_empty_trimmed)
-            .or_else(|| {
-                let path = observation
-                    .transcript_path
-                    .as_deref()
-                    .or_else(|| payload.get("transcript_path").and_then(Value::as_str))?;
-                let tail = read_transcript_tail(Path::new(path))?;
-                statusline::last_assistant_message(&tail)
-            })
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
@@ -752,6 +743,10 @@ struct ClaudeLifecycleParts {
     subagent_start: Option<ClaudeSubagentStart>,
     subagent_stop: Option<ClaudeSubagentStop>,
     stop: Option<ClaudeStop>,
+    stop_failure: Option<ClaudeStopFailure>,
+    pre_tool_use: Option<ClaudePreToolUse>,
+    post_tool_use: Option<ClaudePostToolUse>,
+    permission_request: Option<ClaudePermissionRequest>,
     post_compact: Option<ClaudePostCompact>,
     pending_background: Vec<String>,
 }
@@ -764,6 +759,11 @@ impl ClaudeLifecycleParts {
         let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
         let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
         let stop = (event_name == "Stop").then(|| parse_stop(payload));
+        let stop_failure = (event_name == "StopFailure").then(|| parse_stop_failure(payload));
+        let pre_tool_use = (event_name == "PreToolUse").then(|| parse_pre_tool_use(payload));
+        let post_tool_use = (event_name == "PostToolUse").then(|| parse_post_tool_use(payload));
+        let permission_request =
+            (event_name == "PermissionRequest").then(|| parse_permission_request(payload));
         let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
         let pending_background = stop
             .as_ref()
@@ -775,6 +775,10 @@ impl ClaudeLifecycleParts {
             subagent_start,
             subagent_stop,
             stop,
+            stop_failure,
+            pre_tool_use,
+            post_tool_use,
+            permission_request,
             post_compact,
             pending_background,
         }
@@ -812,7 +816,12 @@ fn map_claude_lifecycle_signal(
             parked_on_background: !parts.pending_background.is_empty(),
         }),
         "PermissionRequest" => descriptor
-            .blocking_tool_kind(parse_permission_request(payload).tool_name.as_deref())
+            .blocking_tool_kind(
+                parts
+                    .permission_request
+                    .as_ref()
+                    .and_then(|request| request.tool_name.as_deref()),
+            )
             .is_none()
             .then_some(LifecycleSignal::AwaitingInput {
                 kind: AskKind::Permission,
@@ -826,7 +835,12 @@ fn map_claude_lifecycle_signal(
             native_key: None,
         }),
         "PreToolUse" => {
-            match descriptor.blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()) {
+            match descriptor.blocking_tool_kind(
+                parts
+                    .pre_tool_use
+                    .as_ref()
+                    .and_then(|request| request.tool_name.as_deref()),
+            ) {
                 Some(kind) => Some(LifecycleSignal::AwaitingInput {
                     kind,
                     ask_id: None,

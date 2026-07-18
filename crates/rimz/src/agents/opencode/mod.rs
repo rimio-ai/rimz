@@ -39,9 +39,9 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, LifecycleRefreshCtx,
-    RefreshSpawn, RefreshTrigger, Result, SubagentIdentity, resolve_subagent_identity,
-    sanitize_user_prompt,
+    AgentAdapter, AgentErr, AgentLifecycleObservation, DecodedHook, LifecycleRefreshCtx,
+    RefreshSpawn, RefreshTrigger, Result, SubagentIdentity, optional_payload_string,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -301,16 +301,208 @@ impl AgentAdapter for OpencodeAdapter {
         &OPENCODE_DESCRIPTOR
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
+        let parsed = payloads::parse_payload(payload);
         let ask_kind = match event_name {
             "permission_ask" => Some(AskKind::Permission),
             "question_ask" => Some(AskKind::Question),
-            "session_idle" if payloads::parse_payload(payload).plan_proposed == Some(true) => {
-                Some(AskKind::PlanApproval)
-            }
+            "session_idle" if parsed.plan_proposed == Some(true) => Some(AskKind::PlanApproval),
             _ => None,
         };
-        classify_catalog_hook(OPENCODE_HOOKS, event_name, ask_kind)
+        let mut decoded =
+            DecodedHook::new(classify_catalog_hook(OPENCODE_HOOKS, event_name, ask_kind));
+        decoded.agent_id = parsed.session_id.clone();
+        decoded.context_agent_id = parsed.session_id.clone();
+        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
+        decoded.questions = if event_name == "question_ask" {
+            parsed
+                .questions
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|question| {
+                    let text = question.question?.trim().to_owned();
+                    if text.is_empty() {
+                        return None;
+                    }
+                    let options = question
+                        .options
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|option| {
+                            let label = option.label?.trim().to_owned();
+                            (!label.is_empty()).then_some(AskOption {
+                                label,
+                                description: option
+                                    .description
+                                    .filter(|value| !value.trim().is_empty()),
+                                caution: None,
+                            })
+                        })
+                        .collect();
+                    Some(AskQuestion {
+                        question: text,
+                        options,
+                        multi_select: question.multiple.unwrap_or(false),
+                        has_option_previews: false,
+                    })
+                })
+                .take(4)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        decoded.ask_detail = decoded
+            .questions
+            .first()
+            .and_then(|question| question.question.lines().next())
+            .map(ToOwned::to_owned)
+            .filter(|detail| !detail.is_empty());
+        decoded.native_answers = match event_name {
+            "permission_replied" => parsed.reply.as_deref().and_then(|reply| {
+                let reply = reply.trim().to_owned();
+                (!reply.is_empty()).then_some(vec![AskAnswer {
+                    question: None,
+                    chosen: vec![reply],
+                    note: None,
+                }])
+            }),
+            "question_replied" => {
+                let answers: Vec<_> = parsed
+                    .answers
+                    .as_ref()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|choices| {
+                        let chosen: Vec<_> = choices
+                            .iter()
+                            .map(|choice| choice.trim().to_owned())
+                            .filter(|choice| !choice.is_empty())
+                            .collect();
+                        (!chosen.is_empty()).then_some(AskAnswer {
+                            question: None,
+                            chosen,
+                            note: None,
+                        })
+                    })
+                    .collect();
+                (!answers.is_empty()).then_some(answers)
+            }
+            "question_rejected" => Some(vec![AskAnswer {
+                question: None,
+                chosen: vec!["(rejected)".to_owned()],
+                note: None,
+            }]),
+            _ => None,
+        };
+        let signal = match event_name {
+            "session_created" => Some(LifecycleSignal::Registered),
+            "permission_ask" => Some(LifecycleSignal::AwaitingInput {
+                kind: AskKind::Permission,
+                ask_id: None,
+                detail: parsed.title.clone(),
+                native_key: None,
+            }),
+            "question_ask" => Some(LifecycleSignal::AwaitingInput {
+                kind: AskKind::Question,
+                ask_id: None,
+                detail: parsed.title.clone(),
+                native_key: None,
+            }),
+            "chat_message" => Some(LifecycleSignal::TurnStarted),
+            "session_idle" if parsed.plan_proposed == Some(true) => {
+                Some(LifecycleSignal::AwaitingInput {
+                    kind: AskKind::PlanApproval,
+                    ask_id: None,
+                    detail: None,
+                    native_key: None,
+                })
+            }
+            "session_idle" => Some(LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            }),
+            "session_error" => Some(LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            }),
+            "permission_replied" | "question_replied" | "question_rejected" => {
+                Some(LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                    native_key: None,
+                })
+            }
+            "tool_after" if self.descriptor().tool_mutates(payload) => {
+                Some(LifecycleSignal::ToolUsed {
+                    mutates: true,
+                    edits: self.descriptor().tool_edits_files(payload),
+                    native_key: None,
+                })
+            }
+            "session_compacting" => Some(LifecycleSignal::Compacting),
+            "session_compacted" => Some(LifecycleSignal::CompactionEnded { auto: None }),
+            "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
+            "SubagentStop" => Some(LifecycleSignal::SubagentStopped {
+                errored: payloads::errored(&parsed),
+            }),
+            "session_ended" => Some(LifecycleSignal::Ended),
+            _ => None,
+        };
+        let Some(signal) = signal else {
+            return Ok(decoded);
+        };
+        let (agent_id, parent_agent_id) = if matches!(event_name, "SubagentStart" | "SubagentStop")
+        {
+            match resolve_subagent_identity(
+                self.descriptor().kind,
+                event_name,
+                parsed.session_id.as_deref(),
+                parsed.parent_session_id.as_deref(),
+                payload,
+            ) {
+                SubagentIdentity::Resolved {
+                    agent_id,
+                    parent_agent_id,
+                } => (Some(agent_id), Some(parent_agent_id)),
+                SubagentIdentity::Quarantined => return Ok(decoded),
+            }
+        } else {
+            (parsed.session_id.as_deref().map(AgentSessionId::from), None)
+        };
+        let mut observation =
+            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        observation.transcript_path = optional_payload_string(payload, &["transcript_path"]);
+        observation.parent_agent_id = parent_agent_id;
+        observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
+        observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+        observation.launch.model = parsed.model.clone();
+        observation.launch.effort = parsed.effort;
+        observation.context_window = parsed
+            .context_window
+            .or_else(|| context_window_for(parsed.model.as_deref()));
+        observation.total_tokens = parsed.total_tokens;
+        observation.cache_read_input_tokens = parsed.cache_read_input_tokens;
+        observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
+        observation.fresh_input_tokens = parsed.input_tokens;
+        observation.output_tokens = parsed.output_tokens;
+        decoded.final_message = if matches!(event_name, "session_idle" | "session_error") {
+            observation.agent_id.as_ref().and_then(|session_id| {
+                let path = observation
+                    .transcript_path
+                    .as_deref()
+                    .map(Path::new)
+                    .filter(|path| path.is_file())
+                    .map(Path::to_path_buf)
+                    .or_else(|| database::files().into_iter().next())?;
+                transcript::last_assistant_message(&path, session_id)
+            })
+        } else {
+            None
+        };
+        decoded.worktree_path = observation.worktree_path.clone();
+        decoded.lifecycle = Some(observation);
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -341,204 +533,6 @@ impl AgentAdapter for OpencodeAdapter {
                 data: r#"{"cost":0.42,"modelID":"gpt-5","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
             },
         })
-    }
-
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        Ok(None)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let parsed = payloads::parse_payload(payload);
-        let signal = match event_name {
-            "session_created" => LifecycleSignal::Registered,
-            "permission_ask" => LifecycleSignal::AwaitingInput {
-                kind: AskKind::Permission,
-                ask_id: None,
-                detail: parsed.title.clone(),
-                native_key: None,
-            },
-            "question_ask" => LifecycleSignal::AwaitingInput {
-                kind: AskKind::Question,
-                ask_id: None,
-                detail: parsed.title.clone(),
-                native_key: None,
-            },
-            "chat_message" => LifecycleSignal::TurnStarted,
-            "session_idle" if parsed.plan_proposed == Some(true) => {
-                LifecycleSignal::AwaitingInput {
-                    kind: AskKind::PlanApproval,
-                    ask_id: None,
-                    detail: None,
-                    native_key: None,
-                }
-            }
-            "session_idle" => LifecycleSignal::TurnEnded {
-                errored: false,
-                parked_on_background: false,
-            },
-            "session_error" => LifecycleSignal::TurnEnded {
-                errored: true,
-                parked_on_background: false,
-            },
-            "permission_replied" | "question_replied" | "question_rejected" => {
-                LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
-                    native_key: None,
-                }
-            }
-            "tool_after" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: self.descriptor().tool_edits_files(payload),
-                native_key: None,
-            },
-            "session_compacting" => LifecycleSignal::Compacting,
-            "session_compacted" => LifecycleSignal::CompactionEnded { auto: None },
-            "SubagentStart" => LifecycleSignal::SubagentStarted,
-            "SubagentStop" => LifecycleSignal::SubagentStopped {
-                errored: payloads::errored(&parsed),
-            },
-            "session_ended" => LifecycleSignal::Ended,
-            _ => return None,
-        };
-
-        let (agent_id, parent_agent_id) = if matches!(event_name, "SubagentStart" | "SubagentStop")
-        {
-            match resolve_subagent_identity(
-                self.descriptor().kind,
-                event_name,
-                parsed.session_id.as_deref(),
-                parsed.parent_session_id.as_deref(),
-                payload,
-            ) {
-                SubagentIdentity::Resolved {
-                    agent_id,
-                    parent_agent_id,
-                } => (Some(agent_id), Some(parent_agent_id)),
-                SubagentIdentity::Quarantined => return None,
-            }
-        } else {
-            (parsed.session_id.as_deref().map(AgentSessionId::from), None)
-        };
-
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.parent_agent_id = parent_agent_id;
-        observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.launch.model = parsed.model.clone();
-        observation.launch.effort = parsed.effort;
-        observation.context_window = parsed
-            .context_window
-            .or_else(|| context_window_for(parsed.model.as_deref()));
-        observation.total_tokens = parsed.total_tokens;
-        observation.cache_read_input_tokens = parsed.cache_read_input_tokens;
-        observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
-        observation.fresh_input_tokens = parsed.input_tokens;
-        observation.output_tokens = parsed.output_tokens;
-        Some(observation)
-    }
-
-    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        if event_name != "question_ask" {
-            return None;
-        }
-        let questions = payloads::parse_payload(payload).questions?;
-        let questions: Vec<_> = questions
-            .into_iter()
-            .filter_map(|question| {
-                let text = question.question?.trim().to_owned();
-                if text.is_empty() {
-                    return None;
-                }
-                let options = question
-                    .options
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|option| {
-                        let label = option.label?.trim().to_owned();
-                        (!label.is_empty()).then_some(AskOption {
-                            label,
-                            description: option
-                                .description
-                                .filter(|value| !value.trim().is_empty()),
-                            caution: None,
-                        })
-                    })
-                    .collect();
-                Some(AskQuestion {
-                    question: text,
-                    options,
-                    multi_select: question.multiple.unwrap_or(false),
-                    has_option_previews: false,
-                })
-            })
-            .take(4)
-            .collect();
-        (!questions.is_empty()).then_some(questions)
-    }
-
-    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
-        let parsed = payloads::parse_payload(payload);
-        match event_name {
-            "permission_replied" => {
-                let reply = parsed.reply?.trim().to_owned();
-                (!reply.is_empty()).then_some(vec![AskAnswer {
-                    question: None,
-                    chosen: vec![reply],
-                    note: None,
-                }])
-            }
-            "question_replied" => {
-                let answers: Vec<_> = parsed
-                    .answers?
-                    .into_iter()
-                    .filter_map(|choices| {
-                        let chosen: Vec<_> = choices
-                            .into_iter()
-                            .map(|choice| choice.trim().to_owned())
-                            .filter(|choice| !choice.is_empty())
-                            .collect();
-                        (!chosen.is_empty()).then_some(AskAnswer {
-                            question: None,
-                            chosen,
-                            note: None,
-                        })
-                    })
-                    .collect();
-                (!answers.is_empty()).then_some(answers)
-            }
-            "question_rejected" => Some(vec![AskAnswer {
-                question: None,
-                chosen: vec!["(rejected)".to_owned()],
-                note: None,
-            }]),
-            _ => None,
-        }
-    }
-
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        _payload: &Value,
-        observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        if !matches!(event_name, "session_idle" | "session_error") {
-            return None;
-        }
-        let session_id = observation.agent_id.as_ref()?;
-        let path = observation
-            .transcript_path
-            .as_deref()
-            .map(Path::new)
-            .filter(|path| path.is_file())
-            .map(Path::to_path_buf)
-            .or_else(|| database::files().into_iter().next())?;
-        transcript::last_assistant_message(&path, session_id)
     }
 
     fn context_refresh_spawn(

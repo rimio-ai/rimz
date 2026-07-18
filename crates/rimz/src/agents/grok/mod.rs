@@ -21,9 +21,10 @@ use super::hook_types::{HookRecord, hook_record};
 use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
     AgentAdapter, AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError,
-    ClassifiedHook, FieldPatch, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
-    LocalTokenPatch, ManagedSource, RefreshTrigger, Result, SessionOrigin, TranscriptMessage,
-    TranscriptPage, TranscriptPosition, TurnErrorClass, non_empty_trimmed, sanitize_user_prompt,
+    ClassifiedHook, DecodedHook, FieldPatch, LocalContextPatch, LocalContextRefresh,
+    LocalContextRefreshCtx, LocalTokenPatch, ManagedSource, RefreshTrigger, Result, SessionOrigin,
+    TranscriptMessage, TranscriptPage, TranscriptPosition, TurnErrorClass, non_empty_trimmed,
+    sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -285,7 +286,7 @@ impl AgentAdapter for GrokAdapter {
         &GROK_DESCRIPTOR
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let canonical = canonical_event_name(event_name);
         let parsed = payloads::parse(payload);
         let ask_kind = (canonical == "Notification")
@@ -299,51 +300,38 @@ impl AgentAdapter for GrokAdapter {
         } else {
             super::AgentHookClass::Unknown
         };
-        ClassifiedHook {
+        let mut decoded = DecodedHook::new(ClassifiedHook {
             class,
             ask_kind,
-            event_name: canonical,
+            event_name: canonical.clone(),
+        });
+        decoded.agent_id = parsed.session_id.clone();
+        decoded.context_agent_id = parsed.session_id.clone();
+        decoded.worktree_path = parsed.workspace_root.clone().or_else(|| parsed.cwd.clone());
+        decoded.turn_error = match canonical.as_str() {
+            "StopFailure" | "PostToolUseFailure" => parsed.error.as_deref(),
+            "Notification" if parsed.notification_type.as_deref() == Some("agent_error") => {
+                parsed.error.as_deref().or(parsed.message.as_deref())
+            }
+            _ => None,
         }
-    }
-
-    #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        GROK_HOOKS.iter().map(|hook| hook.event).collect()
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        tests::classification_corpus()
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "s1",
-            file_name: "updates.jsonl",
-            body: super::SpendFixtureBody::Jsonl(
-                r#"{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"},"_meta":{"promptIndex":0}}}}
-{"timestamp":1700000001,"method":"_x.ai/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn","usage":{"inputTokens":100,"cachedReadTokens":20,"outputTokens":10,"costUsdTicks":1000000000}}}}"#,
-            ),
-        })
-    }
-
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        Ok(None)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let parsed = payloads::parse(payload);
-        let signal = lifecycle_signal(self.descriptor(), event_name, &parsed)?;
-        let is_subagent = matches!(event_name, "SubagentStart" | "SubagentStop");
+        .map(|raw_label| {
+            let label = non_empty_trimmed(raw_label)
+                .map(|label| label.chars().take(160).collect::<String>());
+            AgentTurnError {
+                class: TurnErrorClass::classify_label(label.as_deref()),
+                at: Timestamp::now(),
+                label,
+            }
+        });
+        let Some(signal) = lifecycle_signal(self.descriptor(), &canonical, &parsed) else {
+            return Ok(decoded);
+        };
+        let is_subagent = matches!(canonical.as_str(), "SubagentStart" | "SubagentStop");
         let root_id = parsed.session_id.as_deref().and_then(non_empty_trimmed);
         let child_id = parsed.subagent_id.as_deref().and_then(non_empty_trimmed);
         if is_subagent && (root_id.is_none() || child_id.is_none()) {
-            return None;
+            return Ok(decoded);
         }
         let agent_id = if is_subagent {
             child_id.as_deref()
@@ -355,8 +343,8 @@ impl AgentAdapter for GrokAdapter {
         if is_subagent {
             observation.parent_agent_id = root_id.as_deref().map(AgentSessionId::from);
         }
-        observation.worktree_path = parsed.workspace_root.clone().or_else(|| parsed.cwd.clone());
-        observation.prompt = (event_name == "UserPromptSubmit")
+        observation.worktree_path = decoded.worktree_path.clone();
+        observation.prompt = (canonical == "UserPromptSubmit")
             .then(|| sanitize_user_prompt(parsed.prompt.as_deref()))
             .flatten();
         observation.task = is_subagent
@@ -376,7 +364,7 @@ impl AgentAdapter for GrokAdapter {
                 .or_else(|| paths::transcript_for_session(session_id))
                 .map(|path| path.to_string_lossy().into_owned())
         });
-        if event_name == "SessionStart" {
+        if canonical == "SessionStart" {
             observation.origin = match parsed.source.as_deref() {
                 Some("new" | "startup" | "clear") => Some(SessionOrigin::Fresh),
                 Some("fork") => Some(SessionOrigin::Forked),
@@ -405,40 +393,34 @@ impl AgentAdapter for GrokAdapter {
                 .and_then(|value| value.reasoning_effort.clone());
             observation.description = summary.as_ref().and_then(transcript::Summary::title);
         }
-        Some(observation)
+        decoded.final_message = (canonical == "Stop")
+            .then_some(observation.transcript_path.as_deref())
+            .flatten()
+            .and_then(|path| transcript::last_assistant_message(Path::new(path)));
+        decoded.worktree_path = observation.worktree_path.clone();
+        decoded.lifecycle = Some(observation);
+        Ok(decoded)
     }
 
-    fn observe_turn_error_from_hook(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentTurnError> {
-        let parsed = payloads::parse(payload);
-        let raw_label = match event_name {
-            "StopFailure" | "PostToolUseFailure" => parsed.error.as_deref(),
-            "Notification" if parsed.notification_type.as_deref() == Some("agent_error") => {
-                parsed.error.as_deref().or(parsed.message.as_deref())
-            }
-            _ => return None,
-        };
-        let label = raw_label
-            .and_then(non_empty_trimmed)
-            .map(|label| label.chars().take(160).collect::<String>());
-        Some(AgentTurnError {
-            class: TurnErrorClass::classify_label(label.as_deref()),
-            at: Timestamp::now(),
-            label,
-        })
+    #[cfg(test)]
+    fn native_hook_events(&self) -> Vec<&'static str> {
+        GROK_HOOKS.iter().map(|hook| hook.event).collect()
     }
 
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        _payload: &Value,
-        observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        (event_name == "Stop").then_some(()).and_then(|()| {
-            transcript::last_assistant_message(Path::new(observation.transcript_path.as_deref()?))
+    #[cfg(test)]
+    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+        tests::classification_corpus()
+    }
+
+    #[cfg(test)]
+    fn spend_fixture(&self) -> Option<super::SpendFixture> {
+        Some(super::SpendFixture {
+            session_id: "s1",
+            file_name: "updates.jsonl",
+            body: super::SpendFixtureBody::Jsonl(
+                r#"{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"},"_meta":{"promptIndex":0}}}}
+{"timestamp":1700000001,"method":"_x.ai/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn","usage":{"inputTokens":100,"cachedReadTokens":20,"outputTokens":10,"costUsdTicks":1000000000}}}}"#,
+            ),
         })
     }
 

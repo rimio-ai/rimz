@@ -34,14 +34,13 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, DecodedHook,
     ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity, TurnErrorClass,
     non_empty_trimmed, optional_payload_string, resolve_root_identity, resolve_subagent_identity,
     sanitize_user_prompt, stop_payload_errored,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
-use crate::transcript::AskQuestion;
 
 static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "qwen",
@@ -278,24 +277,178 @@ const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
 #[derive(Clone, Debug, Default)]
 pub struct QwenAdapter;
 
+fn qwen_lifecycle(
+    adapter: &QwenAdapter,
+    event_name: &str,
+    payload: &Value,
+) -> Option<AgentLifecycleObservation> {
+    let signal = lifecycle_signal(adapter.descriptor(), event_name, payload)?;
+    let (agent_id, parent_agent_id) = observation_identity(event_name, payload)?;
+    let transcript_path = optional_payload_string(payload, &["transcript_path"]);
+    let subagent =
+        matches!(event_name, "SubagentStart" | "SubagentStop").then(|| parse_subagent(payload));
+    let subagent_meta = (event_name == "SubagentStop").then_some(()).and_then(|()| {
+        let child = subagent.as_ref()?;
+        payloads::read_subagent_meta(
+            transcript_path.as_deref()?,
+            child.common.common.session_id.as_deref()?,
+            child.common.agent_id.as_deref()?,
+        )
+    });
+    let usage = matches!(event_name, "SessionStart" | "Stop")
+        .then(|| transcript_path.as_deref().map(usage_from_transcript))
+        .flatten()
+        .unwrap_or_default();
+    let start = (event_name == "SessionStart").then(|| parse_session_start(payload));
+    let stop = (event_name == "Stop").then(|| parse_stop(payload));
+    let transcript_is_current = stop
+        .as_ref()
+        .and_then(|value| value.input_tokens)
+        .is_none_or(|prompt| usage.prompt_tokens == Some(prompt));
+    let accepted_usage = transcript_is_current.then_some(&usage);
+    let mut observation =
+        AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+    observation.parent_agent_id = parent_agent_id;
+    observation.transcript_path = transcript_path;
+    observation.launch.model = start
+        .as_ref()
+        .and_then(|value| value.common.model.clone())
+        .or_else(|| optional_payload_string(payload, &["model"]))
+        .or_else(|| accepted_usage.and_then(|usage| usage.model.clone()))
+        .or_else(|| {
+            subagent_meta
+                .as_ref()
+                .and_then(|meta| meta.persisted_cli_flags.model.as_deref())
+                .and_then(non_empty_trimmed)
+        });
+    observation.prompt = (event_name == "UserPromptSubmit")
+        .then(|| parse_user_prompt_submit(payload))
+        .and_then(|value| sanitize_user_prompt(value.prompt.as_deref()));
+    observation.task = if let Some(subagent) = &subagent {
+        subagent.common.agent_type.clone().or_else(|| {
+            subagent_meta.as_ref().and_then(|meta| {
+                meta.agent_type
+                    .as_deref()
+                    .and_then(non_empty_trimmed)
+                    .or_else(|| meta.subagent_name.as_deref().and_then(non_empty_trimmed))
+            })
+        })
+    } else {
+        sanitize_user_prompt(optional_payload_string(payload, &["task"]).as_deref())
+    };
+    observation.description = usage.title.clone().or_else(|| {
+        subagent_meta
+            .as_ref()
+            .and_then(|meta| meta.description.as_deref())
+            .and_then(non_empty_trimmed)
+    });
+    observation.context_pct = stop
+        .as_ref()
+        .and_then(|value| value.context_usage)
+        .map(|ratio| (ratio * 100.0).round().clamp(0.0, 100.0) as u8);
+    observation.context_window = stop
+        .as_ref()
+        .and_then(|value| value.context_limit)
+        .or_else(|| accepted_usage.and_then(|usage| usage.context_window));
+    let transcript_total = accepted_usage.and_then(|usage| usage.total_tokens);
+    let fallback_total = transcript_total
+        .filter(|total| *total > 0)
+        .or_else(|| stop.as_ref().and_then(|value| value.input_tokens))
+        .or(transcript_total);
+    observation.total_tokens = payload_total_tokens(payload, fallback_total);
+    observation.cache_read_input_tokens =
+        accepted_usage.and_then(|usage| usage.cache_read_input_tokens);
+    observation.fresh_input_tokens = accepted_usage.and_then(|usage| usage.fresh_input_tokens);
+    observation.output_tokens = accepted_usage.and_then(|usage| usage.output_tokens);
+    if event_name == "SessionStart"
+        && start.as_ref().is_some_and(|value| {
+            matches!(value.source, SessionSource::Startup | SessionSource::Clear)
+        })
+    {
+        observation.origin = Some(SessionOrigin::Fresh);
+    }
+    Some(observation)
+}
+
 impl AgentAdapter for QwenAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &QWEN_DESCRIPTOR
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
+        let tool = matches!(event_name, "PermissionRequest" | "PreToolUse")
+            .then(|| parse_tool_use(payload));
         let ask_kind = match event_name {
             "PermissionRequest" => Some(
                 self.descriptor()
-                    .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref())
+                    .blocking_tool_kind(tool.as_ref().and_then(|tool| tool.tool_name.as_deref()))
                     .unwrap_or(AskKind::Permission),
             ),
             "PreToolUse" => self
                 .descriptor()
-                .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref()),
+                .blocking_tool_kind(tool.as_ref().and_then(|tool| tool.tool_name.as_deref())),
             _ => None,
         };
-        classify_catalog_hook(QWEN_HOOKS, event_name, ask_kind)
+        let mut decoded = DecodedHook::new(classify_catalog_hook(QWEN_HOOKS, event_name, ask_kind));
+        decoded.agent_id = optional_payload_string(payload, &["session_id", "agent_id"]);
+        decoded.context_agent_id = optional_payload_string(payload, &["session_id"]);
+        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
+        decoded.questions = tool
+            .as_ref()
+            .and_then(|tool| {
+                ask::question_detail(tool.tool_name.as_deref()?, tool.tool_input.as_ref()?)
+            })
+            .unwrap_or_default();
+        decoded.ask_detail = decoded
+            .questions
+            .first()
+            .and_then(|question| question.question.lines().next().map(ToOwned::to_owned))
+            .or_else(|| {
+                matches!(event_name, "PermissionRequest" | "PreToolUse")
+                    .then(|| ask::permission_detail(payload))
+                    .flatten()
+            });
+        if event_name == "StopFailure" {
+            let failure = parse_stop_failure(payload);
+            let label = failure
+                .last_assistant_message
+                .as_deref()
+                .and_then(non_empty_trimmed)
+                .map(|text| text.chars().take(80).collect());
+            let class = match failure.error {
+                QwenStopError::RateLimit => TurnErrorClass::PausedRateLimit,
+                QwenStopError::ServerError => TurnErrorClass::PausedOverloaded,
+                _ => TurnErrorClass::classify_label(label.as_deref()),
+            };
+            decoded.turn_error = Some(AgentTurnError {
+                class,
+                at: Timestamp::now(),
+                label,
+            });
+        }
+        if [
+            "model",
+            "effort",
+            "rate_limits",
+            "total_cost_usd",
+            "context_window",
+            "total_tokens",
+            "context_pct",
+        ]
+        .into_iter()
+        .any(|key| payload.get(key).is_some())
+        {
+            decoded.observed_context = self.observe_context(self.descriptor().kind, payload);
+        }
+        decoded.final_message =
+            optional_payload_string(payload, &["last_assistant_message", "assistant_message"])
+                .as_deref()
+                .and_then(non_empty_trimmed);
+        if let Some(observation) = qwen_lifecycle(self, event_name, payload) {
+            decoded.worktree_path = observation.worktree_path.clone();
+            decoded.lifecycle = Some(observation);
+        }
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -366,120 +519,6 @@ impl AgentAdapter for QwenAdapter {
         })
     }
 
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        Ok(None)
-    }
-    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        matches!(event_name, "PermissionRequest" | "PreToolUse")
-            .then(|| parse_tool_use(payload))
-            .and_then(|tool| {
-                ask::question_detail(tool.tool_name.as_deref()?, tool.tool_input.as_ref()?)
-            })
-    }
-
-    fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
-        if !matches!(event_name, "PermissionRequest" | "PreToolUse") {
-            return None;
-        }
-        self.ask_question_detail(event_name, payload)
-            .and_then(|questions| questions.into_iter().next())
-            .and_then(|question| question.question.lines().next().map(ToOwned::to_owned))
-            .or_else(|| ask::permission_detail(payload))
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let signal = lifecycle_signal(self.descriptor(), event_name, payload)?;
-        let (agent_id, parent_agent_id) = observation_identity(event_name, payload)?;
-        let transcript_path = optional_payload_string(payload, &["transcript_path"]);
-        let subagent =
-            matches!(event_name, "SubagentStart" | "SubagentStop").then(|| parse_subagent(payload));
-        let subagent_meta = (event_name == "SubagentStop").then_some(()).and_then(|()| {
-            let child = subagent.as_ref()?;
-            payloads::read_subagent_meta(
-                transcript_path.as_deref()?,
-                child.common.common.session_id.as_deref()?,
-                child.common.agent_id.as_deref()?,
-            )
-        });
-        let usage = matches!(event_name, "SessionStart" | "Stop")
-            .then(|| transcript_path.as_deref().map(usage_from_transcript))
-            .flatten()
-            .unwrap_or_default();
-        let start = (event_name == "SessionStart").then(|| parse_session_start(payload));
-        let stop = (event_name == "Stop").then(|| parse_stop(payload));
-        let transcript_is_current = stop
-            .as_ref()
-            .and_then(|value| value.input_tokens)
-            .is_none_or(|prompt| usage.prompt_tokens == Some(prompt));
-        let accepted_usage = transcript_is_current.then_some(&usage);
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.parent_agent_id = parent_agent_id;
-        observation.transcript_path = transcript_path;
-        observation.launch.model = start
-            .as_ref()
-            .and_then(|value| value.common.model.clone())
-            .or_else(|| optional_payload_string(payload, &["model"]))
-            .or_else(|| accepted_usage.and_then(|usage| usage.model.clone()))
-            .or_else(|| {
-                subagent_meta
-                    .as_ref()
-                    .and_then(|meta| meta.persisted_cli_flags.model.as_deref())
-                    .and_then(non_empty_trimmed)
-            });
-        observation.prompt = (event_name == "UserPromptSubmit")
-            .then(|| parse_user_prompt_submit(payload))
-            .and_then(|value| sanitize_user_prompt(value.prompt.as_deref()));
-        observation.task = if let Some(subagent) = &subagent {
-            subagent.common.agent_type.clone().or_else(|| {
-                subagent_meta.as_ref().and_then(|meta| {
-                    meta.agent_type
-                        .as_deref()
-                        .and_then(non_empty_trimmed)
-                        .or_else(|| meta.subagent_name.as_deref().and_then(non_empty_trimmed))
-                })
-            })
-        } else {
-            sanitize_user_prompt(optional_payload_string(payload, &["task"]).as_deref())
-        };
-        observation.description = usage.title.clone().or_else(|| {
-            subagent_meta
-                .as_ref()
-                .and_then(|meta| meta.description.as_deref())
-                .and_then(non_empty_trimmed)
-        });
-        observation.context_pct = stop
-            .as_ref()
-            .and_then(|value| value.context_usage)
-            .map(|ratio| (ratio * 100.0).round().clamp(0.0, 100.0) as u8);
-        observation.context_window = stop
-            .as_ref()
-            .and_then(|value| value.context_limit)
-            .or_else(|| accepted_usage.and_then(|usage| usage.context_window));
-        let transcript_total = accepted_usage.and_then(|usage| usage.total_tokens);
-        let fallback_total = transcript_total
-            .filter(|total| *total > 0)
-            .or_else(|| stop.as_ref().and_then(|value| value.input_tokens))
-            .or(transcript_total);
-        observation.total_tokens = payload_total_tokens(payload, fallback_total);
-        observation.cache_read_input_tokens =
-            accepted_usage.and_then(|usage| usage.cache_read_input_tokens);
-        observation.fresh_input_tokens = accepted_usage.and_then(|usage| usage.fresh_input_tokens);
-        observation.output_tokens = accepted_usage.and_then(|usage| usage.output_tokens);
-        if event_name == "SessionStart"
-            && start.as_ref().is_some_and(|value| {
-                matches!(value.source, SessionSource::Startup | SessionSource::Clear)
-            })
-        {
-            observation.origin = Some(SessionOrigin::Fresh);
-        }
-        Some(observation)
-    }
-
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
         if !payload.is_object() {
             return None;
@@ -496,43 +535,6 @@ impl AgentAdapter for QwenAdapter {
         serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
             .ok()?
             .cost(prices)
-    }
-
-    fn observe_turn_error_from_hook(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentTurnError> {
-        if event_name != "StopFailure" {
-            return None;
-        }
-        let failure = parse_stop_failure(payload);
-        let label = failure
-            .last_assistant_message
-            .as_deref()
-            .and_then(non_empty_trimmed)
-            .map(|text| text.chars().take(80).collect());
-        let class = match failure.error {
-            QwenStopError::RateLimit => TurnErrorClass::PausedRateLimit,
-            QwenStopError::ServerError => TurnErrorClass::PausedOverloaded,
-            _ => TurnErrorClass::classify_label(label.as_deref()),
-        };
-        Some(AgentTurnError {
-            class,
-            at: Timestamp::now(),
-            label,
-        })
-    }
-
-    fn last_assistant_message(
-        &self,
-        _event_name: &str,
-        payload: &Value,
-        _observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        optional_payload_string(payload, &["last_assistant_message", "assistant_message"])
-            .as_deref()
-            .and_then(non_empty_trimmed)
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {

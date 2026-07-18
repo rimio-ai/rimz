@@ -14,7 +14,7 @@ Topic detail lives in the internals leaves the root map describes — [model.md]
 
 ## The boundary
 
-An adapter is the *single* place an agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, and `render_neutral`; a built-in also owns install / uninstall / preview for one agent. Add a third-party agent with the manifest and canonical wire under [`plugin/`](./plugin/mod.rs). Add a built-in by implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs) — including tool vocabularies and the full `IntegrationConcern` coverage table — and one line in [`registry::ADAPTERS`](./registry.rs).
+An adapter is the *single* place an agent protocol is normalized. Its `decode_hook` parses one native event into routing, lifecycle, ask/transcript, sidecar evidence, and neutral stdout; a built-in also owns install / uninstall / preview for one agent. Add a third-party agent with the manifest and canonical wire under [`plugin/`](./plugin/mod.rs). Add a built-in by implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs) — including tool vocabularies and the full `IntegrationConcern` coverage table — and one line in [`registry::ADAPTERS`](./registry.rs).
 
 Provider modules own native protocol and process interpretation. Generic hook ingress consumes `hook_ingress`, and generic process discovery consumes registry command identity; provider-only product coordinators may call deep provider modules when the behavior remains unique to that provider.
 

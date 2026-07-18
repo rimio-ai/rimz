@@ -28,7 +28,7 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, catalog_contains, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, DecodedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LocalSessionObservation, LocallyPricedTurnCost,
     PriceBook, Result, SubagentIdentity, locate_binary, non_empty_trimmed,
     resolve_subagent_identity, sanitize_user_prompt,
@@ -299,8 +299,87 @@ impl AgentAdapter for CursorAdapter {
         parse_cursor_version(stdout).or_else(|| parse_cursor_version(stderr))
     }
 
-    fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        classify_catalog_hook(CURSOR_HOOKS, event_name, None)
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
+        let mut decoded = DecodedHook::new(classify_catalog_hook(CURSOR_HOOKS, event_name, None));
+        decoded.neutral = catalog_contains(CURSOR_HOOKS, event_name).then(|| json!({}));
+        let parsed = payloads::parse_payload(payload);
+        decoded.agent_id = parsed
+            .conversation_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned);
+        decoded.context_agent_id = decoded.agent_id.clone();
+        decoded.assistant_message = (event_name == "afterAgentResponse")
+            .then_some(parsed.text.clone())
+            .flatten();
+        if parsed.model.is_some()
+            || parsed.model_id.is_some()
+            || !parsed.model_params.is_empty()
+            || parsed.context_usage_percent.is_some()
+            || parsed.context_window_size.is_some()
+            || parsed.input_tokens.is_some()
+            || parsed.output_tokens.is_some()
+            || parsed.cache_read_tokens.is_some()
+            || parsed.cache_write_tokens.is_some()
+        {
+            decoded.observed_context = self.observe_context(self.descriptor().kind, payload);
+        }
+        if matches!(event_name, "subagentStart" | "subagentStop") {
+            decoded.lifecycle = self.observe_subagent_lifecycle(event_name, payload, parsed);
+            return Ok(decoded);
+        }
+        let turn_usage = (event_name == "stop")
+            .then(|| parsed.turn_usage())
+            .flatten();
+        let signal = match event_name {
+            "sessionStart" => LifecycleSignal::Registered,
+            "beforeSubmitPrompt" => LifecycleSignal::TurnStarted,
+            "postToolUse" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: self.descriptor().tool_edits_files(payload),
+                native_key: None,
+            },
+            "stop" if parsed.stop_outcome() == payloads::StopOutcome::Aborted => {
+                LifecycleSignal::TurnInterrupted
+            }
+            "stop" => LifecycleSignal::TurnEnded {
+                errored: parsed.stop_outcome() == payloads::StopOutcome::Error,
+                parked_on_background: false,
+            },
+            "sessionEnd" => LifecycleSignal::Ended,
+            "preCompact" => LifecycleSignal::Compacting,
+            _ => return Ok(decoded),
+        };
+        let mut observation = AgentLifecycleObservation::new(
+            decoded.agent_id.as_deref().map(AgentSessionId::from),
+            signal,
+        )
+        .with_worktree_from_payload(payload);
+        let prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+        observation.task = prompt.clone();
+        observation.prompt = prompt;
+        let effort = parsed.model_param("effort").map(ToOwned::to_owned);
+        observation.transcript_path = parsed.transcript_path;
+        observation.launch.model = parsed
+            .model_id
+            .or(parsed.model)
+            .map(statusline::normalize_model);
+        observation.launch.effort = effort;
+        observation.context_pct = parsed
+            .context_usage_percent
+            .filter(|value| value.is_finite())
+            .map(|value| value.round().clamp(0.0, 100.0) as u8);
+        observation.context_window = parsed.context_window_size;
+        if event_name == "stop" {
+            observation.fresh_input_tokens = turn_usage.and_then(|usage| usage.fresh_input);
+            observation.output_tokens = turn_usage.and_then(|usage| usage.output);
+            observation.cache_read_input_tokens = turn_usage.and_then(|usage| usage.cache_read);
+            observation.cache_write_input_tokens = turn_usage.and_then(|usage| usage.cache_write);
+        }
+        decoded.worktree_path = observation.worktree_path.clone();
+        decoded.lifecycle = Some(observation);
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -332,73 +411,6 @@ impl AgentAdapter for CursorAdapter {
     #[cfg(test)]
     fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
         Some(session::fixture_observation())
-    }
-
-    fn render_neutral(&self, event_name: &str) -> Result<Option<Value>> {
-        Ok(catalog_contains(CURSOR_HOOKS, event_name).then(|| json!({})))
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let parsed = payloads::parse_payload(payload);
-        if matches!(event_name, "subagentStart" | "subagentStop") {
-            return self.observe_subagent_lifecycle(event_name, payload, parsed);
-        }
-        let turn_usage = (event_name == "stop")
-            .then(|| parsed.turn_usage())
-            .flatten();
-        let signal = match event_name {
-            "sessionStart" => LifecycleSignal::Registered,
-            "beforeSubmitPrompt" => LifecycleSignal::TurnStarted,
-            "postToolUse" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: self.descriptor().tool_edits_files(payload),
-                native_key: None,
-            },
-            "stop" if parsed.stop_outcome() == payloads::StopOutcome::Aborted => {
-                LifecycleSignal::TurnInterrupted
-            }
-            "stop" => LifecycleSignal::TurnEnded {
-                errored: parsed.stop_outcome() == payloads::StopOutcome::Error,
-                parked_on_background: false,
-            },
-            "sessionEnd" => LifecycleSignal::Ended,
-            "preCompact" => LifecycleSignal::Compacting,
-            _ => return None,
-        };
-        let agent_id = parsed
-            .conversation_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-            .map(AgentSessionId::from);
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        let prompt = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.task = prompt.clone();
-        observation.prompt = prompt;
-        let effort = parsed.model_param("effort").map(ToOwned::to_owned);
-        observation.transcript_path = parsed.transcript_path;
-        observation.launch.model = parsed
-            .model_id
-            .or(parsed.model)
-            .map(statusline::normalize_model);
-        observation.launch.effort = effort;
-        observation.context_pct = parsed
-            .context_usage_percent
-            .filter(|value| value.is_finite())
-            .map(|value| value.round().clamp(0.0, 100.0) as u8);
-        observation.context_window = parsed.context_window_size;
-        if event_name == "stop" {
-            observation.fresh_input_tokens = turn_usage.and_then(|usage| usage.fresh_input);
-            observation.output_tokens = turn_usage.and_then(|usage| usage.output);
-            observation.cache_read_input_tokens = turn_usage.and_then(|usage| usage.cache_read);
-            observation.cache_write_input_tokens = turn_usage.and_then(|usage| usage.cache_write);
-        }
-        Some(observation)
     }
 
     fn derive_subagent_observations(&self, workspace: &Path) -> Vec<AgentLifecycleObservation> {
@@ -473,12 +485,6 @@ impl AgentAdapter for CursorAdapter {
 
     fn probe_account(&self) -> super::account::AccountProbe {
         account::probe(self.descriptor())
-    }
-
-    fn observe_assistant_message(&self, event_name: &str, payload: &Value) -> Option<String> {
-        (event_name == "afterAgentResponse")
-            .then(|| payloads::parse_payload(payload).text)
-            .flatten()
     }
 
     fn local_context_refresh(

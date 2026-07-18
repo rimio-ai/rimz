@@ -99,7 +99,7 @@ impl<'a> NormalizedToolCalls<'a> {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum CopilotHookError {
     Detail { message: Option<String> },

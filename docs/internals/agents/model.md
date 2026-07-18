@@ -228,24 +228,22 @@ An agent reports through the same public shape everything else uses: a hook is a
 
 Built-in adapters implement the trait plus a static [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables, integration coverage) and one registry line. External plugins use the shared `PluginAdapter`, which builds the same descriptor and behavior from a validated manifest and canonical envelope. The methods, by role (signatures live in the trait):
 
-- **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the [`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs).
+- **`decode_hook`** parses one native event and returns its channel (or `Unknown`, dropped), [`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs), optional [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs), question/answer and transcript values, sidecar evidence, and neutral stdout together. An absent lifecycle observation means "no transition here", so high-frequency events stay silent.
 - **`hook_ingress`** accepts or ignores a native hook emitter before workspace and store I/O, normalizing its owner PID and agent-versus-daemon role; **`is_interactive_process`** rejects provider service roles after registry command matching.
-- **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs). `None` means "no transition here", so high-frequency events stay silent.
 - **`correlate_subagent`** validates one child-to-parent relation from provider-owned durable evidence; **`spawned_subagents`** walks the same evidence from a completed parent turn so the hook path can adopt children whose terminal hooks arrived before the relation became readable.
-- **`render_neutral`** emits the agent-native no-op for blocking asks. Hooks record the waiting observation and return neutral; the agent's own UI stays open as the answer surface.
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../../crates/rimz/src/agents/context.rs); **`local_context_refresh`** derives explicit keep/set/clear and token-merge patches from local provider state on hook or producer tick triggers; **`context_refresh_spawn`** maps hook or tick triggers to a detached `rimz` helper when a provider's rich context transport needs one. Store applies each patch under the sidecar record lock and owns persistence only; provider merge policy remains in the adapter.
 - **`install_hooks`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it; **`probe_account`** feeds display identity; **`probe_account_usage`** returns one identity-bearing normalized usage result; **`probe_realtime_account_usage`** returns the same snapshot shape without direct-query cadence; **`spending_sources`** / **`parse_spend`** feed historical spend in [providers.md](./providers.md), while **`transcript_files`** remains the live transcript/session fallback.
 
 Two invariants hold the seam shut:
 
-- **Adapters never touch the store.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every store write; it calls the adapter for ingress, classification, lifecycle mapping, and neutral output.
+- **Adapters never touch the store.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every store write; it calls the adapter once for ingress and once to decode the native payload.
 - **Generic flows do not read native payloads or process roles.** They consume normalized lifecycle, ask, ingress, and command-identity results. Provider-only coordinators retain native calls without forcing every unique capability onto the trait.
 
 ### Two hook channels
 
-`classify_hook` sorts every native event into one of two wired channels. The distinction is whether the hook can hold the agent open while RimZ waits for an answer.
+`decode_hook` sorts every native event into one of two wired channels. The distinction is whether the hook can hold the agent open while RimZ waits for an answer.
 
-**Lifecycle: fast, non-blocking.** Drives agent status, the turn phase, task, and enrichment. Each flows through `observe_lifecycle`; an event carrying no transition returns `None` and records nothing.
+**Lifecycle: fast, non-blocking.** Drives agent status, the turn phase, task, and enrichment. An event whose decoded output carries no lifecycle observation records no transition.
 
 **Awaiting-user: records the waiting state and returns neutral.** A permission request, plan approval, or user question ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs)) becomes an `awaiting_input` lifecycle signal when the agent has its own ask UI. RimZ records the signal — the row goes `waiting`, and the ask's question text lands as a transcript `Ask` entry — returns the agent-native no-op immediately, and leaves the prompt visible in the agent's pane. An agent whose descriptor declares `native_ask_ui` off (pi) gets the same neutral no-op with **no waiting observation**, since there is no native prompt a `?` row could route the human to.
 
@@ -267,9 +265,9 @@ A **daemon-routed** hook (Codex's, fired from the shared app-server) inherits it
 
 ### From native event to internals
 
-A lifecycle hook fires → `classify_hook` returns `Lifecycle` → `observe_lifecycle` maps the payload onto an `AgentLifecycleObservation` → the CLI records it as an `agent.lifecycle` event, and [the rollup](#the-rollup) and [the state machine](#the-state-machine) above own it from there.
+A lifecycle hook fires → `decode_hook` returns `Lifecycle` with an `AgentLifecycleObservation` → the CLI records it as an `agent.lifecycle` event, and [the rollup](#the-rollup) and [the state machine](#the-state-machine) above own it from there.
 
-A blocking hook fires → `classify_hook` returns `AwaitingUser` with an `AskKind` → the CLI records the `awaiting_input` lifecycle event when the adapter declares a native ask UI, calls `render_neutral`, and exits. The agent's UI owns the prompt; the sidebar's `?` row routes you to the pane, and you answer there.
+A blocking hook fires → `decode_hook` returns `AwaitingUser` with an `AskKind`, optional waiting observation, structured ask fields, and neutral stdout → the CLI records the observation when the adapter declares a native ask UI, emits only the decoded neutral value, and exits. The agent's UI owns the prompt; the sidebar's `?` row routes you to the pane, and you answer there.
 
 ### Hook install: the visible security step
 

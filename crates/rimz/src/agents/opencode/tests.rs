@@ -114,7 +114,7 @@ fn opencode_render_preset_maps_model_and_rejects_unsupported_fields() {
 #[test]
 fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     let registered = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "session_created",
             &json!({
                 "session_id": "ses_1",
@@ -128,6 +128,8 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
                 "total_tokens": 190
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(registered.agent_id.as_deref(), Some("ses_1"));
     assert_eq!(registered.signal, LifecycleSignal::Registered);
@@ -149,7 +151,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     // 272k for gpt-5.5, not the 400k total) — and stamps `context_window` on the
     // envelope, so the wire-carried value is used verbatim.
     let catalog_window = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "chat_message",
             &json!({
                 "session_id": "ses_2",
@@ -158,38 +160,48 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
                 "context_window": 272_000
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(catalog_window.context_window, Some(272_000));
     // Without a stamped window, a non-Claude model stays unknown (Claude-only fallback).
     let unknown_window = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "chat_message",
             &json!({ "session_id": "ses_2", "model": "gpt-5.5", "provider_id": "openai" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(unknown_window.context_window, None);
 
     let prompt = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "chat_message",
             &json!({ "session_id": "ses_1", "prompt": "  fix auth  " }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
     assert_eq!(prompt.task.as_deref(), Some("fix auth"));
 
     let injected = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "chat_message",
             &json!({ "session_id": "ses_1", "prompt": "<system-reminder>noise" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(injected.prompt, None);
     assert_eq!(injected.task, None);
 
     let idle = OpencodeAdapter
-        .observe_lifecycle("session_idle", &json!({ "session_id": "ses_1" }))
+        .decode_hook("session_idle", &json!({ "session_id": "ses_1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(
         idle.signal,
@@ -199,10 +211,12 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         }
     );
     let proposed_plan = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "session_idle",
             &json!({ "session_id": "ses_1", "plan_proposed": true }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("plan observation");
     assert_eq!(
         proposed_plan.signal,
@@ -214,10 +228,12 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         }
     );
     let error = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "session_error",
             &json!({ "session_id": "ses_1", "error_message": "boom" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(
         error.signal,
@@ -229,10 +245,12 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
 
     assert!(!OpencodeAdapter.ends_session("session_error"));
     let ended = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "session_ended",
             &json!({ "session_id": "ses_1", "reason": "deleted" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("end observation");
     assert_eq!(ended.signal, LifecycleSignal::Ended);
     assert!(OpencodeAdapter.ends_session("session_ended"));
@@ -241,10 +259,12 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
 #[test]
 fn opencode_observes_native_questions() {
     let observed = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "question_ask",
             &json!({ "session_id": "ses_1", "title": "Which database?" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("question observation");
     assert_eq!(
         observed.signal,
@@ -260,7 +280,7 @@ fn opencode_observes_native_questions() {
 #[test]
 fn opencode_parses_structured_native_questions() {
     let questions = OpencodeAdapter
-        .ask_question_detail(
+        .decode_hook(
             "question_ask",
             &json!({
                 "questions": [
@@ -278,7 +298,8 @@ fn opencode_parses_structured_native_questions() {
                 ]
             }),
         )
-        .expect("structured questions");
+        .expect("test hook decodes")
+        .questions;
     assert_eq!(
         questions,
         vec![AskQuestion {
@@ -293,31 +314,41 @@ fn opencode_parses_structured_native_questions() {
         }]
     );
     assert_eq!(
-        OpencodeAdapter.ask_detail(
-            "question_ask",
-            &json!({ "questions": [{ "question": "Which database?\nPick one" }] }),
-        ),
+        OpencodeAdapter
+            .decode_hook(
+                "question_ask",
+                &json!({ "questions": [{ "question": "Which database?\nPick one" }] }),
+            )
+            .expect("test hook decodes")
+            .ask_detail,
         Some("Which database?".to_owned())
     );
     assert!(
         OpencodeAdapter
-            .ask_question_detail("question_ask", &json!({ "questions": "malformed" }))
-            .is_none()
+            .decode_hook("question_ask", &json!({ "questions": "malformed" }))
+            .expect("test hook decodes")
+            .questions
+            .is_empty()
     );
     assert!(
         OpencodeAdapter
-            .ask_question_detail("permission_ask", &json!({ "questions": [] }))
-            .is_none()
+            .decode_hook("permission_ask", &json!({ "questions": [] }))
+            .expect("test hook decodes")
+            .questions
+            .is_empty()
     );
 }
 
 #[test]
 fn opencode_records_native_permission_and_question_answers() {
     assert_eq!(
-        OpencodeAdapter.native_ask_answer(
-            "permission_replied",
-            &json!({ "session_id": "ses_1", "reply": "always" }),
-        ),
+        OpencodeAdapter
+            .decode_hook(
+                "permission_replied",
+                &json!({ "session_id": "ses_1", "reply": "always" }),
+            )
+            .expect("test hook decodes")
+            .native_answers,
         Some(vec![AskAnswer {
             question: None,
             chosen: vec!["always".to_owned()],
@@ -325,13 +356,16 @@ fn opencode_records_native_permission_and_question_answers() {
         }])
     );
     assert_eq!(
-        OpencodeAdapter.native_ask_answer(
-            "question_replied",
-            &json!({
-                "session_id": "ses_1",
-                "answers": [["Postgres"], ["Fast", "Safe"]]
-            }),
-        ),
+        OpencodeAdapter
+            .decode_hook(
+                "question_replied",
+                &json!({
+                    "session_id": "ses_1",
+                    "answers": [["Postgres"], ["Fast", "Safe"]]
+                }),
+            )
+            .expect("test hook decodes")
+            .native_answers,
         Some(vec![
             AskAnswer {
                 question: None,
@@ -346,7 +380,10 @@ fn opencode_records_native_permission_and_question_answers() {
         ])
     );
     assert_eq!(
-        OpencodeAdapter.native_ask_answer("question_rejected", &json!({ "session_id": "ses_1" }),),
+        OpencodeAdapter
+            .decode_hook("question_rejected", &json!({ "session_id": "ses_1" }),)
+            .expect("test hook decodes")
+            .native_answers,
         Some(vec![AskAnswer {
             question: None,
             chosen: vec!["(rejected)".to_owned()],
@@ -355,7 +392,9 @@ fn opencode_records_native_permission_and_question_answers() {
     );
     assert!(
         OpencodeAdapter
-            .native_ask_answer("question_replied", &json!({ "answers": [] }))
+            .decode_hook("question_replied", &json!({ "answers": [] }))
+            .expect("test hook decodes")
+            .native_answers
             .is_none()
     );
 }
@@ -459,10 +498,13 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         ),
         ("read", None),
     ] {
-        let observed = OpencodeAdapter.observe_lifecycle(
-            "tool_after",
-            &json!({ "session_id": "ses_1", "tool_name": tool_name }),
-        );
+        let observed = OpencodeAdapter
+            .decode_hook(
+                "tool_after",
+                &json!({ "session_id": "ses_1", "tool_name": tool_name }),
+            )
+            .expect("test hook decodes")
+            .lifecycle;
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool_name}");
     }
 
@@ -472,7 +514,9 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         "question_rejected",
     ] {
         let observed = OpencodeAdapter
-            .observe_lifecycle(event, &json!({ "session_id": "ses_1" }))
+            .decode_hook(event, &json!({ "session_id": "ses_1" }))
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap_or_else(|| panic!("{event} observation"));
         assert_eq!(
             observed.signal,
@@ -486,11 +530,15 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
     }
 
     let compacting = OpencodeAdapter
-        .observe_lifecycle("session_compacting", &json!({ "session_id": "ses_1" }))
+        .decode_hook("session_compacting", &json!({ "session_id": "ses_1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
     let compacted = OpencodeAdapter
-        .observe_lifecycle("session_compacted", &json!({ "session_id": "ses_1" }))
+        .decode_hook("session_compacted", &json!({ "session_id": "ses_1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(
         compacted.signal,
@@ -498,7 +546,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
     );
 
     let child = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "SubagentStart",
             &json!({
                 "session_id": "ses_child",
@@ -506,6 +554,8 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
                 "prompt": "review auth"
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(child.agent_id.as_deref(), Some("ses_child"));
     assert_eq!(child.parent_agent_id.as_deref(), Some("ses_parent"));
@@ -513,7 +563,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
     assert_eq!(child.task.as_deref(), Some("review auth"));
 
     let child_stopped = OpencodeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "SubagentStop",
             &json!({
                 "session_id": "ses_child",
@@ -521,24 +571,38 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
                 "is_error": true
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .expect("observation");
     assert_eq!(
         child_stopped.signal,
         LifecycleSignal::SubagentStopped { errored: true }
     );
     assert_eq!(
-        OpencodeAdapter.observe_lifecycle(
-            "SubagentStart",
-            &json!({ "session_id": "same", "parent_session_id": "same" }),
-        ),
+        OpencodeAdapter
+            .decode_hook(
+                "SubagentStart",
+                &json!({ "session_id": "same", "parent_session_id": "same" }),
+            )
+            .expect("test hook decodes")
+            .lifecycle,
         None
     );
-    assert_eq!(OpencodeAdapter.observe_lifecycle("bogus", &json!({})), None);
+    assert_eq!(
+        OpencodeAdapter
+            .decode_hook("bogus", &json!({}))
+            .expect("test hook decodes")
+            .lifecycle,
+        None
+    );
 }
 
 #[test]
 fn neutral_decision_shape_is_pinned() {
-    let rendered = OpencodeAdapter.render_neutral("permission_ask").unwrap();
+    let rendered = OpencodeAdapter
+        .decode_hook("permission_ask", &Value::Null)
+        .expect("test hook decodes")
+        .neutral;
     insta::assert_snapshot!(format!("{rendered:?}"), @"None");
 }
 

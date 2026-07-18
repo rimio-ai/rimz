@@ -26,7 +26,7 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentCost, AgentCurrentUsage, AgentErr, AgentLifecycleObservation,
-    AgentTokenUsage, AskKind, ClassifiedHook, FieldPatch, LocalContextPatch, LocalContextRefresh,
+    AgentTokenUsage, AskKind, DecodedHook, FieldPatch, LocalContextPatch, LocalContextRefresh,
     LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result, SessionOrigin, TranscriptStat,
     non_empty_trimmed, sanitize_user_prompt,
 };
@@ -239,9 +239,62 @@ impl AgentAdapter for AmpAdapter {
         parse_amp_version(stdout).or_else(|| parse_amp_version(stderr))
     }
 
-    fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
-        classify_catalog_hook(AMP_HOOKS, event_name, ask_kind)
+        let mut decoded = DecodedHook::new(classify_catalog_hook(AMP_HOOKS, event_name, ask_kind));
+        let parsed = payloads::parse_payload(payload);
+        let session_id = parsed
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|session_id| !session_id.is_empty());
+        decoded.agent_id = session_id.map(ToOwned::to_owned);
+        decoded.context_agent_id = decoded.agent_id.clone();
+        decoded.final_message = (event_name == "agent_end")
+            .then_some(parsed.last_assistant_message.as_deref())
+            .flatten()
+            .and_then(non_empty_trimmed);
+
+        let Some(session_id) = session_id else {
+            return Ok(decoded);
+        };
+        let signal = match event_name {
+            "session_start" => LifecycleSignal::Registered,
+            "agent_start" => LifecycleSignal::TurnStarted,
+            "tool_result" => LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: parsed
+                    .files_modified
+                    .unwrap_or_else(|| self.descriptor().tool_edits_files(payload)),
+                native_key: None,
+            },
+            "agent_end" => LifecycleSignal::TurnEnded {
+                errored: parsed.status.as_deref() != Some("done"),
+                parked_on_background: false,
+            },
+            "permission_ask" => LifecycleSignal::AwaitingInput {
+                kind: AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            },
+            _ => return Ok(decoded),
+        };
+        let mut observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from(session_id)), signal)
+                .with_worktree_from_payload(payload);
+        let prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+        observation.task = prompt.clone();
+        observation.prompt = prompt;
+        observation.launch.model = parsed.model;
+        observation.launch.effort = parsed.effort;
+        stamp_transcript_path(&mut observation, session_id, &spend::data_root());
+        if event_name == "session_start" {
+            observation.origin = Some(SessionOrigin::Fresh);
+        }
+        decoded.worktree_path = observation.worktree_path.clone();
+        decoded.lifecycle = Some(observation);
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -263,61 +316,6 @@ impl AgentAdapter for AmpAdapter {
                 r#"{"id":"T-conformance","messages":[{"role":"assistant","messageId":"m1","content":"done","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":20}}]}"#,
             ),
         })
-    }
-
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        Ok(None)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let parsed = payloads::parse_payload(payload);
-        let session_id = parsed.session_id.as_deref()?.trim();
-        if session_id.is_empty() {
-            return None;
-        }
-        let signal = match event_name {
-            "session_start" => LifecycleSignal::Registered,
-            "agent_start" => LifecycleSignal::TurnStarted,
-            "tool_result" => LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: parsed
-                    .files_modified
-                    .unwrap_or_else(|| self.descriptor().tool_edits_files(payload)),
-                native_key: None,
-            },
-            "agent_end" => LifecycleSignal::TurnEnded {
-                errored: parsed.status.as_deref() != Some("done"),
-                parked_on_background: false,
-            },
-            "permission_ask" => LifecycleSignal::AwaitingInput {
-                kind: AskKind::Permission,
-                ask_id: None,
-                detail: None,
-                native_key: None,
-            },
-            _ => return None,
-        };
-
-        let mut observation =
-            AgentLifecycleObservation::new(Some(AgentSessionId::from(session_id)), signal)
-                .with_worktree_from_payload(payload);
-        let prompt = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.task = prompt.clone();
-        observation.prompt = prompt;
-        observation.launch.model = parsed.model;
-        observation.launch.effort = parsed.effort;
-        stamp_transcript_path(&mut observation, session_id, &spend::data_root());
-        if event_name == "session_start" {
-            // Amp's Fresh lineage means fresh pane occupancy, not a fresh
-            // conversation: focusing an existing thread must supersede the
-            // previously focused thread in the same pane.
-            observation.origin = Some(SessionOrigin::Fresh);
-        }
-        Some(observation)
     }
 
     fn local_context_refresh(
@@ -428,19 +426,6 @@ impl AgentAdapter for AmpAdapter {
         prices: &super::PriceBook,
     ) -> super::spending::SpendParse {
         spend::parse(path, prices)
-    }
-
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        payload: &Value,
-        _observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        (event_name == "agent_end")
-            .then(|| payloads::parse_payload(payload).last_assistant_message)
-            .flatten()
-            .as_deref()
-            .and_then(non_empty_trimmed)
     }
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {

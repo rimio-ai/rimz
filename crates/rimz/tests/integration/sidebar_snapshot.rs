@@ -29,7 +29,6 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         context_pct: None,
         context_window: None,
         total_tokens: None,
-        turn_error: None,
         cache_read_input_tokens: None,
         cache_write_input_tokens: None,
         fresh_input_tokens: None,

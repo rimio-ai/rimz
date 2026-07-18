@@ -23,35 +23,23 @@ pub(crate) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
-    event_name: &str,
+    decoded: &DecodedHook,
     payload: &Value,
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let agent_id = payload_agent_id(payload);
-    let recorded = record_lifecycle_observation(
-        workspace,
-        store,
-        agent,
-        event_name,
-        payload,
-        ingress_owner,
-        globals,
-    );
+    let event_name = decoded.event_name.as_str();
+    let agent_id = decoded.agent_id.as_deref();
+    let recorded =
+        record_lifecycle_observation(workspace, store, agent, decoded, ingress_owner, globals);
     if recorded.as_ref().is_some_and(|recorded| {
         recorded.observation.agent_id.is_some() && recorded.observation.parent_agent_id.is_none()
     }) && derive_subagent_lifecycle(workspace, store, agent, ingress_owner, globals)
     {
         spawn_auto_rotation(workspace);
     }
-    let assistant_message = record_assistant_response(
-        workspace,
-        store,
-        agent,
-        event_name,
-        payload,
-        recorded.as_ref(),
-    );
+    let assistant_message =
+        record_assistant_response(workspace, store, agent, decoded, recorded.as_ref());
     if let (Some(run_id), Some((agent_id, message))) = (env_run_id(), assistant_message)
         && let Err(err) = rimz::harness::run::record_assistant_message(
             store.paths(),
@@ -69,14 +57,7 @@ pub(crate) fn handle_lifecycle_hook(
             "lifecycle: failed to seed supervised response",
         );
     }
-    record_native_answer(
-        workspace,
-        store,
-        agent,
-        event_name,
-        payload,
-        recorded.as_ref(),
-    );
+    record_native_answer(workspace, store, agent, decoded, recorded.as_ref());
     let model_hint = recorded
         .as_ref()
         .and_then(|recorded| recorded.model_hint.as_deref());
@@ -94,9 +75,6 @@ pub(crate) fn handle_lifecycle_hook(
         .and_then(|recorded| recorded.observation.agent_id.as_deref())
         .or(agent_id);
     if let Some(agent_id) = context_agent_id {
-        let observed_turn_error = recorded
-            .as_ref()
-            .and_then(|recorded| recorded.observation.turn_error.clone());
         let parent_agent_id = recorded
             .as_ref()
             .and_then(|recorded| recorded.observation.parent_agent_id.as_deref());
@@ -106,20 +84,20 @@ pub(crate) fn handle_lifecycle_hook(
             agent,
             context: LifecycleEventContext {
                 event_name,
+                decoded,
                 payload,
                 agent_id,
                 parent_agent_id,
                 model_hint,
                 transcript_path,
                 turn_ended,
-                observed_turn_error,
             },
         });
     }
     if let Some(recorded) = recorded.as_ref() {
         let assistant_message =
             assistant_message_for_lifecycle(recorded, env_run_id().is_some(), || {
-                agent.last_assistant_message(event_name, payload, &recorded.observation)
+                decoded.final_message.clone()
             });
         record_run_lifecycle(
             store,
@@ -139,9 +117,7 @@ pub(crate) fn handle_lifecycle_hook(
             user_input_state_root(store),
         );
         let questions = match &recorded.observation.signal {
-            LifecycleSignal::AwaitingInput { .. } => agent
-                .ask_question_detail(event_name, payload)
-                .unwrap_or_default(),
+            LifecycleSignal::AwaitingInput { .. } => decoded.questions.clone(),
             _ => Vec::new(),
         };
         if let Err(err) = record_conversation(
@@ -323,13 +299,13 @@ struct AgentContextHook<'a> {
 
 struct LifecycleEventContext<'a> {
     event_name: &'a str,
+    decoded: &'a DecodedHook,
     payload: &'a Value,
     agent_id: &'a str,
     parent_agent_id: Option<&'a str>,
     model_hint: Option<&'a str>,
     transcript_path: Option<&'a str>,
     turn_ended: bool,
-    observed_turn_error: Option<rimz::agents::AgentTurnError>,
 }
 
 struct ContextSidecarInput<'a> {
@@ -337,12 +313,12 @@ struct ContextSidecarInput<'a> {
     store: &'a Store,
     agent: &'a dyn AgentAdapter,
     event_name: &'a str,
+    decoded: &'a DecodedHook,
     payload: &'a Value,
     context_agent_id: &'a str,
     model_hint: Option<&'a str>,
     transcript_path: Option<&'a str>,
     turn_ended: bool,
-    observed_turn_error: Option<rimz::agents::AgentTurnError>,
 }
 
 fn record_run_lifecycle(

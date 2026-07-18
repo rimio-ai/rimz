@@ -535,6 +535,7 @@ pub(super) struct PlanProposal {
 /// `Plan`; `update_plan` tool calls use a different record shape and cannot
 /// match. Records after the completion clear the marker through the same live
 /// vocabulary as the other resting-turn detectors.
+#[cfg(test)]
 pub(super) fn detect_plan_proposed(tail: &str) -> Option<PlanProposal> {
     match scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_outcome() {
         Some(RestingTurnOutcome::PlanProposed(plan)) => Some(plan),
@@ -962,6 +963,7 @@ impl TranscriptScan {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_outcome(self) -> Option<RestingTurnOutcome> {
         match self.outcome {
             OutcomeScan::Resolved(outcome) => outcome,

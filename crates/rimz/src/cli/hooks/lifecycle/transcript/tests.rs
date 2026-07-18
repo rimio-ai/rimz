@@ -191,16 +191,19 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
     )
     .unwrap();
 
+    let payload = serde_json::json!({
+        "conversation_id": "conv-1",
+        "text": "  safe final  ",
+        "thinking": "must not persist"
+    });
+    let decoded = rimz::agents::CursorAdapter
+        .decode_hook("afterAgentResponse", &payload)
+        .unwrap();
     let recorded_response = record_assistant_response(
         &workspace,
         &store,
         &rimz::agents::CursorAdapter,
-        "afterAgentResponse",
-        &serde_json::json!({
-            "conversation_id": "conv-1",
-            "text": "  safe final  ",
-            "thinking": "must not persist"
-        }),
+        &decoded,
         None,
     )
     .expect("safe response");

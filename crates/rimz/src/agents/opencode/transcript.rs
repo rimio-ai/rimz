@@ -556,29 +556,24 @@ mod tests {
             2_001,
             r#"{"type":"text","text":"completed reply"}"#,
         );
-        let mut observation = crate::agents::AgentLifecycleObservation::new(
-            Some(AgentSessionId::from("ses-main")),
-            crate::agents::LifecycleSignal::TurnEnded {
-                errored: false,
-                parked_on_background: false,
-            },
-        );
-        observation.transcript_path = Some(path.to_string_lossy().into_owned());
-
         assert_eq!(
-            OpencodeAdapter.last_assistant_message(
-                "session_idle",
-                &serde_json::json!({"session_id":"ses-main"}),
-                &observation,
-            ),
+            OpencodeAdapter
+                .decode_hook(
+                    "session_idle",
+                    &serde_json::json!({"session_id":"ses-main","transcript_path":path}),
+                )
+                .expect("test hook decodes")
+                .final_message,
             Some("completed reply".to_owned())
         );
         assert_eq!(
-            OpencodeAdapter.last_assistant_message(
-                "chat_message",
-                &serde_json::json!({"session_id":"ses-main"}),
-                &observation,
-            ),
+            OpencodeAdapter
+                .decode_hook(
+                    "chat_message",
+                    &serde_json::json!({"session_id":"ses-main","transcript_path":path}),
+                )
+                .expect("test hook decodes")
+                .final_message,
             None
         );
     }

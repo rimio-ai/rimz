@@ -55,12 +55,12 @@ use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, ClassifiedHook,
+    AgentAdapter, AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, DecodedHook,
     Result, SubagentIdentity, TranscriptMessage, agent_config_path, non_empty_trimmed,
     optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
-use crate::transcript::{AskAnswer, AskQuestion};
+use crate::transcript::AskQuestion;
 
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
 /// descriptor-vs-trait split.
@@ -286,7 +286,7 @@ impl AgentAdapter for PiAdapter {
         &PI_DESCRIPTOR
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         // Only the rpiv questionnaire blocks on native UI. Ordinary tool calls
         // remain neutral, and headless calls cannot strand a waiting row.
         let ask_kind = (event_name == "tool_call"
@@ -296,7 +296,146 @@ impl AgentAdapter for PiAdapter {
                 .blocking_tool_kind(payload.get("tool_name").and_then(Value::as_str))
         })
         .flatten();
-        classify_catalog_hook(PI_HOOKS, event_name, ask_kind)
+        let mut decoded = DecodedHook::new(classify_catalog_hook(PI_HOOKS, event_name, ask_kind));
+        decoded.agent_id = optional_payload_string(payload, &["session_id"]);
+        decoded.context_agent_id = decoded.agent_id.clone();
+        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
+        decoded.questions = if event_name == "tool_call"
+            && payload.get("has_ui").and_then(Value::as_bool) != Some(false)
+        {
+            payload
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .and_then(|tool_name| ask::question_detail(tool_name, payload.get("tool_input")?))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        decoded.native_answers = (event_name == "tool_execution_end"
+            && payload.get("tool_name").and_then(Value::as_str) == Some("ask_user_question"))
+        .then(|| ask::answer_detail(payload))
+        .flatten();
+        if [
+            "model",
+            "effort",
+            "rate_limits",
+            "total_cost_usd",
+            "context_window",
+            "total_tokens",
+            "context_pct",
+        ]
+        .into_iter()
+        .any(|key| payload.get(key).is_some())
+        {
+            decoded.observed_context = pi_observed_context(self.descriptor().kind, payload);
+        }
+        if matches!(event_name, "subagent_started" | "subagent_stopped") {
+            let signal = if event_name == "subagent_started" {
+                LifecycleSignal::SubagentStarted
+            } else {
+                LifecycleSignal::SubagentStopped {
+                    errored: payload
+                        .get("errored")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                }
+            };
+            let (agent_id, parent_agent_id) = match resolve_subagent_identity(
+                self.descriptor().kind,
+                event_name,
+                payload.get("subagent_id").and_then(Value::as_str),
+                payload.get("session_id").and_then(Value::as_str),
+                payload,
+            ) {
+                SubagentIdentity::Resolved {
+                    agent_id,
+                    parent_agent_id,
+                } => (agent_id, parent_agent_id),
+                SubagentIdentity::Quarantined => return Ok(decoded),
+            };
+            let mut observation = AgentLifecycleObservation::new(Some(agent_id), signal)
+                .with_worktree_from_payload(payload);
+            observation.parent_agent_id = Some(parent_agent_id);
+            observation.task = optional_payload_string(payload, &["subagent_label"])
+                .and_then(|value| non_empty_trimmed(&value));
+            if event_name == "subagent_stopped" {
+                observation.total_tokens = payload.get("total_tokens").and_then(Value::as_u64);
+            }
+            decoded.worktree_path = observation.worktree_path.clone();
+            decoded.lifecycle = Some(observation);
+            return Ok(decoded);
+        }
+
+        let parsed = payloads::parse_payload(payload);
+        let tool_name = payload.get("tool_name").and_then(Value::as_str);
+        let blocking_kind = (payload.get("has_ui").and_then(Value::as_bool) != Some(false))
+            .then(|| self.descriptor().blocking_tool_kind(tool_name))
+            .flatten();
+        let signal = match event_name {
+            "session_start" => Some(LifecycleSignal::Registered),
+            "before_agent_start" => Some(LifecycleSignal::TurnStarted),
+            "agent_settled" if parsed.stop_reason.as_deref() == Some("aborted") => {
+                Some(LifecycleSignal::TurnInterrupted)
+            }
+            "agent_settled" => Some(LifecycleSignal::TurnEnded {
+                errored: payloads::agent_end_errored(&parsed),
+                parked_on_background: false,
+            }),
+            "tool_call" => blocking_kind.map(|kind| LifecycleSignal::AwaitingInput {
+                kind,
+                ask_id: None,
+                detail: None,
+                native_key: optional_payload_string(payload, &["tool_call_id"]),
+            }),
+            "tool_execution_end" if tool_name == Some("ask_user_question") => {
+                Some(LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                    native_key: optional_payload_string(payload, &["tool_call_id"]),
+                })
+            }
+            "tool_execution_end" if self.descriptor().tool_mutates(payload) => {
+                Some(LifecycleSignal::ToolUsed {
+                    mutates: true,
+                    edits: self.descriptor().tool_edits_files(payload),
+                    native_key: optional_payload_string(payload, &["tool_call_id"]),
+                })
+            }
+            "session_before_compact" => Some(LifecycleSignal::Compacting),
+            "session_compact" => Some(LifecycleSignal::CompactionEnded {
+                auto: parsed
+                    .compaction_reason
+                    .as_ref()
+                    .and_then(payloads::PiCompactionReason::auto_flag),
+            }),
+            "session_shutdown" => Some(LifecycleSignal::Ended),
+            _ => None,
+        };
+        let Some(signal) = signal else {
+            return Ok(decoded);
+        };
+        let agent_id = decoded.agent_id.clone().map(AgentSessionId::from);
+        let mut observation =
+            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
+        observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+        observation.launch.model = parsed.model;
+        observation.launch.effort = parsed.effort;
+        observation.context_pct = payload_context_pct(payload, None);
+        observation.context_window = parsed.context_window;
+        observation.total_tokens = parsed.total_tokens;
+        observation.cache_read_input_tokens = parsed.cache_read_input_tokens;
+        observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
+        observation.fresh_input_tokens = parsed.input_tokens;
+        observation.output_tokens = parsed.output_tokens;
+        decoded.final_message = (event_name == "agent_settled")
+            .then_some(parsed.last_assistant_message)
+            .flatten()
+            .as_deref()
+            .and_then(non_empty_trimmed);
+        decoded.worktree_path = observation.worktree_path.clone();
+        decoded.lifecycle = Some(observation);
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -331,24 +470,6 @@ impl AgentAdapter for PiAdapter {
         })
     }
 
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // Empty stdout is the extension's allow: ordinary tools run unasked,
-        // while the questionnaire tool proceeds into its own native UI.
-        Ok(None)
-    }
-
-    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        if event_name != "tool_call"
-            || payload.get("has_ui").and_then(Value::as_bool) == Some(false)
-        {
-            return None;
-        }
-        ask::question_detail(
-            payload.get("tool_name")?.as_str()?,
-            payload.get("tool_input")?,
-        )
-    }
-
     fn answer_plan(
         &self,
         kind: AskKind,
@@ -358,153 +479,8 @@ impl AgentAdapter for PiAdapter {
         ask::answer_plan(kind, questions, answers)
     }
 
-    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
-        (event_name == "tool_execution_end"
-            && payload.get("tool_name").and_then(Value::as_str) == Some("ask_user_question"))
-        .then(|| ask::answer_detail(payload))
-        .flatten()
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        if matches!(event_name, "subagent_started" | "subagent_stopped") {
-            let signal = match event_name {
-                "subagent_started" => LifecycleSignal::SubagentStarted,
-                "subagent_stopped" => LifecycleSignal::SubagentStopped {
-                    errored: payload
-                        .get("errored")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                },
-                _ => return None,
-            };
-            let (agent_id, parent_agent_id) = match resolve_subagent_identity(
-                self.descriptor().kind,
-                event_name,
-                payload.get("subagent_id").and_then(Value::as_str),
-                payload.get("session_id").and_then(Value::as_str),
-                payload,
-            ) {
-                SubagentIdentity::Resolved {
-                    agent_id,
-                    parent_agent_id,
-                } => (agent_id, parent_agent_id),
-                SubagentIdentity::Quarantined => return None,
-            };
-            let mut observation = AgentLifecycleObservation::new(Some(agent_id), signal)
-                .with_worktree_from_payload(payload);
-            observation.parent_agent_id = Some(parent_agent_id);
-            observation.task = optional_payload_string(payload, &["subagent_label"])
-                .and_then(|value| non_empty_trimmed(&value));
-            if event_name == "subagent_stopped" {
-                observation.total_tokens = payload.get("total_tokens").and_then(Value::as_u64);
-            }
-            return Some(observation);
-        }
-
-        let parsed = payloads::parse_payload(payload);
-        // The status decision lives in the shared `lifecycle::step` table —
-        // here the adapter only names the intent. The native-event → signal
-        // mapping is docs/internals/agents/pi.md.
-        let tool_name = payload.get("tool_name").and_then(Value::as_str);
-        let blocking_kind = (payload.get("has_ui").and_then(Value::as_bool) != Some(false))
-            .then(|| self.descriptor().blocking_tool_kind(tool_name))
-            .flatten();
-        let signal = match event_name {
-            "session_start" => LifecycleSignal::Registered,
-            // `before_agent_start` carries the prompt. `agent_end` can still
-            // be followed by retry, compaction, or queued continuation, so it
-            // is enrichment-only; `agent_settled` is the true final boundary.
-            "before_agent_start" => LifecycleSignal::TurnStarted,
-            // The last assistant message is the in-band death certificate:
-            // `stopReason: "error" | "aborted"` plus `errorMessage`, no
-            // transcript forensics needed. Pi has no background-task parking.
-            "agent_settled" if parsed.stop_reason.as_deref() == Some("aborted") => {
-                LifecycleSignal::TurnInterrupted
-            }
-            "agent_settled" => LifecycleSignal::TurnEnded {
-                errored: payloads::agent_end_errored(&parsed),
-                parked_on_background: false,
-            },
-            "tool_call" if blocking_kind.is_some() => LifecycleSignal::AwaitingInput {
-                kind: blocking_kind?,
-                ask_id: None,
-                detail: None,
-                native_key: optional_payload_string(payload, &["tool_call_id"]),
-            },
-            // The questionnaire's completed tool boundary clears waiting for
-            // answers, cancellation, validation failure, and headless no-UI.
-            "tool_execution_end" if tool_name == Some("ask_user_question") => {
-                LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
-                    native_key: optional_payload_string(payload, &["tool_call_id"]),
-                }
-            }
-            // Only a *mutating* tool rides the lifecycle channel: it is proof
-            // of real work (read-only tools stay silent). The `edits` bit
-            // marks the file-writing subset, which ends the turn's thinking
-            // head.
-            "tool_execution_end" if self.descriptor().tool_mutates(payload) => {
-                LifecycleSignal::ToolUsed {
-                    mutates: true,
-                    edits: self.descriptor().tool_edits_files(payload),
-                    native_key: optional_payload_string(payload, &["tool_call_id"]),
-                }
-            }
-            // A leading signal, like Claude's `PreCompact`.
-            "session_before_compact" => LifecycleSignal::Compacting,
-            "session_compact" => LifecycleSignal::CompactionEnded {
-                auto: parsed
-                    .compaction_reason
-                    .as_ref()
-                    .and_then(payloads::PiCompactionReason::auto_flag),
-            },
-            // Fires on quit including Ctrl+C/SIGHUP/SIGTERM and on every
-            // session replacement (`/new`, `/resume`) — a true session end.
-            "session_shutdown" => LifecycleSignal::Ended,
-            _ => return None,
-        };
-        let agent_id = optional_payload_string(payload, &["session_id"]).map(AgentSessionId::from);
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        // A pi row labels with the user's *sanitized* prompt, so harness
-        // control text never reaches the row; absent fields are carry-forward.
-        observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.launch.model = parsed.model;
-        observation.launch.effort = parsed.effort;
-        // The gauge is payload-first and payload-only: the extension stamps
-        // it on every envelope from the in-process `ctx.getContextUsage()`,
-        // so no transcript tail is ever read (the `None` fallback).
-        observation.context_pct = payload_context_pct(payload, None);
-        observation.context_window = parsed.context_window;
-        observation.total_tokens = parsed.total_tokens;
-        observation.cache_read_input_tokens = parsed.cache_read_input_tokens;
-        observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
-        observation.fresh_input_tokens = parsed.input_tokens;
-        observation.output_tokens = parsed.output_tokens;
-        Some(observation)
-    }
-
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
         pi_observed_context(source, payload)
-    }
-
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        payload: &Value,
-        _observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        (event_name == "agent_settled")
-            .then(|| payloads::parse_payload(payload).last_assistant_message)
-            .flatten()
-            .as_deref()
-            .and_then(non_empty_trimmed)
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {

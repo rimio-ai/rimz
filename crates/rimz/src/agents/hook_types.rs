@@ -5,8 +5,58 @@
 //! (including `{}`) always deserialize cleanly.
 
 use serde::Deserialize;
+use serde_json::Value;
 
-use super::{AgentHookClass, AskKind, ClassifiedHook};
+use crate::transcript::{AskAnswer, AskQuestion};
+
+use super::{
+    AgentContext, AgentHookClass, AgentLifecycleObservation, AgentTurnError, AskKind,
+    ClassifiedHook,
+};
+
+/// Provider-neutral result of decoding one native hook payload.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecodedHook {
+    pub event_name: String,
+    pub class: AgentHookClass,
+    pub ask_kind: Option<AskKind>,
+    pub agent_id: Option<String>,
+    pub context_agent_id: Option<String>,
+    pub worktree_path: Option<String>,
+    pub server_url: Option<String>,
+    pub lifecycle: Option<AgentLifecycleObservation>,
+    pub questions: Vec<AskQuestion>,
+    pub ask_detail: Option<String>,
+    pub native_answers: Option<Vec<AskAnswer>>,
+    pub assistant_message: Option<String>,
+    pub final_message: Option<String>,
+    pub turn_error: Option<AgentTurnError>,
+    pub observed_context: Option<AgentContext>,
+    pub neutral: Option<Value>,
+}
+
+impl DecodedHook {
+    pub fn new(classified: ClassifiedHook) -> Self {
+        Self {
+            event_name: classified.event_name,
+            class: classified.class,
+            ask_kind: classified.ask_kind,
+            agent_id: None,
+            context_agent_id: None,
+            worktree_path: None,
+            server_url: None,
+            lifecycle: None,
+            questions: Vec::new(),
+            ask_detail: None,
+            native_answers: None,
+            assistant_message: None,
+            final_message: None,
+            turn_error: None,
+            observed_context: None,
+            neutral: None,
+        }
+    }
+}
 
 /// One installed managed hook and its classification policy.
 #[derive(Clone, Copy, Debug)]

@@ -1,7 +1,7 @@
 use super::*;
 
+use crate::agents::LaunchParams;
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::agents::{AgentTurnError, LaunchParams};
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
@@ -33,9 +33,8 @@ fn rich_lifecycle_observation() -> (AgentLifecycleObservation, Value) {
         },
         "parent_agent_id": "parent-1",
     });
-    let mut payload: AgentLifecyclePayload =
+    let payload: AgentLifecyclePayload =
         serde_json::from_value(params.clone()).expect("rich lifecycle fixture decodes");
-    payload.observation.turn_error = Some(AgentTurnError::default());
     (payload.observation, params)
 }
 
@@ -111,12 +110,7 @@ fn lifecycle_event_uses_flat_compact_wire_shape() {
     let EventKind::AgentLifecycle(payload) = rich.kind() else {
         panic!("rich lifecycle event decodes to its typed kind");
     };
-    let mut durable_observation = observation;
-    durable_observation.turn_error = None;
-    assert_eq!(
-        *payload,
-        AgentLifecyclePayload::new("Stop", &durable_observation)
-    );
+    assert_eq!(*payload, AgentLifecyclePayload::new("Stop", &observation));
 }
 
 #[test]

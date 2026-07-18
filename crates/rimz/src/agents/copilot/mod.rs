@@ -37,11 +37,12 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, AskKind, DecodedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextRefresh,
     LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, SpawnedSubagent,
     SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
-    TranscriptMessage, TurnErrorClass, resolve_subagent_identity, sanitize_user_prompt,
+    TranscriptMessage, TurnErrorClass, optional_payload_string, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -316,9 +317,10 @@ impl AgentAdapter for CopilotAdapter {
         })
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let parsed = payloads::parse_payload(payload);
-        let tool = parsed.normalized_tool_calls().selected();
+        let tools = parsed.normalized_tool_calls();
+        let tool = tools.selected();
         let ask_kind = if event_name == "permissionRequest" {
             Some(AskKind::Permission)
         } else if event_name == "preToolUse" {
@@ -327,40 +329,79 @@ impl AgentAdapter for CopilotAdapter {
         } else {
             None
         };
-        classify_catalog_hook(COPILOT_HOOKS, event_name, ask_kind)
-    }
-
-    #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(COPILOT_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        use super::{AgentHookClass, ClassificationSample};
-
-        let mut samples = super::hook_types::catalog_classification_corpus(COPILOT_HOOKS);
-        samples.push(ClassificationSample::new(
-            "preToolUse",
-            json!({"sessionId":"sess-1","toolName":"bash"}),
-            AgentHookClass::Lifecycle,
-            None,
-        ));
-        samples
-    }
-
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        Ok(None)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let parsed = payloads::parse_payload(payload);
-        let tools = parsed.normalized_tool_calls();
-        let selected_tool = tools.selected();
+        let mut decoded =
+            DecodedHook::new(classify_catalog_hook(COPILOT_HOOKS, event_name, ask_kind));
+        decoded.agent_id = parsed.session_id.clone();
+        decoded.context_agent_id = parsed.session_id.clone();
+        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
+        decoded.questions = if event_name == "preToolUse" {
+            tool.filter(|tool| tool.name == Some("ask_user"))
+                .and_then(|tool| tool.args?.as_object())
+                .and_then(|args| {
+                    let question = ["question", "prompt", "message"]
+                        .into_iter()
+                        .find_map(|key| args.get(key).and_then(Value::as_str))
+                        .or_else(|| args.values().find_map(Value::as_str))?
+                        .trim();
+                    (!question.is_empty()).then(|| {
+                        vec![AskQuestion {
+                            question: question.to_owned(),
+                            options: Vec::new(),
+                            multi_select: false,
+                            has_option_previews: false,
+                        }]
+                    })
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        decoded.ask_detail = if event_name == "permissionRequest" {
+            tool.and_then(|tool| tool.name)
+                .map(str::to_owned)
+                .filter(|name| !name.is_empty())
+        } else {
+            decoded
+                .questions
+                .first()
+                .map(|question| question.question.clone())
+        };
+        decoded.turn_error = (event_name == "errorOccurred")
+            .then(|| {
+                (parsed.recoverable == Some(false)).then_some(())?;
+                let label = parsed
+                    .error
+                    .clone()
+                    .and_then(payloads::CopilotHookError::into_message)
+                    .map(|message| message.trim().chars().take(500).collect::<String>())
+                    .filter(|message| !message.is_empty())?;
+                let at = parsed
+                    .timestamp
+                    .as_ref()
+                    .and_then(Value::as_i64)
+                    .and_then(|millis| Timestamp::from_millisecond(millis).ok())
+                    .unwrap_or_else(Timestamp::now);
+                Some(AgentTurnError {
+                    class: TurnErrorClass::classify_label(Some(&label)),
+                    at,
+                    label: Some(label),
+                })
+            })
+            .flatten();
+        if [
+            "model",
+            "effort",
+            "rate_limits",
+            "total_cost_usd",
+            "context_window",
+            "total_tokens",
+            "context_pct",
+        ]
+        .into_iter()
+        .any(|key| payload.get(key).is_some())
+        {
+            decoded.observed_context = self.observe_context(self.descriptor().kind, payload);
+        }
         let signal = match event_name {
             "sessionStart"
                 if parsed
@@ -380,7 +421,7 @@ impl AgentAdapter for CopilotAdapter {
             },
             "preToolUse" => match self
                 .descriptor()
-                .blocking_tool_kind(selected_tool.and_then(|tool| tool.name))
+                .blocking_tool_kind(tool.and_then(|tool| tool.name))
             {
                 Some(kind) => LifecycleSignal::AwaitingInput {
                     kind,
@@ -405,11 +446,13 @@ impl AgentAdapter for CopilotAdapter {
             },
             "preCompact" => LifecycleSignal::Compacting,
             "sessionEnd" => LifecycleSignal::Ended,
-            _ => return None,
+            _ => return Ok(decoded),
         };
-        let agent_id = parsed.session_id.clone().map(AgentSessionId::from);
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        let mut observation = AgentLifecycleObservation::new(
+            parsed.session_id.clone().map(AgentSessionId::from),
+            signal,
+        )
+        .with_worktree_from_payload(payload);
         if let Some(session_id) = parsed.session_id.as_deref() {
             observation.transcript_path = parsed
                 .transcript_path
@@ -429,7 +472,32 @@ impl AgentAdapter for CopilotAdapter {
             observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
             observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         }
-        Some(observation)
+        decoded.final_message = (event_name == "agentStop")
+            .then_some(observation.transcript_path.as_deref())
+            .flatten()
+            .and_then(|path| transcript::last_assistant_message(Path::new(path)));
+        decoded.worktree_path = observation.worktree_path.clone();
+        decoded.lifecycle = Some(observation);
+        Ok(decoded)
+    }
+
+    #[cfg(test)]
+    fn native_hook_events(&self) -> Vec<&'static str> {
+        super::hook_types::catalog_event_names(COPILOT_HOOKS)
+    }
+
+    #[cfg(test)]
+    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+        use super::{AgentHookClass, ClassificationSample};
+
+        let mut samples = super::hook_types::catalog_classification_corpus(COPILOT_HOOKS);
+        samples.push(ClassificationSample::new(
+            "preToolUse",
+            json!({"sessionId":"sess-1","toolName":"bash"}),
+            AgentHookClass::Lifecycle,
+            None,
+        ));
+        samples
     }
 
     fn correlate_subagent(
@@ -483,89 +551,6 @@ impl AgentAdapter for CopilotAdapter {
                 total_tokens: child.total_tokens,
             })
             .collect()
-    }
-
-    fn observe_turn_error_from_hook(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentTurnError> {
-        if event_name != "errorOccurred" {
-            return None;
-        }
-        let parsed = payloads::parse_payload(payload);
-        if parsed.recoverable != Some(false) {
-            return None;
-        }
-        let label = parsed
-            .error
-            .and_then(payloads::CopilotHookError::into_message)
-            .map(|message| message.trim().chars().take(500).collect::<String>())
-            .filter(|message| !message.is_empty())?;
-        let at = parsed
-            .timestamp
-            .as_ref()
-            .and_then(Value::as_i64)
-            .and_then(|millis| Timestamp::from_millisecond(millis).ok())
-            .unwrap_or_else(Timestamp::now);
-        Some(AgentTurnError {
-            class: TurnErrorClass::classify_label(Some(&label)),
-            at,
-            label: Some(label),
-        })
-    }
-
-    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        if event_name != "preToolUse" {
-            return None;
-        }
-        let parsed = payloads::parse_payload(payload);
-        let tool = parsed.normalized_tool_calls().selected()?;
-        if tool.name != Some("ask_user") {
-            return None;
-        }
-        let args = tool.args?.as_object()?;
-        let question = ["question", "prompt", "message"]
-            .into_iter()
-            .find_map(|key| args.get(key).and_then(Value::as_str))
-            .or_else(|| args.values().find_map(Value::as_str))?
-            .trim();
-        if question.is_empty() {
-            return None;
-        }
-        Some(vec![AskQuestion {
-            question: question.to_owned(),
-            options: Vec::new(),
-            multi_select: false,
-            has_option_previews: false,
-        }])
-    }
-
-    fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
-        if event_name == "permissionRequest" {
-            let parsed = payloads::parse_payload(payload);
-            return parsed
-                .normalized_tool_calls()
-                .selected()
-                .and_then(|tool| tool.name)
-                .map(str::to_owned)
-                .filter(|name| !name.is_empty());
-        }
-        self.ask_question_detail(event_name, payload)
-            .and_then(|questions| questions.into_iter().next())
-            .map(|question| question.question)
-    }
-
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        _payload: &Value,
-        observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        if event_name != "agentStop" {
-            return None;
-        }
-        transcript::last_assistant_message(Path::new(observation.transcript_path.as_deref()?))
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {

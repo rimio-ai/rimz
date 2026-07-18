@@ -52,10 +52,10 @@ use self::install::{
 use self::install::{has_rimz_hook_command, snake_event_token};
 use self::payloads::{
     CodexChildIdentity, CodexCommon, CodexPermissionRequest, CodexPostCompact, CodexPostToolUse,
-    CodexPreCompact, CodexPreToolUse, CodexSessionStart, CodexSubagentStart, CodexSubagentStop,
-    CodexUserPromptSubmit, parse_permission_request, parse_post_compact, parse_post_tool_use,
-    parse_pre_compact, parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start,
-    parse_subagent_stop, parse_user_prompt_submit,
+    CodexPreCompact, CodexPreToolUse, CodexSessionStart, CodexStop, CodexSubagentStart,
+    CodexSubagentStop, CodexUserPromptSubmit, parse_permission_request, parse_post_compact,
+    parse_post_tool_use, parse_pre_compact, parse_pre_tool_use, parse_session_start, parse_stop,
+    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
 pub use self::process::{
     codex_daemon_pids, codex_resumed_session_id_from_cmdline, pid_is_codex_daemon,
@@ -63,14 +63,15 @@ pub use self::process::{
 pub(crate) use self::transcript::infer_turn_death_from_spent_window;
 use self::transcript::{
     CodexRolloutHeader, RestingTurnOutcome, TranscriptScanNeed, TranscriptUsage, configured_model,
-    configured_reasoning_effort, detect_plan_proposed, detect_turn_error, find_session_transcript,
+    configured_reasoning_effort, detect_turn_error, find_session_transcript,
     payload_reasoning_effort, read_rollout_header, scan_transcript_tail,
 };
 #[cfg(test)]
 use self::transcript::{
     configured_model_at, configured_reasoning_effort_at, death_warning_from_frame,
-    detect_turn_complete, detect_turn_interrupted, find_session_transcript_under,
-    transcript_enrichment, usage_from_transcript, with_codex_config_path, with_codex_sessions_root,
+    detect_plan_proposed, detect_turn_complete, detect_turn_interrupted,
+    find_session_transcript_under, transcript_enrichment, usage_from_transcript,
+    with_codex_config_path, with_codex_sessions_root,
 };
 pub use self::transcript::{
     refine_turn_death_from_frame, refresh_transcript_context, session_origin,
@@ -89,14 +90,14 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentAdapter, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr,
-    AnswerStep, AskReply, ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport,
+    AnswerStep, AskReply, DecodedHook, ExtraCredits, HookInstallPreview, HookInstallReport,
     HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx,
     RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity, SubagentIdentity,
     TranscriptMessage, TranscriptRole, non_empty_trimmed, optional_payload_string,
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
     stop_payload_errored,
 };
-use crate::transcript::{AskAnswer, AskOption, AskQuestion};
+use crate::transcript::{AskOption, AskQuestion};
 
 /// Per-hook timeout written into the Codex config (seconds). Hooks write a
 /// Waiting state and return neutral immediately, so the value is a short guard
@@ -483,15 +484,108 @@ impl AgentAdapter for CodexAdapter {
         codex_resumed_session_id_from_cmdline(cmdline)
     }
 
-    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
+        let parts = CodexLifecycleParts::parse(event_name, payload);
         let ask_kind = match event_name {
             "PermissionRequest" => Some(AskKind::Permission),
-            "PreToolUse" => self
-                .descriptor()
-                .blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()),
+            "PreToolUse" => self.descriptor().blocking_tool_kind(
+                parts
+                    .pre_tool_use
+                    .as_ref()
+                    .and_then(|request| request.tool_name.as_deref()),
+            ),
             _ => None,
         };
-        classify_catalog_hook(CODEX_HOOKS, event_name, ask_kind)
+        let mut decoded =
+            DecodedHook::new(classify_catalog_hook(CODEX_HOOKS, event_name, ask_kind));
+        decoded.agent_id = optional_payload_string(payload, &["agent_id", "session_id"]);
+        decoded.context_agent_id = optional_payload_string(payload, &["session_id", "agent_id"]);
+        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
+        decoded.server_url = optional_payload_string(payload, &["server_url"]);
+        decoded.native_answers = match event_name {
+            "PostToolUse" => parts.post_tool_use.as_ref().and_then(|parsed| {
+                ask::answer_detail(
+                    parsed.tool_name.as_deref()?,
+                    parsed.tool_input.as_ref()?,
+                    parsed.tool_response.as_ref()?,
+                )
+            }),
+            "UserPromptSubmit" => parts
+                .user_prompt
+                .as_ref()
+                .and_then(|parsed| ask::submitted_prompt_answer(parsed.prompt.as_deref()?)),
+            _ => None,
+        };
+        let child_id = parts.distinct_child_id();
+        let transcript = codex_transcript_observation(
+            payload,
+            child_id,
+            matches!(event_name, "Stop" | "SubagentStop"),
+        );
+        decoded.questions = match event_name {
+            "PreToolUse" => parts
+                .pre_tool_use
+                .as_ref()
+                .and_then(|parsed| {
+                    ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
+                })
+                .unwrap_or_default(),
+            "Stop" => transcript
+                .plan_proposed
+                .as_ref()
+                .and_then(|plan| ask::plan_question(&plan.text))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        decoded.ask_detail = decoded
+            .questions
+            .first()
+            .and_then(|question| question.question.lines().next())
+            .map(ToOwned::to_owned)
+            .filter(|detail| !detail.is_empty());
+        decoded.turn_error = transcript.turn_error.clone();
+        decoded.final_message = (event_name == "Stop")
+            .then_some(parts.stop.as_ref())
+            .flatten()
+            .and_then(|stop| stop.last_assistant_message.as_deref())
+            .and_then(non_empty_trimmed);
+        let signal = map_codex_lifecycle_signal(
+            self.descriptor(),
+            event_name,
+            payload,
+            &parts,
+            transcript.turn_error.as_ref(),
+            transcript.plan_proposed.is_some(),
+        );
+        if let Some(signal) = signal
+            && let Some((agent_id, parent_agent_id)) = resolve_codex_observation_identity(
+                self.descriptor().kind,
+                event_name,
+                payload,
+                &parts,
+            )
+        {
+            let root_identity_event = parent_agent_id.is_none()
+                && matches!(
+                    signal,
+                    LifecycleSignal::Registered | LifecycleSignal::TurnStarted
+                );
+            let mut observation = build_codex_observation(
+                payload,
+                &parts,
+                signal,
+                agent_id,
+                parent_agent_id,
+                transcript,
+            );
+            if root_identity_event && let Some(agent_id) = observation.agent_id.as_ref() {
+                observation.origin = session_origin(agent_id.as_str());
+            }
+            decoded.agent_id = observation.agent_id.as_ref().map(ToString::to_string);
+            decoded.worktree_path = observation.worktree_path.clone();
+            decoded.lifecycle = Some(observation);
+        }
+        Ok(decoded)
     }
 
     #[cfg(test)]
@@ -547,29 +641,6 @@ impl AgentAdapter for CodexAdapter {
         })
     }
 
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // Codex permission hooks expect empty stdout on the neutral path —
-        // the agent's own UI then asks the human. Per docs/internals/agents/model.md:
-        // never emit `updatedInput` / `interrupt` for Codex permission hooks.
-        Ok(None)
-    }
-
-    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        match event_name {
-            "PreToolUse" => {
-                let parsed = parse_pre_tool_use(payload);
-                ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
-            }
-            "Stop" => {
-                let tail = codex_transcript_path(payload)
-                    .as_deref()
-                    .and_then(read_transcript_tail)?;
-                ask::plan_question(&detect_plan_proposed(&tail)?.text)
-            }
-            _ => None,
-        }
-    }
-
     fn ask_options(&self, kind: AskKind) -> Option<Vec<AskOption>> {
         match kind {
             AskKind::PlanApproval => Some(ask::plan_options()),
@@ -584,84 +655,6 @@ impl AgentAdapter for CodexAdapter {
         answers: &[AskReply],
     ) -> std::result::Result<Vec<AnswerStep>, AnswerPlanErr> {
         ask::answer_plan(kind, questions, answers)
-    }
-
-    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
-        match event_name {
-            "PostToolUse" => {
-                let parsed = parse_post_tool_use(payload);
-                ask::answer_detail(
-                    parsed.tool_name.as_deref()?,
-                    parsed.tool_input.as_ref()?,
-                    parsed.tool_response.as_ref()?,
-                )
-            }
-            "UserPromptSubmit" => {
-                let parsed = parse_user_prompt_submit(payload);
-                ask::submitted_prompt_answer(parsed.prompt.as_deref()?)
-            }
-            _ => None,
-        }
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let parts = CodexLifecycleParts::parse(event_name, payload);
-        let child_id = parts.distinct_child_id();
-        let transcript = codex_transcript_observation(
-            payload,
-            child_id,
-            matches!(event_name, "Stop" | "SubagentStop"),
-        );
-        let signal = map_codex_lifecycle_signal(
-            self.descriptor(),
-            event_name,
-            payload,
-            &parts,
-            transcript.turn_error.as_ref(),
-            transcript.plan_proposed.is_some(),
-        )?;
-        let (agent_id, parent_agent_id) = resolve_codex_observation_identity(
-            self.descriptor().kind,
-            event_name,
-            payload,
-            &parts,
-        )?;
-        let root_identity_event = parent_agent_id.is_none()
-            && matches!(
-                signal,
-                LifecycleSignal::Registered | LifecycleSignal::TurnStarted
-            );
-        let mut observation = build_codex_observation(
-            payload,
-            &parts,
-            signal,
-            agent_id,
-            parent_agent_id,
-            transcript,
-        );
-        if root_identity_event && let Some(agent_id) = observation.agent_id.as_ref() {
-            observation.origin = session_origin(agent_id.as_str());
-        }
-        Some(observation)
-    }
-
-    fn last_assistant_message(
-        &self,
-        event_name: &str,
-        payload: &Value,
-        _observation: &AgentLifecycleObservation,
-    ) -> Option<String> {
-        match event_name {
-            "Stop" => parse_stop(payload)
-                .last_assistant_message
-                .as_deref()
-                .and_then(non_empty_trimmed),
-            _ => None,
-        }
     }
 
     fn observe_turn_error(&self, payload: &Value) -> Option<AgentTurnError> {
@@ -841,6 +834,7 @@ struct CodexLifecycleParts {
     post_tool_use: Option<CodexPostToolUse>,
     pre_compact: Option<CodexPreCompact>,
     post_compact: Option<CodexPostCompact>,
+    stop: Option<CodexStop>,
 }
 
 struct CodexChild<'a> {
@@ -881,6 +875,7 @@ impl CodexLifecycleParts {
             post_tool_use: (event_name == "PostToolUse").then(|| parse_post_tool_use(payload)),
             pre_compact: (event_name == "PreCompact").then(|| parse_pre_compact(payload)),
             post_compact: (event_name == "PostCompact").then(|| parse_post_compact(payload)),
+            stop: (event_name == "Stop").then(|| parse_stop(payload)),
         }
     }
 
@@ -1211,7 +1206,6 @@ fn build_codex_observation(
     observation.transcript_path = transcript
         .path
         .map(|path| path.to_string_lossy().into_owned());
-    observation.turn_error = transcript.turn_error;
     let reported_context_window = usage.reported_context_window();
     observation.launch.role = is_subagent
         .then(|| {

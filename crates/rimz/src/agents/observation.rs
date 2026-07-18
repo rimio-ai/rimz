@@ -16,8 +16,8 @@ use crate::harness::run::PermissionMode;
 use crate::ids::{AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwner};
 
+use super::lifecycle::LifecycleSignal;
 use super::optional_payload_string;
-use super::{AgentTurnError, lifecycle::LifecycleSignal};
 
 /// A provider session's origin, read from the session store head record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,12 +197,6 @@ pub struct AgentLifecycleObservation {
     /// Cumulative token usage for this agent session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
-    /// Provider-native turn-death marker discovered while building this
-    /// observation. The CLI merges it into the context sidecar; it is skipped in
-    /// the durable lifecycle event so the store still carries only the
-    /// normalized signal.
-    #[serde(skip)]
-    pub turn_error: Option<AgentTurnError>,
     /// The latest API call's per-call token split — what the agent card's
     /// composition line legends (`◌` cache-read, `◍` cache-write, `↘` fresh
     /// input, `↗` output). Carry-forward enrichment for an agent with no richer
@@ -254,7 +248,6 @@ impl AgentLifecycleObservation {
             context_pct: None,
             context_window: None,
             total_tokens: None,
-            turn_error: None,
             cache_read_input_tokens: None,
             cache_write_input_tokens: None,
             fresh_input_tokens: None,

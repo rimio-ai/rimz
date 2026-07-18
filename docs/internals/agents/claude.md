@@ -8,7 +8,7 @@ This doc is the single home for everything Claude-specific: how each native even
 
 Native event → internal mapping. The table says *which native events are wired* and *how each maps*; the behaviour they drive is the state machine in [model.md](./model.md), and the upstream events, payloads, and decision schema are in [claude-reference.md](../../externals/agent-adapter/claude-reference.md).
 
-| Native event                  | Channel       | `observe_lifecycle` → [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs)                                          |
+| Native event                  | Channel       | `decode_hook` → [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs)                                          |
 | ----------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `SessionStart`                | lifecycle     | `Registered`; `startup`/`clear` stamp fresh lineage; `compact` maps to `CompactionEnded { auto: None }` - model, context window/tokens (transcript) |
 | `UserPromptSubmit`            | lifecycle     | `TurnStarted` - sanitized `task`/`prompt`; refresh context/tokens                                                            |

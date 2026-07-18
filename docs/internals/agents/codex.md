@@ -8,7 +8,7 @@ This doc is the single home for everything Codex-specific: the native-event mapp
 
 Native event or derived surface → internal mapping; the upstream events, payloads, and decision schema are in [codex-reference.md](../../externals/agent-adapter/codex-reference.md).
 
-| Native event / surface               | Channel       | `observe_lifecycle` → [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields                                |
+| Native event / surface               | Channel       | `decode_hook` → [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields                                |
 | ------------------------------------ | ------------- | ----------------------------------- | ------------------------------------------------ |
 | `SessionStart`                       | lifecycle     | `Registered`; `source = "compact"` maps to `CompactionEnded { auto: None }` | model, effort, root lineage    |
 | `UserPromptSubmit`                   | lifecycle     | `TurnStarted`                       | root prompt, or child progress when `agent_id` is distinct |

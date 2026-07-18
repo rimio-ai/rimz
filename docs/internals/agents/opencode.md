@@ -8,7 +8,7 @@ This doc is the single home for everything OpenCode-specific. OpenCode's integra
 
 Native surface → internal mapping; the upstream hooks, bus payloads, SQLite schema, and auth shape are in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
 
-| Native surface | Plugin emits | Channel | `observe_lifecycle` → [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields |
+| Native surface | Plugin emits | Channel | `decode_hook` → [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields |
 | --- | --- | --- | --- | --- |
 | `session.created` without `parentID` | `session_created` | lifecycle | `Registered` | worktree from `directory`/`cwd` |
 | `chat.message` | `chat_message` | lifecycle | `TurnStarted` | sanitized `prompt`, `model`, `effort` |

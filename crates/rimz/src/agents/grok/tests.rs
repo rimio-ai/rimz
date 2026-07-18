@@ -107,7 +107,7 @@ fn launch_keeps_streaming_flags_out_of_interactive_sessions() {
 fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
     let adapter = GrokAdapter;
     let ask = adapter
-        .observe_lifecycle(
+        .decode_hook(
             "Notification",
             &json!({
                 "sessionId":"s1",
@@ -115,6 +115,8 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
                 "message":"Plan approval requested"
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert!(matches!(
         ask.signal,
@@ -124,19 +126,25 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
         }
     ));
     let interrupted = adapter
-        .observe_lifecycle("Stop", &json!({"sessionId":"s1","reason":"cancelled"}))
+        .decode_hook("Stop", &json!({"sessionId":"s1","reason":"cancelled"}))
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(interrupted.signal, LifecycleSignal::TurnInterrupted);
     assert!(
         adapter
-            .observe_lifecycle("Stop", &json!({"sessionId":"s1","reason":"shutdown"}))
+            .decode_hook("Stop", &json!({"sessionId":"s1","reason":"shutdown"}))
+            .expect("test hook decodes")
+            .lifecycle
             .is_none()
     );
     let child = adapter
-        .observe_lifecycle(
+        .decode_hook(
             "SubagentStop",
             &json!({"sessionId":"s1","subagentId":"child-1","exitCode":-1}),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(child.agent_id.as_deref(), Some("child-1"));
     assert_eq!(child.parent_agent_id.as_deref(), Some("s1"));
@@ -145,10 +153,12 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
         LifecycleSignal::SubagentStopped { errored: false }
     );
     let failed_child = adapter
-        .observe_lifecycle(
+        .decode_hook(
             "SubagentStop",
             &json!({"sessionId":"s1","subagentId":"child-2","exitCode":1}),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(
         failed_child.signal,
@@ -156,26 +166,31 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
     );
     assert!(
         adapter
-            .observe_lifecycle("SubagentStart", &json!({"sessionId":"s1"}))
+            .decode_hook("SubagentStart", &json!({"sessionId":"s1"}))
+            .expect("test hook decodes")
+            .lifecycle
             .is_none()
     );
     assert!(matches!(
         adapter
-            .observe_lifecycle("Stop", &json!({"sessionId":"s1","reason":"error"}))
+            .decode_hook("Stop", &json!({"sessionId":"s1","reason":"error"}))
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap()
             .signal,
         LifecycleSignal::TurnEnded { errored: true, .. }
     ));
+    let decoded = adapter
+        .decode_hook("permission_denied", &json!({}))
+        .expect("test hook decodes");
+    assert_eq!(decoded.class, AgentHookClass::Unknown);
+    assert_eq!(decoded.ask_kind, None);
+    assert_eq!(decoded.event_name, "PermissionDenied");
     assert_eq!(
-        adapter.classify_hook("permission_denied", &json!({})),
-        ClassifiedHook {
-            class: AgentHookClass::Unknown,
-            ask_kind: None,
-            event_name: "PermissionDenied".to_owned(),
-        }
-    );
-    assert_eq!(
-        adapter.classify_hook("future_event", &json!({})).event_name,
+        adapter
+            .decode_hook("future_event", &json!({}))
+            .expect("test hook decodes")
+            .event_name,
         "FutureEvent"
     );
 }
@@ -189,7 +204,9 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
         ("read", false, false),
     ] {
         let observation = adapter
-            .observe_lifecycle("PostToolUse", &json!({"sessionId":"s1","toolName":tool}))
+            .decode_hook("PostToolUse", &json!({"sessionId":"s1","toolName":tool}))
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap();
         assert_eq!(
             observation.signal,
@@ -202,10 +219,12 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
     }
     assert_eq!(
         adapter
-            .observe_lifecycle(
+            .decode_hook(
                 "PostToolUseFailure",
                 &json!({"sessionId":"s1","toolName":"apply_patch","error":"denied"}),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap()
             .signal,
         LifecycleSignal::ToolUsed {
@@ -216,7 +235,9 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
     );
     assert_eq!(
         adapter
-            .observe_lifecycle("PostCompact", &json!({"sessionId":"s1","source":"manual"}))
+            .decode_hook("PostCompact", &json!({"sessionId":"s1","source":"manual"}))
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap()
             .signal,
         LifecycleSignal::CompactionEnded { auto: Some(false) }
@@ -234,8 +255,9 @@ fn managed_catalog_is_passive_and_excludes_pre_tool_use() {
     );
     assert!(
         GrokAdapter
-            .render_neutral("Notification")
-            .unwrap()
+            .decode_hook("Notification", &Value::Null)
+            .expect("test hook decodes")
+            .neutral
             .is_none()
     );
 
@@ -332,10 +354,12 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     );
     assert!(
         GrokAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "permission_requested",
                 &json!({"sessionId":"session-1","toolName":"run_terminal_command"}),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .is_none()
     );
 }
@@ -345,23 +369,29 @@ fn only_failure_hooks_contribute_turn_errors() {
     let adapter = GrokAdapter;
     assert!(
         adapter
-            .observe_turn_error_from_hook("Stop", &json!({"reason":"end_turn"}))
+            .decode_hook("Stop", &json!({"reason":"end_turn"}))
+            .expect("test hook decodes")
+            .turn_error
             .is_none()
     );
     assert!(
         adapter
-            .observe_turn_error_from_hook(
+            .decode_hook(
                 "Notification",
                 &json!({"notificationType":"permission_prompt"}),
             )
+            .expect("test hook decodes")
+            .turn_error
             .is_none()
     );
     assert_eq!(
         adapter
-            .observe_turn_error_from_hook(
+            .decode_hook(
                 "Notification",
                 &json!({"notificationType":"agent_error","message":"provider failed"}),
             )
+            .expect("test hook decodes")
+            .turn_error
             .and_then(|error| error.label),
         Some("provider failed".to_owned())
     );

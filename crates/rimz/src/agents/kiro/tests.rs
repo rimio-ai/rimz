@@ -5,7 +5,6 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use crate::agents::descriptor::{ConcernCoverage, IntegrationConcern};
-use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{
     AgentErr, LaunchPreset, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     TranscriptPosition, TranscriptRole,
@@ -33,18 +32,33 @@ fn native_hooks_are_explicitly_unsupported() {
     for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] {
         let payload = json!({ "session_id": "sess_redacted", "prompt": "ignored" });
         assert_eq!(
-            KiroAdapter.classify_hook(event, &payload).class,
+            KiroAdapter
+                .decode_hook(event, &payload)
+                .expect("test hook decodes")
+                .class,
             AgentHookClass::Unknown
         );
-        assert!(KiroAdapter.observe_lifecycle(event, &payload).is_none());
-        assert_eq!(KiroAdapter.render_neutral(event).unwrap(), None);
+        assert!(
+            KiroAdapter
+                .decode_hook(event, &payload)
+                .expect("test hook decodes")
+                .lifecycle
+                .is_none()
+        );
+        assert_eq!(
+            KiroAdapter
+                .decode_hook(event, &Value::Null)
+                .expect("test hook decodes")
+                .neutral,
+            None
+        );
     }
 
-    let observation =
-        super::super::AgentLifecycleObservation::new(None, LifecycleSignal::Registered);
     assert!(
         KiroAdapter
-            .last_assistant_message("Stop", &json!({}), &observation)
+            .decode_hook("Stop", &json!({}))
+            .expect("test hook decodes")
+            .final_message
             .is_none()
     );
 }

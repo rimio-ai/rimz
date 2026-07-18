@@ -20,9 +20,10 @@ use super::descriptor::{
     ToolClassification,
 };
 use super::{
-    AgentAdapter, AgentErr, AgentHookClass, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
-    LocalSessionObservation, RefreshTrigger, Result, TranscriptMessage, TranscriptStat,
+    AgentAdapter, AgentErr, AgentHookClass, ClassifiedHook, DecodedHook, HookInstallPreview,
+    HookInstallReport, HookUninstallReport, LocalContextPatch, LocalContextRefresh,
+    LocalContextRefreshCtx, LocalSessionObservation, RefreshTrigger, Result, TranscriptMessage,
+    TranscriptStat,
 };
 
 const HOOK_INSTALL_UNAVAILABLE: &str = "the v3 engine does not execute standalone hook configs (verified against Kiro CLI 2.12.1); re-enable after a pinned v3 release provides a reproducible native hook contract";
@@ -209,18 +210,12 @@ impl AgentAdapter for KiroAdapter {
         Some(session::fixture_observation())
     }
 
-    fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        ClassifiedHook {
+    fn decode_hook(&self, event_name: &str, _payload: &Value) -> Result<DecodedHook> {
+        Ok(DecodedHook::new(ClassifiedHook {
             class: AgentHookClass::Unknown,
             ask_kind: None,
             event_name: event_name.to_owned(),
-        }
-    }
-
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // Keep defensive manual feeds silent; if a future pinned release makes
-        // documented hooks executable, stdout may become an agent input.
-        Ok(None)
+        }))
     }
 
     fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<crate::ids::AgentSessionId> {

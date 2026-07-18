@@ -4,12 +4,16 @@ use super::*;
 fn cursor_compatibility_hooks_are_quarantined() {
     let cursor = json!({ "cursor_version": "1.7.0", "conversation_id": "conv-1" });
     assert_eq!(
-        ClaudeAdapter.classify_hook("PostToolUse", &cursor).class,
+        ClaudeAdapter
+            .decode_hook("PostToolUse", &cursor)
+            .expect("test hook decodes")
+            .class,
         AgentHookClass::Unknown
     );
     assert_eq!(
         ClaudeAdapter
-            .classify_hook("PostToolUse", &json!({ "session_id": "sess-1" }))
+            .decode_hook("PostToolUse", &json!({ "session_id": "sess-1" }))
+            .expect("test hook decodes")
             .class,
         AgentHookClass::Lifecycle
     );
@@ -20,24 +24,32 @@ use crate::agents::AgentHookClass;
 fn permission_request_does_not_duplicate_native_ask_tools() {
     for tool in ["AskUserQuestion", "ExitPlanMode"] {
         let payload = json!({ "session_id": "sess-1", "tool_name": tool });
-        let classified = ClaudeAdapter.classify_hook("PermissionRequest", &payload);
+        let classified = ClaudeAdapter
+            .decode_hook("PermissionRequest", &payload)
+            .expect("test hook decodes");
         assert_eq!(classified.class, AgentHookClass::Lifecycle, "{tool}");
         assert_eq!(classified.ask_kind, None, "{tool}");
         assert!(
             ClaudeAdapter
-                .observe_lifecycle("PermissionRequest", &payload)
+                .decode_hook("PermissionRequest", &payload)
+                .expect("test hook decodes")
+                .lifecycle
                 .is_none(),
             "{tool}"
         );
     }
 
     let payload = json!({ "session_id": "sess-1", "tool_name": "Bash" });
-    let classified = ClaudeAdapter.classify_hook("PermissionRequest", &payload);
+    let classified = ClaudeAdapter
+        .decode_hook("PermissionRequest", &payload)
+        .expect("test hook decodes");
     assert_eq!(classified.class, AgentHookClass::AwaitingUser);
     assert_eq!(classified.ask_kind, Some(AskKind::Permission));
     assert!(matches!(
         ClaudeAdapter
-            .observe_lifecycle("PermissionRequest", &payload)
+            .decode_hook("PermissionRequest", &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,
@@ -49,7 +61,9 @@ fn permission_request_does_not_duplicate_native_ask_tools() {
 #[test]
 fn compaction_events_map_trigger_to_lifecycle_signals() {
     let pre = ClaudeAdapter
-        .observe_lifecycle("PreCompact", &json!({ "session_id": "sess-1" }))
+        .decode_hook("PreCompact", &json!({ "session_id": "sess-1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(pre.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(pre.signal, LifecycleSignal::Compacting);
@@ -73,7 +87,9 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
         ),
     ] {
         let obs = ClaudeAdapter
-            .observe_lifecycle("PostCompact", &payload)
+            .decode_hook("PostCompact", &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap();
         assert_eq!(obs.signal, expected, "{payload}");
     }
@@ -82,7 +98,7 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
 #[test]
 fn subagent_and_foreign_identity_boundaries_are_preserved() {
     let start = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "SubagentStart",
             &json!({
                 "session_id": "sess-parent",
@@ -92,6 +108,8 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
                 "permission_mode": "acceptEdits",
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(start.agent_id.as_deref(), Some("child-1"));
     assert_eq!(start.signal, LifecycleSignal::SubagentStarted);
@@ -105,7 +123,9 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
         "last_assistant_message": "Analysis complete",
     });
     let stop = ClaudeAdapter
-        .observe_lifecycle("SubagentStop", &stop_payload)
+        .decode_hook("SubagentStop", &stop_payload)
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(stop.agent_id.as_deref(), Some("child-1"));
     assert_eq!(
@@ -116,17 +136,21 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
     assert_eq!(stop.parent_agent_id.as_deref(), Some("sess-parent"));
 
     let root = ClaudeAdapter
-        .observe_lifecycle("UserPromptSubmit", &json!({ "session_id": "sess-root" }))
+        .decode_hook("UserPromptSubmit", &json!({ "session_id": "sess-root" }))
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(root.agent_id.as_deref(), Some("sess-root"));
     assert_eq!(root.parent_agent_id, None);
 
     assert!(
         ClaudeAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "SubagentStart",
                 &json!({ "session_id": "sess-parent", "subagent_type": "Explore" }),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .is_none()
     );
 
@@ -161,13 +185,17 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
         ),
     ] {
         assert!(
-            ClaudeAdapter.observe_lifecycle(event, &payload).is_none(),
+            ClaudeAdapter
+                .decode_hook(event, &payload)
+                .expect("test hook decodes")
+                .lifecycle
+                .is_none(),
             "{event}"
         );
     }
 
     let root_with_equal_id = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "PostToolUse",
             &json!({
                 "session_id": "sess-1",
@@ -175,6 +203,8 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
                 "tool_name": "Edit",
             }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(root_with_equal_id.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(root_with_equal_id.parent_agent_id, None);
@@ -183,22 +213,24 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
 #[test]
 fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
     let control = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "UserPromptSubmit",
             &json!({
                 "session_id": "sess-1",
                 "prompt": "<task-notification><task-id>afdc639e18e7ebdb9</task-id></task-notification>",
             }),
-        )
+        ).expect("test hook decodes").lifecycle
         .unwrap();
     assert_eq!(control.prompt, None);
     assert_eq!(control.task, None);
 
     let prompt = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "UserPromptSubmit",
             &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(prompt.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
@@ -238,18 +270,23 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             }),
         ),
     ] {
-        let observed = ClaudeAdapter.observe_lifecycle(
-            "PostToolUse",
-            &json!({ "session_id": "sess-1", "tool_name": tool }),
-        );
+        let observed = ClaudeAdapter
+            .decode_hook(
+                "PostToolUse",
+                &json!({ "session_id": "sess-1", "tool_name": tool }),
+            )
+            .expect("test hook decodes")
+            .lifecycle;
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool}");
     }
 
     let pre_tool = ClaudeAdapter
-        .observe_lifecycle(
+        .decode_hook(
             "PreToolUse",
             &json!({ "session_id": "sess-1", "tool_name": "Read" }),
         )
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(
         pre_tool.signal,
@@ -283,10 +320,12 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
         ("future", LifecycleSignal::Registered, None),
     ] {
         let obs = ClaudeAdapter
-            .observe_lifecycle(
+            .decode_hook(
                 "SessionStart",
                 &json!({ "session_id": "sess-1", "source": source }),
             )
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         assert_eq!(obs.signal, expected_signal, "{source}");
@@ -294,14 +333,18 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
         assert_eq!(obs.task, None);
     }
     let absent = ClaudeAdapter
-        .observe_lifecycle("SessionStart", &json!({ "session_id": "sess-1" }))
+        .decode_hook("SessionStart", &json!({ "session_id": "sess-1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .unwrap();
     assert_eq!(absent.signal, LifecycleSignal::Registered);
     assert_eq!(absent.origin, Some(SessionOrigin::Fresh));
 
     assert!(
         ClaudeAdapter
-            .observe_lifecycle("Notification", &json!({}))
+            .decode_hook("Notification", &json!({}))
+            .expect("test hook decodes")
+            .lifecycle
             .is_none()
     );
 
@@ -377,14 +420,18 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
         ),
     ] {
         let obs = ClaudeAdapter
-            .observe_lifecycle("Stop", &payload)
+            .decode_hook("Stop", &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap_or_else(|| panic!("{case} should produce a lifecycle observation"));
         assert_eq!(obs.signal, expected_signal, "{case}");
         assert_eq!(obs.task, None, "{case}");
     }
 
     let ended = ClaudeAdapter
-        .observe_lifecycle("SessionEnd", &json!({ "session_id": "sess-1" }))
+        .decode_hook("SessionEnd", &json!({ "session_id": "sess-1" }))
+        .expect("test hook decodes")
+        .lifecycle
         .expect("SessionEnd is a recorded lifecycle observation");
     assert_eq!(ended.agent_id.as_deref(), Some("sess-1"));
     assert!(ClaudeAdapter.ends_session("SessionEnd"));
@@ -411,7 +458,9 @@ fn expiry_predicates_match_observed_root_signals() {
         ("PostCompact", json!({ "session_id": "sess-1" })),
     ] {
         let obs = ClaudeAdapter
-            .observe_lifecycle(event, &payload)
+            .decode_hook(event, &payload)
+            .expect("test hook decodes")
+            .lifecycle
             .unwrap_or_else(|| panic!("{event} should be observed"));
         assert_eq!(
             ClaudeAdapter.ends_session(event),

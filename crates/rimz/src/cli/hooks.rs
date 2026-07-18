@@ -20,7 +20,7 @@ use super::{GlobalFlags, open_store};
 use rimz::Store;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
 use rimz::agents::{
-    AgentAdapter, AgentHookClass, AgentLifecycleObservation, ClassifiedHook, HookIngressDecision,
+    AgentAdapter, AgentHookClass, AgentLifecycleObservation, DecodedHook, HookIngressDecision,
     HookIngressOwner, adapter_by_kind,
 };
 use rimz::ids::{MuxName, PaneId};
@@ -44,7 +44,7 @@ pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
 pub(crate) use lifecycle::handle_lifecycle_hook;
 use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid};
-use payload_ids::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
+use payload_ids::spawn_refresh_detached;
 use proctree::sibling_agent_pins;
 pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(1_000);
@@ -169,43 +169,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         )?
     };
     let store = open_store(&workspace)?;
-    let classified = classify_ingress(agent, event.as_deref(), &payload);
-    let event_name = classified.event_name;
-
-    if classified.class != AgentHookClass::AwaitingUser {
-        handle_lifecycle_hook(
-            &workspace,
-            &store,
-            agent,
-            event_name.as_str(),
-            &payload,
-            ingress_owner,
-            globals,
-        )?;
-        return emit_neutral(agent, event_name.as_str());
-    }
-
-    if agent.descriptor().capabilities.native_ask_ui {
-        handle_lifecycle_hook(
-            &workspace,
-            &store,
-            agent,
-            event_name.as_str(),
-            &payload,
-            ingress_owner,
-            globals,
-        )?;
-    }
-    emit_neutral(agent, event_name.as_str())
-}
-
-fn classify_ingress(
-    agent: &dyn AgentAdapter,
-    explicit_event: Option<&str>,
-    payload: &Value,
-) -> ClassifiedHook {
-    let event_name = explicit_event
-        .map(ToOwned::to_owned)
+    let event_name = event
         .or_else(|| {
             payload
                 .get("hook_event_name")
@@ -214,7 +178,33 @@ fn classify_ingress(
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_else(|| "unknown".to_owned());
-    agent.classify_hook(&event_name, payload)
+    let decoded = agent.decode_hook(&event_name, &payload)?;
+
+    if decoded.class != AgentHookClass::AwaitingUser {
+        handle_lifecycle_hook(
+            &workspace,
+            &store,
+            agent,
+            &decoded,
+            &payload,
+            ingress_owner,
+            globals,
+        )?;
+        return emit_neutral(&decoded);
+    }
+
+    if agent.descriptor().capabilities.native_ask_ui {
+        handle_lifecycle_hook(
+            &workspace,
+            &store,
+            agent,
+            &decoded,
+            &payload,
+            ingress_owner,
+            globals,
+        )?;
+    }
+    emit_neutral(&decoded)
 }
 
 fn participant_start_path(source: &str, cursor_project_dir: Option<&OsStr>) -> PathBuf {
@@ -229,8 +219,8 @@ fn participant_start_path(source: &str, cursor_project_dir: Option<&OsStr>) -> P
     PathBuf::from(".")
 }
 
-fn emit_neutral(agent: &dyn AgentAdapter, event_name: &str) -> Result<()> {
-    if let Some(payload) = agent.render_neutral(event_name)? {
+fn emit_neutral(decoded: &DecodedHook) -> Result<()> {
+    if let Some(payload) = &decoded.neutral {
         let rendered = serde_json::to_string(&payload)?;
         #[expect(clippy::print_stdout, reason = "hook stdout is the decision channel")]
         {

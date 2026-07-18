@@ -1,8 +1,8 @@
 use super::lifecycle::fill_root_launch_identity;
 use super::lifecycle::handle_lifecycle_hook;
 use super::proctree::matches_agent_kind;
-use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::agents::{AgentAdapter as _, AgentLifecycleObservation};
 use rimz::ids::AgentSessionId;
 use rimz::ids::{MuxName, PaneId};
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
@@ -92,27 +92,16 @@ impl rimz::agents::AgentAdapter for CorrelationTestAdapter {
         rimz::agents::AntigravityAdapter.descriptor()
     }
 
-    fn classify_hook(
+    fn decode_hook(
         &self,
         event_name: &str,
         payload: &serde_json::Value,
-    ) -> rimz::agents::ClassifiedHook {
-        rimz::agents::AntigravityAdapter.classify_hook(event_name, payload)
-    }
-
-    fn render_neutral(&self, event_name: &str) -> rimz::agents::Result<Option<serde_json::Value>> {
-        rimz::agents::AntigravityAdapter.render_neutral(event_name)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &serde_json::Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let mut observation =
-            rimz::agents::AntigravityAdapter.observe_lifecycle(event_name, payload)?;
-        observation.pane_id = Some(id("terminal_77"));
-        Some(observation)
+    ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
+        let mut decoded = rimz::agents::AntigravityAdapter.decode_hook(event_name, payload)?;
+        if let Some(observation) = &mut decoded.lifecycle {
+            observation.pane_id = Some(id("terminal_77"));
+        }
+        Ok(decoded)
     }
 
     fn correlate_subagent(
@@ -195,11 +184,12 @@ fn feed_antigravity(
     event_name: &str,
     payload: serde_json::Value,
 ) {
+    let decoded = adapter.decode_hook(event_name, &payload).unwrap();
     handle_lifecycle_hook(
         &hooks_test_workspace(Some("main")),
         store,
         adapter,
-        event_name,
+        &decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
@@ -214,27 +204,16 @@ impl rimz::agents::AgentAdapter for CopilotCorrelationAdapter {
         rimz::agents::CopilotAdapter.descriptor()
     }
 
-    fn classify_hook(
+    fn decode_hook(
         &self,
         event_name: &str,
         payload: &serde_json::Value,
-    ) -> rimz::agents::ClassifiedHook {
-        rimz::agents::CopilotAdapter.classify_hook(event_name, payload)
-    }
-
-    fn render_neutral(&self, event_name: &str) -> rimz::agents::Result<Option<serde_json::Value>> {
-        rimz::agents::CopilotAdapter.render_neutral(event_name)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &serde_json::Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let mut observation =
-            rimz::agents::CopilotAdapter.observe_lifecycle(event_name, payload)?;
-        observation.pane_id = Some(id("terminal_88"));
-        Some(observation)
+    ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
+        let mut decoded = rimz::agents::CopilotAdapter.decode_hook(event_name, payload)?;
+        if let Some(observation) = &mut decoded.lifecycle {
+            observation.pane_id = Some(id("terminal_88"));
+        }
+        Ok(decoded)
     }
 
     fn correlate_subagent(
@@ -253,11 +232,14 @@ impl rimz::agents::AgentAdapter for CopilotCorrelationAdapter {
 }
 
 fn feed_copilot(store: &rimz::Store, event_name: &str, payload: serde_json::Value) {
+    let decoded = CopilotCorrelationAdapter
+        .decode_hook(event_name, &payload)
+        .unwrap();
     handle_lifecycle_hook(
         &hooks_test_workspace(Some("main")),
         store,
         &CopilotCorrelationAdapter,
-        event_name,
+        &decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
@@ -274,26 +256,16 @@ impl rimz::agents::AgentAdapter for PiAdoptionTestAdapter {
         rimz::agents::PiAdapter.descriptor()
     }
 
-    fn classify_hook(
+    fn decode_hook(
         &self,
         event_name: &str,
         payload: &serde_json::Value,
-    ) -> rimz::agents::ClassifiedHook {
-        rimz::agents::PiAdapter.classify_hook(event_name, payload)
-    }
-
-    fn render_neutral(&self, event_name: &str) -> rimz::agents::Result<Option<serde_json::Value>> {
-        rimz::agents::PiAdapter.render_neutral(event_name)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &serde_json::Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let mut observation = rimz::agents::PiAdapter.observe_lifecycle(event_name, payload)?;
-        observation.pane_id = Some(self.pane_id.clone());
-        Some(observation)
+    ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
+        let mut decoded = rimz::agents::PiAdapter.decode_hook(event_name, payload)?;
+        if let Some(observation) = &mut decoded.lifecycle {
+            observation.pane_id = Some(self.pane_id.clone());
+        }
+        Ok(decoded)
     }
 }
 
@@ -303,11 +275,12 @@ fn feed_pi(
     event_name: &str,
     payload: serde_json::Value,
 ) {
+    let decoded = adapter.decode_hook(event_name, &payload).unwrap();
     handle_lifecycle_hook(
         &hooks_test_workspace(Some("main")),
         store,
         adapter,
-        event_name,
+        &decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
@@ -419,16 +392,20 @@ fn stop_failure_records_turn_error_transcript_entry() {
     let workspace = hooks_test_workspace(Some("main"));
     let globals = hooks_test_globals();
 
+    let payload = serde_json::json!({
+        "session_id": "sess-1",
+        "error": "overloaded",
+        "last_assistant_message": "API Error: Response stalled mid-stream. The response above may be incomplete."
+    });
+    let decoded = rimz::agents::ClaudeAdapter
+        .decode_hook("StopFailure", &payload)
+        .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
         &rimz::agents::ClaudeAdapter,
-        "StopFailure",
-        &serde_json::json!({
-            "session_id": "sess-1",
-            "error": "overloaded",
-            "last_assistant_message": "API Error: Response stalled mid-stream. The response above may be incomplete."
-        }),
+        &decoded,
+        &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &globals,
     )
@@ -466,29 +443,37 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
     let path = transcript_path.to_string_lossy();
     let owner_pid = std::process::id();
 
+    let prompt_payload = serde_json::json!({
+        "session_id": "droid-session",
+        "transcript_path": path,
+        "prompt": "ping"
+    });
+    let prompt_decoded = rimz::agents::DroidAdapter
+        .decode_hook("UserPromptSubmit", &prompt_payload)
+        .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
         &rimz::agents::DroidAdapter,
-        "UserPromptSubmit",
-        &serde_json::json!({
-            "session_id": "droid-session",
-            "transcript_path": path,
-            "prompt": "ping"
-        }),
+        &prompt_decoded,
+        &prompt_payload,
         rimz::agents::HookIngressOwner::agent(Some(owner_pid)),
         &globals,
     )
     .unwrap();
+    let stop_payload = serde_json::json!({
+        "session_id": "droid-session",
+        "transcript_path": path
+    });
+    let stop_decoded = rimz::agents::DroidAdapter
+        .decode_hook("Stop", &stop_payload)
+        .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
         &rimz::agents::DroidAdapter,
-        "Stop",
-        &serde_json::json!({
-            "session_id": "droid-session",
-            "transcript_path": path
-        }),
+        &stop_decoded,
+        &stop_payload,
         rimz::agents::HookIngressOwner::agent(Some(owner_pid)),
         &globals,
     )
@@ -1238,11 +1223,14 @@ fn ingress_accepts_camelcase_field_and_dispatches_the_canonical_event() {
         "hookEventName": "session_start",
         "sessionId": "session-1"
     });
-    let classified = super::classify_ingress(&rimz::agents::GrokAdapter, None, &payload);
+    let classified = rimz::agents::GrokAdapter
+        .decode_hook("session_start", &payload)
+        .unwrap();
     assert_eq!(classified.event_name, "SessionStart");
     assert_eq!(classified.class, rimz::agents::AgentHookClass::Lifecycle);
 
-    let explicit =
-        super::classify_ingress(&rimz::agents::GrokAdapter, Some("post_tool_use"), &payload);
+    let explicit = rimz::agents::GrokAdapter
+        .decode_hook("post_tool_use", &payload)
+        .unwrap();
     assert_eq!(explicit.event_name, "PostToolUse");
 }
