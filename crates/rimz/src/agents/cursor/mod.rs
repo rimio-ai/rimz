@@ -25,12 +25,12 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookRecord, catalog_contains, classify_catalog_hook, hook_record};
+use super::hook_types::{HookRecord, catalog_contains, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, DecodedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LocalSessionObservation, LocallyPricedTurnCost,
-    PriceBook, Result, SubagentIdentity, locate_binary, non_empty_trimmed,
+    HookInstallReport, HookRouting, HookUninstallReport, LocalSessionObservation,
+    LocallyPricedTurnCost, PriceBook, Result, SubagentIdentity, locate_binary, non_empty_trimmed,
     resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
@@ -79,16 +79,6 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["cursor-agent", "agent"],
     bin_names: &["cursor-agent", "agent"],
     extra_bin_dirs: &[],
-    activity_events: &[
-        "sessionStart",
-        "beforeSubmitPrompt",
-        "postToolUse",
-        "postToolUseFailure",
-        "afterAgentResponse",
-        "stop",
-        "subagentStart",
-        "subagentStop",
-    ],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("agent"),
@@ -209,37 +199,44 @@ pub(super) const CURSOR_HOOKS: &[HookRecord] = &[
         lifecycle,
         "sessionStart",
         r#"{"conversation_id":"c1","session_id":"c1","cursor_version":"1.7"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "beforeSubmitPrompt",
         r#"{"conversation_id":"c1","prompt":"fix it","cursor_version":"1.7"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "postToolUse",
         r#"{"conversation_id":"c1","tool_name":"Write","cwd":"/tmp","cursor_version":"1.7"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "postToolUseFailure",
         r#"{"conversation_id":"c1","tool_name":"Shell","failure_type":"error","cursor_version":"1.7"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "afterAgentResponse",
         r#"{"conversation_id":"c1","text":"done","cursor_version":"1.7"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "stop",
         r#"{"conversation_id":"c1","status":"completed","cursor_version":"1.7"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "sessionEnd",
         r#"{"conversation_id":"c1","reason":"quit","cursor_version":"1.7"}"#
-    ),
+    )
+    .session_ended(),
     hook_record!(
         lifecycle,
         "preCompact",
@@ -249,12 +246,14 @@ pub(super) const CURSOR_HOOKS: &[HookRecord] = &[
         lifecycle,
         "subagentStart",
         r#"{"subagent_id":"child-1","parent_conversation_id":"c1","subagent_type":"generalPurpose","task":"inspect hooks","cursor_version":"1.7"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "subagentStop",
         r#"{"subagent_id":"child-1","parent_conversation_id":"c1","subagent_type":"generalPurpose","status":"completed","cursor_version":"1.7"}"#
-    ),
+    )
+    .progress(),
 ];
 pub(super) const RIMZ_HOOK_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cursor";
@@ -300,19 +299,21 @@ impl AgentAdapter for CursorAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
-        let mut decoded = DecodedHook::new(classify_catalog_hook(CURSOR_HOOKS, event_name, None));
-        decoded.neutral = catalog_contains(CURSOR_HOOKS, event_name).then(|| json!({}));
+        let mut decoded = decode_catalog_hook(CURSOR_HOOKS, event_name, None);
+        decoded.set_neutral(catalog_contains(CURSOR_HOOKS, event_name).then(|| json!({})));
         let parsed = payloads::parse_payload(payload);
-        decoded.agent_id = parsed
+        let agent_id = parsed
             .conversation_id
             .as_deref()
             .map(str::trim)
             .filter(|id| !id.is_empty())
             .map(ToOwned::to_owned);
-        decoded.context_agent_id = decoded.agent_id.clone();
-        decoded.assistant_message = (event_name == "afterAgentResponse")
-            .then_some(parsed.text.clone())
-            .flatten();
+        decoded.set_routing(HookRouting::new(agent_id.clone(), agent_id, None, None));
+        decoded.set_assistant_message(
+            (event_name == "afterAgentResponse")
+                .then_some(parsed.text.clone())
+                .flatten(),
+        );
         if parsed.model.is_some()
             || parsed.model_id.is_some()
             || !parsed.model_params.is_empty()
@@ -323,10 +324,13 @@ impl AgentAdapter for CursorAdapter {
             || parsed.cache_read_tokens.is_some()
             || parsed.cache_write_tokens.is_some()
         {
-            decoded.observed_context = self.observe_context(self.descriptor().kind, payload);
+            decoded.set_observed_context(self.observe_context(self.descriptor().kind, payload));
         }
         if matches!(event_name, "subagentStart" | "subagentStop") {
-            decoded.lifecycle = self.observe_subagent_lifecycle(event_name, payload, parsed);
+            if let Some(observation) = self.observe_subagent_lifecycle(event_name, payload, parsed)
+            {
+                decoded.attach_lifecycle(observation);
+            }
             return Ok(decoded);
         }
         let turn_usage = (event_name == "stop")
@@ -352,7 +356,7 @@ impl AgentAdapter for CursorAdapter {
             _ => return Ok(decoded),
         };
         let mut observation = AgentLifecycleObservation::new(
-            decoded.agent_id.as_deref().map(AgentSessionId::from),
+            decoded.routing().event_agent_id().map(AgentSessionId::from),
             signal,
         )
         .with_worktree_from_payload(payload);
@@ -377,8 +381,7 @@ impl AgentAdapter for CursorAdapter {
             observation.cache_read_input_tokens = turn_usage.and_then(|usage| usage.cache_read);
             observation.cache_write_input_tokens = turn_usage.and_then(|usage| usage.cache_write);
         }
-        decoded.worktree_path = observation.worktree_path.clone();
-        decoded.lifecycle = Some(observation);
+        decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
 

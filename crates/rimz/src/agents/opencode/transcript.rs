@@ -563,7 +563,7 @@ mod tests {
                     &serde_json::json!({"session_id":"ses-main","transcript_path":path}),
                 )
                 .expect("test hook decodes")
-                .final_message,
+                .final_message(),
             Some("completed reply".to_owned())
         );
         assert_eq!(
@@ -573,7 +573,7 @@ mod tests {
                     &serde_json::json!({"session_id":"ses-main","transcript_path":path}),
                 )
                 .expect("test hook decodes")
-                .final_message,
+                .final_message(),
             None
         );
     }

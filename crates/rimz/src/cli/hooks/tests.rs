@@ -97,9 +97,9 @@ impl rimz::agents::AgentAdapter for CorrelationTestAdapter {
         payload: &serde_json::Value,
     ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
         let mut decoded = rimz::agents::AntigravityAdapter.decode_hook(event_name, payload)?;
-        if let Some(observation) = &mut decoded.lifecycle {
+        decoded.update_lifecycle(|observation| {
             observation.pane_id = Some(id("terminal_77"));
-        }
+        });
         Ok(decoded)
     }
 
@@ -209,9 +209,9 @@ impl rimz::agents::AgentAdapter for CopilotCorrelationAdapter {
         payload: &serde_json::Value,
     ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
         let mut decoded = rimz::agents::CopilotAdapter.decode_hook(event_name, payload)?;
-        if let Some(observation) = &mut decoded.lifecycle {
+        decoded.update_lifecycle(|observation| {
             observation.pane_id = Some(id("terminal_88"));
-        }
+        });
         Ok(decoded)
     }
 
@@ -261,9 +261,9 @@ impl rimz::agents::AgentAdapter for PiAdoptionTestAdapter {
         payload: &serde_json::Value,
     ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
         let mut decoded = rimz::agents::PiAdapter.decode_hook(event_name, payload)?;
-        if let Some(observation) = &mut decoded.lifecycle {
+        decoded.update_lifecycle(|observation| {
             observation.pane_id = Some(self.pane_id.clone());
-        }
+        });
         Ok(decoded)
     }
 }
@@ -1225,11 +1225,11 @@ fn ingress_accepts_camelcase_field_and_dispatches_the_canonical_event() {
     let classified = rimz::agents::GrokAdapter
         .decode_hook("session_start", &payload)
         .unwrap();
-    assert_eq!(classified.event_name, "SessionStart");
-    assert_eq!(classified.class, rimz::agents::AgentHookClass::Lifecycle);
+    assert_eq!(classified.event_name(), "SessionStart");
+    assert_eq!(classified.class(), rimz::agents::AgentHookClass::Lifecycle);
 
     let explicit = rimz::agents::GrokAdapter
         .decode_hook("post_tool_use", &payload)
         .unwrap();
-    assert_eq!(explicit.event_name, "PostToolUse");
+    assert_eq!(explicit.event_name(), "PostToolUse");
 }

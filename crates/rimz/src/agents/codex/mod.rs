@@ -65,13 +65,13 @@ pub(crate) use self::transcript::infer_turn_death_from_spent_window;
 pub(crate) use self::transcript::with_codex_sessions_root;
 use self::transcript::{
     CodexRolloutHeader, RestingTurnOutcome, TranscriptScanNeed, TranscriptUsage, configured_model,
-    configured_reasoning_effort, detect_turn_error, find_session_transcript,
-    payload_reasoning_effort, read_rollout_header, scan_transcript_tail,
+    configured_reasoning_effort, find_session_transcript, payload_reasoning_effort,
+    read_rollout_header, scan_transcript_tail,
 };
 #[cfg(test)]
 use self::transcript::{
     configured_model_at, configured_reasoning_effort_at, death_warning_from_frame,
-    detect_plan_proposed, detect_turn_complete, detect_turn_interrupted,
+    detect_plan_proposed, detect_turn_complete, detect_turn_error, detect_turn_interrupted,
     find_session_transcript_under, transcript_enrichment, usage_from_transcript,
     with_codex_config_path,
 };
@@ -86,18 +86,18 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookRecord, SessionSource, classify_catalog_hook, hook_record};
+use super::hook_types::{HookRecord, SessionSource, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentAdapter, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr,
     AnswerStep, AskReply, DecodedHook, ExtraCredits, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx,
-    RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity, SubagentIdentity,
-    TranscriptMessage, TranscriptRole, non_empty_trimmed, optional_payload_string,
-    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored,
+    HookRouting, HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh,
+    LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity,
+    SubagentIdentity, TranscriptMessage, TranscriptRole, non_empty_trimmed,
+    optional_payload_string, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::transcript::{AskOption, AskQuestion};
 
@@ -198,16 +198,6 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["codex", "node"],
     bin_names: &["codex"],
     extra_bin_dirs: &[],
-    // Codex hooks ride Claude-style event names; `PreToolUse` (races the
-    // blocking ask) and `Notification` (idle) are deliberately absent.
-    activity_events: &[
-        "PostToolUse",
-        "Stop",
-        "UserPromptSubmit",
-        "SessionStart",
-        "SubagentStart",
-        "SubagentStop",
-    ],
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
@@ -353,25 +343,29 @@ const CODEX_HOOKS: &[HookRecord] = &[
         "SessionStart",
         r#"{"session_id":"sess-1","source":"startup"}"#
     )
-    .with_matcher("startup|resume|clear|compact"),
+    .with_matcher("startup|resume|clear|compact")
+    .progress(),
     hook_record!(
         lifecycle,
         "UserPromptSubmit",
         r#"{"session_id":"sess-1","prompt":"fix auth"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "SubagentStart",
         r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#
     )
-    .with_matcher(".*"),
+    .with_matcher(".*")
+    .progress(),
     hook_record!(
         lifecycle,
         "SubagentStop",
         r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#
     )
-    .with_matcher(".*"),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#),
+    .with_matcher(".*")
+    .progress(),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#).progress(),
     hook_record!(
         blocking,
         "PermissionRequest",
@@ -391,7 +385,8 @@ const CODEX_HOOKS: &[HookRecord] = &[
         "PostToolUse",
         r#"{"session_id":"sess-1","tool_name":"apply_patch"}"#
     )
-    .with_matcher(".*"),
+    .with_matcher(".*")
+    .progress(),
     hook_record!(
         lifecycle,
         "PreCompact",
@@ -505,13 +500,14 @@ impl AgentAdapter for CodexAdapter {
             ),
             _ => None,
         };
-        let mut decoded =
-            DecodedHook::new(classify_catalog_hook(CODEX_HOOKS, event_name, ask_kind));
-        decoded.agent_id = optional_payload_string(payload, &["agent_id", "session_id"]);
-        decoded.context_agent_id = optional_payload_string(payload, &["session_id", "agent_id"]);
-        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
-        decoded.server_url = optional_payload_string(payload, &["server_url"]);
-        decoded.native_answers = match event_name {
+        let mut decoded = decode_catalog_hook(CODEX_HOOKS, event_name, ask_kind);
+        decoded.set_routing(HookRouting::new(
+            optional_payload_string(payload, &["agent_id", "session_id"]),
+            optional_payload_string(payload, &["session_id", "agent_id"]),
+            optional_payload_string(payload, &["worktree_path", "cwd"]),
+            optional_payload_string(payload, &["server_url"]),
+        ));
+        decoded.set_native_answers(match event_name {
             "PostToolUse" => parts.post_tool_use.as_ref().and_then(|parsed| {
                 ask::answer_detail(
                     parsed.tool_name.as_deref()?,
@@ -524,14 +520,14 @@ impl AgentAdapter for CodexAdapter {
                 .as_ref()
                 .and_then(|parsed| ask::submitted_prompt_answer(parsed.prompt.as_deref()?)),
             _ => None,
-        };
+        });
         let child_id = parts.distinct_child_id();
         let transcript = codex_transcript_observation(
             payload,
             child_id,
             matches!(event_name, "Stop" | "SubagentStop"),
         );
-        decoded.questions = match event_name {
+        let questions = match event_name {
             "PreToolUse" => parts
                 .pre_tool_use
                 .as_ref()
@@ -546,18 +542,20 @@ impl AgentAdapter for CodexAdapter {
                 .unwrap_or_default(),
             _ => Vec::new(),
         };
-        decoded.ask_detail = decoded
-            .questions
+        let ask_detail = questions
             .first()
             .and_then(|question| question.question.lines().next())
             .map(ToOwned::to_owned)
             .filter(|detail| !detail.is_empty());
-        decoded.turn_error = transcript.turn_error.clone();
-        decoded.final_message = (event_name == "Stop")
-            .then_some(parts.stop.as_ref())
-            .flatten()
-            .and_then(|stop| stop.last_assistant_message.as_deref())
-            .and_then(non_empty_trimmed);
+        decoded.set_ask(questions, ask_detail);
+        decoded.set_turn_error(transcript.turn_error.clone());
+        decoded.set_final_message(
+            (event_name == "Stop")
+                .then_some(parts.stop.as_ref())
+                .flatten()
+                .and_then(|stop| stop.last_assistant_message.as_deref())
+                .and_then(non_empty_trimmed),
+        );
         let signal = map_codex_lifecycle_signal(
             self.descriptor(),
             event_name,
@@ -590,9 +588,7 @@ impl AgentAdapter for CodexAdapter {
             if root_identity_event && let Some(agent_id) = observation.agent_id.as_ref() {
                 observation.origin = session_origin(agent_id.as_str());
             }
-            decoded.agent_id = observation.agent_id.as_ref().map(ToString::to_string);
-            decoded.worktree_path = observation.worktree_path.clone();
-            decoded.lifecycle = Some(observation);
+            decoded.attach_lifecycle(observation);
         }
         Ok(decoded)
     }
@@ -664,10 +660,6 @@ impl AgentAdapter for CodexAdapter {
         answers: &[AskReply],
     ) -> std::result::Result<Vec<AnswerStep>, AnswerPlanErr> {
         ask::answer_plan(kind, questions, answers)
-    }
-
-    fn observe_turn_error(&self, payload: &Value) -> Option<AgentTurnError> {
-        codex_payload_turn_error(payload)
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
@@ -1026,12 +1018,6 @@ fn map_codex_lifecycle_signal(
         }),
         _ => None,
     }
-}
-
-fn codex_payload_turn_error(payload: &Value) -> Option<AgentTurnError> {
-    let transcript_path = codex_transcript_path(payload)?;
-    let tail = read_transcript_tail(&transcript_path)?;
-    detect_turn_error(&tail)
 }
 
 fn codex_transcript_path(payload: &Value) -> Option<PathBuf> {

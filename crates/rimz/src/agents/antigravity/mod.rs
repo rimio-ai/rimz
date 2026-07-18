@@ -24,13 +24,14 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
     SamePaneSessionPolicy, ThreadKey, ToolClassification,
 };
-use super::hook_types::{HookRecord, classify_catalog_entry, hook_record};
+use super::hook_types::{HookRecord, decode_catalog_entry, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, DecodedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LocalSessionObservation, Result, SpawnedSubagent,
-    SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
-    TranscriptMessage, non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
+    HookInstallReport, HookRouting, HookUninstallReport, LocalSessionObservation, Result,
+    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity,
+    SubagentSpawnInput, TranscriptMessage, non_empty_trimmed, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -55,7 +56,8 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
             lifecycle,
             "PreInvocation",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl","invocationNum":0}"#
-        ),
+        )
+        .progress(),
         config_event: "PreInvocation",
         config_matcher: None,
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PreInvocation",
@@ -65,7 +67,8 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
             lifecycle,
             "PostToolUse:edit",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
-        ),
+        )
+        .progress(),
         config_event: "PostToolUse",
         config_matcher: Some("^(write_to_file|replace_file_content|multi_replace_file_content)$"),
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:edit",
@@ -75,7 +78,8 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
             lifecycle,
             "PostToolUse:mutating",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
-        ),
+        )
+        .progress(),
         config_event: "PostToolUse",
         config_matcher: Some("^run_command$"),
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:mutating",
@@ -85,7 +89,8 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
             lifecycle,
             "PostToolUse:observed",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
-        ),
+        )
+        .progress(),
         config_event: "PostToolUse",
         config_matcher: Some(
             "^(view_file|list_dir|find_by_name|grep_search|search_web|read_url_content|manage_task|schedule|list_permissions|ask_permission|invoke_subagent|define_subagent|send_message|manage_subagents|ask_question|generate_image)$",
@@ -97,7 +102,8 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
             lifecycle,
             "PostInvocation",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
-        ),
+        )
+        .progress(),
         config_event: "PostInvocation",
         config_matcher: None,
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostInvocation",
@@ -107,7 +113,8 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
             lifecycle,
             "Stop",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl","fullyIdle":true,"terminationReason":"model_stop"}"#
-        ),
+        )
+        .progress(),
         config_event: "Stop",
         config_matcher: None,
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event Stop",
@@ -176,7 +183,6 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["agy"],
     bin_names: &["agy"],
     extra_bin_dirs: &[".local/bin"],
-    activity_events: &ANTIGRAVITY_EVENT_NAMES,
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("agy"),
@@ -342,31 +348,38 @@ impl AgentAdapter for AntigravityAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
-        let mut decoded = DecodedHook::new(classify_catalog_entry(
+        let mut decoded = decode_catalog_entry(
             ANTIGRAVITY_HOOKS
                 .iter()
                 .find(|entry| entry.hook.event == event_name)
                 .map(|entry| &entry.hook),
             event_name,
             None,
-        ));
-        decoded.neutral = match event_name {
+        );
+        decoded.set_neutral(match event_name {
             "Stop" => Some(serde_json::json!({ "decision": "" })),
             event if ANTIGRAVITY_EVENT_NAMES.contains(&event) => Some(serde_json::json!({})),
             _ => None,
-        };
+        });
         let fields = decode_lifecycle_fields(event_name, payload, session::latest_prompt);
-        decoded.agent_id = fields.agent_id;
-        decoded.context_agent_id = decoded.agent_id.clone();
-        decoded.worktree_path = fields.worktree_path;
-        decoded.lifecycle = fields.lifecycle;
+        decoded.set_routing(HookRouting::new(
+            fields.agent_id.clone(),
+            fields.agent_id,
+            fields.worktree_path,
+            None,
+        ));
         if event_name == "Stop"
-            && let Some(observation) = decoded.lifecycle.as_ref()
+            && let Some(observation) = fields.lifecycle.as_ref()
         {
-            decoded.final_message = observation
-                .transcript_path
-                .as_deref()
-                .and_then(|path| session::last_assistant_message(Path::new(path)));
+            decoded.set_final_message(
+                observation
+                    .transcript_path
+                    .as_deref()
+                    .and_then(|path| session::last_assistant_message(Path::new(path))),
+            );
+        }
+        if let Some(observation) = fields.lifecycle {
+            decoded.attach_lifecycle(observation);
         }
         Ok(decoded)
     }

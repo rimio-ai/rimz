@@ -353,7 +353,7 @@ fn replay(adapter: &PluginAdapter, path: &Path) -> Result<ReplayCheckReport, Str
             continue;
         }
 
-        let Some(observation) = decoded.lifecycle else {
+        let Some(observation) = decoded.lifecycle() else {
             rejected += 1;
             rows.push(rejected_row(
                 line_number,

@@ -57,14 +57,14 @@ use super::descriptor::{
     ToolClassification,
 };
 use super::hook_types::{
-    BackgroundTask, HookRecord, SessionSource, classify_catalog_hook, hook_record,
+    BackgroundTask, HookRecord, SessionSource, decode_catalog_hook, hook_record,
 };
 use super::lifecycle::LifecycleSignal;
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, AgentTurnError,
-    DecodedHook, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
+    DecodedHook, HookRouting, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
     SubagentObservation, TranscriptMessage, non_empty_trimmed, optional_payload_string,
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
     stop_payload_errored,
@@ -122,16 +122,6 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["claude"],
     bin_names: &["claude"],
     extra_bin_dirs: &[],
-    // `PreToolUse` (races the blocking ask) and `Notification` (idle) are
-    // deliberately absent.
-    activity_events: &[
-        "PostToolUse",
-        "Stop",
-        "UserPromptSubmit",
-        "SessionStart",
-        "SubagentStart",
-        "SubagentStop",
-    ],
     // A Claude session spreads across `<session_id>/chat.jsonl` plus
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
     thread_key: ThreadKey::SessionDir,
@@ -270,14 +260,16 @@ const CLAUDE_HOOKS: &[HookRecord] = &[
         lifecycle,
         "SessionStart",
         r#"{"session_id":"sess-1","source":"startup"}"#
-    ),
-    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#),
+    )
+    .progress(),
+    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
     hook_record!(
         lifecycle,
         "UserPromptSubmit",
         r#"{"session_id":"sess-1","prompt":"fix auth"}"#
-    ),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#),
+    )
+    .progress(),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#).progress(),
     hook_record!(
         lifecycle,
         "StopFailure",
@@ -301,7 +293,8 @@ const CLAUDE_HOOKS: &[HookRecord] = &[
         lifecycle,
         "PostToolUse",
         r#"{"session_id":"sess-1","tool_name":"Edit"}"#
-    ),
+    )
+    .progress(),
     // Subagent lifecycle (Claude Code's Task-tool children, parity with Codex's
     // threads): `SubagentStart` registers a child row keyed by its `agent_id`,
     // `SubagentStop` returns it to idle. Both carry the parent root `session_id`.
@@ -309,12 +302,14 @@ const CLAUDE_HOOKS: &[HookRecord] = &[
         lifecycle,
         "SubagentStart",
         r#"{"session_id":"sess-parent","agent_id":"child-1","subagent_type":"Explore"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "SubagentStop",
         r#"{"session_id":"sess-parent","agent_id":"child-1","agent_type":"Explore"}"#
-    ),
+    )
+    .progress(),
     // Fires around context compaction (manual `/compact` or auto). Pre opens
     // the transient compacting head; Post carries the trigger bit when present,
     // while SessionStart(source=compact) is the reliable triggerless closer.
@@ -378,14 +373,6 @@ const SUBAGENT_STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeAdapter;
 
-impl ClaudeAdapter {
-    fn turn_interrupted(&self, payload: &Value) -> Option<Timestamp> {
-        let path = optional_payload_string(payload, &["transcript_path"])?;
-        let tail = read_transcript_tail(Path::new(&path))?;
-        statusline::detect_turn_interrupted(&tail)
-    }
-}
-
 fn hook_ingress_decision(
     pid: Option<u32>,
     spawned_by_remote_control: bool,
@@ -420,12 +407,12 @@ impl AgentAdapter for ClaudeAdapter {
         // Cursor can execute Claude-compatible third-party hook commands with
         // Cursor-shaped payloads. Drop those before they can double-record or
         // be misparsed; `cursor_version` is Cursor's common-input discriminator.
-        let classified = if payload.get("cursor_version").is_some() {
-            super::ClassifiedHook {
+        let mut decoded = if payload.get("cursor_version").is_some() {
+            DecodedHook::new(super::ClassifiedHook {
                 class: AgentHookClass::Unknown,
                 ask_kind: None,
                 event_name: event_name.to_owned(),
-            }
+            })
         } else {
             let ask_kind = match event_name {
                 "PermissionRequest" => self
@@ -446,52 +433,66 @@ impl AgentAdapter for ClaudeAdapter {
                 ),
                 _ => None,
             };
-            classify_catalog_hook(CLAUDE_HOOKS, event_name, ask_kind)
+            decode_catalog_hook(CLAUDE_HOOKS, event_name, ask_kind)
         };
-        let mut decoded = DecodedHook::new(classified);
-        decoded.agent_id = optional_payload_string(payload, &["agent_id", "session_id"]);
-        decoded.context_agent_id = optional_payload_string(payload, &["session_id", "agent_id"]);
-        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
-        decoded.questions = parts
+        decoded.set_routing(HookRouting::new(
+            optional_payload_string(payload, &["agent_id", "session_id"]),
+            optional_payload_string(payload, &["session_id", "agent_id"]),
+            optional_payload_string(payload, &["worktree_path", "cwd"]),
+            None,
+        ));
+        let questions = parts
             .pre_tool_use
             .as_ref()
             .and_then(|parsed| {
                 ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
             })
             .unwrap_or_default();
-        decoded.ask_detail = if event_name == "PermissionRequest" {
+        let ask_detail = if event_name == "PermissionRequest" {
             ask::permission_detail(payload)
         } else {
-            decoded
-                .questions
+            questions
                 .first()
                 .and_then(|question| question.question.lines().next())
                 .map(ToOwned::to_owned)
                 .filter(|detail| !detail.is_empty())
         };
-        decoded.native_answers = parts.post_tool_use.as_ref().and_then(|parsed| {
+        decoded.set_ask(questions, ask_detail);
+        decoded.set_native_answers(parts.post_tool_use.as_ref().and_then(|parsed| {
             ask::answer_detail(parsed.tool_name.as_deref()?, parsed.tool_response.as_ref()?)
-        });
-        decoded.turn_error = parts.stop_failure.as_ref().and_then(|parsed| {
-            let error = parsed.error.as_deref()?.trim();
-            if error.is_empty() {
-                return None;
-            }
-            let label = parsed
-                .last_assistant_message
-                .as_deref()
-                .and_then(statusline::cap_turn_error_label);
-            let class = match error {
-                "rate_limit" => TurnErrorClass::PausedRateLimit,
-                "overloaded" => TurnErrorClass::PausedOverloaded,
-                _ => TurnErrorClass::classify_label(label.as_deref()),
-            };
-            Some(AgentTurnError {
-                class,
-                at: Timestamp::now(),
-                label,
+        }));
+        let terminal_tail = (event_name == "Stop")
+            .then(|| transcript_tail_from_payload(payload))
+            .flatten();
+        let turn_error = parts
+            .stop_failure
+            .as_ref()
+            .and_then(|parsed| {
+                let error = parsed.error.as_deref()?.trim();
+                if error.is_empty() {
+                    return None;
+                }
+                let label = parsed
+                    .last_assistant_message
+                    .as_deref()
+                    .and_then(statusline::cap_turn_error_label);
+                let class = match error {
+                    "rate_limit" => TurnErrorClass::PausedRateLimit,
+                    "overloaded" => TurnErrorClass::PausedOverloaded,
+                    _ => TurnErrorClass::classify_label(label.as_deref()),
+                };
+                Some(AgentTurnError {
+                    class,
+                    at: Timestamp::now(),
+                    label,
+                })
             })
-        });
+            .or_else(|| {
+                terminal_tail
+                    .as_deref()
+                    .and_then(statusline::detect_turn_error)
+            });
+        decoded.set_turn_error(turn_error);
 
         let signal = map_claude_lifecycle_signal(self.descriptor(), event_name, payload, &parts);
         if let Some(signal) = signal
@@ -512,13 +513,14 @@ impl AgentAdapter for ClaudeAdapter {
             {
                 observation.origin = Some(SessionOrigin::Fresh);
             }
-            decoded.agent_id = observation.agent_id.as_ref().map(ToString::to_string);
-            decoded.worktree_path = observation.worktree_path.clone();
-            decoded.lifecycle = Some(observation);
+            decoded.attach_lifecycle(observation);
         }
-        decoded.final_message = decoded.lifecycle.as_ref().and_then(|observation| {
-            final_message_for_lifecycle(payload, observation, read_transcript_tail)
+        let final_message = decoded.lifecycle().and_then(|observation| {
+            final_message_for_lifecycle(payload, &observation, |path| {
+                terminal_tail.or_else(|| read_transcript_tail(path))
+            })
         });
+        decoded.set_final_message(final_message);
         if [
             "model",
             "effort",
@@ -531,7 +533,7 @@ impl AgentAdapter for ClaudeAdapter {
         .into_iter()
         .any(|key| payload.get(key).is_some())
         {
-            decoded.observed_context = self.observe_context(self.descriptor().kind, payload);
+            decoded.set_observed_context(self.observe_context(self.descriptor().kind, payload));
         }
         Ok(decoded)
     }
@@ -608,19 +610,11 @@ impl AgentAdapter for ClaudeAdapter {
         // non-object payload yields `None` rather than an error.
         let parsed: statusline::StatuslinePayload = serde_json::from_value(payload.clone()).ok()?;
         let mut context = parsed.into_context(source, Timestamp::now());
-        context.turn_error = self.observe_turn_error(payload);
-        context.turn_interrupted = self.turn_interrupted(payload);
+        if let Some(tail) = transcript_tail_from_payload(payload) {
+            context.turn_error = statusline::detect_turn_error(&tail);
+            context.turn_interrupted = statusline::detect_turn_interrupted(&tail);
+        }
         Some(context)
-    }
-
-    fn observe_turn_error(&self, payload: &Value) -> Option<AgentTurnError> {
-        // The statusline payload names the live transcript, and its tail is the
-        // only record of an API-error abort — Claude fires no `Stop` for one
-        // (docs/internals/agents/claude.md). Best-effort: an absent
-        // path or unreadable file is `None`, never an error.
-        let path = optional_payload_string(payload, &["transcript_path"])?;
-        let tail = read_transcript_tail(Path::new(&path))?;
-        statusline::detect_turn_error(&tail)
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
@@ -958,6 +952,11 @@ fn final_message_for_lifecycle(
             let tail = read_tail(Path::new(path))?;
             statusline::last_assistant_message(&tail)
         })
+}
+
+fn transcript_tail_from_payload(payload: &Value) -> Option<String> {
+    let path = optional_payload_string(payload, &["transcript_path"])?;
+    read_transcript_tail(Path::new(&path))
 }
 
 fn claude_task(payload: &Value, subagent_common: Option<&ClaudeCommon>) -> Option<String> {

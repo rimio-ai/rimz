@@ -25,10 +25,10 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookRecord, SessionSource, classify_catalog_hook, hook_record};
+use super::hook_types::{HookRecord, SessionSource, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, DecodedHook, FieldPatch,
+    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, DecodedHook, FieldPatch, HookRouting,
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch, ManagedSource,
     RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
     optional_payload_string, read_transcript_lines, sanitize_user_prompt,
@@ -78,7 +78,6 @@ static DROID_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["droid"],
     bin_names: &["droid"],
     extra_bin_dirs: &[],
-    activity_events: &["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("droid"),
@@ -200,13 +199,13 @@ const DROID_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 
 const DROID_HOOK_TIMEOUT_SECS: u64 = 10;
 const DROID_HOOKS: &[HookRecord] = &[
-    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
+    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"sess-1"}"#).progress(),
+    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"sess-1"}"#).progress(),
     hook_record!(lifecycle, "Notification", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#).progress(),
     hook_record!(lifecycle, "PreCompact", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
 ];
 const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source droid";
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source droid";
@@ -235,10 +234,14 @@ impl AgentAdapter for DroidAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
-        let mut decoded = DecodedHook::new(classify_catalog_hook(DROID_HOOKS, event_name, None));
+        let mut decoded = decode_catalog_hook(DROID_HOOKS, event_name, None);
         let agent_id = optional_payload_string(payload, &["session_id"]);
-        decoded.agent_id = agent_id.clone();
-        decoded.context_agent_id = agent_id.clone();
+        decoded.set_routing(HookRouting::new(
+            agent_id.clone(),
+            agent_id.clone(),
+            None,
+            None,
+        ));
         let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let signal = match event_name {
             "SessionStart" => match session_start.as_ref().map(|start| &start.source) {
@@ -281,12 +284,13 @@ impl AgentAdapter for DroidAdapter {
         {
             observation.origin = Some(SessionOrigin::Fresh);
         }
-        decoded.final_message = (event_name == "Stop")
-            .then_some(observation.transcript_path.as_deref())
-            .flatten()
-            .and_then(|path| transcript::last_assistant_message(Path::new(path)));
-        decoded.worktree_path = observation.worktree_path.clone();
-        decoded.lifecycle = Some(observation);
+        decoded.set_final_message(
+            (event_name == "Stop")
+                .then_some(observation.transcript_path.as_deref())
+                .flatten()
+                .and_then(|path| transcript::last_assistant_message(Path::new(path))),
+        );
+        decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
 

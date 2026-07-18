@@ -22,11 +22,11 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
+use super::hook_types::{HookRecord, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTurnError, DecodedHook, FieldPatch,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextPatch,
+    HookInstallPreview, HookInstallReport, HookRouting, HookUninstallReport, LocalContextPatch,
     LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result,
     TranscriptStat, TurnErrorClass, non_empty_trimmed, sanitize_user_prompt,
 };
@@ -36,31 +36,34 @@ use crate::ids::AgentSessionId;
 use crate::transcript::{AskOption, AskQuestion};
 
 pub(super) const KIMI_HOOKS: &[HookRecord] = &[
-    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"s"}"#),
-    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"s","prompt":[{"type":"text","text":"fix"}]}"#),
+    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"s"}"#).progress(),
+    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"s","prompt":[{"type":"text","text":"fix"}]}"#).progress(),
     hook_record!(blocking, "PreToolUse", r#"{"session_id":"s","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Continue?"}]}}"#, super::AskKind::Question)
         .with_matcher(".*")
         .synchronous()
         .with_lifecycle_fallback(),
     hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"s","tool_name":"Write"}"#)
-        .with_matcher(".*"),
+        .with_matcher(".*")
+        .progress(),
     hook_record!(lifecycle, "PostToolUseFailure", r#"{"session_id":"s","tool_name":"Bash"}"#)
-        .with_matcher(".*"),
+        .with_matcher(".*")
+        .progress(),
     hook_record!(blocking, "PermissionRequest", r#"{"session_id":"s","tool_call_id":"r","tool_name":"Bash","action":"Run shell"}"#, super::AskKind::Permission)
         .with_matcher(".*")
         .synchronous()
         .with_lifecycle_fallback(),
     hook_record!(lifecycle, "PermissionResult", r#"{"session_id":"s","tool_call_id":"r","tool_name":"Bash","decision":"approved"}"#)
-        .with_matcher(".*"),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"s"}"#),
+        .with_matcher(".*")
+        .progress(),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"s"}"#).progress(),
     hook_record!(lifecycle, "StopFailure", r#"{"session_id":"s","error_type":"RuntimeError"}"#),
-    hook_record!(lifecycle, "Interrupt", r#"{"session_id":"s","turn_id":"t","reason":"cancelled"}"#),
-    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"s"}"#),
-    hook_record!(lifecycle, "SubagentStart", r#"{"session_id":"s","agent_name":"coder","prompt":"inspect the parser"}"#),
-    hook_record!(lifecycle, "SubagentStop", r#"{"session_id":"s","agent_name":"coder","response":"done"}"#),
+    hook_record!(lifecycle, "Interrupt", r#"{"session_id":"s","turn_id":"t","reason":"cancelled"}"#).progress(),
+    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"s"}"#).session_ended(),
+    hook_record!(lifecycle, "SubagentStart", r#"{"session_id":"s","agent_name":"coder","prompt":"inspect the parser"}"#).progress(),
+    hook_record!(lifecycle, "SubagentStop", r#"{"session_id":"s","agent_name":"coder","response":"done"}"#).progress(),
     hook_record!(lifecycle, "PreCompact", r#"{"session_id":"s","trigger":"manual"}"#),
     hook_record!(lifecycle, "PostCompact", r#"{"session_id":"s","trigger":"auto"}"#),
-    hook_record!(lifecycle, "Notification", r#"{"session_id":"s","notification_type":"task.completed"}"#),
+    hook_record!(lifecycle, "Notification", r#"{"session_id":"s","notification_type":"task.completed"}"#).progress(),
 ];
 
 static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
@@ -105,18 +108,6 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["kimi", "kimi-code"],
     bin_names: &["kimi"],
     extra_bin_dirs: &[".kimi-code/bin"],
-    activity_events: &[
-        "SessionStart",
-        "UserPromptSubmit",
-        "PostToolUse",
-        "PostToolUseFailure",
-        "PermissionResult",
-        "Stop",
-        "Interrupt",
-        "SubagentStart",
-        "SubagentStop",
-        "Notification",
-    ],
     thread_key: ThreadKey::SessionDir,
     launch: super::LaunchSpec {
         program: Some("kimi"),
@@ -236,6 +227,164 @@ const KIMI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 #[derive(Clone, Debug, Default)]
 pub struct KimiAdapter;
 
+fn kimi_ask_kind(
+    adapter: &KimiAdapter,
+    event_name: &str,
+    parsed: &payloads::KimiHookPayload,
+) -> Option<super::AskKind> {
+    match event_name {
+        "PermissionRequest" => Some(
+            adapter
+                .descriptor()
+                .blocking_tool_kind(parsed.tool_name.as_deref())
+                .unwrap_or(super::AskKind::Permission),
+        ),
+        "PreToolUse"
+            if parsed.tool_name.as_deref() == Some("AskUserQuestion")
+                && !parsed.question_background() =>
+        {
+            Some(super::AskKind::Question)
+        }
+        _ => None,
+    }
+}
+
+fn kimi_questions(event_name: &str, parsed: &payloads::KimiHookPayload) -> Vec<AskQuestion> {
+    (event_name == "PreToolUse" && parsed.tool_name.as_deref() == Some("AskUserQuestion"))
+        .then(|| parsed.tool_input.as_ref().and_then(parse_questions))
+        .flatten()
+        .unwrap_or_default()
+}
+
+fn kimi_turn_error(event_name: &str, parsed: &payloads::KimiHookPayload) -> Option<AgentTurnError> {
+    (event_name == "StopFailure").then(|| {
+        let label = parsed
+            .error_message
+            .clone()
+            .or_else(|| parsed.error_type.clone())
+            .and_then(|value| non_empty_trimmed(&value))
+            .map(|value| value.chars().take(80).collect::<String>());
+        AgentTurnError {
+            class: TurnErrorClass::classify_label(label.as_deref()),
+            at: Timestamp::now(),
+            label,
+        }
+    })
+}
+
+fn kimi_observation(
+    adapter: &KimiAdapter,
+    event_name: &str,
+    payload: &Value,
+    parsed: &payloads::KimiHookPayload,
+    session_dir: Option<&Path>,
+    ask_detail: Option<String>,
+) -> Option<AgentLifecycleObservation> {
+    if matches!(event_name, "SubagentStart" | "SubagentStop") {
+        return session_dir.and_then(|session_dir| {
+            adapter.observe_subagent_lifecycle(event_name, payload, parsed, session_dir)
+        });
+    }
+    if event_name == "Stop"
+        && session_dir.is_some_and(|session_dir| {
+            subagents::has_subagents(session_dir) && subagents::main_turn_mid_step(session_dir)
+        })
+    {
+        debug!(
+            target: "rimz::agent::lifecycle",
+            kind = adapter.descriptor().kind,
+            session_id = parsed.session_id.as_deref().unwrap_or(""),
+            "suppressed child-fired Kimi Stop while the main wire was mid-step",
+        );
+        return None;
+    }
+    let signal = kimi_root_signal(adapter, event_name, payload, parsed, ask_detail)?;
+    let agent_id = parsed.session_id.clone().map(AgentSessionId::from);
+    let mut observation =
+        AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+    observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
+    observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+    if event_name == "SessionStart"
+        && let Some(session_id) = parsed.session_id.as_deref()
+    {
+        observation.transcript_path =
+            wire::wire_path(session_id, parsed.cwd.as_deref().map(Path::new))
+                .map(|path| path.to_string_lossy().into_owned());
+    }
+    Some(observation)
+}
+
+fn kimi_root_signal(
+    adapter: &KimiAdapter,
+    event_name: &str,
+    payload: &Value,
+    parsed: &payloads::KimiHookPayload,
+    ask_detail: Option<String>,
+) -> Option<LifecycleSignal> {
+    let neutral_tool = || LifecycleSignal::ToolUsed {
+        mutates: false,
+        edits: false,
+        native_key: None,
+    };
+    match event_name {
+        "SessionStart" => Some(LifecycleSignal::Registered),
+        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
+        "PreToolUse"
+            if parsed.tool_name.as_deref() == Some("AskUserQuestion")
+                && !parsed.question_background() =>
+        {
+            Some(LifecycleSignal::AwaitingInput {
+                kind: super::AskKind::Question,
+                ask_id: None,
+                detail: ask_detail,
+                native_key: None,
+            })
+        }
+        "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
+            kind: adapter
+                .descriptor()
+                .blocking_tool_kind(parsed.tool_name.as_deref())
+                .unwrap_or(super::AskKind::Permission),
+            ask_id: None,
+            detail: ask_detail,
+            native_key: None,
+        }),
+        "PermissionResult" | "PostToolUseFailure" => Some(neutral_tool()),
+        "PostToolUse" => Some(LifecycleSignal::ToolUsed {
+            mutates: adapter.descriptor().tool_mutates(payload),
+            edits: adapter.descriptor().tool_edits_files(payload),
+            native_key: None,
+        }),
+        "Stop" | "Interrupt" => Some(LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        }),
+        "StopFailure" => Some(LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+        }),
+        "SessionEnd" => Some(LifecycleSignal::Ended),
+        "PreCompact" => Some(LifecycleSignal::Compacting),
+        "PostCompact" => Some(LifecycleSignal::CompactionEnded {
+            auto: parsed.trigger.as_deref().map(|trigger| trigger == "auto"),
+        }),
+        _ => None,
+    }
+}
+
+fn kimi_final_message(event_name: &str, parsed: &payloads::KimiHookPayload) -> Option<String> {
+    matches!(event_name, "Stop" | "StopFailure")
+        .then(|| {
+            let path = wire::wire_path(
+                parsed.session_id.as_deref()?,
+                parsed.cwd.as_deref().map(Path::new),
+            )?;
+            let lines = std::fs::read_to_string(path).ok()?;
+            transcript::latest_assistant(&lines)
+        })
+        .flatten()
+}
+
 impl AgentAdapter for KimiAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &KIMI_DESCRIPTOR
@@ -247,51 +396,22 @@ impl AgentAdapter for KimiAdapter {
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let parsed = payloads::parse(payload);
-        let questions = (event_name == "PreToolUse"
-            && parsed.tool_name.as_deref() == Some("AskUserQuestion"))
-        .then(|| parsed.tool_input.as_ref().and_then(parse_questions))
-        .flatten()
-        .unwrap_or_default();
-        let ask = match event_name {
-            "PermissionRequest" => Some(
-                self.descriptor()
-                    .blocking_tool_kind(parsed.tool_name.as_deref())
-                    .unwrap_or(super::AskKind::Permission),
-            ),
-            "PreToolUse"
-                if parsed.tool_name.as_deref() == Some("AskUserQuestion")
-                    && !parsed.question_background() =>
-            {
-                Some(super::AskKind::Question)
-            }
-            _ => None,
-        };
-        let mut decoded = DecodedHook::new(classify_catalog_hook(KIMI_HOOKS, event_name, ask));
-        decoded.agent_id = parsed.session_id.clone();
-        decoded.context_agent_id = parsed.session_id.clone();
-        decoded.worktree_path = parsed.cwd.clone();
-        decoded.questions = questions;
-        decoded.ask_detail = if event_name == "PermissionRequest" {
+        let ask = kimi_ask_kind(self, event_name, &parsed);
+        let questions = kimi_questions(event_name, &parsed);
+        let mut decoded = decode_catalog_hook(KIMI_HOOKS, event_name, ask);
+        decoded.set_routing(HookRouting::new(
+            parsed.session_id.clone(),
+            parsed.session_id.clone(),
+            parsed.cwd.clone(),
+            None,
+        ));
+        let ask_detail = if event_name == "PermissionRequest" {
             parsed.action.as_deref().and_then(non_empty_trimmed)
         } else {
-            decoded
-                .questions
-                .first()
-                .map(|question| question.question.clone())
+            questions.first().map(|question| question.question.clone())
         };
-        decoded.turn_error = (event_name == "StopFailure").then(|| {
-            let label = parsed
-                .error_message
-                .clone()
-                .or_else(|| parsed.error_type.clone())
-                .and_then(|value| non_empty_trimmed(&value))
-                .map(|value| value.chars().take(80).collect::<String>());
-            AgentTurnError {
-                class: TurnErrorClass::classify_label(label.as_deref()),
-                at: Timestamp::now(),
-                label,
-            }
-        });
+        decoded.set_ask(questions, ask_detail.clone());
+        decoded.set_turn_error(kimi_turn_error(event_name, &parsed));
         let session_dir = matches!(event_name, "SubagentStart" | "SubagentStop" | "Stop")
             .then(|| {
                 wire::session_dir(
@@ -300,109 +420,17 @@ impl AgentAdapter for KimiAdapter {
                 )
             })
             .flatten();
-        let observation = if matches!(event_name, "SubagentStart" | "SubagentStop") {
-            session_dir.as_deref().and_then(|session_dir| {
-                self.observe_subagent_lifecycle(event_name, payload, &parsed, session_dir)
-            })
-        } else if event_name == "Stop"
-            && session_dir.as_deref().is_some_and(|session_dir| {
-                subagents::has_subagents(session_dir) && subagents::main_turn_mid_step(session_dir)
-            })
-        {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                kind = self.descriptor().kind,
-                session_id = parsed.session_id.as_deref().unwrap_or(""),
-                "suppressed child-fired Kimi Stop while the main wire was mid-step",
-            );
-            None
-        } else {
-            let signal = match event_name {
-                "SessionStart" => Some(LifecycleSignal::Registered),
-                "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
-                "PreToolUse"
-                    if parsed.tool_name.as_deref() == Some("AskUserQuestion")
-                        && !parsed.question_background() =>
-                {
-                    Some(LifecycleSignal::AwaitingInput {
-                        kind: super::AskKind::Question,
-                        ask_id: None,
-                        detail: decoded.ask_detail.clone(),
-                        native_key: None,
-                    })
-                }
-                "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
-                    kind: self
-                        .descriptor()
-                        .blocking_tool_kind(parsed.tool_name.as_deref())
-                        .unwrap_or(super::AskKind::Permission),
-                    ask_id: None,
-                    detail: decoded.ask_detail.clone(),
-                    native_key: None,
-                }),
-                "PermissionResult" => Some(LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
-                    native_key: None,
-                }),
-                "PostToolUse" => Some(LifecycleSignal::ToolUsed {
-                    mutates: self.descriptor().tool_mutates(payload),
-                    edits: self.descriptor().tool_edits_files(payload),
-                    native_key: None,
-                }),
-                "PostToolUseFailure" => Some(LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
-                    native_key: None,
-                }),
-                "Stop" => Some(LifecycleSignal::TurnEnded {
-                    errored: false,
-                    parked_on_background: false,
-                }),
-                "StopFailure" => Some(LifecycleSignal::TurnEnded {
-                    errored: true,
-                    parked_on_background: false,
-                }),
-                "Interrupt" => Some(LifecycleSignal::TurnEnded {
-                    errored: false,
-                    parked_on_background: false,
-                }),
-                "SessionEnd" => Some(LifecycleSignal::Ended),
-                "PreCompact" => Some(LifecycleSignal::Compacting),
-                "PostCompact" => Some(LifecycleSignal::CompactionEnded {
-                    auto: parsed.trigger.as_deref().map(|trigger| trigger == "auto"),
-                }),
-                _ => None,
-            };
-            signal.map(|signal| {
-                let agent_id = parsed.session_id.clone().map(AgentSessionId::from);
-                let mut observation = AgentLifecycleObservation::new(agent_id, signal)
-                    .with_worktree_from_payload(payload);
-                observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-                observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
-                if event_name == "SessionStart"
-                    && let Some(session_id) = parsed.session_id.as_deref()
-                {
-                    observation.transcript_path =
-                        wire::wire_path(session_id, parsed.cwd.as_deref().map(Path::new))
-                            .map(|path| path.to_string_lossy().into_owned());
-                }
-                observation
-            })
-        };
+        let observation = kimi_observation(
+            self,
+            event_name,
+            payload,
+            &parsed,
+            session_dir.as_deref(),
+            ask_detail,
+        );
         if let Some(observation) = observation {
-            decoded.final_message = matches!(event_name, "Stop" | "StopFailure")
-                .then(|| {
-                    let path = wire::wire_path(
-                        parsed.session_id.as_deref()?,
-                        parsed.cwd.as_deref().map(Path::new),
-                    )?;
-                    let lines = std::fs::read_to_string(path).ok()?;
-                    transcript::latest_assistant(&lines)
-                })
-                .flatten();
-            decoded.worktree_path = observation.worktree_path.clone();
-            decoded.lifecycle = Some(observation);
+            decoded.set_final_message(kimi_final_message(event_name, &parsed));
+            decoded.attach_lifecycle(observation);
         }
         Ok(decoded)
     }

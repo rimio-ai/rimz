@@ -74,7 +74,6 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // excluded to avoid false-positive presence.
     process_names: &["kiro-cli", "kiro-cli-chat"],
     extra_bin_dirs: &[],
-    activity_events: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("kiro-cli"),

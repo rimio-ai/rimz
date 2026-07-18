@@ -49,14 +49,14 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
+use super::hook_types::{HookRecord, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, DecodedHook,
-    Result, SubagentIdentity, TranscriptMessage, agent_config_path, non_empty_trimmed,
+    HookRouting, Result, SubagentIdentity, TranscriptMessage, agent_config_path, non_empty_trimmed,
     optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
@@ -112,18 +112,6 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["pi"],
     bin_names: &["pi"],
     extra_bin_dirs: &[],
-    // Pi's progress-proving events, in its own wire vocabulary. The blocking
-    // `tool_call` is excluded like Claude's `PreToolUse`: it fires while the
-    // ask is being created, so touching on it would instantly un-block the
-    // row. Every *completed* tool still touches via `tool_execution_end`.
-    activity_events: &[
-        "session_start",
-        "before_agent_start",
-        "agent_end",
-        "message_update",
-        "turn_end",
-        "tool_execution_end",
-    ],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("pi"),
@@ -244,20 +232,20 @@ const PI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 /// Everything the extension wires, in `pi.on(...)` registration order. Selector
 /// and context-update records remain lifecycle-classified enrichment markers.
 const PI_HOOKS: &[HookRecord] = &[
-    hook_record!(lifecycle, "session_start", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "before_agent_start", r#"{"session_id":"sess-1","prompt":"fix auth"}"#),
-    hook_record!(lifecycle, "agent_end", r#"{"session_id":"sess-1","stop_reason":"stop"}"#),
+    hook_record!(lifecycle, "session_start", r#"{"session_id":"sess-1"}"#).progress(),
+    hook_record!(lifecycle, "before_agent_start", r#"{"session_id":"sess-1","prompt":"fix auth"}"#).progress(),
+    hook_record!(lifecycle, "agent_end", r#"{"session_id":"sess-1","stop_reason":"stop"}"#).progress(),
     hook_record!(lifecycle, "agent_settled", r#"{"session_id":"sess-1","stop_reason":"stop"}"#),
-    hook_record!(lifecycle, "turn_end", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "turn_end", r#"{"session_id":"sess-1"}"#).progress(),
     hook_record!(lifecycle, "after_provider_response", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "message_update", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "message_update", r#"{"session_id":"sess-1"}"#).progress(),
     hook_record!(lifecycle, "session_info_changed", r#"{"session_id":"sess-1","session_name":"Parser cleanup"}"#),
-    hook_record!(lifecycle, "tool_execution_end", r#"{"session_id":"sess-1","tool_call_id":"sibling-call","tool_name":"bash"}"#),
+    hook_record!(lifecycle, "tool_execution_end", r#"{"session_id":"sess-1","tool_call_id":"sibling-call","tool_name":"bash"}"#).progress(),
     hook_record!(lifecycle, "model_select", r#"{"session_id":"sess-1","model":"gpt-5.5"}"#),
     hook_record!(lifecycle, "thinking_level_select", r#"{"session_id":"sess-1","effort":"high"}"#),
     hook_record!(lifecycle, "session_before_compact", r#"{"session_id":"sess-1"}"#),
     hook_record!(lifecycle, "session_compact", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "session_shutdown", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "session_shutdown", r#"{"session_id":"sess-1"}"#).session_ended(),
     hook_record!(lifecycle, "subagent_started", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session"}"#),
     hook_record!(lifecycle, "subagent_stopped", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session","errored":true,"total_tokens":1200}"#),
     hook_record!(blocking, "tool_call", r#"{"session_id":"sess-1","tool_call_id":"ask-call","tool_name":"ask_user_question","tool_input":{"questions":[{"question":"Which route?","header":"Route","options":[{"label":"Safe","description":"Stage it"},{"label":"Fast","description":"Ship it"}]}]}}"#, AskKind::Question)
@@ -296,11 +284,15 @@ impl AgentAdapter for PiAdapter {
                 .blocking_tool_kind(payload.get("tool_name").and_then(Value::as_str))
         })
         .flatten();
-        let mut decoded = DecodedHook::new(classify_catalog_hook(PI_HOOKS, event_name, ask_kind));
-        decoded.agent_id = optional_payload_string(payload, &["session_id"]);
-        decoded.context_agent_id = decoded.agent_id.clone();
-        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
-        decoded.questions = if event_name == "tool_call"
+        let mut decoded = decode_catalog_hook(PI_HOOKS, event_name, ask_kind);
+        let agent_id = optional_payload_string(payload, &["session_id"]);
+        decoded.set_routing(HookRouting::new(
+            agent_id.clone(),
+            agent_id,
+            optional_payload_string(payload, &["worktree_path", "cwd"]),
+            None,
+        ));
+        let questions = if event_name == "tool_call"
             && payload.get("has_ui").and_then(Value::as_bool) != Some(false)
         {
             payload
@@ -311,10 +303,13 @@ impl AgentAdapter for PiAdapter {
         } else {
             Vec::new()
         };
-        decoded.native_answers = (event_name == "tool_execution_end"
-            && payload.get("tool_name").and_then(Value::as_str) == Some("ask_user_question"))
-        .then(|| ask::answer_detail(payload))
-        .flatten();
+        decoded.set_ask(questions, None);
+        decoded.set_native_answers(
+            (event_name == "tool_execution_end"
+                && payload.get("tool_name").and_then(Value::as_str) == Some("ask_user_question"))
+            .then(|| ask::answer_detail(payload))
+            .flatten(),
+        );
         if [
             "model",
             "effort",
@@ -327,7 +322,7 @@ impl AgentAdapter for PiAdapter {
         .into_iter()
         .any(|key| payload.get(key).is_some())
         {
-            decoded.observed_context = pi_observed_context(self.descriptor().kind, payload);
+            decoded.set_observed_context(pi_observed_context(self.descriptor().kind, payload));
         }
         if matches!(event_name, "subagent_started" | "subagent_stopped") {
             let signal = if event_name == "subagent_started" {
@@ -361,8 +356,7 @@ impl AgentAdapter for PiAdapter {
             if event_name == "subagent_stopped" {
                 observation.total_tokens = payload.get("total_tokens").and_then(Value::as_u64);
             }
-            decoded.worktree_path = observation.worktree_path.clone();
-            decoded.lifecycle = Some(observation);
+            decoded.attach_lifecycle(observation);
             return Ok(decoded);
         }
 
@@ -414,7 +408,7 @@ impl AgentAdapter for PiAdapter {
         let Some(signal) = signal else {
             return Ok(decoded);
         };
-        let agent_id = decoded.agent_id.clone().map(AgentSessionId::from);
+        let agent_id = decoded.routing().event_agent_id().map(AgentSessionId::from);
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
@@ -428,13 +422,14 @@ impl AgentAdapter for PiAdapter {
         observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
         observation.fresh_input_tokens = parsed.input_tokens;
         observation.output_tokens = parsed.output_tokens;
-        decoded.final_message = (event_name == "agent_settled")
-            .then_some(parsed.last_assistant_message)
-            .flatten()
-            .as_deref()
-            .and_then(non_empty_trimmed);
-        decoded.worktree_path = observation.worktree_path.clone();
-        decoded.lifecycle = Some(observation);
+        decoded.set_final_message(
+            (event_name == "agent_settled")
+                .then_some(parsed.last_assistant_message)
+                .flatten()
+                .as_deref()
+                .and_then(non_empty_trimmed),
+        );
+        decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
 

@@ -32,13 +32,13 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
+use super::hook_types::{HookRecord, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, AskKind, DecodedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextRefresh,
+    HookInstallPreview, HookInstallReport, HookRouting, HookUninstallReport, LocalContextRefresh,
     LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, SpawnedSubagent,
     SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
     TranscriptMessage, TurnErrorClass, optional_payload_string, resolve_subagent_identity,
@@ -88,13 +88,6 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["copilot", "node"],
     bin_names: &["copilot"],
     extra_bin_dirs: &[],
-    activity_events: &[
-        "sessionStart",
-        "userPromptSubmitted",
-        "postToolUse",
-        "postToolUseFailure",
-        "agentStop",
-    ],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("copilot"),
@@ -220,12 +213,14 @@ pub(super) const COPILOT_HOOKS: &[HookRecord] = &[
         lifecycle,
         "sessionStart",
         r#"{"sessionId":"sess-1","source":"startup"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "userPromptSubmitted",
         r#"{"sessionId":"sess-1","prompt":"fix auth"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         blocking,
         "preToolUse",
@@ -238,12 +233,14 @@ pub(super) const COPILOT_HOOKS: &[HookRecord] = &[
         lifecycle,
         "postToolUse",
         r#"{"sessionId":"sess-1","toolName":"edit"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "postToolUseFailure",
         r#"{"sessionId":"sess-1","toolName":"bash","error":"failed"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         blocking,
         "permissionRequest",
@@ -255,7 +252,8 @@ pub(super) const COPILOT_HOOKS: &[HookRecord] = &[
         lifecycle,
         "agentStop",
         r#"{"sessionId":"sess-1","stopReason":"end_turn"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "preCompact",
@@ -270,7 +268,8 @@ pub(super) const COPILOT_HOOKS: &[HookRecord] = &[
         lifecycle,
         "sessionEnd",
         r#"{"sessionId":"sess-1","reason":"user_exit"}"#
-    ),
+    )
+    .session_ended(),
 ];
 
 // If Copilot starts rejecting unknown top-level keys, move the ownership
@@ -329,12 +328,14 @@ impl AgentAdapter for CopilotAdapter {
         } else {
             None
         };
-        let mut decoded =
-            DecodedHook::new(classify_catalog_hook(COPILOT_HOOKS, event_name, ask_kind));
-        decoded.agent_id = parsed.session_id.clone();
-        decoded.context_agent_id = parsed.session_id.clone();
-        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
-        decoded.questions = if event_name == "preToolUse" {
+        let mut decoded = decode_catalog_hook(COPILOT_HOOKS, event_name, ask_kind);
+        decoded.set_routing(HookRouting::new(
+            parsed.session_id.clone(),
+            parsed.session_id.clone(),
+            optional_payload_string(payload, &["worktree_path", "cwd"]),
+            None,
+        ));
+        let questions = if event_name == "preToolUse" {
             tool.filter(|tool| tool.name == Some("ask_user"))
                 .and_then(|tool| tool.args?.as_object())
                 .and_then(|args| {
@@ -356,38 +357,38 @@ impl AgentAdapter for CopilotAdapter {
         } else {
             Vec::new()
         };
-        decoded.ask_detail = if event_name == "permissionRequest" {
+        let ask_detail = if event_name == "permissionRequest" {
             tool.and_then(|tool| tool.name)
                 .map(str::to_owned)
                 .filter(|name| !name.is_empty())
         } else {
-            decoded
-                .questions
-                .first()
-                .map(|question| question.question.clone())
+            questions.first().map(|question| question.question.clone())
         };
-        decoded.turn_error = (event_name == "errorOccurred")
-            .then(|| {
-                (parsed.recoverable == Some(false)).then_some(())?;
-                let label = parsed
-                    .error
-                    .clone()
-                    .and_then(payloads::CopilotHookError::into_message)
-                    .map(|message| message.trim().chars().take(500).collect::<String>())
-                    .filter(|message| !message.is_empty())?;
-                let at = parsed
-                    .timestamp
-                    .as_ref()
-                    .and_then(Value::as_i64)
-                    .and_then(|millis| Timestamp::from_millisecond(millis).ok())
-                    .unwrap_or_else(Timestamp::now);
-                Some(AgentTurnError {
-                    class: TurnErrorClass::classify_label(Some(&label)),
-                    at,
-                    label: Some(label),
+        decoded.set_ask(questions, ask_detail);
+        decoded.set_turn_error(
+            (event_name == "errorOccurred")
+                .then(|| {
+                    (parsed.recoverable == Some(false)).then_some(())?;
+                    let label = parsed
+                        .error
+                        .clone()
+                        .and_then(payloads::CopilotHookError::into_message)
+                        .map(|message| message.trim().chars().take(500).collect::<String>())
+                        .filter(|message| !message.is_empty())?;
+                    let at = parsed
+                        .timestamp
+                        .as_ref()
+                        .and_then(Value::as_i64)
+                        .and_then(|millis| Timestamp::from_millisecond(millis).ok())
+                        .unwrap_or_else(Timestamp::now);
+                    Some(AgentTurnError {
+                        class: TurnErrorClass::classify_label(Some(&label)),
+                        at,
+                        label: Some(label),
+                    })
                 })
-            })
-            .flatten();
+                .flatten(),
+        );
         if [
             "model",
             "effort",
@@ -400,7 +401,7 @@ impl AgentAdapter for CopilotAdapter {
         .into_iter()
         .any(|key| payload.get(key).is_some())
         {
-            decoded.observed_context = self.observe_context(self.descriptor().kind, payload);
+            decoded.set_observed_context(self.observe_context(self.descriptor().kind, payload));
         }
         let signal = match event_name {
             "sessionStart"
@@ -472,12 +473,13 @@ impl AgentAdapter for CopilotAdapter {
             observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
             observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         }
-        decoded.final_message = (event_name == "agentStop")
-            .then_some(observation.transcript_path.as_deref())
-            .flatten()
-            .and_then(|path| transcript::last_assistant_message(Path::new(path)));
-        decoded.worktree_path = observation.worktree_path.clone();
-        decoded.lifecycle = Some(observation);
+        decoded.set_final_message(
+            (event_name == "agentStop")
+                .then_some(observation.transcript_path.as_deref())
+                .flatten()
+                .and_then(|path| transcript::last_assistant_message(Path::new(path))),
+        );
+        decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
 

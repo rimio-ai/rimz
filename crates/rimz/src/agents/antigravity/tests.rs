@@ -39,28 +39,28 @@ fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
         AntigravityAdapter
             .decode_hook("PreInvocation", &Value::Null)
             .expect("test hook decodes")
-            .neutral,
+            .neutral(),
         Some(json!({}))
     );
     assert_eq!(
         AntigravityAdapter
             .decode_hook("Stop", &Value::Null)
             .expect("test hook decodes")
-            .neutral,
+            .neutral(),
         Some(json!({"decision": ""}))
     );
     assert_eq!(
         AntigravityAdapter
             .decode_hook("PreToolUse", &payload)
             .expect("test hook decodes")
-            .class,
+            .class(),
         AgentHookClass::Unknown
     );
     assert_eq!(
         AntigravityAdapter
             .decode_hook("PreToolUse", &Value::Null)
             .expect("test hook decodes")
-            .neutral,
+            .neutral(),
         None
     );
 }
@@ -82,7 +82,7 @@ fn native_hooks_normalize_lifecycle() {
             &with(&common, [("invocationNum", json!(0))]),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(started.signal, LifecycleSignal::TurnStarted);
     assert_eq!(started.agent_id.as_deref(), Some(SESSION_ID));
@@ -146,7 +146,7 @@ fn native_hooks_normalize_lifecycle() {
         let signal = AntigravityAdapter
             .decode_hook(event, &payload)
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .map(|value| value.signal);
         assert_eq!(signal, expected);
     }
@@ -157,10 +157,10 @@ fn catalog_events_without_lifecycle_signal_keep_context_identity() {
     let camel = AntigravityAdapter
         .decode_hook("PostInvocation", &hook_payload())
         .expect("test hook decodes");
-    assert_eq!(camel.agent_id.as_deref(), Some(SESSION_ID));
-    assert_eq!(camel.context_agent_id.as_deref(), Some(SESSION_ID));
-    assert_eq!(camel.worktree_path.as_deref(), Some("/workspace/project"));
-    assert!(camel.lifecycle.is_none());
+    assert_eq!(camel.routing().event_agent_id(), Some(SESSION_ID));
+    assert_eq!(camel.routing().context_agent_id(), Some(SESSION_ID));
+    assert_eq!(camel.routing().worktree_path(), Some("/workspace/project"));
+    assert!(camel.lifecycle().is_none());
 
     let snake = AntigravityAdapter
         .decode_hook(
@@ -172,9 +172,9 @@ fn catalog_events_without_lifecycle_signal_keep_context_identity() {
             }),
         )
         .expect("test hook decodes");
-    assert_eq!(snake.agent_id.as_deref(), Some(SESSION_ID));
-    assert_eq!(snake.context_agent_id.as_deref(), Some(SESSION_ID));
-    assert!(snake.lifecycle.is_none());
+    assert_eq!(snake.routing().event_agent_id(), Some(SESSION_ID));
+    assert_eq!(snake.routing().context_agent_id(), Some(SESSION_ID));
+    assert!(snake.lifecycle().is_none());
 }
 #[test]
 fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
@@ -194,14 +194,14 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
             AntigravityAdapter
                 .decode_hook("Stop", &payload)
                 .expect("test hook decodes")
-                .turn_error
+                .turn_error()
                 .is_none()
         );
         assert_eq!(
             AntigravityAdapter
                 .decode_hook("Stop", &payload)
                 .expect("test hook decodes")
-                .lifecycle
+                .lifecycle()
                 .unwrap()
                 .signal,
             LifecycleSignal::TurnEnded {

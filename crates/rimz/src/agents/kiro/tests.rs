@@ -22,7 +22,12 @@ fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
 fn native_hooks_are_explicitly_unsupported() {
     let descriptor = KiroAdapter.descriptor();
     assert!(!descriptor.has_wired_hook_install());
-    assert!(descriptor.activity_events.is_empty());
+    assert!(
+        !KiroAdapter
+            .decode_hook("unknown", &json!({}))
+            .expect("unknown hook decodes")
+            .records_progress()
+    );
     assert!(KiroAdapter.native_hook_events().is_empty());
     assert!(matches!(
         descriptor.concern_coverage(IntegrationConcern::TurnLifecycle),
@@ -35,21 +40,21 @@ fn native_hooks_are_explicitly_unsupported() {
             KiroAdapter
                 .decode_hook(event, &payload)
                 .expect("test hook decodes")
-                .class,
+                .class(),
             AgentHookClass::Unknown
         );
         assert!(
             KiroAdapter
                 .decode_hook(event, &payload)
                 .expect("test hook decodes")
-                .lifecycle
+                .lifecycle()
                 .is_none()
         );
         assert_eq!(
             KiroAdapter
                 .decode_hook(event, &Value::Null)
                 .expect("test hook decodes")
-                .neutral,
+                .neutral(),
             None
         );
     }
@@ -58,7 +63,7 @@ fn native_hooks_are_explicitly_unsupported() {
         KiroAdapter
             .decode_hook("Stop", &json!({}))
             .expect("test hook decodes")
-            .final_message
+            .final_message()
             .is_none()
     );
 }

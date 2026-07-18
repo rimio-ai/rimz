@@ -15,22 +15,22 @@ fn native_questions_and_permissions_use_distinct_hooks() {
     let classified = KimiAdapter
         .decode_hook("PreToolUse", &question)
         .expect("test hook decodes");
-    assert_eq!(classified.class, AgentHookClass::AwaitingUser);
-    assert_eq!(classified.ask_kind, Some(super::super::AskKind::Question));
+    assert_eq!(classified.class(), AgentHookClass::AwaitingUser);
+    assert_eq!(classified.ask_kind(), Some(super::super::AskKind::Question));
 
     let plan_pre_tool = json!({"session_id":"s1","tool_name":"ExitPlanMode"});
     assert_eq!(
         KimiAdapter
             .decode_hook("PreToolUse", &plan_pre_tool)
             .expect("test hook decodes")
-            .class,
+            .class(),
         AgentHookClass::Lifecycle
     );
     assert!(
         KimiAdapter
             .decode_hook("PreToolUse", &plan_pre_tool)
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .is_none()
     );
 
@@ -44,7 +44,7 @@ fn native_questions_and_permissions_use_distinct_hooks() {
         KimiAdapter
             .decode_hook("PermissionRequest", &plan_permission)
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .unwrap()
             .signal,
         LifecycleSignal::AwaitingInput {
@@ -58,7 +58,7 @@ fn native_questions_and_permissions_use_distinct_hooks() {
         KimiAdapter
             .decode_hook("PermissionRequest", &permission)
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .unwrap()
             .signal,
         LifecycleSignal::AwaitingInput {
@@ -66,7 +66,7 @@ fn native_questions_and_permissions_use_distinct_hooks() {
             ..
         }
     ));
-    insta::assert_snapshot!(format!("{:?}", KimiAdapter.decode_hook("PermissionRequest", &Value::Null).expect("test hook decodes").neutral), @"None");
+    insta::assert_snapshot!(format!("{:?}", KimiAdapter.decode_hook("PermissionRequest", &Value::Null).expect("test hook decodes").neutral()), @"None");
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn permission_result_and_interrupt_clear_waiting_state() {
             &json!({"session_id":"s1","tool_name":"Bash","decision":"approved"}),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(
         result.signal,
@@ -94,7 +94,7 @@ fn permission_result_and_interrupt_clear_waiting_state() {
                 &json!({"session_id":"s1","turn_id":"t1","reason":"cancelled"})
             )
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .unwrap()
             .signal,
         LifecycleSignal::TurnEnded { errored: false, .. }
@@ -109,7 +109,7 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
             &json!({"session_id":"s1","tool_name":"AskUserQuestion"}),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(
         failed.signal,
@@ -129,14 +129,14 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
         KimiAdapter
             .decode_hook("PreToolUse", &background)
             .expect("test hook decodes")
-            .class,
+            .class(),
         AgentHookClass::Lifecycle
     );
     assert!(
         KimiAdapter
             .decode_hook("PreToolUse", &background)
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .is_none()
     );
 }
@@ -151,7 +151,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
     let observed = KimiAdapter
         .decode_hook("UserPromptSubmit", &prompt)
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(observed.prompt.as_deref(), Some("fix\nparser"));
     assert_eq!(
@@ -212,7 +212,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
             &json!({"session_id":"s1","tool_name":"Write"}),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(
         write.signal,

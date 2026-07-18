@@ -551,6 +551,7 @@ pub(super) fn detect_plan_proposed(tail: &str) -> Option<PlanProposal> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
     scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_raw_error()
 }
@@ -977,6 +978,7 @@ impl TranscriptScan {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_raw_error(self) -> Option<AgentTurnError> {
         match self.raw_error {
             RawErrorScan::Resolved(error) => error,

@@ -180,7 +180,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         .unwrap_or_else(|| "unknown".to_owned());
     let decoded = agent.decode_hook(&event_name, &payload)?;
 
-    if decoded.class != AgentHookClass::AwaitingUser {
+    if decoded.class() != AgentHookClass::AwaitingUser {
         handle_lifecycle_hook(
             &workspace,
             &store,
@@ -220,7 +220,7 @@ fn participant_start_path(source: &str, cursor_project_dir: Option<&OsStr>) -> P
 }
 
 fn emit_neutral(decoded: &DecodedHook) -> Result<()> {
-    if let Some(payload) = &decoded.neutral {
+    if let Some(payload) = decoded.neutral() {
         let rendered = serde_json::to_string(&payload)?;
         #[expect(clippy::print_stdout, reason = "hook stdout is the decision channel")]
         {

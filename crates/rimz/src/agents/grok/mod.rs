@@ -17,11 +17,11 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
     SamePaneSessionPolicy, ThreadKey, ToolClassification,
 };
-use super::hook_types::{HookRecord, hook_record};
+use super::hook_types::{HookRecord, decode_catalog_hook, hook_record};
 use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
     AgentAdapter, AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError,
-    ClassifiedHook, DecodedHook, FieldPatch, LocalContextPatch, LocalContextRefresh,
+    DecodedHook, FieldPatch, HookRouting, LocalContextPatch, LocalContextRefresh,
     LocalContextRefreshCtx, LocalTokenPatch, ManagedSource, RefreshTrigger, Result, SessionOrigin,
     TranscriptMessage, TurnErrorClass, non_empty_trimmed, sanitize_user_prompt,
 };
@@ -73,16 +73,6 @@ static GROK_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["grok", "xai-grok-pager"],
     bin_names: &["grok"],
     extra_bin_dirs: &[],
-    activity_events: &[
-        "SessionStart",
-        "UserPromptSubmit",
-        "PostToolUse",
-        "PostToolUseFailure",
-        "Stop",
-        "SubagentStart",
-        "SubagentStop",
-        "PostCompact",
-    ],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("grok"),
@@ -204,22 +194,25 @@ pub(super) const RIMZ_HOOK_COMMAND: &str = "rimz hooks feed --source grok";
 pub(super) const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source grok";
 
 pub(super) const GROK_HOOKS: &[HookRecord] = &[
-    hook_record!(lifecycle, "SessionStart", r#"{"sessionId":"s1"}"#),
+    hook_record!(lifecycle, "SessionStart", r#"{"sessionId":"s1"}"#).progress(),
     hook_record!(
         lifecycle,
         "UserPromptSubmit",
         r#"{"sessionId":"s1","prompt":"hello"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "PostToolUse",
         r#"{"sessionId":"s1","toolName":"apply_patch"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "PostToolUseFailure",
         r#"{"sessionId":"s1","toolName":"apply_patch","error":"failed"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         blocking,
         "Notification",
@@ -236,17 +229,20 @@ pub(super) const GROK_HOOKS: &[HookRecord] = &[
         lifecycle,
         "Stop",
         r#"{"sessionId":"s1","reason":"end_turn"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "SubagentStart",
         r#"{"sessionId":"s1","subagentId":"child"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "SubagentStop",
         r#"{"sessionId":"s1","subagentId":"child","exitCode":0}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "PreCompact",
@@ -256,8 +252,9 @@ pub(super) const GROK_HOOKS: &[HookRecord] = &[
         lifecycle,
         "PostCompact",
         r#"{"sessionId":"s1","source":"auto"}"#
-    ),
-    hook_record!(lifecycle, "SessionEnd", r#"{"sessionId":"s1"}"#),
+    )
+    .progress(),
+    hook_record!(lifecycle, "SessionEnd", r#"{"sessionId":"s1"}"#).session_ended(),
 ];
 
 const KNOWN_EVENTS: &[&str] = &[
@@ -291,38 +288,32 @@ impl AgentAdapter for GrokAdapter {
         let ask_kind = (canonical == "Notification")
             .then(|| notification_ask(&parsed))
             .flatten();
-        let installed = GROK_HOOKS.iter().any(|hook| hook.event == canonical);
-        let class = if ask_kind.is_some() {
-            super::AgentHookClass::AwaitingUser
-        } else if installed {
-            super::AgentHookClass::Lifecycle
-        } else {
-            super::AgentHookClass::Unknown
-        };
-        let mut decoded = DecodedHook::new(ClassifiedHook {
-            class,
-            ask_kind,
-            event_name: canonical.clone(),
-        });
-        decoded.agent_id = parsed.session_id.clone();
-        decoded.context_agent_id = parsed.session_id.clone();
-        decoded.worktree_path = parsed.workspace_root.clone().or_else(|| parsed.cwd.clone());
-        decoded.turn_error = match canonical.as_str() {
-            "StopFailure" | "PostToolUseFailure" => parsed.error.as_deref(),
-            "Notification" if parsed.notification_type.as_deref() == Some("agent_error") => {
-                parsed.error.as_deref().or(parsed.message.as_deref())
+        let mut decoded = decode_catalog_hook(GROK_HOOKS, &canonical, ask_kind);
+        let worktree_path = parsed.workspace_root.clone().or_else(|| parsed.cwd.clone());
+        decoded.set_routing(HookRouting::new(
+            parsed.session_id.clone(),
+            parsed.session_id.clone(),
+            worktree_path.clone(),
+            None,
+        ));
+        decoded.set_turn_error(
+            match canonical.as_str() {
+                "StopFailure" | "PostToolUseFailure" => parsed.error.as_deref(),
+                "Notification" if parsed.notification_type.as_deref() == Some("agent_error") => {
+                    parsed.error.as_deref().or(parsed.message.as_deref())
+                }
+                _ => None,
             }
-            _ => None,
-        }
-        .map(|raw_label| {
-            let label = non_empty_trimmed(raw_label)
-                .map(|label| label.chars().take(160).collect::<String>());
-            AgentTurnError {
-                class: TurnErrorClass::classify_label(label.as_deref()),
-                at: Timestamp::now(),
-                label,
-            }
-        });
+            .map(|raw_label| {
+                let label = non_empty_trimmed(raw_label)
+                    .map(|label| label.chars().take(160).collect::<String>());
+                AgentTurnError {
+                    class: TurnErrorClass::classify_label(label.as_deref()),
+                    at: Timestamp::now(),
+                    label,
+                }
+            }),
+        );
         let Some(signal) = lifecycle_signal(self.descriptor(), &canonical, &parsed) else {
             return Ok(decoded);
         };
@@ -342,7 +333,7 @@ impl AgentAdapter for GrokAdapter {
         if is_subagent {
             observation.parent_agent_id = root_id.as_deref().map(AgentSessionId::from);
         }
-        observation.worktree_path = decoded.worktree_path.clone();
+        observation.worktree_path = worktree_path;
         observation.prompt = (canonical == "UserPromptSubmit")
             .then(|| sanitize_user_prompt(parsed.prompt.as_deref()))
             .flatten();
@@ -392,12 +383,13 @@ impl AgentAdapter for GrokAdapter {
                 .and_then(|value| value.reasoning_effort.clone());
             observation.description = summary.as_ref().and_then(transcript::Summary::title);
         }
-        decoded.final_message = (canonical == "Stop")
-            .then_some(observation.transcript_path.as_deref())
-            .flatten()
-            .and_then(|path| transcript::last_assistant_message(Path::new(path)));
-        decoded.worktree_path = observation.worktree_path.clone();
-        decoded.lifecycle = Some(observation);
+        decoded.set_final_message(
+            (canonical == "Stop")
+                .then_some(observation.transcript_path.as_deref())
+                .flatten()
+                .and_then(|path| transcript::last_assistant_message(Path::new(path))),
+        );
+        decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
 

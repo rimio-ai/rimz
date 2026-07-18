@@ -19,7 +19,7 @@ fn transcript_tail_drives_context_window_and_tokens() {
             &json!({ "session_id": "sess-1", "transcript_path": bare.to_str().unwrap() }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(obs.total_tokens, Some(100_500));
     assert_eq!(obs.context_window, None);
@@ -45,7 +45,7 @@ fn transcript_tail_drives_context_window_and_tokens() {
             }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(obs.context_window, Some(1_000_000));
     assert_eq!(obs.total_tokens, Some(100_500));
@@ -53,7 +53,7 @@ fn transcript_tail_drives_context_window_and_tokens() {
 }
 
 #[test]
-fn observe_turn_error_reads_the_tail_from_the_payload_path() {
+fn stop_hook_reads_turn_error_from_the_transcript_path() {
     // End-to-end over the real file path: the statusline payload names the
     // transcript, the adapter reads its bounded tail, and the verified
     // incident shape (flagged assistant entry + turn_duration, no Stop)
@@ -70,26 +70,38 @@ fn observe_turn_error_reads_the_tail_from_the_payload_path() {
         )
         .unwrap();
     let error = ClaudeAdapter
-        .observe_turn_error(&json!({
-            "session_id": "sess-1",
-            "transcript_path": transcript.to_str().unwrap(),
-        }))
+        .decode_hook(
+            "Stop",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": transcript.to_str().unwrap(),
+            }),
+        )
+        .expect("Stop decodes")
+        .turn_error()
         .expect("the dead turn is detected");
     assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
 
     assert!(
         ClaudeAdapter
-            .observe_turn_error(&json!({ "session_id": "sess-1" }))
+            .decode_hook("Stop", &json!({ "session_id": "sess-1" }))
+            .expect("Stop decodes")
+            .turn_error()
             .is_none(),
         "no transcript path, no marker"
     );
     assert!(
         ClaudeAdapter
-            .observe_turn_error(&json!({
-                "session_id": "sess-1",
-                "transcript_path": dir.path().join("gone.jsonl").to_str().unwrap(),
-            }))
+            .decode_hook(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "transcript_path": dir.path().join("gone.jsonl").to_str().unwrap(),
+                }),
+            )
+            .expect("Stop decodes")
+            .turn_error()
             .is_none(),
         "an unreadable transcript degrades to no marker"
     );
@@ -110,16 +122,21 @@ fn turn_interrupted_reads_the_tail_from_the_payload_path() {
     .unwrap();
 
     assert_eq!(
-        ClaudeAdapter.turn_interrupted(&json!({
-            "session_id": "sess-1",
-            "transcript_path": transcript.to_str().unwrap(),
-        })),
+        ClaudeAdapter
+            .observe_context(
+                "claude",
+                &json!({
+                    "session_id": "sess-1",
+                    "transcript_path": transcript.to_str().unwrap(),
+                }),
+            )
+            .and_then(|context| context.turn_interrupted),
         Some("2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap())
     );
     assert!(
         ClaudeAdapter
-            .turn_interrupted(&json!({ "session_id": "sess-1" }))
-            .is_none()
+            .observe_context("claude", &json!({ "session_id": "sess-1" }))
+            .is_some_and(|context| context.turn_interrupted.is_none())
     );
 }
 
@@ -136,7 +153,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
                 }),
             )
             .expect("test hook decodes")
-            .turn_error
+            .turn_error()
             .expect("marker")
     };
 
@@ -153,7 +170,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
             }),
         )
         .expect("test hook decodes")
-        .turn_error
+        .turn_error()
         .expect("marker");
     assert_eq!(transient.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(transient.label.as_deref(), Some("API Error: Server Error"));
@@ -168,7 +185,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
             }),
         )
         .expect("test hook decodes")
-        .turn_error
+        .turn_error()
         .expect("marker");
     assert_eq!(failed.class, TurnErrorClass::Failed);
     assert_eq!(failed.label.as_deref(), Some("API Error: Bad Request"));
@@ -177,7 +194,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
         ClaudeAdapter
             .decode_hook("StopFailure", &json!({ "session_id": "sess-1" }))
             .expect("test hook decodes")
-            .turn_error
+            .turn_error()
             .is_none(),
         "missing error has no marker"
     );
@@ -191,7 +208,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
                 }),
             )
             .expect("test hook decodes")
-            .turn_error
+            .turn_error()
             .is_none(),
         "only StopFailure carries this marker"
     );
@@ -216,7 +233,7 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
             &json!({ "session_id": "sess-1", "transcript_path": fresh.to_str().unwrap() }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(obs.total_tokens, Some(0));
     assert_eq!(obs.context_window, None);
@@ -228,7 +245,7 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
             &json!({ "session_id": "sess-1", "transcript_path": "/nonexistent/session.jsonl" }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(obs.total_tokens, None);
     assert_eq!(obs.context_window, None);
@@ -248,7 +265,7 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
             &json!({ "transcript_path": usage.to_str().unwrap() }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(obs.total_tokens, None);
     assert_eq!(obs.context_window, None);

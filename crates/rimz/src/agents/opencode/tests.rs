@@ -5,14 +5,29 @@ use serde_json::json;
 
 #[test]
 fn opencode_activity_filter_and_launch_commands_build() {
-    let descriptor = OpencodeAdapter.descriptor();
-    assert!(descriptor.records_activity("tool_after"));
-    assert!(descriptor.records_activity("session_idle"));
-    assert!(descriptor.records_activity("session_error"));
-    assert!(descriptor.records_activity("SubagentStart"));
-    assert!(!descriptor.records_activity("permission_ask"));
-    assert!(!descriptor.records_activity("question_ask"));
-    assert!(!descriptor.records_activity("session_compacting"));
+    for event in [
+        "tool_after",
+        "session_idle",
+        "session_error",
+        "SubagentStart",
+    ] {
+        assert!(
+            OpencodeAdapter
+                .decode_hook(event, &json!({ "session_id": "ses_1" }))
+                .expect("test hook decodes")
+                .records_progress(),
+            "{event} records progress"
+        );
+    }
+    for event in ["permission_ask", "question_ask", "session_compacting"] {
+        assert!(
+            !OpencodeAdapter
+                .decode_hook(event, &json!({ "session_id": "ses_1" }))
+                .expect("test hook decodes")
+                .records_progress(),
+            "{event} does not record progress"
+        );
+    }
 
     assert_eq!(
         OpencodeAdapter.resume_command("ses_123", Path::new("/tmp")),
@@ -142,7 +157,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(registered.agent_id.as_deref(), Some("ses_1"));
     assert_eq!(registered.signal, LifecycleSignal::Registered);
@@ -174,7 +189,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(catalog_window.context_window, Some(272_000));
     // Without a stamped window, a non-Claude model stays unknown (Claude-only fallback).
@@ -184,7 +199,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             &json!({ "session_id": "ses_2", "model": "gpt-5.5", "provider_id": "openai" }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(unknown_window.context_window, None);
 
@@ -194,7 +209,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             &json!({ "session_id": "ses_1", "prompt": "  fix auth  " }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
@@ -206,7 +221,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             &json!({ "session_id": "ses_1", "prompt": "<system-reminder>noise" }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(injected.prompt, None);
     assert_eq!(injected.task, None);
@@ -214,7 +229,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     let idle = OpencodeAdapter
         .decode_hook("session_idle", &json!({ "session_id": "ses_1" }))
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(
         idle.signal,
@@ -229,7 +244,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             &json!({ "session_id": "ses_1", "plan_proposed": true }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("plan observation");
     assert_eq!(
         proposed_plan.signal,
@@ -246,7 +261,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             &json!({ "session_id": "ses_1", "error_message": "boom" }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(
         error.signal,
@@ -256,17 +271,21 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         }
     );
 
-    assert!(!OpencodeAdapter.descriptor().ends_session("session_error"));
-    let ended = OpencodeAdapter
+    let ended_decoded = OpencodeAdapter
         .decode_hook(
             "session_ended",
             &json!({ "session_id": "ses_1", "reason": "deleted" }),
         )
-        .expect("test hook decodes")
-        .lifecycle
-        .expect("end observation");
+        .expect("test hook decodes");
+    let ended = ended_decoded.lifecycle().expect("end observation");
     assert_eq!(ended.signal, LifecycleSignal::Ended);
-    assert!(OpencodeAdapter.descriptor().ends_session("session_ended"));
+    assert!(ended_decoded.ends_session());
+    assert!(
+        !OpencodeAdapter
+            .decode_hook("session_error", &json!({ "session_id": "ses_1" }))
+            .expect("test hook decodes")
+            .ends_session()
+    );
 }
 
 #[test]
@@ -277,7 +296,7 @@ fn opencode_observes_native_questions() {
             &json!({ "session_id": "ses_1", "title": "Which database?" }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("question observation");
     assert_eq!(
         observed.signal,
@@ -312,7 +331,7 @@ fn opencode_parses_structured_native_questions() {
             }),
         )
         .expect("test hook decodes")
-        .questions;
+        .questions();
     assert_eq!(
         questions,
         vec![AskQuestion {
@@ -333,21 +352,21 @@ fn opencode_parses_structured_native_questions() {
                 &json!({ "questions": [{ "question": "Which database?\nPick one" }] }),
             )
             .expect("test hook decodes")
-            .ask_detail,
+            .ask_detail(),
         Some("Which database?".to_owned())
     );
     assert!(
         OpencodeAdapter
             .decode_hook("question_ask", &json!({ "questions": "malformed" }))
             .expect("test hook decodes")
-            .questions
+            .questions()
             .is_empty()
     );
     assert!(
         OpencodeAdapter
             .decode_hook("permission_ask", &json!({ "questions": [] }))
             .expect("test hook decodes")
-            .questions
+            .questions()
             .is_empty()
     );
 }
@@ -361,7 +380,7 @@ fn opencode_records_native_permission_and_question_answers() {
                 &json!({ "session_id": "ses_1", "reply": "always" }),
             )
             .expect("test hook decodes")
-            .native_answers,
+            .native_answers(),
         Some(vec![AskAnswer {
             question: None,
             chosen: vec!["always".to_owned()],
@@ -378,7 +397,7 @@ fn opencode_records_native_permission_and_question_answers() {
                 }),
             )
             .expect("test hook decodes")
-            .native_answers,
+            .native_answers(),
         Some(vec![
             AskAnswer {
                 question: None,
@@ -396,7 +415,7 @@ fn opencode_records_native_permission_and_question_answers() {
         OpencodeAdapter
             .decode_hook("question_rejected", &json!({ "session_id": "ses_1" }),)
             .expect("test hook decodes")
-            .native_answers,
+            .native_answers(),
         Some(vec![AskAnswer {
             question: None,
             chosen: vec!["(rejected)".to_owned()],
@@ -407,7 +426,7 @@ fn opencode_records_native_permission_and_question_answers() {
         OpencodeAdapter
             .decode_hook("question_replied", &json!({ "answers": [] }))
             .expect("test hook decodes")
-            .native_answers
+            .native_answers()
             .is_none()
     );
 }
@@ -517,7 +536,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
                 &json!({ "session_id": "ses_1", "tool_name": tool_name }),
             )
             .expect("test hook decodes")
-            .lifecycle;
+            .lifecycle();
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool_name}");
     }
 
@@ -529,7 +548,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         let observed = OpencodeAdapter
             .decode_hook(event, &json!({ "session_id": "ses_1" }))
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .unwrap_or_else(|| panic!("{event} observation"));
         assert_eq!(
             observed.signal,
@@ -545,13 +564,13 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
     let compacting = OpencodeAdapter
         .decode_hook("session_compacting", &json!({ "session_id": "ses_1" }))
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
     let compacted = OpencodeAdapter
         .decode_hook("session_compacted", &json!({ "session_id": "ses_1" }))
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(
         compacted.signal,
@@ -568,7 +587,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(child.agent_id.as_deref(), Some("ses_child"));
     assert_eq!(child.parent_agent_id.as_deref(), Some("ses_parent"));
@@ -585,7 +604,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .expect("observation");
     assert_eq!(
         child_stopped.signal,
@@ -598,14 +617,14 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
                 &json!({ "session_id": "same", "parent_session_id": "same" }),
             )
             .expect("test hook decodes")
-            .lifecycle,
+            .lifecycle(),
         None
     );
     assert_eq!(
         OpencodeAdapter
             .decode_hook("bogus", &json!({}))
             .expect("test hook decodes")
-            .lifecycle,
+            .lifecycle(),
         None
     );
 }
@@ -615,7 +634,7 @@ fn neutral_decision_shape_is_pinned() {
     let rendered = OpencodeAdapter
         .decode_hook("permission_ask", &Value::Null)
         .expect("test hook decodes")
-        .neutral;
+        .neutral();
     insta::assert_snapshot!(format!("{rendered:?}"), @"None");
 }
 

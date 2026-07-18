@@ -34,14 +34,14 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
+use super::hook_types::{HookRecord, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, DecodedHook, LifecycleRefreshCtx,
-    RefreshSpawn, RefreshTrigger, Result, SubagentIdentity, optional_payload_string,
-    resolve_subagent_identity, sanitize_user_prompt,
+    AgentAdapter, AgentErr, AgentLifecycleObservation, DecodedHook, HookRouting,
+    LifecycleRefreshCtx, RefreshSpawn, RefreshTrigger, Result, SubagentIdentity,
+    optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -87,15 +87,6 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["opencode", "bun"],
     bin_names: &["opencode"],
     extra_bin_dirs: &[".opencode/bin"],
-    activity_events: &[
-        "session_created",
-        "chat_message",
-        "session_idle",
-        "session_error",
-        "tool_after",
-        "SubagentStart",
-        "SubagentStop",
-    ],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("opencode"),
@@ -222,35 +213,41 @@ const OPENCODE_HOOKS: &[HookRecord] = &[
         lifecycle,
         "session_created",
         r#"{"session_id":"ses_1","cwd":"/tmp/repo"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "chat_message",
         r#"{"session_id":"ses_1","prompt":"fix auth"}"#
-    ),
-    hook_record!(lifecycle, "session_idle", r#"{"session_id":"ses_1"}"#),
+    )
+    .progress(),
+    hook_record!(lifecycle, "session_idle", r#"{"session_id":"ses_1"}"#).progress(),
     hook_record!(
         lifecycle,
         "session_error",
         r#"{"session_id":"ses_1","error_message":"boom"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "tool_after",
         r#"{"session_id":"ses_1","tool_name":"bash"}"#
-    ),
+    )
+    .progress(),
     hook_record!(lifecycle, "session_compacting", r#"{"session_id":"ses_1"}"#),
     hook_record!(lifecycle, "session_compacted", r#"{"session_id":"ses_1"}"#),
     hook_record!(
         lifecycle,
         "SubagentStart",
         r#"{"session_id":"ses_child","parent_session_id":"ses_parent","prompt":"review auth"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "SubagentStop",
         r#"{"session_id":"ses_child","parent_session_id":"ses_parent"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         blocking,
         "permission_ask",
@@ -280,7 +277,8 @@ const OPENCODE_HOOKS: &[HookRecord] = &[
         lifecycle,
         "session_ended",
         r#"{"session_id":"ses_1","reason":"deleted"}"#
-    ),
+    )
+    .session_ended(),
 ];
 
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
@@ -309,12 +307,14 @@ impl AgentAdapter for OpencodeAdapter {
             "session_idle" if parsed.plan_proposed == Some(true) => Some(AskKind::PlanApproval),
             _ => None,
         };
-        let mut decoded =
-            DecodedHook::new(classify_catalog_hook(OPENCODE_HOOKS, event_name, ask_kind));
-        decoded.agent_id = parsed.session_id.clone();
-        decoded.context_agent_id = parsed.session_id.clone();
-        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
-        decoded.questions = if event_name == "question_ask" {
+        let mut decoded = decode_catalog_hook(OPENCODE_HOOKS, event_name, ask_kind);
+        decoded.set_routing(HookRouting::new(
+            parsed.session_id.clone(),
+            parsed.session_id.clone(),
+            optional_payload_string(payload, &["worktree_path", "cwd"]),
+            None,
+        ));
+        let questions = if event_name == "question_ask" {
             parsed
                 .questions
                 .clone()
@@ -352,13 +352,13 @@ impl AgentAdapter for OpencodeAdapter {
         } else {
             Vec::new()
         };
-        decoded.ask_detail = decoded
-            .questions
+        let ask_detail = questions
             .first()
             .and_then(|question| question.question.lines().next())
             .map(ToOwned::to_owned)
             .filter(|detail| !detail.is_empty());
-        decoded.native_answers = match event_name {
+        decoded.set_ask(questions, ask_detail);
+        decoded.set_native_answers(match event_name {
             "permission_replied" => parsed.reply.as_deref().and_then(|reply| {
                 let reply = reply.trim().to_owned();
                 (!reply.is_empty()).then_some(vec![AskAnswer {
@@ -394,7 +394,7 @@ impl AgentAdapter for OpencodeAdapter {
                 note: None,
             }]),
             _ => None,
-        };
+        });
         let signal = match event_name {
             "session_created" => Some(LifecycleSignal::Registered),
             "permission_ask" => Some(LifecycleSignal::AwaitingInput {
@@ -486,7 +486,7 @@ impl AgentAdapter for OpencodeAdapter {
         observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
         observation.fresh_input_tokens = parsed.input_tokens;
         observation.output_tokens = parsed.output_tokens;
-        decoded.final_message = if matches!(event_name, "session_idle" | "session_error") {
+        decoded.set_final_message(if matches!(event_name, "session_idle" | "session_error") {
             observation.agent_id.as_ref().and_then(|session_id| {
                 let path = observation
                     .transcript_path
@@ -499,9 +499,8 @@ impl AgentAdapter for OpencodeAdapter {
             })
         } else {
             None
-        };
-        decoded.worktree_path = observation.worktree_path.clone();
-        decoded.lifecycle = Some(observation);
+        });
+        decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
 

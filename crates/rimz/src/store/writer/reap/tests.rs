@@ -118,7 +118,7 @@ fn amp_focus_lifecycle(workspace_id: &WorkspaceId, agent_id: &str, pane_id: &str
             &json!({ "session_id": agent_id, "cwd": "/repo" }),
         )
         .expect("Amp session start decodes")
-        .lifecycle
+        .lifecycle()
         .expect("Amp session start observation");
     observation.agent_pid = Some(std::process::id());
     observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane_id));

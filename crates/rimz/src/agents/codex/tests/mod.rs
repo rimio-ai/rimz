@@ -206,7 +206,7 @@ fn codex_question_summary_reads_request_user_input_questions() {
             }),
         )
         .expect("test hook decodes")
-        .questions;
+        .questions();
 
     assert_eq!(
         questions,
@@ -235,7 +235,7 @@ fn codex_question_summary_reads_request_user_input_questions() {
                 }),
             )
             .expect("test hook decodes")
-            .questions
+            .questions()
             .is_empty()
     );
 }

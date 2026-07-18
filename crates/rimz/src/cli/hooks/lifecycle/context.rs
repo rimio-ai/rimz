@@ -21,23 +21,24 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     } = context;
     // Remove the session's statusline context sidecar so a retained ended row
     // cannot rejoin stale enrichment.
-    if agent.descriptor().ends_session(event_name)
-        && let Err(err) = rimz::store::agent_context::remove(
+    if decoded.ends_session() {
+        if let Err(err) = rimz::store::agent_context::remove(
             store.runtime_paths(),
             agent.descriptor().kind,
             agent_id,
-        )
-    {
-        warn!(
-            agent = agent.descriptor().kind,
-            event = %event_name,
-            error = %err,
-            "lifecycle: failed to remove the session's context sidecar",
-        );
+        ) {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to remove the session's context sidecar",
+            );
+        }
+        return;
     }
     // Refresh the activity heartbeat on progress-proving events so the
     // sidebar's `last_activity` advances per tool call, not just per turn.
-    if (agent.descriptor().records_activity(event_name) || parent_agent_id.is_some())
+    if (decoded.records_progress() || parent_agent_id.is_some())
         && let Err(err) =
             rimz::agent_activity::touch(store.runtime_paths(), agent.descriptor().kind, agent_id)
     {
@@ -54,7 +55,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     if parent_agent_id.is_some() {
         return;
     }
-    if let Some(context_agent_id) = decoded.context_agent_id.as_deref() {
+    if let Some(context_agent_id) = decoded.routing().context_agent_id() {
         merge_agent_context_sidecars(ContextSidecarInput {
             workspace,
             store,
@@ -75,7 +76,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         agent_id,
         workspace_id: workspace.workspace_id.as_str(),
         model_hint,
-        server_url: decoded.server_url.as_deref(),
+        server_url: decoded.routing().server_url(),
     };
     if let Some(spawn) =
         agent.context_refresh_spawn(rimz::agents::RefreshTrigger::Hook(event_name), &refresh_ctx)
@@ -98,18 +99,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         turn_ended,
     } = input;
     let mut turn_error_updated = false;
-    if let Some(marker) = decoded.turn_error.clone() {
-        turn_error_updated |= merge_turn_error_marker_and_transcript(
-            workspace,
-            store,
-            agent,
-            event_name,
-            context_agent_id,
-            marker,
-        );
-    } else if turn_error_refresh_event(event_name)
-        && let Some(marker) = agent.observe_turn_error(payload)
-    {
+    if let Some(marker) = decoded.turn_error() {
         turn_error_updated |= merge_turn_error_marker_and_transcript(
             workspace,
             store,
@@ -123,7 +113,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
     }
 
-    if let Some(context) = decoded.observed_context.clone() {
+    if let Some(context) = decoded.observed_context() {
         let kind = agent.descriptor().kind;
         match rimz::store::agent_context::merge_observed(
             store.runtime_paths(),

@@ -21,14 +21,14 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
+use super::hook_types::{HookRecord, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentCost, AgentCurrentUsage, AgentErr, AgentLifecycleObservation,
-    AgentTokenUsage, AskKind, DecodedHook, FieldPatch, LocalContextPatch, LocalContextRefresh,
-    LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result, SessionOrigin, TranscriptStat,
-    non_empty_trimmed, sanitize_user_prompt,
+    AgentTokenUsage, AskKind, DecodedHook, FieldPatch, HookRouting, LocalContextPatch,
+    LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result,
+    SessionOrigin, TranscriptStat, non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -71,7 +71,6 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["amp", "node"],
     bin_names: &["amp"],
     extra_bin_dirs: &[],
-    activity_events: AMP_ACTIVITY_EVENTS,
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("amp"),
@@ -187,28 +186,31 @@ const AMP_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     },
 };
 
-const AMP_ACTIVITY_EVENTS: &[&str] = &["session_start", "agent_start", "tool_result", "agent_end"];
 const AMP_HOOKS: &[HookRecord] = &[
     hook_record!(
         lifecycle,
         "session_start",
         r#"{"session_id":"T-abc123","cwd":"/tmp/repo"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "agent_start",
         r#"{"session_id":"T-abc123","prompt":"fix auth"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "tool_result",
         r#"{"session_id":"T-abc123","tool_name":"apply_patch","status":"done","files_modified":true}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "agent_end",
         r#"{"session_id":"T-abc123","status":"done"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         blocking,
         "permission_ask",
@@ -241,19 +243,25 @@ impl AgentAdapter for AmpAdapter {
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
-        let mut decoded = DecodedHook::new(classify_catalog_hook(AMP_HOOKS, event_name, ask_kind));
+        let mut decoded = decode_catalog_hook(AMP_HOOKS, event_name, ask_kind);
         let parsed = payloads::parse_payload(payload);
         let session_id = parsed
             .session_id
             .as_deref()
             .map(str::trim)
             .filter(|session_id| !session_id.is_empty());
-        decoded.agent_id = session_id.map(ToOwned::to_owned);
-        decoded.context_agent_id = decoded.agent_id.clone();
-        decoded.final_message = (event_name == "agent_end")
-            .then_some(parsed.last_assistant_message.as_deref())
-            .flatten()
-            .and_then(non_empty_trimmed);
+        decoded.set_routing(HookRouting::new(
+            session_id.map(ToOwned::to_owned),
+            session_id.map(ToOwned::to_owned),
+            None,
+            None,
+        ));
+        decoded.set_final_message(
+            (event_name == "agent_end")
+                .then_some(parsed.last_assistant_message.as_deref())
+                .flatten()
+                .and_then(non_empty_trimmed),
+        );
 
         let Some(session_id) = session_id else {
             return Ok(decoded);
@@ -292,8 +300,7 @@ impl AgentAdapter for AmpAdapter {
         if event_name == "session_start" {
             observation.origin = Some(SessionOrigin::Fresh);
         }
-        decoded.worktree_path = observation.worktree_path.clone();
-        decoded.lifecycle = Some(observation);
+        decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
 

@@ -266,9 +266,9 @@ fn classify_matches_corpus() {
                 .decode_hook(sample.event_name, &sample.payload)
                 .expect("corpus payload decodes");
             let actual = ClassifiedHook {
-                class: decoded.class,
-                ask_kind: decoded.ask_kind,
-                event_name: decoded.event_name,
+                class: decoded.class(),
+                ask_kind: decoded.ask_kind(),
+                event_name: decoded.event_name().to_owned(),
             };
             assert_eq!(
                 actual, sample.expected,
@@ -302,7 +302,7 @@ fn native_events_are_covered_by_the_corpus_and_classify_to_a_channel() {
                 adapter
                     .decode_hook(sample.event_name, &sample.payload)
                     .expect("corpus payload decodes")
-                    .class,
+                    .class(),
                 AgentHookClass::Unknown,
                 "{kind} native sample {} classified as unknown",
                 sample.event_name
@@ -439,18 +439,29 @@ fn lifecycle_hooks_are_complete_and_honest() {
 }
 
 #[test]
-fn ends_session_follows_native_descriptor_event() {
+fn session_end_policy_follows_native_catalog_event() {
     for adapter in ADAPTERS {
         let descriptor = adapter.descriptor();
-        assert!(!descriptor.ends_session("__not_session_end__"));
+        let samples = corpus(*adapter);
+        let decoded_ends = |event: &str| {
+            samples
+                .iter()
+                .find(|sample| sample.event_name == event)
+                .is_some_and(|sample| {
+                    adapter
+                        .decode_hook(sample.event_name, &sample.payload)
+                        .expect("catalog payload decodes")
+                        .ends_session()
+                })
+        };
         match descriptor.lifecycle_hooks.ended {
             HookCoverage::Native { event } => assert!(
-                descriptor.ends_session(event),
+                decoded_ends(event),
                 "{} must end on {event}",
                 descriptor.kind
             ),
             HookCoverage::Derived { .. } | HookCoverage::Absent { .. } => assert!(
-                !descriptor.ends_session(descriptor.lifecycle_hooks.ended.detail()),
+                !samples.iter().any(|sample| decoded_ends(sample.event_name)),
                 "{} derived/absent end must stay false",
                 descriptor.kind
             ),
@@ -680,9 +691,15 @@ fn assert_coverage_honest(
         IntegrationConcern::BackgroundParking => {}
         IntegrationConcern::SessionEnd => assert_eq!(
             wired,
-            native_events
+            samples
                 .iter()
-                .any(|event| adapter.descriptor().ends_session(event)),
+                .filter(|sample| native_events.contains(&sample.event_name))
+                .any(|sample| {
+                    adapter
+                        .decode_hook(sample.event_name, &sample.payload)
+                        .expect("native event decodes")
+                        .ends_session()
+                }),
             "{kind} SessionEnd coverage must match a native session-ending event"
         ),
         IntegrationConcern::IdleNotification => {
@@ -783,13 +800,13 @@ fn sample_produces_signal(
             && adapter
                 .decode_hook(sample.event_name, &sample.payload)
                 .expect("corpus payload decodes")
-                .class
+                .class()
                 == AgentHookClass::AwaitingUser;
     }
     adapter
         .decode_hook(sample.event_name, &sample.payload)
         .expect("corpus payload decodes")
-        .lifecycle
+        .lifecycle()
         .is_some_and(|observation| observation.signal.kind() == signal_kind)
 }
 
@@ -918,9 +935,9 @@ fn derived_ask_kind(adapter: &dyn AgentAdapter) -> Option<AskKind> {
     let observed = adapter
         .decode_hook(fixture.event_name, &payload)
         .expect("derived ask payload decodes")
-        .lifecycle
-        .and_then(|observation| match observation.signal {
-            LifecycleSignal::AwaitingInput { kind, .. } => Some(kind),
+        .lifecycle()
+        .and_then(|observation| match &observation.signal {
+            LifecycleSignal::AwaitingInput { kind, .. } => Some(*kind),
             _ => None,
         });
     assert_eq!(
@@ -959,7 +976,7 @@ fn observes_turn_lifecycle(adapter: &dyn AgentAdapter, samples: &[Classification
             && adapter
                 .decode_hook(sample.event_name, &sample.payload)
                 .expect("corpus payload decodes")
-                .lifecycle
+                .lifecycle()
                 .is_some_and(|obs| {
                     matches!(
                         obs.signal,
@@ -977,7 +994,7 @@ fn observes_compaction(adapter: &dyn AgentAdapter, samples: &[ClassificationSamp
             && adapter
                 .decode_hook(sample.event_name, &sample.payload)
                 .expect("corpus payload decodes")
-                .lifecycle
+                .lifecycle()
                 .is_some_and(|obs| {
                     matches!(
                         obs.signal,
@@ -997,7 +1014,7 @@ fn observes_subagent_lifecycle(
             && adapter
                 .decode_hook(sample.event_name, &sample.payload)
                 .expect("corpus payload decodes")
-                .lifecycle
+                .lifecycle()
                 .is_some_and(|obs| {
                     obs.parent_agent_id.is_some()
                         && matches!(
@@ -1021,7 +1038,7 @@ fn native_event_classifies(
                 && adapter
                     .decode_hook(sample.event_name, &sample.payload)
                     .expect("corpus payload decodes")
-                    .class
+                    .class()
                     == AgentHookClass::Lifecycle
         })
 }

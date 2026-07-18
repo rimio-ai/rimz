@@ -93,7 +93,7 @@ pub use descriptor::{
     ToolClassification, program_names_kind,
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
-pub use hook_types::DecodedHook;
+pub use hook_types::{DecodedHook, HookRouting};
 pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };
@@ -902,19 +902,6 @@ pub trait AgentAdapter: Send + Sync {
     /// supplies the local price book and owns persistence; adapters only parse
     /// their native payload and return the normalized cost.
     fn context_cost(&self, _payload: &Value, _prices: &PriceBook) -> Option<AgentCost> {
-        None
-    }
-
-    /// Detect a provider turn-death marker the adapter can recover from local
-    /// transcript/rollout evidence. Claude uses it for API-error aborts that
-    /// emit no `Stop`; Codex uses the same marker on `Stop` when the native
-    /// payload itself looks clean. Returns `None` when the newest turn is alive
-    /// or recovered, the transcript is unreadable, or the adapter has no local
-    /// marker shape. The marker itself is display-only enrichment: it rides the
-    /// context sidecar and refines the displayed row. An adapter may also use the
-    /// same evidence inside [`decode_hook`](Self::decode_hook) to set
-    /// a lifecycle error bit when the native turn-end payload lacks one.
-    fn observe_turn_error(&self, _payload: &Value) -> Option<AgentTurnError> {
         None
     }
 

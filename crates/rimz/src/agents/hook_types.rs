@@ -17,22 +17,21 @@ use super::{
 /// Provider-neutral result of decoding one native hook payload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecodedHook {
-    pub event_name: String,
-    pub class: AgentHookClass,
-    pub ask_kind: Option<AskKind>,
-    pub agent_id: Option<String>,
-    pub context_agent_id: Option<String>,
-    pub worktree_path: Option<String>,
-    pub server_url: Option<String>,
-    pub lifecycle: Option<AgentLifecycleObservation>,
-    pub questions: Vec<AskQuestion>,
-    pub ask_detail: Option<String>,
-    pub native_answers: Option<Vec<AskAnswer>>,
-    pub assistant_message: Option<String>,
-    pub final_message: Option<String>,
-    pub turn_error: Option<AgentTurnError>,
-    pub observed_context: Option<AgentContext>,
-    pub neutral: Option<Value>,
+    event_name: String,
+    class: AgentHookClass,
+    ask_kind: Option<AskKind>,
+    routing: HookRouting,
+    progress: bool,
+    session_ended: bool,
+    lifecycle: Option<AgentLifecycleObservation>,
+    questions: Vec<AskQuestion>,
+    ask_detail: Option<String>,
+    native_answers: Option<Vec<AskAnswer>>,
+    assistant_message: Option<String>,
+    final_message: Option<String>,
+    turn_error: Option<AgentTurnError>,
+    observed_context: Option<AgentContext>,
+    neutral: Option<Value>,
 }
 
 impl DecodedHook {
@@ -41,10 +40,9 @@ impl DecodedHook {
             event_name: classified.event_name,
             class: classified.class,
             ask_kind: classified.ask_kind,
-            agent_id: None,
-            context_agent_id: None,
-            worktree_path: None,
-            server_url: None,
+            routing: HookRouting::default(),
+            progress: false,
+            session_ended: false,
             lifecycle: None,
             questions: Vec::new(),
             ask_detail: None,
@@ -56,6 +54,167 @@ impl DecodedHook {
             neutral: None,
         }
     }
+
+    fn with_policy(mut self, hook: Option<&HookRecord>) -> Self {
+        self.progress = hook.is_some_and(|hook| hook.progress);
+        self.session_ended = hook.is_some_and(|hook| hook.session_ended);
+        self
+    }
+
+    pub fn event_name(&self) -> &str {
+        &self.event_name
+    }
+
+    pub const fn class(&self) -> AgentHookClass {
+        self.class
+    }
+
+    pub const fn ask_kind(&self) -> Option<AskKind> {
+        self.ask_kind
+    }
+
+    pub const fn routing(&self) -> &HookRouting {
+        &self.routing
+    }
+
+    pub const fn records_progress(&self) -> bool {
+        self.progress
+    }
+
+    pub const fn ends_session(&self) -> bool {
+        self.session_ended
+    }
+
+    pub fn lifecycle(&self) -> Option<AgentLifecycleObservation> {
+        self.lifecycle.clone()
+    }
+
+    pub fn questions(&self) -> Vec<AskQuestion> {
+        self.questions.clone()
+    }
+
+    pub fn ask_detail(&self) -> Option<String> {
+        self.ask_detail.clone()
+    }
+
+    pub fn native_answers(&self) -> Option<Vec<AskAnswer>> {
+        self.native_answers.clone()
+    }
+
+    pub fn assistant_message(&self) -> Option<String> {
+        self.assistant_message.clone()
+    }
+
+    pub fn final_message(&self) -> Option<String> {
+        self.final_message.clone()
+    }
+
+    pub fn turn_error(&self) -> Option<AgentTurnError> {
+        self.turn_error.clone()
+    }
+
+    pub fn observed_context(&self) -> Option<AgentContext> {
+        self.observed_context.clone()
+    }
+
+    pub fn neutral(&self) -> Option<Value> {
+        self.neutral.clone()
+    }
+
+    pub(crate) fn set_routing(&mut self, routing: HookRouting) {
+        self.routing = routing;
+    }
+
+    pub(crate) fn set_ask(&mut self, questions: Vec<AskQuestion>, detail: Option<String>) {
+        self.questions = questions;
+        self.ask_detail = detail;
+    }
+
+    pub(crate) fn set_native_answers(&mut self, answers: Option<Vec<AskAnswer>>) {
+        self.native_answers = answers;
+    }
+
+    pub(crate) fn set_assistant_message(&mut self, message: Option<String>) {
+        self.assistant_message = message;
+    }
+
+    pub(crate) fn set_final_message(&mut self, message: Option<String>) {
+        self.final_message = message;
+    }
+
+    pub(crate) fn set_turn_error(&mut self, error: Option<AgentTurnError>) {
+        self.turn_error = error;
+    }
+
+    pub(crate) fn set_observed_context(&mut self, context: Option<AgentContext>) {
+        self.observed_context = context;
+    }
+
+    pub(crate) fn set_neutral(&mut self, neutral: Option<Value>) {
+        self.neutral = neutral;
+    }
+
+    pub(crate) fn attach_lifecycle(&mut self, observation: AgentLifecycleObservation) {
+        if let Some(agent_id) = observation.agent_id.as_ref() {
+            self.routing.event_agent_id = Some(agent_id.to_string());
+        }
+        if let Some(worktree_path) = observation.worktree_path.as_ref() {
+            self.routing.worktree_path = Some(worktree_path.clone());
+        }
+        self.lifecycle = Some(observation);
+    }
+
+    pub fn update_lifecycle(&mut self, update: impl FnOnce(&mut AgentLifecycleObservation)) {
+        if let Some(observation) = self.lifecycle.as_mut() {
+            update(observation);
+        }
+    }
+
+    pub(crate) fn set_policy(&mut self, progress: bool, session_ended: bool) {
+        self.progress = progress;
+        self.session_ended = session_ended;
+    }
+}
+
+/// Stable routing stamped before provider lifecycle identity is resolved.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HookRouting {
+    event_agent_id: Option<String>,
+    context_agent_id: Option<String>,
+    worktree_path: Option<String>,
+    server_url: Option<String>,
+}
+
+impl HookRouting {
+    pub fn new(
+        event_agent_id: Option<String>,
+        context_agent_id: Option<String>,
+        worktree_path: Option<String>,
+        server_url: Option<String>,
+    ) -> Self {
+        Self {
+            event_agent_id,
+            context_agent_id,
+            worktree_path,
+            server_url,
+        }
+    }
+
+    pub fn event_agent_id(&self) -> Option<&str> {
+        self.event_agent_id.as_deref()
+    }
+
+    pub fn context_agent_id(&self) -> Option<&str> {
+        self.context_agent_id.as_deref()
+    }
+
+    pub fn worktree_path(&self) -> Option<&str> {
+        self.worktree_path.as_deref()
+    }
+
+    pub fn server_url(&self) -> Option<&str> {
+        self.server_url.as_deref()
+    }
 }
 
 /// One installed managed hook and its classification policy.
@@ -65,6 +224,8 @@ pub(crate) struct HookRecord {
     pub(crate) matcher: Option<&'static str>,
     pub(crate) lifecycle_fallback: bool,
     pub(crate) synchronous: bool,
+    progress: bool,
+    session_ended: bool,
     #[cfg(test)]
     pub(crate) test_payload: &'static str,
     #[cfg(test)]
@@ -78,6 +239,8 @@ impl HookRecord {
             matcher: None,
             lifecycle_fallback: true,
             synchronous: false,
+            progress: false,
+            session_ended: false,
             #[cfg(test)]
             test_payload: _test_payload,
             #[cfg(test)]
@@ -95,6 +258,8 @@ impl HookRecord {
             matcher: None,
             lifecycle_fallback: false,
             synchronous: false,
+            progress: false,
+            session_ended: false,
             #[cfg(test)]
             test_payload: _test_payload,
             #[cfg(test)]
@@ -114,6 +279,16 @@ impl HookRecord {
 
     pub(crate) const fn with_lifecycle_fallback(mut self) -> Self {
         self.lifecycle_fallback = true;
+        self
+    }
+
+    pub(crate) const fn progress(mut self) -> Self {
+        self.progress = true;
+        self
+    }
+
+    pub(crate) const fn session_ended(mut self) -> Self {
+        self.session_ended = true;
         self
     }
 
@@ -178,16 +353,21 @@ pub(crate) fn classification_sample(hook: &HookRecord) -> super::ClassificationS
     )
 }
 
-pub(crate) fn classify_catalog_hook(
+pub(crate) fn decode_catalog_hook(
     hooks: &[HookRecord],
     event_name: &str,
     ask_kind: Option<AskKind>,
-) -> ClassifiedHook {
-    classify_catalog_entry(
-        hooks.iter().find(|hook| hook.event == event_name),
-        event_name,
-        ask_kind,
-    )
+) -> DecodedHook {
+    let hook = hooks.iter().find(|hook| hook.event == event_name);
+    DecodedHook::new(classify_catalog_entry(hook, event_name, ask_kind)).with_policy(hook)
+}
+
+pub(crate) fn decode_catalog_entry(
+    hook: Option<&HookRecord>,
+    event_name: &str,
+    ask_kind: Option<AskKind>,
+) -> DecodedHook {
+    DecodedHook::new(classify_catalog_entry(hook, event_name, ask_kind)).with_policy(hook)
 }
 
 pub(crate) fn classify_catalog_entry(
@@ -299,13 +479,15 @@ mod tests {
     #[test]
     fn hook_catalog_records_derive_policy_and_event_names() {
         const HOOKS: [HookRecord; 4] = [
-            hook_record!(lifecycle, "Start", r#"{}"#),
+            hook_record!(lifecycle, "Start", r#"{}"#).progress(),
             hook_record!(blocking, "Ask", r#"{}"#, AskKind::Question).synchronous(),
             hook_record!(blocking, "Permission", r#"{}"#, AskKind::Permission)
                 .with_matcher("shell")
                 .synchronous()
                 .with_lifecycle_fallback(),
-            hook_record!(lifecycle, "Stop", r#"{}"#).with_matcher("done"),
+            hook_record!(lifecycle, "Stop", r#"{}"#)
+                .with_matcher("done")
+                .session_ended(),
         ];
         const NAMES: [&str; 4] = catalog_event_name_array(&HOOKS);
 
@@ -324,5 +506,67 @@ mod tests {
         assert_eq!(samples[1].expected.class, AgentHookClass::AwaitingUser);
         assert_eq!(samples[2].expected.class, AgentHookClass::AwaitingUser);
         assert_eq!(samples[2].expected.ask_kind, Some(AskKind::Permission));
+
+        let start = decode_catalog_hook(&HOOKS, "Start", None);
+        assert!(start.records_progress());
+        assert!(!start.ends_session());
+        let stop = decode_catalog_hook(&HOOKS, "Stop", None);
+        assert!(!stop.records_progress());
+        assert!(stop.ends_session());
+    }
+
+    #[test]
+    fn lifecycle_attachment_preserves_root_routing_and_promotes_event_identity() {
+        let mut decoded = DecodedHook::new(ClassifiedHook {
+            class: AgentHookClass::Lifecycle,
+            ask_kind: None,
+            event_name: "SubagentStop".to_owned(),
+        });
+        decoded.set_routing(HookRouting::new(
+            Some("root-event".to_owned()),
+            Some("root-context".to_owned()),
+            Some("/root/worktree".to_owned()),
+            Some("http://localhost".to_owned()),
+        ));
+        let mut observation = AgentLifecycleObservation::new(
+            Some(crate::ids::AgentSessionId::from("child")),
+            super::super::LifecycleSignal::SubagentStopped { errored: false },
+        );
+        observation.parent_agent_id = Some(crate::ids::AgentSessionId::from("root"));
+        observation.worktree_path = Some("/child/worktree".to_owned());
+        decoded.attach_lifecycle(observation);
+
+        assert_eq!(decoded.routing().event_agent_id(), Some("child"));
+        assert_eq!(decoded.routing().context_agent_id(), Some("root-context"));
+        assert_eq!(decoded.routing().worktree_path(), Some("/child/worktree"));
+        assert_eq!(decoded.routing().server_url(), Some("http://localhost"));
+    }
+
+    #[test]
+    fn lifecycle_attachment_keeps_routing_fallbacks_and_lifecycle_less_routing() {
+        let classified = ClassifiedHook {
+            class: AgentHookClass::Lifecycle,
+            ask_kind: None,
+            event_name: "Context".to_owned(),
+        };
+        let mut decoded = DecodedHook::new(classified.clone());
+        decoded.set_routing(HookRouting::new(
+            Some("root".to_owned()),
+            Some("context".to_owned()),
+            Some("/fallback".to_owned()),
+            None,
+        ));
+        assert!(decoded.lifecycle().is_none());
+        assert_eq!(decoded.routing().event_agent_id(), Some("root"));
+        assert_eq!(decoded.routing().context_agent_id(), Some("context"));
+
+        let mut attached = DecodedHook::new(classified);
+        attached.set_routing(decoded.routing().clone());
+        attached.attach_lifecycle(AgentLifecycleObservation::new(
+            None,
+            super::super::LifecycleSignal::TurnStarted,
+        ));
+        assert_eq!(attached.routing().event_agent_id(), Some("root"));
+        assert_eq!(attached.routing().worktree_path(), Some("/fallback"));
     }
 }

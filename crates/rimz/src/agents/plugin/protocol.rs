@@ -2,7 +2,8 @@
 
 use serde::Deserialize;
 
-use crate::agents::{AgentRateLimits, AskKind};
+use crate::agents::{AgentHookClass, AgentRateLimits, AskKind, LifecycleSignal};
+use crate::transcript::AskQuestion;
 
 use super::manifest::PROTOCOL_VERSION;
 
@@ -154,6 +155,160 @@ impl CanonicalEvent {
             Self::SessionEnd => "session_end",
             Self::Context => "context",
             Self::Unknown => "unknown",
+        }
+    }
+
+    pub(super) fn normalize(&self, mutates: bool, edits: bool) -> NormalizedCanonicalEvent {
+        match self {
+            Self::SessionStart => {
+                NormalizedCanonicalEvent::lifecycle(LifecycleSignal::Registered, true)
+            }
+            Self::TurnStart { prompt } => NormalizedCanonicalEvent {
+                signal: Some(LifecycleSignal::TurnStarted),
+                prompt: prompt.clone(),
+                progress: true,
+                ..NormalizedCanonicalEvent::default()
+            },
+            Self::TurnEnd {
+                errored,
+                error_message,
+                last_assistant_message,
+            } => NormalizedCanonicalEvent {
+                signal: Some(LifecycleSignal::TurnEnded {
+                    errored: *errored,
+                    parked_on_background: false,
+                }),
+                turn_error: errored.then(|| error_message.clone()).flatten(),
+                final_message: last_assistant_message.clone(),
+                progress: true,
+                ..NormalizedCanonicalEvent::default()
+            },
+            Self::ToolUse { .. } => NormalizedCanonicalEvent::lifecycle(
+                LifecycleSignal::ToolUsed {
+                    mutates,
+                    edits,
+                    native_key: None,
+                },
+                true,
+            ),
+            Self::AwaitingInput { ask, question } => {
+                let questions = question
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|question| !question.is_empty())
+                    .map(|question| {
+                        vec![AskQuestion {
+                            question: question.to_owned(),
+                            options: Vec::new(),
+                            multi_select: false,
+                            has_option_previews: false,
+                        }]
+                    })
+                    .unwrap_or_default();
+                let detail = questions.first().map(|question| question.question.clone());
+                NormalizedCanonicalEvent {
+                    class: AgentHookClass::AwaitingUser,
+                    ask_kind: Some(*ask),
+                    signal: Some(LifecycleSignal::AwaitingInput {
+                        kind: *ask,
+                        ask_id: None,
+                        detail: detail.clone(),
+                        native_key: None,
+                    }),
+                    questions,
+                    ask_detail: detail,
+                    ..NormalizedCanonicalEvent::default()
+                }
+            }
+            Self::CompactionStart => {
+                NormalizedCanonicalEvent::lifecycle(LifecycleSignal::Compacting, true)
+            }
+            Self::CompactionEnd { trigger } => NormalizedCanonicalEvent::lifecycle(
+                LifecycleSignal::CompactionEnded {
+                    auto: trigger.map(|trigger| matches!(trigger, CompactionTrigger::Auto)),
+                },
+                true,
+            ),
+            Self::SubagentStart => NormalizedCanonicalEvent {
+                signal: Some(LifecycleSignal::SubagentStarted),
+                is_subagent: true,
+                progress: true,
+                ..NormalizedCanonicalEvent::default()
+            },
+            Self::SubagentEnd { errored } => NormalizedCanonicalEvent {
+                signal: Some(LifecycleSignal::SubagentStopped { errored: *errored }),
+                is_subagent: true,
+                progress: true,
+                ..NormalizedCanonicalEvent::default()
+            },
+            Self::SessionEnd => NormalizedCanonicalEvent {
+                signal: Some(LifecycleSignal::Ended),
+                session_ended: true,
+                ..NormalizedCanonicalEvent::default()
+            },
+            Self::Context => NormalizedCanonicalEvent {
+                context: true,
+                ..NormalizedCanonicalEvent::default()
+            },
+            Self::Unknown => NormalizedCanonicalEvent {
+                class: AgentHookClass::Unknown,
+                ..NormalizedCanonicalEvent::default()
+            },
+        }
+    }
+
+    pub(super) fn tool(&self) -> Option<(&str, bool)> {
+        match self {
+            Self::ToolUse {
+                tool_name: Some(tool_name),
+                is_error,
+            } => Some((tool_name, *is_error)),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct NormalizedCanonicalEvent {
+    pub class: AgentHookClass,
+    pub ask_kind: Option<AskKind>,
+    pub signal: Option<LifecycleSignal>,
+    pub questions: Vec<AskQuestion>,
+    pub ask_detail: Option<String>,
+    pub turn_error: Option<String>,
+    pub final_message: Option<String>,
+    pub prompt: Option<String>,
+    pub progress: bool,
+    pub session_ended: bool,
+    pub is_subagent: bool,
+    pub context: bool,
+}
+
+impl Default for NormalizedCanonicalEvent {
+    fn default() -> Self {
+        Self {
+            class: AgentHookClass::Lifecycle,
+            ask_kind: None,
+            signal: None,
+            questions: Vec::new(),
+            ask_detail: None,
+            turn_error: None,
+            final_message: None,
+            prompt: None,
+            progress: false,
+            session_ended: false,
+            is_subagent: false,
+            context: false,
+        }
+    }
+}
+
+impl NormalizedCanonicalEvent {
+    fn lifecycle(signal: LifecycleSignal, progress: bool) -> Self {
+        Self {
+            signal: Some(signal),
+            progress,
+            ..Self::default()
         }
     }
 }

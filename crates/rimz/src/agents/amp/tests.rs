@@ -101,7 +101,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
             }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(registered.agent_id.as_deref(), Some("T-abc123"));
     assert_eq!(registered.worktree_path.as_deref(), Some("/tmp/repo"));
@@ -117,7 +117,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
             &json!({ "session_id": "T-abc123", "prompt": "  fix auth  " }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     assert_eq!(started.prompt.as_deref(), Some("fix auth"));
     assert_eq!(started.task.as_deref(), Some("fix auth"));
@@ -136,7 +136,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
             }),
         )
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     state = step(Some(&state), None, &tool.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
@@ -145,7 +145,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
     let waiting = AmpAdapter
         .decode_hook("permission_ask", &json!({ "session_id": "T-abc123" }))
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
     state = step(Some(&state), None, &waiting.signal).next;
     assert_eq!(state.status, AgentStatus::Waiting);
@@ -161,7 +161,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
                 &json!({ "session_id": "T-abc123", "status": status }),
             )
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .unwrap();
         assert_eq!(
             step(Some(&state), None, &ended.signal).next.status,
@@ -189,7 +189,7 @@ fn files_modified_flag_precedes_static_tool_fallback() {
         let observed = AmpAdapter
             .decode_hook("tool_result", &payload)
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .unwrap();
         assert_eq!(
             observed.signal,
@@ -213,7 +213,7 @@ fn agent_end_extracts_the_supervised_final_answer() {
         AmpAdapter
             .decode_hook("agent_end", &payload)
             .expect("test hook decodes")
-            .final_message
+            .final_message()
             .as_deref(),
         Some("Fixed the race.")
     );
@@ -221,7 +221,7 @@ fn agent_end_extracts_the_supervised_final_answer() {
         AmpAdapter
             .decode_hook("tool_result", &payload)
             .expect("test hook decodes")
-            .final_message,
+            .final_message(),
         None
     );
 }
@@ -231,10 +231,10 @@ fn ask_classification_and_neutral_output_are_pinned() {
     let classified = AmpAdapter
         .decode_hook("permission_ask", &json!({ "session_id": "T-abc123" }))
         .expect("test hook decodes");
-    assert_eq!(classified.class, AgentHookClass::AwaitingUser);
-    assert_eq!(classified.ask_kind, Some(AskKind::Permission));
+    assert_eq!(classified.class(), AgentHookClass::AwaitingUser);
+    assert_eq!(classified.ask_kind(), Some(AskKind::Permission));
     insta::assert_snapshot!(
-        format!("{:?}", AmpAdapter.decode_hook("permission_ask", &Value::Null).expect("test hook decodes").neutral),
+        format!("{:?}", AmpAdapter.decode_hook("permission_ask", &Value::Null).expect("test hook decodes").neutral()),
         @"None"
     );
 }
@@ -242,11 +242,11 @@ fn ask_classification_and_neutral_output_are_pinned() {
 #[test]
 fn malformed_payloads_fold_to_no_observation() {
     insta::assert_snapshot!(
-        format!("{:?}", AmpAdapter.decode_hook("agent_start", &json!({ "prompt": "missing id" })).expect("test hook decodes").lifecycle),
+        format!("{:?}", AmpAdapter.decode_hook("agent_start", &json!({ "prompt": "missing id" })).expect("test hook decodes").lifecycle()),
         @"None"
     );
     insta::assert_snapshot!(
-        format!("{:?}", AmpAdapter.decode_hook("agent_start", &json!("junk")).expect("test hook decodes").lifecycle),
+        format!("{:?}", AmpAdapter.decode_hook("agent_start", &json!("junk")).expect("test hook decodes").lifecycle()),
         @"None"
     );
 }
@@ -456,7 +456,7 @@ fn lifecycle_stamps_the_exact_cache_path_for_run_recording() {
     let mut observation = AmpAdapter
         .decode_hook("agent_end", &json!({"session_id":"T-run","status":"done"}))
         .expect("test hook decodes")
-        .lifecycle
+        .lifecycle()
         .unwrap();
 
     stamp_transcript_path(&mut observation, "T-run", dir.path());

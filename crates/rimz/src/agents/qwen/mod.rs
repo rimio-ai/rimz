@@ -27,7 +27,7 @@ use super::descriptor::{
     ToolClassification,
 };
 use super::hook_types::{
-    BackgroundTask, HookRecord, SessionSource, classify_catalog_hook, hook_record,
+    BackgroundTask, HookRecord, SessionSource, decode_catalog_hook, hook_record,
 };
 use super::lifecycle::{AskKind, LifecycleSignal};
 use super::observation::payload_total_tokens;
@@ -35,9 +35,9 @@ use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, DecodedHook,
-    ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity, TurnErrorClass,
-    non_empty_trimmed, optional_payload_string, resolve_root_identity, resolve_subagent_identity,
-    sanitize_user_prompt, stop_payload_errored,
+    HookRouting, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
+    TurnErrorClass, non_empty_trimmed, optional_payload_string, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -94,15 +94,6 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     default_model: None,
     process_names: &["qwen", "node"],
     extra_bin_dirs: &[],
-    activity_events: &[
-        "PostToolUse",
-        "PostToolUseFailure",
-        "Stop",
-        "UserPromptSubmit",
-        "SessionStart",
-        "SubagentStart",
-        "SubagentStop",
-    ],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("qwen"),
@@ -218,10 +209,10 @@ const QWEN_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 
 const QWEN_HOOK_TIMEOUT_MS: u64 = 10_000;
 const QWEN_HOOKS: &[HookRecord] = &[
-    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
+    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
+    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"sess-1"}"#).progress(),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#).progress(),
     hook_record!(lifecycle, "StopFailure", r#"{"session_id":"sess-1"}"#),
     hook_record!(lifecycle, "Notification", r#"{"session_id":"sess-1"}"#),
     hook_record!(
@@ -241,22 +232,25 @@ const QWEN_HOOKS: &[HookRecord] = &[
     )
     .synchronous()
     .with_lifecycle_fallback(),
-    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"sess-1"}"#).progress(),
     hook_record!(
         lifecycle,
         "PostToolUseFailure",
         r#"{"session_id":"sess-1"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "SubagentStart",
         r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#
-    ),
+    )
+    .progress(),
     hook_record!(
         lifecycle,
         "SubagentStop",
         r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#
-    ),
+    )
+    .progress(),
     hook_record!(lifecycle, "PreCompact", r#"{"session_id":"sess-1"}"#),
     hook_record!(lifecycle, "PostCompact", r#"{"session_id":"sess-1"}"#),
 ];
@@ -389,18 +383,20 @@ impl AgentAdapter for QwenAdapter {
                 .blocking_tool_kind(tool.as_ref().and_then(|tool| tool.tool_name.as_deref())),
             _ => None,
         };
-        let mut decoded = DecodedHook::new(classify_catalog_hook(QWEN_HOOKS, event_name, ask_kind));
-        decoded.agent_id = optional_payload_string(payload, &["session_id", "agent_id"]);
-        decoded.context_agent_id = optional_payload_string(payload, &["session_id"]);
-        decoded.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
-        decoded.questions = tool
+        let mut decoded = decode_catalog_hook(QWEN_HOOKS, event_name, ask_kind);
+        decoded.set_routing(HookRouting::new(
+            optional_payload_string(payload, &["session_id", "agent_id"]),
+            optional_payload_string(payload, &["session_id"]),
+            optional_payload_string(payload, &["worktree_path", "cwd"]),
+            None,
+        ));
+        let questions = tool
             .as_ref()
             .and_then(|tool| {
                 ask::question_detail(tool.tool_name.as_deref()?, tool.tool_input.as_ref()?)
             })
             .unwrap_or_default();
-        decoded.ask_detail = decoded
-            .questions
+        let ask_detail = questions
             .first()
             .and_then(|question| question.question.lines().next().map(ToOwned::to_owned))
             .or_else(|| {
@@ -408,6 +404,7 @@ impl AgentAdapter for QwenAdapter {
                     .then(|| ask::permission_detail(payload))
                     .flatten()
             });
+        decoded.set_ask(questions, ask_detail);
         if event_name == "StopFailure" {
             let failure = parse_stop_failure(payload);
             let label = failure
@@ -420,11 +417,11 @@ impl AgentAdapter for QwenAdapter {
                 QwenStopError::ServerError => TurnErrorClass::PausedOverloaded,
                 _ => TurnErrorClass::classify_label(label.as_deref()),
             };
-            decoded.turn_error = Some(AgentTurnError {
+            decoded.set_turn_error(Some(AgentTurnError {
                 class,
                 at: Timestamp::now(),
                 label,
-            });
+            }));
         }
         if [
             "model",
@@ -438,15 +435,15 @@ impl AgentAdapter for QwenAdapter {
         .into_iter()
         .any(|key| payload.get(key).is_some())
         {
-            decoded.observed_context = self.observe_context(self.descriptor().kind, payload);
+            decoded.set_observed_context(self.observe_context(self.descriptor().kind, payload));
         }
-        decoded.final_message =
+        decoded.set_final_message(
             optional_payload_string(payload, &["last_assistant_message", "assistant_message"])
                 .as_deref()
-                .and_then(non_empty_trimmed);
+                .and_then(non_empty_trimmed),
+        );
         if let Some(observation) = qwen_lifecycle(self, event_name, payload) {
-            decoded.worktree_path = observation.worktree_path.clone();
-            decoded.lifecycle = Some(observation);
+            decoded.attach_lifecycle(observation);
         }
         Ok(decoded)
     }

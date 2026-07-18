@@ -14,11 +14,11 @@ pub(super) fn record_assistant_response(
     decoded: &DecodedHook,
     recorded: Option<&RecordedLifecycle>,
 ) -> Option<(rimz::ids::AgentSessionId, String)> {
-    let message = decoded.assistant_message.as_deref()?.trim().to_owned();
+    let message = decoded.assistant_message()?.trim().to_owned();
     if message.is_empty() {
         return None;
     }
-    let agent_id = rimz::ids::AgentSessionId::from(decoded.agent_id.as_deref()?);
+    let agent_id = rimz::ids::AgentSessionId::from(decoded.routing().event_agent_id()?);
     let state = store.snapshot_cached().ok().and_then(|snapshot| {
         snapshot
             .agents
@@ -27,7 +27,7 @@ pub(super) fn record_assistant_response(
     });
     let worktree_path = recorded
         .and_then(|recorded| recorded.observation.worktree_path.as_deref())
-        .or(decoded.worktree_path.as_deref())
+        .or(decoded.routing().worktree_path())
         .or_else(|| {
             state
                 .as_ref()
@@ -66,7 +66,7 @@ pub(super) fn record_assistant_response(
     if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
-            event = %decoded.event_name,
+            event = %decoded.event_name(),
             agent_id = %agent_id,
             error = %err,
             "lifecycle: failed to record assistant response",
@@ -82,14 +82,14 @@ pub(super) fn record_native_answer(
     decoded: &DecodedHook,
     recorded: Option<&RecordedLifecycle>,
 ) {
-    let Some(answers) = decoded.native_answers.clone() else {
+    let Some(answers) = decoded.native_answers() else {
         return;
     };
     let answer = rimz::transcript::answers_text(&answers);
     if answers.is_empty() || answer.is_empty() {
         return;
     }
-    let Some(agent_id) = decoded.agent_id.as_deref() else {
+    let Some(agent_id) = decoded.routing().event_agent_id() else {
         return;
     };
 
@@ -115,8 +115,8 @@ pub(super) fn record_native_answer(
     }
 
     let worktree_path = decoded
-        .worktree_path
-        .as_deref()
+        .routing()
+        .worktree_path()
         .filter(|path| !path.is_empty())
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned(workspace.worktree_root.display().to_string()));
@@ -138,7 +138,7 @@ pub(super) fn record_native_answer(
     if let Err(err) = rimz::transcript::append_answer_if_missing(store.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
-            event = %decoded.event_name,
+            event = %decoded.event_name(),
             agent_id,
             error = %err,
             "lifecycle: failed to record native ask answer",
@@ -339,10 +339,6 @@ fn turn_opened_by(
     )
     .map(|record| record.context.turn_opened_by)
     .unwrap_or_default()
-}
-
-pub(super) fn turn_error_refresh_event(event_name: &str) -> bool {
-    matches!(event_name, "Stop")
 }
 
 pub(super) fn merge_turn_error_marker_and_transcript(

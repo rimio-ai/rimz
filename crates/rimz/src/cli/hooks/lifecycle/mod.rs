@@ -28,8 +28,8 @@ pub(crate) fn handle_lifecycle_hook(
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let event_name = decoded.event_name.as_str();
-    let agent_id = decoded.agent_id.as_deref();
+    let event_name = decoded.event_name();
+    let agent_id = decoded.routing().event_agent_id();
     let recorded =
         record_lifecycle_observation(workspace, store, agent, decoded, ingress_owner, globals);
     if recorded.as_ref().is_some_and(|recorded| {
@@ -73,6 +73,7 @@ pub(crate) fn handle_lifecycle_hook(
     let context_agent_id = recorded
         .as_ref()
         .and_then(|recorded| recorded.observation.agent_id.as_deref())
+        .or(decoded.routing().context_agent_id())
         .or(agent_id);
     if let Some(agent_id) = context_agent_id {
         let parent_agent_id = recorded
@@ -97,7 +98,7 @@ pub(crate) fn handle_lifecycle_hook(
     if let Some(recorded) = recorded.as_ref() {
         let assistant_message =
             assistant_message_for_lifecycle(recorded, env_run_id().is_some(), || {
-                decoded.final_message.clone()
+                decoded.final_message()
             });
         record_run_lifecycle(
             store,
@@ -117,7 +118,7 @@ pub(crate) fn handle_lifecycle_hook(
             user_input_state_root(store),
         );
         let questions = match &recorded.observation.signal {
-            LifecycleSignal::AwaitingInput { .. } => decoded.questions.clone(),
+            LifecycleSignal::AwaitingInput { .. } => decoded.questions(),
             _ => Vec::new(),
         };
         if let Err(err) = record_conversation(
@@ -411,6 +412,53 @@ mod tests {
         let runtime = rimz::store::RuntimePaths::under(workspace_id, dir.path()).unwrap();
         let store = Store::open(paths, runtime).unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn native_session_end_removes_context_without_lifecycle_identity() {
+        let (_dir, store) = test_store();
+        let decoded = rimz::agents::ClaudeAdapter
+            .decode_hook(
+                "SessionEnd",
+                &serde_json::json!({
+                    "session_id": "root-session",
+                    "agent_id": "foreign-child"
+                }),
+            )
+            .expect("session end decodes");
+        assert!(decoded.ends_session());
+        assert!(decoded.lifecycle().is_none());
+        assert_eq!(decoded.routing().context_agent_id(), Some("root-session"));
+
+        let mut context =
+            rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
+        context.model_id = Some("claude-sonnet".to_owned());
+        rimz::store::agent_context::merge_observed(
+            store.runtime_paths(),
+            "claude",
+            "root-session",
+            context,
+        )
+        .expect("context sidecar writes");
+        manage_agent_context(AgentContextHook {
+            workspace: &test_workspace(),
+            store: &store,
+            agent: &rimz::agents::ClaudeAdapter,
+            context: LifecycleEventContext {
+                event_name: decoded.event_name(),
+                decoded: &decoded,
+                payload: &serde_json::json!({}),
+                agent_id: decoded.routing().context_agent_id().unwrap(),
+                parent_agent_id: None,
+                model_hint: None,
+                transcript_path: None,
+                turn_ended: false,
+            },
+        });
+        assert!(
+            rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "root-session")
+                .is_none()
+        );
     }
 
     fn transcript_entry(

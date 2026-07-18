@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use self::manifest::{PluginManifest, TranscriptThreadKey};
-use self::protocol::{CanonicalEvent, CompactionTrigger, Envelope};
+use self::protocol::Envelope;
 #[cfg(test)]
 use super::AskKind;
 #[cfg(test)]
@@ -31,17 +31,15 @@ use super::descriptor::{
     RealtimeUsageChannel, RemoteControlCapability, StaticPresetMatcher, ThreadKey,
     ToolClassification,
 };
-use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
-    DecodedHook, PriceBook, Result, RootIdentity, SubagentIdentity, resolve_root_identity,
-    resolve_subagent_identity,
+    DecodedHook, HookRouting, PriceBook, Result, RootIdentity, SubagentIdentity,
+    resolve_root_identity, resolve_subagent_identity,
 };
 #[cfg(test)]
 use super::{PresetArgMatcher, PresetField};
-use crate::transcript::AskQuestion;
 
 pub use check::{
     PluginCheckReport, PluginCheckSummary, ProbeCheckReport, ProbeCheckStatus, ReplayCheckReport,
@@ -98,126 +96,65 @@ impl AgentAdapter for PluginAdapter {
         if !self.emits(event_name) {
             warn_undeclared_once(self.descriptor.kind, event_name);
         }
-        let (class, ask_kind) = match envelope.event {
-            CanonicalEvent::Unknown => (AgentHookClass::Unknown, None),
-            CanonicalEvent::AwaitingInput { ask, .. } => (AgentHookClass::AwaitingUser, Some(ask)),
-            _ => (AgentHookClass::Lifecycle, None),
-        };
+        let (mutates, edits) = envelope
+            .event
+            .tool()
+            .map_or((false, false), |(name, is_error)| {
+                let mutates = !is_error && self.descriptor.tools.mutating.contains(&name);
+                (
+                    mutates,
+                    mutates && self.descriptor.tools.editing.contains(&name),
+                )
+            });
+        let event = envelope.event.normalize(mutates, edits);
         let mut decoded = DecodedHook::new(super::ClassifiedHook {
-            class,
-            ask_kind,
+            class: event.class,
+            ask_kind: event.ask_kind,
             event_name: event_name.to_owned(),
         });
-        decoded.agent_id = envelope
-            .agent_id
-            .clone()
-            .or_else(|| envelope.session_id.clone());
-        decoded.context_agent_id = envelope.session_id.clone();
-        decoded.worktree_path = envelope.cwd.clone();
-        decoded.questions = match &envelope.event {
-            CanonicalEvent::AwaitingInput { question, .. } => question
-                .as_deref()
-                .map(str::trim)
-                .filter(|question| !question.is_empty())
-                .map(|question| {
-                    vec![AskQuestion {
-                        question: question.to_owned(),
-                        options: Vec::new(),
-                        multi_select: false,
-                        has_option_previews: false,
-                    }]
-                })
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        };
-        decoded.ask_detail = decoded
-            .questions
-            .first()
-            .map(|question| question.question.clone());
-        if let CanonicalEvent::TurnEnd {
-            errored: true,
-            error_message,
-            ..
-        } = &envelope.event
-        {
-            decoded.turn_error = Some(super::AgentTurnError {
-                at: Timestamp::now(),
-                label: error_message.clone(),
-                ..super::AgentTurnError::default()
-            });
+        decoded.set_policy(event.progress, event.session_ended);
+        decoded.set_routing(HookRouting::new(
+            envelope
+                .agent_id
+                .clone()
+                .or_else(|| envelope.session_id.clone()),
+            envelope.session_id.clone(),
+            envelope.cwd.clone(),
+            None,
+        ));
+        decoded.set_ask(event.questions, event.ask_detail);
+        decoded.set_turn_error(event.turn_error.map(|label| super::AgentTurnError {
+            at: Timestamp::now(),
+            label: Some(label),
+            ..super::AgentTurnError::default()
+        }));
+        decoded.set_final_message(event.final_message);
+        if event.context {
+            decoded.set_observed_context(normalize_context(
+                self.descriptor.kind,
+                payload,
+                &envelope,
+            ));
         }
-        decoded.final_message = match &envelope.event {
-            CanonicalEvent::TurnEnd {
-                last_assistant_message,
-                ..
-            } => last_assistant_message.clone(),
-            _ => None,
-        };
-        if matches!(envelope.event, CanonicalEvent::Context) {
-            decoded.observed_context = normalize_context(self.descriptor.kind, payload, &envelope);
-        }
-        let signal = match &envelope.event {
-            CanonicalEvent::SessionStart => Some(LifecycleSignal::Registered),
-            CanonicalEvent::TurnStart { .. } => Some(LifecycleSignal::TurnStarted),
-            CanonicalEvent::TurnEnd { errored, .. } => Some(LifecycleSignal::TurnEnded {
-                errored: *errored,
-                parked_on_background: false,
-            }),
-            CanonicalEvent::ToolUse {
-                tool_name,
-                is_error,
-            } => {
-                let mutates = !is_error
-                    && tool_name
-                        .as_deref()
-                        .is_some_and(|name| self.descriptor.tools.mutating.contains(&name));
-                let edits = mutates
-                    && tool_name
-                        .as_deref()
-                        .is_some_and(|name| self.descriptor.tools.editing.contains(&name));
-                Some(LifecycleSignal::ToolUsed {
-                    mutates,
-                    edits,
-                    native_key: None,
-                })
-            }
-            CanonicalEvent::AwaitingInput { ask, .. } => Some(LifecycleSignal::AwaitingInput {
-                kind: *ask,
-                ask_id: None,
-                detail: decoded.ask_detail.clone(),
-                native_key: None,
-            }),
-            CanonicalEvent::CompactionStart => Some(LifecycleSignal::Compacting),
-            CanonicalEvent::CompactionEnd { trigger } => Some(LifecycleSignal::CompactionEnded {
-                auto: trigger.map(|trigger| matches!(trigger, CompactionTrigger::Auto)),
-            }),
-            CanonicalEvent::SubagentStart => Some(LifecycleSignal::SubagentStarted),
-            CanonicalEvent::SubagentEnd { errored } => {
-                Some(LifecycleSignal::SubagentStopped { errored: *errored })
-            }
-            CanonicalEvent::SessionEnd => Some(LifecycleSignal::Ended),
-            CanonicalEvent::Context | CanonicalEvent::Unknown => None,
-        };
-        let Some(signal) = signal else {
+        let Some(signal) = event.signal else {
             return Ok(decoded);
         };
-        let (agent_id, parent_agent_id) = match envelope.event {
-            CanonicalEvent::SubagentStart | CanonicalEvent::SubagentEnd { .. } => {
-                match resolve_subagent_identity(
-                    self.descriptor.kind,
-                    event_name,
-                    envelope.agent_id.as_deref(),
-                    envelope.session_id.as_deref(),
-                    payload,
-                ) {
-                    SubagentIdentity::Resolved {
-                        agent_id,
-                        parent_agent_id,
-                    } => (Some(agent_id), Some(parent_agent_id)),
-                    SubagentIdentity::Quarantined => return Ok(decoded),
-                }
+        let (agent_id, parent_agent_id) = if event.is_subagent {
+            match resolve_subagent_identity(
+                self.descriptor.kind,
+                event_name,
+                envelope.agent_id.as_deref(),
+                envelope.session_id.as_deref(),
+                payload,
+            ) {
+                SubagentIdentity::Resolved {
+                    agent_id,
+                    parent_agent_id,
+                } => (Some(agent_id), Some(parent_agent_id)),
+                SubagentIdentity::Quarantined => return Ok(decoded),
             }
-            _ => match resolve_root_identity(
+        } else {
+            match resolve_root_identity(
                 self.descriptor.kind,
                 event_name,
                 envelope.agent_id.as_deref(),
@@ -225,7 +162,7 @@ impl AgentAdapter for PluginAdapter {
             ) {
                 RootIdentity::Root { agent_id } => (agent_id, None),
                 RootIdentity::ForeignChild => return Ok(decoded),
-            },
+            }
         };
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
@@ -244,12 +181,11 @@ impl AgentAdapter for PluginAdapter {
         if observation.worktree_path.is_none() {
             observation.worktree_path = envelope.cwd;
         }
-        if let CanonicalEvent::TurnStart { prompt } = envelope.event {
-            observation.task = prompt.clone();
-            observation.prompt = prompt;
+        if event.prompt.is_some() {
+            observation.task = event.prompt.clone();
+            observation.prompt = event.prompt;
         }
-        decoded.worktree_path = observation.worktree_path.clone();
-        decoded.lifecycle = Some(observation);
+        decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
 
@@ -422,24 +358,6 @@ fn build_descriptor(
     ));
     let coverage = derive_coverage(manifest, hook_reason);
     let lifecycle_hooks = derive_lifecycle_hooks(manifest);
-    let activity_events = manifest
-        .emits
-        .iter()
-        .filter(|event| {
-            matches!(
-                event.as_str(),
-                "session_start"
-                    | "turn_start"
-                    | "turn_end"
-                    | "tool_use"
-                    | "subagent_start"
-                    | "subagent_end"
-                    | "compaction_start"
-                    | "compaction_end"
-            )
-        })
-        .map(|event| leak_string(event.clone()))
-        .collect();
     let launch = manifest
         .launch
         .as_ref()
@@ -518,7 +436,6 @@ fn build_descriptor(
         process_names: leak_strings(&manifest.process_names),
         bin_names: leak_strings(std::slice::from_ref(&manifest.kind)),
         extra_bin_dirs: &[],
-        activity_events: leak_slice(activity_events),
         thread_key: match manifest.transcripts.as_ref().map(|value| value.thread_key) {
             Some(TranscriptThreadKey::SessionDir) => ThreadKey::SessionDir,
             Some(TranscriptThreadKey::PerFile) | None => ThreadKey::PerFile,
@@ -942,7 +859,7 @@ globs = ["history/**/*.jsonl"]
                 adapter
                     .decode_hook(event, &value)
                     .expect("test hook decodes")
-                    .lifecycle
+                    .lifecycle()
                     .unwrap()
                     .signal
                     .kind(),
@@ -956,7 +873,7 @@ globs = ["history/**/*.jsonl"]
         let observed = adapter
             .decode_hook("subagent_start", &child)
             .expect("test hook decodes")
-            .lifecycle
+            .lifecycle()
             .unwrap();
         assert_eq!(observed.signal.kind(), LifecycleSignalKind::SubagentStarted);
         assert_eq!(observed.agent_id.as_deref(), Some("child"));
@@ -968,7 +885,7 @@ globs = ["history/**/*.jsonl"]
             adapter
                 .decode_hook("subagent_end", &child_end)
                 .expect("test hook decodes")
-                .lifecycle
+                .lifecycle()
                 .unwrap()
                 .signal
                 .kind(),
@@ -990,14 +907,14 @@ globs = ["history/**/*.jsonl"]
         let decoded = adapter
             .decode_hook("awaiting_input", &ask)
             .expect("test hook decodes");
-        assert_eq!(decoded.class, AgentHookClass::AwaitingUser);
-        assert_eq!(decoded.ask_kind, Some(AskKind::Permission));
-        assert_eq!(decoded.event_name, "awaiting_input");
+        assert_eq!(decoded.class(), AgentHookClass::AwaitingUser);
+        assert_eq!(decoded.ask_kind(), Some(AskKind::Permission));
+        assert_eq!(decoded.event_name(), "awaiting_input");
         assert_eq!(
             adapter
                 .decode_hook("future", &payload("future"))
                 .expect("test hook decodes")
-                .class,
+                .class(),
             AgentHookClass::Unknown
         );
         assert_eq!(
@@ -1007,21 +924,21 @@ globs = ["history/**/*.jsonl"]
                     &json!({ "protocol": 2, "hook_event_name": "turn_end" })
                 )
                 .expect("test hook decodes")
-                .class,
+                .class(),
             AgentHookClass::Unknown
         );
         assert!(
             adapter
                 .decode_hook("turn_end", &json!({}))
                 .expect("test hook decodes")
-                .lifecycle
+                .lifecycle()
                 .is_none()
         );
         assert_eq!(
             adapter
                 .decode_hook("awaiting_input", &Value::Null)
                 .expect("test hook decodes")
-                .neutral,
+                .neutral(),
             None
         );
     }
@@ -1034,14 +951,14 @@ globs = ["history/**/*.jsonl"]
             adapter
                 .decode_hook("turn_start", &turn)
                 .expect("test hook decodes")
-                .class,
+                .class(),
             AgentHookClass::Lifecycle
         );
         assert_eq!(
             adapter
                 .decode_hook("turn_start", &turn)
                 .expect("test hook decodes")
-                .lifecycle
+                .lifecycle()
                 .unwrap()
                 .signal
                 .kind(),

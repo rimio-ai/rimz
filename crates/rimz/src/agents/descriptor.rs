@@ -306,15 +306,6 @@ pub struct AgentDescriptor {
     /// [`locate_binary`](super::locate_binary); empty for an agent that only
     /// ever ships on `$PATH`.
     pub extra_bin_dirs: &'static [&'static str],
-    /// Lifecycle events, in this agent's own wire vocabulary, that prove the
-    /// agent is actively making progress — a tool completed, a turn started
-    /// or ended, a subagent spawned or finished. These refresh the per-agent
-    /// activity heartbeat. A blocking pre-tool gate (Claude's `PreToolUse`,
-    /// pi's `tool_call`) is deliberately excluded: it can fire in the same
-    /// tool call as a blocking ask, so touching on it would race the ask
-    /// creation and instantly un-block the row. An idle notification is
-    /// excluded too — waiting for input is not progress.
-    pub activity_events: &'static [&'static str],
     /// How this agent's transcript files map to billing threads, for the
     /// spending session count.
     pub thread_key: ThreadKey,
@@ -323,14 +314,6 @@ pub struct AgentDescriptor {
 }
 
 impl AgentDescriptor {
-    /// Whether this event is the descriptor's native session-end event.
-    pub fn ends_session(&self, event_name: &str) -> bool {
-        matches!(
-            self.lifecycle_hooks.ended,
-            HookCoverage::Native { event } if event == event_name
-        )
-    }
-
     /// Render typed launch profile presets into provider-native argv.
     pub fn render_preset(&self, preset: &LaunchPreset) -> Result<Vec<String>, PresetErr> {
         self.launch.render_preset(self.kind, preset)
@@ -749,12 +732,6 @@ impl AgentDescriptor {
     /// [`AgentKind`](crate::ids::AgentKind) for a known adapter.
     pub fn kind_id(&self) -> crate::ids::AgentKind {
         crate::ids::AgentKind::new_unchecked(self.kind)
-    }
-
-    /// Whether an event refreshes the per-agent activity heartbeat. See
-    /// [`activity_events`](Self::activity_events).
-    pub fn records_activity(&self, event_name: &str) -> bool {
-        self.activity_events.contains(&event_name)
     }
 
     /// Whether a process `comm`/argv0 basename belongs to this agent: one of
