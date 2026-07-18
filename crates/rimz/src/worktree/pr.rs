@@ -26,6 +26,7 @@ static TEMP_REF_NONCE: AtomicU64 = AtomicU64::new(0);
 struct PrContext {
     number: u64,
     remote: String,
+    remote_repo: Option<forge::RemoteRepo>,
     refspec: String,
 }
 
@@ -56,19 +57,26 @@ pub fn create_from_pr(
                 });
             }
             let remote = origin_remote(repo_root, pr.number)?;
-            validate_pr_origin(pr, &remote)?;
+            let remote_repo = forge::RemoteRepo::parse(&remote);
+            validate_pr_origin(pr, &remote, remote_repo.as_ref())?;
             return Ok(reused);
         }
     };
     let review_branch = branch.or(fresh.branch.as_deref());
 
     let remote = origin_remote(repo_root, pr.number)?;
-    validate_pr_origin(pr, &remote)?;
-    let forge = pr.forge.unwrap_or_else(|| forge::forge_for_remote(&remote));
+    let remote_repo = forge::RemoteRepo::parse(&remote);
+    validate_pr_origin(pr, &remote, remote_repo.as_ref())?;
+    let remote_forge = pr.forge.unwrap_or_else(|| {
+        remote_repo
+            .as_ref()
+            .map_or(forge::Forge::GitHubStyle, forge::RemoteRepo::forge)
+    });
     let context = PrContext {
         number: pr.number,
-        refspec: forge.pr_refspec(pr.number),
+        refspec: remote_forge.pr_refspec(pr.number),
         remote,
+        remote_repo,
     };
 
     if let Some(branch) = review_branch {
@@ -76,7 +84,11 @@ pub fn create_from_pr(
         return review_only_checkout(repo_root, fresh, &context, branch, None);
     }
 
-    let Some(cli) = forge::forge_cli_for_remote(&context.remote) else {
+    let Some((remote_repo, cli)) = context
+        .remote_repo
+        .as_ref()
+        .and_then(|remote| remote.forge_cli().map(|cli| (remote, cli)))
+    else {
         let branch = resolve_branch(None, fresh.branch.as_deref(), &fresh.name)?;
         return review_only_checkout(
             repo_root,
@@ -86,7 +98,7 @@ pub fn create_from_pr(
             Some("origin has no supported forge CLI".to_owned()),
         );
     };
-    let program = forge_cli_program(cli);
+    let program = cli.program();
     if which::which(program).is_err() {
         let branch = resolve_branch(None, fresh.branch.as_deref(), &fresh.name)?;
         return review_only_checkout(
@@ -97,13 +109,13 @@ pub fn create_from_pr(
             Some(format!("`{program}` is not installed")),
         );
     }
-    let head = resolve_pr_head_with_cli(repo_root, context.number, &context.remote)?;
+    let head = resolve_pr_head_with_cli(repo_root, context.number, cli, remote_repo)?;
     let same_repo = match (cli, head.is_cross_repository) {
         (forge::ForgeCli::Gh, Some(cross_repository)) => !cross_repository,
         _ => head
             .repo_full_name
             .as_deref()
-            .zip(forge::remote_repo_slug(&context.remote).as_deref())
+            .zip(remote_repo.repo_slug())
             .map(|(head_repo, origin_repo)| head_repo.eq_ignore_ascii_case(origin_repo))
             .ok_or_else(|| WorktreeErr::PrHeadUnresolved {
                 number: context.number,
@@ -128,11 +140,18 @@ fn origin_remote(repo_root: &Path, number: u64) -> Result<String> {
     })
 }
 
-fn validate_pr_origin(pr: &forge::PrTarget, remote: &str) -> Result<()> {
-    if !forge::pr_url_matches_origin(pr, remote) {
+fn validate_pr_origin(
+    pr: &forge::PrTarget,
+    remote: &str,
+    remote_repo: Option<&forge::RemoteRepo>,
+) -> Result<()> {
+    if pr.host.is_some() && !remote_repo.is_some_and(|remote| remote.matches_target(pr)) {
         return Err(WorktreeErr::PrRepoMismatch {
             url_repo: pr.repo.clone().unwrap_or_default(),
-            origin_repo: forge::remote_repo_slug(remote).unwrap_or_else(|| remote.to_owned()),
+            origin_repo: remote_repo
+                .and_then(forge::RemoteRepo::repo_slug)
+                .unwrap_or(remote)
+                .to_owned(),
         });
     }
     Ok(())
@@ -210,12 +229,14 @@ fn fork_checkout(
             number: context.number,
             reason: "forge CLI output did not identify the head repository".to_owned(),
         })?;
-    let fork_url = forge::sibling_repo_url(&context.remote, &repo_full_name).ok_or_else(|| {
-        WorktreeErr::PrHeadUnresolved {
+    let fork_url = context
+        .remote_repo
+        .as_ref()
+        .and_then(|remote| remote.sibling_url(&repo_full_name))
+        .ok_or_else(|| WorktreeErr::PrHeadUnresolved {
             number: context.number,
             reason: "could not build the fork clone URL from origin".to_owned(),
-        }
-    })?;
+        })?;
     let pr_head = fetch_pr_head(repo_root, context.number, &context.remote, &context.refspec)?;
     let head_branch = head.branch;
     let branch = if local_branch_tip(repo_root, &head_branch).is_none() {
@@ -344,56 +365,19 @@ fn pr_marker_provenance(
     }
 }
 
-fn resolve_pr_head_with_cli(repo_root: &Path, number: u64, remote: &str) -> Result<forge::PrHead> {
-    let cli = forge::forge_cli_for_remote(remote).ok_or_else(|| WorktreeErr::PrHeadUnresolved {
-        number,
-        reason: "origin has no supported forge CLI".to_owned(),
-    })?;
-    let parsed = match cli {
-        forge::ForgeCli::Gh => gh_pr_head(repo_root, number),
-        forge::ForgeCli::Tea => tea_pr_head(repo_root, number, remote),
-    };
-    parsed.map_err(|reason| WorktreeErr::PrHeadUnresolved { number, reason })
-}
-
-fn forge_cli_program(cli: forge::ForgeCli) -> &'static str {
-    match cli {
-        forge::ForgeCli::Gh => "gh",
-        forge::ForgeCli::Tea => "tea",
-    }
-}
-
-fn gh_pr_head(repo_root: &Path, number: u64) -> std::result::Result<forge::PrHead, String> {
-    let number_arg = number.to_string();
-    let args = [
-        "pr",
-        "view",
-        number_arg.as_str(),
-        "--json",
-        "headRefName,headRepository,headRepositoryOwner,isCrossRepository",
-    ];
-    let raw = pr_command_stdout(repo_root, "gh", &args)?;
-    forge::parse_gh_pr_view_json(&raw)
-}
-
-fn tea_pr_head(
+fn resolve_pr_head_with_cli(
     repo_root: &Path,
     number: u64,
-    remote: &str,
-) -> std::result::Result<forge::PrHead, String> {
-    let number_arg = number.to_string();
-    let repo = forge::remote_repo_slug(remote)
-        .ok_or_else(|| "could not derive the origin repository for tea".to_owned())?;
-    let args = [
-        "pr",
-        number_arg.as_str(),
-        "--output",
-        "json",
-        "--repo",
-        repo.as_str(),
-    ];
-    let raw = pr_command_stdout(repo_root, "tea", &args)?;
-    forge::parse_tea_pr_head_json(&raw)
+    cli: forge::ForgeCli,
+    remote: &forge::RemoteRepo,
+) -> Result<forge::PrHead> {
+    let parsed = (|| {
+        let args = cli.pr_head_args(number, remote.repo_slug())?;
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let raw = pr_command_stdout(repo_root, cli.program(), &args)?;
+        cli.decode_pr_head(&raw)
+    })();
+    parsed.map_err(|reason| WorktreeErr::PrHeadUnresolved { number, reason })
 }
 
 fn pr_command_stdout(

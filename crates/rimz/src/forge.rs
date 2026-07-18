@@ -1,8 +1,4 @@
-//! Forge pull-request ref and status parsing.
-//!
-//! RimZ keeps forge command execution outside this module. The pure helpers
-//! here identify PR numbers, ref shapes, host families, and status JSON emitted
-//! by forge CLIs.
+//! Pure forge PR and remote parsing; command execution stays in callers.
 
 use std::collections::BTreeMap;
 
@@ -11,16 +7,34 @@ use serde_json::Value;
 
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
+const GH_HEAD_FIELDS: &str = "headRefName,headRepository,headRepositoryOwner,isCrossRepository";
+const GH_LIST_FIELDS: &str = "number,state,headRefName,statusCheckRollup";
+const TEA_LIST_FIELDS: &str = "index,state,head";
+const LIST_LIMIT: &str = "500";
+const HEAD_FIELDS: &str = "head head_branch headRefName source_branch sourceBranch";
+const HEAD_OBJECT_FIELDS: &str = "ref name branch label";
+const NUMBER_FIELDS: &str = "number index id";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Forge {
     GitHubStyle,
     GitLab,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForgeCli {
     Gh,
     Tea,
+}
+pub(crate) struct RemoteRepo {
+    raw: String,
+    host: String,
+    repo_slug: Option<String>,
+    transport: RemoteTransport,
+}
+
+enum RemoteTransport {
+    Slash(String),
+    Scp(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,64 +138,127 @@ fn pr_url_identity(
     Some((host, repo_segments.join("/")))
 }
 
+impl RemoteRepo {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        if ["/", ".", "~"].iter().any(|prefix| raw.starts_with(prefix))
+            || raw.contains('\\')
+            || raw.as_bytes().get(1) == Some(&b':')
+        {
+            return None;
+        }
+        let (host, path, transport) = if let Some((scheme, rest)) = raw.split_once("://") {
+            let url = url::Url::parse(raw).ok()?;
+            let (authority, path) = rest.split_once('/')?;
+            (!authority.is_empty()).then_some(())?;
+            (
+                url.host_str()?.to_ascii_lowercase(),
+                path,
+                RemoteTransport::Slash(format!("{scheme}://{authority}")),
+            )
+        } else {
+            let (authority, path, transport) = if let Some((authority, path)) = raw.split_once(':')
+            {
+                (!authority.contains('/')).then_some(())?;
+                (authority, path, RemoteTransport::Scp(authority.to_owned()))
+            } else {
+                let (authority, path) = raw.split_once('/')?;
+                (
+                    authority,
+                    path,
+                    RemoteTransport::Slash(authority.to_owned()),
+                )
+            };
+            (remote_authority_host(authority)?, path, transport)
+        };
+        let path = normalized_repo_path(path)?;
+        let slug = path.strip_suffix(".git").unwrap_or(path);
+        let repo_slug = (slug.split('/').count() >= 2).then(|| slug.to_owned());
+        Some(Self {
+            raw: raw.to_owned(),
+            host,
+            repo_slug,
+            transport,
+        })
+    }
+
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub(crate) fn repo_slug(&self) -> Option<&str> {
+        self.repo_slug.as_deref()
+    }
+
+    pub(crate) fn forge(&self) -> Forge {
+        if self.host.contains("gitlab") {
+            Forge::GitLab
+        } else {
+            Forge::GitHubStyle
+        }
+    }
+
+    pub(crate) fn forge_cli(&self) -> Option<ForgeCli> {
+        if self.host == "github.com" {
+            return Some(ForgeCli::Gh);
+        }
+        ["gitea", "forgejo", "codeberg"]
+            .iter()
+            .any(|name| self.host.contains(name))
+            .then_some(ForgeCli::Tea)
+    }
+
+    pub(crate) fn repo_key(&self, cli: ForgeCli) -> String {
+        let repo = self.repo_slug.as_deref().unwrap_or(&self.raw);
+        format!("{}:{}:{repo}", cli.key(), self.host())
+    }
+
+    pub(crate) fn matches_target(&self, target: &PrTarget) -> bool {
+        let Some((host, repo)) = target.host.as_deref().zip(target.repo.as_deref()) else {
+            return true;
+        };
+        host.eq_ignore_ascii_case(&self.host)
+            && self
+                .repo_slug()
+                .is_some_and(|origin| repo.eq_ignore_ascii_case(origin))
+    }
+
+    pub(crate) fn sibling_url(&self, repo_full_name: &str) -> Option<String> {
+        let repo = normalized_repo_path(repo_full_name)?;
+        let raw = self.raw.trim_end_matches('/');
+        let suffix = if raw.ends_with(".git") { ".git" } else { "" };
+        Some(match &self.transport {
+            RemoteTransport::Slash(base) => format!("{base}/{repo}{suffix}"),
+            RemoteTransport::Scp(authority) => format!("{authority}:{repo}{suffix}"),
+        })
+    }
+}
+
+fn normalized_repo_path(path: &str) -> Option<&str> {
+    let path = path.trim_matches('/');
+    (!path.is_empty() && path.split('/').all(|segment| !segment.is_empty())).then_some(path)
+}
+
+fn remote_authority_host(authority: &str) -> Option<String> {
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    (!matches!(host, "" | "." | "..") && !host.chars().any(char::is_whitespace))
+        .then(|| host.to_ascii_lowercase())
+}
 pub fn forge_for_remote(remote_url: &str) -> Forge {
-    if remote_host(remote_url)
-        .to_ascii_lowercase()
-        .contains("gitlab")
-    {
-        Forge::GitLab
-    } else {
-        Forge::GitHubStyle
-    }
+    RemoteRepo::parse(remote_url).map_or(Forge::GitHubStyle, |remote| remote.forge())
 }
-
 pub fn forge_cli_for_remote(remote_url: &str) -> Option<ForgeCli> {
-    let host = remote_host(remote_url).to_ascii_lowercase();
-    if host == "github.com" {
-        Some(ForgeCli::Gh)
-    } else if host.contains("gitea") || host.contains("forgejo") || host.contains("codeberg") {
-        Some(ForgeCli::Tea)
-    } else {
-        None
-    }
+    RemoteRepo::parse(remote_url).and_then(|remote| remote.forge_cli())
 }
-
 /// Extract the `owner/repo` slug from a git remote URL.
 pub fn remote_repo_slug(remote_url: &str) -> Option<String> {
-    let trimmed = remote_url.trim();
-    let had_scheme = trimmed.contains("://");
-    let without_scheme = trimmed
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(trimmed);
-    let after_userinfo = without_scheme
-        .rsplit_once('@')
-        .map(|(_, rest)| rest)
-        .unwrap_or(without_scheme);
-    let path = if had_scheme {
-        let (authority, path) = after_userinfo.split_once('/')?;
-        (!authority.is_empty()).then_some(path)?
-    } else if let Some((host, path)) = after_userinfo.split_once(':') {
-        (!host.is_empty()).then_some(path)?
-    } else {
-        let (host, path) = after_userinfo.split_once('/')?;
-        (!host.is_empty()).then_some(path)?
-    };
-    let path = path.trim_matches('/');
-    let slug = path.strip_suffix(".git").unwrap_or(path);
-    let segments = slug.split('/').collect::<Vec<_>>();
-    (segments.len() >= 2 && segments.iter().all(|segment| !segment.is_empty()))
-        .then(|| slug.to_owned())
+    RemoteRepo::parse(remote_url).and_then(|remote| remote.repo_slug)
 }
 
 /// Return whether URL-derived PR identity names the origin repository.
 pub fn pr_url_matches_origin(target: &PrTarget, origin_url: &str) -> bool {
-    let (Some(host), Some(repo)) = (target.host.as_deref(), target.repo.as_deref()) else {
-        return true;
-    };
-    host.eq_ignore_ascii_case(remote_host(origin_url))
-        && remote_repo_slug(origin_url)
-            .is_some_and(|origin_repo| repo.eq_ignore_ascii_case(origin_repo.as_str()))
+    target.host.is_none()
+        || RemoteRepo::parse(origin_url).is_some_and(|remote| remote.matches_target(target))
 }
 
 pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
@@ -264,30 +341,7 @@ pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
 
 /// Build a sibling repository URL while preserving the origin's transport.
 pub fn sibling_repo_url(origin_url: &str, repo_full_name: &str) -> Option<String> {
-    let origin = origin_url.trim().trim_end_matches('/');
-    let repo = repo_full_name.trim().trim_matches('/');
-    if origin.is_empty() || repo.is_empty() || repo.split('/').any(|segment| segment.is_empty()) {
-        return None;
-    }
-    let suffix = if origin.ends_with(".git") { ".git" } else { "" };
-
-    if let Some((scheme, rest)) = origin.split_once("://") {
-        let (authority, _) = rest.split_once('/')?;
-        if scheme.is_empty() || authority.is_empty() {
-            return None;
-        }
-        return Some(format!("{scheme}://{authority}/{repo}{suffix}"));
-    }
-
-    if let Some((authority, _)) = origin.split_once(':') {
-        if authority.is_empty() || authority.contains('/') {
-            return None;
-        }
-        return Some(format!("{authority}:{repo}{suffix}"));
-    }
-
-    let (authority, _) = origin.split_once('/')?;
-    (!authority.is_empty()).then(|| format!("{authority}/{repo}{suffix}"))
+    RemoteRepo::parse(origin_url)?.sibling_url(repo_full_name)
 }
 
 fn required_json_text(raw: &str, label: &str) -> Result<String, String> {
@@ -308,6 +362,67 @@ impl Forge {
     }
 }
 
+impl ForgeCli {
+    pub(crate) fn program(self) -> &'static str {
+        match self {
+            Self::Gh => "gh",
+            Self::Tea => "tea",
+        }
+    }
+
+    pub(crate) fn key(self) -> &'static str {
+        self.program()
+    }
+
+    pub(crate) fn pr_head_args(
+        self,
+        number: u64,
+        repo: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let number = number.to_string();
+        Ok(match self {
+            Self::Gh => ["pr", "view", &number, "--json", GH_HEAD_FIELDS]
+                .map(str::to_owned)
+                .into(),
+            Self::Tea => {
+                let repo = repo
+                    .ok_or_else(|| "could not derive the origin repository for tea".to_owned())?;
+                ["pr", &number, "--output", "json", "--repo", repo]
+                    .map(str::to_owned)
+                    .into()
+            }
+        })
+    }
+
+    pub(crate) fn decode_pr_head(self, raw: &str) -> Result<PrHead, String> {
+        match self {
+            Self::Gh => parse_gh_pr_view_json(raw),
+            Self::Tea => parse_tea_pr_head_json(raw),
+        }
+    }
+
+    pub(crate) fn open_pr_list_args(self, repo: Option<&str>) -> Vec<&str> {
+        match self {
+            Self::Gh => {
+                let mut args = vec!["pr", "list", "--state", "open"];
+                args.extend(["--json", GH_LIST_FIELDS, "--limit", LIST_LIMIT]);
+                args
+            }
+            Self::Tea => tea_pr_list_args("open", repo),
+        }
+    }
+
+    pub(crate) fn decode_open_prs(
+        self,
+        raw: &str,
+    ) -> Result<BTreeMap<String, PrCandidate>, String> {
+        match self {
+            Self::Gh => parse_gh_pr_list_links(raw),
+            Self::Tea => parse_tea_pr_list_links(raw),
+        }
+    }
+}
+
 fn parse_number(raw: &str) -> Result<u64, String> {
     if raw.is_empty() {
         return Err("PR number cannot be empty".to_owned());
@@ -321,23 +436,6 @@ fn parse_number(raw: &str) -> Result<u64, String> {
 
 fn clean_segment(segment: &str) -> &str {
     segment.split(['?', '#']).next().unwrap_or(segment).trim()
-}
-
-pub(crate) fn remote_host(remote_url: &str) -> &str {
-    let trimmed = remote_url.trim();
-    let without_scheme = trimmed
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(trimmed);
-    let authority = without_scheme
-        .rsplit_once('@')
-        .map(|(_, rest)| rest)
-        .unwrap_or(without_scheme);
-    authority
-        .split(['/', ':'])
-        .next()
-        .unwrap_or(authority)
-        .trim()
 }
 
 #[derive(Deserialize)]
@@ -432,15 +530,9 @@ pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<PrCandid
         .ok_or_else(|| "tea PR list output must be a JSON array".to_owned())?;
     Ok(pulls
         .iter()
-        .filter(|pull| pr_head_matches(pull, branch))
-        .filter_map(|pull| {
-            Some(PrCandidate {
-                number: pr_number(pull)?,
-                state: pr_state_from_value(pull)?,
-                ci: None,
-                merge_sha: None,
-            })
-        })
+        .filter_map(tea_pr_candidate)
+        .filter(|(head, _)| head == branch)
+        .map(|(_, candidate)| candidate)
         .fold(None, |current, next| Some(prefer_candidate(current, next))))
 }
 
@@ -451,20 +543,8 @@ pub fn parse_tea_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate
         .ok_or_else(|| "tea PR list output must be a JSON array".to_owned())?;
     let mut links = BTreeMap::new();
     for pull in pulls {
-        let Some(branch) = pr_head_branch(pull) else {
+        let Some((branch, candidate)) = tea_pr_candidate(pull) else {
             continue;
-        };
-        let Some(state) = pr_state_from_value(pull) else {
-            continue;
-        };
-        let Some(number) = pr_number(pull) else {
-            continue;
-        };
-        let candidate = PrCandidate {
-            number,
-            state,
-            ci: None,
-            merge_sha: None,
         };
         links.insert(
             branch.clone(),
@@ -491,24 +571,17 @@ pub fn parse_tea_pr_detail_json(raw: &str) -> Result<TeaPrDetail, String> {
     })
 }
 
-/// Build the `tea pr list` argv for PR-state enrichment.
-///
-/// Both tea callers use the same bounded page size so older closed or merged
-/// PRs do not fall off tea's default page while the sidebar is detecting a
-/// branch transition.
+/// Build bounded `tea pr list` argv for open-set and transition probes.
 pub fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a str> {
-    let mut args = vec![
-        "pr",
-        "list",
-        "--state",
-        state,
+    let mut args = vec!["pr", "list", "--state", state];
+    args.extend([
         "--output",
         "json",
         "--fields",
-        "index,state,head",
+        TEA_LIST_FIELDS,
         "--limit",
-        "500",
-    ];
+        LIST_LIMIT,
+    ]);
     if let Some(repo) = repo {
         args.extend_from_slice(&["--repo", repo]);
     }
@@ -692,17 +765,14 @@ pub(crate) fn worst_ci(
 }
 
 fn pr_state_from_value(value: &Value) -> Option<WorktreePrState> {
-    if value
-        .get("merged")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    if value.get("merged").and_then(Value::as_bool) == Some(true)
         || value
             .get("merged_at")
             .is_some_and(|merged| !merged.is_null())
     {
         return Some(WorktreePrState::Merged);
     }
-    ["state", "status"].iter().find_map(|field| {
+    "state status".split_ascii_whitespace().find_map(|field| {
         value
             .get(field)
             .and_then(Value::as_str)
@@ -720,18 +790,13 @@ fn parse_pr_state(raw: &str) -> Option<WorktreePrState> {
 }
 
 fn prefer_candidate(current: Option<PrCandidate>, next: PrCandidate) -> PrCandidate {
-    let Some(current) = current else {
-        return next;
-    };
-    if pr_state_rank(next.state) > pr_state_rank(current.state) {
-        next
-    } else {
-        current
+    match current {
+        Some(current) if pr_state_rank(current.state) >= pr_state_rank(next.state) => current,
+        _ => next,
     }
 }
 
 fn pr_state_rank(state: WorktreePrState) -> u8 {
-    // Single precedence source: merged beats open beats closed.
     match state {
         WorktreePrState::Closed => 0,
         WorktreePrState::Open => 1,
@@ -740,62 +805,42 @@ fn pr_state_rank(state: WorktreePrState) -> u8 {
 }
 
 fn pr_number(value: &Value) -> Option<u64> {
-    ["number", "index", "id"].iter().find_map(|field| {
-        let value = value.get(field)?;
+    NUMBER_FIELDS.split_ascii_whitespace().find_map(|field| {
         value
-            .as_u64()
-            .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
+            .get(field)
+            .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
     })
 }
 
-fn pr_head_matches(value: &Value, branch: &str) -> bool {
-    pr_head_branch(value).is_some_and(|head| ref_name_matches(&head, branch))
+fn tea_pr_candidate(value: &Value) -> Option<(String, PrCandidate)> {
+    let candidate = PrCandidate {
+        number: pr_number(value)?,
+        state: pr_state_from_value(value)?,
+        ci: None,
+        merge_sha: None,
+    };
+    Some((pr_head_branch(value)?, candidate))
 }
 
 fn pr_head_branch(value: &Value) -> Option<String> {
-    [
-        "head",
-        "head_branch",
-        "headRefName",
-        "source_branch",
-        "sourceBranch",
-    ]
-    .iter()
-    .find_map(|field| head_branch_from_value(value.get(field)))
+    HEAD_FIELDS
+        .split_ascii_whitespace()
+        .find_map(|field| head_branch_from_value(value.get(field)))
 }
 
 fn head_branch_from_value(value: Option<&Value>) -> Option<String> {
     let value = value?;
-    if let Some(raw) = value.as_str() {
-        return ref_name_branch(raw);
-    }
-    if let Some(object) = value.as_object() {
-        return ["ref", "name", "branch", "label"].iter().find_map(|field| {
-            object
-                .get(*field)
-                .and_then(Value::as_str)
-                .and_then(ref_name_branch)
-        });
-    }
-    None
+    let raw = value.as_str().or_else(|| {
+        HEAD_OBJECT_FIELDS
+            .split_ascii_whitespace()
+            .find_map(|field| value.get(field)?.as_str())
+    })?;
+    ref_name_branch(raw)
 }
 
 fn ref_name_branch(raw: &str) -> Option<String> {
     let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    Some(
-        raw.rsplit_once(':')
-            .map(|(_, name)| name)
-            .unwrap_or(raw)
-            .to_owned(),
-    )
-}
-
-fn ref_name_matches(raw: &str, branch: &str) -> bool {
-    let raw = raw.trim();
-    raw == branch || raw.rsplit_once(':').is_some_and(|(_, name)| name == branch)
+    (!raw.is_empty()).then(|| raw.rsplit(':').next().unwrap_or(raw).to_owned())
 }
 
 #[cfg(test)]

@@ -1,16 +1,8 @@
 //! Producer-only pull-request link enrichment.
 //!
-//! The probe shells out to the repo's forge CLI on a long TTL, publishes
-//! `pr-state.json`, and lets consumers project the cached map without forking.
-//! `gh` reports `MERGED` as a first-class PR state, so one `gh pr list`
-//! resolves open/closed/merged. `tea pr list` omits merge SHAs and CI, so
-//! `probe_tea` follows closed and merged candidates with a Gitea API detail
-//! read that supplies canonical merge state and commit metadata. Both tea list calls page through
-//! [`crate::forge::tea_pr_list_args`] with the same `--limit`. GitHub includes
-//! CI in its open-PR list and reads merge-commit checks after a transition.
-//! Tea reads Gitea's combined commit status for open branches and merge commits.
-//! Those calls are best-effort enrichment and do not invalidate a successful
-//! PR-state probe.
+//! The probe shells out to the repo's forge CLI on a long TTL, publishes `pr-state.json`, and lets consumers project the cached map without forking.
+//! `gh` reports merged state directly; Tea follows terminal candidates with a Gitea detail read for canonical merge state and commit metadata.
+//! CI enrichment stays best-effort: GitHub reads open-list rollups and merge-commit checks, while Tea reads combined commit status for open branches and merge commits.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -321,7 +313,6 @@ fn repo_due(
 struct Target {
     path: String,
     branch: String,
-    remote: String,
     forge_cli: ForgeCli,
     repo_key: String,
     repo_slug: Option<String>,
@@ -347,35 +338,24 @@ fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> 
         let Some(remote) = git_line(worktree, &["remote", "get-url", "origin"]) else {
             continue;
         };
-        let Some(forge_cli) = forge::forge_cli_for_remote(&remote) else {
+        let Some(remote) = forge::RemoteRepo::parse(&remote) else {
             continue;
         };
-        let repo_slug = forge::remote_repo_slug(&remote);
+        let Some(forge_cli) = remote.forge_cli() else {
+            continue;
+        };
+        let repo_slug = remote.repo_slug().map(str::to_owned);
         targets.push(Target {
             path: path.clone(),
             branch,
-            remote: remote.clone(),
             forge_cli,
-            repo_key: repo_key(forge_cli, &remote, repo_slug.as_deref()),
+            repo_key: remote.repo_key(forge_cli),
             repo_slug,
             worktree: worktree.to_path_buf(),
             head_sha: target_head_sha(diff_cache, path).map(str::to_owned),
         });
     }
     targets
-}
-
-fn repo_key(forge_cli: ForgeCli, remote: &str, repo_slug: Option<&str>) -> String {
-    let host = forge::remote_host(remote).to_ascii_lowercase();
-    let repo = repo_slug.unwrap_or_else(|| remote.trim());
-    format!("{}:{host}:{repo}", forge_cli_key(forge_cli))
-}
-
-fn forge_cli_key(forge_cli: ForgeCli) -> &'static str {
-    match forge_cli {
-        ForgeCli::Gh => "gh",
-        ForgeCli::Tea => "tea",
-    }
 }
 
 fn group_targets(targets: Vec<Target>) -> BTreeMap<String, RepoGroup> {
@@ -681,36 +661,15 @@ fn carry_prior_states(
 }
 
 fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, forge::PrCandidate>> {
-    let output = match group.forge_cli {
-        ForgeCli::Gh => command_stdout(
-            &group.worktree,
-            "gh",
-            &[
-                "pr",
-                "list",
-                "--state",
-                "open",
-                "--json",
-                "number,state,headRefName,statusCheckRollup",
-                "--limit",
-                "500",
-            ],
-        )?,
-        ForgeCli::Tea => command_stdout(
-            &group.worktree,
-            "tea",
-            &forge::tea_pr_list_args("open", group.repo_slug.as_deref()),
-        )?,
-    };
-    match group.forge_cli {
-        ForgeCli::Gh => forge::parse_gh_pr_list_links(&output),
-        ForgeCli::Tea => forge::parse_tea_pr_list_links(&output),
-    }
-    .map_err(|err| {
-        tracing::debug!(error = %err, "forge PR open-set parse failed");
-        err
-    })
-    .ok()
+    let args = group
+        .forge_cli
+        .open_pr_list_args(group.repo_slug.as_deref());
+    let output = command_stdout(&group.worktree, group.forge_cli.program(), &args)?;
+    group
+        .forge_cli
+        .decode_open_prs(&output)
+        .inspect_err(|err| tracing::debug!(error = %err, "forge PR open-set parse failed"))
+        .ok()
 }
 
 struct ProbeState {
@@ -721,7 +680,12 @@ struct ProbeState {
 fn probe_transition(target: &Target, number: Option<u64>) -> ProbeState {
     match target.forge_cli {
         ForgeCli::Gh => probe_github(target, number),
-        ForgeCli::Tea => probe_tea(&target.worktree, &target.branch, &target.remote, number),
+        ForgeCli::Tea => probe_tea(
+            &target.worktree,
+            &target.branch,
+            target.repo_slug.as_deref(),
+            number,
+        ),
     }
 }
 
@@ -846,10 +810,14 @@ fn tea_pr_detail_args(number: u64, repo: &str) -> Vec<String> {
     vec!["api".to_owned(), format!("repos/{repo}/pulls/{number}")]
 }
 
-fn probe_tea(worktree: &Path, branch: &str, remote: &str, prior_number: Option<u64>) -> ProbeState {
-    let repo = forge::remote_repo_slug(remote);
+fn probe_tea(
+    worktree: &Path,
+    branch: &str,
+    repo: Option<&str>,
+    prior_number: Option<u64>,
+) -> ProbeState {
     if let Some(number) = prior_number
-        && let Some(repo) = repo.as_deref()
+        && let Some(repo) = repo
         && let Some(link) = probe_tea_detail(worktree, repo, number)
     {
         return ProbeState {
@@ -857,7 +825,7 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str, prior_number: Option<u
             ok: true,
         };
     }
-    let list_args = forge::tea_pr_list_args("all", repo.as_deref());
+    let list_args = forge::tea_pr_list_args("all", repo);
     let Some(output) = command_stdout(worktree, "tea", &list_args) else {
         return ProbeState {
             state: None,
@@ -885,7 +853,7 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str, prior_number: Option<u
     if matches!(
         candidate.state,
         WorktreePrState::Closed | WorktreePrState::Merged
-    ) && let Some(repo) = repo.as_deref()
+    ) && let Some(repo) = repo
         && let Some(link) = probe_tea_detail(worktree, repo, candidate.number)
     {
         return ProbeState {

@@ -68,6 +68,10 @@ fn compares_pr_url_identity_with_origin() {
         &parse("7").unwrap(),
         "git@gitlab.com:other/repo.git"
     ));
+    assert!(pr_url_matches_origin(
+        &parse("https://GITHUB.com/Org/Team/Repo/pull/7").unwrap(),
+        "git@github.com:org/team/repo.git"
+    ));
 }
 
 #[test]
@@ -112,6 +116,9 @@ fn maps_remote_hosts_to_forge_cli() {
     for remote in [
         "https://gitlab.com/org/repo.git",
         "https://example.test/org/repo.git",
+        "/tmp/gitea.example.test/org/repo.git",
+        "https:///gitea.example.test/org/repo.git",
+        "not-a-remote",
     ] {
         assert_eq!(forge_cli_for_remote(remote), None, "{remote}");
     }
@@ -126,6 +133,10 @@ fn extracts_remote_repo_slug() {
         ("git@host:owner/repo", "owner/repo"),
         ("https://host/owner/repo/", "owner/repo"),
         ("git@host:owner/team/repo.git", "owner/team/repo"),
+        (
+            "ssh://build@host:2222/owner/team/repo.git",
+            "owner/team/repo",
+        ),
     ] {
         assert_eq!(remote_repo_slug(remote), Some(slug.to_owned()), "{remote}");
     }
@@ -216,10 +227,10 @@ fn builds_sibling_repo_urls() {
             "https://github.com/alice/fork.git",
         ),
         (
-            "ssh://git@host:2222/org/repo.git",
-            "ssh://git@host:2222/alice/fork.git",
+            "ssh://build@host:2222/org/team/repo.git",
+            "ssh://build@host:2222/alice/fork.git",
         ),
-        ("git@host:org/repo.git", "git@host:alice/fork.git"),
+        ("git@host:org/team/repo.git", "git@host:alice/fork.git"),
         ("host/org/repo", "host/alice/fork"),
     ] {
         assert_eq!(
@@ -482,34 +493,38 @@ fn parses_tea_pr_list_and_detail_json() {
 
 #[test]
 fn parses_tea_pr_list_links_by_head_branch() {
-    let links = parse_tea_pr_list_links(
-        r#"[
-            {"index": 7, "head": {"label": "me:feature"}, "state": "closed"},
-            {"index": 8, "head": {"branch": "feature"}, "state": "open"},
-            {"index": 9, "source_branch": "other", "state": "open"}
-        ]"#,
-    )
-    .unwrap();
+    let payload = r#"[
+        {"number": "7", "head": "me:feature", "state": "closed"},
+        {"index": 8, "head": {"branch": "feature"}, "state": "open"},
+        {"id": "9", "head": {"label": "owner:feature"}, "state": "closed", "merged": true},
+        {"index": 10, "source_branch": "other", "state": "open"}
+    ]"#;
+    let links = parse_tea_pr_list_links(payload).unwrap();
 
     assert_eq!(
         links.get("feature"),
         Some(&PrCandidate {
-            number: 8,
-            state: WorktreePrState::Open,
+            number: 9,
+            state: WorktreePrState::Merged,
             ci: None,
             merge_sha: None,
         })
     );
     assert_eq!(
+        parse_tea_pr_list_json(payload, "feature").unwrap(),
+        links.get("feature").cloned()
+    );
+    assert_eq!(
         links.get("other"),
         Some(&PrCandidate {
-            number: 9,
+            number: 10,
             state: WorktreePrState::Open,
             ci: None,
             merge_sha: None,
         })
     );
     assert!(parse_tea_pr_list_links("{}").is_err());
+    assert!(parse_tea_pr_list_json("{}", "feature").is_err());
 }
 
 #[test]
@@ -525,6 +540,86 @@ fn tea_pr_list_args_thread_limit_state_and_repo() {
     let bare = tea_pr_list_args("open", None);
     assert!(bare.windows(2).any(|window| window == ["--limit", "500"]));
     assert!(!bare.contains(&"--repo"));
+}
+
+#[test]
+fn forge_cli_builds_and_decodes_head_and_open_list_commands() {
+    assert_eq!(
+        ForgeCli::Gh.pr_head_args(42, None).unwrap().join(" "),
+        "pr view 42 --json headRefName,headRepository,headRepositoryOwner,isCrossRepository"
+    );
+    assert_eq!(
+        ForgeCli::Tea
+            .pr_head_args(42, Some("org/repo"))
+            .unwrap()
+            .join(" "),
+        "pr 42 --output json --repo org/repo"
+    );
+    assert_eq!(
+        ForgeCli::Tea.pr_head_args(42, None).unwrap_err(),
+        "could not derive the origin repository for tea"
+    );
+    assert_eq!(
+        ForgeCli::Gh.open_pr_list_args(None),
+        [
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--json",
+            "number,state,headRefName,statusCheckRollup",
+            "--limit",
+            "500"
+        ]
+    );
+    assert_eq!(
+        ForgeCli::Tea.open_pr_list_args(Some("org/repo")),
+        [
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--output",
+            "json",
+            "--fields",
+            "index,state,head",
+            "--limit",
+            "500",
+            "--repo",
+            "org/repo"
+        ]
+    );
+
+    assert_eq!(
+        ForgeCli::Gh
+            .decode_pr_head(
+                r#"{"headRefName":"feature","headRepository":{"name":"repo"},"headRepositoryOwner":{"login":"org"}}"#,
+            )
+            .unwrap()
+            .branch,
+        "feature"
+    );
+    assert_eq!(
+        ForgeCli::Tea
+            .decode_pr_head(r#"{"head":{"label":"org:feature"}}"#)
+            .unwrap()
+            .branch,
+        "feature"
+    );
+    assert_eq!(
+        ForgeCli::Gh
+            .decode_open_prs(r#"[{"number":1,"state":"OPEN","headRefName":"feature"}]"#)
+            .unwrap()["feature"]
+            .number,
+        1
+    );
+    assert_eq!(
+        ForgeCli::Tea
+            .decode_open_prs(r#"[{"index":2,"state":"open","head":"feature"}]"#)
+            .unwrap()["feature"]
+            .number,
+        2
+    );
 }
 
 #[test]

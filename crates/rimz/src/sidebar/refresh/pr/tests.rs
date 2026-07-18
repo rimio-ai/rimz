@@ -217,6 +217,13 @@ fn transition_args_prefer_cached_pr_numbers() {
 }
 
 #[test]
+fn github_repo_cache_key_stays_stable() {
+    let remote = forge::RemoteRepo::parse("https://GitHub.com/org/repo.git").unwrap();
+
+    assert_eq!(remote.repo_key(ForgeCli::Gh), "gh:github.com:org/repo");
+}
+
+#[test]
 fn legacy_cache_defaults_and_leaves_repos_due() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("pr-state.json");
@@ -535,7 +542,6 @@ fn target(path: &str, branch: &str) -> Target {
     Target {
         path: path.to_owned(),
         branch: branch.to_owned(),
-        remote: "https://github.com/org/repo.git".to_owned(),
         forge_cli: ForgeCli::Gh,
         repo_key: "gh:github.com:org/repo".to_owned(),
         repo_slug: Some("org/repo".to_owned()),
