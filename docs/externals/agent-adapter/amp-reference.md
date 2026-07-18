@@ -38,6 +38,8 @@ amp tools list
 
 `amp plugins show-docs` emits the `@ampcode/plugin` declarations understood by that exact binary. Prefer it over cached web text whenever the two disagree.
 
+The pinned `amp --version` shape is `0.0.1783946745-g8c4c0a (released 2026-07-13T12:45:45.000Z)`. RimZ validates the leading numeric plus `-g<hex>` build token and normalizes this example to `0.0.1783946745-g8c4c0a`; release annotation and other prose stay outside the version field.
+
 The executable and launch kind are both `amp`. Official installation paths are the direct shell/PowerShell installer, Homebrew (`ampcode/tap/ampcode`), and the `@ampcode/cli` npm package; npm is supported but not recommended. `amp update` refreshes direct installs, while `amp.updates.mode` controls automatic checking. Because this adapter targets only the latest architecture, preflight should reject a different version with the exact supported-version fix instead of guessing across Amp's intentionally moving surface.
 
 ## Recommended adapter shape

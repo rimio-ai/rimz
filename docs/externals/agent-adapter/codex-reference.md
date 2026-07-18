@@ -235,7 +235,7 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
 }
 ```
 
-Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and reported window lengths render from `windowDurationMins`. Codex declares one product-level exception: when an authoritative response reports another window but omits the 5-hour duration, RimZ keeps the 5-hour slot visible as an unlimited `∞` bar. `rateLimits` remains the backward-compatible single-bucket view; `rateLimitsByLimitId` carries newer multi-bucket data. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted in older payloads, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. The 0.144.1 generated schema requires only `hasCredits` and `unlimited` in `CreditsSnapshot`; RimZ tolerates the older fields and unknown shapes without dropping valid windows. `rateLimitResetCredits.availableCount` maps to the dashboard count, and the earliest `expiresAt` among `available` detail rows maps to its expiry.
+Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and reported window lengths render from `windowDurationMins`. Codex declares one product-level exception: when an authoritative response reports another window but omits the 5-hour duration, RimZ keeps the 5-hour slot visible as an unlimited `∞` bar. `rateLimits` remains the backward-compatible single-bucket view; `rateLimitsByLimitId` carries newer multi-bucket data. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted in older payloads, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. The 0.144.1 generated schema requires only `hasCredits` and `unlimited` in `CreditsSnapshot`; RimZ tolerates the older fields and unknown shapes without dropping valid windows. `rateLimitResetCredits.availableCount` maps to the authoritative dashboard count; every valid `expiresAt` among `available` detail rows is retained, and the earliest remains the summary expiry.
 
 **`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but RimZ does not map it to row effort because it is a catalog default/recommendation, not the current session's live value.
 
@@ -427,13 +427,13 @@ Rate-limit reset credits use the same OAuth token and optional `ChatGPT-Account-
   "credits": [
     {
       "status": "available",             // only available credits affect the count and expiry
-      "expires_at": "2026-07-06T12:00:00Z", // parsed for soonest_expiry
+      "expires_at": "2026-07-06T12:00:00Z", // retained in expiries; earliest also becomes soonest_expiry
       "title": "Rate Limit Reset"        // present, ignored
     }
   ]
 }
 ```
 
-The usage response's `rate_limit_reset_credits` field remains ignored; the dedicated endpoint is the per-credit source and rides the standard OAuth usage cadence. A reset-credit fetch failure leaves the prior dashboard value in place when the primary usage fetch succeeds.
+The usage response's `rate_limit_reset_credits` field remains ignored; the dedicated endpoint is the per-credit source and rides the standard OAuth usage cadence. Available detail expiries that fail RFC 3339 parsing are excluded without changing `available_count`; valid expiries sort ascending and equal timestamps remain distinct credits. A reset-credit fetch failure leaves the prior dashboard value in place when the primary usage fetch succeeds.
 
 RimZ consumes a credit with `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume`, or `/api/codex/rate-limit-reset-credits/consume` for a non-`/backend-api` base, using the same OAuth and account headers as the GET. The request is `{"redeem_request_id":"<uuid-v7>","credit_id":"<optional id>"}`; the response carries `code` (`reset`, `nothing_to_reset`, `no_credit`, or `already_redeemed`) and `windows_reset`. Unknown codes remain a non-success outcome for forward compatibility. `nothing_to_reset` leaves the credit available.

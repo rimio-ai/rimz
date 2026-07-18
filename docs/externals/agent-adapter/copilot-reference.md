@@ -40,6 +40,8 @@ copilot help permissions
 copilot help providers
 ```
 
+The pinned version banner begins with `GitHub Copilot CLI 1.0.71.` and may continue with an update notice on later lines. RimZ recognizes only that exact first-line brand shape, removes its sentence punctuation, and normalizes the example to `1.0.71`; version-looking tokens in the notice do not enter provider state.
+
 ## Recommended adapter shape
 
 Use **command hooks** as the lifecycle and decision seam. They are local, session-scoped, carry the session ID and cwd on every event, expose synchronous permission decisions, and preserve Copilot's stock interactive UI. This matches RimZ's existing pane-first contract.

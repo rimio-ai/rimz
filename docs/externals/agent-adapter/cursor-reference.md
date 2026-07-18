@@ -40,6 +40,8 @@ agent models
 agent mcp list
 ```
 
+The pinned `agent --version` output begins with `2026.07.09-a3815c0`. RimZ validates the zero-padded `YYYY.MM.DD-<hex>` build token and preserves this example unchanged as `2026.07.09-a3815c0`; unrelated release prose and non-padded near matches abstain.
+
 The current primary executable is `agent`. `cursor-agent` is a backward-compatible alias introduced before `agent` became the primary entry point; probe both names during discovery and launch the resolved executable rather than assuming either path.
 
 ## Adapter feasibility at a glance

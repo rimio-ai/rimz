@@ -17,6 +17,14 @@ rimz providers --json             # stable report array for scripts
 | `--refresh` | Bypass account and account-usage TTLs for this invocation |
 | `--all` | Include logged-out and empty registered kinds; without it, a kind needs a login, last-known account, or recorded spend |
 
+## Human output
+
+Each provider block starts with `Name — Plan · status`; its aligned detail rows always begin with `version: v…`, or a faint dash when the version is unknown.
+
+Codex reset credits render as a count followed by up to the soonest three known expiry instants. Each bullet uses `YYYY-MM-DD HH:MM:SS ±HH:MM` in the configured machine timezone plus `in <interval>`, or `due` once the deadline passes. A cached count with only the legacy earliest-expiry summary renders that one deadline until the next refresh supplies per-credit detail.
+
+Paid-usage, spend, and budget rows apply the money tone only to formatted dollar tokens; surrounding labels, intervals, separators, `/day`, and `parked` stay in the normal body tone.
+
 ## Freshness
 
 A plain query uses the sidebar's refresh semantics: each successful or logged-out account probe stays cached for its normal TTL, unavailable probes retry on their shorter TTL, and each logged-in provider's direct usage query runs only when its own durable cadence is due. The account and usage paths are single-flighted across rooms and concurrent CLI calls.
@@ -39,6 +47,7 @@ The document is an array in display order: providers with dashboard panels retai
 | `metered`, `version` | Subscription-window metering state and agent CLI version |
 | `windows` | Included quotas with usage percentage, reset, duration or named scope, provenance, and lifted state |
 | `extra_credits`, `reset_credits` | Paid/API credit facts and redeemable reset-credit facts |
+| `reset_credits.count`, `.soonest_expiry`, `.expiries` | Provider-reported available count, earliest available expiry summary, and the additive sorted list of every known valid available-credit expiry; old caches and clients may omit `expiries` |
 | `spending` | Published headline, 7-day, 30-day, and 365-day spend/token tally |
 | `day_budget` | Configured provider daily cap, current local-day spend, and parked state |
 | `active_sessions` | Currently bound root panes for this provider; zero outside a room-backed panel |
