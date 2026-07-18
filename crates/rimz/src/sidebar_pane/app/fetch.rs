@@ -829,7 +829,7 @@ struct FetchCauseSet(u16);
 
 impl FetchCauseSet {
     fn one(cause: FetchFoldCause) -> Self {
-        Self(1 << fetch_cause_index(cause))
+        Self(1 << cause.index())
     }
 
     fn insert(&mut self, other: Self) {
@@ -837,29 +837,11 @@ impl FetchCauseSet {
     }
 
     fn iter(self) -> impl Iterator<Item = FetchFoldCause> {
-        FETCH_CAUSES
+        FetchFoldCause::ALL
             .into_iter()
             .enumerate()
             .filter_map(move |(index, cause)| (self.0 & (1 << index) != 0).then_some(cause))
     }
-}
-
-const FETCH_CAUSES: [FetchFoldCause; 8] = [
-    FetchFoldCause::StoreDelta,
-    FetchFoldCause::Topology,
-    FetchFoldCause::Metrics,
-    FetchFoldCause::Presence,
-    FetchFoldCause::Backstop,
-    FetchFoldCause::WatchTransition,
-    FetchFoldCause::HardRefresh,
-    FetchFoldCause::Recovery,
-];
-
-fn fetch_cause_index(cause: FetchFoldCause) -> usize {
-    FETCH_CAUSES
-        .iter()
-        .position(|candidate| *candidate == cause)
-        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -922,17 +904,25 @@ impl FetchRequest {
         Self::with_cause(FetchFoldCause::StoreDelta)
     }
 
+    pub(super) fn store_delta_with_fresh_panes() -> Self {
+        Self::producer_fresh_panes_with_cause(FetchFoldCause::StoreDelta)
+    }
+
     pub(super) fn recovery() -> Self {
         Self::with_cause(FetchFoldCause::Recovery)
     }
 
     pub(super) fn producer_fresh_panes() -> Self {
+        Self::producer_fresh_panes_with_cause(FetchFoldCause::Topology)
+    }
+
+    fn producer_fresh_panes_with_cause(cause: FetchFoldCause) -> Self {
         Self {
             mode: FetchMode::ProducerFreshPanes,
             min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
             published_frame_hint: false,
             force_fold: false,
-            causes: FetchCauseSet::one(FetchFoldCause::Topology),
+            causes: FetchCauseSet::one(cause),
         }
     }
 
@@ -979,6 +969,11 @@ impl FetchRequest {
     #[cfg(test)]
     pub(super) fn is_producer_fresh_panes(self) -> bool {
         matches!(self.mode, FetchMode::ProducerFreshPanes)
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_cause(self, cause: FetchFoldCause) -> bool {
+        self.causes.iter().any(|candidate| candidate == cause)
     }
 
     #[cfg(test)]

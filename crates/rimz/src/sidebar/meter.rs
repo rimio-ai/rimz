@@ -49,7 +49,7 @@ struct FetchFoldCounts {
 #[derive(Clone, Debug)]
 struct FetchFoldMeter {
     since_ms: u64,
-    counts: [FetchFoldCounts; 8],
+    counts: [FetchFoldCounts; FetchFoldCause::COUNT],
 }
 
 impl FetchFoldMeter {
@@ -60,7 +60,7 @@ impl FetchFoldMeter {
         fold_ms: u64,
     ) {
         for cause in causes {
-            let counts = &mut self.counts[fetch_fold_cause_index(cause)];
+            let counts = &mut self.counts[cause.index()];
             match outcome {
                 FetchFoldOutcome::MemoSkip => counts.memo_skips += 1,
                 FetchFoldOutcome::Full => counts.full_folds += 1,
@@ -83,7 +83,7 @@ impl FetchFoldMeter {
         if interval_ms < FETCH_FOLD_REPORT_INTERVAL_MS {
             return None;
         }
-        let causes = FETCH_FOLD_CAUSES
+        let causes = FetchFoldCause::ALL
             .into_iter()
             .zip(std::mem::take(&mut self.counts))
             .filter_map(|(cause, counts)| {
@@ -104,24 +104,6 @@ impl FetchFoldMeter {
             causes,
         })
     }
-}
-
-const FETCH_FOLD_CAUSES: [FetchFoldCause; 8] = [
-    FetchFoldCause::StoreDelta,
-    FetchFoldCause::Topology,
-    FetchFoldCause::Metrics,
-    FetchFoldCause::Presence,
-    FetchFoldCause::Backstop,
-    FetchFoldCause::WatchTransition,
-    FetchFoldCause::HardRefresh,
-    FetchFoldCause::Recovery,
-];
-
-fn fetch_fold_cause_index(cause: FetchFoldCause) -> usize {
-    FETCH_FOLD_CAUSES
-        .iter()
-        .position(|candidate| *candidate == cause)
-        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

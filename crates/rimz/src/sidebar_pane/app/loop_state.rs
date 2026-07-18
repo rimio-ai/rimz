@@ -560,11 +560,18 @@ impl LoopState {
                     ),
                 }
             }
-            SidebarEvent::StoreDelta { .. } => fetch.request_or_defer(
-                FetchRequest::store_delta(),
-                self.identity_free_fetch_immediate(),
-                crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
-            ),
+            SidebarEvent::StoreDelta { .. } => {
+                let request = if requests_verification {
+                    FetchRequest::store_delta_with_fresh_panes()
+                } else {
+                    FetchRequest::store_delta()
+                };
+                fetch.request_or_defer(
+                    request,
+                    self.identity_free_fetch_immediate(),
+                    crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
+                )
+            }
             event @ SidebarEvent::Notify { .. } => {
                 self.handle_notification(config, terminal, event, diag);
             }
@@ -577,8 +584,8 @@ impl LoopState {
             event if event.is_overlay() => {
                 self.handle_overlay_event(config, fetch, event, sent_at_ms, anim_start, diag);
             }
-            // Identity-free nudges — `StoreDelta`, `PanesChanged`, a
-            // `PaneOpened` without a command: nothing to fuse, so refetch,
+            // Identity-free nudges — `PanesChanged`, a `PaneOpened` without a
+            // command: nothing to fuse, so refetch,
             // bypassing the pane cache when the event says topology moved.
             _ => {
                 fetch.request_or_defer(

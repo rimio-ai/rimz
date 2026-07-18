@@ -95,6 +95,27 @@ pub enum FetchFoldCause {
     Recovery,
 }
 
+impl FetchFoldCause {
+    pub const ALL: [Self; 8] = [
+        Self::StoreDelta,
+        Self::Topology,
+        Self::Metrics,
+        Self::Presence,
+        Self::Backstop,
+        Self::WatchTransition,
+        Self::HardRefresh,
+        Self::Recovery,
+    ];
+    pub const COUNT: usize = Self::ALL.len();
+
+    pub fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .expect("fetch fold cause is present in FetchFoldCause::ALL")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FetchFoldCauseStats {
     pub cause: FetchFoldCause,

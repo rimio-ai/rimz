@@ -692,6 +692,44 @@ fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
 }
 
 #[test]
+fn lifecycle_store_delta_preserves_fresh_pane_verification() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+
+    for signal in [
+        crate::agents::LifecycleSignal::Registered.tag(),
+        crate::agents::LifecycleSignal::Ended.tag(),
+    ] {
+        let (_dir, mut state) = loop_state(&ws);
+        state.last_known_elder = true;
+        let (mut fetch, request_rx) = fetch_dispatcher();
+
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                SidebarEvent::StoreDelta {
+                    event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
+                    agent_signal: Some(signal.to_owned()),
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
+
+        let request = request_rx.try_recv().expect("immediate lifecycle fetch");
+        assert!(request.is_producer_fresh_panes(), "signal: {signal}");
+        assert!(
+            request.has_cause(crate::diag::record::FetchFoldCause::StoreDelta),
+            "signal: {signal}"
+        );
+    }
+}
+
+#[test]
 fn repeated_hidden_metrics_publications_fold_once_at_the_background_deadline() {
     let ws = workspace();
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
