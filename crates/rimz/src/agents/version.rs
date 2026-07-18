@@ -78,6 +78,16 @@ impl FromStr for CliVersion {
 /// Run `<binary> --version` with captured stdio. Any failure is an absent
 /// version, not account truth or a launch precondition on its own.
 pub(crate) fn probe_cli_version(binary: impl AsRef<OsStr>) -> Option<String> {
+    probe_cli_version_with(binary, conventional_cli_version)
+}
+
+/// Run `<binary> --version` and pass its two output streams to the adapter's
+/// parser. Keeping the streams separate lets branded CLIs recognize their own
+/// banner without scanning unrelated release or upgrade prose.
+pub(crate) fn probe_cli_version_with(
+    binary: impl AsRef<OsStr>,
+    parse: impl FnOnce(&str, &str) -> Option<String>,
+) -> Option<String> {
     let mut command = Command::new(binary);
     command.arg("--version").stdin(Stdio::null());
     let output = crate::proc::run_bounded_output(
@@ -88,7 +98,7 @@ pub(crate) fn probe_cli_version(binary: impl AsRef<OsStr>) -> Option<String> {
     if output.timed_out || !output.status.success() {
         return None;
     }
-    cli_version_from_streams(
+    parse(
         &String::from_utf8_lossy(&output.stdout),
         &String::from_utf8_lossy(&output.stderr),
     )
@@ -97,20 +107,12 @@ pub(crate) fn probe_cli_version(binary: impl AsRef<OsStr>) -> Option<String> {
 /// Pick the version from a `--version` probe's two streams. Scan both for the
 /// first parseable version token so older Pi releases that used stderr remain
 /// compatible with current releases that use stdout.
-fn cli_version_from_streams(stdout: &str, stderr: &str) -> Option<String> {
-    normalize_cli_version_output(&format!("{stdout}\n{stderr}"))
-}
-
-fn normalize_cli_version_output(output: &str) -> Option<String> {
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    trimmed
+pub(crate) fn conventional_cli_version(stdout: &str, stderr: &str) -> Option<String> {
+    stdout
         .split_whitespace()
+        .chain(stderr.split_whitespace())
         .find_map(|token| token.parse::<CliVersion>().ok())
         .map(|version| version.to_string())
-        .or_else(|| Some(trimmed.to_owned()))
 }
 
 #[cfg(test)]
@@ -144,27 +146,22 @@ mod tests {
     }
 
     #[test]
-    fn picks_version_from_either_stream_and_falls_back_to_raw() {
+    fn picks_conventional_version_from_either_stream_and_abstains_on_raw_prose() {
         // Claude and Codex print `--version` to stdout; the first parseable token wins.
         assert_eq!(
-            cli_version_from_streams("2.1.173 (Claude Code)\n", "").as_deref(),
+            conventional_cli_version("2.1.173 (Claude Code)\n", "").as_deref(),
             Some("2.1.173")
         );
         assert_eq!(
-            cli_version_from_streams("codex-cli 0.139.0\n", "").as_deref(),
+            conventional_cli_version("codex-cli 0.139.0\n", "").as_deref(),
             Some("0.139.0")
         );
         // Older Pi releases printed `--version` to stderr; keep accepting it.
         assert_eq!(
-            cli_version_from_streams("", "0.78.1\n").as_deref(),
+            conventional_cli_version("", "0.78.1\n").as_deref(),
             Some("0.78.1")
         );
-        // No parseable token falls back to the trimmed raw string; nothing at all
-        // is an absent version.
-        assert_eq!(
-            cli_version_from_streams("not a version", "").as_deref(),
-            Some("not a version")
-        );
-        assert_eq!(cli_version_from_streams("", ""), None);
+        assert_eq!(conventional_cli_version("not a version", ""), None);
+        assert_eq!(conventional_cli_version("", ""), None);
     }
 }

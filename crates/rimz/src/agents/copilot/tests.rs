@@ -7,6 +7,27 @@ use crate::agents::{AgentErr, AgentHookClass, AgentStatus, LaunchPreset, PresetE
 use serde_json::json;
 
 #[test]
+fn version_parser_ignores_the_copilot_update_notice() {
+    assert_eq!(
+        CopilotAdapter
+            .parse_version(
+                "GitHub Copilot CLI 1.0.71.\nA newer version is available: 1.0.72\n",
+                "",
+            )
+            .as_deref(),
+        Some("1.0.71")
+    );
+    assert_eq!(
+        CopilotAdapter.parse_version("A newer version is available: 1.0.72", ""),
+        None
+    );
+    assert_eq!(
+        CopilotAdapter.parse_version("Copilot CLI 1.0.71.", ""),
+        None
+    );
+}
+
+#[test]
 fn account_usage_surface_is_declared_statically() {
     assert!(
         CopilotAdapter

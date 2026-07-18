@@ -295,6 +295,10 @@ impl AgentAdapter for CursorAdapter {
         &CURSOR_DESCRIPTOR
     }
 
+    fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
+        parse_cursor_version(stdout).or_else(|| parse_cursor_version(stderr))
+    }
+
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
         classify_catalog_hook(CURSOR_HOOKS, event_name, None)
     }
@@ -571,6 +575,30 @@ impl AgentAdapter for CursorAdapter {
     fn status_line_invocation(&self) -> super::StatusLineInvocation {
         super::StatusLineInvocation::DirectArgv
     }
+}
+
+fn parse_cursor_version(output: &str) -> Option<String> {
+    let token = output
+        .lines()
+        .find(|line| !line.trim().is_empty())?
+        .split_whitespace()
+        .next()?;
+    let (date, hash) = token.split_once('-')?;
+    let mut parts = date.split('.');
+    let (year, month, day) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some()
+        || year.len() != 4
+        || month.len() != 2
+        || day.len() != 2
+        || ![year, month, day]
+            .into_iter()
+            .all(|part| part.chars().all(|ch| ch.is_ascii_digit()))
+        || hash.is_empty()
+        || !hash.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(token.to_owned())
 }
 
 impl CursorAdapter {

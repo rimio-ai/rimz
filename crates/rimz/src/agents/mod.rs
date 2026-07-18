@@ -1218,8 +1218,14 @@ pub trait AgentAdapter: Send + Sync {
     /// Probe the agent binary's version out-of-band. Producer-only and
     /// display-only: a failure leaves the provider header without a version,
     /// never affecting account truth, cache freshness, or store correctness.
+    fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
+        version::conventional_cli_version(stdout, stderr)
+    }
+
     fn probe_version(&self) -> Option<String> {
-        probe_descriptor_version(self.descriptor())
+        probe_descriptor_version(self.descriptor(), &|stdout, stderr| {
+            self.parse_version(stdout, stderr)
+        })
     }
 
     /// Every full-history spending source this agent has on disk, fleet-wide —

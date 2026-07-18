@@ -304,6 +304,10 @@ impl AgentAdapter for CopilotAdapter {
         &COPILOT_DESCRIPTOR
     }
 
+    fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
+        parse_copilot_version(stdout).or_else(|| parse_copilot_version(stderr))
+    }
+
     #[cfg(test)]
     fn context_cost_fixture(&self) -> Option<super::ContextCostFixture> {
         Some(super::ContextCostFixture {
@@ -672,6 +676,19 @@ impl AgentAdapter for CopilotAdapter {
     fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
         account_usage::probe_usage()
     }
+}
+
+fn parse_copilot_version(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let token = line
+            .trim()
+            .strip_prefix("GitHub Copilot CLI ")?
+            .strip_suffix('.')?;
+        token
+            .parse::<super::version::CliVersion>()
+            .ok()
+            .map(|version| version.to_string())
+    })
 }
 
 fn local_context_refresh_with_statusline(

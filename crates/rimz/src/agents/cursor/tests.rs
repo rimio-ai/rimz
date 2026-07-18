@@ -11,6 +11,21 @@ use serde_json::json;
 use sha2::Sha256;
 use std::time::{Duration, Instant};
 
+#[test]
+fn version_parser_preserves_the_cursor_date_build_token() {
+    assert_eq!(
+        CursorAdapter
+            .parse_version("2026.07.09-a3815c0\n", "")
+            .as_deref(),
+        Some("2026.07.09-a3815c0")
+    );
+    assert_eq!(CursorAdapter.parse_version("2026.7.9-a3815c0", ""), None);
+    assert_eq!(
+        CursorAdapter.parse_version("Cursor release 2026.07.09-a3815c0", ""),
+        None
+    );
+}
+
 struct CursorAskFixture {
     _dir: tempfile::TempDir,
     home: PathBuf,

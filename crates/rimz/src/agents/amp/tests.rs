@@ -6,6 +6,27 @@ use crate::agents::{
 use serde_json::json;
 
 #[test]
+fn version_parser_keeps_the_amp_build_token_only() {
+    assert_eq!(
+        AmpAdapter
+            .parse_version(
+                "0.0.1783946745-g8c4c0a (released 2026-07-13T12:45:45.000Z)\n",
+                "",
+            )
+            .as_deref(),
+        Some("0.0.1783946745-g8c4c0a")
+    );
+    assert_eq!(
+        AmpAdapter.parse_version("release 0.0.1783946745-g8c4c0a", ""),
+        None
+    );
+    assert_eq!(
+        AmpAdapter.parse_version("0.0.1-gnope (released today)", ""),
+        None
+    );
+}
+
+#[test]
 fn launch_resume_and_preset_commands_match_amp_cli() {
     assert_eq!(
         AmpAdapter.launch_command(&[], None),

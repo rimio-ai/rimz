@@ -8,16 +8,20 @@ use std::path::{Path, PathBuf};
 use super::descriptor::AgentDescriptor;
 use super::{AgentErr, Result, version};
 
-pub(crate) fn probe_descriptor_version(descriptor: &AgentDescriptor) -> Option<String> {
-    probe_descriptor_version_with_locator(descriptor, locate_binary)
+pub(crate) fn probe_descriptor_version(
+    descriptor: &AgentDescriptor,
+    parse: &dyn Fn(&str, &str) -> Option<String>,
+) -> Option<String> {
+    probe_descriptor_version_with_locator(descriptor, parse, locate_binary)
 }
 
 fn probe_descriptor_version_with_locator(
     descriptor: &AgentDescriptor,
+    parse: &dyn Fn(&str, &str) -> Option<String>,
     locate: impl FnOnce(&AgentDescriptor) -> Option<PathBuf>,
 ) -> Option<String> {
     let binary = locate(descriptor)?;
-    version::probe_cli_version(binary)
+    version::probe_cli_version_with(binary, parse)
 }
 
 /// Resolve an agent's binary on this machine: `$PATH` first, then the
@@ -122,10 +126,15 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&bin, permissions).unwrap();
 
-        let version = probe_descriptor_version_with_locator(opencode, |descriptor| {
-            binary_in_install_dirs(descriptor, home.path())
-        });
+        let version = probe_descriptor_version_with_locator(
+            opencode,
+            &|stdout, stderr| {
+                let version = version::conventional_cli_version(stdout, stderr)?;
+                Some(format!("selected:{version}"))
+            },
+            |descriptor| binary_in_install_dirs(descriptor, home.path()),
+        );
 
-        assert_eq!(version.as_deref(), Some("1.17.7"));
+        assert_eq!(version.as_deref(), Some("selected:1.17.7"));
     }
 }

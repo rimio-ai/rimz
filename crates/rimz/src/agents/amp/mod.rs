@@ -234,6 +234,10 @@ impl AgentAdapter for AmpAdapter {
         &AMP_DESCRIPTOR
     }
 
+    fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
+        parse_amp_version(stdout).or_else(|| parse_amp_version(stderr))
+    }
+
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
         let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
         classify_catalog_hook(AMP_HOOKS, event_name, ask_kind)
@@ -444,6 +448,18 @@ impl AgentAdapter for AmpAdapter {
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
     }
+}
+
+fn parse_amp_version(output: &str) -> Option<String> {
+    let line = output.lines().find(|line| !line.trim().is_empty())?.trim();
+    let (token, annotation) = line.split_once(' ')?;
+    if !annotation.starts_with("(released ") || !annotation.ends_with(')') {
+        return None;
+    }
+    let (base, hash) = token.split_once("-g")?;
+    let base = base.parse::<super::version::CliVersion>().ok()?;
+    (!hash.is_empty() && hash.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .then(|| format!("{base}-g{hash}"))
 }
 
 fn amp_plugin_path() -> Result<PathBuf> {
