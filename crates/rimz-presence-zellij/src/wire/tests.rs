@@ -122,6 +122,45 @@ fn changed_wake_argv_carries_workspace_and_topology() {
 }
 
 #[test]
+fn large_topology_is_chunked_and_reassembles_byte_identical() {
+    let topology = format!(r#"{{"panes":"{}é"}}"#, "x".repeat(131_072));
+    let argv = wake_argv(&ctx(), WakeRequest::Changed, Some(&topology)).expect("wake argv");
+    let chunks = argv
+        .windows(2)
+        .filter(|pair| pair[0] == "--topology")
+        .map(|pair| pair[1].as_str())
+        .collect::<Vec<_>>();
+
+    assert!(chunks.len() > 1);
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| chunk.len() <= TOPOLOGY_ARG_CHUNK_BYTES)
+    );
+    assert_eq!(chunks.concat(), topology);
+}
+
+#[test]
+fn oversized_topology_keeps_wake_without_topology_arguments() {
+    let topology = "x".repeat(TOPOLOGY_MAX_BYTES + 1);
+    let argv = wake_argv(&ctx(), WakeRequest::Changed, Some(&topology)).expect("wake argv");
+
+    assert!(!publishes_topology(&argv));
+    assert_eq!(
+        argv,
+        strings(&[
+            "/bin/rimz",
+            "sidebar",
+            "wake",
+            "--reason",
+            "panes-changed",
+            "--workspace-id",
+            "workspace-1",
+        ])
+    );
+}
+
+#[test]
 fn alive_wake_argv_carries_telemetry_before_session_name() {
     assert_eq!(
         wake_argv(

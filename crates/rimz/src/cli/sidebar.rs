@@ -11,7 +11,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
 use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
@@ -194,8 +194,8 @@ struct WakeArgs {
     focused_pane_ids: Vec<String>,
     #[arg(long = "unfocused-pane-id")]
     unfocused_pane_ids: Vec<String>,
-    #[arg(long = "topology", hide = true)]
-    topology: Option<String>,
+    #[arg(long = "topology", hide = true, action = ArgAction::Append)]
+    topology: Vec<String>,
     #[arg(long, hide = true)]
     plugin_mem_pages: Option<u64>,
     #[arg(long, hide = true)]
@@ -420,11 +420,13 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                         .filter(|raw| !raw.is_empty())
                         .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
                         .collect(),
-                    topology: topology.and_then(|raw| match serde_json::from_str(&raw) {
-                        Ok(cache) => Some(cache),
-                        Err(err) => {
-                            tracing::debug!(error = %err, "presence poke: topology payload parse failed");
-                            None
+                    topology: (!topology.is_empty()).then(|| topology.concat()).and_then(|raw| {
+                        match serde_json::from_str(&raw) {
+                            Ok(cache) => Some(cache),
+                            Err(err) => {
+                                tracing::debug!(error = %err, "presence poke: topology payload parse failed");
+                                None
+                            }
                         }
                     }),
                     telemetry: plugin_mem_pages.map(|pages| ZellijPluginTelemetry {

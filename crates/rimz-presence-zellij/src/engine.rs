@@ -555,9 +555,6 @@ impl Engine {
             }
             return Vec::new();
         }
-        if published_topology {
-            self.stale_writer_rejections = 0;
-        }
         self.wake_fork_failures = self.wake_fork_failures.saturating_add(1);
         if self.wake_fork_failures < WAKE_FORK_FALLBACK_THRESHOLD || self.rimz_bin.is_none() {
             return Vec::new();

@@ -1003,6 +1003,12 @@ fn repeated_stale_writer_rejections_retire_the_losing_plugin() {
             .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 20, &host)
             .is_empty()
     );
+    assert!(
+        engine
+            .on_run_command_result(Some(2), true, 25, &host)
+            .is_empty(),
+        "a failed topology fork preserves the stale-writer rejection streak",
+    );
     assert_eq!(
         engine.on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 30, &host),
         vec![Effect::Unsubscribe]

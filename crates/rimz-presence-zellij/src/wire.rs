@@ -37,6 +37,14 @@ pub const STALE_WRITER_EXIT_CODE: i32 = 73;
 /// reset the consecutive stale-writer rejection counter.
 pub const TOPOLOGY_PUBLISH_CONTEXT: &str = "rimz_topology_publish";
 
+/// Maximum bytes carried in one topology argv value. Linux limits each argv
+/// entry independently, so topology travels as repeated bounded arguments.
+pub const TOPOLOGY_ARG_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Topologies beyond this ceiling skip publication while the wake's stamp and
+/// telemetry still reach the host.
+pub const TOPOLOGY_MAX_BYTES: usize = 1024 * 1024;
+
 pub fn publishes_topology(argv: &[String]) -> bool {
     argv.iter().any(|arg| arg == "--topology")
 }
@@ -359,9 +367,17 @@ pub fn wake_argv(
             }
         }
     }
-    if let Some(topology) = topology_json {
-        argv.push("--topology".to_owned());
-        argv.push(topology.to_owned());
+    if let Some(topology) = topology_json.filter(|topology| topology.len() <= TOPOLOGY_MAX_BYTES) {
+        let mut start = 0;
+        while start < topology.len() {
+            let mut end = (start + TOPOLOGY_ARG_CHUNK_BYTES).min(topology.len());
+            while !topology.is_char_boundary(end) {
+                end -= 1;
+            }
+            argv.push("--topology".to_owned());
+            argv.push(topology[start..end].to_owned());
+            start = end;
+        }
     }
     Some(argv)
 }
