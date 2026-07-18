@@ -466,15 +466,14 @@ mod tests {
         assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
         assert_eq!(snapshot.work.candidate_parses, 1);
 
-        writeln!(
-            fs::OpenOptions::new()
-                .append(true)
-                .open(project.join(format!("{id}.jsonl")))
-                .unwrap(),
-            "\n{}",
-            r#"{"timestamp":"2025-01-01T00:01:00Z","cwd":"/workspace/project"}"#,
-        )
-        .unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(project.join(format!("{id}.jsonl")))
+            .unwrap()
+            .write_all(
+                b"\n{\"timestamp\":\"2025-01-01T00:01:00Z\",\"cwd\":\"/workspace/project\"}\n",
+            )
+            .unwrap();
         assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
         assert_eq!(snapshot.work.full_scans, 1);
         assert_eq!(snapshot.work.candidate_parses, 2);

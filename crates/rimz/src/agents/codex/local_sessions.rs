@@ -743,12 +743,12 @@ mod tests {
         assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
         assert_eq!(snapshot.work.header_reads, 1);
 
-        writeln!(
-            fs::OpenOptions::new().append(true).open(path).unwrap(),
-            "\n{}",
-            r#"{"type":"event_msg"}"#,
-        )
-        .unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"\n{\"type\":\"event_msg\"}\n")
+            .unwrap();
         assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
         assert_eq!(snapshot.work.full_scans, 1);
         assert_eq!(snapshot.work.header_reads, 2);

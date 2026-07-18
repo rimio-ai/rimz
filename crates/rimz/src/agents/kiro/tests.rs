@@ -234,15 +234,14 @@ fn discovery_cache_reuses_sessions_and_reparses_one_message_log() {
     );
     assert_eq!(cache.work(), (1, 1));
 
-    writeln!(
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(messages)
-            .unwrap(),
-        "\n{}",
-        r#"{"id":"event-2","timestamp":"2025-01-01T00:01:00Z","payload":{"type":"user","content":"changed"}}"#,
-    )
-    .unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(messages)
+        .unwrap()
+        .write_all(
+            b"\n{\"id\":\"event-2\",\"timestamp\":\"2025-01-01T00:01:00Z\",\"payload\":{\"type\":\"user\",\"content\":\"changed\"}}\n",
+        )
+        .unwrap();
     assert_eq!(
         cache
             .refresh(dir.path(), &[workspace.as_path()], start)
