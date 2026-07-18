@@ -5,11 +5,12 @@ use super::*;
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
 pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
-    let entry = task_catalog(globals)?
+    let task = task_catalog(globals)?
         .for_run(name)
-        .map(|task| task.entry.clone())
+        .cloned()
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
-    let lock_state = probe_run_lock(name, &entry)?;
+    let entry = task.entry();
+    let lock_state = probe_run_lock(name, entry)?;
     if next_stop_action(&lock_state, false, false, false) == StopAction::Done {
         writeln!(ui::out(), "loop `{name}`: no active run")?;
         return Ok(());
@@ -26,7 +27,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
         crate::cli::supervised::stop_supervised_run(&workspace, &store, globals, record)?;
     }
 
-    if wait_for_run_lock_release(name, &entry, STOP_GRACE)? {
+    if wait_for_run_lock_release(name, entry, STOP_GRACE)? {
         write_stopped(name, run.as_ref(), false)?;
         return Ok(());
     }
@@ -44,14 +45,14 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
 
     if signal_error.is_none()
         && let Some(info) = holder
-        && wait_for_run_lock_release(name, &entry, STOP_GRACE)?
+        && wait_for_run_lock_release(name, entry, STOP_GRACE)?
     {
-        append_stopped_record(name, &entry, info, run.as_ref());
+        append_stopped_record(name, entry, info, run.as_ref());
         write_stopped(name, run.as_ref(), true)?;
         return Ok(());
     }
 
-    let lock = run_lock_path(name, &entry)?;
+    let lock = run_lock_path(name, entry)?;
     let holder = holder
         .map(|info| format!(" (pid {})", info.pid))
         .unwrap_or_default();

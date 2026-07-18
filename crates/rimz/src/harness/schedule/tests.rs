@@ -164,6 +164,42 @@ fn task_action_kind_predicates_cover_each_shape() {
 }
 
 #[test]
+fn task_shape_keeps_action_reset_identity_and_timing_independent() {
+    let mut conflicting = reset_entry(Some("claude-ping"));
+    conflicting.cron = Some("0 7 * * *".to_owned());
+    let shape = TaskShape::compile("primer", &conflicting);
+    assert_eq!(
+        shape.action(),
+        Ok(&TaskAction::Spawn("claude-ping".to_owned()))
+    );
+    assert!(matches!(
+        shape.schedule(),
+        Err(ScheduleErr::TimeConflict { .. })
+    ));
+    assert_eq!(
+        shape.reset_ping_kind().map(AgentKind::as_str),
+        Some("claude")
+    );
+
+    for (every, agent, expected_kind) in [
+        ("reset", "claude-ping", Some("claude")),
+        ("Reset", "claude-ping", None),
+        (" reset ", "claude-ping", None),
+        ("reset", "amp-ping", None),
+    ] {
+        let mut entry = reset_entry(Some(agent));
+        entry.every = Some(every.to_owned());
+        assert_eq!(
+            TaskShape::compile("primer", &entry)
+                .reset_ping_kind()
+                .map(AgentKind::as_str),
+            expected_kind,
+            "{every} {agent}"
+        );
+    }
+}
+
+#[test]
 fn surplus_gate_values_parse_and_reject_unsafe_inputs() {
     assert_eq!(parse_surplus("1.5x"), Ok(1.5));
     assert_eq!(parse_surplus(" 2X "), Ok(2.0));
@@ -337,12 +373,31 @@ fn seconds_before(ts: Timestamp, seconds: i64) -> Timestamp {
     Timestamp::from_second(ts.as_second() - seconds).expect("shifted timestamp")
 }
 
+fn evaluate_timing(
+    name: &str,
+    entry: &TaskEntry,
+    blocked: Option<crate::trust::TrustState>,
+    last_fire: Option<Timestamp>,
+    pause: Option<&pauses::PauseEntry>,
+    now: &Zoned,
+    reset_signal: ResetSignal,
+) -> TaskTiming {
+    TaskTiming::evaluate(
+        &parse_schedule(name, entry),
+        blocked,
+        last_fire,
+        pause,
+        now,
+        reset_signal,
+    )
+}
+
 #[test]
 fn task_timing_classifies_runtime_schedule_edges() {
     let now = zdt(2026, 6, 24, 8, 10, 0);
     let interval = entry(None, Some("15m"), None);
     assert!(matches!(
-        TaskTiming::evaluate(
+        evaluate_timing(
             "task",
             &interval,
             None,
@@ -355,7 +410,7 @@ fn task_timing_classifies_runtime_schedule_edges() {
         TaskTimingState::Upcoming(_)
     ));
     assert!(matches!(
-        TaskTiming::evaluate(
+        evaluate_timing(
             "task",
             &interval,
             None,
@@ -368,7 +423,7 @@ fn task_timing_classifies_runtime_schedule_edges() {
         TaskTimingState::Due(_)
     ));
     assert_eq!(
-        TaskTiming::evaluate(
+        evaluate_timing(
             "task",
             &interval,
             None,
@@ -383,7 +438,7 @@ fn task_timing_classifies_runtime_schedule_edges() {
 
     let reset = reset_entry(Some("claude-ping"));
     assert_eq!(
-        TaskTiming::evaluate(
+        evaluate_timing(
             "task",
             &reset,
             None,
@@ -398,7 +453,7 @@ fn task_timing_classifies_runtime_schedule_edges() {
 
     let invalid = entry(None, None, None);
     assert_eq!(
-        TaskTiming::evaluate(
+        evaluate_timing(
             "task",
             &invalid,
             None,
@@ -421,7 +476,7 @@ fn task_timing_precedence_is_blocked_then_pause_then_schedule() {
         strikes: Some(3),
     };
     assert_eq!(
-        TaskTiming::evaluate(
+        evaluate_timing(
             "task",
             &invalid,
             Some(crate::trust::TrustState::Stale),
@@ -434,7 +489,7 @@ fn task_timing_precedence_is_blocked_then_pause_then_schedule() {
         TaskTimingState::Blocked(crate::trust::TrustState::Stale)
     );
     assert_eq!(
-        TaskTiming::evaluate(
+        evaluate_timing(
             "task",
             &invalid,
             None,
@@ -455,7 +510,7 @@ fn task_timing_precedence_is_blocked_then_pause_then_schedule() {
         strikes: None,
     };
     assert_eq!(
-        TaskTiming::evaluate(
+        evaluate_timing(
             "task",
             &invalid,
             None,
@@ -477,7 +532,7 @@ fn task_timing_uses_expired_pause_as_last_fire_edge() {
         until: Some(seconds_before(now.timestamp(), 5 * 60)),
         strikes: None,
     };
-    let timing = TaskTiming::evaluate(
+    let timing = evaluate_timing(
         "task",
         &interval,
         None,
@@ -529,7 +584,7 @@ fn task_timing_due_matches_schedule_rules_at_occurrence_edges() {
         let parsed = parse_schedule(name, &entry).expect("parsed schedule");
         assert!(parsed.schedule.due(last_fire, &now, reset_signal), "{name}");
         assert!(matches!(
-            TaskTiming::evaluate(
+            evaluate_timing(
                 name,
                 &entry,
                 None,

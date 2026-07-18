@@ -26,6 +26,13 @@ pub use pane_probe::{
     in_pane_agent_start_for_root, in_pane_agent_starts,
 };
 
+/// Return at most the final `cap` bytes, decoding an initial partial codepoint lossily.
+#[doc(hidden)]
+pub fn tail_output(bytes: &[u8], cap: usize) -> String {
+    let start = bytes.len().saturating_sub(cap);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
 #[cfg(target_os = "macos")]
 pub use macos::{
     argv, children, clk_tck, cmdline, comm, comm_and_ppid, cwd, env_var, environ, exe_path,
@@ -879,6 +886,14 @@ pub fn clk_tck() -> u64 {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_tail_caps_bytes_and_preserves_lossy_boundary_behavior() {
+        assert_eq!(tail_output(b"abcdef", 4), "cdef");
+        assert_eq!(tail_output("éabc".as_bytes(), 4), "�abc");
+        assert_eq!(tail_output(b"abc", 0), "");
+        assert_eq!(tail_output(b"abc", 8), "abc");
+    }
 
     #[test]
     fn parse_comm_trims_trailing_newline() {

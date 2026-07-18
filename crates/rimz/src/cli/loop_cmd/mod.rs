@@ -35,8 +35,7 @@ use rimz::harness::schedule::runner::{
     CheckEcho, ResolvedTaskSpec, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
     StopAction, newest_active_run, newest_active_run_for_entry, next_stop_action, parse_mode,
     parse_task_timeout, ping_kind_supported, preflight_entry, probe_run_lock, resolve_task_spec,
-    run_lock_path, signal_run_lock_holder, tail_output, wait_for_run_lock_release,
-    window_reset_signal,
+    run_lock_path, signal_run_lock_holder, wait_for_run_lock_release, window_reset_signal,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -278,8 +277,8 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
 
 // ---- add / remove -----------------------------------------------------------
 
-fn task_subject(entry: &TaskEntry) -> String {
-    TaskAction::from_entry("display", entry)
+fn task_subject(task: &LoadedTask) -> String {
+    task.action()
         .map(|action| action.subject().to_owned())
         .unwrap_or_else(|_| "<invalid>".to_owned())
 }
@@ -304,34 +303,24 @@ fn task_catalog(globals: &GlobalFlags) -> Result<TaskCatalog> {
     TaskCatalog::load(project_root.as_deref())
 }
 
-fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<(TaskEntry, TaskSource)>> {
-    Ok(task_catalog(globals)?
-        .visible()
-        .get(name)
-        .map(|task| (task.entry.clone(), task.source)))
+fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {
+    Ok(task_catalog(globals)?.visible().get(name).cloned())
 }
 
 fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
     RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
 }
 
-fn reset_signal_for(entry: &TaskEntry, now: Timestamp) -> schedule::ResetSignal {
-    if entry.every.as_deref() != Some("reset") {
-        return schedule::ResetSignal::Unknown;
-    }
-    let Some(kind) = entry
-        .agent
-        .as_deref()
-        .and_then(rimz::harness::spec::ping_kind)
-    else {
+fn reset_signal_for(task: &LoadedTask, now: Timestamp) -> schedule::ResetSignal {
+    let Some(kind) = task.reset_ping_kind() else {
         return schedule::ResetSignal::Unknown;
     };
-    window_reset_signal(entry, kind, now).unwrap_or(schedule::ResetSignal::Unknown)
+    window_reset_signal(task.entry(), kind.as_str(), now).unwrap_or(schedule::ResetSignal::Unknown)
 }
 
 fn observe_task_timing(
     name: &str,
-    entry: &TaskEntry,
+    task: &LoadedTask,
     blocked: Option<TrustState>,
     stamps: &BTreeMap<String, Timestamp>,
     pause: Option<&PauseEntry>,
@@ -340,25 +329,16 @@ fn observe_task_timing(
 ) -> schedule::TaskTiming {
     let last_fire = stamps.get(name).copied();
     let active_pause = pause.is_some_and(|pause| pauses::is_active(pause, now_zoned.timestamp()));
-    let valid_reset_shape = entry.cron.is_none()
-        && entry.at.is_none()
-        && entry.every.as_deref() == Some("reset")
-        && entry
-            .agent
-            .as_deref()
-            .and_then(rimz::harness::spec::ping_kind)
-            .is_some();
     let reset_signal = if (retain_overlaid_next || (blocked.is_none() && !active_pause))
         && last_fire.is_some()
-        && valid_reset_shape
+        && task.reset_ping_kind().is_some()
     {
-        reset_signal_for(entry, now_zoned.timestamp())
+        reset_signal_for(task, now_zoned.timestamp())
     } else {
         schedule::ResetSignal::Unknown
     };
     schedule::TaskTiming::evaluate(
-        name,
-        entry,
+        task.schedule(),
         blocked,
         last_fire,
         pause,
@@ -369,14 +349,14 @@ fn observe_task_timing(
 
 fn task_next_fire_text(
     name: &str,
-    entry: &TaskEntry,
+    task: &LoadedTask,
     pause: Option<&PauseEntry>,
     now: Timestamp,
 ) -> Option<String> {
-    let runtime = runtime_for_root(&entry.resolved_root())?;
+    let runtime = runtime_for_root(&task.entry().resolved_root())?;
     let stamps = schedule::last_stamps(&runtime);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    observe_task_timing(name, entry, None, &stamps, pause, &now_zoned, false)
+    observe_task_timing(name, task, None, &stamps, pause, &now_zoned, false)
         .next_timestamp()
         .map(|next| ui::rel_until(next, now))
 }

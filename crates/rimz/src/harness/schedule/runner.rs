@@ -27,7 +27,7 @@ use crate::agents::{
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use crate::harness::assist_log::AssistWindowReset;
 use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
-use crate::harness::schedule::catalog::{self, TaskCatalog};
+use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     PingWindowOutcome, RunTransition,
@@ -294,6 +294,7 @@ pub struct TaskFire<'a> {
     entry: TaskEntry,
     catalog: &'a TaskCatalog,
     action: Option<TaskAction>,
+    ephemeral: bool,
     context: Option<FireContext>,
     mode: LoopRunMode,
     keep: bool,
@@ -314,7 +315,7 @@ impl<'a> TaskFire<'a> {
     )]
     pub fn new(
         name: impl Into<String>,
-        entry: TaskEntry,
+        task: LoadedTask,
         catalog: &'a TaskCatalog,
         mode: LoopRunMode,
         keep: bool,
@@ -324,12 +325,14 @@ impl<'a> TaskFire<'a> {
         started: Instant,
     ) -> Result<Self> {
         let name = name.into();
-        let action = TaskAction::from_entry(&name, &entry)?;
+        let action = task.action().cloned().map_err(Clone::clone)?;
+        let entry = task.entry().clone();
         Ok(Self {
             name,
             entry,
             catalog,
             action: Some(action),
+            ephemeral: task.is_ephemeral(),
             context: None,
             mode,
             keep,
@@ -582,7 +585,7 @@ impl<'a> TaskFire<'a> {
             .as_ref()
             .is_some_and(|context| context.action.is_check_only())
         {
-            if self.mode == LoopRunMode::Scheduled && catalog::is_ephemeral(&self.entry) {
+            if self.mode == LoopRunMode::Scheduled && self.ephemeral {
                 self.catalog.consume_scheduled(&self.name)?;
             }
             let result = check_only_result(&outcome);
@@ -780,7 +783,7 @@ impl<'a> TaskFire<'a> {
     }
 
     fn consume_ephemeral(&self) -> Result<()> {
-        if self.mode == LoopRunMode::Scheduled && catalog::is_ephemeral(&self.entry) {
+        if self.mode == LoopRunMode::Scheduled && self.ephemeral {
             self.catalog.consume_scheduled(&self.name)?;
         }
         Ok(())
@@ -1040,16 +1043,12 @@ pub fn ping_kind_supported(kind: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn preflight_entry(
-    name: &str,
-    entry: &TaskEntry,
-    resolved: Option<&ResolvedTaskSpec>,
-) -> Result<()> {
-    match TaskAction::from_entry(name, entry)? {
+pub fn preflight_entry(action: &TaskAction, resolved: Option<&ResolvedTaskSpec>) -> Result<()> {
+    match action {
         TaskAction::Spawn(spec) => {
             let resolved = resolved
                 .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
-            preflight_resolved_task(&spec, resolved)?;
+            preflight_resolved_task(spec, resolved)?;
         }
         TaskAction::Deliver(target) => preflight_kind(&target.kind)?,
         TaskAction::CheckOnly => {}
@@ -1550,7 +1549,7 @@ pub fn run_check(
     };
     let mut output = stdout.join().unwrap_or_default();
     output.extend(stderr.join().unwrap_or_default());
-    let output = tail_output(&output, CHECK_OUTPUT_CAP);
+    let output = crate::proc::tail_output(&output, CHECK_OUTPUT_CAP);
     Ok(CheckOutcome {
         passed: status.success() && !timed_out,
         timed_out,
@@ -1650,11 +1649,6 @@ fn drain_pipe(
         }
         buf
     })
-}
-
-pub fn tail_output(bytes: &[u8], cap: usize) -> String {
-    let start = bytes.len().saturating_sub(cap);
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
 }
 
 /// Whether `entry`'s provider already has a budget window counting down, read

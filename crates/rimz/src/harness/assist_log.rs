@@ -4,7 +4,6 @@
 //! after attempting their intervention. Readers fold the current file and its
 //! single rotated predecessor for the stats dashboard and forensic timeline.
 
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -142,34 +141,22 @@ pub enum FocusRepairParseError {
 }
 
 pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> {
-    let path = log_path(state_root);
     let mut records = Vec::new();
-    append_records(&rotated_path(&path), since, &mut records);
-    append_records(&path, since, &mut records);
+    log(state_root, MAX_BYTES).visit_records(|record: AssistRecord| {
+        if since.is_none_or(|since| record.at >= since) {
+            records.push(record);
+        }
+    });
     records.sort_by_key(|record| record.at);
     records
 }
 
 fn append_to(state_root: &Path, record: &AssistRecord, max_bytes: u64) {
-    crate::diag::rotating::JsonlLog::new(log_path(state_root), max_bytes).append(record);
+    log(state_root, max_bytes).append(record);
 }
 
-fn append_records(path: &Path, since: Option<Timestamp>, records: &mut Vec<AssistRecord>) {
-    let Ok(file) = std::fs::File::open(path) else {
-        return;
-    };
-    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(record) = serde_json::from_str::<AssistRecord>(&line) else {
-            continue;
-        };
-        if since.is_none_or(|since| record.at >= since) {
-            records.push(record);
-        }
-    }
-}
-
-fn rotated_path(path: &Path) -> PathBuf {
-    path.with_file_name("assists.log.1.jsonl")
+fn log(state_root: &Path, max_bytes: u64) -> crate::diag::rotating::JsonlLog {
+    crate::diag::rotating::JsonlLog::new(log_path(state_root), max_bytes)
 }
 
 #[cfg(test)]
@@ -269,7 +256,6 @@ mod tests {
         let second = resumed(20);
         append_to(dir.path(), &second, 1);
 
-        assert!(rotated_path(&log_path(dir.path())).exists());
         assert_eq!(recent(dir.path(), None), vec![first, second]);
     }
 

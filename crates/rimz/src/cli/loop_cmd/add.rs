@@ -38,10 +38,12 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let action = resolve_add_action(&args, &workspace, action_kind)?;
     let provider_kind = action.provider_kind().map(ToOwned::to_owned);
     let (entry, resolved_for_preflight) = build_task_entry(&args, action, &project_root)?;
-    // Validate the firing time before writing, so a bad `--at`/`--every` fails here.
-    let parsed = schedule::parse_schedule(&args.name, &entry)?;
+    // Compile once before writing, so validation and feedback share one shape.
+    let shape = schedule::TaskShape::compile(&args.name, &entry);
+    let parsed = shape.schedule().as_ref().map_err(Clone::clone)?;
+    let task_action = shape.action().map_err(Clone::clone)?;
     if action_kind.has_effect() {
-        preflight_entry(&args.name, &entry, resolved_for_preflight.as_ref())?;
+        preflight_entry(task_action, resolved_for_preflight.as_ref())?;
     }
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let mutation = if args.project {
@@ -60,9 +62,9 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     }
     write_add_feedback(
         &mut out,
-        &args.name,
         &entry,
-        &parsed,
+        parsed,
+        task_action,
         provider_kind.as_deref(),
     )?;
     writeln!(
@@ -366,7 +368,7 @@ pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 pub(super) fn resume(name: &str, globals: &GlobalFlags) -> Result<()> {
-    let (entry, _) = load_task(name, globals)?
+    let task = load_task(name, globals)?
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let now = Timestamp::now();
     let pause = pauses::load().remove(name);
@@ -386,7 +388,7 @@ pub(super) fn resume(name: &str, globals: &GlobalFlags) -> Result<()> {
     strikes::clear(name)?;
     let mut out = ui::out();
     write!(out, "loop `{name}`: resumed")?;
-    if let Some(next) = task_next_fire_text(name, &entry, Some(&resumed), now) {
+    if let Some(next) = task_next_fire_text(name, &task, Some(&resumed), now) {
         write!(out, " · next {next}")?;
     }
     writeln!(out)?;
@@ -496,12 +498,12 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
 
 fn write_add_feedback(
     out: &mut impl Write,
-    name: &str,
     entry: &TaskEntry,
     parsed: &schedule::ParsedSchedule,
+    action: &TaskAction,
     action_kind: Option<&str>,
 ) -> Result<()> {
-    match TaskAction::from_entry(name, entry)? {
+    match action {
         TaskAction::Spawn(agent) => {
             writeln!(
                 out,

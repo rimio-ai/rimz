@@ -7,7 +7,6 @@
 //! reads the same records for per-task inspection.
 
 use std::collections::BTreeMap;
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use jiff::{Timestamp, Zoned};
@@ -248,30 +247,34 @@ pub fn append(record: &LoopRunRecord) {
 
 fn append_to(state_root: &Path, record: &LoopRunRecord) {
     let capped = capped_record(record);
-    crate::diag::rotating::JsonlLog::new(log_path(state_root), MAX_BYTES).append(&capped);
+    log(state_root, MAX_BYTES).append(&capped);
 }
 
 pub fn stats(state_root: &Path, now: &Zoned) -> BTreeMap<String, LoopRunStats> {
-    let path = log_path(state_root);
     let mut stats = BTreeMap::new();
-    fold_file(&rotated_path(&path), now, &mut stats);
-    fold_file(&path, now, &mut stats);
+    log(state_root, MAX_BYTES).visit_records(|record: LoopRunRecord| {
+        fold_record(record, now, &mut stats);
+    });
     stats
 }
 
 pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
-    let path = log_path(state_root);
     let mut records = Vec::new();
-    append_task_records(&rotated_path(&path), task, &mut records);
-    append_task_records(&path, task, &mut records);
+    log(state_root, MAX_BYTES).visit_records(|record: LoopRunRecord| {
+        if record.task == task {
+            records.push(record);
+        }
+    });
     records
 }
 
 pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<LoopRunRecord> {
-    let path = log_path(state_root);
     let mut records = Vec::new();
-    append_recent_records(&rotated_path(&path), since, &mut records);
-    append_recent_records(&path, since, &mut records);
+    log(state_root, MAX_BYTES).visit_records(|record: LoopRunRecord| {
+        if since.is_none_or(|since| record.at >= since) {
+            records.push(record);
+        }
+    });
     records.sort_by_key(|record| record.at);
     records
 }
@@ -377,66 +380,28 @@ pub fn daily_budget_gate(
     )
 }
 
-fn fold_file(path: &Path, now: &Zoned, stats: &mut BTreeMap<String, LoopRunStats>) {
-    let Ok(file) = std::fs::File::open(path) else {
-        return;
-    };
-    let lines = std::io::BufReader::new(file).lines();
-    for line in lines.map_while(Result::ok) {
-        let Ok(record) = serde_json::from_str::<LoopRunRecord>(&line) else {
-            continue;
-        };
-        let spend_today_usd = cost_on_local_day(&record, now).unwrap_or(0.0);
-        stats
-            .entry(record.task.clone())
-            .and_modify(|entry| {
-                entry.runs += 1;
-                entry.spend_today_usd += spend_today_usd;
-                if record.at > entry.last.at {
-                    entry.streak = if record.result == entry.last.result {
-                        entry.streak + 1
-                    } else {
-                        1
-                    };
-                    entry.last = record.clone();
-                }
-            })
-            .or_insert(LoopRunStats {
-                runs: 1,
-                streak: 1,
-                last: record,
-                spend_today_usd,
-            });
-    }
-}
-
-fn append_task_records(path: &Path, task: &str, records: &mut Vec<LoopRunRecord>) {
-    let Ok(file) = std::fs::File::open(path) else {
-        return;
-    };
-    let lines = std::io::BufReader::new(file).lines();
-    for line in lines.map_while(Result::ok) {
-        let Ok(record) = serde_json::from_str::<LoopRunRecord>(&line) else {
-            continue;
-        };
-        if record.task == task {
-            records.push(record);
-        }
-    }
-}
-
-fn append_recent_records(path: &Path, since: Option<Timestamp>, records: &mut Vec<LoopRunRecord>) {
-    let Ok(file) = std::fs::File::open(path) else {
-        return;
-    };
-    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(record) = serde_json::from_str::<LoopRunRecord>(&line) else {
-            continue;
-        };
-        if since.is_none_or(|since| record.at >= since) {
-            records.push(record);
-        }
-    }
+fn fold_record(record: LoopRunRecord, now: &Zoned, stats: &mut BTreeMap<String, LoopRunStats>) {
+    let spend_today_usd = cost_on_local_day(&record, now).unwrap_or(0.0);
+    stats
+        .entry(record.task.clone())
+        .and_modify(|entry| {
+            entry.runs += 1;
+            entry.spend_today_usd += spend_today_usd;
+            if record.at > entry.last.at {
+                entry.streak = if record.result == entry.last.result {
+                    entry.streak + 1
+                } else {
+                    1
+                };
+                entry.last = record.clone();
+            }
+        })
+        .or_insert(LoopRunStats {
+            runs: 1,
+            streak: 1,
+            last: record,
+            spend_today_usd,
+        });
 }
 
 fn capped_record(record: &LoopRunRecord) -> LoopRunRecord {
@@ -464,13 +429,14 @@ fn tail_string(value: &str, cap: usize) -> String {
     value[start..].to_owned()
 }
 
-fn rotated_path(path: &Path) -> PathBuf {
-    path.with_file_name("loop-runs.log.1.jsonl")
+fn log(state_root: &Path, max_bytes: u64) -> crate::diag::rotating::JsonlLog {
+    crate::diag::rotating::JsonlLog::new(log_path(state_root), max_bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         LoopRunRecord {
@@ -605,8 +571,6 @@ mod tests {
     #[test]
     fn ping_window_outcome_round_trips_and_recent_folds_generations() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = log_path(dir.path());
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
         let mut old = record("autoping-codex", 10, LoopRunResult::Completed);
         old.window = Some(PingWindowOutcome {
             shortest: Some(AssistWindowReset {
@@ -616,16 +580,9 @@ mod tests {
             longest: None,
         });
         let new = record("other", 30, LoopRunResult::Completed);
-        std::fs::write(
-            rotated_path(&path),
-            format!("{}\n", serde_json::to_string(&old).expect("old")),
-        )
-        .expect("rotated");
-        std::fs::write(
-            &path,
-            format!("{}\n", serde_json::to_string(&new).expect("new")),
-        )
-        .expect("current");
+        let log = log(dir.path(), 1);
+        log.append(&old);
+        log.append(&new);
 
         assert_eq!(
             recent(dir.path(), Some(Timestamp::from_second(10).unwrap())),
@@ -732,21 +689,15 @@ mod tests {
     #[test]
     fn stats_folds_rotated_sibling_and_keeps_newest_last() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = log_path(dir.path());
-        std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
-        std::fs::write(
-            rotated_path(&path),
-            serde_json::to_string(&record("wake", 20, LoopRunResult::Completed)).expect("json")
-                + "\n",
-        )
-        .expect("write rotated");
-        std::fs::write(
-            path,
-            serde_json::to_string(&record("wake", 10, LoopRunResult::Failed)).expect("json")
-                + "\n"
-                + "not json\n",
-        )
-        .expect("write current");
+        let log = log(dir.path(), 1);
+        log.append(&record("wake", 20, LoopRunResult::Completed));
+        log.append(&record("wake", 10, LoopRunResult::Failed));
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(log_path(dir.path()))
+            .expect("open active")
+            .write_all(b"not json\n")
+            .expect("append malformed line");
 
         let now = Timestamp::from_second(30)
             .expect("timestamp")
@@ -761,18 +712,9 @@ mod tests {
     #[test]
     fn stats_tracks_matching_result_streak_across_rotated_and_current_files() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = log_path(dir.path());
-        std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
-        std::fs::write(
-            rotated_path(&path),
-            serde_json::to_string(&record("wake", 10, LoopRunResult::Failed)).expect("json") + "\n",
-        )
-        .expect("write rotated");
-        std::fs::write(
-            path,
-            serde_json::to_string(&record("wake", 20, LoopRunResult::Failed)).expect("json") + "\n",
-        )
-        .expect("write current");
+        let log = log(dir.path(), 1);
+        log.append(&record("wake", 10, LoopRunResult::Failed));
+        log.append(&record("wake", 20, LoopRunResult::Failed));
 
         let now = Timestamp::from_second(30)
             .expect("timestamp")

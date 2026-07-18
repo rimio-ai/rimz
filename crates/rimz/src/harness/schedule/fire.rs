@@ -11,9 +11,11 @@ use std::path::{Path, PathBuf};
 use jiff::{Timestamp, Zoned};
 
 use super::pauses::PauseEntry;
-use super::{catalog::TaskCatalog, pauses};
+use super::{
+    catalog::{LoadedTask, TaskCatalog},
+    pauses,
+};
 use crate::RuntimePaths;
-use crate::config::TaskEntry;
 use crate::harness::schedule;
 use crate::ids::WorkspaceId;
 use crate::store::atomic::write_temp_then_rename_cache;
@@ -34,12 +36,12 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
             .iter()
             .filter(|(_, task)| {
                 !matches!(
-                    task.source,
+                    task.source(),
                     super::catalog::TaskSource::Project { state }
                         if state != crate::trust::TrustState::Trusted
                 )
             })
-            .map(|(name, task)| (name.clone(), task.entry.clone()))
+            .map(|(name, task)| (name.clone(), task.clone()))
             .collect(),
         &runtime.workspace_id,
     );
@@ -82,7 +84,7 @@ fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
 }
 
 fn plan(
-    tasks: &BTreeMap<String, TaskEntry>,
+    tasks: &BTreeMap<String, LoadedTask>,
     state: &BTreeMap<String, Timestamp>,
     pauses: &BTreeMap<String, PauseEntry>,
     now: &Zoned,
@@ -90,8 +92,8 @@ fn plan(
 ) -> (Vec<(String, Action)>, BTreeMap<String, Timestamp>) {
     let mut actions = Vec::new();
     let mut next_state = BTreeMap::new();
-    for (name, entry) in tasks {
-        let parsed = match schedule::parse_schedule(name, entry) {
+    for (name, task) in tasks {
+        let parsed = match task.schedule() {
             Ok(parsed) => parsed,
             Err(err) => {
                 tracing::debug!(
@@ -136,33 +138,29 @@ fn plan(
 
 fn reset_signals(
     runtime: &RuntimePaths,
-    tasks: &BTreeMap<String, TaskEntry>,
+    tasks: &BTreeMap<String, LoadedTask>,
     now: Timestamp,
 ) -> BTreeMap<String, schedule::ResetSignal> {
     tasks
         .iter()
-        .filter(|(_, entry)| entry.every.as_deref() == Some("reset"))
-        .filter_map(|(name, entry)| {
-            let kind = entry
-                .agent
-                .as_deref()
-                .and_then(crate::harness::spec::ping_kind)?;
+        .filter_map(|(name, task)| {
+            let kind = task.reset_ping_kind()?;
             Some((
                 name.clone(),
-                super::runner::window_reset_signal_in(runtime, entry, kind, now),
+                super::runner::window_reset_signal_in(runtime, task.entry(), kind.as_str(), now),
             ))
         })
         .collect()
 }
 
 fn workspace_tasks(
-    tasks: BTreeMap<String, TaskEntry>,
+    tasks: BTreeMap<String, LoadedTask>,
     workspace_id: &WorkspaceId,
-) -> BTreeMap<String, TaskEntry> {
+) -> BTreeMap<String, LoadedTask> {
     tasks
         .into_iter()
-        .filter(|(_, entry)| {
-            WorkspaceId::from_project_root(&entry.resolved_root()) == *workspace_id
+        .filter(|(_, task)| {
+            WorkspaceId::from_project_root(&task.entry().resolved_root()) == *workspace_id
         })
         .collect()
 }
@@ -206,6 +204,7 @@ fn spawn_loop_run(runtime: &RuntimePaths, project_root: Option<&Path>, name: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::TaskEntry;
     use jiff::civil::date;
 
     fn zdt(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Zoned {
@@ -219,24 +218,36 @@ mod tests {
         Timestamp::from_second(ts.as_second() - seconds).expect("shifted timestamp")
     }
 
-    fn task(root: &str, every: &str) -> TaskEntry {
-        TaskEntry {
+    fn task(root: &str, every: &str) -> LoadedTask {
+        let entry = TaskEntry {
             agent: Some("claude".to_owned()),
             prompt: Some("do it".to_owned()),
             root: PathBuf::from(root),
             every: Some(every.to_owned()),
             ..TaskEntry::default()
-        }
+        };
+        LoadedTask::new(
+            "task",
+            entry,
+            super::super::catalog::TaskSource::Config,
+            false,
+        )
     }
 
-    fn reset_task(root: &str) -> TaskEntry {
-        TaskEntry {
+    fn reset_task(root: &str) -> LoadedTask {
+        let entry = TaskEntry {
             agent: Some("claude-ping".to_owned()),
             prompt: Some("ping".to_owned()),
             root: PathBuf::from(root),
             every: Some("reset".to_owned()),
             ..TaskEntry::default()
-        }
+        };
+        LoadedTask::new(
+            "reset",
+            entry,
+            super::super::catalog::TaskSource::Config,
+            false,
+        )
     }
 
     #[test]
@@ -286,6 +297,35 @@ mod tests {
             &now,
             &BTreeMap::new(),
         );
+        assert!(actions.is_empty());
+        assert!(next.is_empty());
+    }
+
+    #[test]
+    fn malformed_schedule_is_skipped_without_arming() {
+        let entry = TaskEntry {
+            agent: Some("claude".to_owned()),
+            every: Some("5m".to_owned()),
+            at: Some("07:00".to_owned()),
+            ..TaskEntry::default()
+        };
+        let task = LoadedTask::new(
+            "broken",
+            entry,
+            super::super::catalog::TaskSource::Config,
+            false,
+        );
+        let now = zdt(2026, 6, 24, 8, 0, 0);
+        let state = BTreeMap::from([("broken".to_owned(), seconds_before(now.timestamp(), 300))]);
+
+        let (actions, next) = plan(
+            &BTreeMap::from([("broken".to_owned(), task)]),
+            &state,
+            &BTreeMap::new(),
+            &now,
+            &BTreeMap::new(),
+        );
+
         assert!(actions.is_empty());
         assert!(next.is_empty());
     }
@@ -447,7 +487,7 @@ mod tests {
         assert_eq!(
             super::super::runner::window_reset_signal_in(
                 &runtime,
-                &reset_task(dir.path().to_str().expect("utf8 path")),
+                reset_task(dir.path().to_str().expect("utf8 path")).entry(),
                 "claude",
                 now,
             ),
@@ -513,7 +553,7 @@ mod tests {
 
     #[test]
     fn ended_pause_skips_crossed_calendar_occurrence() {
-        let task = TaskEntry {
+        let entry = TaskEntry {
             agent: Some("claude".to_owned()),
             prompt: Some("do it".to_owned()),
             root: PathBuf::from("/repo"),
@@ -521,6 +561,12 @@ mod tests {
             at: Some("07:00".to_owned()),
             ..TaskEntry::default()
         };
+        let task = LoadedTask::new(
+            "daily",
+            entry,
+            super::super::catalog::TaskSource::Config,
+            false,
+        );
         let tasks = BTreeMap::from([("daily".to_owned(), task)]);
         let state = BTreeMap::from([("daily".to_owned(), zdt(2026, 6, 23, 6, 0, 0).timestamp())]);
         let pauses = BTreeMap::from([(

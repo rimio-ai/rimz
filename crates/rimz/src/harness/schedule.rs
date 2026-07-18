@@ -1,7 +1,9 @@
 //! Scheduled loop task core.
 //!
 //! The elected sidebar elder keeps time for loop tasks while a room is open and
-//! fires `rimz loop run <name>`, which drives one configured loop wake-up. A
+//! fires `rimz loop run <name>`, which drives one configured loop wake-up.
+//! Persisted rows compile once into independent action and timing results; a
+//! malformed half remains observable without hiding the valid half. A
 //! `<kind>-ping` virtual cell is the window-priming special case; the schedule
 //! machinery stays generic by evaluating an externally resolved reset signal.
 //!
@@ -13,6 +15,7 @@
 use std::time::Duration;
 
 use crate::config::{TaskEntry, TaskTarget};
+use crate::ids::AgentKind;
 use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub mod catalog;
@@ -126,7 +129,7 @@ impl TaskAction {
 }
 
 /// Errors from parsing or validating a schedule entry.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ScheduleErr {
     #[error(
         "schedule `{name}` needs a firing time: set `at = \"HH:MM\"` for a one-shot, `every = \"30m\"`, or `cron = \"...\"`"
@@ -152,6 +155,55 @@ pub enum ScheduleErr {
     BadEvery { name: String, value: String },
     #[error("schedule name `{name}` must be non-empty and use only letters, digits, `-`, or `_`")]
     BadName { name: String },
+}
+
+/// Runtime shape compiled once from one persisted task row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskShape {
+    action: Result<TaskAction, TaskActionErr>,
+    schedule: Result<ParsedSchedule, ScheduleErr>,
+    reset_ping_kind: Option<AgentKind>,
+    ephemeral: bool,
+}
+
+impl TaskShape {
+    pub fn compile(name: &str, entry: &TaskEntry) -> Self {
+        let reset_ping_kind = (entry.every.as_deref() == Some("reset"))
+            .then(|| {
+                entry
+                    .agent
+                    .as_deref()
+                    .and_then(crate::harness::spec::ping_kind)
+            })
+            .flatten()
+            .map(AgentKind::new_unchecked);
+        Self {
+            action: TaskAction::from_entry(name, entry),
+            schedule: parse_schedule(name, entry),
+            reset_ping_kind,
+            ephemeral: ephemeral_lifetime(entry),
+        }
+    }
+
+    pub fn action(&self) -> Result<&TaskAction, &TaskActionErr> {
+        self.action.as_ref()
+    }
+
+    pub fn schedule(&self) -> &Result<ParsedSchedule, ScheduleErr> {
+        &self.schedule
+    }
+
+    pub fn reset_ping_kind(&self) -> Option<&AgentKind> {
+        self.reset_ping_kind.as_ref()
+    }
+
+    pub const fn is_ephemeral(&self) -> bool {
+        self.ephemeral
+    }
+}
+
+pub(super) fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
+    (entry.every.is_none() && entry.cron.is_none()) || entry.deadline.is_some()
 }
 
 /// A weekday in Mon..Sun order.
@@ -355,15 +407,14 @@ pub enum TaskTimingState {
 
 impl TaskTiming {
     pub fn evaluate(
-        name: &str,
-        entry: &TaskEntry,
+        parsed: &Result<ParsedSchedule, ScheduleErr>,
         blocked: Option<crate::trust::TrustState>,
         last_fire: Option<Timestamp>,
         pause: Option<&pauses::PauseEntry>,
         now: &Zoned,
         reset_signal: ResetSignal,
     ) -> Self {
-        let parsed = parse_schedule(name, entry);
+        let parsed = parsed.clone();
         let active_pause = pause
             .filter(|pause| pauses::is_active(pause, now.timestamp()))
             .copied();
@@ -489,21 +540,17 @@ pub fn parse_surplus_after(raw: &str) -> Result<Duration, String> {
 /// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Full
 /// agent preflight is validated separately by the CLI.
 pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, ScheduleErr> {
-    if entry.cron.is_some() && (entry.at.is_some() || entry.every.is_some()) {
-        return Err(ScheduleErr::TimeConflict {
-            name: name.to_owned(),
-        });
-    }
-    let schedule = match (
-        entry.cron.as_deref(),
-        entry.every.as_deref(),
-        entry.at.as_deref(),
-    ) {
-        (Some(cron), None, None) => {
+    let schedule = match TimingFields::classify(entry) {
+        TimingFields::Conflict => {
+            return Err(ScheduleErr::TimeConflict {
+                name: name.to_owned(),
+            });
+        }
+        TimingFields::Cron(cron) => {
             validate_cron_expr(name, cron)?;
             Schedule::RawCron(cron.trim().to_owned())
         }
-        (None, Some(every), at) => match parse_every(name, every)? {
+        TimingFields::Every { every, at } => match parse_every(name, every)? {
             EverySpec::Reset => {
                 if at.is_some() {
                     return Err(ScheduleErr::TimeConflict {
@@ -542,7 +589,7 @@ pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, S
                 })
             }
         },
-        (None, None, Some(at)) => {
+        TimingFields::Once(at) => {
             let (hour, minute) = parse_task_hhmm(name, at)?;
             Schedule::Calendar(CalendarSpec {
                 minute,
@@ -550,17 +597,40 @@ pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, S
                 weekdays: Vec::new(),
             })
         }
-        (None, None, None) => {
+        TimingFields::Missing => {
             return Err(ScheduleErr::NoTime {
                 name: name.to_owned(),
             });
         }
-        _ => unreachable!("cron conflicts returned before parsing"),
     };
     Ok(ParsedSchedule {
         schedule,
         once: entry.every.is_none() && entry.cron.is_none(),
     })
+}
+
+enum TimingFields<'a> {
+    Conflict,
+    Cron(&'a str),
+    Every { every: &'a str, at: Option<&'a str> },
+    Once(&'a str),
+    Missing,
+}
+
+impl<'a> TimingFields<'a> {
+    fn classify(entry: &'a TaskEntry) -> Self {
+        match (
+            entry.cron.as_deref(),
+            entry.every.as_deref(),
+            entry.at.as_deref(),
+        ) {
+            (Some(cron), None, None) => Self::Cron(cron),
+            (Some(_), _, _) => Self::Conflict,
+            (None, Some(every), at) => Self::Every { every, at },
+            (None, None, Some(at)) => Self::Once(at),
+            (None, None, None) => Self::Missing,
+        }
+    }
 }
 
 enum EverySpec {

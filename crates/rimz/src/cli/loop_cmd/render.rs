@@ -14,8 +14,7 @@ struct ListRowContext<'a> {
 
 struct ObservedTask<'a> {
     name: &'a str,
-    entry: &'a TaskEntry,
-    source: TaskSource,
+    task: &'a LoadedTask,
     timing: schedule::TaskTiming,
 }
 
@@ -31,15 +30,12 @@ fn grouped_tasks<'a>(
     now_zoned: &jiff::Zoned,
     retain_overlaid_next: bool,
 ) -> Vec<ObservedTaskGroup<'a>> {
-    let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &TaskEntry, TaskSource)>> =
-        BTreeMap::new();
+    let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &LoadedTask)>> = BTreeMap::new();
     for (name, task) in tasks {
-        let entry = &task.entry;
-        let source = task.source;
         entries_by_root
-            .entry(entry.resolved_root())
+            .entry(task.entry().resolved_root())
             .or_default()
-            .push((name, entry, source));
+            .push((name, task));
     }
     entries_by_root
         .into_iter()
@@ -52,14 +48,13 @@ fn grouped_tasks<'a>(
                 .unwrap_or_default();
             let tasks = entries
                 .into_iter()
-                .map(|(name, entry, source)| ObservedTask {
+                .map(|(name, task)| ObservedTask {
                     name,
-                    entry,
-                    source,
+                    task,
                     timing: observe_task_timing(
                         name,
-                        entry,
-                        source.blocked_state(),
+                        task,
+                        task.source().blocked_state(),
                         &stamps,
                         pauses.get(name),
                         now_zoned,
@@ -104,7 +99,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         .indent(2);
         let context = ListRowContext { stats: &stats, now };
         for task in group.tasks {
-            blocked_count += usize::from(task.source.blocked_state().is_some());
+            blocked_count += usize::from(task.task.source().blocked_state().is_some());
             table.row(task_row(&task, &context));
         }
         table.render(&mut out)?;
@@ -117,6 +112,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
 }
 
 fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Cell> {
+    let entry = task.task.entry();
     let when = match task.timing.parsed() {
         Ok(schedule) => schedule.describe(),
         Err(err) => format!("invalid: {err}"),
@@ -128,7 +124,7 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
         .map(|stats| last_run_cells(stats, context.now))
         .unwrap_or_else(|| (ui::cell("-").dash(), ui::cell("-").dash()));
     let cost = list_cost_label(
-        task.entry,
+        entry,
         context
             .stats
             .get(task.name)
@@ -138,8 +134,8 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
     .unwrap_or_else(|| ui::cell("-").dash());
     vec![
         ui::cell(task.name).fg(ui::palette::body()),
-        ui::cell(task_subject(task.entry)),
-        source_cell(task.source),
+        ui::cell(task_subject(task.task)),
+        source_cell(task.task.source()),
         ui::cell(when),
         last,
         status,
@@ -381,7 +377,7 @@ impl<'a> WatchSummary<'a> {
 
 fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> WatchRow {
     let running = matches!(
-        probe_run_lock(task.name, task.entry),
+        probe_run_lock(task.name, task.task.entry()),
         Ok(RunLockState::Held(_))
     );
     let next_ts = watch_next_timestamp(&task.timing, running);
@@ -713,17 +709,17 @@ struct ActionWords {
     untouched: &'static str,
 }
 
-fn action_words(entry: &TaskEntry) -> Option<ActionWords> {
-    match TaskAction::from_entry("display", entry).ok()? {
+fn action_words(action: &TaskAction) -> Option<ActionWords> {
+    match action {
         TaskAction::Spawn(subject) => Some(ActionWords {
-            subject,
+            subject: subject.clone(),
             base: "start",
             third_person: "starts",
             progressive: "starting",
             untouched: "not started",
         }),
         TaskAction::Deliver(target) => Some(ActionWords {
-            subject: target.handle,
+            subject: target.handle.clone(),
             base: "wake",
             third_person: "wakes",
             progressive: "waking",
@@ -733,9 +729,9 @@ fn action_words(entry: &TaskEntry) -> Option<ActionWords> {
     }
 }
 
-fn check_summary(entry: &TaskEntry) -> Option<String> {
+fn check_summary(entry: &TaskEntry, action: Option<&TaskAction>) -> Option<String> {
     let check = entry.check.as_ref()?;
-    if let Some(action) = action_words(entry) {
+    if let Some(action) = action.and_then(action_words) {
         Some(format!(
             "{check} ({} {} on {})",
             action.third_person,
@@ -747,8 +743,8 @@ fn check_summary(entry: &TaskEntry) -> Option<String> {
     }
 }
 
-pub(super) fn task_run_rule(entry: &TaskEntry) -> String {
-    let action = action_words(entry).map(|words| format!("{} {}", words.base, words.subject));
+pub(super) fn task_run_rule(entry: &TaskEntry, task_action: &TaskAction) -> String {
+    let action = action_words(task_action).map(|words| format!("{} {}", words.base, words.subject));
     let mut rule = match (entry.check.is_some(), action) {
         (true, Some(action)) => format!(
             "check, then {action} on {}",
@@ -765,14 +761,14 @@ pub(super) fn task_run_rule(entry: &TaskEntry) -> String {
     rule
 }
 
-pub(super) fn action_progressive_phrase(entry: &TaskEntry) -> String {
-    action_words(entry)
+pub(super) fn action_progressive_phrase(action: &TaskAction) -> String {
+    action_words(action)
         .map(|words| format!("{} {}", words.progressive, words.subject))
         .unwrap_or_else(|| "running <invalid>".to_owned())
 }
 
-pub(super) fn check_skip_decision(entry: &TaskEntry) -> String {
-    let Some(action) = action_words(entry) else {
+pub(super) fn check_skip_decision(entry: &TaskEntry, task_action: &TaskAction) -> String {
+    let Some(action) = action_words(task_action) else {
         return "<invalid> unchanged".to_owned();
     };
     let condition = match entry.on.unwrap_or_default() {
@@ -901,14 +897,16 @@ fn display_path(path: &Path) -> String {
     ui::home_relative(path.to_string_lossy().as_ref())
 }
 
-fn has_agent_runs_section(entry: &TaskEntry) -> bool {
-    entry.check.is_some() && action_words(entry).is_some()
+fn has_agent_runs_section(task: &LoadedTask) -> bool {
+    task.entry().check.is_some() && task.action().ok().and_then(action_words).is_some()
 }
 
 pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
-    let (entry, source) = load_task(&args.name, globals)?.ok_or_else(|| {
+    let task = load_task(&args.name, globals)?.ok_or_else(|| {
         anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
     })?;
+    let entry = task.entry();
+    let source = task.source();
     let root = entry.resolved_root();
     let runtime = runtime_for_root(&root);
     let stamps = runtime
@@ -920,7 +918,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let timing = observe_task_timing(
         &args.name,
-        &entry,
+        &task,
         source.blocked_state(),
         &stamps,
         pause.as_ref(),
@@ -928,10 +926,10 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         false,
     );
     let records = run_log::task_records(&state_home(), &args.name);
-    let show_agent_runs = has_agent_runs_section(&entry);
-    let lock_state = probe_run_lock(&args.name, &entry).ok();
+    let show_agent_runs = has_agent_runs_section(&task);
+    let lock_state = probe_run_lock(&args.name, entry).ok();
     let active_run = if matches!(lock_state.as_ref(), Some(RunLockState::Held(_))) {
-        newest_active_run_for_entry(&args.name, &entry)?
+        newest_active_run_for_entry(&args.name, entry)?
     } else {
         None
     };
@@ -944,8 +942,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     write_show_facts(
         &mut out,
         &args.name,
-        &entry,
-        source,
+        &task,
         &records,
         ShowFactsContext {
             now_zoned: &now_zoned,
@@ -970,7 +967,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let (detail_idx, failure_idx) = detail_indices(&records);
     if let Some(detail) = detail_idx.and_then(|idx| records.get(idx)) {
         writeln!(out)?;
-        render_record_detail(&mut out, &entry, detail, "LAST RUN", now)?;
+        render_record_detail(&mut out, entry, detail, "LAST RUN", now)?;
     }
     if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
         write_failure_pointer(&mut out, &args.name, failure, now)?;
@@ -979,9 +976,10 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
-    let (entry, _source) = load_task(&args.name, globals)?.ok_or_else(|| {
+    let task = load_task(&args.name, globals)?.ok_or_else(|| {
         anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
     })?;
+    let entry = task.entry();
     let records = run_log::task_records(&state_home(), &args.name);
     let visible = records
         .iter()
@@ -1019,7 +1017,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
             write!(out, " · {exit}")?;
         }
         writeln!(out)?;
-        write_record_forensics(&mut out, &entry, record)?;
+        write_record_forensics(&mut out, entry, record)?;
     }
     Ok(())
 }
@@ -1092,11 +1090,12 @@ struct ShowFactsContext<'a> {
 fn write_show_facts(
     out: &mut impl Write,
     name: &str,
-    entry: &TaskEntry,
-    source: TaskSource,
+    task: &LoadedTask,
     records: &[LoopRunRecord],
     context: ShowFactsContext<'_>,
 ) -> std::io::Result<()> {
+    let entry = task.entry();
+    let source = task.source();
     let root = entry.resolved_root();
     let room_is_open = room_open(&root);
     let blocked_state = source.blocked_state();
@@ -1132,8 +1131,8 @@ fn write_show_facts(
         })
     });
     let mut kv = ui::KeyVals::new().indent(2);
-    kv.push("task", ui::cell(task_subject(entry)));
-    if let Some(check) = check_summary(entry) {
+    kv.push("task", ui::cell(task_subject(task)));
+    if let Some(check) = check_summary(entry, task.action().ok()) {
         kv.push("check", ui::cell(check));
     }
     if let Some(verify) = entry.verify.as_deref() {

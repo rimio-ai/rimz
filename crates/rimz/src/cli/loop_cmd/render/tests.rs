@@ -288,9 +288,13 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         on: Some(CheckOn::Fail),
         ..TaskEntry::default()
     };
-    assert_eq!(task_run_rule(&spawn), "check, then start codex on fail");
+    let spawn_action = TaskAction::from_entry("task", &spawn).unwrap();
     assert_eq!(
-        check_summary(&spawn).as_deref(),
+        task_run_rule(&spawn, &spawn_action),
+        "check, then start codex on fail"
+    );
+    assert_eq!(
+        check_summary(&spawn, Some(&spawn_action)).as_deref(),
         Some("cargo test (starts codex on fail)")
     );
 
@@ -304,9 +308,13 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         on: Some(CheckOn::Success),
         ..TaskEntry::default()
     };
-    assert_eq!(task_run_rule(&wake), "check, then wake @planner on success");
+    let wake_action = TaskAction::from_entry("task", &wake).unwrap();
     assert_eq!(
-        check_summary(&wake).as_deref(),
+        task_run_rule(&wake, &wake_action),
+        "check, then wake @planner on success"
+    );
+    assert_eq!(
+        check_summary(&wake, Some(&wake_action)).as_deref(),
         Some("cargo test (wakes @planner on success)")
     );
 
@@ -314,7 +322,8 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         check: Some("cargo test".to_owned()),
         ..TaskEntry::default()
     };
-    assert_eq!(task_run_rule(&check), "check");
+    let check_action = TaskAction::from_entry("task", &check).unwrap();
+    assert_eq!(task_run_rule(&check, &check_action), "check");
 
     let spawn = TaskEntry {
         agent: Some("claude".to_owned()),
@@ -322,14 +331,16 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         max_attempts: Some(4),
         ..TaskEntry::default()
     };
+    let spawn_action = TaskAction::from_entry("task", &spawn).unwrap();
     assert_eq!(
-        task_run_rule(&spawn),
+        task_run_rule(&spawn, &spawn_action),
         "start claude, verify `cargo xtask gate` (up to 4 attempts)"
     );
 
     let mut wake_only = wake;
     wake_only.check = None;
-    assert_eq!(task_run_rule(&wake_only), "wake @planner");
+    let wake_action = TaskAction::from_entry("task", &wake_only).unwrap();
+    assert_eq!(task_run_rule(&wake_only, &wake_action), "wake @planner");
 }
 
 #[test]
@@ -734,13 +745,13 @@ fn interval_timing(
     pause: Option<&PauseEntry>,
     now: Timestamp,
 ) -> schedule::TaskTiming {
+    let entry = TaskEntry {
+        agent: Some("claude".to_owned()),
+        every: Some("15m".to_owned()),
+        ..TaskEntry::default()
+    };
     schedule::TaskTiming::evaluate(
-        "task",
-        &TaskEntry {
-            agent: Some("claude".to_owned()),
-            every: Some("15m".to_owned()),
-            ..TaskEntry::default()
-        },
+        schedule::TaskShape::compile("task", &entry).schedule(),
         blocked,
         last_fire,
         pause,
@@ -797,8 +808,7 @@ fn task_timing_maps_to_existing_list_and_watch_labels() {
         ),
         (
             schedule::TaskTiming::evaluate(
-                "task",
-                &TaskEntry::default(),
+                schedule::TaskShape::compile("task", &TaskEntry::default()).schedule(),
                 None,
                 Some(now),
                 None,

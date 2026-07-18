@@ -1,20 +1,19 @@
-//! Loop task catalog, source precedence, and coordinated mutation.
+//! Loop task catalog, compiled runtime shapes, source precedence, and coordinated mutation.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::{TaskAction, config_edit, instances, pauses, strikes};
+use super::{
+    ParsedSchedule, ScheduleErr, TaskAction, TaskActionErr, TaskShape, config_edit, instances,
+    pauses, strikes,
+};
 use crate::Store;
 use crate::config::{MachineConfig, TaskEntry, Tasks};
 use crate::store::paths::{RuntimePaths, StatePaths, config_home, state_home};
 use crate::trust::TrustState;
 use crate::workspace::WorkspaceResolver;
-
-pub fn is_ephemeral(entry: &TaskEntry) -> bool {
-    (entry.every.is_none() && entry.cron.is_none()) || entry.deadline.is_some()
-}
 
 #[doc(hidden)]
 pub fn instances_path(state_root: &Path) -> PathBuf {
@@ -55,14 +54,45 @@ impl TaskSource {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadedTask {
-    pub entry: TaskEntry,
-    pub source: TaskSource,
+    entry: TaskEntry,
+    source: TaskSource,
+    shape: TaskShape,
     synthetic: bool,
 }
 
 impl LoadedTask {
-    pub fn action(&self, name: &str) -> Result<TaskAction, super::TaskActionErr> {
-        TaskAction::from_entry(name, &self.entry)
+    pub(super) fn new(name: &str, entry: TaskEntry, source: TaskSource, synthetic: bool) -> Self {
+        let shape = TaskShape::compile(name, &entry);
+        Self {
+            entry,
+            source,
+            shape,
+            synthetic,
+        }
+    }
+
+    pub fn entry(&self) -> &TaskEntry {
+        &self.entry
+    }
+
+    pub const fn source(&self) -> TaskSource {
+        self.source
+    }
+
+    pub fn action(&self) -> Result<&TaskAction, &TaskActionErr> {
+        self.shape.action()
+    }
+
+    pub fn schedule(&self) -> &std::result::Result<ParsedSchedule, ScheduleErr> {
+        self.shape.schedule()
+    }
+
+    pub fn reset_ping_kind(&self) -> Option<&crate::ids::AgentKind> {
+        self.shape.reset_ping_kind()
+    }
+
+    pub const fn is_ephemeral(&self) -> bool {
+        self.shape.is_ephemeral()
     }
 }
 
@@ -108,14 +138,8 @@ impl TaskCatalog {
         let mut visible = runnable.clone();
         if let Some((project, state)) = project {
             let project = project.0.into_iter().map(|(name, entry)| {
-                (
-                    name,
-                    LoadedTask {
-                        entry,
-                        source: TaskSource::Project { state },
-                        synthetic: false,
-                    },
-                )
+                let task = LoadedTask::new(&name, entry, TaskSource::Project { state }, false);
+                (name, task)
             });
             if state == TrustState::Trusted {
                 let project = project.collect::<Vec<_>>();
@@ -144,17 +168,14 @@ impl TaskCatalog {
             if self.visible.contains_key(&name) {
                 continue;
             }
-            let task = LoadedTask {
-                entry: TaskEntry {
-                    agent: Some(format!("{kind}-ping")),
-                    prompt: Some("ping".to_owned()),
-                    root: project_root.to_path_buf(),
-                    every: Some("reset".to_owned()),
-                    ..TaskEntry::default()
-                },
-                source: TaskSource::Config,
-                synthetic: true,
+            let entry = TaskEntry {
+                agent: Some(format!("{kind}-ping")),
+                prompt: Some("ping".to_owned()),
+                root: project_root.to_path_buf(),
+                every: Some("reset".to_owned()),
+                ..TaskEntry::default()
             };
+            let task = LoadedTask::new(&name, entry, TaskSource::Config, true);
             self.visible.insert(name.clone(), task.clone());
             self.runnable.insert(name, task);
         }
@@ -175,7 +196,7 @@ impl TaskCatalog {
 
     pub fn replace_machine(&self, name: &str, entry: &TaskEntry) -> Result<TaskMutation> {
         if matches!(
-            self.visible.get(name).map(|task| task.source),
+            self.visible.get(name).map(LoadedTask::source),
             Some(TaskSource::Project { .. })
         ) {
             bail!(
@@ -185,7 +206,7 @@ impl TaskCatalog {
                     .display()
             );
         }
-        if is_ephemeral(entry) {
+        if super::ephemeral_lifetime(entry) {
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
             instances::insert(name, entry)?;
         } else {
@@ -221,7 +242,7 @@ impl TaskCatalog {
         let cleared_strikes = strikes::clear(name)?;
         Ok(TaskMutation {
             changed,
-            source: Some(task.source),
+            source: Some(task.source()),
             project_root: project_root(task),
             cleared_pause,
             cleared_strikes,
@@ -236,13 +257,13 @@ impl TaskCatalog {
             return Ok(TaskMutation::unchanged());
         };
         refuse_synthetic_mutation(name, task)?;
-        let changed = match task.source {
+        let changed = match task.source() {
             TaskSource::Config => {
                 config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?
             }
             TaskSource::Instance => instances::rename(name, new_name)?,
             TaskSource::Project { .. } => config_edit::rename(
-                config_edit::TaskStore::Project(&task.entry.root),
+                config_edit::TaskStore::Project(&task.entry().root),
                 name,
                 new_name,
             )?,
@@ -251,7 +272,7 @@ impl TaskCatalog {
         let cleared_strikes = strikes::rename(name, new_name)?;
         Ok(TaskMutation {
             changed,
-            source: Some(task.source),
+            source: Some(task.source()),
             project_root: project_root(task),
             cleared_pause,
             cleared_strikes,
@@ -267,7 +288,7 @@ impl TaskCatalog {
         };
         Ok(TaskMutation {
             changed: remove_definition(name, task)?,
-            source: Some(task.source),
+            source: Some(task.source()),
             project_root: project_root(task),
             cleared_pause: false,
             cleared_strikes: false,
@@ -283,15 +304,15 @@ impl TaskCatalog {
         let catalog = Self::load_lenient(None);
         let mut reaped = 0;
         for (name, task) in catalog.runnable.clone() {
-            let target = match task.action(&name) {
-                Ok(TaskAction::Deliver(target)) => target,
+            let target = match task.action() {
+                Ok(TaskAction::Deliver(target)) => target.clone(),
                 Ok(TaskAction::Spawn(_) | TaskAction::CheckOnly) => continue,
                 Err(err) => {
                     tracing::debug!(task = %name, error = %err, "invalid loop task skipped by schedule gc");
                     continue;
                 }
             };
-            match delivery_target_alive(&task.entry, &target) {
+            match delivery_target_alive(task.entry(), &target) {
                 Ok(true) => {}
                 Ok(false) => {
                     catalog.consume_scheduled(&name)?;
@@ -308,7 +329,7 @@ impl TaskCatalog {
 
 impl TaskSource {
     fn from_entry(entry: &TaskEntry) -> Self {
-        if is_ephemeral(entry) {
+        if super::ephemeral_lifetime(entry) {
             Self::Instance
         } else {
             Self::Config
@@ -360,25 +381,13 @@ fn merge_base(instances: Tasks, machine: Tasks) -> BTreeMap<String, LoadedTask> 
         .0
         .into_iter()
         .map(|(name, entry)| {
-            (
-                name,
-                LoadedTask {
-                    entry,
-                    source: TaskSource::Instance,
-                    synthetic: false,
-                },
-            )
+            let task = LoadedTask::new(&name, entry, TaskSource::Instance, false);
+            (name, task)
         })
         .collect::<BTreeMap<_, _>>();
     tasks.extend(machine.0.into_iter().map(|(name, entry)| {
-        (
-            name,
-            LoadedTask {
-                entry,
-                source: TaskSource::Config,
-                synthetic: false,
-            },
-        )
+        let task = LoadedTask::new(&name, entry, TaskSource::Config, false);
+        (name, task)
     }));
     tasks
 }
@@ -407,15 +416,15 @@ fn clear_overlays(
 }
 
 fn project_root(task: &LoadedTask) -> Option<PathBuf> {
-    matches!(task.source, TaskSource::Project { .. }).then(|| task.entry.root.clone())
+    matches!(task.source(), TaskSource::Project { .. }).then(|| task.entry().root.clone())
 }
 
 fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
-    match task.source {
+    match task.source() {
         TaskSource::Config => Ok(config_edit::remove(config_edit::TaskStore::Machine, name)?),
         TaskSource::Instance => Ok(instances::remove(name)?),
         TaskSource::Project { .. } => Ok(config_edit::remove(
-            config_edit::TaskStore::Project(&task.entry.root),
+            config_edit::TaskStore::Project(&task.entry().root),
             name,
         )?),
     }
@@ -505,6 +514,25 @@ mod tests {
     }
 
     #[test]
+    fn malformed_schedule_stays_visible_with_valid_action() {
+        let mut entry = task("still runnable manually");
+        entry.at = Some("07:00".to_owned());
+        let catalog = TaskCatalog::from_layers(
+            Tasks::default(),
+            Tasks(BTreeMap::from([("broken".to_owned(), entry)])),
+            None,
+        );
+        let loaded = &catalog.visible()["broken"];
+
+        assert!(matches!(loaded.action(), Ok(TaskAction::Spawn(_))));
+        assert!(matches!(
+            loaded.schedule(),
+            Err(ScheduleErr::TimeConflict { .. })
+        ));
+        assert!(catalog.for_run("broken").is_some());
+    }
+
+    #[test]
     fn auto_ping_synthesizes_each_ping_capable_adapter_with_a_root() {
         let catalog = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
             .with_auto_ping(true, Some(Path::new("/repo")));
@@ -534,13 +562,11 @@ mod tests {
             assert_eq!(task.entry.root, Path::new("/repo"));
             assert_eq!(task.entry.worktree, None);
             assert_eq!(
-                task.action(name).unwrap(),
-                TaskAction::Spawn(format!("{kind}-ping"))
+                task.action().unwrap(),
+                &TaskAction::Spawn(format!("{kind}-ping"))
             );
             assert!(matches!(
-                super::super::parse_schedule(name, &task.entry)
-                    .unwrap()
-                    .schedule,
+                task.schedule().as_ref().unwrap().schedule,
                 super::super::Schedule::WindowReset
             ));
         }
@@ -601,13 +627,13 @@ mod tests {
     #[test]
     fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
         let mut entry = task("wake");
-        assert!(!is_ephemeral(&entry));
+        assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
 
         entry.every = None;
-        assert!(is_ephemeral(&entry));
+        assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
 
         entry.every = Some("15m".to_owned());
         entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
-        assert!(is_ephemeral(&entry));
+        assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
     }
 }

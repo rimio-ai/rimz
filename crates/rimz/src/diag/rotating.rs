@@ -1,14 +1,15 @@
-//! Small rotating JSONL append helper for diagnostic logs.
+//! Small rotating JSONL streaming read/write helper for diagnostic logs.
 //!
 //! The caller owns the record schema and path. This module owns the shared
 //! rotation lock and append discipline so diagnostic files do not grow separate
 //! implementations.
 
 use std::fs::OpenOptions;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::store::atomic;
 
@@ -32,6 +33,24 @@ impl JsonlLog {
     pub fn append<T: Serialize>(&self, record: &T) {
         if let Err(err) = append_rotating_jsonl(&self.path, self.max_bytes, record) {
             tracing::debug!(path = %self.path.display(), error = %err, "diagnostic log append failed");
+        }
+    }
+
+    /// Visit decodable records oldest generation first, best-effort per file and line.
+    pub fn visit_records<T: DeserializeOwned>(&self, mut visit: impl FnMut(T)) {
+        let rotated = rotated_path(&self.path);
+        for path in [rotated.as_path(), self.path.as_path()] {
+            let Ok(file) = std::fs::File::open(path) else {
+                continue;
+            };
+            for line in std::io::BufReader::new(file).lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if let Ok(record) = serde_json::from_str(&line) {
+                    visit(record);
+                }
+            }
         }
     }
 }
@@ -159,6 +178,7 @@ impl Drop for RotationLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     #[test]
     fn appends_jsonl_and_rotates_one_generation() {
@@ -174,6 +194,39 @@ mod tests {
             "{\"n\":1}\n"
         );
         assert_eq!(std::fs::read_to_string(path).unwrap(), "{\"n\":2}\n");
+    }
+
+    #[test]
+    fn visitor_streams_rotated_then_active_and_skips_bad_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.log.jsonl");
+        let log = JsonlLog::new(path.clone(), 16);
+        log.append(&serde_json::json!({ "n": 1 }));
+        log.append(&serde_json::json!({ "n": 2 }));
+        log.append(&serde_json::json!({ "n": 3 }));
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"not-json\n{\"n\":4}\n")
+            .unwrap();
+
+        let mut seen = Vec::new();
+        log.visit_records::<serde_json::Value>(|record| seen.push(record["n"].as_u64().unwrap()));
+
+        assert_eq!(seen, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn visitor_skips_missing_rotated_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = JsonlLog::new(dir.path().join("binding.log.jsonl"), 1024);
+        log.append(&serde_json::json!({ "n": 1 }));
+
+        let mut seen = Vec::new();
+        log.visit_records::<serde_json::Value>(|record| seen.push(record["n"].as_u64().unwrap()));
+
+        assert_eq!(seen, vec![1]);
     }
 
     #[test]

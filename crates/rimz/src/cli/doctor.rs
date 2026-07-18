@@ -109,8 +109,8 @@ fn collect_loop() -> model::LoopTasks {
         .visible()
         .iter()
         .map(|(name, task)| {
-            let entry = &task.entry;
-            let (when, valid) = match rimz::harness::schedule::parse_schedule(name, entry) {
+            let entry = task.entry();
+            let (when, valid) = match task.schedule() {
                 Ok(schedule) => (schedule.describe(), true),
                 Err(err) => (format!("invalid: {err}"), false),
             };

@@ -150,7 +150,9 @@ pub(crate) fn loop_tasks() -> Vec<CompletionCandidate> {
         .visible()
         .iter()
         .map(|(name, task)| {
-            let help = rimz::harness::schedule::parse_schedule(name, &task.entry)
+            let help = task
+                .schedule()
+                .as_ref()
                 .map(|schedule| schedule.describe())
                 .unwrap_or_else(|error| format!("invalid: {error}"));
             candidate(name, help)

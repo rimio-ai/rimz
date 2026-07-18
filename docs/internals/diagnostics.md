@@ -10,7 +10,7 @@ Most of this doc is the local log and the [frame-stream observer](#the-frame-str
 
 Each workspace writes its diagnostic logs under its state directory, `~/.local/state/rimz/workspaces/<workspace-id>/`. The state directory is the right home because the job is investigation after the pane, mux session, or machine has gone away: runtime caches under `$XDG_RUNTIME_DIR` die with the session, while these records survive reboot like store records.
 
-The `diag/` module owns a family of append-only JSONL surfaces that share one rotating helper, [`JsonlLog`](../../crates/rimz/src/diag/rotating.rs): every file rotates at 1 MiB to one kept generation (`<name>.1.jsonl`) and appends best-effort, so a failed write logs at debug rather than surfacing on a RimZ path. Three of these surfaces carry the workspace identity through one [`DiagSink`](../../crates/rimz/src/diag.rs); a disabled sink is a no-op with the same methods, so the emitting callsites need no `#[cfg]` or branch.
+The `diag/` module owns a family of append-only JSONL surfaces that share one rotating streaming interface, [`JsonlLog`](../../crates/rimz/src/diag/rotating.rs): every file rotates at 1 MiB to one kept generation (`<name>.1.jsonl`), appends best-effort, and visits decoded records from the retained generation through the active file without collecting them internally. A failed write logs at debug rather than surfacing on a RimZ path, while missing files and malformed read lines contribute no records. Three of these surfaces carry the workspace identity through one [`DiagSink`](../../crates/rimz/src/diag.rs); a disabled sink is a no-op with the same methods, so the emitting callsites need no `#[cfg]` or branch.
 
 | Surface | Location | Records | Owner |
 | --- | --- | --- | --- |

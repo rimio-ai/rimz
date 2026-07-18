@@ -1214,6 +1214,30 @@ fn loop_list_uses_room_arm_stamp_for_next_fire() {
 }
 
 #[test]
+fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.invalid]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\nat = \"07:00\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let list = loop_ok(&env, &["loop", "list"]);
+    let show = loop_ok(&env, &["loop", "show", "invalid"]);
+    let fire = loop_ok(&env, &["loop", "fire", "invalid"]);
+
+    assert!(
+        list.lines()
+            .any(|line| { line.trim_start().starts_with("invalid") && line.contains("invalid:") })
+            && show.contains("invalid — invalid:")
+            && fire.contains("check passed"),
+        "{list}\n{show}\n{fire}"
+    );
+}
+
+#[test]
 fn loop_reset_cadence_requires_ping_and_handles_cold_cache() {
     let env = Env::new();
     let (_stdout, error) = loop_fail(
