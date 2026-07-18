@@ -1694,7 +1694,7 @@ pub fn binding_cache_matches(
 }
 
 /// Resolve the exact provider account a fresh ping task would launch with.
-pub fn managed_ping_binding(entry: &TaskEntry, kind: &str) -> Option<ProviderAccountBinding> {
+fn managed_ping_binding(entry: &TaskEntry, kind: &str) -> Option<ProviderAccountBinding> {
     if kind != "qwen" || entry.worktree.is_some() {
         return None;
     }
@@ -1832,7 +1832,7 @@ fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
     }
 }
 
-pub(crate) fn reset_signal(capacity: Option<&ProviderCapacity>, now: Timestamp) -> ResetSignal {
+fn reset_signal(capacity: Option<&ProviderCapacity>, now: Timestamp) -> ResetSignal {
     match capacity.map(|capacity| capacity.longest_window_signal(now)) {
         Some(LongestWindowSignal::At(reset_at)) => ResetSignal::At(reset_at),
         Some(LongestWindowSignal::ConfirmedDown) => ResetSignal::ConfirmedDown,
@@ -1840,7 +1840,7 @@ pub(crate) fn reset_signal(capacity: Option<&ProviderCapacity>, now: Timestamp) 
     }
 }
 
-pub(crate) fn reset_signal_for(
+fn reset_signal_for_binding(
     runtime: &RuntimePaths,
     kind: &str,
     binding: Option<&ProviderAccountBinding>,
@@ -1851,14 +1851,29 @@ pub(crate) fn reset_signal_for(
 }
 
 /// Reset signal for `entry`'s provider longest budget window.
-pub fn window_reset_signal(
+pub fn window_reset_signal(entry: &TaskEntry, kind: &str, now: Timestamp) -> Result<ResetSignal> {
+    let runtime = entry_runtime(entry)?;
+    Ok(window_reset_signal_in(&runtime, entry, kind, now))
+}
+
+pub(super) fn window_reset_signal_in(
+    runtime: &RuntimePaths,
     entry: &TaskEntry,
+    kind: &str,
+    now: Timestamp,
+) -> ResetSignal {
+    let binding = managed_ping_binding(entry, kind);
+    reset_signal_for_binding(runtime, kind, binding.as_ref(), now)
+}
+
+#[cfg(test)]
+pub(super) fn reset_signal_for_test_binding(
+    runtime: &RuntimePaths,
     kind: &str,
     binding: Option<&ProviderAccountBinding>,
     now: Timestamp,
-) -> Result<ResetSignal> {
-    let runtime = entry_runtime(entry)?;
-    Ok(reset_signal_for(&runtime, kind, binding, now))
+) -> ResetSignal {
+    reset_signal_for_binding(runtime, kind, binding, now)
 }
 
 fn capacity_for(

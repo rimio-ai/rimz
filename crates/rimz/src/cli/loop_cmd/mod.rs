@@ -33,10 +33,10 @@ use rimz::harness::schedule::run_log::{
 };
 use rimz::harness::schedule::runner::{
     CheckEcho, ResolvedTaskSpec, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
-    StopAction, managed_ping_binding, newest_active_run, newest_active_run_for_entry,
-    next_stop_action, parse_mode, parse_task_timeout, ping_kind_supported, preflight_entry,
-    probe_run_lock, resolve_task_spec, run_lock_path, signal_run_lock_holder, tail_output,
-    wait_for_run_lock_release, window_reset_signal,
+    StopAction, newest_active_run, newest_active_run_for_entry, next_stop_action, parse_mode,
+    parse_task_timeout, ping_kind_supported, preflight_entry, probe_run_lock, resolve_task_spec,
+    run_lock_path, signal_run_lock_holder, tail_output, wait_for_run_lock_release,
+    window_reset_signal,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -326,11 +326,7 @@ fn reset_signal_for(entry: &TaskEntry, now: Timestamp) -> schedule::ResetSignal 
     else {
         return schedule::ResetSignal::Unknown;
     };
-    let binding = (kind == "qwen")
-        .then(|| managed_ping_binding(entry, kind))
-        .flatten();
-    window_reset_signal(entry, kind, binding.as_ref(), now)
-        .unwrap_or(schedule::ResetSignal::Unknown)
+    window_reset_signal(entry, kind, now).unwrap_or(schedule::ResetSignal::Unknown)
 }
 
 fn observe_task_timing(

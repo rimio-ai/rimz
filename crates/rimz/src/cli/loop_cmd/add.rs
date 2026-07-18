@@ -559,14 +559,7 @@ fn first_next_fire(entry: &TaskEntry, parsed: &schedule::ParsedSchedule) -> Opti
             .agent
             .as_deref()
             .and_then(rimz::harness::spec::ping_kind)
-            .and_then(|kind| {
-                let binding = if kind == "qwen" {
-                    managed_ping_binding(entry, kind)
-                } else {
-                    None
-                };
-                window_reset_signal(entry, kind, binding.as_ref(), now).ok()
-            })
+            .and_then(|kind| window_reset_signal(entry, kind, now).ok())
             .unwrap_or(schedule::ResetSignal::Unknown),
         _ => schedule::ResetSignal::Unknown,
     };
