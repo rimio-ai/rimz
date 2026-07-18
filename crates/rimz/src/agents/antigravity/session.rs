@@ -332,6 +332,7 @@ impl AntigravityDiscoverySnapshot {
             self.work.full_scans += 1;
         }
         let brain = key.home.join("brain");
+        let topology_before = stamp_paths([brain.clone()]);
         let mut catalog = Vec::new();
         if ProviderPathStamp::read(&brain).is_dir()
             && let Ok(entries) = fs::read_dir(&brain)
@@ -359,10 +360,11 @@ impl AntigravityDiscoverySnapshot {
                 });
             }
         }
+        let stable = stamps_unchanged(&topology_before);
         self.key = Some(key.clone());
-        self.last_full_scan = Some(now);
+        self.last_full_scan = stable.then_some(now);
         self.topology = stamp_paths([brain]);
-        self.catalog = catalog;
+        self.catalog = stable.then_some(catalog).unwrap_or_default();
     }
 
     fn refresh_conversation(

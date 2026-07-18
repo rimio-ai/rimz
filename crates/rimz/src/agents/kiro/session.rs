@@ -477,6 +477,7 @@ impl KiroDiscoverySnapshot {
         }
         let sessions_root = key.home.join("sessions");
         let mut topology = vec![sessions_root.clone()];
+        let mut topology_before = stamp_paths([sessions_root.clone()]);
         let mut catalog = Vec::new();
         for workspace in &key.workspaces {
             let Some(bucket_name) = workspace_bucket(workspace) else {
@@ -484,6 +485,7 @@ impl KiroDiscoverySnapshot {
             };
             let bucket = sessions_root.join(bucket_name);
             topology.push(bucket.clone());
+            topology_before.push((bucket.clone(), ProviderPathStamp::read(&bucket)));
             if !regular_dir(&sessions_root)
                 || !regular_dir(&bucket)
                 || fs::canonicalize(&bucket)
@@ -533,12 +535,13 @@ impl KiroDiscoverySnapshot {
                 catalog.push(candidate);
             }
         }
+        let stable = stamps_unchanged(&topology_before);
         topology.sort();
         topology.dedup();
         self.key = Some(key.clone());
-        self.last_full_scan = Some(now);
+        self.last_full_scan = stable.then_some(now);
         self.topology = stamp_paths(topology);
-        self.catalog = catalog;
+        self.catalog = stable.then_some(catalog).unwrap_or_default();
     }
 
     fn fold_candidates(&mut self, forced: bool) -> (Vec<LocalSessionObservation>, bool) {

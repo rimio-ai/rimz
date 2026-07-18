@@ -136,7 +136,7 @@ impl ClaudeDiscoverySnapshot {
         {
             self.work.full_scans += 1;
         }
-        let mut topology_paths = Vec::new();
+        let mut topology_before = Vec::new();
         let mut catalog = Vec::new();
         for config_dir in &key.config_dirs {
             for workspace in &key.workspaces {
@@ -147,17 +147,22 @@ impl ClaudeDiscoverySnapshot {
                     config_dir,
                     workspace,
                     &project_dir,
-                    &mut topology_paths,
+                    &mut topology_before,
                     &mut catalog,
                 );
             }
         }
+        let stable = stamps_unchanged(&topology_before);
+        let mut topology_paths = topology_before
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>();
         topology_paths.sort();
         topology_paths.dedup();
         self.key = Some(key.clone());
-        self.last_full_scan = Some(now);
+        self.last_full_scan = stable.then_some(now);
         self.topology = stamp_paths(topology_paths);
-        self.catalog = catalog;
+        self.catalog = stable.then_some(catalog).unwrap_or_default();
     }
 
     fn refresh_candidate(
@@ -201,11 +206,12 @@ fn collect_catalog(
     config_dir: &Path,
     workspace: &Path,
     dir: &Path,
-    topology: &mut Vec<PathBuf>,
+    topology: &mut Vec<(PathBuf, ProviderPathStamp)>,
     catalog: &mut Vec<CatalogEntry>,
 ) {
-    topology.push(dir.to_path_buf());
-    if !ProviderPathStamp::read(dir).is_dir() {
+    let stamp = ProviderPathStamp::read(dir);
+    topology.push((dir.to_path_buf(), stamp.clone()));
+    if !stamp.is_dir() {
         return;
     }
     let Ok(entries) = fs::read_dir(dir) else {

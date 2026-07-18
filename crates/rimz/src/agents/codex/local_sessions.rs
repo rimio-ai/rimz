@@ -169,14 +169,20 @@ impl CodexDiscoverySnapshot {
         let archive = key.home.join("archived_sessions");
         let dates = recent_dates(key.today);
         let cutoff = *dates.last().unwrap_or(&key.today);
+        let day_paths = dates
+            .into_iter()
+            .map(|date| {
+                sessions
+                    .join(format!("{:04}", date.year()))
+                    .join(format!("{:02}", date.month()))
+                    .join(format!("{:02}", date.day()))
+            })
+            .collect::<Vec<_>>();
         let mut topology_paths = vec![sessions.clone(), archive.clone()];
+        topology_paths.extend(day_paths.iter().cloned());
+        let topology_before = stamp_paths(topology_paths.clone());
         let mut catalog = Vec::new();
-        for date in dates {
-            let day = sessions
-                .join(format!("{:04}", date.year()))
-                .join(format!("{:02}", date.month()))
-                .join(format!("{:02}", date.day()));
-            topology_paths.push(day.clone());
+        for day in day_paths {
             let Ok(entries) = fs::read_dir(day) else {
                 continue;
             };
@@ -206,10 +212,11 @@ impl CodexDiscoverySnapshot {
                     }),
             );
         }
+        let stable = stamps_unchanged(&topology_before);
         self.key = Some(key.clone());
-        self.last_full_scan = Some(now);
+        self.last_full_scan = stable.then_some(now);
         self.topology = stamp_paths(topology_paths);
-        self.catalog = catalog;
+        self.catalog = stable.then_some(catalog).unwrap_or_default();
     }
 
     fn refresh_header(

@@ -11,6 +11,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::agents::context::{AgentTurnError, TurnErrorClass};
+use crate::agents::local_session_cache::{ProviderPathStamp, stamp_paths, stamps_unchanged};
 use crate::agents::transcript_fs::deserialize_optional_string_lossy;
 use crate::agents::{LocalContextRefresh, LocalContextRefreshCtx, TranscriptStat};
 
@@ -163,6 +164,7 @@ pub(super) fn discover_under(root: &Path, conversation_id: &str) -> Option<PathB
 
 pub(super) struct DiscoveryCatalog {
     pub(super) topology_paths: Vec<PathBuf>,
+    pub(super) stable: bool,
     dependencies: HashMap<String, Vec<PathBuf>>,
     resolved: HashMap<String, Option<PathBuf>>,
 }
@@ -170,6 +172,7 @@ pub(super) struct DiscoveryCatalog {
 impl DiscoveryCatalog {
     pub(super) fn build(root: &Path, conversation_ids: &[String]) -> Self {
         let mut topology_paths = vec![root.to_path_buf()];
+        let mut topology_before = stamp_paths([root.to_path_buf()]);
         let mut dependencies = conversation_ids
             .iter()
             .map(|id| (id.clone(), Vec::new()))
@@ -185,8 +188,10 @@ impl DiscoveryCatalog {
                 }
                 let project = entry.path();
                 let transcripts = project.join("agent-transcripts");
-                topology_paths.push(project);
+                topology_paths.push(project.clone());
                 topology_paths.push(transcripts.clone());
+                topology_before.push((project.clone(), ProviderPathStamp::read(&project)));
+                topology_before.push((transcripts.clone(), ProviderPathStamp::read(&transcripts)));
                 for id in conversation_ids {
                     let conversation = transcripts.join(id);
                     let path = conversation.join(format!("{id}.jsonl"));
@@ -204,6 +209,7 @@ impl DiscoveryCatalog {
         }
         topology_paths.sort();
         topology_paths.dedup();
+        let stable = stamps_unchanged(&topology_before);
         let resolved = matches
             .into_iter()
             .map(|(id, mut paths)| {
@@ -218,12 +224,14 @@ impl DiscoveryCatalog {
             .collect();
         Self {
             topology_paths,
+            stable,
             dependencies,
             resolved,
         }
     }
 
     pub(super) fn resolve(&self, conversation_id: &str) -> Option<&Path> {
+        self.stable.then_some(())?;
         self.resolved.get(conversation_id)?.as_deref()
     }
 

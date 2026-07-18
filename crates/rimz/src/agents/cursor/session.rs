@@ -357,12 +357,15 @@ impl CursorDiscoverySnapshot {
             self.work.full_scans += 1;
         }
         let mut topology = Vec::new();
+        let workspace_before = stamp_kind_paths(key.workspaces.iter().cloned());
+        let mut topology_before = Vec::new();
         let mut catalog = Vec::new();
         for workspace in &key.workspaces {
             let Some((bucket, workspace)) = chats_bucket(&key.home, workspace) else {
                 continue;
             };
             topology.push(bucket.clone());
+            topology_before.push((bucket.clone(), ProviderPathStamp::read(&bucket)));
             let Ok(entries) = fs::read_dir(&bucket) else {
                 continue;
             };
@@ -379,11 +382,12 @@ impl CursorDiscoverySnapshot {
         }
         topology.sort();
         topology.dedup();
+        let stable = kind_stamps_unchanged(&workspace_before) && stamps_unchanged(&topology_before);
         self.key = Some(key.clone());
-        self.last_full_scan = Some(now);
+        self.last_full_scan = stable.then_some(now);
         self.base_topology = topology;
         self.workspace_stamps = stamp_kind_paths(key.workspaces.iter().cloned());
-        self.catalog = catalog;
+        self.catalog = stable.then_some(catalog).unwrap_or_default();
         self.transcripts = None;
         self.selected_ids.clear();
     }
@@ -421,6 +425,9 @@ impl CursorDiscoverySnapshot {
     fn rebuild_transcripts(&mut self, home: &Path, selected_ids: Vec<String>) {
         let catalog =
             super::transcript::DiscoveryCatalog::build(&home.join("projects"), &selected_ids);
+        if !catalog.stable {
+            self.last_full_scan = None;
+        }
         let mut topology = self.base_topology.clone();
         topology.extend(catalog.topology_paths.iter().cloned());
         topology.sort();
