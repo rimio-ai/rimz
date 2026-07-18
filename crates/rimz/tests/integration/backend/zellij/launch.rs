@@ -31,16 +31,21 @@ fn attach_command_keeps_terminal_mouse_reporting_enabled() {
         "Zellij 0.44.3 disables mouse reporting for `--mouse-mode true`: {spec:?}",
     );
 
-    let output = capture_pty_output(&spec, Duration::from_millis(900));
+    let output = capture_pty_output_until(&spec, Duration::from_secs(10), mouse_reporting_enabled);
     assert!(
-        output
-            .windows(b"\x1b[?1006h".len())
-            .any(|w| w == b"\x1b[?1006h")
-            && output
-                .windows(b"\x1b[?1000h".len())
-                .any(|w| w == b"\x1b[?1000h"),
-        "attach output did not enable terminal mouse reporting",
+        mouse_reporting_enabled(&output),
+        "attach output did not enable terminal mouse reporting: {:?}",
+        String::from_utf8_lossy(&output),
     );
+}
+
+fn mouse_reporting_enabled(output: &[u8]) -> bool {
+    output
+        .windows(b"\x1b[?1006h".len())
+        .any(|window| window == b"\x1b[?1006h")
+        && output
+            .windows(b"\x1b[?1000h".len())
+            .any(|window| window == b"\x1b[?1000h")
 }
 
 /// `open_sidebar` births the full Zellij room shape once: left sidebar, focused

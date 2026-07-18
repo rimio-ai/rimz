@@ -98,6 +98,7 @@ const NEW_TAB_MATERIALIZE_STEP: Duration = Duration::from_millis(50);
 /// handing control back to the caller.
 const FOCUS_RESTORE_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 const FOCUS_RESTORE_CONFIRM_STEP: Duration = Duration::from_millis(50);
+const FOCUS_RESTORE_STABLE_FOR: Duration = Duration::from_millis(500);
 
 /// Pipe name the presence-plugin launch sends its boot message down.
 const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";

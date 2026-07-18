@@ -266,6 +266,7 @@ impl ZellijBackend {
         restore: &FocusRestoreTarget,
     ) -> Result<()> {
         let deadline = Instant::now() + super::FOCUS_RESTORE_CONFIRM_WINDOW;
+        let mut stable_since = None;
         loop {
             let last_error = match self
                 .go_to_tab_position(session_name, restore.tab_position)
@@ -279,14 +280,25 @@ impl ZellijBackend {
                     .map(|view| view.viewed_panes)
                 {
                     Ok(focused) if focused.iter().any(|pane| pane == &restore.pane) => {
-                        return Ok(());
+                        let since = stable_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= super::FOCUS_RESTORE_STABLE_FOR {
+                            return Ok(());
+                        }
+                        format!("focus matched for {:?}", since.elapsed())
                     }
                     Ok(focused) => {
+                        stable_since = None;
                         format!("focused panes were {focused:?}")
                     }
-                    Err(err) => err.to_string(),
+                    Err(err) => {
+                        stable_since = None;
+                        err.to_string()
+                    }
                 },
-                Err(err) => err.to_string(),
+                Err(err) => {
+                    stable_since = None;
+                    err.to_string()
+                }
             };
             if Instant::now() >= deadline {
                 return Err(MuxErr::Output {
@@ -1279,15 +1291,13 @@ fn settle_tab_focus(
     tab_position: u64,
     raw_id: u64,
 ) -> bool {
-    const STABLE_FOR: Duration = Duration::from_millis(500);
-
     let deadline = Instant::now() + super::FOCUS_RESTORE_CONFIRM_WINDOW;
     let mut stable_since = None;
     loop {
         let _ = backend.focus_terminal(session_name, raw_id);
         if tab_focus_is(backend, session_name, workspace_id, tab_position, raw_id) {
             let since = stable_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= STABLE_FOR {
+            if since.elapsed() >= super::FOCUS_RESTORE_STABLE_FOR {
                 return true;
             }
         } else {

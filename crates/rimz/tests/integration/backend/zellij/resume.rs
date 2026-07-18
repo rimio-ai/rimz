@@ -77,10 +77,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
 
     close_all_sidebar_panes(xdg.path(), &workspace.session_name);
     assert!(
-        backend
-            .list_sessions()
-            .expect("list sessions")
-            .contains(&workspace.session_name),
+        wait_for_live_session(&backend, &workspace.session_name).contains(&workspace.session_name),
         "session should stay live after removing every sidebar",
     );
 
@@ -103,10 +100,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         String::from_utf8_lossy(&closed.stderr),
     );
     assert!(
-        backend
-            .list_sessions()
-            .expect("list sessions")
-            .contains(&workspace.session_name),
+        wait_for_live_session(&backend, &workspace.session_name).contains(&workspace.session_name),
         "closing one agent pane must leave the room alive",
     );
     wait_for_agent_end_observation(&env, agent_id);

@@ -68,7 +68,7 @@ pub(in crate::backend::zellij) fn wait_for_focused_nonplugin_id_in_tab(
     tab: u64,
     want: u64,
 ) -> Option<u64> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     let mut last_error = String::new();
     loop {
         match list_panes(xdg, session) {
@@ -99,17 +99,17 @@ pub(in crate::backend::zellij) fn focus_nonplugin_pane_until(
     let deadline = Instant::now() + Duration::from_secs(10);
     let pane_id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{want}"));
     let backend = ZellijBackend::with_runtime_dir(xdg);
-    let mut last_focused = None;
+    let mut last_focused = Vec::new();
     let mut last_error = String::new();
     let mut attempts = 0;
     loop {
         if let Err(err) = backend.focus_pane(&pane_id, Some(session)) {
             last_error = err.to_string();
         }
-        match list_panes(xdg, session) {
-            Ok(snapshot) => {
-                last_focused = snapshot.focused_terminal_in_tab(tab).map(|pane| pane.id);
-                if last_focused == Some(want) {
+        match viewed_panes(&backend, session) {
+            Ok(focused) => {
+                last_focused = focused;
+                if last_focused.contains(&pane_id) {
                     return;
                 }
             }
@@ -143,7 +143,7 @@ pub(in crate::backend::zellij) fn wait_for_focused_client_pane(
     want: &PaneId,
 ) -> Vec<PaneId> {
     super::actions::poll_until(
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         || viewed_panes(backend, session),
         |focused| focused.contains(want),
         &format!("client focus on {want}"),

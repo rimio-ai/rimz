@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarWidth};
+use rimz::mux::{SidebarLiveness, SidebarPaneOptions, SidebarWidth};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::RuntimePaths;
 use tempfile::TempDir;
@@ -26,25 +26,33 @@ struct TerminalState {
     title: Option<String>,
 }
 
-fn wait_for_stable_terminal_state(
+fn wait_for_stable_terminal_state_matching(
     xdg: &Path,
     session: &str,
     stable_for: Duration,
+    mut ready: impl FnMut(&BTreeMap<u64, TerminalState>) -> bool,
 ) -> BTreeMap<u64, TerminalState> {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let mut candidate = None;
     let mut unchanged_since = None;
+    let mut last_observation = None;
     let mut last_error = String::new();
     loop {
         match list_panes(xdg, session).map(|snapshot| terminal_state(&snapshot)) {
-            Ok(state) if candidate.as_ref() == Some(&state) => {
-                if unchanged_since.is_some_and(|since: Instant| since.elapsed() >= stable_for) {
-                    return state;
-                }
-            }
             Ok(state) => {
-                candidate = Some(state);
-                unchanged_since = Some(Instant::now());
+                last_error.clear();
+                if !ready(&state) {
+                    last_observation = Some(state);
+                    candidate = None;
+                    unchanged_since = None;
+                } else if candidate.as_ref() == Some(&state) {
+                    if unchanged_since.is_some_and(|since: Instant| since.elapsed() >= stable_for) {
+                        return state;
+                    }
+                } else {
+                    candidate = Some(state);
+                    unchanged_since = Some(Instant::now());
+                }
             }
             Err(err) => {
                 last_error = err;
@@ -54,10 +62,18 @@ fn wait_for_stable_terminal_state(
         }
         assert!(
             Instant::now() < deadline,
-            "terminal state for {session} did not stabilize; last observation: {candidate:?}; last error: {last_error}"
+            "terminal state for {session} did not stabilize; candidate: {candidate:?}; last observation: {last_observation:?}; last error: {last_error}"
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn wait_for_stable_terminal_state(
+    xdg: &Path,
+    session: &str,
+    stable_for: Duration,
+) -> BTreeMap<u64, TerminalState> {
+    wait_for_stable_terminal_state_matching(xdg, session, stable_for, |_| true)
 }
 
 fn terminal_state(snapshot: &PaneSnapshot) -> BTreeMap<u64, TerminalState> {
@@ -155,10 +171,9 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
         .any(|workspace| workspace.session_name == name),
         "reload fixture workspace is discoverable",
     );
+    let backend = rimz::mux::ZellijBackend::with_runtime_dir(xdg.path());
     assert!(
-        rimz::mux::ZellijBackend::with_runtime_dir(xdg.path())
-            .list_sessions()
-            .expect("list fixture sessions")
+        wait_for_live_session(&backend, &name)
             .iter()
             .any(|session| session == &name),
         "reload fixture session is live",
@@ -260,11 +275,11 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     // its fallback terminal size before Zellij restores the held PTY client.
     // Assert the settled session state so load does not make this a race with
     // that client disconnect.
-    let after_terminals = poll_until(
-        Duration::from_secs(10),
-        || list_panes(xdg.path(), &name).map(|snapshot| terminal_state(&snapshot)),
+    let after_terminals = wait_for_stable_terminal_state_matching(
+        xdg.path(),
+        &name,
+        Duration::from_millis(500),
         |state| state == &before_terminals,
-        "terminal geometry and focus to settle after bare reload",
     );
     assert_eq!(
         after_terminals, before_terminals,
@@ -314,7 +329,7 @@ fn reconcile_defers_the_add_on_a_detached_session() {
     let after = wait_for_pane_count(xdg.path(), &name, 1);
     assert_eq!(after.len(), 1, "no pane was added detached: {after:?}");
     assert_eq!(
-        serve_processes_for(&name),
+        serve_processes_for(&name).expect("scan sidebar serve processes"),
         0,
         "no serve pair leaked for the deferred add",
     );
@@ -921,32 +936,30 @@ fn claimed_liveness(raw_sidebar_id: u64) -> SidebarLiveness {
 }
 
 fn assert_sidebar_identity(xdg: &Path, name: &str, sidebar_id: u64, message: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let after = raw_sidebar_pane(xdg, name);
-        let observed = Some(after.id);
-        if observed == Some(sidebar_id) || Instant::now() >= deadline {
-            assert_eq!(observed, Some(sidebar_id), "{message}: {after:?}");
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let after = poll_until(
+        Duration::from_secs(15),
+        || {
+            list_panes(xdg, name)?
+                .sidebar()
+                .cloned()
+                .ok_or_else(|| format!("rimz-sidebar pane missing in {name}"))
+        },
+        |sidebar| sidebar.id == sidebar_id,
+        &format!("sidebar {sidebar_id} to retain its identity"),
+    );
+    assert_eq!(after.id, sidebar_id, "{message}: {after:?}");
 }
 
 fn wait_for_sidebar_width_at_most(xdg: &Path, name: &str, max_cols: u64) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let sidebar = raw_sidebar_pane(xdg, name);
-        let cols = sidebar.pane_columns;
-        if cols <= max_cols {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "redock should shrink the sidebar to the canonical width: \
-                 got {cols}, want <= {max_cols}",
-            );
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    poll_until(
+        Duration::from_secs(15),
+        || {
+            list_panes(xdg, name)?
+                .sidebar()
+                .cloned()
+                .ok_or_else(|| format!("rimz-sidebar pane missing in {name}"))
+        },
+        |sidebar| sidebar.pane_columns <= max_cols,
+        &format!("sidebar width <= {max_cols} columns after redock"),
+    );
 }

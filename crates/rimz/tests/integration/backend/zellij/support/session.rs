@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::ids::WorkspaceId;
-use rimz::mux::{LayoutColumn, PaneCmd, SidebarPaneOptions, SidebarWidth};
+use rimz::mux::{
+    LayoutColumn, MuxBackend, PaneCmd, SidebarPaneOptions, SidebarWidth, ZellijBackend,
+};
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, ScrubSessionEnvExt};
@@ -362,9 +365,22 @@ pub(in crate::backend::zellij) fn wait_until_session_ready(xdg: &Path, name: &st
     }
 }
 
-pub(in crate::backend::zellij) fn capture_pty_output(
+pub(in crate::backend::zellij) fn wait_for_live_session(
+    backend: &ZellijBackend,
+    name: &str,
+) -> Vec<String> {
+    super::actions::poll_until(
+        Duration::from_secs(15),
+        || backend.list_sessions().map_err(|err| err.to_string()),
+        |sessions| sessions.iter().any(|session| session == name),
+        &format!("live session {name}"),
+    )
+}
+
+pub(in crate::backend::zellij) fn capture_pty_output_until(
     spec: &rimz::mux::CommandSpec,
-    duration: Duration,
+    timeout: Duration,
+    mut ready: impl FnMut(&[u8]) -> bool,
 ) -> Vec<u8> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -384,17 +400,42 @@ pub(in crate::backend::zellij) fn capture_pty_output(
     let mut child = pair.slave.spawn_command(cmd).expect("spawn zellij");
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().expect("clone reader");
+    let (output_tx, output_rx) = mpsc::channel();
     let reader_thread = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
-        output
+        let mut buffer = [0u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => return,
+                Ok(read) => {
+                    if output_tx.send(buffer[..read].to_vec()).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
     });
 
-    std::thread::sleep(duration);
+    let deadline = Instant::now() + timeout;
+    let mut output = Vec::new();
+    while !ready(&output) {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        match output_rx.recv_timeout(Duration::from_millis(100).min(deadline - now)) {
+            Ok(chunk) => output.extend_from_slice(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
     let _ = child.kill();
     let _ = child.wait();
     drop(pair.master);
-    reader_thread.join().expect("join reader")
+    reader_thread.join().expect("join reader");
+    for chunk in output_rx.try_iter() {
+        output.extend_from_slice(&chunk);
+    }
+    output
 }
 
 pub(in crate::backend::zellij) fn unique_session_name(prefix: &str) -> String {

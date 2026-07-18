@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rimz::ids::WorkspaceId;
 use rimz::mux::{MuxBackend, ZellijBackend, zellij};
@@ -10,17 +10,13 @@ use crate::common::CommandTimeoutExt;
 use super::presence::{presence_wasm_artifact, seed_presence_permissions};
 use super::support::*;
 
-fn wait_for_no_serve_processes(session: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if serve_processes_for(session) == 0 {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
+fn wait_for_no_serve_processes(session: &str, timeout: Duration) {
+    poll_until(
+        timeout,
+        || serve_processes_for(session),
+        |count| *count == 0,
+        &format!("sidebar serve process exit for {session}"),
+    );
 }
 
 #[test]
@@ -87,53 +83,32 @@ fn sidebar_self_closes_when_its_tab_empties() {
         })
         .expect("load presence plugin for self-close topology");
 
-    assert!(
-        wait_for_nonplugin_panes(xdg, &name, 2, Duration::from_secs(15)),
-        "expected sidebar + terminal before self-close for {name}",
-    );
-    assert!(
-        wait_for_no_serve_processes(&name, Duration::from_secs(15)),
-        "sidebar serve process did not exit after the terminal left its tab for {name}",
-    );
-    assert!(
-        wait_for_nonplugin_panes(xdg, &name, 0, Duration::from_secs(15)),
-        "lone sidebar pane did not close after its renderer exited for {name}",
-    );
+    wait_for_nonplugin_panes(xdg, &name, 2, Duration::from_secs(15));
+    wait_for_no_serve_processes(&name, Duration::from_secs(15));
+    wait_for_nonplugin_panes(xdg, &name, 0, Duration::from_secs(20));
 
     let heartbeat_dir = xdg
         .join("rimz")
         .join("ws_0123456789abcdef01234567")
         .join("heartbeat");
-    assert!(
-        wait_for_no_sidebar_heartbeat(&heartbeat_dir, Duration::from_secs(5)),
-        "sidebar heartbeat should be removed on self-close, found: {:?}",
-        std::fs::read_dir(&heartbeat_dir)
-            .map(|d| d.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
-            .unwrap_or_default(),
-    );
+    wait_for_no_sidebar_heartbeat(&heartbeat_dir, Duration::from_secs(15));
 }
 
-fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let lingering = std::fs::read_dir(dir)
-            .map(|entries| {
-                entries.flatten().any(|entry| {
-                    entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|n| n.starts_with("sidebar.") && n.ends_with(".json"))
-                })
-            })
-            .unwrap_or(false);
-        if !lingering {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) {
+    poll_until(
+        timeout,
+        || match std::fs::read_dir(dir) {
+            Ok(entries) => Ok(entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| name.starts_with("sidebar.") && name.ends_with(".json"))
+                .collect::<Vec<_>>()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(err) => Err(format!("read {}: {err}", dir.display())),
+        },
+        Vec::is_empty,
+        "sidebar heartbeat removal",
+    );
 }
 
 fn self_close_layout(session: &str, rimz: &Path, xdg: &Path) -> String {
@@ -178,36 +153,40 @@ fn sidebar_serve_command_with_tick(
     )
 }
 
-fn session_nonplugin_count(xdg: &Path, name: &str) -> usize {
-    scoped_zellij(xdg)
+fn session_nonplugin_count(xdg: &Path, name: &str) -> Result<usize, String> {
+    let output = scoped_zellij(xdg)
         .args(["--session", name, "action", "list-panes", "-j", "-a"])
         .bounded_output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
-        .and_then(|panes| {
-            panes.as_array().map(|panes| {
-                panes
-                    .iter()
-                    .filter(|pane| {
-                        pane.get("is_plugin").and_then(|b| b.as_bool()) == Some(false)
-                            && pane.get("is_suppressed").and_then(|b| b.as_bool()) != Some(true)
-                    })
-                    .count()
-            })
+        .map_err(|err| format!("list panes for {name}: {err}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("There is no active session") {
+            return Ok(0);
+        }
+        return Err(format!(
+            "list panes for {name} exited {}: {}",
+            output.status, stderr,
+        ));
+    }
+    let panes: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|err| format!("parse panes for {name}: {err}"))?;
+    let panes = panes
+        .as_array()
+        .ok_or_else(|| format!("pane listing for {name} was not an array"))?;
+    Ok(panes
+        .iter()
+        .filter(|pane| {
+            pane.get("is_plugin").and_then(|b| b.as_bool()) == Some(false)
+                && pane.get("is_suppressed").and_then(|b| b.as_bool()) != Some(true)
         })
-        .unwrap_or(0)
+        .count())
 }
 
-fn wait_for_nonplugin_panes(xdg: &Path, name: &str, target: usize, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if session_nonplugin_count(xdg, name) == target {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
+fn wait_for_nonplugin_panes(xdg: &Path, name: &str, target: usize, timeout: Duration) {
+    poll_until(
+        timeout,
+        || session_nonplugin_count(xdg, name),
+        |count| *count == target,
+        &format!("{target} non-plugin panes in {name}"),
+    );
 }

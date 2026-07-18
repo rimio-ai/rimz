@@ -9,11 +9,9 @@ use super::actions::{poll_until, spawn_sleep_pane};
 use super::panes::{PaneGeometry, PaneSnapshot, list_panes};
 use super::session::{SPAWN_TIMEOUT, scoped_zellij};
 
-pub(in crate::backend::zellij) fn serve_processes_for(session: &str) -> usize {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return 0;
-    };
-    entries
+pub(in crate::backend::zellij) fn serve_processes_for(session: &str) -> Result<usize, String> {
+    let entries = std::fs::read_dir("/proc").map_err(|err| format!("read /proc: {err}"))?;
+    Ok(entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
@@ -23,7 +21,7 @@ pub(in crate::backend::zellij) fn serve_processes_for(session: &str) -> usize {
             let cmdline = String::from_utf8_lossy(cmdline).replace('\0', " ");
             cmdline.contains(session) && cmdline.contains("sidebar") && cmdline.contains("serve")
         })
-        .count()
+        .count())
 }
 
 pub(in crate::backend::zellij) fn assert_session_has_bottom_bar(xdg: &Path, session: &str) {
