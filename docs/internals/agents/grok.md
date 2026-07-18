@@ -1,6 +1,6 @@
 # Grok Build adapter
 
-Grok is an eagerly registered stock-TUI adapter. RimZ launches `grok`, installs passive global hooks in `${GROK_HOME:-~/.grok}/hooks/rimz.json`, and enriches each session from its durable `updates.jsonl`, `summary.json`, and `signals.json` files. ACP and provider-private billing APIs stay outside this adapter.
+Grok is an eagerly registered stock-TUI adapter. RimZ launches `grok`, installs passive global hooks in `${GROK_HOME:-~/.grok}/hooks/rimz.json`, and enriches each session from its durable `updates.jsonl`, `summary.json`, `signals.json`, and optional `events.jsonl` files. ACP and provider-private billing APIs stay outside this adapter.
 
 ## Hooks and lifecycle
 
@@ -20,7 +20,7 @@ Grok uses three naming conventions on one surface: hook config keys are PascalCa
 
 Notification classification is exact: `permission_prompt` plus `Tool permission requested` or `Diff review requested` is Permission; `Plan approval requested` is PlanApproval; and `elicitation_dialog` plus `User question requested` is Question. Near matches and `agent_error` do not open an ask. Human answers stay in Grok's native pane, and hook stdout stays empty.
 
-The installer writes one four-second managed command, `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source grok`, for every passive event. It omits `PreToolUse`, Grok's blocking decision channel, preserves unrelated global hooks, and restores only RimZ-owned entries on uninstall. `RIMZ_GROK_HOOKS` provides an isolated hook-file override for tests.
+The installer writes one four-second managed command, `rimz hooks feed --source grok`, for every passive event. The hook helper attributes the event through its bounded process-ancestor walk when `RIMZ_AGENT_PID` is absent. The installer omits `PreToolUse`, Grok's blocking decision channel, preserves unrelated global hooks, reclaims older marker-owned RimZ commands on reinstall, and restores only RimZ-owned entries on uninstall. `RIMZ_GROK_HOOKS` provides an isolated hook-file override for tests.
 
 ## Launch and sessions
 
@@ -28,7 +28,7 @@ Interactive launches remain `grok [flags]`. A supervised prompt alone adds `-p <
 
 Ask maps to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`. Plan adds no argv because Grok exposes interactive `/plan` but no launch flag that enforces a plan-only posture. Grok has no provider-window ping profile.
 
-A hook-supplied transcript path is accepted only when its canonical path is an `updates.jsonl` below the resolved sessions root and its parent directory exactly equals `sessionId`. Fallback discovery scans `${GROK_HOME:-~/.grok}/sessions/**/updates.jsonl` by that parent identity. The same resolver feeds lifecycle, context, history, and spend.
+A hook-supplied transcript path is accepted only when its canonical path is an `updates.jsonl` below the resolved sessions root and its parent directory exactly equals `sessionId`. Fallback discovery scans `${GROK_HOME:-~/.grok}/sessions/**/updates.jsonl` by that parent identity. The same resolver feeds lifecycle, context, history, and spend. Only after `updates.jsonl` validates may context enrichment derive an `events.jsonl` sibling whose canonical regular-file path stays in that same canonical session directory; the event file never discovers or identifies a session.
 
 ## Transcript branch and context
 
@@ -36,7 +36,11 @@ A hook-supplied transcript path is accepted only when its canonical path is an `
 
 A `rewind_marker.target_prompt_index` truncates the active fold to that prompt boundary before later records apply. History, final assistant output, context, and cold spend all reuse this fold. Incremental assistant streaming is append-only: it discards bytes before the last rewind marker in the newly read suffix, but cannot retract output already delivered before the cursor.
 
-Local context refresh stat-gates the three session files. `summary.json` supplies model, reasoning effort, and stable title; the newest active-branch `_meta.totalTokens` supplies occupancy; `signals.json.contextWindowTokens` supplies the denominator and is the usage fallback before a rewind. After a rewind with no newer token sample, occupancy remains unknown rather than showing stale abandoned-branch usage. Missing or malformed companion files remove only their optional enrichment.
+Local context refresh stat-gates the validated session files as one aggregate. `summary.json` supplies model, reasoning effort, and stable title; the newest active-branch `_meta.totalTokens` supplies occupancy; `signals.json.contextWindowTokens` supplies the denominator and is the usage fallback before a rewind. After a rewind with no newer token sample, occupancy remains unknown rather than showing stale abandoned-branch usage. Missing or malformed companion files remove only their optional enrichment.
+
+The optional `events.jsonl` tail supplies one display-only permission bracket for Grok versions that persist `permission_requested` and `permission_resolved` records without firing `Notification`. RimZ matches append-ordered records by exact non-empty `tool_name`, publishes the newest unmatched request through `native_permission_wait`, and reads only the bounded record-aligned tail. This marker raises the waiting card and routes attention to Grok's pane; it creates no lifecycle wait, open ask, ask ID, or structured answer path. A later lifecycle activity timestamp self-clears a stale marker through the shared projection.
+
+Exact `Notification` classification remains authoritative when Grok emits it: permission, plan approval, diff review, and question notifications create their existing durable lifecycle/open-ask state. The event sidecar neither broadens those mappings nor competes with them.
 
 ## Spend
 

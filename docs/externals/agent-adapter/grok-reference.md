@@ -265,13 +265,26 @@ A JSON decision overrides the process exit code. Timeouts, crashes, malformed ou
 
 Command hooks receive these reserved variables: `GROK_HOOK_EVENT`, `GROK_HOOK_NAME`, `GROK_SESSION_ID`, `GROK_WORKSPACE_ROOT`, and the compatibility alias `CLAUDE_PROJECT_DIR`. Plugin hooks also receive `GROK_PLUGIN_ROOT` and `GROK_PLUGIN_DATA` plus compatibility aliases. Handler `env` values cannot override reserved variables.
 
-The command runner uses direct execution for simple argv and a shell for syntax that needs expansion or composition. It bounds captured stdout and stderr to 64 KiB each. Hook stdout remains the decision channel; diagnostics belong on stderr.
+The pinned hook parser pre-expands plain `$VAR` and `${VAR}` references in command and URL fields from the handler `env` map and Grok's process environment while preserving unresolved references and shell modifier forms. Command strings that retain shell syntax run through a shell, but the runner first rejects unresolved plain references that are absent from its reserved variables, handler environment, process environment, and recognized local assignments. The hook fails before spawn with a message naming the required variables. HTTP hooks expand again before URL validation so plugin-injected variables can resolve; a still-unresolved reference fails URL validation. The command runner bounds captured stdout and stderr to 64 KiB each. Hook stdout remains the decision channel; diagnostics belong on stderr.
 
 HTTP hooks POST the same envelope as JSON. They require HTTPS, resolve and reject private, link-local, and cloud-metadata addresses, and permit loopback addresses. A 2xx empty response allows; valid JSON `allow` or `deny` decides regardless of status. Invalid JSON on 2xx and transport failures fail open, while an empty or malformed non-2xx response records a failure and also fails open at dispatch.
 
 ## Durable session sidecars
 
 Sidecars enrich lifecycle after the hook establishes `sessionId`. Read them best-effort and keep hooks plus process liveness authoritative for live status.
+
+### Locally observed Grok 0.2.103 compatibility
+
+Local verification against Grok 0.2.103 found the command preflight rejecting RimZ's former `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source grok` handler with `required env var(s) not set: ${PPID}`. `PPID` is a shell parameter rather than an exported process environment variable, so the preflight rejects the handler before a shell can supply it. RimZ therefore installs the variable-free `rimz hooks feed --source grok` command and recovers process ownership from the helper's bounded ancestor walk.
+
+The same version locally persisted permission brackets in a new `events.jsonl` sibling without a corresponding `Notification` hook execution. The observed records have these exact shapes:
+
+```json
+{"ts":"2026-07-18T04:21:38.748Z","type":"permission_requested","tool_name":"run_terminal_command"}
+{"ts":"2026-07-18T04:21:40.816Z","type":"permission_resolved","tool_name":"run_terminal_command","decision":"allow","wait_ms":2067}
+```
+
+This is a version-scoped local observation, not a claim about the pinned source revision. Request IDs are not established, and the shapes or semantics of question, plan, and phase records are not established. Treat this file only as optional status enrichment after `updates.jsonl` validates; keep `Notification` authoritative for lifecycle and open asks.
 
 ### `summary.json`
 

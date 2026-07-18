@@ -38,6 +38,21 @@ pub(super) fn validate_transcript(path: &Path, session_id: &str) -> Option<PathB
     validate_transcript_under(path, session_id, &sessions_root())
 }
 
+/// Resolve the optional event sidecar beside an already validated transcript.
+pub(super) fn events_companion(path: &Path, session_id: &str) -> Option<PathBuf> {
+    events_companion_under(path, session_id, &sessions_root())
+}
+
+fn events_companion_under(path: &Path, session_id: &str, sessions_root: &Path) -> Option<PathBuf> {
+    let transcript = validate_transcript_under(path, session_id, sessions_root)?;
+    let session_dir = transcript.parent()?;
+    if session_dir.file_name()?.to_str()? != session_id.trim() {
+        return None;
+    }
+    let events = session_dir.join("events.jsonl").canonicalize().ok()?;
+    (events.is_file() && events.parent() == Some(session_dir)).then_some(events)
+}
+
 fn validate_transcript_under(
     path: &Path,
     session_id: &str,
@@ -126,5 +141,53 @@ mod tests {
             validate_transcript_under(&home.join("auth.json"), "session-1", &home.join("sessions"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn events_companion_requires_a_regular_sibling_in_the_validated_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("sessions");
+        let session = root.join("%2Fworkspace/session-1");
+        let updates = session.join("updates.jsonl");
+        let events = session.join("events.jsonl");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(&updates, "").unwrap();
+
+        assert!(events_companion_under(&updates, "session-1", &root).is_none());
+        std::fs::write(&events, "").unwrap();
+        assert_eq!(
+            events_companion_under(&updates, "session-1", &root),
+            events.canonicalize().ok()
+        );
+        assert!(events_companion_under(&updates, "session-2", &root).is_none());
+        assert!(events_companion_under(&events, "session-1", &root).is_none());
+
+        std::fs::remove_file(&events).unwrap();
+        std::fs::create_dir(&events).unwrap();
+        assert!(events_companion_under(&updates, "session-1", &root).is_none());
+
+        let outside = temp.path().join("outside/session-1/updates.jsonl");
+        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        std::fs::write(&outside, "").unwrap();
+        std::fs::write(outside.parent().unwrap().join("events.jsonl"), "").unwrap();
+        assert!(events_companion_under(&outside, "session-1", &root).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn events_companion_rejects_symlinks_outside_the_session() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("sessions");
+        let session = root.join("%2Fworkspace/session-1");
+        let updates = session.join("updates.jsonl");
+        let outside = temp.path().join("outside-events.jsonl");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(&updates, "").unwrap();
+        std::fs::write(&outside, "").unwrap();
+        symlink(&outside, session.join("events.jsonl")).unwrap();
+
+        assert!(events_companion_under(&updates, "session-1", &root).is_none());
     }
 }

@@ -238,6 +238,98 @@ fn managed_catalog_is_passive_and_excludes_pre_tool_use() {
             .unwrap()
             .is_none()
     );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rimz.json");
+    let preview = install::MANAGED_SOURCE.preview_at(&path).unwrap();
+    let candidate: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
+    assert_eq!(RIMZ_HOOK_COMMAND, "rimz hooks feed --source grok");
+    for hook in install::catalog() {
+        let entries = candidate["hooks"][hook.event].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        let handler = &entries[0]["hooks"][0];
+        assert_eq!(handler["command"], RIMZ_HOOK_COMMAND);
+        assert!(!handler["command"].as_str().unwrap().contains('$'));
+    }
+}
+
+#[test]
+fn local_context_refresh_tracks_events_only_permission_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    let updates = session.join("updates.jsonl");
+    let events = session.join("events.jsonl");
+    let pricing = dir.path().join("pricing-cache.json");
+    std::fs::create_dir(&session).unwrap();
+    std::fs::write(&updates, "{}\n").unwrap();
+    std::fs::write(&events, "").unwrap();
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "session-1",
+        model_hint: None,
+        current_transcript_path: None,
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing,
+    };
+    let initial = refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &ctx).unwrap();
+    assert!(initial.native_permission_wait.is_none());
+
+    let requested_at = "2026-07-18T04:21:46.248Z";
+    std::fs::write(
+        &events,
+        json!({
+            "ts": requested_at,
+            "type": "permission_requested",
+            "tool_name": "run_terminal_command",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let requested_ctx = LocalContextRefreshCtx {
+        prior_transcript_stat: initial.transcript_stat.as_ref(),
+        ..ctx
+    };
+    let requested =
+        refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &requested_ctx).unwrap();
+    assert_eq!(requested.native_permission_wait, requested_at.parse().ok());
+
+    let unchanged_ctx = LocalContextRefreshCtx {
+        prior_transcript_stat: requested.transcript_stat.as_ref(),
+        ..ctx
+    };
+    assert!(
+        refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &unchanged_ctx).is_none()
+    );
+
+    let resolved_at = "2026-07-18T04:22:00Z";
+    std::fs::write(
+        &events,
+        format!(
+            "{}\n{}",
+            json!({
+                "ts": requested_at,
+                "type": "permission_requested",
+                "tool_name": "run_terminal_command",
+            }),
+            json!({
+                "ts": resolved_at,
+                "type": "permission_resolved",
+                "tool_name": "run_terminal_command",
+            })
+        ),
+    )
+    .unwrap();
+    let resolved =
+        refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &unchanged_ctx).unwrap();
+    assert!(resolved.native_permission_wait.is_none());
+    assert!(
+        GrokAdapter
+            .observe_lifecycle(
+                "permission_requested",
+                &json!({"sessionId":"session-1","toolName":"run_terminal_command"}),
+            )
+            .is_none()
+    );
 }
 
 #[test]

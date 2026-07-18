@@ -199,8 +199,7 @@ const GROK_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     },
 };
 
-pub(super) const RIMZ_HOOK_COMMAND: &str =
-    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source grok";
+pub(super) const RIMZ_HOOK_COMMAND: &str = "rimz hooks feed --source grok";
 pub(super) const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source grok";
 
 pub(super) const GROK_HOOKS: &[HookRecord] = &[
@@ -486,73 +485,8 @@ impl AgentAdapter for GrokAdapter {
             ctx.current_transcript_path.map(Path::new),
             ctx.prior_transcript_path.map(Path::new),
         )?;
-        let stat = transcript::combined_stat(&path)?;
-        if ctx.prior_transcript_stat == Some(&stat) {
-            return None;
-        }
-        let folded = transcript::read(&path).ok()?;
-        let summary = transcript::read_summary(&path).filter(|summary| {
-            summary
-                .info
-                .id
-                .as_deref()
-                .is_none_or(|summary_id| summary_id == ctx.agent_id)
-        });
-        let signals = transcript::read_signals(&path);
-        let sample = folded.latest_token_sample();
-        let context_window_size = sample
-            .and_then(|value| value.context_window_tokens)
-            .or_else(|| {
-                signals
-                    .map(|value| value.context_window_tokens)
-                    .filter(|value| *value > 0)
-            });
-        let current_context_tokens = sample.map(|value| value.total_tokens).or_else(|| {
-            (!folded.saw_rewind)
-                .then(|| signals.map(|value| value.context_tokens_used))
-                .flatten()
-                .or_else(|| (!folded.saw_rewind).then_some(0))
-        });
-        let latest_usage = folded
-            .completions()
-            .rev()
-            .find_map(|completion| completion.usage.as_ref());
-        let tokens = Some(AgentTokenUsage {
-            context_window_size,
-            used_percentage: current_context_tokens.zip(context_window_size).map(
-                |(used, window)| {
-                    ((used as f64 / window as f64) * 100.0)
-                        .round()
-                        .clamp(0.0, 100.0) as u8
-                },
-            ),
-            remaining_percentage: None,
-            current_context_tokens,
-            current_usage: latest_usage.map(|usage| AgentCurrentUsage {
-                input_tokens: Some(usage.input_tokens.saturating_sub(usage.cached_read_tokens)),
-                output_tokens: Some(usage.output_tokens),
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: Some(usage.cached_read_tokens),
-            }),
-            session_usage: None,
-        });
-        let model_id = summary
-            .as_ref()
-            .and_then(|value| value.current_model_id.clone())
-            .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
-        let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
-        let cost = super::spending::session_cost_usd(self, ctx.agent_id, &path, &prices);
-        Some(LocalContextRefresh {
-            session_preview: summary.as_ref().and_then(transcript::Summary::title),
-            model_display_name: model_id.as_deref().map(super::model_display::display_model),
-            model_id,
-            effort: summary.and_then(|value| value.reasoning_effort),
-            tokens,
-            cost,
-            transcript_path: Some(path.to_string_lossy().into_owned()),
-            transcript_stat: Some(stat),
-            ..LocalContextRefresh::default()
-        })
+        let events = paths::events_companion(&path, ctx.agent_id);
+        refresh_resolved_context(self, &path, events.as_deref(), ctx)
     }
 
     fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<AgentSessionId> {
@@ -597,6 +531,82 @@ impl AgentAdapter for GrokAdapter {
     fn managed_source(&self) -> Option<&'static ManagedSource> {
         Some(&install::MANAGED_SOURCE)
     }
+}
+
+fn refresh_resolved_context(
+    adapter: &GrokAdapter,
+    path: &Path,
+    events: Option<&Path>,
+    ctx: &LocalContextRefreshCtx<'_>,
+) -> Option<LocalContextRefresh> {
+    let stat = transcript::combined_stat(path, events)?;
+    if ctx.prior_transcript_stat == Some(&stat) {
+        return None;
+    }
+    let folded = transcript::read(path).ok()?;
+    let summary = transcript::read_summary(path).filter(|summary| {
+        summary
+            .info
+            .id
+            .as_deref()
+            .is_none_or(|summary_id| summary_id == ctx.agent_id)
+    });
+    let signals = transcript::read_signals(path);
+    let sample = folded.latest_token_sample();
+    let context_window_size = sample
+        .and_then(|value| value.context_window_tokens)
+        .or_else(|| {
+            signals
+                .map(|value| value.context_window_tokens)
+                .filter(|value| *value > 0)
+        });
+    let current_context_tokens = sample.map(|value| value.total_tokens).or_else(|| {
+        (!folded.saw_rewind)
+            .then(|| signals.map(|value| value.context_tokens_used))
+            .flatten()
+            .or_else(|| (!folded.saw_rewind).then_some(0))
+    });
+    let latest_usage = folded
+        .completions()
+        .rev()
+        .find_map(|completion| completion.usage.as_ref());
+    let tokens = Some(AgentTokenUsage {
+        context_window_size,
+        used_percentage: current_context_tokens
+            .zip(context_window_size)
+            .map(|(used, window)| {
+                ((used as f64 / window as f64) * 100.0)
+                    .round()
+                    .clamp(0.0, 100.0) as u8
+            }),
+        remaining_percentage: None,
+        current_context_tokens,
+        current_usage: latest_usage.map(|usage| AgentCurrentUsage {
+            input_tokens: Some(usage.input_tokens.saturating_sub(usage.cached_read_tokens)),
+            output_tokens: Some(usage.output_tokens),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(usage.cached_read_tokens),
+        }),
+        session_usage: None,
+    });
+    let model_id = summary
+        .as_ref()
+        .and_then(|value| value.current_model_id.clone())
+        .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
+    let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
+    let cost = super::spending::session_cost_usd(adapter, ctx.agent_id, path, &prices);
+    Some(LocalContextRefresh {
+        session_preview: summary.as_ref().and_then(transcript::Summary::title),
+        model_display_name: model_id.as_deref().map(super::model_display::display_model),
+        model_id,
+        effort: summary.and_then(|value| value.reasoning_effort),
+        tokens,
+        cost,
+        native_permission_wait: events.and_then(transcript::native_permission_wait),
+        transcript_path: Some(path.to_string_lossy().into_owned()),
+        transcript_stat: Some(stat),
+        ..LocalContextRefresh::default()
+    })
 }
 
 fn notification_ask(payload: &payloads::HookPayload) -> Option<AskKind> {

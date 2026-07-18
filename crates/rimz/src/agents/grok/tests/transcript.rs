@@ -86,3 +86,134 @@ fn assistant_suffix_does_not_require_the_earlier_user_chunk() {
     );
     assert_eq!(parse_assistant_suffix(&rewound), ["new branch"]);
 }
+
+fn permission_event(at: &str, event_type: &str, tool_name: &str) -> String {
+    serde_json::json!({
+        "ts": at,
+        "type": event_type,
+        "tool_name": tool_name,
+    })
+    .to_string()
+}
+
+fn permission_wait(lines: &[String]) -> Option<Timestamp> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    std::fs::write(&path, lines.join("\n")).unwrap();
+    native_permission_wait(&path)
+}
+
+#[test]
+fn permission_fold_tracks_unmatched_and_resolved_requests() {
+    let first = "2026-07-18T04:21:46.248Z";
+    let second = "2026-07-18T04:21:47.248Z";
+    assert_eq!(
+        permission_wait(&[permission_event(
+            first,
+            "permission_requested",
+            "run_terminal_command",
+        )]),
+        first.parse().ok()
+    );
+    assert!(
+        permission_wait(&[
+            permission_event(first, "permission_requested", "run_terminal_command"),
+            permission_event(second, "permission_resolved", "run_terminal_command"),
+        ])
+        .is_none()
+    );
+}
+
+#[test]
+fn permission_fold_matches_tools_and_repeated_requests_in_append_order() {
+    let first = "2026-07-18T04:21:46Z";
+    let second = "2026-07-18T04:21:47Z";
+    let third = "2026-07-18T04:21:48Z";
+    assert_eq!(
+        permission_wait(&[
+            permission_event(first, "permission_requested", "read_file"),
+            permission_event(second, "permission_requested", "run_terminal_command"),
+            permission_event(third, "permission_resolved", "read_file"),
+        ]),
+        second.parse().ok()
+    );
+    assert_eq!(
+        permission_wait(&[
+            permission_event(first, "permission_requested", "read_file"),
+            permission_event(second, "permission_requested", "read_file"),
+            permission_event(third, "permission_resolved", "read_file"),
+        ]),
+        second.parse().ok()
+    );
+}
+
+#[test]
+fn permission_fold_keeps_unmatched_resolutions_inert_at_equal_timestamps() {
+    let at = "2026-07-18T04:21:46Z";
+    assert_eq!(
+        permission_wait(&[
+            permission_event(at, "permission_resolved", "read_file"),
+            permission_event(at, "permission_requested", "read_file"),
+        ]),
+        at.parse().ok()
+    );
+}
+
+#[test]
+fn permission_fold_ignores_unrelated_malformed_and_invalid_records() {
+    let at = "2026-07-18T04:21:46Z";
+    assert_eq!(
+        permission_wait(&[
+            r#"{"ts":"2026-07-18T04:21:40Z","type":"phase_changed","phase":"permission_prompt"}"#
+                .to_owned(),
+            "not json".to_owned(),
+            permission_event("not-a-timestamp", "permission_requested", "bad_time"),
+            permission_event(at, "permission_requested", ""),
+            permission_event(at, "permission_requested", "read_file"),
+            permission_event("not-a-timestamp", "permission_resolved", "read_file"),
+        ]),
+        at.parse().ok()
+    );
+}
+
+#[test]
+fn permission_tail_accepts_a_complete_final_record_and_excludes_a_torn_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    let at = "2026-07-18T04:21:46Z";
+    let request = permission_event(at, "permission_requested", "read_file");
+    std::fs::write(&path, &request).unwrap();
+    assert_eq!(native_permission_wait(&path), at.parse().ok());
+
+    let resolved = permission_event(at, "permission_resolved", "read_file");
+    std::fs::write(
+        &path,
+        format!("{request}\n{resolved}\n{{\"ts\":\"{at}\",\"type\":\"permission_requested\""),
+    )
+    .unwrap();
+    assert!(native_permission_wait(&path).is_none());
+}
+
+#[test]
+fn combined_stat_changes_when_only_events_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let updates = dir.path().join("updates.jsonl");
+    let events = dir.path().join("events.jsonl");
+    std::fs::write(&updates, "{}\n").unwrap();
+
+    let absent = combined_stat(&updates, None).unwrap();
+    std::fs::write(&events, "").unwrap();
+    let created = combined_stat(&updates, Some(&events)).unwrap();
+    assert_ne!(created, absent);
+
+    std::fs::write(
+        &events,
+        permission_event("2026-07-18T04:21:46Z", "permission_requested", "read_file"),
+    )
+    .unwrap();
+    let appended = combined_stat(&updates, Some(&events)).unwrap();
+    assert_ne!(appended, created);
+
+    std::fs::remove_file(&events).unwrap();
+    assert_eq!(combined_stat(&updates, None), Some(absent));
+}

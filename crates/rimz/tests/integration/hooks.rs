@@ -102,14 +102,14 @@ fn grok_global_hooks_preserve_user_config_and_route_camelcase_events_neutrally()
         .expect("mkdir Grok hooks parent");
     std::fs::write(
         &path,
-        r#"{"theme":"user-theme","hooks":{"Custom":[{"command":"user-hook"}]}}"#,
+        r#"{"theme":"user-theme","hooks":{"Custom":[{"command":"user-hook"}],"SessionStart":[{"_rimz_managed":true,"hooks":[{"type":"command","command":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source grok","timeout":4}]}]}}"#,
     )
     .expect("write user Grok hooks");
 
     env.install_agent_hooks("grok");
     assert!(env.agent_hooks_installed("grok"));
-    let installed: Value =
-        serde_json::from_slice(&std::fs::read(&path).expect("read Grok hooks")).expect("JSON");
+    let installed_bytes = std::fs::read(&path).expect("read Grok hooks");
+    let installed: Value = serde_json::from_slice(&installed_bytes).expect("JSON");
     assert_eq!(installed["theme"], "user-theme");
     assert_eq!(installed["hooks"]["Custom"][0]["command"], "user-hook");
     assert!(installed["hooks"].get("PreToolUse").is_none());
@@ -117,6 +117,23 @@ fn grok_global_hooks_preserve_user_config_and_route_camelcase_events_neutrally()
         installed["hooks"]["SessionStart"][0]["hooks"][0]["timeout"],
         4
     );
+    let managed_commands = installed["hooks"]
+        .as_object()
+        .unwrap()
+        .values()
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter(|entry| entry["_rimz_managed"] == true)
+        .map(|entry| entry["hooks"][0]["command"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(managed_commands.len(), 12);
+    assert!(
+        managed_commands
+            .iter()
+            .all(|command| *command == "rimz hooks feed --source grok" && !command.contains('$'))
+    );
+    env.install_agent_hooks("grok");
+    assert_eq!(std::fs::read(&path).unwrap(), installed_bytes);
 
     let run = |payload: Value| {
         let output = env.run_installed_hook("grok", &payload.to_string());

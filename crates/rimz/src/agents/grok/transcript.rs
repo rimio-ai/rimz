@@ -1,11 +1,13 @@
 //! Rewind-aware normalization of Grok Build's durable session branch.
 
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
 use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::agents::transcript_fs::read_transcript_tail;
 use crate::agents::{
     TranscriptCompanionStat, TranscriptMessage, TranscriptRole, TranscriptStat,
     sanitize_user_prompt,
@@ -508,13 +510,71 @@ pub(super) fn read_signals(transcript: &Path) -> Option<Signals> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-pub(super) fn combined_stat(transcript: &Path) -> Option<TranscriptStat> {
+#[derive(Deserialize)]
+struct PermissionRecord {
+    ts: String,
+    #[serde(flatten)]
+    event: PermissionEvent,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PermissionEvent {
+    PermissionRequested {
+        tool_name: String,
+    },
+    PermissionResolved {
+        tool_name: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+/// Fold Grok's append-ordered permission brackets without promoting them to
+/// lifecycle or ask state. A bounded record-aligned tail keeps this enrichment
+/// best-effort when a session has a long event history.
+pub(super) fn native_permission_wait(events: &Path) -> Option<Timestamp> {
+    let tail = read_transcript_tail(events)?;
+    let mut outstanding = HashMap::<String, VecDeque<Timestamp>>::new();
+    for line in tail.lines() {
+        let Ok(record) = serde_json::from_str::<PermissionRecord>(line) else {
+            continue;
+        };
+        let Ok(at) = record.ts.parse::<Timestamp>() else {
+            continue;
+        };
+        let (tool_name, requested) = match record.event {
+            PermissionEvent::PermissionRequested { tool_name } => (tool_name, true),
+            PermissionEvent::PermissionResolved { tool_name } => (tool_name, false),
+            PermissionEvent::Other => continue,
+        };
+        if tool_name.trim().is_empty() {
+            continue;
+        }
+        if requested {
+            outstanding.entry(tool_name).or_default().push_back(at);
+        } else if let Some(requests) = outstanding.get_mut(&tool_name) {
+            requests.pop_front();
+        }
+    }
+    outstanding
+        .values()
+        .flat_map(|requests| requests.iter().copied())
+        .max()
+}
+
+pub(super) fn combined_stat(transcript: &Path, events: Option<&Path>) -> Option<TranscriptStat> {
     let mut stat = TranscriptStat::from_path(transcript)?;
     let parent = transcript.parent()?;
-    let companions = [parent.join("summary.json"), parent.join("signals.json")]
-        .into_iter()
-        .filter_map(|path| TranscriptStat::from_path(&path))
-        .collect::<Vec<_>>();
+    let companions = [
+        Some(parent.join("summary.json")),
+        Some(parent.join("signals.json")),
+        events.map(Path::to_path_buf),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|path| TranscriptStat::from_path(&path))
+    .collect::<Vec<_>>();
     if !companions.is_empty() {
         stat.companion = Some(TranscriptCompanionStat {
             mtime_secs: companions
