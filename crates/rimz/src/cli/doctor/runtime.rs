@@ -1471,6 +1471,23 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             pane_id,
             worker_pid,
         } => format!("reaped orphaned renderer {worker_pid} after pane {pane_id} disappeared"),
+        DiagEvent::SidebarOrphanReaped {
+            pane_id,
+            pid,
+            first_confirmed_at_ms,
+            second_confirmed_at_ms,
+            sigkilled,
+        } => format!(
+            "reaped orphaned sidebar {pid} after pane {pane_id} was absent at {first_confirmed_at_ms} and {second_confirmed_at_ms}; sigkill={sigkilled}"
+        ),
+        DiagEvent::PaneCacheDivergence {
+            pane_id,
+            pid,
+            cache_observed_at_ms,
+            authoritative_observed_at_ms,
+        } => format!(
+            "pane cache at {cache_observed_at_ms:?} omitted live sidebar {pid} in {pane_id}; authoritative roster observed it at {authoritative_observed_at_ms}"
+        ),
         DiagEvent::SupervisorConvergence { target_build } => {
             format!("supervisor converging onto build {target_build}")
         }

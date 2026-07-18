@@ -19,11 +19,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::config::{MachineConfig, MultiplexerConfig};
+use crate::diag::record::DiagEvent;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::recovery;
 use crate::mux::{
-    MuxBackend, PaneListOptions, SidebarLiveness, SidebarPaneOptions, SidebarWidth, backend_for,
+    MuxBackend, PaneListOptions, PaneListing, SidebarLiveness, SidebarPaneOptions, SidebarWidth,
+    backend_for,
 };
+use crate::proc::ProcInfo;
 use crate::room::session::LiveSessions;
 use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
@@ -40,6 +43,7 @@ pub struct StagedBuild {
 }
 
 const STAGED_BUILD_GC_GRACE: Duration = Duration::from_secs(60);
+const REAP_CONFIRM_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Debug, thiserror::Error)]
 pub enum StageBuildErr {
@@ -801,15 +805,157 @@ fn heartbeat_liveness<'a>(
     live
 }
 
-/// SIGTERM→SIGKILL this user's sidebar *processes* for `ws` whose pane the mux no
-/// longer lists. A process we cannot attribute to a pane is left alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReapCandidate {
+    pid: u32,
+    pane: PaneId,
+}
+
+#[derive(Debug)]
+struct ReapConfirmation {
+    confirmed: Vec<ReapCandidate>,
+    spared: Vec<ReapCandidate>,
+    first_panes: HashSet<PaneId>,
+    first_observed_at_ms: u64,
+    second_observed_at_ms: u64,
+}
+
+struct ReapCandidateInputs<'a> {
+    procs: &'a [ProcInfo],
+    my_uid: u32,
+    protected: &'a HashSet<u32>,
+    mux: MuxName,
+    workspace: &'a KnownWorkspace,
+    positive_panes: &'a HashSet<PaneId>,
+    now: jiff::Timestamp,
+}
+
+fn assemble_reap_candidates(
+    inputs: ReapCandidateInputs<'_>,
+    mut process_start: impl FnMut(u32) -> Option<jiff::Timestamp>,
+    mut attributed_pane: impl FnMut(u32, MuxName) -> Option<PaneId>,
+) -> Vec<ReapCandidate> {
+    let mut candidates = Vec::new();
+    for proc in inputs.procs {
+        if proc.real_uid != inputs.my_uid
+            || inputs.protected.contains(&proc.pid)
+            || !recovery::is_sidebar_serve(
+                &proc.cmdline,
+                inputs.workspace.workspace_id.as_str(),
+                &inputs.workspace.session_name,
+            )
+            || process_start(proc.pid).is_some_and(|start| {
+                crate::sidebar::born_recently(start, inputs.now, crate::sidebar::FRESH_PANE_GRACE)
+            })
+        {
+            continue;
+        }
+        let Some(pane) = attributed_pane(proc.pid, inputs.mux) else {
+            continue;
+        };
+        if !inputs.positive_panes.contains(&pane) {
+            candidates.push(ReapCandidate {
+                pid: proc.pid,
+                pane,
+            });
+        }
+    }
+    candidates
+}
+
+fn partition_confirmed(
+    candidates: Vec<ReapCandidate>,
+    first_panes: &HashSet<PaneId>,
+    second_panes: &HashSet<PaneId>,
+) -> (Vec<ReapCandidate>, Vec<ReapCandidate>) {
+    candidates.into_iter().partition(|candidate| {
+        !first_panes.contains(&candidate.pane) && !second_panes.contains(&candidate.pane)
+    })
+}
+
+fn confirm_reap_candidates<E>(
+    candidates: Vec<ReapCandidate>,
+    mut list_panes: impl FnMut() -> std::result::Result<PaneListing, E>,
+    pause: impl FnOnce(),
+) -> std::result::Result<ReapConfirmation, E> {
+    let first = list_panes()?;
+    let first_observed_at_ms = first.observed_at_ms;
+    let first_panes = first
+        .panes
+        .into_iter()
+        .map(|pane| pane.pane_id)
+        .collect::<HashSet<_>>();
+    pause();
+    let second = list_panes()?;
+    let second_observed_at_ms = second.observed_at_ms;
+    let second_panes = second
+        .panes
+        .into_iter()
+        .map(|pane| pane.pane_id)
+        .collect::<HashSet<_>>();
+    let (confirmed, spared) = partition_confirmed(candidates, &first_panes, &second_panes);
+    Ok(ReapConfirmation {
+        confirmed,
+        spared,
+        first_panes,
+        first_observed_at_ms,
+        second_observed_at_ms,
+    })
+}
+
+fn pane_cache_divergence_events(
+    spared: &[ReapCandidate],
+    cache_observed_at_ms: Option<u64>,
+    first_panes: &HashSet<PaneId>,
+    first_observed_at_ms: u64,
+    second_observed_at_ms: u64,
+) -> Vec<DiagEvent> {
+    spared
+        .iter()
+        .map(|candidate| DiagEvent::PaneCacheDivergence {
+            pane_id: candidate.pane.to_string(),
+            pid: candidate.pid as i32,
+            cache_observed_at_ms,
+            authoritative_observed_at_ms: if first_panes.contains(&candidate.pane) {
+                first_observed_at_ms
+            } else {
+                second_observed_at_ms
+            },
+        })
+        .collect()
+}
+
+fn sidebar_orphan_reaped_events(
+    confirmed: &[ReapCandidate],
+    outcome: &recovery::KillOutcome,
+    first_confirmed_at_ms: u64,
+    second_confirmed_at_ms: u64,
+) -> Vec<DiagEvent> {
+    let signalled = outcome.signalled.iter().copied().collect::<HashSet<_>>();
+    let sigkilled = outcome.sigkilled.iter().copied().collect::<HashSet<_>>();
+    confirmed
+        .iter()
+        .filter(|candidate| signalled.contains(&candidate.pid))
+        .map(|candidate| DiagEvent::SidebarOrphanReaped {
+            pane_id: candidate.pane.to_string(),
+            pid: candidate.pid as i32,
+            first_confirmed_at_ms,
+            second_confirmed_at_ms,
+            sigkilled: sigkilled.contains(&candidate.pid),
+        })
+        .collect()
+}
+
+/// SIGTERM→SIGKILL this user's sidebar *processes* for `ws` only after two
+/// authoritative mux rosters omit their panes. A process we cannot attribute
+/// to a pane is left alone, and any authoritative failure aborts the reap.
 fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorkspace) -> usize {
     let now = jiff::Timestamp::now();
     let floor_ms =
         unix_now_ms().saturating_sub(crate::sidebar::FRESH_PANE_GRACE.as_millis() as u64);
-    // Reap acts on pane absence, so topology cache hits must be no older than
-    // the grace that also protects just-born sidebar processes below.
-    let live_panes: HashSet<PaneId> = match backend.list_panes(PaneListOptions {
+    // The cache is positive liveness evidence only. An omission nominates a
+    // candidate for authoritative confirmation; it never licenses a kill.
+    let (positive_panes, cache_observed_at_ms) = match backend.list_panes(PaneListOptions {
         session_name: Some(ws.session_name.clone()),
         runtime_paths: None,
         workspace_id: Some(ws.workspace_id.clone()),
@@ -818,40 +964,100 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         require_authoritative: false,
         command_timeout: Some(RECONCILE_LIST_TIMEOUT),
     }) {
-        Ok(listing) => listing.panes.into_iter().map(|pane| pane.pane_id).collect(),
+        Ok(listing) => (
+            listing.panes.into_iter().map(|pane| pane.pane_id).collect(),
+            Some(listing.observed_at_ms),
+        ),
         Err(err) => {
             tracing::warn!(
                 session = %ws.session_name,
                 tags.operation = "reload.reap_list_panes",
                 error = &err as &dyn std::error::Error,
-                "reload: pane listing for orphan reap failed; skipping reap",
+                "reload: pane cache listing for orphan reap failed; escalating to mux truth",
             );
-            return 0;
+            (HashSet::new(), None)
         }
     };
     let procs = crate::proc::list_processes();
     let protected = recovery::protected_pids(&procs, std::process::id());
-    let my_uid = recovery::current_uid();
-    let orphans: Vec<u32> = procs
-        .iter()
-        .filter(|proc| proc.real_uid == my_uid)
-        .filter(|proc| !protected.contains(&proc.pid))
-        .filter(|proc| {
-            recovery::is_sidebar_serve(&proc.cmdline, ws.workspace_id.as_str(), &ws.session_name)
-        })
-        .filter(|proc| {
-            !crate::proc::process_start(proc.pid).is_some_and(|start| {
-                crate::sidebar::born_recently(start, now, crate::sidebar::FRESH_PANE_GRACE)
+    let candidates = assemble_reap_candidates(
+        ReapCandidateInputs {
+            procs: &procs,
+            my_uid: recovery::current_uid(),
+            protected: &protected,
+            mux,
+            workspace: ws,
+            positive_panes: &positive_panes,
+            now,
+        },
+        crate::proc::process_start,
+        recovery::attributed_pane,
+    );
+    if candidates.is_empty() {
+        return 0;
+    }
+
+    let confirmation = match confirm_reap_candidates(
+        candidates,
+        || {
+            backend.list_panes(PaneListOptions {
+                session_name: Some(ws.session_name.clone()),
+                workspace_id: Some(ws.workspace_id.clone()),
+                authoritative: true,
+                require_authoritative: true,
+                command_timeout: Some(RECONCILE_LIST_TIMEOUT),
+                ..Default::default()
             })
-        })
-        .filter(|proc| match recovery::attributed_pane(proc.pid, mux) {
-            Some(pane) => !live_panes.contains(&pane),
-            None => false,
-        })
-        .map(|proc| proc.pid)
-        .collect();
-    recovery::kill_pids(&orphans, recovery::SWEEP_GRACE).len()
+        },
+        || std::thread::sleep(REAP_CONFIRM_DELAY),
+    ) {
+        Ok(confirmation) => confirmation,
+        Err(err) => {
+            tracing::warn!(
+                session = %ws.session_name,
+                tags.operation = "reload.reap_list_panes",
+                error = &err as &dyn std::error::Error,
+                "reload: authoritative pane confirmation failed; skipping orphan reap",
+            );
+            return 0;
+        }
+    };
+
+    let diag = crate::diag::DiagSink::for_workspace(
+        ws.workspace_id.clone(),
+        ws.session_name.clone(),
+        None,
+    );
+    for event in pane_cache_divergence_events(
+        &confirmation.spared,
+        cache_observed_at_ms,
+        &confirmation.first_panes,
+        confirmation.first_observed_at_ms,
+        confirmation.second_observed_at_ms,
+    ) {
+        diag.emit(event);
+    }
+
+    let confirmed_pids = confirmation
+        .confirmed
+        .iter()
+        .map(|candidate| candidate.pid)
+        .collect::<Vec<_>>();
+    let outcome = recovery::kill_pids(&confirmed_pids, recovery::SWEEP_GRACE);
+    for event in sidebar_orphan_reaped_events(
+        &confirmation.confirmed,
+        &outcome,
+        confirmation.first_observed_at_ms,
+        confirmation.second_observed_at_ms,
+    ) {
+        diag.emit(event);
+    }
+    outcome.signalled.len()
 }
+
+#[cfg(test)]
+#[path = "reload/reap_tests.rs"]
+mod reap_tests;
 
 #[cfg(test)]
 mod tests {

@@ -453,6 +453,20 @@ pub enum DiagEvent {
         pane_id: String,
         worker_pid: i32,
     },
+    SidebarOrphanReaped {
+        pane_id: String,
+        pid: i32,
+        first_confirmed_at_ms: u64,
+        second_confirmed_at_ms: u64,
+        sigkilled: bool,
+    },
+    PaneCacheDivergence {
+        pane_id: String,
+        pid: i32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_observed_at_ms: Option<u64>,
+        authoritative_observed_at_ms: u64,
+    },
     SupervisorConvergence {
         target_build: String,
     },
@@ -505,6 +519,8 @@ impl DiagEvent {
             }
             | Self::TopologyWriteRejected { .. }
             | Self::RendererOrphanReaped { .. }
+            | Self::SidebarOrphanReaped { .. }
+            | Self::PaneCacheDivergence { .. }
             | Self::SupervisorPreflightRejected { .. }
             | Self::SelfCloseRejected { .. }
             | Self::RowConflict { .. }
@@ -595,6 +611,8 @@ impl DiagEvent {
             Self::RendererPanic { .. } => "renderer_panic",
             Self::RendererSignalDeath { .. } => "renderer_signal_death",
             Self::RendererOrphanReaped { .. } => "renderer_orphan_reaped",
+            Self::SidebarOrphanReaped { .. } => "sidebar_orphan_reaped",
+            Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
             Self::SupervisorConvergence { .. } => "supervisor_convergence",
             Self::SupervisorPreflightRejected { .. } => "supervisor_preflight_rejected",
             Self::SelfCloseRejected { .. } => "self_close_rejected",
@@ -775,6 +793,10 @@ impl DiagEvent {
             }
             Self::RendererOrphanReaped { pane_id, .. } => {
                 format!("{}:{pane_id}", self.kind_name())
+            }
+            Self::SidebarOrphanReaped { pane_id, pid, .. }
+            | Self::PaneCacheDivergence { pane_id, pid, .. } => {
+                format!("{}:{pane_id}:{pid}", self.kind_name())
             }
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {

@@ -213,6 +213,19 @@ fn severity_table_pins_conditional_and_regression_categories() {
             timed_out: true,
             errors: Vec::new(),
         },
+        DiagEvent::SidebarOrphanReaped {
+            pane_id: "zellij:terminal_5".to_owned(),
+            pid: 42,
+            first_confirmed_at_ms: 1_000,
+            second_confirmed_at_ms: 1_500,
+            sigkilled: false,
+        },
+        DiagEvent::PaneCacheDivergence {
+            pane_id: "zellij:terminal_5".to_owned(),
+            pid: 42,
+            cache_observed_at_ms: Some(900),
+            authoritative_observed_at_ms: 1_000,
+        },
     ];
     let error = [
         DiagEvent::RendererPanic {
@@ -255,6 +268,39 @@ fn sidebar_width_trace_round_trips() {
     assert_eq!(
         serde_json::from_value::<DiagEvent>(encoded).expect("decode width intent"),
         event
+    );
+}
+
+#[test]
+fn orphan_reap_events_keep_their_evidence_on_the_wire() {
+    let reaped = DiagEvent::SidebarOrphanReaped {
+        pane_id: "zellij:terminal_5".to_owned(),
+        pid: 42,
+        first_confirmed_at_ms: 1_000,
+        second_confirmed_at_ms: 1_500,
+        sigkilled: true,
+    };
+    let divergence = DiagEvent::PaneCacheDivergence {
+        pane_id: "zellij:terminal_5".to_owned(),
+        pid: 42,
+        cache_observed_at_ms: None,
+        authoritative_observed_at_ms: 1_000,
+    };
+
+    let reaped_json = serde_json::to_value(&reaped).expect("encode orphan reap");
+    assert_eq!(reaped_json["kind"], "sidebar_orphan_reaped");
+    assert_eq!(reaped_json["sigkilled"], true);
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(reaped_json).expect("decode orphan reap"),
+        reaped
+    );
+
+    let divergence_json = serde_json::to_value(&divergence).expect("encode divergence");
+    assert_eq!(divergence_json["kind"], "pane_cache_divergence");
+    assert!(divergence_json.get("cache_observed_at_ms").is_none());
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(divergence_json).expect("decode divergence"),
+        divergence
     );
 }
 

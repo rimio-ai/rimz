@@ -58,6 +58,7 @@ const PANE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PANE_PROBE_WAIT_STEP: Duration = Duration::from_millis(25);
 const PANE_PROBE_WAIT_STEPS: u32 = 20;
 const PANE_GONE_STRIKES: u8 = 3;
+const SELF_CLOSE_RECONFIRM_DELAY: Duration = Duration::from_millis(500);
 pub const RELOAD_EXIT_CODE: i32 = 100;
 const PANIC_EXIT_CODE: i32 = 101;
 pub const RESPAWN_EXIT_CODE: i32 = 102;
@@ -652,7 +653,8 @@ fn confirm_self_close(
             reason: "own pane is unavailable".to_owned(),
         };
     };
-    let listing = match crate::mux::backend_for(watchdog.mux).list_panes(watchdog.probe_options()) {
+    let backend = crate::mux::backend_for(watchdog.mux);
+    let listing = match backend.list_panes(watchdog.probe_options()) {
         Ok(listing) => listing,
         Err(err) => {
             return SelfCloseConfirmation::Keep {
@@ -662,7 +664,15 @@ fn confirm_self_close(
         }
     };
     match self_close_verdict(&listing.panes, &watchdog.pane) {
-        SelfCloseVerdict::PaneGone => SelfCloseConfirmation::PaneGone,
+        SelfCloseVerdict::PaneGone => reconfirm_pane_gone(
+            || {
+                backend
+                    .list_panes(watchdog.probe_options())
+                    .map(|listing| self_close_verdict(&listing.panes, &watchdog.pane))
+                    .map_err(|err| err.to_string())
+            },
+            || thread::sleep(SELF_CLOSE_RECONFIRM_DELAY),
+        ),
         SelfCloseVerdict::Keep { siblings, reason } => {
             SelfCloseConfirmation::Keep { siblings, reason }
         }
@@ -680,6 +690,28 @@ fn confirm_self_close(
                 },
             }
         }
+    }
+}
+
+fn reconfirm_pane_gone(
+    reprobe: impl FnOnce() -> std::result::Result<SelfCloseVerdict, String>,
+    pause: impl FnOnce(),
+) -> SelfCloseConfirmation {
+    pause();
+    match reprobe() {
+        Ok(SelfCloseVerdict::PaneGone) => SelfCloseConfirmation::PaneGone,
+        Err(err) => SelfCloseConfirmation::Keep {
+            siblings: 0,
+            reason: format!("pane-gone reconfirmation probe failed: {err}"),
+        },
+        Ok(SelfCloseVerdict::Keep { siblings, .. }) => SelfCloseConfirmation::Keep {
+            siblings,
+            reason: "authoritative absence not reproduced".to_owned(),
+        },
+        Ok(SelfCloseVerdict::Empty { floating_siblings }) => SelfCloseConfirmation::Keep {
+            siblings: floating_siblings,
+            reason: "authoritative absence not reproduced".to_owned(),
+        },
     }
 }
 
@@ -1520,6 +1552,37 @@ mod tests {
             ),
             SelfCloseVerdict::Empty {
                 floating_siblings: 1
+            }
+        );
+    }
+
+    #[test]
+    fn self_close_accepts_only_reproduced_pane_absence() {
+        assert_eq!(
+            reconfirm_pane_gone(|| Ok(SelfCloseVerdict::PaneGone), || {}),
+            SelfCloseConfirmation::PaneGone
+        );
+
+        assert_eq!(
+            reconfirm_pane_gone(
+                || {
+                    Ok(SelfCloseVerdict::Empty {
+                        floating_siblings: 0,
+                    })
+                },
+                || {},
+            ),
+            SelfCloseConfirmation::Keep {
+                siblings: 0,
+                reason: "authoritative absence not reproduced".to_owned(),
+            }
+        );
+
+        assert_eq!(
+            reconfirm_pane_gone(|| Err("mux timed out".to_owned()), || {}),
+            SelfCloseConfirmation::Keep {
+                siblings: 0,
+                reason: "pane-gone reconfirmation probe failed: mux timed out".to_owned(),
             }
         );
     }

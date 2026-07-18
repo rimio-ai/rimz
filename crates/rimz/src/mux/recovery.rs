@@ -22,6 +22,12 @@ use crate::proc::ProcInfo;
 /// well-behaved process to exit on its own, short enough not to stall `reset`.
 pub(crate) const SWEEP_GRACE: Duration = Duration::from_millis(300);
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct KillOutcome {
+    pub(crate) signalled: Vec<u32>,
+    pub(crate) sigkilled: Vec<u32>,
+}
+
 /// What [`teardown_room`] removed, for the user-facing `rimz reset` report.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TeardownReport {
@@ -240,7 +246,7 @@ pub(crate) fn sweep_orphan_processes(
         &protected,
         include_mux_server,
     );
-    kill_pids(&targets, SWEEP_GRACE)
+    kill_pids(&targets, SWEEP_GRACE).signalled
 }
 
 #[cfg(not(unix))]
@@ -356,7 +362,7 @@ pub(crate) fn kill_sidebar_serve_for_pane(
         .filter(|proc| attributed_pane(proc.pid, mux).as_ref() == Some(pane))
         .map(|proc| proc.pid)
         .collect();
-    kill_pids(&targets, SWEEP_GRACE).len()
+    kill_pids(&targets, SWEEP_GRACE).signalled.len()
 }
 
 #[cfg(unix)]
@@ -369,16 +375,17 @@ pub(crate) fn current_uid() -> u32 {
     u32::MAX
 }
 
-/// SIGTERM each pid, wait `grace`, then SIGKILL any still alive; returns the pids
-/// signalled. The shared graceful-then-forceful kill path for the `rimz reset`
-/// orphan sweep and `rimz reload`'s zombie-sidebar reaping.
+/// SIGTERM each pid, wait `grace`, then SIGKILL any still alive; reports every
+/// pid signalled and the subset that needed escalation. The shared
+/// graceful-then-forceful kill path for the `rimz reset` orphan sweep and
+/// `rimz reload`'s zombie-sidebar reaping.
 #[cfg(unix)]
-pub(crate) fn kill_pids(targets: &[u32], grace: Duration) -> Vec<u32> {
+pub(crate) fn kill_pids(targets: &[u32], grace: Duration) -> KillOutcome {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
     if targets.is_empty() {
-        return Vec::new();
+        return KillOutcome::default();
     }
     let signal = |pid: u32, sig: Signal| {
         let _ = kill(Pid::from_raw(pid as i32), sig);
@@ -391,17 +398,23 @@ pub(crate) fn kill_pids(targets: &[u32], grace: Duration) -> Vec<u32> {
         .iter()
         .map(|proc| proc.pid)
         .collect();
-    for &pid in targets {
-        if still_alive.contains(&pid) {
-            signal(pid, Signal::SIGKILL);
-        }
+    let sigkilled = targets
+        .iter()
+        .copied()
+        .filter(|pid| still_alive.contains(pid))
+        .collect::<Vec<_>>();
+    for &pid in &sigkilled {
+        signal(pid, Signal::SIGKILL);
     }
-    targets.to_vec()
+    KillOutcome {
+        signalled: targets.to_vec(),
+        sigkilled,
+    }
 }
 
 #[cfg(not(unix))]
-pub(crate) fn kill_pids(_targets: &[u32], _grace: Duration) -> Vec<u32> {
-    Vec::new()
+pub(crate) fn kill_pids(_targets: &[u32], _grace: Duration) -> KillOutcome {
+    KillOutcome::default()
 }
 
 #[cfg(test)]
