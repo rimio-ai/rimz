@@ -385,9 +385,24 @@ impl ClaudeAdapter {
     }
 }
 
+fn hook_ingress_decision(
+    pid: Option<u32>,
+    spawned_by_remote_control: bool,
+) -> super::HookIngressDecision {
+    if spawned_by_remote_control {
+        super::HookIngressDecision::Ignore(super::HookIngressIgnoreReason::ClaudeRemoteControl)
+    } else {
+        super::HookIngressDecision::Accept(super::HookIngressOwner::agent(pid))
+    }
+}
+
 impl AgentAdapter for ClaudeAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &CLAUDE_DESCRIPTOR
+    }
+
+    fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
+        hook_ingress_decision(pid, remote_control::spawned_by_remote_control())
     }
 
     #[cfg(test)]

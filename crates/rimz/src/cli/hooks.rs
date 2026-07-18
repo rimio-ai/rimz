@@ -20,7 +20,8 @@ use super::{GlobalFlags, open_store};
 use rimz::Store;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
 use rimz::agents::{
-    AgentAdapter, AgentHookClass, AgentLifecycleObservation, ClassifiedHook, adapter_by_kind,
+    AgentAdapter, AgentHookClass, AgentLifecycleObservation, ClassifiedHook, HookIngressDecision,
+    HookIngressOwner, adapter_by_kind,
 };
 use rimz::ids::{MuxName, PaneId};
 use rimz::store::{AgentLifecycleIntent, AgentLifecycleOutcome};
@@ -42,7 +43,7 @@ pub(in crate::cli) use hook_install::ensure_detected_agent_hooks;
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
 pub(crate) use lifecycle::handle_lifecycle_hook;
-use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid, hook_owner_is_daemon};
+use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid};
 use payload_ids::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
 use proctree::sibling_agent_pins;
 pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
@@ -105,45 +106,48 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
-    // Suppress hooks fired by a RimZ-internal enrichment `codex app-server`.
-    // `refresh-context` cold-spawns such a server to read realtime context; it
-    // is not a user session, but Codex still fires its configured lifecycle
-    // hooks (e.g. `SessionStart`) on startup. Processing one here would call
-    // `context_refresh_spawn`, spawn another `refresh-context`, cold-spawn
-    // another app-server, and recurse without bound. The marker rides the
-    // server's env into this hook child; a neutral no-op (empty stdout) breaks
-    // the loop. See `rimz::agents::codex::ENV_INTERNAL_APP_SERVER`.
-    if rimz::agents::codex::spawned_as_internal_app_server() {
-        debug!(
-            source = %source,
-            "hooks feed: suppressed — fired by a RimZ-internal codex app-server",
-        );
-        return Ok(());
-    }
-    if source == "claude" && rimz::agents::claude::remote_control::spawned_by_remote_control() {
-        debug!(
-            source = %source,
-            "hooks feed: suppressed — fired by a Claude remote-control session",
-        );
-        return Ok(());
-    }
     let raw_agent_pid = hook_agent_pid(&source);
-    let normalized_owner_pid = if source == "droid" {
-        match raw_agent_pid.map(rimz::agents::droid::hook_process_disposition) {
-            Some(rimz::agents::droid::HookProcessDisposition::StockTui) => {
-                debug!(source = %source, "hooks feed: suppressed duplicate outer Droid TUI hook");
-                return Ok(());
-            }
-            Some(
-                rimz::agents::droid::HookProcessDisposition::InternalWorker { owner_pid }
-                | rimz::agents::droid::HookProcessDisposition::Standalone { owner_pid },
-            ) => Some(owner_pid),
-            None => None,
-        }
+    let adapter = adapter_by_kind(&source);
+    let ingress = adapter
+        .as_ref()
+        .ok()
+        .map(|adapter| adapter.hook_ingress(raw_agent_pid));
+    if let Some(HookIngressDecision::Ignore(reason)) = ingress {
+        debug!(
+            source = %source,
+            reason = reason.as_str(),
+            "hooks feed: suppressed by adapter ingress policy",
+        );
+        return Ok(());
+    }
+
+    let mut buf = String::new();
+    io::stdin()
+        .read_to_string(&mut buf)
+        .context("reading hook stdin")?;
+    let payload: Value = if buf.trim().is_empty() {
+        Value::Null
     } else {
-        raw_agent_pid
+        serde_json::from_str(&buf).context("parsing hook payload")?
     };
-    let daemon_owned = normalized_owner_pid.is_some_and(|pid| hook_owner_is_daemon(&source, pid));
+    let agent = match adapter {
+        Ok(agent) => agent,
+        Err(err)
+            if rimz::agents::plugin::loaded()
+                .errors
+                .iter()
+                .any(|load_error| load_error.kind_hint.as_deref() == Some(source.as_str())) =>
+        {
+            warn!(source, error = %err, "hooks feed: invalid agent plugin skipped");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let ingress_owner = match ingress {
+        Some(HookIngressDecision::Accept(owner)) => owner,
+        Some(HookIngressDecision::Ignore(_)) => return Ok(()),
+        None => HookIngressOwner::agent(raw_agent_pid),
+    };
     let participant_start =
         participant_start_path(&source, std::env::var_os("CURSOR_PROJECT_DIR").as_deref());
     let scan = |cwd: &Path| sibling_agent_pins(&source, cwd);
@@ -151,7 +155,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     // pin for the unrelated room that launched the shared daemon. Daemon-owned
     // hooks never consult it. Pane-owned hooks keep the env pin first and use
     // sibling recovery when a daemon route cannot be classified.
-    let workspace = if daemon_owned {
+    let workspace = if ingress_owner.kind == rimz::RuntimeOwnerKind::Daemon {
         WorkspaceResolver::resolve_daemon_participant_with_pin_recovery(
             &participant_start,
             globals.root.clone(),
@@ -165,28 +169,6 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         )?
     };
     let store = open_store(&workspace)?;
-    let mut buf = String::new();
-    io::stdin()
-        .read_to_string(&mut buf)
-        .context("reading hook stdin")?;
-    let payload: Value = if buf.trim().is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_str(&buf).context("parsing hook payload")?
-    };
-    let agent = match adapter_by_kind(&source) {
-        Ok(agent) => agent,
-        Err(err)
-            if rimz::agents::plugin::loaded()
-                .errors
-                .iter()
-                .any(|load_error| load_error.kind_hint.as_deref() == Some(source.as_str())) =>
-        {
-            warn!(source, error = %err, "hooks feed: invalid agent plugin skipped");
-            return Ok(());
-        }
-        Err(err) => return Err(err.into()),
-    };
     let classified = classify_ingress(agent, event.as_deref(), &payload);
     let event_name = classified.event_name;
 
@@ -197,7 +179,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             agent,
             event_name.as_str(),
             &payload,
-            normalized_owner_pid,
+            ingress_owner,
             globals,
         )?;
         return emit_neutral(agent, event_name.as_str());
@@ -210,7 +192,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             agent,
             event_name.as_str(),
             &payload,
-            normalized_owner_pid,
+            ingress_owner,
             globals,
         )?;
     }

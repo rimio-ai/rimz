@@ -16,13 +16,15 @@ Topic detail lives in the internals leaves the root map describes — [model.md]
 
 An adapter is the *single* place an agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, and `render_neutral`; a built-in also owns install / uninstall / preview for one agent. Add a third-party agent with the manifest and canonical wire under [`plugin/`](./plugin/mod.rs). Add a built-in by implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs) — including tool vocabularies and the full `IntegrationConcern` coverage table — and one line in [`registry::ADAPTERS`](./registry.rs).
 
+Provider modules own native protocol and process interpretation. Generic hook ingress consumes `hook_ingress`, and generic process discovery consumes registry command identity; provider-only product coordinators may call deep provider modules when the behavior remains unique to that provider.
+
 `AgentAdapter::probe_account_usage` returns one identity-bearing provider-neutral result. Provider transports parse native wire shapes, provider account modules normalize plan/windows/credits, and sidebar refresh code alone owns cadence, durable claims, and cache publication.
 
 - **Plugin manifests derive claims.** The declared canonical event list, capabilities, and probes generate both descriptor matrices. Keep hook installation self-managed and neutral output empty; probes stay bounded, read-only, and off the store import graph.
 - **Read upstream JSONC without rewriting it.** Read-only probes of user-editable upstream JSON files parse through [`jsonc.rs`](./jsonc.rs); install flows that rewrite a file keep strict parsing so comments are never silently discarded.
 
 - **Adapters never touch the store.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) calls the adapter for classification, neutral rendering, and normalized run output, then submits lifecycle write intent to Store.
-- **Emit only the normalized outputs downstream consumes** — an `AgentLifecycleObservation`, a blocking-ask classification, and a supervised-run final assistant message. A native event name or payload field reached for outside this module is a mapping that belongs *in* an adapter.
+- **Emit only the normalized outputs generic flows consume** — lifecycle observations, blocking-ask classifications, hook ingress ownership, interactive process identity, and supervised-run final messages. Keep provider-only capabilities in deep provider modules until a second generic consumer proves an adapter seam.
 
 ## Hook discipline
 

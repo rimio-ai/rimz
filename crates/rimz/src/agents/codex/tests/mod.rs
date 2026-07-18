@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::agents::{HookIngressDecision, HookIngressIgnoreReason, HookIngressOwner};
 use crate::harness::run::PermissionMode;
 use std::io::Write;
 use std::path::Path;
@@ -9,6 +10,25 @@ mod ask;
 mod install;
 mod lifecycle;
 mod transcript;
+
+#[test]
+fn hook_ingress_ignores_internal_servers_and_normalizes_daemon_owners() {
+    assert_eq!(
+        hook_ingress_decision(Some(42), true, false),
+        HookIngressDecision::Ignore(HookIngressIgnoreReason::CodexInternalAppServer)
+    );
+    assert_eq!(
+        hook_ingress_decision(Some(42), false, true),
+        HookIngressDecision::Accept(HookIngressOwner {
+            pid: Some(42),
+            kind: crate::pane::RuntimeOwnerKind::Daemon,
+        })
+    );
+    assert_eq!(
+        hook_ingress_decision(Some(42), false, false),
+        HookIngressDecision::Accept(HookIngressOwner::agent(Some(42)))
+    );
+}
 
 #[test]
 fn codex_commands_and_permission_args_match_run_posture() {

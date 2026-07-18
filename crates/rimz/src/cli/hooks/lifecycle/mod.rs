@@ -25,16 +25,22 @@ pub(crate) fn handle_lifecycle_hook(
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
-    owner_pid: Option<u32>,
+    ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let agent_id = payload_agent_id(payload);
     let recorded = record_lifecycle_observation(
-        workspace, store, agent, event_name, payload, owner_pid, globals,
+        workspace,
+        store,
+        agent,
+        event_name,
+        payload,
+        ingress_owner,
+        globals,
     );
     if recorded.as_ref().is_some_and(|recorded| {
         recorded.observation.agent_id.is_some() && recorded.observation.parent_agent_id.is_none()
-    }) && derive_subagent_lifecycle(workspace, store, agent, owner_pid, globals)
+    }) && derive_subagent_lifecycle(workspace, store, agent, ingress_owner, globals)
     {
         spawn_auto_rotation(workspace);
     }
@@ -215,7 +221,7 @@ fn derive_subagent_lifecycle(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
-    owner_pid: Option<u32>,
+    ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
 ) -> bool {
     let observations = agent.derive_subagent_observations(&workspace.worktree_root);
@@ -273,7 +279,7 @@ fn derive_subagent_lifecycle(
             agent,
             event_name,
             observation,
-            owner_pid,
+            ingress_owner,
             globals,
         );
         rotation_due |= recorded.rotation_due;

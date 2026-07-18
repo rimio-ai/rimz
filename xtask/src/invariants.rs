@@ -38,6 +38,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     let files = tracked_text_files(root)?;
     ensure_banned_imports(root, &files)?;
     ensure_hook_stdio(root, &files)?;
+    ensure_normalized_agent_process_decisions(root, &files)?;
     ensure_sidebar_renderer_boundaries(root, &files)?;
     ensure_spend_parser_boundaries(root, &files)?;
     ensure_spending_walker_ownership(root, &files)?;
@@ -61,6 +62,24 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_inline_tests_stay_small(&files)?;
+    Ok(())
+}
+
+fn ensure_normalized_agent_process_decisions(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let consumers = [
+        root.join("crates/rimz/src/cli/hooks.rs"),
+        root.join("crates/rimz/src/cli/hooks/owner.rs"),
+        root.join("crates/rimz/src/proc/pane_probe.rs"),
+    ];
+    for provider in ["claude", "codex", "droid"] {
+        let needle = format!("agents::{provider}::");
+        ensure_no_match(
+            files,
+            &needle,
+            |path| !consumers.iter().any(|consumer| consumer == path),
+            "generic hook and process consumers must use normalized adapter or registry decisions",
+        )?;
+    }
     Ok(())
 }
 

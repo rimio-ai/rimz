@@ -68,6 +68,7 @@ use serde_json::Value;
 
 use crate::harness::run::PermissionMode;
 use crate::mux::NamedKey;
+use crate::pane::RuntimeOwnerKind;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 pub(crate) use account::LongestWindowSignal;
@@ -331,6 +332,44 @@ pub struct ClassifiedHook {
     pub class: AgentHookClass,
     pub ask_kind: Option<AskKind>,
     pub event_name: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookIngressIgnoreReason {
+    ClaudeRemoteControl,
+    CodexInternalAppServer,
+    DroidStockTui,
+}
+
+impl HookIngressIgnoreReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClaudeRemoteControl => "claude_remote_control",
+            Self::CodexInternalAppServer => "codex_internal_app_server",
+            Self::DroidStockTui => "droid_stock_tui",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookIngressOwner {
+    pub pid: Option<u32>,
+    pub kind: RuntimeOwnerKind,
+}
+
+impl HookIngressOwner {
+    pub const fn agent(pid: Option<u32>) -> Self {
+        Self {
+            pid,
+            kind: RuntimeOwnerKind::Agent,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookIngressDecision {
+    Ignore(HookIngressIgnoreReason),
+    Accept(HookIngressOwner),
 }
 
 #[cfg(test)]
@@ -776,6 +815,11 @@ pub trait AgentAdapter: Send + Sync {
     /// classification tables. Everything `const` about an agent lives here;
     /// the trait methods own everything behavioral.
     fn descriptor(&self) -> &'static AgentDescriptor;
+
+    /// Normalize hook-emitter process ownership before workspace or store I/O.
+    fn hook_ingress(&self, pid: Option<u32>) -> HookIngressDecision {
+        HookIngressDecision::Accept(HookIngressOwner::agent(pid))
+    }
 
     /// Whether a command already matched by this adapter's launch descriptors
     /// is an interactive agent process. Providers with service subcommands

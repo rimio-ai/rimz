@@ -93,6 +93,50 @@ fn spend_parser_path_predicate_covers_nested_modules() {
 }
 
 #[test]
+fn generic_process_consumers_require_normalized_adapter_decisions() {
+    let root = temp_repo_root("normalized-agent-process-decisions");
+    let hooks = root.join("crates/rimz/src/cli/hooks.rs");
+    let owner = root.join("crates/rimz/src/cli/hooks/owner.rs");
+    let pane_probe = root.join("crates/rimz/src/proc/pane_probe.rs");
+    for path in [&hooks, &owner, &pane_probe] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    std::fs::write(
+        &hooks,
+        "fn f() { rimz::agents::codex::pid_is_codex_daemon(1); }\n",
+    )
+    .expect("write forbidden hook decision");
+    std::fs::write(
+        &owner,
+        "fn f(adapter: &dyn AgentAdapter) { adapter.hook_ingress(None); }\n",
+    )
+    .expect("write normalized hook decision");
+    std::fs::write(
+        &pane_probe,
+        "fn f(command: &str) { crate::agents::registry::command_agent_kind(command); }\n",
+    )
+    .expect("write normalized process decision");
+
+    let err = ensure_normalized_agent_process_decisions(
+        &root,
+        &[hooks.clone(), owner.clone(), pane_probe.clone()],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("normalized adapter or registry"));
+    assert!(err.to_string().contains(&hooks.display().to_string()));
+    assert!(!err.to_string().contains(&owner.display().to_string()));
+    assert!(!err.to_string().contains(&pane_probe.display().to_string()));
+
+    std::fs::write(
+        &hooks,
+        "fn f(adapter: &dyn AgentAdapter) { adapter.hook_ingress(None); }\n",
+    )
+    .expect("write normalized hook decision");
+    ensure_normalized_agent_process_decisions(&root, &[hooks, owner, pane_probe]).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn sidebar_event_log_reads_must_route_through_rollup() {
     let root = temp_repo_root("sidebar-event-log-boundary");
     let bad = root.join("crates/rimz/src/sidebar/enrich/bad.rs");

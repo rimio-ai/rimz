@@ -1,7 +1,7 @@
 //! Lifecycle observation ingestion and transition checks.
 
 use super::*;
-use rimz::agents::{SubagentCorrelationInput, SubagentSpawnInput};
+use rimz::agents::{HookIngressOwner, SubagentCorrelationInput, SubagentSpawnInput};
 
 const MAX_SUBAGENT_PARENT_CANDIDATES: usize = 64;
 
@@ -11,7 +11,7 @@ pub(super) fn record_lifecycle_observation(
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
-    owner_pid: Option<u32>,
+    ingress_owner: HookIngressOwner,
     globals: &GlobalFlags,
 ) -> Option<RecordedLifecycle> {
     let mut observation = agent.observe_lifecycle(event_name, payload)?;
@@ -21,7 +21,7 @@ pub(super) fn record_lifecycle_observation(
             *detail = agent.ask_detail(event_name, payload);
         }
     }
-    attach_agent_owner(agent.descriptor().kind, owner_pid, &mut observation);
+    attach_agent_owner(ingress_owner, &mut observation);
     attach_agent_pane(&mut observation);
     correlate_subagent_observation(workspace, store, agent, &mut observation);
     Some(record_mapped_lifecycle_observation(
@@ -40,10 +40,10 @@ pub(super) fn record_derived_lifecycle_observation(
     agent: &dyn AgentAdapter,
     event_name: &str,
     mut observation: AgentLifecycleObservation,
-    owner_pid: Option<u32>,
+    ingress_owner: HookIngressOwner,
     globals: &GlobalFlags,
 ) -> RecordedLifecycle {
-    attach_agent_owner(agent.descriptor().kind, owner_pid, &mut observation);
+    attach_agent_owner(ingress_owner, &mut observation);
     attach_agent_pane(&mut observation);
     record_mapped_lifecycle_observation(workspace, store, agent, event_name, observation, globals)
 }

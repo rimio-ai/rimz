@@ -256,6 +256,16 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_adapters_accept_default_hook_ingress_ownership() {
+        assert_eq!(
+            find_adapter("amp").unwrap().hook_ingress(Some(42)),
+            crate::agents::HookIngressDecision::Accept(crate::agents::HookIngressOwner::agent(
+                Some(42)
+            ))
+        );
+    }
+
+    #[test]
     fn every_adapter_exposes_a_manual_compaction_command() {
         // `--smart-compact` types this into the agent's composer; every wired
         // agent exposes a slash command (`/compact`, Cursor's `/summarize`), so

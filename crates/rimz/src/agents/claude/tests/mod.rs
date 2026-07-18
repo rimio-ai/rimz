@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::TurnErrorClass;
+use crate::agents::{HookIngressDecision, HookIngressIgnoreReason, HookIngressOwner};
 use crate::harness::run::PermissionMode;
 use serde_json::json;
 use std::path::Path;
@@ -8,6 +9,18 @@ mod context;
 mod install;
 mod install_statusline;
 mod lifecycle;
+
+#[test]
+fn hook_ingress_ignores_remote_control_and_preserves_ordinary_owner() {
+    assert_eq!(
+        hook_ingress_decision(Some(42), true),
+        HookIngressDecision::Ignore(HookIngressIgnoreReason::ClaudeRemoteControl)
+    );
+    assert_eq!(
+        hook_ingress_decision(Some(42), false),
+        HookIngressDecision::Accept(HookIngressOwner::agent(Some(42)))
+    );
+}
 
 #[test]
 fn claude_commands_and_permission_args_match_run_posture() {

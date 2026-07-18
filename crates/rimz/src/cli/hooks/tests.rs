@@ -201,7 +201,7 @@ fn feed_antigravity(
         adapter,
         event_name,
         &payload,
-        Some(std::process::id()),
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
     )
     .unwrap();
@@ -259,7 +259,7 @@ fn feed_copilot(store: &rimz::Store, event_name: &str, payload: serde_json::Valu
         &CopilotCorrelationAdapter,
         event_name,
         &payload,
-        Some(std::process::id()),
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
     )
     .unwrap();
@@ -309,7 +309,7 @@ fn feed_pi(
         adapter,
         event_name,
         &payload,
-        Some(std::process::id()),
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
     )
     .unwrap();
@@ -429,7 +429,7 @@ fn stop_failure_records_turn_error_transcript_entry() {
             "error": "overloaded",
             "last_assistant_message": "API Error: Response stalled mid-stream. The response above may be incomplete."
         }),
-        Some(std::process::id()),
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &globals,
     )
     .unwrap();
@@ -476,7 +476,7 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
             "transcript_path": path,
             "prompt": "ping"
         }),
-        Some(owner_pid),
+        rimz::agents::HookIngressOwner::agent(Some(owner_pid)),
         &globals,
     )
     .unwrap();
@@ -489,7 +489,7 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
             "session_id": "droid-session",
             "transcript_path": path
         }),
-        Some(owner_pid),
+        rimz::agents::HookIngressOwner::agent(Some(owner_pid)),
         &globals,
     )
     .unwrap();

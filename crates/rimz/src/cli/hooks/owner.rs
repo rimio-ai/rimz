@@ -1,5 +1,6 @@
 use super::proctree::walk_to_agent_ancestor;
 use super::*;
+use rimz::agents::HookIngressOwner;
 use rimz::pane::RuntimeOwnerKind;
 use rimz::store::runtime::process_owner;
 
@@ -42,8 +43,7 @@ fn attach_agent_pane_with(
 }
 
 pub(super) fn attach_agent_owner(
-    source: &str,
-    owner_pid: Option<u32>,
+    ingress_owner: HookIngressOwner,
     observation: &mut AgentLifecycleObservation,
 ) {
     if observation.runtime_owner.is_some() {
@@ -52,22 +52,13 @@ pub(super) fn attach_agent_owner(
     let Some(agent_id) = observation.agent_id.as_deref().filter(|id| !id.is_empty()) else {
         return;
     };
-    let Some(pid) = observation.agent_pid.or(owner_pid) else {
+    let Some(pid) = observation.agent_pid.or(ingress_owner.pid) else {
         return;
     };
-    let kind = if hook_owner_is_daemon(source, pid) {
-        RuntimeOwnerKind::Daemon
-    } else {
-        RuntimeOwnerKind::Agent
-    };
-    let owner = process_owner(kind, agent_id, pid);
+    let owner = process_owner(ingress_owner.kind, agent_id, pid);
     observation.agent_pid = Some(pid);
     observation.agent_process_start = owner.process_start.clone();
     observation.runtime_owner = Some(owner);
-}
-
-pub(super) fn hook_owner_is_daemon(source: &str, pid: u32) -> bool {
-    source == "codex" && rimz::agents::codex::pid_is_codex_daemon(pid)
 }
 
 #[cfg(test)]
@@ -109,7 +100,7 @@ mod tests {
             LifecycleSignal::Registered,
         );
 
-        attach_agent_owner("droid", Some(pid), &mut observation);
+        attach_agent_owner(HookIngressOwner::agent(Some(pid)), &mut observation);
 
         assert_eq!(observation.agent_pid, Some(pid));
         assert_eq!(

@@ -11,13 +11,13 @@ use std::path::Path;
 const MAX_ANCESTOR_DEPTH: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HookProcessDisposition {
+pub(super) enum HookProcessDisposition {
     StockTui,
     InternalWorker { owner_pid: u32 },
     Standalone { owner_pid: u32 },
 }
 
-pub fn hook_process_disposition(pid: u32) -> HookProcessDisposition {
+pub(super) fn hook_process_disposition(pid: u32) -> HookProcessDisposition {
     hook_process_disposition_with(pid, &crate::proc::argv, &|pid| {
         crate::proc::comm_and_ppid(pid).map(|(_, ppid)| ppid)
     })

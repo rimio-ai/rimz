@@ -422,6 +422,24 @@ const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source codex";
 #[derive(Clone, Debug, Default)]
 pub struct CodexAdapter;
 
+fn hook_ingress_decision(
+    pid: Option<u32>,
+    internal_app_server: bool,
+    daemon_owned: bool,
+) -> super::HookIngressDecision {
+    if internal_app_server {
+        return super::HookIngressDecision::Ignore(
+            super::HookIngressIgnoreReason::CodexInternalAppServer,
+        );
+    }
+    let kind = if daemon_owned {
+        crate::pane::RuntimeOwnerKind::Daemon
+    } else {
+        crate::pane::RuntimeOwnerKind::Agent
+    };
+    super::HookIngressDecision::Accept(super::HookIngressOwner { pid, kind })
+}
+
 impl AgentAdapter for CodexAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &CODEX_DESCRIPTOR
@@ -429,6 +447,14 @@ impl AgentAdapter for CodexAdapter {
 
     fn is_interactive_process(&self, command: &str) -> bool {
         process::is_interactive_process(command)
+    }
+
+    fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
+        hook_ingress_decision(
+            pid,
+            spawned_as_internal_app_server(),
+            pid.is_some_and(process::pid_is_codex_daemon),
+        )
     }
 
     #[cfg(test)]

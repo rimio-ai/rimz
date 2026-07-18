@@ -220,7 +220,7 @@ Worktree removal appends a durable `Ended` observation for every matching non-li
 
 ## The adapter boundary
 
-A coding agent reports to RimZ through hooks, and every agent speaks through one trait, [`AgentAdapter`](../../../crates/rimz/src/agents/mod.rs). [`registry::all_adapters`](../../../crates/rimz/src/agents/registry.rs) chains the compiled-in `ADAPTERS` slice with validated machine-tier process plugins. The trait is the single place a native protocol diverges and the single place it is normalized; nothing downstream of it is agent-specific. The per-provider mappings it produces are the adapter docs; the raw upstream protocols they read are the [external references](../../externals/agent-adapter/claude-reference.md), and the external process wire is [plugin.md](./plugin.md).
+A coding agent reports to RimZ through hooks, and every agent speaks through one trait, [`AgentAdapter`](../../../crates/rimz/src/agents/mod.rs). [`registry::all_adapters`](../../../crates/rimz/src/agents/registry.rs) chains the compiled-in `ADAPTERS` slice with validated machine-tier process plugins. Provider modules interpret native protocols and process roles; generic hook and process flows consume normalized adapter and registry decisions. Explicit provider-only product coordinators keep calling deep provider modules when their behavior has no generic counterpart. The per-provider mappings are the adapter docs; the raw upstream protocols they read are the [external references](../../externals/agent-adapter/claude-reference.md), and the external process wire is [plugin.md](./plugin.md).
 
 An agent reports through the same public shape everything else uses: a hook is an adapter that translates a native protocol onto one RimZ CLI entrypoint, and the observations it records land in the same store every read surface projects.
 
@@ -229,6 +229,7 @@ An agent reports through the same public shape everything else uses: a hook is a
 Built-in adapters implement the trait plus a static [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables, integration coverage) and one registry line. External plugins use the shared `PluginAdapter`, which builds the same descriptor and behavior from a validated manifest and canonical envelope. The methods, by role (signatures live in the trait):
 
 - **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the [`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs).
+- **`hook_ingress`** accepts or ignores a native hook emitter before workspace and store I/O, normalizing its owner PID and agent-versus-daemon role; **`is_interactive_process`** rejects provider service roles after registry command matching.
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs). `None` means "no transition here", so high-frequency events stay silent.
 - **`correlate_subagent`** validates one child-to-parent relation from provider-owned durable evidence; **`spawned_subagents`** walks the same evidence from a completed parent turn so the hook path can adopt children whose terminal hooks arrived before the relation became readable.
 - **`render_neutral`** emits the agent-native no-op for blocking asks. Hooks record the waiting observation and return neutral; the agent's own UI stays open as the answer surface.
@@ -237,8 +238,8 @@ Built-in adapters implement the trait plus a static [`AgentDescriptor`](../../..
 
 Two invariants hold the seam shut:
 
-- **Adapters never touch the store.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every store write; it calls the adapter for classification and neutral output only.
-- **Nothing downstream reads a native payload.** The adapter emits exactly two things the rest of RimZ consumes: an `AgentLifecycleObservation` and a blocking-ask classification. A native field reached for outside an adapter is a mapping that belongs *in* the adapter.
+- **Adapters never touch the store.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every store write; it calls the adapter for ingress, classification, lifecycle mapping, and neutral output.
+- **Generic flows do not read native payloads or process roles.** They consume normalized lifecycle, ask, ingress, and command-identity results. Provider-only coordinators retain native calls without forcing every unique capability onto the trait.
 
 ### Two hook channels
 

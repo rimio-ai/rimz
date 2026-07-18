@@ -12,8 +12,6 @@ mod process;
 mod spend;
 mod transcript;
 
-pub use self::process::{HookProcessDisposition, hook_process_disposition};
-
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -219,6 +217,21 @@ pub struct DroidAdapter;
 impl AgentAdapter for DroidAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &DROID_DESCRIPTOR
+    }
+
+    fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
+        let Some(pid) = pid else {
+            return super::HookIngressDecision::Accept(super::HookIngressOwner::agent(None));
+        };
+        match process::hook_process_disposition(pid) {
+            process::HookProcessDisposition::StockTui => {
+                super::HookIngressDecision::Ignore(super::HookIngressIgnoreReason::DroidStockTui)
+            }
+            process::HookProcessDisposition::InternalWorker { owner_pid }
+            | process::HookProcessDisposition::Standalone { owner_pid } => {
+                super::HookIngressDecision::Accept(super::HookIngressOwner::agent(Some(owner_pid)))
+            }
+        }
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
