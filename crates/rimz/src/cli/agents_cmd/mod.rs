@@ -42,7 +42,7 @@ use rimz::agents::AgentState;
 use rimz::harness::plan::{
     LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, agent_pane_plans,
     apply_in_place_downgrade, cohort_cells, launch_identity_requests, layout_panes_with_names,
-    mint_launch_id, resolve_placement, validate_agent_name,
+    mint_launch_id, resolve_fork_placement, resolve_placement, validate_agent_name,
 };
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::{Cell, LayoutSpec};

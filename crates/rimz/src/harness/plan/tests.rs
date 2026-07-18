@@ -898,6 +898,25 @@ fn launch_placement_matrix() {
 }
 
 #[test]
+fn fork_placement_defaults_to_the_launching_pane() {
+    use Placement::{NewPane, NewTab, SamePane};
+
+    for (name, new_tab, new_pane, bg, has_pane, expected) in [
+        ("plain fork", false, false, false, true, SamePane),
+        ("explicit pane", false, true, false, true, NewPane),
+        ("explicit tab", true, false, false, true, NewTab),
+        ("background fork", false, false, true, true, NewPane),
+        ("outside a room", false, false, false, false, NewTab),
+    ] {
+        assert_eq!(
+            resolve_fork_placement(new_tab, new_pane, bg, has_pane).unwrap(),
+            expected,
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn single_role_team_launch_takes_over_caller_pane() {
     let profiles = crate::config::ProfilesConfig(BTreeMap::from([(
         "planner-profile".to_owned(),

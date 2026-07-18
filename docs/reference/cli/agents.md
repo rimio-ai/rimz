@@ -262,7 +262,7 @@ The activity description — the same field the sidebar card shows — renders u
 
 `fork <ref>` resolves one live agent in the current channel first, then falls back to the stopped-agent audit rollup, and opens a provider-native copy with the full conversation history under a new session id. The source stays untouched. The fork carries the source profile, channel, and permission mode; drops team and role identity so the original role handle stays unique; and lets the provider restore the conversation's model and effort.
 
-The fork always opens in the source agent's recorded worktree. `--name/-n <name>` pins its handle; `--new-pane`, `--new-tab`, and `--bg` override the configured `agents.placement` policy just as they do for a single-agent launch. Cross-worktree forks and a first prompt are outside this command; send the first new instruction with `rimz message` after the fork opens.
+The fork always opens in the source agent's recorded worktree. A plain fork takes over the launching pane; `--new-pane` splits it into the current view, `--new-tab` opens a separate view, and `--bg` implies a background split. `--name/-n <name>` pins its handle. Cross-worktree forks and a first prompt are outside this command; send the first new instruction with `rimz message` after the fork opens.
 
 | Agent | Native fork argv |
 | --- | --- |

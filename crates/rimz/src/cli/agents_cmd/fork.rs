@@ -81,20 +81,12 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         },
         &seed.cwd,
     )?;
-    let scoped = channel.is_some()
-        || (seed.cwd != workspace.project_root && seed.cwd != workspace.worktree_root);
-    let placement = apply_in_place_downgrade(
-        resolve_placement(
-            args.new_tab,
-            args.new_pane,
-            config.agents.placement,
-            scoped,
-            true,
-            rimz::mux::ambient_pane_id().is_some(),
-        )?,
+    let placement = resolve_fork_placement(
+        args.new_tab,
+        args.new_pane,
         args.bg,
-        true,
-    );
+        rimz::mux::ambient_pane_id().is_some(),
+    )?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let room =
         RoomContext::from_resolved(&workspace, config.clone(), mux, RoomSizing::OrdinaryTab)?;

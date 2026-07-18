@@ -448,6 +448,27 @@ pub fn resolve_placement(
     })
 }
 
+/// Resolve provider-native fork placement. A plain fork takes over the
+/// launching pane; only explicit placement flags or `--bg` open another pane
+/// or tab. The global launch-placement preference applies to fresh and resumed
+/// layout launches, not this targeted agent operation.
+pub fn resolve_fork_placement(
+    new_tab: bool,
+    new_pane: bool,
+    bg: bool,
+    has_launching_pane: bool,
+) -> Result<Placement> {
+    let placement = resolve_placement(
+        new_tab,
+        new_pane,
+        LaunchPlacement::Auto,
+        false,
+        true,
+        has_launching_pane,
+    )?;
+    Ok(apply_in_place_downgrade(placement, bg, true))
+}
+
 pub fn apply_in_place_downgrade(placement: Placement, bg: bool, allow_in_place: bool) -> Placement {
     // In-place takes over the launching pane: it cannot honor --bg, and
     // create-on-miss must never replace the caller's pane. Downgrade to a split.

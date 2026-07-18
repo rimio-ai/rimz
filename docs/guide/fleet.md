@@ -199,7 +199,7 @@ rimz agents stop @claude --all  # close every Claude in scope
 
 **Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current `agents.toml`, so edits take effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the allocated replacement handle instead of hiding a possible rename.
 
-**Fork an agent to try another approach.** `rimz agents fork @coder` opens the full conversation under a new provider-assigned session id beside the source agent in the same worktree, leaving the original untouched and preserving its permission mode. RimZ gives the fork a fresh pet name; use `rimz agents fork @coder --name twin` to pin `@twin` when you want both approaches to have memorable handles.
+**Fork an agent to try another approach.** `rimz agents fork @coder` takes over the launching pane with the full conversation under a new provider-assigned session id in the source worktree, leaving the original session untouched and preserving its permission mode. Pass `--new-pane` to keep the launching pane, or `--new-tab` for a separate view. RimZ gives the fork a fresh pet name; use `rimz agents fork @coder --name twin` to pin `@twin` when you want both approaches to have memorable handles.
 
 Two everyday tasks have their own guides, with the depth this page leaves out:
 
