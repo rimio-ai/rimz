@@ -25,9 +25,8 @@ fn reset_purges_the_resurrection_cache() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
 
-    // Plant a serialized-session cache the way Zellij would, under HOME/.cache
-    // (the harness pins HOME and leaves XDG_CACHE_HOME unset, so `cache_home()`
-    // resolves there).
+    // Plant a serialized-session cache the way Zellij would, under HOME/.cache;
+    // the harness pins XDG_CACHE_HOME to that disposable fallback path.
     let session_info = env
         .home_root
         .join(".cache/zellij/contract_version_1/session_info");

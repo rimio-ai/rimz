@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use nix::sys::termios::{self, InputFlags, LocalFlags, OutputFlags, Termios};
 use portable_pty::{CommandBuilder, PtyPair, PtySize, native_pty_system};
 
-use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
+use crate::common::{CommandTimeoutExt, Env};
 
 fn ssh_shim() -> PathBuf {
     crate::common::cargo_bin("ssh-trace", env!("CARGO_BIN_EXE_ssh-trace"))
@@ -74,15 +74,9 @@ fn remote_connect_command(env: &Env, log: &Path) -> Command {
 
 fn remote_connect_pty_command(env: &Env, log: &Path) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(env.rimz_bin());
-    cmd.scrub_session_env();
+    env.pin_pty_command(&mut cmd);
     cmd.args(["remote", "connect", "dev-box:query-engine", "--attach"]);
     cmd.cwd(env.project_root.as_os_str());
-    cmd.env("XDG_STATE_HOME", env.state_root());
-    cmd.env("XDG_RUNTIME_DIR", &env.runtime_root);
-    cmd.env("XDG_CONFIG_HOME", env.config_root());
-    cmd.env("HOME", &env.home_root);
-    cmd.env("SHELL", "/bin/sh");
-    cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
     cmd.env("RIMZ_SSH_BIN", ssh_shim());
     cmd.env("RIMZ_TEST_SSH_LOG", log);
     cmd.env("RIMZ_REMOTE_DIAL_MS", "0");
@@ -91,10 +85,6 @@ fn remote_connect_pty_command(env: &Env, log: &Path) -> CommandBuilder {
     cmd.env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1");
     cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0");
     cmd.env("TERM", "xterm-256color");
-    cmd.env_remove("ENV");
-    cmd.env_remove("BASH_ENV");
-    cmd.env_remove("ZDOTDIR");
-    cmd.env_remove("RUST_LOG");
     cmd
 }
 

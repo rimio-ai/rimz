@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::workspace::WorkspaceResolver;
 
-use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
+use crate::common::{CommandTimeoutExt, Env};
 
 const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
 
@@ -303,16 +303,10 @@ fn reconnect_marker_keeps_pty_start_unattended() {
         })
         .expect("open pty");
     let mut command = CommandBuilder::new(env.rimz_bin());
-    command.scrub_session_env();
+    env.pin_pty_command(&mut command);
     command.args(["--mux", "zellij", "start", "--no-attach"]);
-    command.env("XDG_STATE_HOME", env.state_root());
-    command.env("XDG_RUNTIME_DIR", &env.runtime_root);
-    command.env("XDG_CONFIG_HOME", env.config_root());
-    command.env("HOME", &env.home_root);
-    command.env("SHELL", "/bin/sh");
     command.env("PATH", &bin_dir);
     command.env("TERM", "dumb");
-    command.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
     command.env("RIMZ_PETS_OFFLINE", "1");
     command.env("RIMZ_REMOTE_RECONNECT", "1");
     command.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim());
@@ -328,10 +322,6 @@ fn reconnect_marker_keeps_pty_start_unattended() {
         "RIMZ_ANTIGRAVITY_SETTINGS",
         env.home_root.join("agent-config/settings.json"),
     );
-    command.env_remove("ENV");
-    command.env_remove("BASH_ENV");
-    command.env_remove("ZDOTDIR");
-    command.env_remove("RUST_LOG");
 
     let mut child = pair
         .slave

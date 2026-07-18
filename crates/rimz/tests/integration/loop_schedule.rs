@@ -58,23 +58,13 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
         })
         .expect("open loop watch pty");
     let mut cmd = CommandBuilder::new(env.rimz_bin());
-    cmd.scrub_session_env();
+    env.pin_pty_command(&mut cmd);
     cmd.args(["loop", "watch", "--hold"]);
     cmd.cwd(env.project_root.as_os_str());
-    cmd.env("XDG_STATE_HOME", env.state_root());
-    cmd.env("XDG_RUNTIME_DIR", &env.runtime_root);
-    cmd.env("XDG_CONFIG_HOME", env.config_root());
-    cmd.env("HOME", &env.home_root);
-    cmd.env("SHELL", "/bin/sh");
     cmd.env("TERM", "xterm-256color");
-    cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
     cmd.env("RIMZ_TEST_GIT_LOG", &git_log);
     cmd.env("RIMZ_TEST_REAL_GIT", &real_git);
     cmd.env("PATH", crate::common::path_with_front(&bin_dir));
-    cmd.env_remove("ENV");
-    cmd.env_remove("BASH_ENV");
-    cmd.env_remove("ZDOTDIR");
-    cmd.env_remove("RUST_LOG");
 
     let mut child = pair.slave.spawn_command(cmd).expect("spawn loop watch");
     drop(pair.slave);

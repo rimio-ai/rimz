@@ -39,7 +39,7 @@ use rimz::pane::PaneRef;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::common::{Env, ScrubSessionEnvExt};
+use crate::common::Env;
 
 /// Sidebar pane dimensions for the journey. Within the documented 24–36 col
 /// band, tall enough that no phase scrolls off.
@@ -144,7 +144,7 @@ impl<'a> RoomHarness<'a> {
             .expect("openpty");
 
         let mut cmd = CommandBuilder::new(&bin);
-        cmd.scrub_session_env();
+        env.pin_pty_command(&mut cmd);
         // Pin the renderer to the tempdir workspace root. Left unset, the mux
         // process inherits the suite's cwd — a developer's real RimZ worktree —
         // and the producer's git detection derives that worktree's channel,
@@ -163,10 +163,7 @@ impl<'a> RoomHarness<'a> {
             "1",
         ]);
         cmd.env("RIMZ_BIN", env.rimz_bin());
-        cmd.env("XDG_STATE_HOME", env.state_root());
-        cmd.env("XDG_CONFIG_HOME", env.config_root());
         cmd.env("XDG_RUNTIME_DIR", runtime.path());
-        cmd.env("HOME", &env.home_root);
         cmd.env("RIMZ_TEST_PANE_LIST", &pane_file);
         cmd.env(rimz::harness::run::ENV_CHANNEL, "");
         cmd.env(rimz::harness::run::ENV_TEAM, "");

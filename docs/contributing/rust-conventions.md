@@ -175,7 +175,9 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 
 ## Tests
 
-`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`; trailing args forward as nextest filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). nextest is the only suite runner — never run bare `cargo test`; install it with `cargo install cargo-nextest --locked`. Three profiles in `.config/nextest.toml` partition the suite: `gate` (deterministic non-live tests, what `cargo xtask gate` runs), `live` (mux backend tests and deep mux smokes), and `journey` (non-deep rendered journeys).
+`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`; trailing args forward as nextest filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). Each invocation gives the suite a disposable HOME, every XDG root, and private tmux and Zellij server namespaces, while `common::Env` narrows CLI subprocesses to per-test roots for every persistent surface. nextest is the only suite runner — never run bare `cargo test`; install it with `cargo install cargo-nextest --locked`. Three profiles in `.config/nextest.toml` partition the suite: `gate` (deterministic non-live tests, what `cargo xtask gate` runs), `live` (mux backend tests and deep mux smokes), and `journey` (non-deep rendered journeys).
+
+Run interactive smoke checks of a built binary through `cargo xtask sandbox -- target/debug/rimz <args>`. The sandbox replaces HOME, every persistent XDG root, `TMUX_TMPDIR`, the Zellij runtime and config roots, and `TMPDIR`, then tears down both private mux servers when the command exits. A bare `target/debug/rimz start` is a real product invocation and therefore addresses the user's normal multiplexer server.
 
 Core test shapes keep their own discipline:
 
@@ -251,6 +253,7 @@ The individual gates:
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
 - `cargo nextest run --workspace --all-features --locked` — the `test` task; accepts nextest filters and profiles as trailing args.
 - `cargo nextest archive --workspace --all-features --locked --archive-file <path>` — the `test-archive` task; compiles and packages the workspace test binaries for portable execution.
+- `cargo xtask sandbox -- <command> [args]` — runs an interactive target-binary smoke command with disposable host state and private tmux/Zellij servers.
 - `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
 - `cargo xtask invariants` — the [architectural invariants](#architectural-invariants).
 - `cargo deny check -D warnings` — license, advisory, ban, and yanked-crate check. In CI it runs offline (`RIMZ_DENY_OFFLINE=1` adds the global `--offline` option) against the image's baked advisory DB and a local crates.io index prepared at the canonical cache path.

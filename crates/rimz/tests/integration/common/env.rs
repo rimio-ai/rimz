@@ -1,6 +1,6 @@
 //! Out-of-process CLI harness: drives the `rimz` binary with XDG roots scoped
-//! to a tempdir, the workspace resolved from the project root, and the hook
-//! helpers every CLI test repeats.
+//! to tempdirs, both multiplexer namespaces kept private, the workspace
+//! resolved from the project root, and the hook helpers every CLI test repeats.
 
 use std::io::{self, Write};
 use std::os::unix::net::UnixDatagram;
@@ -46,10 +46,10 @@ pub fn tmux_pane(raw: &str, command: &str, cwd: &Path) -> PaneRef {
     }
 }
 
-/// Out-of-process CLI harness: a tempdir `HOME` holding `state/runtime/config`
-/// plus a `project/` workspace root under it — the shape a real machine has,
-/// so per-user agent config and the workspace never share a directory — and a
-/// configured `rimz` command builder.
+/// Out-of-process CLI harness: a tempdir `HOME` holding persistent roots plus a
+/// `project/` workspace root under it — the shape a real machine has, so
+/// per-user agent config and the workspace never share a directory — and a
+/// configured `rimz` command builder pinned to private tmux and Zellij roots.
 pub struct Env {
     _home: TempDir,
     _runtime: TempDir,
@@ -101,6 +101,21 @@ impl Env {
             runtime_root,
             agent_owner: std::sync::OnceLock::new(),
         };
+        for dir in [
+            env.cache_root(),
+            env.data_root(),
+            env.tmp_root(),
+            env.tmux_tmpdir(),
+            env.zellij_config_dir(),
+        ] {
+            std::fs::create_dir_all(&dir)
+                .unwrap_or_else(|err| panic!("mkdir test root {}: {err}", dir.display()));
+        }
+        std::fs::write(
+            env.zellij_config_dir().join("config.kdl"),
+            "show_startup_tips false\nshow_release_notes false\n",
+        )
+        .expect("write test Zellij config");
         // Pre-create the heartbeat dir so sidebar writes never race the store creating it.
         std::fs::create_dir_all(env.heartbeat_dir()).expect("mkdir heartbeat");
         env
@@ -142,6 +157,26 @@ impl Env {
         self.home_root.join("config")
     }
 
+    pub fn cache_root(&self) -> PathBuf {
+        self.home_root.join(".cache")
+    }
+
+    pub fn data_root(&self) -> PathBuf {
+        self.home_root.join(".local").join("share")
+    }
+
+    pub fn tmp_root(&self) -> PathBuf {
+        self.home_root.join("tmp")
+    }
+
+    pub fn tmux_tmpdir(&self) -> PathBuf {
+        self.runtime_root.join("tmux")
+    }
+
+    pub fn zellij_config_dir(&self) -> PathBuf {
+        self.config_root().join("zellij")
+    }
+
     pub fn heartbeat_dir(&self) -> PathBuf {
         self.workspace_runtime().join("heartbeat")
     }
@@ -161,9 +196,10 @@ impl Env {
         super::shim::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"))
     }
 
-    /// Base command: XDG roots scoped to the tempdir, HOME pinned, `RUST_LOG`
-    /// cleared, cwd at the project root. The workspace resolves from cwd — no
-    /// `--root`; tests targeting another project override `current_dir`.
+    /// Base command: persistent roots and mux servers scoped to tempdirs, HOME
+    /// pinned, `RUST_LOG` cleared, cwd at the project root. The workspace
+    /// resolves from cwd — no `--root`; tests targeting another project
+    /// override `current_dir`.
     pub fn rimz(&self) -> Command {
         self.rimz_at(&self.rimz_bin())
     }
@@ -175,6 +211,11 @@ impl Env {
             .env("XDG_STATE_HOME", self.state_root())
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("XDG_CONFIG_HOME", self.config_root())
+            .env("XDG_DATA_HOME", self.data_root())
+            .env("XDG_CACHE_HOME", self.cache_root())
+            .env("ZELLIJ_CONFIG_DIR", self.zellij_config_dir())
+            .env("TMUX_TMPDIR", self.tmux_tmpdir())
+            .env("TMPDIR", self.tmp_root())
             .env("HOME", &self.home_root)
             .env("SHELL", "/bin/sh")
             .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
@@ -189,6 +230,28 @@ impl Env {
             .env_remove("XAI_API_KEY")
             .current_dir(&self.project_root);
         cmd
+    }
+
+    /// Apply the same disposable host-state and mux roots as [`Self::rimz`] to
+    /// a PTY command. Interactive integration tests use this instead of
+    /// reconstructing a partial environment that can miss tmux isolation.
+    pub fn pin_pty_command(&self, cmd: &mut portable_pty::CommandBuilder) {
+        cmd.scrub_session_env();
+        cmd.env("XDG_STATE_HOME", self.state_root());
+        cmd.env("XDG_RUNTIME_DIR", &self.runtime_root);
+        cmd.env("XDG_CONFIG_HOME", self.config_root());
+        cmd.env("XDG_DATA_HOME", self.data_root());
+        cmd.env("XDG_CACHE_HOME", self.cache_root());
+        cmd.env("ZELLIJ_CONFIG_DIR", self.zellij_config_dir());
+        cmd.env("TMUX_TMPDIR", self.tmux_tmpdir());
+        cmd.env("TMPDIR", self.tmp_root());
+        cmd.env("HOME", &self.home_root);
+        cmd.env("SHELL", "/bin/sh");
+        cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
+        cmd.env_remove("ENV");
+        cmd.env_remove("BASH_ENV");
+        cmd.env_remove("ZDOTDIR");
+        cmd.env_remove("RUST_LOG");
     }
 
     // --- hooks ---
@@ -590,4 +653,27 @@ pub fn af_unix_bind_sandboxed(dir: &std::path::Path) -> bool {
         Err(e) if matches!(e.kind(), io::ErrorKind::PermissionDenied) => true,
         Err(_) => false,
     }
+}
+
+#[test]
+fn rimz_command_pins_persistent_roots_and_both_mux_namespaces() {
+    let env = Env::new();
+    let command = env.rimz();
+    let configured = |key: &str| {
+        command
+            .get_envs()
+            .find_map(|(name, value)| (name == key).then(|| value.map(PathBuf::from)))
+            .flatten()
+            .unwrap_or_else(|| panic!("{key} missing from Env::rimz"))
+    };
+
+    assert_eq!(configured("HOME"), env.home_root);
+    assert_eq!(configured("XDG_CONFIG_HOME"), env.config_root());
+    assert_eq!(configured("XDG_DATA_HOME"), env.data_root());
+    assert_eq!(configured("XDG_CACHE_HOME"), env.cache_root());
+    assert_eq!(configured("XDG_STATE_HOME"), env.state_root());
+    assert_eq!(configured("XDG_RUNTIME_DIR"), env.runtime_root);
+    assert_eq!(configured("ZELLIJ_CONFIG_DIR"), env.zellij_config_dir());
+    assert_eq!(configured("TMUX_TMPDIR"), env.tmux_tmpdir());
+    assert!(env.tmux_tmpdir().starts_with(&env.runtime_root));
 }

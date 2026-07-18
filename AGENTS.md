@@ -70,6 +70,7 @@ rimz loop logs <task>                # full forensics for recent runs
 
 - Run `cargo xtask gate` before a PR or hand-off: it auto-formats, then runs invariants, docs-links, lint, and the fast nextest subset. That subset excludes the live-backend and journey tiers; `cargo xtask test -P live` and `cargo xtask test -P journey` are the exact excluded complement.
 - Use `cargo xtask test <filter>` for focused iteration; nextest is the only suite runner, so never run bare `cargo test`.
+- Run a built `target/.../rimz` against a real multiplexer through `cargo xtask sandbox -- <command>`; the sandbox gives HOME, XDG, tmux, and Zellij disposable roots and tears its mux servers down on exit.
 - Escalate to journey, live-backend, performance, dependency gates, or full CI (`cargo xtask ci`) when the change touches those surfaces, their fixtures, or shared infrastructure; instrumented coverage runs through `cargo xtask coverage`.
 - CI's `tests` job is the branch-protection check; the pipeline shape (single compile, profile steps, branch protection) lives in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Keep test tiers separate: unit tests stay in-module and pure, integration tests own subprocess/filesystem behaviour, journey tests own rendered user flows, live-backend tests own real tmux/Zellij, and performance tests assert bounded resource use.

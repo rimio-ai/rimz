@@ -85,8 +85,19 @@ fn sidebar_redraws_at_new_size_on_resize() {
         "--tick-seconds",
         &TICK_SECONDS.to_string(),
     ]);
-    cmd.env("XDG_STATE_HOME", xdg.path());
-    cmd.env("XDG_RUNTIME_DIR", xdg.path());
+    for key in [
+        "HOME",
+        "TMPDIR",
+        "TMUX_TMPDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_RUNTIME_DIR",
+        "XDG_STATE_HOME",
+        "ZELLIJ_CONFIG_DIR",
+    ] {
+        cmd.env(key, xdg.path());
+    }
     let mut child = pair.slave.spawn_command(cmd).expect("spawn rimz sidebar");
     drop(pair.slave);
 

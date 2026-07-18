@@ -3,8 +3,8 @@
 //!
 //! Two entry points, one module each:
 //! - [`Env`] (`env`) drives the `rimz` binary out of process (the CLI tier):
-//!   XDG roots scoped to a tempdir, the workspace resolved from the project
-//!   root, and helpers for hook round trips every CLI test repeats.
+//!   host state and both mux namespaces scoped to tempdirs, the workspace
+//!   resolved from the project root, and repeated hook round-trip helpers.
 //! - [`Harness`] (`harness`) opens a real [`rimz::Store`] in process (the
 //!   library tier) for tests that drive store APIs directly.
 //!

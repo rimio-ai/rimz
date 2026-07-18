@@ -14,6 +14,7 @@ mod invariants;
 mod pricing;
 mod rtk;
 mod runner;
+mod sandbox;
 mod sccache;
 mod screenshot;
 mod source_files;
@@ -104,6 +105,11 @@ const TASKS: &[TaskInfo] = &[
         name: "test-archive",
         summary: "Compile and archive workspace nextest binaries.",
         runs: "cargo nextest archive --workspace --all-features --locked --archive-file <path>",
+    },
+    TaskInfo {
+        name: "sandbox",
+        summary: "Run a command with disposable HOME, XDG, tmux, and Zellij roots.",
+        runs: "the supplied command with host state isolated under a temporary directory; tears down sandbox mux servers on exit",
     },
     TaskInfo {
         name: "deny",
@@ -261,7 +267,7 @@ pub(crate) fn is_help_flag(arg: &str) -> bool {
 fn task_accepts_args(task: &str) -> bool {
     matches!(
         task,
-        "test" | "test-archive" | "perf" | "complexity" | "screenshot"
+        "test" | "test-archive" | "sandbox" | "perf" | "complexity" | "screenshot"
     )
 }
 
@@ -281,6 +287,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "lint" => gates::lint(root),
         "test" => gates::test(root, args),
         "test-archive" => gates::test_archive(root, args),
+        "sandbox" => sandbox::run(root, args),
         "deny" => gates::deny(root),
         "deps" => gates::deps(root),
         "vet" => gates::vet(root),

@@ -8,7 +8,7 @@ use assert_cmd::assert::OutputAssertExt;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use predicates::str::contains;
 
-use crate::common::{Env, ScrubSessionEnvExt};
+use crate::common::Env;
 
 const PI_EXTENSION_SOURCE: &str = include_str!("../../src/agents/pi/extension.ts");
 const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/opencode/plugin.ts");
@@ -52,15 +52,9 @@ fn run_setup_pty(
         .expect("openpty");
 
     let mut cmd = CommandBuilder::new(env.rimz_bin());
-    cmd.scrub_session_env();
+    env.pin_pty_command(&mut cmd);
     cmd.arg("setup");
     cmd.cwd(env.project_root.as_os_str());
-    cmd.env("XDG_STATE_HOME", env.state_root());
-    cmd.env("XDG_RUNTIME_DIR", &env.runtime_root);
-    cmd.env("XDG_CONFIG_HOME", env.config_root());
-    cmd.env("HOME", &env.home_root);
-    cmd.env("SHELL", "/bin/sh");
-    cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
     cmd.env("RIMZ_PETS_OFFLINE", "1");
     cmd.env("TERM", "dumb");
     cmd.env_remove("COLORTERM");
@@ -70,10 +64,6 @@ fn run_setup_pty(
     for (name, value) in adapter_paths {
         cmd.env(name, value);
     }
-    cmd.env_remove("ENV");
-    cmd.env_remove("BASH_ENV");
-    cmd.env_remove("ZDOTDIR");
-    cmd.env_remove("RUST_LOG");
 
     let mut child = pair.slave.spawn_command(cmd).expect("spawn rimz setup");
     drop(pair.slave);

@@ -9,7 +9,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
-use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
+use crate::common::{CommandTimeoutExt, Env};
 
 #[test]
 fn socket_preflight_fails_before_calling_zellij() {
@@ -211,7 +211,7 @@ fn rimz_start_pty_output(env: &Env, shim: &FakeZellij, session_name: &str) -> St
         .expect("openpty");
 
     let mut cmd = CommandBuilder::new(env.rimz_bin());
-    cmd.scrub_session_env();
+    env.pin_pty_command(&mut cmd);
     cmd.args([
         "--mux",
         "zellij",
@@ -219,13 +219,7 @@ fn rimz_start_pty_output(env: &Env, shim: &FakeZellij, session_name: &str) -> St
         env.project_root.to_str().expect("utf-8 project root"),
         "--no-attach",
     ]);
-    cmd.env("XDG_STATE_HOME", env.state_root());
-    cmd.env("XDG_RUNTIME_DIR", &env.runtime_root);
-    cmd.env("XDG_CONFIG_HOME", env.config_root());
-    cmd.env("HOME", &env.home_root);
-    cmd.env("SHELL", "/bin/sh");
     cmd.env("PATH", shim.log.parent().expect("fake zellij home"));
-    cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
     cmd.env("RIMZ_ZELLIJ_BIN", &shim.bin);
     cmd.env("RIMZ_TEST_ZELLIJ_LOG", &shim.log);
     cmd.env("RIMZ_TEST_ZELLIJ_MODE", shim.mode.env_value());
@@ -233,10 +227,6 @@ fn rimz_start_pty_output(env: &Env, shim: &FakeZellij, session_name: &str) -> St
         "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
         format!("{session_name} [Created 1m ago] (EXITED - attach to resurrect)\n"),
     );
-    cmd.env_remove("ENV");
-    cmd.env_remove("BASH_ENV");
-    cmd.env_remove("ZDOTDIR");
-    cmd.env_remove("RUST_LOG");
 
     let mut child = pair.slave.spawn_command(cmd).expect("spawn rimz");
     drop(pair.slave);

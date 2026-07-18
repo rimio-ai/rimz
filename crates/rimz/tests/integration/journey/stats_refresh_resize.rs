@@ -143,12 +143,19 @@ impl StatsRefreshHarness {
         let mut cmd = CommandBuilder::new(&bin);
         cmd.scrub_session_env();
         cmd.args(["stats", "--refresh"]);
-        cmd.env("HOME", xdg.path());
-        cmd.env("XDG_CONFIG_HOME", xdg.path());
-        cmd.env("XDG_STATE_HOME", xdg.path());
-        cmd.env("XDG_RUNTIME_DIR", xdg.path());
-        cmd.env("XDG_DATA_HOME", xdg.path());
-        cmd.env("XDG_CACHE_HOME", xdg.path());
+        for key in [
+            "HOME",
+            "TMPDIR",
+            "TMUX_TMPDIR",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_RUNTIME_DIR",
+            "XDG_STATE_HOME",
+            "ZELLIJ_CONFIG_DIR",
+        ] {
+            cmd.env(key, xdg.path());
+        }
         cmd.env("RIMZ_PRICING_OFFLINE", "1");
         cmd.env_remove("CLAUDE_CONFIG_DIR");
         cmd.env_remove("CODEX_HOME");

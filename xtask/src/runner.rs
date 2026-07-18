@@ -34,19 +34,6 @@ where
     run_with_env_and_removed(root, program, args, envs, &[])
 }
 
-pub(crate) fn run_with_env_removed<I, S>(
-    root: &Path,
-    program: &str,
-    args: I,
-    removed_envs: &[&str],
-) -> Result<()>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    run_with_env_and_removed(root, program, args, &[], removed_envs)
-}
-
 pub(crate) fn run_with_env_and_removed<I, S>(
     root: &Path,
     program: &str,
@@ -70,6 +57,7 @@ pub(crate) fn run_streamed<I, S>(
     root: &Path,
     program: &str,
     args: I,
+    envs: &[(&str, PathBuf)],
     removed_envs: &[&str],
     on_line: &mut dyn FnMut(&str),
 ) -> Result<Captured>
@@ -78,7 +66,7 @@ where
     S: AsRef<OsStr>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    let mut child = build_command(root, program, &args, &[], removed_envs)
+    let mut child = build_command(root, program, &args, envs, removed_envs)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

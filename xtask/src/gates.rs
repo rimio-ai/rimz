@@ -10,7 +10,8 @@ use anyhow::{Context, Result, bail};
 use crate::build::build_plugin;
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
-use crate::runner::{ensure_success, run, run_streamed, run_with_env_removed};
+use crate::runner::{ensure_success, run, run_streamed, run_with_env_and_removed};
+use crate::sandbox::HostSandbox;
 use crate::spinner::Spinner;
 
 const LINT_ARGS: &[&str] = &[
@@ -199,7 +200,7 @@ pub(crate) fn gate(root: &Path) -> Result<()> {
 }
 
 fn gate_fmt(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
-    captured_cargo_gate(root, ["fmt", "--all"], &[], None, progress)
+    captured_cargo_gate(root, ["fmt", "--all"], &[], &[], None, progress)
 }
 
 fn gate_invariants(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
@@ -211,13 +212,16 @@ fn gate_docs_links(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateR
 }
 
 fn gate_lint(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
-    captured_cargo_gate(root, LINT_ARGS.iter().copied(), &[], None, progress)
+    captured_cargo_gate(root, LINT_ARGS.iter().copied(), &[], &[], None, progress)
 }
 
 fn gate_test(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+    let sandbox = HostSandbox::for_tests(root)?;
+    let env = sandbox.command_env();
     captured_cargo_gate(
         root,
         GATE_TEST_ARGS.iter().copied(),
+        &env,
         &["NO_COLOR"],
         Some(extract_test_summary),
         progress,
@@ -227,6 +231,7 @@ fn gate_test(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> 
 fn captured_cargo_gate<I, S>(
     root: &Path,
     args: I,
+    envs: &[(&str, PathBuf)],
     removed_envs: &[&str],
     note: Option<fn(&str) -> Option<String>>,
     progress: &mut dyn FnMut(&str),
@@ -235,7 +240,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let captured = run_streamed(root, "cargo", args, removed_envs, progress)?;
+    let captured = run_streamed(root, "cargo", args, envs, removed_envs, progress)?;
     if captured.status.success() {
         return Ok(GateResult::Pass {
             note: note.and_then(|extract| extract(&captured.output)),
@@ -463,6 +468,8 @@ pub(crate) fn deps(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
+    let sandbox = HostSandbox::for_tests(root)?;
+    let env = sandbox.command_env();
     let mut cargo_args = vec![
         "nextest".to_owned(),
         "run".to_owned(),
@@ -471,10 +478,12 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
         "--locked".to_owned(),
     ];
     cargo_args.extend(args.iter().cloned());
-    run_with_env_removed(root, "cargo", cargo_args, &["NO_COLOR"])
+    run_with_env_and_removed(root, "cargo", cargo_args, &env, &["NO_COLOR"])
 }
 
 pub(crate) fn test_archive(root: &Path, args: &[String]) -> Result<()> {
+    let sandbox = HostSandbox::for_tests(root)?;
+    let env = sandbox.command_env();
     let archive_parent = nextest_archive_file(args)
         .and_then(|archive_file| archive_file.parent().map(Path::to_path_buf))
         .filter(|parent| !parent.as_os_str().is_empty());
@@ -490,7 +499,7 @@ pub(crate) fn test_archive(root: &Path, args: &[String]) -> Result<()> {
         "--locked".to_owned(),
     ];
     cargo_args.extend(args.iter().cloned());
-    run_with_env_removed(root, "cargo", cargo_args, &["NO_COLOR"])
+    run_with_env_and_removed(root, "cargo", cargo_args, &env, &["NO_COLOR"])
 }
 
 fn nextest_archive_file(args: &[String]) -> Option<PathBuf> {
@@ -509,11 +518,13 @@ fn nextest_archive_file(args: &[String]) -> Option<PathBuf> {
 // workflow artifacts. The default nextest live-server groups bound mux
 // concurrency per run.
 pub(crate) fn coverage(root: &Path) -> Result<()> {
+    let sandbox = HostSandbox::for_tests(root)?;
+    let env = sandbox.command_env();
     // Stale profraw files from an interrupted local run can poison the merge.
     run(root, "cargo", ["llvm-cov", "clean", "--workspace"])?;
     fs::create_dir_all(root.join("target/ci/coverage"))
         .context("creating coverage output directory")?;
-    run_with_env_removed(
+    run_with_env_and_removed(
         root,
         "cargo",
         [
@@ -526,6 +537,7 @@ pub(crate) fn coverage(root: &Path) -> Result<()> {
             "--all-features",
             "--locked",
         ],
+        &env,
         &["NO_COLOR"],
     )
 }

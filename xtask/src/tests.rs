@@ -76,6 +76,19 @@ fn test_archive_forwards_archive_args() {
 }
 
 #[test]
+fn sandbox_forwards_the_command() {
+    let argv = args(&["sandbox", "--", "target/debug/rimz", "--zellij", "doctor"]);
+
+    assert_eq!(
+        parse_args(&argv).unwrap(),
+        Action::Run {
+            task: "sandbox",
+            args: &argv[1..],
+        },
+    );
+}
+
+#[test]
 fn screenshot_accepts_subcommands() {
     let argv = args(&["screenshot", "state", "fleet"]);
 
