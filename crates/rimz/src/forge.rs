@@ -224,7 +224,7 @@ impl RemoteRepo {
     }
 
     pub(crate) fn sibling_url(&self, repo_full_name: &str) -> Option<String> {
-        let repo = normalized_repo_path(repo_full_name)?;
+        let repo = normalized_repo_path(repo_full_name.trim())?;
         let raw = self.raw.trim_end_matches('/');
         let suffix = if raw.ends_with(".git") { ".git" } else { "" };
         Some(match &self.transport {

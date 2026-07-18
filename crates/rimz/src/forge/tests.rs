@@ -239,6 +239,10 @@ fn builds_sibling_repo_urls() {
             "{origin}"
         );
     }
+    assert_eq!(
+        sibling_repo_url("https://host/org/repo.git", " /alice/fork/ ").as_deref(),
+        Some("https://host/alice/fork.git")
+    );
     assert_eq!(sibling_repo_url("/tmp/origin.git", "alice/fork"), None);
 }
 
