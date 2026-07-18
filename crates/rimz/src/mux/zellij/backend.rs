@@ -15,14 +15,15 @@ use super::parse::{
 use super::raw_pane::{
     RawPaneListing, SessionCleanliness, floating_panes_in_anchor_view, is_sidebar_pane,
     own_zellij_pane_id, sidebar_geometry_off_spec, tab_view_cols, views_with_sidebars,
+    zellij_pane_id,
 };
 use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
-    ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
-    NamedKey, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, Result,
-    SessionHealth, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
+    CachedPaneRoster, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
+    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome,
+    Result, SessionHealth, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
     SplitDirection, SplitPaneOptions, TabOptions, WidthStep, ensure_pane_backend,
     execute_reconcile_plan, memoized_version,
 };
@@ -450,6 +451,29 @@ impl MuxBackend for ZellijBackend {
             .lines()
             .filter_map(live_session_name_from_line)
             .collect())
+    }
+
+    fn cached_pane_roster(
+        &self,
+        session: &str,
+        workspace_id: &WorkspaceId,
+    ) -> Option<CachedPaneRoster> {
+        let runtime = self.runtime_paths_for_authoritative(workspace_id)?;
+        let cache = crate::sidebar::cache::read_pane_topology_cache(&runtime, session)?;
+        crate::sidebar::cache::pane_topology_cache_is_fresh(
+            &cache,
+            crate::sidebar::timing::unix_now_ms(),
+            None,
+        )
+        .then(|| CachedPaneRoster {
+            pane_ids: cache
+                .panes
+                .into_iter()
+                .filter(|pane| !pane.is_plugin)
+                .map(|pane| zellij_pane_id(pane.id))
+                .collect(),
+            observed_at_ms: cache.produced_at_ms,
+        })
     }
 
     fn list_panes(&self, opts: PaneListOptions) -> Result<PaneListing> {

@@ -283,6 +283,50 @@ exit 1
 
 #[cfg(unix)]
 #[test]
+fn cached_pane_roster_reads_only_fresh_normalized_terminal_ids() {
+    let room = TestRoom::new();
+    let produced_at_ms = unix_now_ms();
+    room.write_cache(
+        produced_at_ms,
+        None,
+        None,
+        vec![
+            terminal_pane(7, 0, 80, 0, "zsh"),
+            PaneTopologyPane {
+                is_plugin: true,
+                ..terminal_pane(9, 0, 0, 0, "plugin")
+            },
+        ],
+    );
+    let backend = ZellijBackend::with_runtime_dir(room.runtime_root.path());
+
+    assert_eq!(
+        backend.cached_pane_roster("rimz-test", &room.workspace_id),
+        Some(crate::mux::CachedPaneRoster {
+            pane_ids: vec![PaneId::from_parts(
+                crate::ids::MuxName::Zellij,
+                "terminal_7",
+            )],
+            observed_at_ms: produced_at_ms,
+        }),
+    );
+
+    room.write_cache(
+        produced_at_ms
+            .saturating_sub(crate::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64)
+            .saturating_sub(1),
+        None,
+        None,
+        vec![terminal_pane(7, 0, 80, 0, "zsh")],
+    );
+    assert_eq!(
+        backend.cached_pane_roster("rimz-test", &room.workspace_id),
+        None,
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn authoritative_list_panes_preserves_server_identity_and_cache_enrichment() {
     let room = TestRoom::new();
     room.write_cache(

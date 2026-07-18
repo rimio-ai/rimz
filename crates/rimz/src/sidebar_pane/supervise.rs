@@ -4,8 +4,9 @@
 //! owns the pane command PID, polls durable build intent, proves a replacement
 //! worker stable before preflight and self-exec, and preserves the sidebar
 //! instance across failures and reloads. It also confirms worker self-close
-//! requests against authoritative mux truth, reaps stray children, and records
-//! deaths Rust hooks cannot catch.
+//! requests against authoritative mux truth, proves routine pane liveness from
+//! cached presence before escalating to mux truth, reaps stray children, and
+//! records deaths Rust hooks cannot catch.
 
 use std::env;
 use std::ffi::OsString;
@@ -515,7 +516,20 @@ impl PaneWatchdog {
         let Ok(runtime) = crate::RuntimePaths::for_workspace(self.workspace_id.clone()) else {
             return PaneProbe::Unknown;
         };
-        shared_authoritative_pane_probe(self, &runtime, || self.produce_probe())
+        #[cfg(feature = "testkit")]
+        let roster = forced_pane_probe()
+            .is_none()
+            .then(|| {
+                crate::mux::backend_for(self.mux)
+                    .cached_pane_roster(&self.session_name, &self.workspace_id)
+            })
+            .flatten();
+        #[cfg(not(feature = "testkit"))]
+        let roster = crate::mux::backend_for(self.mux)
+            .cached_pane_roster(&self.session_name, &self.workspace_id);
+        ladder_probe(&self.pane, roster.as_ref(), || {
+            shared_authoritative_pane_probe(self, &runtime, || self.produce_probe())
+        })
     }
 
     fn produce_probe(&self) -> Option<AuthoritativePaneProbe> {
@@ -559,14 +573,24 @@ impl PaneWatchdog {
         crate::mux::PaneListOptions {
             session_name: Some(self.session_name.clone()),
             workspace_id: Some(self.workspace_id.clone()),
-            // Orphan reaping kills the render worker, so require mux truth.
-            // A fresh but incomplete presence cache can omit a newly-created
-            // tab and must stay a latency hint rather than destructive proof.
+            // Presence proves routine liveness. An absent or unavailable hint
+            // escalates here because orphan reaping requires mux truth.
             authoritative: true,
             require_authoritative: true,
             command_timeout: Some(PANE_PROBE_TIMEOUT),
             ..Default::default()
         }
+    }
+}
+
+fn ladder_probe(
+    pane: &crate::ids::PaneId,
+    roster: Option<&crate::mux::CachedPaneRoster>,
+    escalate: impl FnOnce() -> PaneProbe,
+) -> PaneProbe {
+    match roster {
+        Some(roster) if roster.pane_ids.contains(pane) => PaneProbe::Present(roster.observed_at_ms),
+        _ => escalate(),
     }
 }
 
@@ -1415,6 +1439,37 @@ mod tests {
         assert!(options.authoritative);
         assert!(options.require_authoritative);
         assert_eq!(options.command_timeout, Some(PANE_PROBE_TIMEOUT));
+    }
+
+    #[test]
+    fn pane_watchdog_presence_ladder_escalates_only_on_suspicion() {
+        let pane = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_9");
+        let roster = crate::mux::CachedPaneRoster {
+            pane_ids: vec![pane.clone()],
+            observed_at_ms: 42,
+        };
+        let escalations = std::cell::Cell::new(0);
+        let escalate = || {
+            escalations.set(escalations.get() + 1);
+            PaneProbe::Absent(43)
+        };
+
+        assert_eq!(
+            ladder_probe(&pane, Some(&roster), escalate),
+            PaneProbe::Present(42),
+        );
+        assert_eq!(escalations.get(), 0);
+
+        let missing = crate::mux::CachedPaneRoster {
+            pane_ids: Vec::new(),
+            observed_at_ms: 44,
+        };
+        assert_eq!(
+            ladder_probe(&pane, Some(&missing), escalate),
+            PaneProbe::Absent(43),
+        );
+        assert_eq!(ladder_probe(&pane, None, escalate), PaneProbe::Absent(43));
+        assert_eq!(escalations.get(), 2);
     }
 
     #[test]

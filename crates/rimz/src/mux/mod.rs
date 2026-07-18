@@ -220,6 +220,14 @@ pub struct PaneListing {
     pub client_view: Option<ClientView>,
 }
 
+/// The freshest pane roster a backend push channel has cached without a
+/// control-plane command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CachedPaneRoster {
+    pub pane_ids: Vec<PaneId>,
+    pub observed_at_ms: u64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ClientFocusOptions {
     pub session_name: Option<String>,
@@ -630,6 +638,17 @@ pub trait MuxBackend: Send + Sync {
         self.list_sessions_within(LIST_SESSIONS_TIMEOUT)
     }
     fn list_sessions_within(&self, timeout: Duration) -> Result<Vec<String>>;
+    /// Read a backend push-channel roster as a liveness latency hint. `None` or
+    /// a missing pane id permits escalation to mux truth; neither proves pane
+    /// absence for a destructive decision.
+    fn cached_pane_roster(
+        &self,
+        session: &str,
+        workspace_id: &WorkspaceId,
+    ) -> Option<CachedPaneRoster> {
+        let _ = (session, workspace_id);
+        None
+    }
     fn list_panes(&self, opts: PaneListOptions) -> Result<PaneListing>;
     fn client_view(&self, opts: ClientFocusOptions) -> Result<ClientView> {
         let _ = opts;
