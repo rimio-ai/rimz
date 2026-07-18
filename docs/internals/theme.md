@@ -1,6 +1,6 @@
 # Theme core
 
-The shared theme core turns one machine theme into the design vocabulary used by every human renderer. It lives in `crates/rimz/src/theme/`; the CLI and native sidebar consume its resolved values without owning parallel palette or provider-brand rules.
+The shared theme core turns one machine theme into the design vocabulary used by every human renderer. It lives in `crates/rimz/src/theme/`; the CLI and native sidebar consume its resolved values without owning parallel palette, provider-brand, or glyph rules.
 
 ## Resolution stack
 
@@ -9,13 +9,17 @@ Resolution follows one direction:
 1. A bundled scheme, an explicit Alacritty palette, or the default scheme supplies the raw terminal colors.
 2. Theme slot overrides derive the semantic palette and its health, calm, and expense ramps.
 3. `ColorDepth` resolves every color to `Tone::Rgb` or `Tone::Indexed`; indexed resolution quantizes RGB through the shared xterm table.
-4. Each renderer converts `Tone` at its boundary: `cli/render/palette.rs` produces `anstyle` styles, while `sidebar_pane/render/theme.rs` produces ratatui colors and adds sidebar-only components and animation.
+4. `config` owns `GlyphRole`, its stable wire names, and serialized overrides.
+5. The shared theme glyph catalog selects the Unicode or Nerd Font preset, applies matching inline overrides last, and supplies setup probes.
+6. Each renderer converts `Tone` at its boundary and consumes resolved glyphs: `cli/render/palette.rs` produces `anstyle` styles, while `sidebar_pane/render/theme.rs` produces ratatui colors and adds sidebar-only components and animation.
 
 `Palette::resolve` is the single scheme-to-semantic path. Renderer code consumes semantic accessors and keeps raw color construction at its edge.
 
 ## Provider identity
 
 `resolve_provider_identity` supplies the name, emblem, emblem tints, and brand color for a provider. `[theme.providers.<kind>]` fields win over the registered agent descriptor; an unregistered kind falls back to a title-cased name and neutral xterm color 244.
+
+`resolve_provider_brand` supplies the same brand rule without resolving or cloning the name and emblem. Names, tabs, and other color-only paths use it when they already own their display text; full panels use `resolve_provider_identity` for name, art, and tints.
 
 A registered descriptor carries both its truecolor RGB and its hand-tuned xterm index. Truecolor rendering uses the RGB value, while indexed rendering preserves the authored index instead of re-quantizing it.
 
