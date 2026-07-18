@@ -378,7 +378,7 @@ else
 fi
 
 if [ "$fancy" = 1 ]; then
-    draw_row 4 "$c_spin" '⠋' install "$install_dir" ''
+    draw_row 4 "$c_spin" '⠋' install "${install_dir:-selecting destination}" ''
 fi
 
 tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"
