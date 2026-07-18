@@ -1,8 +1,11 @@
 //! Validated Antigravity CLI local-session discovery and transcript projection.
 
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
@@ -10,6 +13,9 @@ use serde_json::Value;
 use url::Url;
 
 use crate::agents::lifecycle::TurnPhase;
+use crate::agents::local_session_cache::{
+    ProviderPathStamp, full_scan_due, normalized_workspace_inputs, stamp_paths, stamps_unchanged,
+};
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     SpawnedSubagent, TranscriptMessage, TranscriptRole, read_transcript_tail,
@@ -122,13 +128,362 @@ struct FoldedSession {
     waiting_since: Option<Timestamp>,
 }
 
-pub(super) fn discover(workspace: &Path) -> Vec<LocalSessionObservation> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DiscoveryKey {
+    home: PathBuf,
+    workspaces: Vec<PathBuf>,
+}
+
+#[derive(Clone)]
+struct ConversationCandidate {
+    id: String,
+    session_dir: PathBuf,
+    generated_dir: PathBuf,
+    logs_dir: PathBuf,
+    preferred: PathBuf,
+    fallback: PathBuf,
+}
+
+impl ConversationCandidate {
+    fn dependencies(&self) -> Vec<PathBuf> {
+        vec![
+            self.session_dir.clone(),
+            self.generated_dir.clone(),
+            self.logs_dir.clone(),
+            self.preferred.clone(),
+            self.fallback.clone(),
+        ]
+    }
+
+    fn selected_path(&self, stamps: &[(PathBuf, ProviderPathStamp)]) -> Option<PathBuf> {
+        stamps
+            .iter()
+            .find(|(path, stamp)| path == &self.preferred && stamp.is_file())
+            .or_else(|| {
+                stamps
+                    .iter()
+                    .find(|(path, stamp)| path == &self.fallback && stamp.is_file())
+            })
+            .map(|(path, _)| path.clone())
+    }
+}
+
+#[derive(Clone)]
+struct DiscoveredConversation {
+    session_id: String,
+    transcript_path: PathBuf,
+    created_at: Timestamp,
+    first_event_at: Option<Timestamp>,
+    last_activity: Timestamp,
+    projection: LocalSessionProjection,
+}
+
+#[derive(Clone)]
+struct CachedConversation {
+    dependencies: Vec<(PathBuf, ProviderPathStamp)>,
+    conversation: Option<DiscoveredConversation>,
+}
+
+#[derive(Clone)]
+struct CachedIndex {
+    stamp: ProviderPathStamp,
+    values: BTreeMap<PathBuf, String>,
+}
+
+#[derive(Default)]
+struct AntigravityDiscoverySnapshot {
+    key: Option<DiscoveryKey>,
+    last_full_scan: Option<Instant>,
+    topology: Vec<(PathBuf, ProviderPathStamp)>,
+    catalog: Vec<ConversationCandidate>,
+    conversations: HashMap<String, CachedConversation>,
+    index: Option<CachedIndex>,
+    #[cfg(test)]
+    work: DiscoveryWork,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct DiscoveryWork {
+    full_scans: usize,
+    index_parses: usize,
+    tail_folds: usize,
+}
+
+thread_local! {
+    static DISCOVERY: RefCell<AntigravityDiscoverySnapshot> = RefCell::new(AntigravityDiscoverySnapshot::default());
+}
+
+#[cfg(test)]
+pub(super) struct DiscoveryCacheHarness(AntigravityDiscoverySnapshot);
+
+#[cfg(test)]
+impl DiscoveryCacheHarness {
+    pub(super) fn new() -> Self {
+        Self(AntigravityDiscoverySnapshot::default())
+    }
+
+    pub(super) fn refresh(
+        &mut self,
+        home: &Path,
+        workspaces: &[&Path],
+        now: Instant,
+    ) -> Vec<LocalSessionObservation> {
+        self.0.refresh(
+            DiscoveryKey {
+                home: home.to_path_buf(),
+                workspaces: normalized_workspace_inputs(workspaces),
+            },
+            now,
+        )
+    }
+
+    pub(super) fn work(&self) -> (usize, usize, usize) {
+        (
+            self.0.work.full_scans,
+            self.0.work.index_parses,
+            self.0.work.tail_folds,
+        )
+    }
+}
+
+pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
     let Some(home) = home() else {
         return Vec::new();
     };
-    discover_under(&home, workspace)
+    let key = DiscoveryKey {
+        home,
+        workspaces: normalized_workspace_inputs(workspaces),
+    };
+    if key.workspaces.is_empty() {
+        return Vec::new();
+    }
+    DISCOVERY.with(|snapshot| snapshot.borrow_mut().refresh(key, Instant::now()))
 }
 
+impl AntigravityDiscoverySnapshot {
+    fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
+        let key_changed = self.key.as_ref() != Some(&key);
+        let topology_changed = !key_changed && !stamps_unchanged(&self.topology);
+        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
+        if forced {
+            self.rebuild_catalog(&key, now);
+        }
+
+        let mut selected = self
+            .catalog
+            .iter()
+            .cloned()
+            .filter_map(|candidate| {
+                let dependencies = stamp_paths(candidate.dependencies());
+                let path = candidate.selected_path(&dependencies)?;
+                let modified = dependencies
+                    .iter()
+                    .find(|(candidate, _)| candidate == &path)
+                    .and_then(|(_, stamp)| stamp.modified);
+                Some((candidate, dependencies, modified))
+            })
+            .collect::<Vec<_>>();
+        selected.sort_by(|left, right| {
+            right
+                .2
+                .cmp(&left.2)
+                .then_with(|| left.0.id.cmp(&right.0.id))
+        });
+        selected.truncate(MAX_DISCOVERED_SESSIONS);
+        let conversations = selected
+            .into_iter()
+            .filter_map(|(candidate, dependencies, _)| {
+                self.refresh_conversation(&key.home, candidate, dependencies, forced)
+            })
+            .collect::<Vec<_>>();
+        let index = self.refresh_index(&key.home, forced);
+
+        let catalog_ids = self
+            .catalog
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        self.conversations.retain(|id, _| catalog_ids.contains(id));
+
+        let mut observations = Vec::new();
+        for workspace in &key.workspaces {
+            let current = index
+                .get(workspace)
+                .filter(|id| valid_conversation_id(id))
+                .map(String::as_str);
+            let mut workspace_observations = conversations
+                .iter()
+                .map(|conversation| materialize(conversation, workspace, current))
+                .collect::<Vec<_>>();
+            workspace_observations.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then(left.session_id.cmp(&right.session_id))
+            });
+            observations.extend(workspace_observations);
+        }
+        observations
+    }
+
+    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
+        #[cfg(test)]
+        {
+            self.work.full_scans += 1;
+        }
+        let brain = key.home.join("brain");
+        let mut catalog = Vec::new();
+        if ProviderPathStamp::read(&brain).is_dir()
+            && let Ok(entries) = fs::read_dir(&brain)
+        {
+            for entry in entries.filter_map(Result::ok) {
+                if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                    continue;
+                }
+                let Ok(id) = entry.file_name().into_string() else {
+                    continue;
+                };
+                if !valid_conversation_id(&id) {
+                    continue;
+                }
+                let session_dir = entry.path();
+                let generated_dir = session_dir.join(".system_generated");
+                let logs_dir = generated_dir.join("logs");
+                catalog.push(ConversationCandidate {
+                    id,
+                    session_dir,
+                    generated_dir,
+                    preferred: logs_dir.join(TRANSCRIPT_BASENAMES[0]),
+                    fallback: logs_dir.join(TRANSCRIPT_BASENAMES[1]),
+                    logs_dir,
+                });
+            }
+        }
+        self.key = Some(key.clone());
+        self.last_full_scan = Some(now);
+        self.topology = stamp_paths([brain]);
+        self.catalog = catalog;
+    }
+
+    fn refresh_conversation(
+        &mut self,
+        home: &Path,
+        candidate: ConversationCandidate,
+        before: Vec<(PathBuf, ProviderPathStamp)>,
+        forced: bool,
+    ) -> Option<DiscoveredConversation> {
+        if !forced
+            && let Some(cached) = self.conversations.get(&candidate.id)
+            && cached.dependencies == before
+            && before.iter().all(|(_, stamp)| stamp.is_stable())
+        {
+            return cached.conversation.clone();
+        }
+        #[cfg(test)]
+        {
+            self.work.tail_folds += 1;
+        }
+        let selected = candidate.selected_path(&before);
+        let conversation = selected
+            .as_deref()
+            .and_then(|path| discover_conversation(home, path, &candidate.id));
+        let after = stamp_paths(candidate.dependencies());
+        if before != after || after.iter().any(|(_, stamp)| !stamp.is_stable()) {
+            self.conversations.remove(&candidate.id);
+            return None;
+        }
+        self.conversations.insert(
+            candidate.id,
+            CachedConversation {
+                dependencies: after,
+                conversation: conversation.clone(),
+            },
+        );
+        conversation
+    }
+
+    fn refresh_index(&mut self, home: &Path, forced: bool) -> BTreeMap<PathBuf, String> {
+        let path = home.join("cache/last_conversations.json");
+        let before = ProviderPathStamp::read(&path);
+        if !forced
+            && let Some(cached) = &self.index
+            && cached.stamp == before
+            && before.is_stable()
+        {
+            return cached.values.clone();
+        }
+        #[cfg(test)]
+        {
+            self.work.index_parses += 1;
+        }
+        let values = if before.is_file() {
+            fs::read(&path)
+                .ok()
+                .and_then(|body| serde_json::from_slice::<BTreeMap<PathBuf, String>>(&body).ok())
+                .unwrap_or_default()
+        } else {
+            BTreeMap::new()
+        };
+        let after = ProviderPathStamp::read(&path);
+        if before != after || !after.is_stable() {
+            self.index = None;
+            return BTreeMap::new();
+        }
+        self.index = Some(CachedIndex {
+            stamp: after,
+            values: values.clone(),
+        });
+        values
+    }
+}
+
+fn discover_conversation(
+    home: &Path,
+    path: &Path,
+    session_id: &str,
+) -> Option<DiscoveredConversation> {
+    valid_transcript_under(home, path, session_id).then_some(())?;
+    let lines = read_transcript_tail(path)?;
+    let folded = fold(&lines);
+    let created_at = folded.first_event_at?;
+    let last_activity = folded.last_activity?;
+    Some(DiscoveredConversation {
+        session_id: session_id.to_owned(),
+        transcript_path: path.to_path_buf(),
+        created_at,
+        first_event_at: Some(created_at),
+        last_activity,
+        projection: LocalSessionProjection::Lifecycle(LocalSessionState {
+            status: folded.status,
+            phase: folded.phase,
+            latest_prompt: folded.latest_prompt,
+            native_prompt_detail: folded.native_prompt_detail,
+            waiting_since: folded.waiting_since,
+            context_pct: None,
+        }),
+    })
+}
+
+fn materialize(
+    conversation: &DiscoveredConversation,
+    workspace: &Path,
+    current_session_id: Option<&str>,
+) -> LocalSessionObservation {
+    LocalSessionObservation {
+        kind: AgentKind::new_unchecked("antigravity"),
+        session_id: AgentSessionId::from(conversation.session_id.clone()),
+        workspace: workspace.to_path_buf(),
+        transcript_path: conversation.transcript_path.clone(),
+        created_at: conversation.created_at,
+        fresh_binding_at: (current_session_id == Some(conversation.session_id.as_str()))
+            .then_some(conversation.created_at),
+        first_event_at: conversation.first_event_at,
+        last_activity: conversation.last_activity,
+        projection: conversation.projection.clone(),
+    }
+}
+
+#[cfg(test)]
 pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
     if !workspace.is_absolute() {
         return Vec::new();
@@ -414,6 +769,7 @@ pub(super) fn resolve_home(override_home: Option<&OsStr>, home: Option<&OsStr>) 
         })
 }
 
+#[cfg(test)]
 fn latest_conversation(home: &Path, workspace: &Path) -> Option<String> {
     let path = home.join("cache/last_conversations.json");
     regular_file(&path).then_some(())?;
@@ -428,6 +784,7 @@ fn latest_conversation(home: &Path, workspace: &Path) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+#[cfg(test)]
 fn transcript_files_under(home: &Path) -> Vec<PathBuf> {
     let brain = home.join("brain");
     if !regular_dir(&brain) {
@@ -492,6 +849,7 @@ fn valid_transcript_under(home: &Path, path: &Path, session_id: &str) -> bool {
         })
 }
 
+#[cfg(test)]
 fn observation(
     path: &Path,
     workspace: &Path,

@@ -34,6 +34,7 @@ pub(crate) mod jsonc;
 pub mod kimi;
 pub mod kiro;
 pub mod lifecycle;
+mod local_session_cache;
 pub(crate) mod locate;
 pub(crate) mod managed_json_hooks;
 mod managed_source;

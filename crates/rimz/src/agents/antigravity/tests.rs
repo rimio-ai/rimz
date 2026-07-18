@@ -5,7 +5,9 @@ use crate::agents::{
 };
 use serde_json::{Value, json};
 use std::ffi::OsStr;
+use std::io::Write as _;
 use std::path::Path;
+use std::time::{Duration, Instant};
 const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 const CHILD_ALPHA: &str = "15b124d3-7753-412b-988b-88b2cd518cf8";
 const CHILD_BETA: &str = "c86b1a56-5c62-43b4-9055-102461a074ef";
@@ -891,6 +893,71 @@ fn discovery_prefers_full_transcripts_and_cache_for_fresh_pairing_only() {
         session::resolve_home(None, Some(OsStr::new("/home/user"))),
         Some(Path::new("/home/user/.gemini/antigravity-cli").to_path_buf())
     );
+}
+#[test]
+fn discovery_cache_batches_workspaces_and_revalidates_changed_dependencies() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let transcript = write_transcript(dir.path(), SESSION_ID);
+    std::fs::create_dir_all(dir.path().join("cache")).unwrap();
+    let index = dir.path().join("cache/last_conversations.json");
+    std::fs::write(
+        &index,
+        json!({first.to_str().unwrap(): SESSION_ID}).to_string(),
+    )
+    .unwrap();
+    let mut cache = session::DiscoveryCacheHarness::new();
+    let start = Instant::now();
+
+    assert_eq!(
+        cache
+            .refresh(dir.path(), &[first.as_path(), second.as_path()], start)
+            .len(),
+        2
+    );
+    assert_eq!(cache.work(), (1, 1, 1));
+    assert_eq!(
+        cache
+            .refresh(dir.path(), &[first.as_path(), second.as_path()], start)
+            .len(),
+        2
+    );
+    assert_eq!(cache.work(), (1, 1, 1));
+
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(transcript)
+            .unwrap(),
+        "{}",
+        user_record(9, "2026-07-13T23:24:00Z", "changed")
+    )
+    .unwrap();
+    assert_eq!(
+        cache
+            .refresh(dir.path(), &[first.as_path(), second.as_path()], start)
+            .len(),
+        2
+    );
+    assert_eq!(cache.work(), (1, 1, 2));
+
+    std::fs::write(
+        index,
+        json!({second.to_str().unwrap(): SESSION_ID}).to_string(),
+    )
+    .unwrap();
+    cache.refresh(dir.path(), &[first.as_path(), second.as_path()], start);
+    assert_eq!(cache.work(), (1, 2, 2));
+
+    cache.refresh(
+        dir.path(),
+        &[first.as_path(), second.as_path()],
+        start + Duration::from_secs(30),
+    );
+    assert_eq!(cache.work(), (2, 3, 3));
 }
 #[test]
 fn bounded_discovery_can_lose_an_older_prompt_from_a_long_turn() {

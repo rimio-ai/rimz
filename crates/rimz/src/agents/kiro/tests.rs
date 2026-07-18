@@ -2,6 +2,7 @@ use super::*;
 
 use std::ffi::OsStr;
 use std::io::Write as _;
+use std::time::{Duration, Instant};
 
 use crate::agents::descriptor::{ConcernCoverage, IntegrationConcern};
 use crate::agents::lifecycle::LifecycleSignal;
@@ -191,6 +192,71 @@ fn discovery_validates_layout_and_folds_ordered_records() {
         local_state(observation).phase,
         crate::agents::TurnPhase::Idle
     );
+}
+
+#[test]
+fn discovery_cache_reuses_sessions_and_reparses_one_message_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let bucket = dir
+        .path()
+        .join("sessions")
+        .join(session::workspace_bucket(&workspace).unwrap());
+    let session_id = "sess_33333333-3333-4333-8333-333333333333";
+    let session_dir = bucket.join(session_id);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let mut metadata: serde_json::Value =
+        serde_json::from_str(include_str!("tests/fixtures/stock_empty/session.json")).unwrap();
+    metadata["workspacePaths"] = serde_json::json!([workspace]);
+    std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
+    let messages = session_dir.join("messages.jsonl");
+    std::fs::write(
+        &messages,
+        include_bytes!("tests/fixtures/stock_empty/messages.jsonl"),
+    )
+    .unwrap();
+    let mut cache = session::DiscoveryCacheHarness::new();
+    let start = Instant::now();
+
+    assert_eq!(
+        cache
+            .refresh(dir.path(), &[workspace.as_path()], start)
+            .len(),
+        1
+    );
+    assert_eq!(cache.work(), (1, 1));
+    assert_eq!(
+        cache
+            .refresh(dir.path(), &[workspace.as_path()], start)
+            .len(),
+        1
+    );
+    assert_eq!(cache.work(), (1, 1));
+
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(messages)
+            .unwrap(),
+        "\n{}",
+        r#"{"id":"event-2","timestamp":"2025-01-01T00:01:00Z","payload":{"type":"user","content":"changed"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        cache
+            .refresh(dir.path(), &[workspace.as_path()], start)
+            .len(),
+        1
+    );
+    assert_eq!(cache.work(), (1, 2));
+
+    cache.refresh(
+        dir.path(),
+        &[workspace.as_path()],
+        start + Duration::from_secs(30),
+    );
+    assert_eq!(cache.work(), (2, 3));
 }
 
 #[cfg(unix)]

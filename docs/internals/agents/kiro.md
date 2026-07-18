@@ -16,6 +16,8 @@ A provider session replacing a provisional launch row inherits launch-owned name
 
 The stock layout is `${KIRO_HOME:-~/.kiro}/sessions/<sha256(cwd)[0..16]>/<sess_uuid>/{session.json,messages.jsonl}`. Discovery inspects direct `sess_*` children of the requested workspace bucket only.
 
+The producer batches exact workspaces and retains each requested bucket plus the selected valid sessions' directory, metadata, and message stamps. An unchanged tick reuses the normalized observation; a changed selected dependency re-runs validation and the bounded tail fold for that session, while invalidation reconciles the bucket so another valid child can fill the existing 128-valid-session window. Bucket topology, exact inputs, or the 30-second backstop rescans with validation before the cap; full-history transcript helpers remain uncached.
+
 A session is accepted when the directory and paired files are regular, non-symlink entries under the bucket, the ID is `sess_<uuid>` and matches metadata, `schemaVersion` is `1.0.0`, `dataModelVersion` is `1`, `workspacePaths` contains the requested absolute cwd, and `createdAt` parses. Missing or null `status` means idle, and an empty regular `messages.jsonl` produces an immediate pre-prompt idle card once process identity binds. ACP UUID directories, v2/readline history, mismatched metadata, unsupported schema, and symlink escapes stay excluded.
 
 ## Transcript, lifecycle, and context

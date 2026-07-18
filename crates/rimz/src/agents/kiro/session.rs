@@ -1,8 +1,11 @@
 //! Validated Kiro CLI v3 local-session discovery and transcript projection.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -10,6 +13,9 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::agents::lifecycle::TurnPhase;
+use crate::agents::local_session_cache::{
+    ProviderPathStamp, full_scan_due, normalized_workspace_inputs, stamp_paths, stamps_unchanged,
+};
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     TranscriptMessage, TranscriptRole, read_transcript_tail,
@@ -116,6 +122,86 @@ struct SessionEventContext {
 struct ValidatedSession {
     metadata: SessionMetadata,
     messages: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DiscoveryKey {
+    home: PathBuf,
+    workspaces: Vec<PathBuf>,
+}
+
+#[derive(Clone)]
+struct SessionCandidate {
+    workspace: PathBuf,
+    bucket: PathBuf,
+    session: PathBuf,
+}
+
+impl SessionCandidate {
+    fn dependencies(&self) -> Vec<PathBuf> {
+        vec![
+            self.session.clone(),
+            self.session.join("session.json"),
+            self.session.join("messages.jsonl"),
+        ]
+    }
+}
+
+#[derive(Clone)]
+struct CachedCandidate {
+    dependencies: Vec<(PathBuf, ProviderPathStamp)>,
+    observation: Option<LocalSessionObservation>,
+}
+
+#[derive(Default)]
+struct KiroDiscoverySnapshot {
+    key: Option<DiscoveryKey>,
+    last_full_scan: Option<Instant>,
+    topology: Vec<(PathBuf, ProviderPathStamp)>,
+    catalog: Vec<SessionCandidate>,
+    candidates: HashMap<PathBuf, CachedCandidate>,
+    #[cfg(test)]
+    work: DiscoveryWork,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct DiscoveryWork {
+    full_scans: usize,
+    candidate_parses: usize,
+}
+
+thread_local! {
+    static DISCOVERY: RefCell<KiroDiscoverySnapshot> = RefCell::new(KiroDiscoverySnapshot::default());
+}
+
+#[cfg(test)]
+pub(super) struct DiscoveryCacheHarness(KiroDiscoverySnapshot);
+
+#[cfg(test)]
+impl DiscoveryCacheHarness {
+    pub(super) fn new() -> Self {
+        Self(KiroDiscoverySnapshot::default())
+    }
+
+    pub(super) fn refresh(
+        &mut self,
+        home: &Path,
+        workspaces: &[&Path],
+        now: Instant,
+    ) -> Vec<LocalSessionObservation> {
+        self.0.refresh(
+            DiscoveryKey {
+                home: home.to_path_buf(),
+                workspaces: normalized_workspace_inputs(workspaces),
+            },
+            now,
+        )
+    }
+
+    pub(super) fn work(&self) -> (usize, usize) {
+        (self.0.work.full_scans, self.0.work.candidate_parses)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -342,13 +428,165 @@ pub(super) fn workspace_bucket(workspace: &Path) -> Option<String> {
     })
 }
 
-pub(super) fn discover(workspace: &Path) -> Vec<LocalSessionObservation> {
+pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
     let Some(home) = super::install::home() else {
         return Vec::new();
     };
-    discover_under(&home, workspace)
+    let key = DiscoveryKey {
+        home,
+        workspaces: normalized_workspace_inputs(workspaces),
+    };
+    if key.workspaces.is_empty() {
+        return Vec::new();
+    }
+    DISCOVERY.with(|snapshot| snapshot.borrow_mut().refresh(key, Instant::now()))
 }
 
+impl KiroDiscoverySnapshot {
+    fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
+        let key_changed = self.key.as_ref() != Some(&key);
+        let topology_changed = !key_changed && !stamps_unchanged(&self.topology);
+        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
+        if forced {
+            self.rebuild_catalog(&key, now);
+        }
+        let (mut observations, invalidated) = self.fold_candidates(false);
+        if invalidated && !forced {
+            self.rebuild_catalog(&key, now);
+            (observations, _) = self.fold_candidates(true);
+        }
+        let catalog_paths = self
+            .catalog
+            .iter()
+            .map(|candidate| candidate.session.clone())
+            .collect::<HashSet<_>>();
+        self.candidates
+            .retain(|path, _| catalog_paths.contains(path));
+        observations.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then(left.session_id.cmp(&right.session_id))
+        });
+        observations
+    }
+
+    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
+        #[cfg(test)]
+        {
+            self.work.full_scans += 1;
+        }
+        let sessions_root = key.home.join("sessions");
+        let mut topology = vec![sessions_root.clone()];
+        let mut catalog = Vec::new();
+        for workspace in &key.workspaces {
+            let Some(bucket_name) = workspace_bucket(workspace) else {
+                continue;
+            };
+            let bucket = sessions_root.join(bucket_name);
+            topology.push(bucket.clone());
+            if !regular_dir(&sessions_root)
+                || !regular_dir(&bucket)
+                || fs::canonicalize(&bucket)
+                    .ok()
+                    .and_then(|bucket| bucket.parent().map(Path::to_path_buf))
+                    != fs::canonicalize(&sessions_root).ok()
+            {
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(&bucket) else {
+                continue;
+            };
+            let mut admitted = 0;
+            for entry in entries.filter_map(Result::ok) {
+                if admitted >= MAX_SESSIONS_PER_WORKSPACE {
+                    break;
+                }
+                let candidate = SessionCandidate {
+                    workspace: workspace.clone(),
+                    bucket: bucket.clone(),
+                    session: entry.path(),
+                };
+                let before = stamp_paths(candidate.dependencies());
+                #[cfg(test)]
+                {
+                    self.work.candidate_parses += 1;
+                }
+                let Some(session) =
+                    validate_session(&candidate.bucket, &candidate.session, &candidate.workspace)
+                else {
+                    continue;
+                };
+                admitted += 1;
+                let parsed = observation(session, &candidate.workspace);
+                let after = stamp_paths(candidate.dependencies());
+                if before == after && after.iter().all(|(_, stamp)| stamp.is_stable()) {
+                    self.candidates.insert(
+                        candidate.session.clone(),
+                        CachedCandidate {
+                            dependencies: after,
+                            observation: parsed,
+                        },
+                    );
+                } else {
+                    self.candidates.remove(&candidate.session);
+                }
+                catalog.push(candidate);
+            }
+        }
+        topology.sort();
+        topology.dedup();
+        self.key = Some(key.clone());
+        self.last_full_scan = Some(now);
+        self.topology = stamp_paths(topology);
+        self.catalog = catalog;
+    }
+
+    fn fold_candidates(&mut self, forced: bool) -> (Vec<LocalSessionObservation>, bool) {
+        let catalog = self.catalog.clone();
+        let mut observations = Vec::new();
+        let mut invalidated = false;
+        for candidate in catalog {
+            let before = stamp_paths(candidate.dependencies());
+            if !forced
+                && let Some(cached) = self.candidates.get(&candidate.session)
+                && cached.dependencies == before
+                && before.iter().all(|(_, stamp)| stamp.is_stable())
+            {
+                observations.extend(cached.observation.clone());
+                continue;
+            }
+            #[cfg(test)]
+            {
+                self.work.candidate_parses += 1;
+            }
+            let had_observation = self
+                .candidates
+                .get(&candidate.session)
+                .is_some_and(|cached| cached.observation.is_some());
+            let parsed =
+                validate_session(&candidate.bucket, &candidate.session, &candidate.workspace)
+                    .and_then(|session| observation(session, &candidate.workspace));
+            let after = stamp_paths(candidate.dependencies());
+            if before != after || after.iter().any(|(_, stamp)| !stamp.is_stable()) {
+                self.candidates.remove(&candidate.session);
+                invalidated = true;
+                continue;
+            }
+            invalidated |= had_observation && parsed.is_none();
+            self.candidates.insert(
+                candidate.session,
+                CachedCandidate {
+                    dependencies: after,
+                    observation: parsed.clone(),
+                },
+            );
+            observations.extend(parsed);
+        }
+        (observations, invalidated)
+    }
+}
+
+#[cfg(test)]
 pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
     let Some(bucket_name) = workspace_bucket(workspace) else {
         return Vec::new();

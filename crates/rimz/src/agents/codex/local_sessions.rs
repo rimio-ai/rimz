@@ -1,31 +1,268 @@
 //! Codex's active and archived rollout stores mapped into local observations.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use jiff::{Timestamp, civil::Date};
 use uuid::Uuid;
 
-use super::transcript::read_rollout_header;
+use super::transcript::{CodexRolloutHeader, read_rollout_header};
+use crate::agents::local_session_cache::{
+    ProviderPathStamp, full_scan_due, normalized_workspace_inputs, stamp_paths, stamps_unchanged,
+};
 use crate::agents::{LocalSessionObservation, LocalSessionProjection};
 use crate::ids::{AgentKind, AgentSessionId};
 
 const MAX_EXAMINED_FILES: usize = 512;
 const MAX_SESSION_AGE_DAYS: usize = 14;
 
+#[derive(Clone)]
 struct RolloutCandidate {
     path: PathBuf,
     active: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DiscoveryKey {
+    home: PathBuf,
+    workspaces: Vec<PathBuf>,
+    today: Date,
+}
+
+#[derive(Clone)]
+struct CachedHeader {
+    stamp: ProviderPathStamp,
+    header: Option<CodexRolloutHeader>,
+}
+
+#[derive(Default)]
+struct CodexDiscoverySnapshot {
+    key: Option<DiscoveryKey>,
+    last_full_scan: Option<Instant>,
+    topology: Vec<(PathBuf, ProviderPathStamp)>,
+    catalog: Vec<RolloutCandidate>,
+    headers: HashMap<PathBuf, CachedHeader>,
+    #[cfg(test)]
+    work: DiscoveryWork,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct DiscoveryWork {
+    full_scans: usize,
+    header_reads: usize,
+}
+
+thread_local! {
+    static DISCOVERY: RefCell<CodexDiscoverySnapshot> = RefCell::new(CodexDiscoverySnapshot::default());
 }
 
 pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
     let Some(home) = super::app_server::codex_home() else {
         return Vec::new();
     };
-    discover_under(&home, workspaces)
+    let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
+    discover_cached(&home, workspaces, today, Instant::now())
 }
 
+fn discover_cached(
+    home: &Path,
+    workspaces: &[&Path],
+    today: Date,
+    now: Instant,
+) -> Vec<LocalSessionObservation> {
+    let key = DiscoveryKey {
+        home: home.to_path_buf(),
+        workspaces: normalized_workspace_inputs(workspaces),
+        today,
+    };
+    if key.workspaces.is_empty() {
+        return Vec::new();
+    }
+    DISCOVERY.with(|snapshot| snapshot.borrow_mut().refresh(key, now))
+}
+
+impl CodexDiscoverySnapshot {
+    fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
+        let key_changed = self.key.as_ref() != Some(&key);
+        let topology_changed = !key_changed && !stamps_unchanged(&self.topology);
+        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
+        if forced {
+            self.rebuild_catalog(&key, now);
+        }
+
+        let active_session_ids = self
+            .catalog
+            .iter()
+            .filter(|candidate| candidate.active)
+            .filter_map(|candidate| session_id_from_filename(&candidate.path))
+            .collect::<HashSet<_>>();
+        let mut candidates = self.catalog.clone();
+        candidates.sort_by(|left, right| {
+            rollout_filename(&right.path)
+                .cmp(&rollout_filename(&left.path))
+                .then_with(|| right.active.cmp(&left.active))
+        });
+        let workspace_lookup = key
+            .workspaces
+            .iter()
+            .map(PathBuf::as_path)
+            .collect::<HashSet<_>>();
+        let mut examined = 0;
+        let mut session_ids_seen = HashSet::new();
+        let mut observations = Vec::new();
+        for candidate in candidates {
+            let filename_session = session_id_from_filename(&candidate.path);
+            if !candidate.active
+                && filename_session
+                    .as_ref()
+                    .is_some_and(|session_id| active_session_ids.contains(session_id))
+            {
+                continue;
+            }
+            if examined >= MAX_EXAMINED_FILES {
+                break;
+            }
+            examined += 1;
+            if filename_session
+                .as_ref()
+                .is_some_and(|session_id| session_ids_seen.contains(session_id))
+            {
+                continue;
+            }
+            let stamp = ProviderPathStamp::read(&candidate.path);
+            let header = self.refresh_header(&candidate.path, stamp.clone(), forced);
+            if let Some(observation) = header.and_then(|header| {
+                observation_from_header(candidate.path, header, stamp, &workspace_lookup)
+            }) {
+                if let Some(session_id) = filename_session {
+                    session_ids_seen.insert(session_id);
+                }
+                session_ids_seen.insert(observation.session_id.to_string());
+                observations.push(observation);
+            }
+        }
+        let catalog_paths = self
+            .catalog
+            .iter()
+            .map(|candidate| candidate.path.clone())
+            .collect::<HashSet<_>>();
+        self.headers.retain(|path, _| catalog_paths.contains(path));
+        observations.sort_by(|left, right| {
+            right
+                .last_activity
+                .cmp(&left.last_activity)
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+        observations
+    }
+
+    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
+        #[cfg(test)]
+        {
+            self.work.full_scans += 1;
+        }
+        let sessions = key.home.join("sessions");
+        let archive = key.home.join("archived_sessions");
+        let dates = recent_dates(key.today);
+        let cutoff = *dates.last().unwrap_or(&key.today);
+        let mut topology_paths = vec![sessions.clone(), archive.clone()];
+        let mut catalog = Vec::new();
+        for date in dates {
+            let day = sessions
+                .join(format!("{:04}", date.year()))
+                .join(format!("{:02}", date.month()))
+                .join(format!("{:02}", date.day()));
+            topology_paths.push(day.clone());
+            let Ok(entries) = fs::read_dir(day) else {
+                continue;
+            };
+            catalog.extend(
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+                    .map(|entry| entry.path())
+                    .filter(|path| rollout_filename(path).is_some())
+                    .map(|path| RolloutCandidate { path, active: true }),
+            );
+        }
+        if let Ok(entries) = fs::read_dir(&archive) {
+            catalog.extend(
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        rollout_filename(path)
+                            .and_then(rollout_filename_date)
+                            .is_some_and(|date| date >= cutoff)
+                    })
+                    .map(|path| RolloutCandidate {
+                        path,
+                        active: false,
+                    }),
+            );
+        }
+        self.key = Some(key.clone());
+        self.last_full_scan = Some(now);
+        self.topology = stamp_paths(topology_paths);
+        self.catalog = catalog;
+    }
+
+    fn refresh_header(
+        &mut self,
+        path: &Path,
+        before: ProviderPathStamp,
+        forced: bool,
+    ) -> Option<CodexRolloutHeader> {
+        if !forced
+            && let Some(cached) = self.headers.get(path)
+            && cached.stamp == before
+            && before.is_stable()
+        {
+            return cached.header.clone();
+        }
+        #[cfg(test)]
+        {
+            self.work.header_reads += 1;
+        }
+        let header = before
+            .is_file()
+            .then(|| read_rollout_header(path))
+            .flatten();
+        let after = ProviderPathStamp::read(path);
+        if before != after || !after.is_stable() {
+            self.headers.remove(path);
+            return None;
+        }
+        self.headers.insert(
+            path.to_path_buf(),
+            CachedHeader {
+                stamp: after,
+                header: header.clone(),
+            },
+        );
+        header
+    }
+}
+
+fn recent_dates(today: Date) -> Vec<Date> {
+    let mut dates = vec![today];
+    let mut date = today;
+    for _ in 0..MAX_SESSION_AGE_DAYS {
+        let Ok(previous) = date.yesterday() else {
+            break;
+        };
+        dates.push(previous);
+        date = previous;
+    }
+    dates
+}
+
+#[cfg(test)]
 pub(super) fn discover_under(home: &Path, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
     let workspaces = workspaces
         .iter()
@@ -103,6 +340,7 @@ pub(super) fn discover_under(home: &Path, workspaces: &[&Path]) -> Vec<LocalSess
     observations
 }
 
+#[cfg(test)]
 fn active_rollouts(root: &Path, cutoff: Date) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for (_, _, date_dir) in date_directories(root, cutoff) {
@@ -121,6 +359,7 @@ fn active_rollouts(root: &Path, cutoff: Date) -> Vec<PathBuf> {
     files
 }
 
+#[cfg(test)]
 fn archived_rollouts(root: &Path, cutoff: Date) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
@@ -150,6 +389,7 @@ fn rollout_filename_date(filename: &str) -> Option<Date> {
     filename.get(..10)?.parse().ok()
 }
 
+#[cfg(test)]
 fn date_directories(root: &Path, cutoff: Date) -> Vec<(Date, PathBuf, PathBuf)> {
     let mut dates = Vec::new();
     let Ok(years) = fs::read_dir(root) else {
@@ -189,6 +429,7 @@ fn date_directories(root: &Path, cutoff: Date) -> Vec<(Date, PathBuf, PathBuf)> 
     dates
 }
 
+#[cfg(test)]
 fn relative_date(relative: &Path) -> Option<Date> {
     let parts = relative
         .iter()
@@ -200,8 +441,19 @@ fn relative_date(relative: &Path) -> Option<Date> {
     format!("{year}-{month}-{day}").parse().ok()
 }
 
+#[cfg(test)]
 fn observation(path: PathBuf, workspaces: &HashSet<&Path>) -> Option<LocalSessionObservation> {
     let header = read_rollout_header(&path)?;
+    let stamp = ProviderPathStamp::read(&path);
+    observation_from_header(path, header, stamp, workspaces)
+}
+
+fn observation_from_header(
+    path: PathBuf,
+    header: CodexRolloutHeader,
+    stamp: ProviderPathStamp,
+    workspaces: &HashSet<&Path>,
+) -> Option<LocalSessionObservation> {
     if header.is_subagent {
         return None;
     }
@@ -210,7 +462,10 @@ fn observation(path: PathBuf, workspaces: &HashSet<&Path>) -> Option<LocalSessio
         .session_id
         .or_else(|| session_id_from_filename(&path))?;
     let created_at = header.timestamp?;
-    let last_activity = file_mtime(&path).unwrap_or(created_at).max(created_at);
+    let last_activity = timestamp_from_stamp(&stamp)
+        .or_else(|| file_mtime(&path))
+        .unwrap_or(created_at)
+        .max(created_at);
     Some(LocalSessionObservation {
         kind: AgentKind::new_unchecked("codex"),
         session_id: AgentSessionId::from(session_id),
@@ -222,6 +477,15 @@ fn observation(path: PathBuf, workspaces: &HashSet<&Path>) -> Option<LocalSessio
         last_activity,
         projection: LocalSessionProjection::IdentityOnly,
     })
+}
+
+fn timestamp_from_stamp(stamp: &ProviderPathStamp) -> Option<Timestamp> {
+    let since_epoch = stamp.modified?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Timestamp::new(
+        i64::try_from(since_epoch.as_secs()).ok()?,
+        since_epoch.subsec_nanos() as i32,
+    )
+    .ok()
 }
 
 fn session_id_from_filename(path: &Path) -> Option<String> {
@@ -265,6 +529,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
 #[cfg(test)]
 mod tests {
     use std::fs::FileTimes;
+    use std::io::Write as _;
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
@@ -448,6 +713,52 @@ mod tests {
             observations[1].workspace.as_os_str().as_encoded_bytes(),
             b"/workspace/first"
         );
+    }
+
+    #[test]
+    fn cached_discovery_reuses_headers_and_forces_the_backstop() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = PathBuf::from("/workspace/project");
+        let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
+        let active = date_path(temp.path(), false, 0);
+        let id = "11111111-1111-4111-8111-111111111111";
+        let path = write_rollout(
+            &active,
+            id,
+            "/workspace/project",
+            "2025-01-01T00:00:00Z",
+            1_735_689_600,
+        );
+        let key = DiscoveryKey {
+            home: temp.path().to_path_buf(),
+            workspaces: vec![workspace],
+            today,
+        };
+        let start = Instant::now();
+        let mut snapshot = CodexDiscoverySnapshot::default();
+
+        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
+        assert_eq!(snapshot.work.full_scans, 1);
+        assert_eq!(snapshot.work.header_reads, 1);
+        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
+        assert_eq!(snapshot.work.header_reads, 1);
+
+        writeln!(
+            fs::OpenOptions::new().append(true).open(path).unwrap(),
+            "\n{}",
+            r#"{"type":"event_msg"}"#,
+        )
+        .unwrap();
+        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
+        assert_eq!(snapshot.work.full_scans, 1);
+        assert_eq!(snapshot.work.header_reads, 2);
+
+        assert_eq!(
+            snapshot.refresh(key, start + Duration::from_secs(30)).len(),
+            1
+        );
+        assert_eq!(snapshot.work.full_scans, 2);
+        assert_eq!(snapshot.work.header_reads, 3);
     }
 
     #[test]

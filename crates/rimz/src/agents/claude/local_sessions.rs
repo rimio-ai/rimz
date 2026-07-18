@@ -1,16 +1,21 @@
 //! Claude's machine-local session store mapped into provider-neutral observations.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::BufRead as _;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use jiff::Timestamp;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use super::spend::claude_config_dirs;
+use crate::agents::local_session_cache::{
+    ProviderPathStamp, full_scan_due, normalized_workspace_inputs, stamp_paths, stamps_unchanged,
+};
 use crate::agents::{LocalSessionObservation, LocalSessionProjection, read_transcript_tail};
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -27,21 +32,203 @@ struct ClaudeSessionRecord {
     is_sidechain: bool,
 }
 
-pub(super) fn discover(workspace: &Path) -> Vec<LocalSessionObservation> {
-    if !workspace.is_absolute() {
-        return Vec::new();
-    }
-    let mut observations = claude_config_dirs()
-        .into_iter()
-        .flat_map(|config_dir| discover_under(&config_dir, workspace))
-        .collect::<Vec<_>>();
-    observations.sort_by(observation_cmp);
-    let mut seen = HashSet::new();
-    observations.retain(|observation| seen.insert(observation.session_id.clone()));
-    observations.truncate(MAX_DISCOVERED_SESSIONS);
-    observations
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DiscoveryKey {
+    config_dirs: Vec<PathBuf>,
+    workspaces: Vec<PathBuf>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct CatalogEntry {
+    config_dir: PathBuf,
+    workspace: PathBuf,
+    path: PathBuf,
+}
+
+#[derive(Clone)]
+struct CachedCandidate {
+    stamp: ProviderPathStamp,
+    observation: Option<LocalSessionObservation>,
+}
+
+#[derive(Default)]
+struct ClaudeDiscoverySnapshot {
+    key: Option<DiscoveryKey>,
+    last_full_scan: Option<Instant>,
+    topology: Vec<(PathBuf, ProviderPathStamp)>,
+    catalog: Vec<CatalogEntry>,
+    candidates: HashMap<CatalogEntry, CachedCandidate>,
+    #[cfg(test)]
+    work: DiscoveryWork,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct DiscoveryWork {
+    full_scans: usize,
+    candidate_parses: usize,
+}
+
+thread_local! {
+    static DISCOVERY: RefCell<ClaudeDiscoverySnapshot> = RefCell::new(ClaudeDiscoverySnapshot::default());
+}
+
+pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
+    let key = DiscoveryKey {
+        config_dirs: claude_config_dirs(),
+        workspaces: normalized_workspace_inputs(workspaces),
+    };
+    if key.config_dirs.is_empty() || key.workspaces.is_empty() {
+        return Vec::new();
+    }
+    DISCOVERY.with(|snapshot| snapshot.borrow_mut().refresh(key, Instant::now()))
+}
+
+impl ClaudeDiscoverySnapshot {
+    fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
+        let key_changed = self.key.as_ref() != Some(&key);
+        let topology_changed = !key_changed && !stamps_unchanged(&self.topology);
+        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
+        if forced {
+            self.rebuild_catalog(&key, now);
+        }
+
+        let mut selected = Vec::new();
+        for config_dir in &key.config_dirs {
+            for workspace in &key.workspaces {
+                let mut bucket = self
+                    .catalog
+                    .iter()
+                    .filter(|entry| {
+                        &entry.config_dir == config_dir && &entry.workspace == workspace
+                    })
+                    .filter_map(|entry| {
+                        let stamp = ProviderPathStamp::read(&entry.path);
+                        stamp.is_file().then(|| (entry.clone(), stamp))
+                    })
+                    .collect::<Vec<_>>();
+                bucket.sort_by(|left, right| {
+                    right
+                        .1
+                        .modified
+                        .cmp(&left.1.modified)
+                        .then_with(|| left.0.path.cmp(&right.0.path))
+                });
+                selected.extend(bucket.into_iter().take(MAX_DISCOVERED_SESSIONS));
+            }
+        }
+
+        let mut observations = selected
+            .into_iter()
+            .filter_map(|(entry, stamp)| self.refresh_candidate(entry, stamp, forced))
+            .collect::<Vec<_>>();
+        self.candidates
+            .retain(|entry, _| self.catalog.contains(entry));
+        observations.sort_by(observation_cmp);
+        let mut seen = HashSet::new();
+        observations.retain(|observation| seen.insert(observation.session_id.clone()));
+        observations.truncate(MAX_DISCOVERED_SESSIONS);
+        observations
+    }
+
+    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
+        #[cfg(test)]
+        {
+            self.work.full_scans += 1;
+        }
+        let mut topology_paths = Vec::new();
+        let mut catalog = Vec::new();
+        for config_dir in &key.config_dirs {
+            for workspace in &key.workspaces {
+                let project_dir = config_dir
+                    .join("projects")
+                    .join(project_directory_name(workspace));
+                collect_catalog(
+                    config_dir,
+                    workspace,
+                    &project_dir,
+                    &mut topology_paths,
+                    &mut catalog,
+                );
+            }
+        }
+        topology_paths.sort();
+        topology_paths.dedup();
+        self.key = Some(key.clone());
+        self.last_full_scan = Some(now);
+        self.topology = stamp_paths(topology_paths);
+        self.catalog = catalog;
+    }
+
+    fn refresh_candidate(
+        &mut self,
+        entry: CatalogEntry,
+        before: ProviderPathStamp,
+        forced: bool,
+    ) -> Option<LocalSessionObservation> {
+        if !forced
+            && let Some(cached) = self.candidates.get(&entry)
+            && cached.stamp == before
+            && before.is_stable()
+        {
+            return cached.observation.clone();
+        }
+        #[cfg(test)]
+        {
+            self.work.candidate_parses += 1;
+        }
+        let parsed = before
+            .is_file()
+            .then(|| observation(entry.path.clone(), &entry.workspace))
+            .flatten();
+        let after = ProviderPathStamp::read(&entry.path);
+        if before != after || !after.is_stable() {
+            self.candidates.remove(&entry);
+            return None;
+        }
+        self.candidates.insert(
+            entry,
+            CachedCandidate {
+                stamp: after,
+                observation: parsed.clone(),
+            },
+        );
+        parsed
+    }
+}
+
+fn collect_catalog(
+    config_dir: &Path,
+    workspace: &Path,
+    dir: &Path,
+    topology: &mut Vec<PathBuf>,
+    catalog: &mut Vec<CatalogEntry>,
+) {
+    topology.push(dir.to_path_buf());
+    if !ProviderPathStamp::read(dir).is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_catalog(config_dir, workspace, &path, topology, catalog);
+        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
+            catalog.push(CatalogEntry {
+                config_dir: config_dir.to_path_buf(),
+                workspace: workspace.to_path_buf(),
+                path,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) fn discover_under(config_dir: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
     if !workspace.is_absolute() {
         return Vec::new();
@@ -177,6 +364,9 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+    use std::time::Duration;
+
     use super::*;
 
     fn write_session(dir: &Path, id: &str, records: &[&str]) {
@@ -250,5 +440,50 @@ mod tests {
                 .iter()
                 .all(|observation| observation.projection == LocalSessionProjection::IdentityOnly)
         );
+    }
+
+    #[test]
+    fn cached_discovery_reparses_only_changed_candidates_and_backstops() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = PathBuf::from("/workspace/project");
+        let project = temp.path().join("projects").join("-workspace-project");
+        let id = "11111111-1111-4111-8111-111111111111";
+        write_session(
+            &project,
+            id,
+            &[r#"{"timestamp":"2025-01-01T00:00:00Z","cwd":"/workspace/project"}"#],
+        );
+        let key = DiscoveryKey {
+            config_dirs: vec![temp.path().to_path_buf()],
+            workspaces: vec![workspace],
+        };
+        let start = Instant::now();
+        let mut snapshot = ClaudeDiscoverySnapshot::default();
+
+        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
+        assert_eq!(snapshot.work.full_scans, 1);
+        assert_eq!(snapshot.work.candidate_parses, 1);
+        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
+        assert_eq!(snapshot.work.candidate_parses, 1);
+
+        writeln!(
+            fs::OpenOptions::new()
+                .append(true)
+                .open(project.join(format!("{id}.jsonl")))
+                .unwrap(),
+            "\n{}",
+            r#"{"timestamp":"2025-01-01T00:01:00Z","cwd":"/workspace/project"}"#,
+        )
+        .unwrap();
+        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
+        assert_eq!(snapshot.work.full_scans, 1);
+        assert_eq!(snapshot.work.candidate_parses, 2);
+
+        assert_eq!(
+            snapshot.refresh(key, start + Duration::from_secs(30)).len(),
+            1
+        );
+        assert_eq!(snapshot.work.full_scans, 2);
+        assert_eq!(snapshot.work.candidate_parses, 3);
     }
 }

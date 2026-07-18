@@ -228,10 +228,7 @@ impl AgentAdapter for KiroAdapter {
     }
 
     fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
-        workspaces
-            .iter()
-            .flat_map(|workspace| session::discover(workspace))
-            .collect()
+        session::discover(workspaces)
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {

@@ -3,6 +3,7 @@
 //! Cursor transcript assistant blocks combine visible prose and thinking. This
 //! module deliberately models only the terminal row discriminator and outcome.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -158,6 +159,80 @@ pub(super) fn discover_under(root: &Path, conversation_id: &str) -> Option<PathB
         .filter(|path| path.is_file());
     let found = matches.next()?;
     matches.next().is_none().then_some(found)
+}
+
+pub(super) struct DiscoveryCatalog {
+    pub(super) topology_paths: Vec<PathBuf>,
+    dependencies: HashMap<String, Vec<PathBuf>>,
+    resolved: HashMap<String, Option<PathBuf>>,
+}
+
+impl DiscoveryCatalog {
+    pub(super) fn build(root: &Path, conversation_ids: &[String]) -> Self {
+        let mut topology_paths = vec![root.to_path_buf()];
+        let mut dependencies = conversation_ids
+            .iter()
+            .map(|id| (id.clone(), Vec::new()))
+            .collect::<HashMap<_, _>>();
+        let mut matches = conversation_ids
+            .iter()
+            .map(|id| (id.clone(), Vec::new()))
+            .collect::<HashMap<_, _>>();
+        if let Ok(entries) = fs::read_dir(root) {
+            for entry in entries.filter_map(Result::ok) {
+                if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                let project = entry.path();
+                let transcripts = project.join("agent-transcripts");
+                topology_paths.push(project);
+                topology_paths.push(transcripts.clone());
+                for id in conversation_ids {
+                    let conversation = transcripts.join(id);
+                    let path = conversation.join(format!("{id}.jsonl"));
+                    dependencies
+                        .entry(id.clone())
+                        .or_default()
+                        .extend([conversation, path.clone()]);
+                    if fs::symlink_metadata(&path)
+                        .is_ok_and(|metadata| metadata.file_type().is_file())
+                    {
+                        matches.entry(id.clone()).or_default().push(path);
+                    }
+                }
+            }
+        }
+        topology_paths.sort();
+        topology_paths.dedup();
+        let resolved = matches
+            .into_iter()
+            .map(|(id, mut paths)| {
+                paths.sort();
+                paths.dedup();
+                let resolved = match paths.as_slice() {
+                    [path] => Some(path.clone()),
+                    _ => None,
+                };
+                (id, resolved)
+            })
+            .collect();
+        Self {
+            topology_paths,
+            dependencies,
+            resolved,
+        }
+    }
+
+    pub(super) fn resolve(&self, conversation_id: &str) -> Option<&Path> {
+        self.resolved.get(conversation_id)?.as_deref()
+    }
+
+    pub(super) fn dependencies(&self, conversation_id: &str) -> &[PathBuf] {
+        self.dependencies
+            .get(conversation_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

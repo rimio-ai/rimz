@@ -9,6 +9,7 @@ use prost::Message;
 use rusqlite::Connection;
 use serde_json::json;
 use sha2::Sha256;
+use std::time::{Duration, Instant};
 
 struct CursorAskFixture {
     _dir: tempfile::TempDir,
@@ -153,6 +154,50 @@ impl CursorAskFixture {
     fn observations(&self) -> Vec<crate::agents::LocalSessionObservation> {
         session::discover_under(&self.home, &self.workspace)
     }
+}
+
+#[test]
+fn discovery_cache_reuses_positive_and_negative_sqlite_results() {
+    let fixture = CursorAskFixture::new(vec![pending_ask("Which color?", false, None)]);
+    let missing_id = "22222222-2222-4222-8222-222222222222";
+    let missing = fixture.session.parent().unwrap().join(missing_id);
+    std::fs::create_dir_all(&missing).unwrap();
+    let mut cache = session::DiscoveryCacheHarness::new();
+    let start = Instant::now();
+
+    assert_eq!(
+        cache
+            .refresh(&fixture.home, &[fixture.workspace.as_path()], start)
+            .len(),
+        1
+    );
+    assert_eq!(cache.work(), (1, 1));
+    assert_eq!(
+        cache
+            .refresh(&fixture.home, &[fixture.workspace.as_path()], start)
+            .len(),
+        1
+    );
+    assert_eq!(cache.work(), (1, 1));
+
+    let metadata_path = fixture.session.join("meta.json");
+    let mut metadata = std::fs::read(&metadata_path).unwrap();
+    metadata.push(b'\n');
+    std::fs::write(metadata_path, metadata).unwrap();
+    assert_eq!(
+        cache
+            .refresh(&fixture.home, &[fixture.workspace.as_path()], start)
+            .len(),
+        1
+    );
+    assert_eq!(cache.work(), (1, 2));
+
+    cache.refresh(
+        &fixture.home,
+        &[fixture.workspace.as_path()],
+        start + Duration::from_secs(30),
+    );
+    assert_eq!(cache.work(), (2, 3));
 }
 
 fn message(value: Value) -> Vec<u8> {
