@@ -16,7 +16,7 @@ use super::{
     PRESENCE_SHARE_PIPE, PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
 use crate::mux::{MuxErr, Result};
-use crate::sidebar::cache::read_pane_topology_cache;
+use crate::sidebar::cache::{PresenceDesired, read_pane_topology_cache, write_presence_desired};
 use crate::sidebar::timing::unix_now_ms;
 use crate::store::{atomic, paths};
 
@@ -242,6 +242,34 @@ impl ZellijBackend {
         self.seed_presence_permissions(opts);
         let url = format!("file:{}", opts.wasm.display());
         let configuration = presence_plugin_configuration(opts);
+        if let Some(config) = presence_plugin_config_hash(&configuration) {
+            let desired = PresenceDesired {
+                build: presence_plugin_build().to_owned(),
+                config: config.to_owned(),
+                recorded_at_ms: unix_now_ms(),
+            };
+            match self.runtime_paths_for_workspace(opts.workspace_id.clone()) {
+                Ok(runtime) => {
+                    if let Err(err) = write_presence_desired(&runtime, &desired) {
+                        tracing::debug!(
+                            session = %opts.session_name,
+                            error = %err,
+                            "recording desired presence-plugin identity failed",
+                        );
+                    }
+                }
+                Err(err) => tracing::debug!(
+                    session = %opts.session_name,
+                    error = %err,
+                    "desired presence-plugin identity paths are unavailable",
+                ),
+            }
+        } else {
+            tracing::debug!(
+                session = %opts.session_name,
+                "desired presence-plugin config identity is unavailable",
+            );
+        }
         if opts.converge {
             // Reload a *running* plugin in place onto the current wasm —
             // `start-or-reload-plugin` converges a pipe-launched instance
@@ -319,10 +347,20 @@ impl ZellijBackend {
                 return;
             }
         };
+        let configuration = presence_plugin_configuration(opts);
+        let Some(expected_config) = presence_plugin_config_hash(&configuration) else {
+            tracing::debug!(
+                session = %opts.session_name,
+                "presence retire skipped because the desired config identity is unavailable",
+            );
+            return;
+        };
         let Some(writer) = wait_for_presence_replacement(
             &runtime,
             &opts.session_name,
             floor_ms,
+            presence_plugin_build(),
+            expected_config,
             timeout,
             poll_step,
         ) else {
@@ -420,6 +458,8 @@ fn wait_for_presence_replacement(
     runtime: &crate::store::RuntimePaths,
     session_name: &str,
     floor_ms: u64,
+    expected_build: &str,
+    expected_config: &str,
     timeout: Duration,
     poll_step: Duration,
 ) -> Option<crate::mux::zellij::pane_topology::TopologyWriter> {
@@ -427,7 +467,11 @@ fn wait_for_presence_replacement(
     loop {
         if let Some(writer) = read_pane_topology_cache(runtime, session_name)
             .and_then(|cache| cache.writer)
-            .filter(|writer| writer.loaded_at_ms >= floor_ms)
+            .filter(|writer| {
+                writer.loaded_at_ms >= floor_ms
+                    && writer.build.as_deref() == Some(expected_build)
+                    && writer.config.as_deref() == Some(expected_config)
+            })
         {
             return Some(writer);
         }
@@ -703,6 +747,20 @@ exit 0
         std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log")
     }
 
+    fn current_writer(
+        plugin_id: u32,
+        loaded_at_ms: u64,
+    ) -> crate::mux::zellij::pane_topology::TopologyWriter {
+        let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+        let configuration = presence_plugin_configuration(&opts);
+        crate::mux::zellij::pane_topology::TopologyWriter {
+            plugin_id,
+            loaded_at_ms,
+            build: Some(presence_plugin_build().to_owned()),
+            config: presence_plugin_config_hash(&configuration).map(str::to_owned),
+        }
+    }
+
     #[test]
     fn embedded_presence_plugin_is_present() {
         assert!(!EMBEDDED_PRESENCE_PLUGIN.is_empty());
@@ -784,25 +842,40 @@ exit 0
 
     #[cfg(unix)]
     #[test]
+    fn owner_launch_records_the_desired_writer_identity() {
+        use crate::sidebar::cache::read_presence_desired;
+        use crate::store::RuntimePaths;
+
+        let (temp, shim) = zellij_shim("#!/bin/sh\nexit 0\n");
+        let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
+        let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+        let runtime = RuntimePaths::under(opts.workspace_id.clone(), temp.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+
+        backend
+            .ensure_presence_plugin_for(&opts)
+            .expect("ensure presence plugin");
+
+        let desired = read_presence_desired(&runtime).expect("desired writer record");
+        let configuration = presence_plugin_configuration(&opts);
+        assert_eq!(desired.build, presence_plugin_build());
+        assert_eq!(
+            Some(desired.config.as_str()),
+            presence_plugin_config_hash(&configuration)
+        );
+        assert!(desired.recorded_at_ms > 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn presence_convergence_retires_after_replacement_writer_is_proven() {
-        let log =
-            presence_convergence_log(Some(crate::mux::zellij::pane_topology::TopologyWriter {
-                plugin_id: 2,
-                loaded_at_ms: u64::MAX,
-                build: None,
-                config: None,
-            }));
+        let log = presence_convergence_log(Some(current_writer(2, u64::MAX)));
 
         assert!(
             log.contains("--name rimz:dump_topology -- dump"),
             "convergence should request replacement topology:\n{log}",
         );
-        assert!(
-            log.contains(
-                "--name rimz:retire -- {\"plugin_id\":2,\"loaded_at_ms\":18446744073709551615}"
-            ),
-            "a proven replacement should retire stale plugins:\n{log}",
-        );
+        assert!(log.contains("--name rimz:retire -- {\"plugin_id\":2,\"loaded_at_ms\":18446744073709551615,\"build\":"), "a proven replacement should retire stale plugins:\n{log}");
         assert_eq!(
             log.matches("--name rimz_presence_boot -- load").count(),
             2,
@@ -813,17 +886,25 @@ exit 0
     #[cfg(unix)]
     #[test]
     fn presence_convergence_rejects_old_writer_generation() {
-        let log =
-            presence_convergence_log(Some(crate::mux::zellij::pane_topology::TopologyWriter {
-                plugin_id: 1,
-                loaded_at_ms: 0,
-                build: None,
-                config: None,
-            }));
+        let log = presence_convergence_log(Some(current_writer(1, 0)));
 
         assert!(
             !log.contains("--name rimz:retire"),
             "fresh topology from an old writer must not prove the replacement:\n{log}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn presence_convergence_rejects_a_wrong_writer_identity() {
+        let mut writer = current_writer(2, u64::MAX);
+        writer.build = Some("old-build".to_owned());
+
+        let log = presence_convergence_log(Some(writer));
+
+        assert!(
+            !log.contains("--name rimz:retire"),
+            "a later writer from another build must not prove the replacement:\n{log}",
         );
     }
 

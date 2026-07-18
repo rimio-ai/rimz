@@ -929,6 +929,18 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
 }
 
 #[test]
+fn retire_pipe_closes_a_newer_instance_with_the_wrong_identity() {
+    let mut engine = Engine::new(100, config());
+
+    assert_eq!(
+        engine.on_retire_pipe(Some(
+            r#"{"plugin_id":1,"loaded_at_ms":10,"build":"new-build","config":"new-config"}"#,
+        )),
+        vec![Effect::CloseSelf]
+    );
+}
+
+#[test]
 fn repeated_command_failures_fall_back_to_path_once_and_success_resets_the_streak() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());

@@ -36,6 +36,24 @@ fn plugin_focus_argv_parses_without_workspace_id() {
 }
 
 #[test]
+fn plugin_wake_argv_accepts_repeated_topology_chunks() {
+    use clap::Parser;
+
+    crate::cli::Cli::try_parse_from([
+        "rimz",
+        "sidebar",
+        "wake",
+        "--reason",
+        "alive",
+        "--topology",
+        "{\"panes\":",
+        "--topology",
+        "--a-chunk-may-start-with-hyphens}",
+    ])
+    .expect("plugin topology chunks must append in order");
+}
+
+#[test]
 fn gallery_argv_parses_pets_flag() {
     use clap::Parser;
 

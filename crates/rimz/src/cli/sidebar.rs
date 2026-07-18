@@ -194,7 +194,12 @@ struct WakeArgs {
     focused_pane_ids: Vec<String>,
     #[arg(long = "unfocused-pane-id")]
     unfocused_pane_ids: Vec<String>,
-    #[arg(long = "topology", hide = true, action = ArgAction::Append)]
+    #[arg(
+        long = "topology",
+        hide = true,
+        action = ArgAction::Append,
+        allow_hyphen_values = true
+    )]
     topology: Vec<String>,
     #[arg(long, hide = true)]
     plugin_mem_pages: Option<u64>,

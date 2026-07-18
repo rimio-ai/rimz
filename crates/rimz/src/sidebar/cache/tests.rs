@@ -133,6 +133,23 @@ fn presence_probe_stamp_round_trips_and_rejects_bad_files() {
     assert_eq!(read_presence_probe_stamp(&runtime), None);
 }
 
+#[test]
+fn desired_presence_identity_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let desired = PresenceDesired {
+        build: "wasm-build".to_owned(),
+        config: "config-hash".to_owned(),
+        recorded_at_ms: 42,
+    };
+
+    write_presence_desired(&runtime, &desired).unwrap();
+
+    assert_eq!(read_presence_desired(&runtime), Some(desired));
+}
+
 fn cache_produced_at(produced_at_ms: u64) -> PaneFrame {
     assemble_frame(Vec::new(), produced_at_ms, "rimz-test")
 }

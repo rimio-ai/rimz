@@ -185,6 +185,31 @@ pub fn presence_event_mode(stamp_age_ms: Option<u64>) -> bool {
     stamp_age_ms.is_some_and(|age| age <= PRESENCE_STAMP_FRESH.as_millis() as u64)
 }
 
+/// The plugin identity owner flows most recently asked Zellij to run. The
+/// topology writer gate uses it to converge overlapping build generations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceDesired {
+    pub build: String,
+    pub config: String,
+    pub recorded_at_ms: u64,
+}
+
+fn presence_desired_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join("presence-desired.json")
+}
+
+pub fn read_presence_desired(runtime: &RuntimePaths) -> Option<PresenceDesired> {
+    let bytes = std::fs::read(presence_desired_path(runtime)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub fn write_presence_desired(
+    runtime: &RuntimePaths,
+    desired: &PresenceDesired,
+) -> crate::store::atomic::Result<()> {
+    crate::store::atomic::write_temp_then_rename_cache(&presence_desired_path(runtime), desired)
+}
+
 /// The effective pane-cache TTL for one produce: the event-mode TTL while the
 /// presence channel is alive or the published frame is unwatched, else the
 /// poll-mode TTL. Computed once per `cached_panes_or_produce` call and threaded

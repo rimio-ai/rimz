@@ -517,6 +517,11 @@ impl Engine {
             return Vec::new();
         };
         let own = self.writer();
+        if let (Some(build), Some(config)) = (&generation.build, &generation.config)
+            && (own.build.as_ref() != Some(build) || own.config.as_ref() != Some(config))
+        {
+            return vec![Effect::CloseSelf];
+        }
         if (own.loaded_at_ms, own.plugin_id) >= (generation.loaded_at_ms, generation.plugin_id) {
             return Vec::new();
         }
