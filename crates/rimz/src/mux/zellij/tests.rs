@@ -114,6 +114,7 @@ fn terminal_pane(
         title: Some(title.to_owned()),
         pane_command: None,
         pane_cwd: None,
+        pane_pid: None,
         terminal_command: None,
     }
 }
@@ -338,6 +339,7 @@ fn authoritative_list_panes_preserves_server_identity_and_cache_enrichment() {
                 tab_name: Some("old".to_owned()),
                 pane_command: Some("vim".to_owned()),
                 pane_cwd: Some(room.project_root.path().to_string_lossy().into_owned()),
+                pane_pid: Some(707),
                 ..terminal_pane(7, 0, 999, 999, "zsh")
             },
             PaneTopologyPane {
@@ -381,6 +383,7 @@ exit 1
         .expect("active");
     assert_eq!((active.pane_columns, active.pane_x), (Some(100), Some(0)));
     assert_eq!(active.pane_command.as_deref(), Some("vim"));
+    assert_eq!(active.pane_pid, Some(707));
     assert_eq!(
         active.pane_cwd.as_deref(),
         Some(room.project_root.path().to_string_lossy().as_ref())

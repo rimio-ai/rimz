@@ -28,6 +28,7 @@ fn pane(id: u32) -> PaneFields {
         title: format!("pane-{id}"),
         pane_command: None,
         pane_cwd: None,
+        pane_pid: None,
         terminal_command: Some("zsh".to_owned()),
     }
 }
@@ -57,24 +58,23 @@ fn topology_json_carries_focused_pane() {
     assert_eq!(payload["writer"]["config"], "config-hash");
 }
 #[test]
-fn topology_json_carries_baseline_cwd() {
-    let mut implicit = pane(7);
-    implicit.terminal_command = None;
-    let mut tabs = BTreeMap::from([(0, vec![implicit])]);
-    let baseline = BTreeMap::from([(
-        7,
-        policy::PaneBaseline {
-            command: "zsh".to_owned(),
-            cwd: Some("/repo/main".to_owned()),
-        },
-    )]);
-    policy::apply_foreground_commands(&mut tabs, &BTreeMap::new(), &baseline);
+fn topology_json_carries_present_pid_and_omits_absent_pid() {
+    let mut tabs = BTreeMap::from([(0, vec![pane(7), pane(8)])]);
+    policy::apply_foreground_commands(
+        &mut tabs,
+        &BTreeMap::new(),
+        &BTreeMap::from([(7, "zsh".to_owned())]),
+        &BTreeMap::from([(7, "/repo/main".to_owned())]),
+        &BTreeMap::from([(7, 707)]),
+    );
     let json = topology_json(Some("session-1"), 42, None, Some(7), None, &tabs)
         .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
     assert_eq!(payload["panes"][0]["pane_command"], "zsh");
     assert_eq!(payload["panes"][0]["pane_cwd"], "/repo/main");
+    assert_eq!(payload["panes"][0]["pane_pid"], 707);
+    assert!(payload["panes"][1].get("pane_pid").is_none());
 }
 
 #[test]

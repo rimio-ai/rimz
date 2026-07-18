@@ -6,16 +6,16 @@ use crate::policy::{self, KEEPALIVE_MS, POKE_FLOOR_MS, SETTLE_POKE_MS, SIDEBAR_P
 
 #[derive(Clone)]
 struct FakeHost {
-    baselines: BTreeMap<u32, PaneBaseline>,
-    baseline_calls: RefCell<Vec<u32>>,
+    pids: BTreeMap<u32, u32>,
+    pid_calls: RefCell<Vec<u32>>,
     telemetry: PluginTelemetry,
 }
 
 impl Default for FakeHost {
     fn default() -> Self {
         Self {
-            baselines: BTreeMap::new(),
-            baseline_calls: RefCell::new(Vec::new()),
+            pids: BTreeMap::new(),
+            pid_calls: RefCell::new(Vec::new()),
             telemetry: PluginTelemetry {
                 plugin_id: None,
                 loaded_at_ms: 0,
@@ -34,9 +34,9 @@ impl Default for FakeHost {
 }
 
 impl Host for FakeHost {
-    fn baseline(&self, pane_id: u32) -> Option<PaneBaseline> {
-        self.baseline_calls.borrow_mut().push(pane_id);
-        self.baselines.get(&pane_id).cloned()
+    fn pane_pid(&self, pane_id: u32) -> Option<u32> {
+        self.pid_calls.borrow_mut().push(pane_id);
+        self.pids.get(&pane_id).copied()
     }
 
     fn telemetry(&self) -> PluginTelemetry {
@@ -87,14 +87,8 @@ fn pane(id: u32) -> PaneFields {
         title: format!("pane-{id}"),
         pane_command: None,
         pane_cwd: None,
+        pane_pid: None,
         terminal_command: Some("zsh".to_owned()),
-    }
-}
-
-fn implicit_pane(id: u32) -> PaneFields {
-    PaneFields {
-        terminal_command: None,
-        ..pane(id)
     }
 }
 
@@ -565,112 +559,125 @@ fn dump_topology_bypasses_floor_and_pregrant_dump_holds_signal() {
 }
 
 #[test]
-fn topology_publication_schedules_baseline_without_probing_inline() {
+fn manifest_probes_each_pane_pid_once_including_failures() {
     let mut host = FakeHost::default();
-    host.baselines.insert(
-        2,
-        PaneBaseline {
-            command: "fish".to_owned(),
-            cwd: Some("/repo".to_owned()),
-        },
+    host.pids.insert(1, 101);
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let initial = tabs(vec![pane(1)]);
+    let _ = engine.on_pane_manifest(raw_hash(&initial), |_| initial, 20, &host);
+    let manifest = tabs(vec![pane(1), pane(2)]);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 200, &host);
+
+    assert_eq!(*host.pid_calls.borrow(), vec![1, 2]);
+    assert_eq!(reasons(&effects), vec!["pane-opened"]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["panes"][0]["pane_pid"], 101);
+    assert!(topology["panes"][1].get("pane_pid").is_none());
+
+    let changed = tabs(vec![focused(pane(1)), pane(2)]);
+    let _ = engine.on_pane_manifest(raw_hash(&changed), |_| changed, 300, &host);
+    assert_eq!(
+        *host.pid_calls.borrow(),
+        vec![1, 2],
+        "a failed pid lookup is not retried on later manifests",
     );
+}
+
+#[test]
+fn dump_topology_on_fresh_state_probes_missing_pids() {
+    let mut host = FakeHost::default();
+    host.pids.insert(1, 101);
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    engine.tabs = tabs(vec![pane(1)]);
+
+    let effects = engine.on_dump_topology_pipe(20, &host);
+
+    assert_eq!(reasons(&effects), vec!["alive"]);
+    assert_eq!(*host.pid_calls.borrow(), vec![1]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["panes"][0]["pane_pid"], 101);
+}
+
+#[test]
+fn cwd_changed_updates_published_topology_and_signals() {
+    let mut host = FakeHost::default();
+    host.pids.insert(1, 101);
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
     seed_manifest(&mut engine, tabs(vec![pane(1)]), 20, &host);
-    let manifest = tabs(vec![pane(1), implicit_pane(2)]);
 
-    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 30, &host);
+    let effects = engine.on_cwd_changed(
+        ProjectedPaneId::Terminal(1),
+        Some("/repo/main".to_owned()),
+        200,
+        &host,
+    );
 
-    assert_eq!(reasons(&effects), vec!["pane-opened"]);
-    assert!(has_timeout(&effects, 0));
-    assert!(host.baseline_calls.borrow().is_empty());
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["panes"][0]["pane_cwd"], "/repo/main");
+    assert_eq!(topology["panes"][0]["pane_pid"], 101);
 }
 
 #[test]
-fn dump_topology_publishes_immediately_without_probing_baseline() {
+fn shell_command_replaces_finished_foreground_in_topology() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
-    seed_manifest(&mut engine, tabs(vec![implicit_pane(1)]), 20, &host);
-
-    let effects = engine.on_dump_topology_pipe(21, &host);
-
-    assert_eq!(reasons(&effects), vec!["alive"]);
-    assert!(run_commands(&effects)[0].contains(&"--topology".to_owned()));
-    assert!(host.baseline_calls.borrow().is_empty());
-}
-
-#[test]
-fn baseline_timer_probes_one_bounded_batch() {
-    let host = FakeHost::default();
-    let mut engine = Engine::new(0, config());
-    grant(&mut engine, 1, &host);
-    let manifest = tabs((1..=10).map(implicit_pane).collect());
-    seed_manifest(&mut engine, manifest, 10, &host);
-
-    let effects = engine.on_timer(10, &host);
-
-    assert_eq!(host.baseline_calls.borrow().len(), BASELINE_PROBE_BATCH);
-    assert!(has_timeout(&effects, BASELINE_PROBE_RETRY_MS));
-}
-
-#[test]
-fn exhausted_baseline_probe_restarts_after_pane_reopens() {
-    let host = FakeHost::default();
-    let mut engine = Engine::new(0, config());
-    grant(&mut engine, 1, &host);
-    let manifest = tabs(vec![implicit_pane(1)]);
-    seed_manifest(&mut engine, manifest.clone(), 10, &host);
-
-    for now in [
-        10,
-        10 + BASELINE_PROBE_RETRY_MS,
-        10 + 2 * BASELINE_PROBE_RETRY_MS,
-    ] {
-        let _ = engine.on_timer(now, &host);
-    }
-    assert_eq!(
-        host.baseline_calls.borrow().len(),
-        usize::from(BASELINE_PROBE_MAX_ATTEMPTS),
-    );
-    let _ = engine.on_timer(10 + 3 * BASELINE_PROBE_RETRY_MS, &host);
-    assert_eq!(
-        host.baseline_calls.borrow().len(),
-        usize::from(BASELINE_PROBE_MAX_ATTEMPTS),
-        "an exhausted pane stays capped",
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 20, &host);
+    let _ = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["sleep", "5"]),
+        true,
+        200,
+        &host,
     );
 
-    let _ = engine.on_pane_closed(ProjectedPaneId::Terminal(1), 7_000, &host);
-    let _ = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 7_010, &host);
-    let _ = engine.on_timer(7_010, &host);
-    assert_eq!(
-        host.baseline_calls.borrow().len(),
-        usize::from(BASELINE_PROBE_MAX_ATTEMPTS) + 1,
-        "a new pane lifetime receives a fresh attempt budget",
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["zsh"]),
+        false,
+        400,
+        &host,
     );
-}
 
-#[test]
-fn successful_deferred_baseline_publishes_enriched_topology() {
-    let mut host = FakeHost::default();
-    host.baselines.insert(
-        1,
-        PaneBaseline {
-            command: "zsh".to_owned(),
-            cwd: Some("/repo/main".to_owned()),
-        },
-    );
-    let mut engine = Engine::new(0, config());
-    grant(&mut engine, 1, &host);
-    seed_manifest(&mut engine, tabs(vec![implicit_pane(1)]), 10, &host);
-
-    let effects = engine.on_timer(10, &host);
-
-    assert_eq!(*host.baseline_calls.borrow(), vec![1]);
     assert_eq!(reasons(&effects), vec!["panes-changed"]);
     let topology = topology_json(run_commands(&effects)[0]);
     assert_eq!(topology["panes"][0]["pane_command"], "zsh");
-    assert_eq!(topology["panes"][0]["pane_cwd"], "/repo/main");
+}
+
+#[test]
+fn closing_a_pane_prunes_enrichment_and_allows_a_new_lifetime_probe() {
+    let mut host = FakeHost::default();
+    host.pids.insert(1, 101);
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let manifest = tabs(vec![pane(1)]);
+    seed_manifest(&mut engine, manifest.clone(), 20, &host);
+    let _ = engine.on_cwd_changed(
+        ProjectedPaneId::Terminal(1),
+        Some("/old".to_owned()),
+        30,
+        &host,
+    );
+    let _ = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["zsh"]),
+        false,
+        40,
+        &host,
+    );
+
+    let _ = engine.on_pane_closed(ProjectedPaneId::Terminal(1), 50, &host);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 200, &host);
+
+    assert_eq!(*host.pid_calls.borrow(), vec![1, 1]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert!(topology["panes"][0].get("pane_command").is_none());
+    assert!(topology["panes"][0].get("pane_cwd").is_none());
+    assert_eq!(topology["panes"][0]["pane_pid"], 101);
 }
 
 #[test]

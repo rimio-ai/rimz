@@ -989,6 +989,7 @@ fn write_width_topology(runtime: &RuntimePaths, session: &str) {
         title: Some(title.to_owned()),
         pane_command: None,
         pane_cwd: None,
+        pane_pid: None,
         terminal_command: None,
     };
     crate::sidebar::cache::write_pane_topology_cache(

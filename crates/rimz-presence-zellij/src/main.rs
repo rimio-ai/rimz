@@ -13,7 +13,7 @@ mod shell {
     use rimz_presence_zellij::engine::{
         Effect, Engine, EngineConfig, Host, ProjectedClientFocus, ProjectedPaneId,
     };
-    use rimz_presence_zellij::policy::{self, PaneBaseline, PaneFields, RawStablePaneFields};
+    use rimz_presence_zellij::policy::{self, PaneFields, RawStablePaneFields};
     use rimz_presence_zellij::wire::{
         self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, RETIRE_PIPE, SHARE_SESSION_PIPE,
     };
@@ -32,17 +32,10 @@ mod shell {
     }
 
     impl Host for ShellHost {
-        fn baseline(&self, pane_id: u32) -> Option<PaneBaseline> {
-            let pane_id = PaneId::Terminal(pane_id);
-            let Ok(args) = get_pane_running_command(pane_id) else {
-                return None;
-            };
-            let command = policy::joined_foreground_command(&args)?;
-            let cwd = get_pane_cwd(pane_id)
+        fn pane_pid(&self, pane_id: u32) -> Option<u32> {
+            get_pane_pid(PaneId::Terminal(pane_id))
                 .ok()
-                .and_then(|cwd| cwd.into_os_string().into_string().ok())
-                .filter(|cwd| !cwd.is_empty());
-            Some(PaneBaseline { command, cwd })
+                .and_then(|pid| u32::try_from(pid).ok())
         }
 
         fn telemetry(&self) -> wire::PluginTelemetry {
@@ -146,6 +139,15 @@ mod shell {
                         now,
                         &host,
                     ),
+                Event::CwdChanged(pane_id, path, _) => engine.on_cwd_changed(
+                    project_pane_id(pane_id),
+                    path.into_os_string()
+                        .into_string()
+                        .ok()
+                        .filter(|cwd| !cwd.is_empty()),
+                    now,
+                    &host,
+                ),
                 Event::PaneClosed(pane_id) => {
                     engine.on_pane_closed(project_pane_id(pane_id), now, &host)
                 }
@@ -232,11 +234,12 @@ mod shell {
         }
     }
 
-    fn subscribed_events() -> [EventType; 9] {
+    fn subscribed_events() -> [EventType; 10] {
         [
             EventType::PaneUpdate,
             EventType::TabUpdate,
             EventType::CommandChanged,
+            EventType::CwdChanged,
             EventType::PaneClosed,
             EventType::Timer,
             EventType::PermissionRequestResult,

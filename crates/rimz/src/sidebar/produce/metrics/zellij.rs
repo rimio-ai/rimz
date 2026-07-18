@@ -25,11 +25,10 @@ pub(in crate::sidebar::produce) fn backfill_zellij_pane_pids_from_proc(
     children
 }
 
-/// Backfill `pane_pid` for panes whose backend reported none (Zellij emits no
-/// pid field; tmux fills `#{pane_pid}` natively), resolving each pane to its
-/// root process — the direct child of the session's `zellij --server <socket>`
-/// process — so the field carries tmux's semantics on both backends and the
-/// shell→single-child descent above behaves identically.
+/// Backfill `pane_pid` for panes whose backend reported none. Published Zellij
+/// topology pids and tmux's `#{pane_pid}` are authoritative; this fallback
+/// resolves pidless Zellij panes to the direct child of the session's
+/// `zellij --server <socket>` process so both backends carry the same semantics.
 ///
 /// Zellij reports a pane's *foreground* command as that process's `/proc`
 /// cmdline (argv joined by spaces — the same form as

@@ -109,6 +109,7 @@ impl From<RawListedPane> for PaneTopologyPane {
             title: pane.title,
             pane_command: None,
             pane_cwd: None,
+            pane_pid: None,
             terminal_command: pane.terminal_command,
         }
     }
@@ -124,6 +125,7 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
                 (
                     pane.pane_command,
                     pane.pane_cwd,
+                    pane.pane_pid,
                     pane.pane_columns,
                     pane.pane_x,
                 ),
@@ -131,7 +133,7 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
         })
         .collect::<HashMap<_, _>>();
     for pane in &mut cache.panes {
-        let Some((command, cwd, columns, x)) = enrichment.get(&pane.id) else {
+        let Some((command, cwd, pid, columns, x)) = enrichment.get(&pane.id) else {
             continue;
         };
         if pane.pane_command.is_none() {
@@ -139,6 +141,9 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
         }
         if pane.pane_cwd.is_none() {
             pane.pane_cwd.clone_from(cwd);
+        }
+        if pane.pane_pid.is_none() {
+            pane.pane_pid = *pid;
         }
         if pane.pane_columns.is_none() {
             pane.pane_columns = *columns;
@@ -525,7 +530,7 @@ impl MuxBackend for ZellijBackend {
                 title: p.title.take(),
                 is_focused: p.is_focused,
                 is_floating: p.is_floating,
-                pane_pid: None,
+                pane_pid: p.pane_pid,
                 pane_process_start: None,
                 hosted_agent_kind: None,
                 hosted_agent_process_start: None,

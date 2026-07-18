@@ -30,6 +30,7 @@ impl ListedPane {
             title: self.title.clone(),
             pane_command: self.pane_command.clone(),
             pane_cwd: self.pane_cwd.clone(),
+            pane_pid: None,
             terminal_command: self.terminal_command.clone(),
         }
     }

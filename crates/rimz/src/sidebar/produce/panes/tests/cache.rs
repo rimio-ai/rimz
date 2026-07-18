@@ -192,6 +192,7 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
                 title: Some("zsh".to_owned()),
                 pane_command: Some("zsh".to_owned()),
                 pane_cwd: Some("/repo".to_owned()),
+                pane_pid: None,
                 terminal_command: Some("zsh".to_owned()),
             }],
         },

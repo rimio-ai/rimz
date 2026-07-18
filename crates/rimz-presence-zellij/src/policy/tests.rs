@@ -16,6 +16,7 @@ fn pane(id: u32) -> PaneFields {
         title: format!("pane-{id}"),
         pane_command: None,
         pane_cwd: None,
+        pane_pid: None,
         terminal_command: Some("zsh".to_owned()),
     }
 }
@@ -297,131 +298,124 @@ fn published_topology_payload_carries_writer() {
 }
 
 #[test]
-fn panes_needing_baseline_selects_implicit_idle_live_panes() {
-    let mut implicit = pane(1);
-    implicit.terminal_command = None;
-    let mut spawn_command = pane(2);
-    spawn_command.terminal_command = Some("zsh".to_owned());
-    let mut with_foreground = pane(3);
-    with_foreground.terminal_command = None;
-    let mut with_baseline = pane(4);
-    with_baseline.terminal_command = None;
-    let mut plugin = plugin_pane(5);
-    plugin.terminal_command = None;
+fn panes_needing_pid_selects_unprobed_live_terminals() {
+    let implicit = pane(1);
+    let spawn_command = pane(2);
+    let with_pid = pane(3);
+    let probed = pane(4);
+    let plugin = plugin_pane(5);
     let mut floating = pane(6);
-    floating.terminal_command = None;
     floating.is_floating = true;
     let mut held = pane(7);
-    held.terminal_command = None;
     held.is_held = true;
     let room = tabs(vec![
         implicit,
         spawn_command,
-        with_foreground,
-        with_baseline,
+        with_pid,
+        probed,
         plugin,
         floating,
         held,
     ]);
-    let foreground = BTreeMap::from([(3, "vim".to_owned())]);
-    let baseline = BTreeMap::from([(
-        4,
-        PaneBaseline {
-            command: "zsh".to_owned(),
-            cwd: Some("/repo/main".to_owned()),
-        },
-    )]);
+    let pids = BTreeMap::from([(3, 300)]);
+    let probed = BTreeSet::from([4]);
 
-    assert_eq!(
-        panes_needing_baseline(&room, &foreground, &baseline),
-        vec![1],
-    );
+    assert_eq!(panes_needing_pid(&room, &pids, &probed), vec![1, 2]);
 }
 
 #[test]
-fn apply_foreground_commands_uses_foreground_then_baseline_and_cwd() {
-    let mut first = pane(1);
-    first.terminal_command = None;
-    let mut second = pane(2);
-    second.terminal_command = None;
-    let mut room = tabs(vec![first, second]);
+fn apply_foreground_commands_uses_foreground_then_shell_and_enrichment() {
+    let mut room = tabs(vec![pane(1), pane(2)]);
     let foreground = BTreeMap::from([(1, "vim README.md".to_owned())]);
-    let baseline = BTreeMap::from([
-        (
-            1,
-            PaneBaseline {
-                command: "zsh".to_owned(),
-                cwd: Some("/repo/main".to_owned()),
-            },
-        ),
-        (
-            2,
-            PaneBaseline {
-                command: "fish".to_owned(),
-                cwd: Some("/repo/side".to_owned()),
-            },
-        ),
-    ]);
+    let shell = BTreeMap::from([(1, "zsh".to_owned()), (2, "fish".to_owned())]);
+    let cwd = BTreeMap::from([(1, "/repo/main".to_owned()), (2, "/repo/side".to_owned())]);
+    let pids = BTreeMap::from([(1, 101), (2, 202)]);
 
-    apply_foreground_commands(&mut room, &foreground, &baseline);
+    apply_foreground_commands(&mut room, &foreground, &shell, &cwd, &pids);
 
     let panes = room.get(&0).expect("tab exists");
     assert_eq!(panes[0].pane_command.as_deref(), Some("vim README.md"));
     assert_eq!(panes[0].pane_cwd.as_deref(), Some("/repo/main"));
+    assert_eq!(panes[0].pane_pid, Some(101));
     assert_eq!(panes[1].pane_command.as_deref(), Some("fish"));
     assert_eq!(panes[1].pane_cwd.as_deref(), Some("/repo/side"));
+    assert_eq!(panes[1].pane_pid, Some(202));
 }
 
 #[test]
-fn published_topology_payload_carries_baseline_cwd() {
-    let mut implicit = pane(1);
-    implicit.terminal_command = None;
-    let mut manifest = tabs(vec![implicit]);
-    let baseline = BTreeMap::from([(
-        1,
-        PaneBaseline {
-            command: "zsh".to_owned(),
-            cwd: Some("/repo/main".to_owned()),
-        },
-    )]);
-    apply_foreground_commands(&mut manifest, &BTreeMap::new(), &baseline);
+fn published_topology_payload_carries_event_enrichment() {
+    let mut manifest = tabs(vec![pane(1)]);
+    apply_foreground_commands(
+        &mut manifest,
+        &BTreeMap::new(),
+        &BTreeMap::from([(1, "zsh".to_owned())]),
+        &BTreeMap::from([(1, "/repo/main".to_owned())]),
+        &BTreeMap::from([(1, 101)]),
+    );
     let payload = published_topology_payload("rimz-test", 42, None, Some(1), None, &manifest)
         .expect("topology payload publishes");
     let encoded = serde_json::to_value(payload).expect("payload serializes");
 
     assert_eq!(encoded["panes"][0]["pane_command"], "zsh");
     assert_eq!(encoded["panes"][0]["pane_cwd"], "/repo/main");
+    assert_eq!(encoded["panes"][0]["pane_pid"], 101);
 }
 
 #[test]
-fn forgetting_foreground_reveals_baseline_command() {
-    let mut implicit = pane(1);
-    implicit.terminal_command = None;
-    let mut room = tabs(vec![implicit]);
-    let mut foreground = BTreeMap::from([(1, "sleep 5".to_owned())]);
-    let baseline = BTreeMap::from([(
-        1,
-        PaneBaseline {
-            command: "zsh".to_owned(),
-            cwd: Some("/repo/main".to_owned()),
-        },
-    )]);
-
-    apply_foreground_commands(&mut room, &foreground, &baseline);
+fn command_updates_distinguish_foreground_shell_and_empty() {
     assert_eq!(
-        room.get(&0).unwrap()[0].pane_command.as_deref(),
-        Some("sleep 5"),
+        foreground_command_update(&["vim".to_owned()], true),
+        ForegroundCommandUpdate::Remember("vim".to_owned()),
+    );
+    assert_eq!(
+        foreground_command_update(&["zsh".to_owned()], false),
+        ForegroundCommandUpdate::Shell("zsh".to_owned()),
     );
     assert_eq!(
         foreground_command_update(&[], false),
         ForegroundCommandUpdate::Forget,
     );
+
+    let mut room = tabs(vec![pane(1)]);
+    let mut foreground = BTreeMap::from([(1, "sleep 5".to_owned())]);
+    let shell = BTreeMap::from([(1, "zsh".to_owned())]);
+
+    apply_foreground_commands(
+        &mut room,
+        &foreground,
+        &shell,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    assert_eq!(
+        room.get(&0).unwrap()[0].pane_command.as_deref(),
+        Some("sleep 5"),
+    );
     foreground.remove(&1);
-    apply_foreground_commands(&mut room, &foreground, &baseline);
+    apply_foreground_commands(
+        &mut room,
+        &foreground,
+        &shell,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
 
     let pane = &room.get(&0).unwrap()[0];
     assert_eq!(pane.pane_command.as_deref(), Some("zsh"));
-    assert_eq!(pane.pane_cwd.as_deref(), Some("/repo/main"));
+}
+
+#[test]
+fn pane_fields_deserialize_legacy_payload_without_pid() {
+    let mut with_pid = pane(1);
+    with_pid.pane_pid = Some(101);
+    let encoded = serde_json::to_value(with_pid).expect("pane serializes");
+    let decoded: PaneFields = serde_json::from_value(encoded).expect("pane round-trips");
+    assert_eq!(decoded.pane_pid, Some(101));
+
+    let mut legacy = serde_json::to_value(pane(2)).expect("pane serializes");
+    legacy.as_object_mut().unwrap().remove("pane_pid");
+    let decoded: PaneFields = serde_json::from_value(legacy).expect("legacy pane parses");
+    assert_eq!(decoded.pane_pid, None);
 }
 
 // --- focus_shortcut: focus-only moves take the optimistic CLI patch ---
@@ -511,6 +505,17 @@ fn focus_shortcut_rejects_non_focus_changes() {
         focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![cwd_changed])),
         None,
         "a cwd change is not a focus-only patch",
+    );
+
+    let previous_focus = tabs(vec![focused(pane(1)), pane(2)]);
+    let pid_changed = PaneFields {
+        pane_pid: Some(202),
+        ..focused(pane(2))
+    };
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous_focus, &tabs(vec![pane(1), pid_changed]),),
+        None,
+        "a learned pid is not a focus-only patch",
     );
 
     let floating = PaneFields {

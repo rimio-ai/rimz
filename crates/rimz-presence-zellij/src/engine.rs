@@ -8,14 +8,14 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use crate::policy::{
-    self, CorrectionAction, FocusCorrection, FocusPatch, ForegroundCommandUpdate, PaneBaseline,
-    PaneFields, Poke, PokePolicy, TimerGate,
+    self, CorrectionAction, FocusCorrection, FocusPatch, ForegroundCommandUpdate, PaneFields, Poke,
+    PokePolicy, TimerGate,
 };
 use crate::wire::{self, PluginTelemetry};
 
 /// Host lookups the engine needs mid-decision.
 pub trait Host {
-    fn baseline(&self, pane_id: u32) -> Option<PaneBaseline>;
+    fn pane_pid(&self, pane_id: u32) -> Option<u32>;
     fn telemetry(&self) -> PluginTelemetry;
 }
 
@@ -74,9 +74,10 @@ pub struct Engine {
     last_raw_stable_hash: Option<u64>,
     tab_names: BTreeMap<usize, String>,
     foreground: BTreeMap<u32, String>,
-    baseline: BTreeMap<u32, PaneBaseline>,
-    baseline_attempts: BTreeMap<u32, u8>,
-    next_baseline_probe_at: Option<u64>,
+    shell: BTreeMap<u32, String>,
+    cwd: BTreeMap<u32, String>,
+    pids: BTreeMap<u32, u32>,
+    pid_probed: BTreeSet<u32>,
     active_tab: Option<usize>,
     active_focused_pane: Option<u32>,
     session_focused_pane: Option<u32>,
@@ -106,9 +107,6 @@ pub struct Engine {
 
 const WAKE_FORK_FALLBACK_THRESHOLD: u32 = 3;
 const STALE_WRITER_RETIRE_THRESHOLD: u32 = 3;
-const BASELINE_PROBE_BATCH: usize = 8;
-const BASELINE_PROBE_MAX_ATTEMPTS: u8 = 3;
-const BASELINE_PROBE_RETRY_MS: u64 = 2_000;
 
 impl Engine {
     pub fn new(now: u64, config: EngineConfig) -> Self {
@@ -118,9 +116,10 @@ impl Engine {
             last_raw_stable_hash: None,
             tab_names: BTreeMap::new(),
             foreground: BTreeMap::new(),
-            baseline: BTreeMap::new(),
-            baseline_attempts: BTreeMap::new(),
-            next_baseline_probe_at: None,
+            shell: BTreeMap::new(),
+            cwd: BTreeMap::new(),
+            pids: BTreeMap::new(),
+            pid_probed: BTreeSet::new(),
             active_tab: None,
             active_focused_pane: None,
             session_focused_pane: None,
@@ -208,8 +207,8 @@ impl Engine {
             // Zellij can deliver partial pane manifests; omitted tabs retain
             // their previous state instead of collapsing the room.
             let mut next_tabs = policy::merged_room(&self.tabs, &projected);
-            self.prune_baseline_state(&next_tabs);
-            policy::apply_foreground_commands(&mut next_tabs, &self.foreground, &self.baseline);
+            self.prune_pane_state(&next_tabs);
+            self.probe_missing_pids(&mut next_tabs, host);
             self.repair_contested_focus(&mut next_tabs);
             let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
             let focus_patch = policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
@@ -220,7 +219,6 @@ impl Engine {
                 self.session_focused_pane = Some(focused);
             }
             self.tabs = next_tabs;
-            self.schedule_baseline_probe(now);
             let pending_correction_tab = self.focus_correction.pending_tab();
             let correction_will_resolve_active_tab =
                 pending_correction_tab.is_some() && pending_correction_tab == self.active_tab;
@@ -266,8 +264,6 @@ impl Engine {
                 self.active_tab,
                 self.session_focused_pane,
             );
-        } else {
-            self.schedule_baseline_probe(now);
         }
         self.finish_update(now, host, effects)
     }
@@ -324,7 +320,7 @@ impl Engine {
         let mut effects = Vec::new();
         match policy::foreground_command_update(&command, is_foreground) {
             ForegroundCommandUpdate::Remember(command_text) => {
-                self.set_foreground_command(pane, Some(command_text), now, host);
+                self.set_foreground_command(pane, Some(command_text));
                 if let Some(id) = self.optimistic_command_poke_pane(pane, now)
                     && self.run_wake(
                         wire::WakeRequest::CommandChanged {
@@ -342,12 +338,49 @@ impl Engine {
                     self.signal_change(now);
                 }
             }
+            ForegroundCommandUpdate::Shell(command_text) => {
+                let ProjectedPaneId::Terminal(id) = pane else {
+                    return self.finish_update(now, host, effects);
+                };
+                self.foreground.remove(&id);
+                self.shell.insert(id, command_text);
+                self.refresh_pane(id);
+                self.signal_change(now);
+            }
             ForegroundCommandUpdate::Forget => {
-                self.set_foreground_command(pane, None, now, host);
+                self.set_foreground_command(pane, None);
                 self.signal_change(now);
             }
         }
         self.finish_update(now, host, effects)
+    }
+
+    pub fn on_cwd_changed(
+        &mut self,
+        pane: ProjectedPaneId,
+        cwd: Option<String>,
+        now: u64,
+        host: &impl Host,
+    ) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
+        let ProjectedPaneId::Terminal(id) = pane else {
+            return self.finish_update(now, host, Vec::new());
+        };
+        let changed = match cwd {
+            Some(cwd) if self.cwd.get(&id) != Some(&cwd) => {
+                self.cwd.insert(id, cwd);
+                true
+            }
+            Some(_) => false,
+            None => self.cwd.remove(&id).is_some(),
+        };
+        if changed {
+            self.refresh_pane(id);
+            self.signal_change(now);
+        }
+        self.finish_update(now, host, Vec::new())
     }
 
     pub fn on_pane_closed(
@@ -366,7 +399,6 @@ impl Engine {
             ProjectedPaneId::Plugin(_) => None,
         };
         self.remove_pane(pane);
-        self.schedule_baseline_probe(now);
         if let ProjectedPaneId::Terminal(id) = pane
             && self.session_focused_pane == Some(id)
         {
@@ -393,7 +425,6 @@ impl Engine {
             return Vec::new();
         }
         self.timer_gate.on_fire(now);
-        self.dispatch_due_baseline_probe(now, host);
         self.finish_update(now, host, Vec::new())
     }
 
@@ -467,8 +498,8 @@ impl Engine {
             self.pending_pregrant_change = true;
             return effects;
         }
-        self.schedule_baseline_probe(now);
         let mut tabs = std::mem::take(&mut self.tabs);
+        self.probe_missing_pids(&mut tabs, host);
         self.repair_contested_focus(&mut tabs);
         self.tabs = tabs;
         self.poke(Poke::Alive, now, host, &mut effects);
@@ -763,12 +794,7 @@ impl Engine {
     fn rearm(&mut self, now: u64, effects: &mut Vec<Effect>) {
         let policy_at = Some(self.policy.next_wake_at());
         let correction_at = self.focus_correction.next_deadline();
-        let baseline_at = self.next_baseline_probe_at;
-        let Some(at) = [policy_at, correction_at, baseline_at]
-            .into_iter()
-            .flatten()
-            .min()
-        else {
+        let Some(at) = [policy_at, correction_at].into_iter().flatten().min() else {
             return;
         };
         if self.timer_gate.should_arm(at) {
@@ -857,117 +883,68 @@ impl Engine {
         )));
     }
 
-    fn baseline_probe_candidates(&self) -> Vec<u32> {
-        policy::panes_needing_baseline(&self.tabs, &self.foreground, &self.baseline)
-            .into_iter()
-            .filter(|id| {
-                self.baseline_attempts.get(id).copied().unwrap_or_default()
-                    < BASELINE_PROBE_MAX_ATTEMPTS
-            })
-            .collect()
+    fn probe_missing_pids(
+        &mut self,
+        tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
+        host: &impl Host,
+    ) {
+        for id in policy::panes_needing_pid(tabs, &self.pids, &self.pid_probed) {
+            self.pid_probed.insert(id);
+            if let Some(pid) = host.pane_pid(id) {
+                self.pids.insert(id, pid);
+            }
+        }
+        policy::apply_foreground_commands(
+            tabs,
+            &self.foreground,
+            &self.shell,
+            &self.cwd,
+            &self.pids,
+        );
     }
 
-    fn schedule_baseline_probe(&mut self, now: u64) {
-        if self.baseline_probe_candidates().is_empty() {
-            self.next_baseline_probe_at = None;
-        } else if self.next_baseline_probe_at.is_none() {
-            self.next_baseline_probe_at = Some(now);
-        }
-    }
-
-    fn probe_baseline(&mut self, id: u32, host: &impl Host) -> bool {
-        if self.baseline_attempts.get(&id).copied().unwrap_or_default()
-            >= BASELINE_PROBE_MAX_ATTEMPTS
-        {
-            return false;
-        }
-        let Some(baseline) = host.baseline(id) else {
-            let attempts = self.baseline_attempts.entry(id).or_default();
-            *attempts = attempts.saturating_add(1);
-            return false;
-        };
-        self.baseline.insert(id, baseline);
-        self.baseline_attempts.remove(&id);
-        true
-    }
-
-    fn dispatch_due_baseline_probe(&mut self, now: u64, host: &impl Host) {
-        if self.next_baseline_probe_at.is_none_or(|at| now < at) {
-            return;
-        }
-        self.next_baseline_probe_at = None;
-        let candidates = self.baseline_probe_candidates();
-        let mut changed = false;
-        for id in candidates.into_iter().take(BASELINE_PROBE_BATCH) {
-            changed = self.probe_baseline(id, host) || changed;
-        }
-        if changed {
-            policy::apply_foreground_commands(&mut self.tabs, &self.foreground, &self.baseline);
-            self.signal_change(now);
-        }
-        if !self.baseline_probe_candidates().is_empty() {
-            self.next_baseline_probe_at = Some(now.saturating_add(BASELINE_PROBE_RETRY_MS));
-        }
-    }
-
-    fn prune_baseline_state(&mut self, tabs: &BTreeMap<usize, Vec<PaneFields>>) {
+    fn prune_pane_state(&mut self, tabs: &BTreeMap<usize, Vec<PaneFields>>) {
         let pane_ids = tabs
             .values()
             .flatten()
             .filter(|pane| !pane.is_plugin)
             .map(|pane| pane.id)
             .collect::<BTreeSet<_>>();
-        self.baseline.retain(|id, _| pane_ids.contains(id));
-        self.baseline_attempts.retain(|id, _| pane_ids.contains(id));
+        self.foreground.retain(|id, _| pane_ids.contains(id));
+        self.shell.retain(|id, _| pane_ids.contains(id));
+        self.cwd.retain(|id, _| pane_ids.contains(id));
+        self.pids.retain(|id, _| pane_ids.contains(id));
+        self.pid_probed.retain(|id| pane_ids.contains(id));
     }
 
-    fn set_foreground_command(
-        &mut self,
-        pane_id: ProjectedPaneId,
-        command: Option<String>,
-        now: u64,
-        host: &impl Host,
-    ) {
+    fn set_foreground_command(&mut self, pane_id: ProjectedPaneId, command: Option<String>) {
         let ProjectedPaneId::Terminal(id) = pane_id else {
             return;
         };
         match command.as_ref() {
             Some(command) => {
                 self.foreground.insert(id, command.clone());
-                self.baseline_attempts.remove(&id);
             }
             None => {
                 self.foreground.remove(&id);
             }
         }
-        if command.is_none() && self.granted {
-            if self.baseline_probe_candidates().contains(&id) {
-                let changed = self.probe_baseline(id, host);
-                if changed
-                    || self.baseline_attempts.get(&id).copied().unwrap_or_default()
-                        >= BASELINE_PROBE_MAX_ATTEMPTS
-                {
-                    self.schedule_baseline_probe(now);
-                } else {
-                    self.next_baseline_probe_at = Some(now.saturating_add(BASELINE_PROBE_RETRY_MS));
-                }
-            }
-        } else {
-            self.schedule_baseline_probe(now);
-        }
-        let pane_command = self.foreground.get(&id).cloned().or_else(|| {
-            self.baseline
-                .get(&id)
-                .map(|baseline| baseline.command.clone())
-        });
-        let pane_cwd = self
-            .baseline
+        self.refresh_pane(id);
+    }
+
+    fn refresh_pane(&mut self, id: u32) {
+        let pane_command = self
+            .foreground
             .get(&id)
-            .and_then(|baseline| baseline.cwd.clone());
+            .or_else(|| self.shell.get(&id))
+            .cloned();
+        let pane_cwd = self.cwd.get(&id).cloned();
+        let pane_pid = self.pids.get(&id).copied();
         for pane in self.tabs.values_mut().flatten() {
             if !pane.is_plugin && pane.id == id {
                 pane.pane_command = pane_command.clone();
                 pane.pane_cwd = pane_cwd.clone();
+                pane.pane_pid = pane_pid;
                 return;
             }
         }
@@ -990,8 +967,10 @@ impl Engine {
         policy::remove_pane_from_tabs(&mut self.tabs, is_plugin, id);
         if !is_plugin {
             self.foreground.remove(&id);
-            self.baseline.remove(&id);
-            self.baseline_attempts.remove(&id);
+            self.shell.remove(&id);
+            self.cwd.remove(&id);
+            self.pids.remove(&id);
+            self.pid_probed.remove(&id);
             self.policy.forget_pane(id);
         }
     }

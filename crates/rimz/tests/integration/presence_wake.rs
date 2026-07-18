@@ -259,6 +259,7 @@ impl WakeEnv {
                     title: Some("rimz-sidebar".to_owned()),
                     pane_command: Some("rimz-sidebar".to_owned()),
                     pane_cwd: None,
+                    pane_pid: None,
                     terminal_command: Some("rimz sidebar serve".to_owned()),
                 },
                 PaneTopologyPane {
@@ -276,6 +277,7 @@ impl WakeEnv {
                     title: Some("zsh".to_owned()),
                     pane_command: Some("zsh".to_owned()),
                     pane_cwd: None,
+                    pane_pid: None,
                     terminal_command: Some("/bin/zsh".to_owned()),
                 },
             ],
@@ -326,6 +328,7 @@ impl WakeEnv {
                     title: Some("zsh".to_owned()),
                     pane_command: Some("zsh".to_owned()),
                     pane_cwd: None,
+                    pane_pid: None,
                     terminal_command: Some("/bin/zsh".to_owned()),
                 })
                 .collect(),

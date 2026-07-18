@@ -41,7 +41,7 @@ pub const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 /// `pane_command` are carried for focus correction and topology publication but
 /// deliberately excluded from the hash: agents mutate titles per output line,
 /// and foreground command changes already publish through `CommandChanged`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneFields {
     pub id: u32,
     pub is_plugin: bool,
@@ -62,14 +62,10 @@ pub struct PaneFields {
     pub pane_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_command: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PaneBaseline {
-    pub command: String,
-    pub cwd: Option<String>,
 }
 
 /// Stable pane fields folded before the wasm shell allocates projected
@@ -184,6 +180,7 @@ impl PaneFields {
             title,
             pane_command: None,
             pane_cwd: None,
+            pane_pid: None,
             terminal_command: stable.terminal_command.map(str::to_owned),
         }
     }
@@ -263,6 +260,7 @@ pub fn focus_shortcut_if_only_focus_changed(
             if previous_stable != next_stable
                 || previous.pane_command != next.pane_command
                 || previous.pane_cwd != next.pane_cwd
+                || previous.pane_pid != next.pane_pid
             {
                 return None;
             }
@@ -410,58 +408,54 @@ pub fn joined_foreground_command(command: &[String]) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForegroundCommandUpdate {
     Remember(String),
+    Shell(String),
     Forget,
 }
 
-/// Project one Zellij `CommandChanged` event into the retained foreground map.
-/// A non-foreground or empty foreground event means the previous foreground
-/// tenant ended; any real foreground command replaces it. Launch-chrome
-/// scrubbing lives in the host wake path.
+/// Project one Zellij `CommandChanged` event into the retained command maps.
+/// A foreground command replaces the active tenant, a non-foreground command
+/// retains the pane shell, and an empty event forgets only the active tenant.
+/// Launch-chrome scrubbing lives in the host wake path.
 pub fn foreground_command_update(
     command: &[String],
     is_foreground: bool,
 ) -> ForegroundCommandUpdate {
-    if !is_foreground {
-        return ForegroundCommandUpdate::Forget;
-    }
-    match joined_foreground_command(command) {
-        Some(command) => ForegroundCommandUpdate::Remember(command),
-        None => ForegroundCommandUpdate::Forget,
+    match (is_foreground, joined_foreground_command(command)) {
+        (true, Some(command)) => ForegroundCommandUpdate::Remember(command),
+        (false, Some(command)) => ForegroundCommandUpdate::Shell(command),
+        (_, None) => ForegroundCommandUpdate::Forget,
     }
 }
 
 pub fn apply_foreground_commands(
     tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
     foreground: &BTreeMap<u32, String>,
-    baseline: &BTreeMap<u32, PaneBaseline>,
+    shell: &BTreeMap<u32, String>,
+    cwd: &BTreeMap<u32, String>,
+    pids: &BTreeMap<u32, u32>,
 ) {
     for pane in tabs.values_mut().flatten() {
         if pane.is_plugin {
             continue;
         }
-        pane.pane_command = foreground.get(&pane.id).cloned().or_else(|| {
-            baseline
-                .get(&pane.id)
-                .map(|baseline| baseline.command.clone())
-        });
-        pane.pane_cwd = baseline
+        pane.pane_command = foreground
             .get(&pane.id)
-            .and_then(|baseline| baseline.cwd.clone());
+            .or_else(|| shell.get(&pane.id))
+            .cloned();
+        pane.pane_cwd = cwd.get(&pane.id).cloned();
+        pane.pane_pid = pids.get(&pane.id).copied();
     }
 }
 
-pub fn panes_needing_baseline(
+pub fn panes_needing_pid(
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    foreground: &BTreeMap<u32, String>,
-    baseline: &BTreeMap<u32, PaneBaseline>,
+    pids: &BTreeMap<u32, u32>,
+    probed: &BTreeSet<u32>,
 ) -> Vec<u32> {
     tabs.values()
         .flatten()
         .filter(|pane| {
-            pane.is_live_terminal()
-                && pane.terminal_command.as_deref().is_none_or(str::is_empty)
-                && !foreground.contains_key(&pane.id)
-                && !baseline.contains_key(&pane.id)
+            pane.is_live_terminal() && !pids.contains_key(&pane.id) && !probed.contains(&pane.id)
         })
         .map(|pane| pane.id)
         .collect()
