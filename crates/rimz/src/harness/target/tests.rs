@@ -198,7 +198,10 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
     let mut owner = agent("codex", "session-owner", Some("main"), "terminal_1");
     owner.role = Some("coder".to_owned());
     owner.origin = Some(crate::agents::SessionOrigin::Fresh);
-    snapshot.agents = vec![older, owner];
+    let mut hidden_fork = agent("codex", "session-fork", Some("main"), "terminal_1");
+    hidden_fork.role = Some("coder".to_owned());
+    hidden_fork.origin = Some(crate::agents::SessionOrigin::Forked);
+    snapshot.agents = vec![older, owner, hidden_fork];
     let mut pane = bound_pane("codex", 2, "owner", "session-owner", "main", "terminal_1");
     pane.role = Some("coder".to_owned());
     snapshot.agent_panes = vec![pane];
