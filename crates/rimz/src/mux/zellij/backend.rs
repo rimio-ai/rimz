@@ -57,10 +57,10 @@ struct RawTab {
 }
 
 #[derive(Debug, Deserialize)]
-struct RawListedPane {
-    id: u64,
+pub(super) struct RawListedPane {
+    pub(super) id: u64,
     #[serde(default)]
-    is_plugin: bool,
+    pub(super) is_plugin: bool,
     #[serde(default)]
     is_held: bool,
     #[serde(default)]
@@ -83,7 +83,7 @@ struct RawListedPane {
     #[serde(default)]
     pane_x: Option<u64>,
     #[serde(default)]
-    title: Option<String>,
+    pub(super) title: Option<String>,
     #[serde(default)]
     terminal_command: Option<String>,
 }
@@ -155,15 +155,7 @@ impl ZellijBackend {
             program: "zellij".to_owned(),
             reason: format!("target pane `{pane}` has no numeric Zellij id"),
         })?;
-        let output = self
-            .zellij_action(session_name)
-            .args(["list-panes", "--all", "--json"])
-            .run()?;
-        let listed: Vec<RawListedPane> =
-            serde_json::from_slice(&output.stdout).map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("parsing `list-panes --all --json`: {err}"),
-            })?;
+        let listed = self.raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?;
         listed
             .into_iter()
             .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
@@ -174,6 +166,21 @@ impl ZellijBackend {
             })
     }
 
+    pub(super) fn raw_listed_panes(
+        &self,
+        session_name: &str,
+        timeout: Duration,
+    ) -> Result<Vec<RawListedPane>> {
+        let output = self
+            .zellij_action(session_name)
+            .args(["list-panes", "--all", "--json"])
+            .run_with_timeout(timeout)?;
+        serde_json::from_slice(&output.stdout).map_err(|err| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("parsing `list-panes --all --json`: {err}"),
+        })
+    }
+
     pub(super) fn authoritative_pane_listing(
         &self,
         session_name: &str,
@@ -182,15 +189,7 @@ impl ZellijBackend {
         timeout: Duration,
     ) -> Result<RawPaneListing> {
         let observed_at_ms = crate::sidebar::timing::unix_now_ms();
-        let output = self
-            .zellij_action(session_name)
-            .args(["list-panes", "--all", "--json"])
-            .run_with_timeout(timeout)?;
-        let listed: Vec<RawListedPane> =
-            serde_json::from_slice(&output.stdout).map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("parsing `list-panes --all --json`: {err}"),
-            })?;
+        let listed = self.raw_listed_panes(session_name, timeout)?;
         let mut cache = PaneTopologyCache {
             session_name: session_name.to_owned(),
             produced_at_ms: observed_at_ms,

@@ -1,4 +1,3 @@
-
 use super::*;
 use rimz::diag::record::{
     AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FrameRejectReason, FrameStamp, ObserveRole,
