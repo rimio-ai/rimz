@@ -3,10 +3,10 @@
 //! lives in exactly one place and is testable without a real multiplexer.
 //!
 //! The dangerous step is the process sweep: it signals processes by heuristic, so
-//! it is scoped three ways — real uid, the exact (path-derived, globally unique)
-//! session name in the command line, and an explicit exclusion of this process
-//! and its ancestors — and it runs where the process backend can enumerate the
-//! current user's process table.
+//! it is scoped four ways — real uid, the exact path-derived session name in the
+//! command line, an explicit exclusion of this process and its ancestors, and the
+//! inherited environment domain — and it runs where the process backend can
+//! enumerate the current user's process table.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::MuxBackend;
+use crate::mux::domain::ProcessDomain;
 use crate::proc::ProcInfo;
 
 /// Grace between SIGTERM and SIGKILL in the process sweep — long enough for a
@@ -151,14 +152,14 @@ fn remove_path(path: &Path) -> bool {
 }
 
 /// Whether `cmdline` belongs to an orphaned room process worth sweeping. The
-/// exact, path-derived `session_name` is globally unique, so requiring it in the
-/// command line is the load-bearing scope: nothing from another room can match.
-/// Within that scope we take a leaked rimz sidebar / agent app-server daemon for
-/// this workspace, and — only when `include_mux_server` — an orphaned multiplexer
-/// server. `rimz reset` kills the session first, so its lingering server is a
-/// corpse and sweeping it is safe; `rimz reload` infers "dead" from a best-effort
-/// probe, so it never sweeps a server (a probe that wrongly read a live session
-/// as dead would otherwise destroy it) and reaps only respawnable daemons.
+/// exact, path-derived `session_name` is unique within an environment domain;
+/// the caller applies the domain guard before signalling. Within that scope we
+/// take a leaked rimz sidebar / agent app-server daemon for this workspace, and
+/// — only when `include_mux_server` — an orphaned multiplexer server. `rimz
+/// reset` kills the session first, so its lingering server is a corpse and
+/// sweeping it is safe; `rimz reload` infers "dead" from a best-effort probe, so
+/// it never sweeps a server (a probe that wrongly read a live session as dead
+/// would otherwise destroy it) and reaps only respawnable daemons.
 #[cfg(any(unix, test))]
 fn is_sweep_target(
     cmdline: &str,
@@ -238,6 +239,7 @@ pub(crate) fn sweep_orphan_processes(
 ) -> Vec<u32> {
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
+    let own_domain = ProcessDomain::current();
     let targets = select_sweep_targets(
         &procs,
         current_uid(),
@@ -245,7 +247,21 @@ pub(crate) fn sweep_orphan_processes(
         workspace_id,
         &protected,
         include_mux_server,
-    );
+    )
+    .into_iter()
+    .filter(|pid| {
+        let Some(process) = procs.iter().find(|process| process.pid == *pid) else {
+            return false;
+        };
+        let Some(candidate) = ProcessDomain::of_process(*pid) else {
+            return false;
+        };
+        match required_domain_check(&process.cmdline) {
+            RequiredDomainCheck::World => own_domain.same_world(&candidate),
+            RequiredDomainCheck::Mux(mux) => own_domain.same_mux_endpoint(&candidate, mux),
+        }
+    })
+    .collect::<Vec<_>>();
     kill_pids(&targets, SWEEP_GRACE).signalled
 }
 
@@ -258,12 +274,12 @@ pub(crate) fn sweep_orphan_processes(
     Vec::new()
 }
 
-/// SIGUSR1 every `rimz stats --refresh` dashboard this user owns so each
-/// re-execs in place onto the freshly-installed binary. User-wide and unscoped:
-/// stats are account-global, so a reload refreshes the daemon-view pane and any
-/// standalone dashboard alike. Returns the pids signalled; empty where the
-/// process backend cannot enumerate processes and the dashboard reloads via its
-/// own `r` key.
+/// SIGUSR1 every `rimz stats --refresh` dashboard this user owns in this state
+/// domain so each re-execs in place onto the freshly-installed binary. Stats
+/// are mux-agnostic, so a reload refreshes the daemon-view pane and any
+/// standalone dashboard in the same world alike. Returns the pids signalled;
+/// empty where the process backend cannot enumerate processes and the dashboard
+/// reloads via its own `r` key.
 #[cfg(unix)]
 pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
     use nix::sys::signal::{Signal, kill};
@@ -276,11 +292,16 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
     let my_uid = current_uid();
+    let own_domain = ProcessDomain::current();
     let targets: Vec<u32> = procs
         .iter()
         .filter(|proc| proc.real_uid == my_uid)
         .filter(|proc| !protected.contains(&proc.pid))
         .filter(|proc| is_stats_refresh(&proc.cmdline))
+        .filter(|proc| {
+            ProcessDomain::of_process(proc.pid)
+                .is_some_and(|candidate| own_domain.same_world(&candidate))
+        })
         .map(|proc| proc.pid)
         .collect();
     for &pid in &targets {
@@ -343,8 +364,8 @@ pub(crate) fn attributed_pane(pid: u32, mux: MuxName) -> Option<PaneId> {
 /// SIGTERM→SIGKILL the sidebar serve pair attributed (by its inherited mux pane
 /// env) to exactly `pane` — the cleanup for an in-place add whose pane never
 /// mounted or could not be docked, so a failed add never leaks a paneless
-/// renderer. Same uid/ancestor scoping as the orphan sweep. Returns the number
-/// of processes signalled; empty where `list_processes` is empty.
+/// renderer. Same uid/ancestor/environment scoping as the orphan sweep. Returns
+/// the number of processes signalled; empty where `list_processes` is empty.
 pub(crate) fn kill_sidebar_serve_for_pane(
     workspace_id: &str,
     session_name: &str,
@@ -354,15 +375,36 @@ pub(crate) fn kill_sidebar_serve_for_pane(
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
     let my_uid = current_uid();
+    let own_domain = ProcessDomain::current();
     let targets: Vec<u32> = procs
         .iter()
         .filter(|proc| proc.real_uid == my_uid)
         .filter(|proc| !protected.contains(&proc.pid))
         .filter(|proc| is_sidebar_serve(&proc.cmdline, workspace_id, session_name))
         .filter(|proc| attributed_pane(proc.pid, mux).as_ref() == Some(pane))
+        .filter(|proc| {
+            ProcessDomain::of_process(proc.pid)
+                .is_some_and(|candidate| own_domain.same_mux_endpoint(&candidate, mux))
+        })
         .map(|proc| proc.pid)
         .collect();
     kill_pids(&targets, SWEEP_GRACE).signalled.len()
+}
+
+#[cfg(any(unix, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequiredDomainCheck {
+    World,
+    Mux(MuxName),
+}
+
+#[cfg(any(unix, test))]
+fn required_domain_check(cmdline: &str) -> RequiredDomainCheck {
+    if cmdline.contains("--server") {
+        RequiredDomainCheck::Mux(MuxName::Zellij)
+    } else {
+        RequiredDomainCheck::World
+    }
 }
 
 #[cfg(unix)]
@@ -492,6 +534,22 @@ mod tests {
         let mut daemons_only = select_sweep_targets(&procs, me, SESSION, WS, &protected, false);
         daemons_only.sort_unstable();
         assert_eq!(daemons_only, vec![11, 12]);
+    }
+
+    #[test]
+    fn sweep_requires_mux_endpoint_only_for_the_zellij_server() {
+        assert_eq!(
+            required_domain_check("zellij --server /run/user/1000/zellij/rimz-room"),
+            RequiredDomainCheck::Mux(MuxName::Zellij),
+        );
+        assert_eq!(
+            required_domain_check("rimz sidebar serve --session-name rimz-room"),
+            RequiredDomainCheck::World,
+        );
+        assert_eq!(
+            required_domain_check("rimz codex app-server serve --session-name rimz-room"),
+            RequiredDomainCheck::World,
+        );
     }
 
     #[test]

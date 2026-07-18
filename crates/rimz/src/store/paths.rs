@@ -634,20 +634,31 @@ pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
 }
 
 pub fn state_home() -> PathBuf {
-    if let Some(value) = env_path("XDG_STATE_HOME") {
-        return value;
-    }
+    let xdg_state = env_path("XDG_STATE_HOME");
     #[cfg(test)]
     {
-        unit_test_state_home()
+        xdg_state.unwrap_or_else(unit_test_state_home)
     }
     #[cfg(not(test))]
     {
-        if let Some(home) = env_path("HOME") {
-            return home.join(".local/state");
-        }
-        env::temp_dir().join("rimz-state")
+        state_home_from(
+            xdg_state.as_deref(),
+            env_path("HOME").as_deref(),
+            &env::temp_dir(),
+        )
     }
+}
+
+/// Resolve the production state root from an explicit environment view.
+pub(crate) fn state_home_from(
+    xdg_state: Option<&Path>,
+    home: Option<&Path>,
+    tmpdir: &Path,
+) -> PathBuf {
+    xdg_state
+        .map(Path::to_path_buf)
+        .or_else(|| home.map(|home| home.join(".local/state")))
+        .unwrap_or_else(|| tmpdir.join("rimz-state"))
 }
 
 /// Under `cfg(test)`, the lib crate resolves the implicit state root to a
@@ -670,27 +681,26 @@ fn unit_test_state_home() -> PathBuf {
 }
 
 pub fn runtime_home() -> PathBuf {
-    if let Some(value) = env_path("XDG_RUNTIME_DIR") {
-        return value;
-    }
     // Containers and minimal hosts often lack XDG_RUNTIME_DIR. Use the short
     // /tmp/rimz-<uid> namespace per the docs; RuntimePaths::ensure_dirs verifies
     // and hardens the fallback root, rimz root, workspace root, and shared root.
-    runtime_fallback_home()
+    runtime_home_from(env_path("XDG_RUNTIME_DIR").as_deref(), current_uid())
+}
+
+/// Resolve the runtime root from an explicit environment view.
+pub(crate) fn runtime_home_from(xdg_runtime: Option<&Path>, uid: u32) -> PathBuf {
+    xdg_runtime
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/tmp").join(format!("rimz-{uid}")))
 }
 
 pub fn persistent_shared_home() -> PathBuf {
     state_home().join("rimz").join("shared")
 }
 
-#[cfg(unix)]
+#[cfg(test)]
 fn runtime_fallback_home() -> PathBuf {
-    PathBuf::from("/tmp").join(format!("rimz-{}", current_uid()))
-}
-
-#[cfg(not(unix))]
-fn runtime_fallback_home() -> PathBuf {
-    env::temp_dir().join(format!("rimz-{}", current_uid()))
+    runtime_home_from(None, current_uid())
 }
 
 /// Per-user, per-machine config root. Hosts configuration that survives
@@ -750,13 +760,13 @@ pub fn env_path(key: &str) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn current_uid() -> String {
-    nix::unistd::Uid::current().as_raw().to_string()
+fn current_uid() -> u32 {
+    nix::unistd::Uid::current().as_raw()
 }
 
 #[cfg(not(unix))]
-fn current_uid() -> String {
-    "unknown".to_owned()
+fn current_uid() -> u32 {
+    0
 }
 
 #[cfg(test)]
@@ -1025,19 +1035,12 @@ mod tests {
     #[test]
     fn runtime_fallback_uses_short_tmp_root() {
         let fallback = runtime_fallback_home();
-
-        #[cfg(unix)]
-        {
-            let expected = format!("rimz-{}", current_uid());
-            assert_eq!(fallback.parent(), Some(Path::new("/tmp")));
-            assert_eq!(
-                fallback.file_name().and_then(|name| name.to_str()),
-                Some(expected.as_str())
-            );
-        }
-
-        #[cfg(not(unix))]
-        assert!(fallback.starts_with(env::temp_dir()));
+        let expected = format!("rimz-{}", current_uid());
+        assert_eq!(fallback.parent(), Some(Path::new("/tmp")));
+        assert_eq!(
+            fallback.file_name().and_then(|name| name.to_str()),
+            Some(expected.as_str())
+        );
     }
 
     #[test]

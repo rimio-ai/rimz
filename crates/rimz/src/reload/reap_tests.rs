@@ -172,7 +172,32 @@ fn old_reexeced_process_is_nominated_when_the_cache_omits_its_pane() {
         },
         |_| Some(old),
         |_, _| Some(pane.clone()),
+        |_| true,
     );
 
     assert_eq!(candidates, vec![ReapCandidate { pid: 42, pane }]);
+}
+
+#[test]
+fn foreign_domain_process_is_not_nominated() {
+    let ws = workspace();
+    let proc = process(42);
+    let now = jiff::Timestamp::from_second(1_000_000).unwrap();
+
+    let candidates = assemble_reap_candidates(
+        ReapCandidateInputs {
+            procs: &[proc],
+            my_uid: 1_000,
+            protected: &HashSet::new(),
+            mux: MuxName::Zellij,
+            workspace: &ws,
+            positive_panes: &HashSet::new(),
+            now,
+        },
+        |_| None,
+        |_, _| Some(pane("terminal_5")),
+        |_| false,
+    );
+
+    assert!(candidates.is_empty());
 }

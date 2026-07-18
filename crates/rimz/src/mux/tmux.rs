@@ -114,8 +114,14 @@ pub fn diagnose_log_record(
     })
 }
 
-fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBuf {
+pub(crate) fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBuf {
     tmpdir.join(format!("tmux-{uid}")).join("default")
+}
+
+/// Extract the server socket from tmux's `socket,pid,index` environment value.
+pub(crate) fn socket_path_from_tmux_var(value: &str) -> Option<PathBuf> {
+    let socket = value.split(',').next()?;
+    (!socket.is_empty()).then(|| PathBuf::from(socket))
 }
 
 /// Bundle reported by `rimz doctor` when the active backend is tmux.

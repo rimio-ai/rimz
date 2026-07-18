@@ -9,6 +9,20 @@ fn default_server_socket_path_uses_tmux_default_layout() {
 }
 
 #[test]
+fn tmux_var_parser_extracts_a_nonempty_socket() {
+    assert_eq!(
+        socket_path_from_tmux_var("/tmp/tmux-1001/default,42,3"),
+        Some(PathBuf::from("/tmp/tmux-1001/default")),
+    );
+    assert_eq!(
+        socket_path_from_tmux_var("/tmp/tmux-1001/default"),
+        Some(PathBuf::from("/tmp/tmux-1001/default")),
+    );
+    assert_eq!(socket_path_from_tmux_var(",42,3"), None);
+    assert_eq!(socket_path_from_tmux_var(""), None);
+}
+
+#[test]
 fn equal_row_splits_size_each_remaining_stack() {
     let sizes = |pane_count| {
         (1..pane_count)

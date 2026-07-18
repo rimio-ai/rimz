@@ -8,6 +8,7 @@
 pub mod binaries;
 mod capabilities;
 mod command;
+pub mod domain;
 mod focus_key;
 mod keys;
 pub mod logtail;

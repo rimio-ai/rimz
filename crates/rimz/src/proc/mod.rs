@@ -28,9 +28,9 @@ pub use pane_probe::{
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    argv, children, clk_tck, cmdline, comm, comm_and_ppid, cwd, env_var, exe_path, io_bytes,
-    list_processes, process_is_live, process_start, process_start_token, real_uid, stat_metrics,
-    write_bytes,
+    argv, children, clk_tck, cmdline, comm, comm_and_ppid, cwd, env_var, environ, exe_path,
+    io_bytes, list_processes, process_is_live, process_start, process_start_token, real_uid,
+    stat_metrics, write_bytes,
 };
 
 fn git_binary() -> &'static Path {
@@ -286,13 +286,44 @@ pub fn env_var(_pid: u32, _key: &str) -> Option<String> {
     None
 }
 
+/// The complete environment of `pid` as parsed `key=value` pairs. A readable
+/// empty environment is `Some(Vec::new())`; an unreadable process environment
+/// is `None`, so signal callers can spare a process whose domain is unknown.
+#[cfg(target_os = "linux")]
+pub fn environ(pid: u32) -> Option<Vec<(String, String)>> {
+    Some(parse_environ_pairs(
+        &std::fs::read(format!("/proc/{pid}/environ")).ok()?,
+    ))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn environ(_pid: u32) -> Option<Vec<(String, String)>> {
+    None
+}
+
 /// Find `key`'s value in a NUL-separated `key=value` environ blob.
 #[cfg(target_os = "linux")]
 fn parse_environ(raw: &[u8], key: &str) -> Option<String> {
-    let prefix = format!("{key}=");
     String::from_utf8_lossy(raw)
         .split('\0')
-        .find_map(|pair| pair.strip_prefix(prefix.as_str()).map(str::to_owned))
+        .filter_map(parse_environ_pair)
+        .find_map(|(candidate, value)| (candidate == key).then(|| value.to_owned()))
+}
+
+/// Parse a NUL-separated environment snapshot, splitting each entry at its
+/// first `=` so values may contain further equals signs.
+#[cfg(target_os = "linux")]
+fn parse_environ_pairs(raw: &[u8]) -> Vec<(String, String)> {
+    String::from_utf8_lossy(raw)
+        .split('\0')
+        .filter_map(parse_environ_pair)
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn parse_environ_pair(pair: &str) -> Option<(&str, &str)> {
+    pair.split_once('=')
 }
 
 /// Trim the trailing newline `/proc/<pid>/comm` always carries; an empty name is
@@ -874,6 +905,17 @@ mod tests {
         assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID"), None);
         // A bare key with no `=` never matches the `key=` prefix.
         assert_eq!(parse_environ(b"ZELLIJ_PANE_ID\0", "ZELLIJ_PANE_ID"), None);
+    }
+
+    #[test]
+    fn parse_environ_pairs_preserves_empty_and_equals_values() {
+        assert_eq!(
+            parse_environ_pairs(b"EMPTY=\0TOKEN=left=right\0BARE\0"),
+            vec![
+                ("EMPTY".to_owned(), String::new()),
+                ("TOKEN".to_owned(), "left=right".to_owned()),
+            ]
+        );
     }
 
     #[test]

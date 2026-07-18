@@ -41,13 +41,42 @@ mod linux {
         );
     }
 
+    #[test]
+    fn process_domain_distinguishes_inherited_and_sandboxed_children() {
+        let inherited = ChildGuard::new(spawn_sleep().expect("spawn inherited child"));
+        let sandbox = tempfile::tempdir().expect("sandbox tempdir");
+        let mut sandbox_command = sleep_command();
+        sandbox_command
+            .env("HOME", sandbox.path().join("home"))
+            .env("XDG_STATE_HOME", sandbox.path().join("state"))
+            .env("XDG_RUNTIME_DIR", sandbox.path().join("runtime"))
+            .env("TMUX_TMPDIR", sandbox.path().join("tmux"))
+            .env("TMPDIR", sandbox.path().join("tmp"));
+        let sandboxed = ChildGuard::new(sandbox_command.spawn().expect("spawn sandboxed child"));
+
+        let current = rimz::mux::domain::ProcessDomain::current();
+        let inherited_domain = rimz::mux::domain::ProcessDomain::of_process(inherited.id())
+            .expect("read inherited child environment");
+        let sandboxed_domain = rimz::mux::domain::ProcessDomain::of_process(sandboxed.id())
+            .expect("read sandboxed child environment");
+
+        assert!(current.same_world(&inherited_domain));
+        assert!(!current.same_world(&sandboxed_domain));
+        assert_eq!(rimz::mux::domain::ProcessDomain::of_process(u32::MAX), None,);
+    }
+
     fn spawn_sleep() -> std::io::Result<Child> {
-        Command::new("sleep")
+        sleep_command().spawn()
+    }
+
+    fn sleep_command() -> Command {
+        let mut command = Command::new("sleep");
+        command
             .arg("60")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        command
     }
 
     fn wait_for_expected_children(expected: &[u32]) -> Vec<u32> {

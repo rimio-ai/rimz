@@ -77,7 +77,18 @@ pub(crate) fn expected_socket_path_from(
     temp_dir: &Path,
     uid: &str,
 ) -> PathBuf {
-    let base = if let Some(dir) = zellij_socket_dir {
+    socket_base_from(zellij_socket_dir, xdg_runtime_dir, temp_dir, uid)
+        .join("contract_version_1")
+        .join(session_name)
+}
+
+pub(crate) fn socket_base_from(
+    zellij_socket_dir: Option<&Path>,
+    xdg_runtime_dir: Option<&Path>,
+    temp_dir: &Path,
+    uid: &str,
+) -> PathBuf {
+    if let Some(dir) = zellij_socket_dir {
         dir.to_path_buf()
     } else if cfg!(target_os = "linux") {
         xdg_runtime_dir
@@ -85,8 +96,7 @@ pub(crate) fn expected_socket_path_from(
             .unwrap_or_else(|| temp_dir.join(format!("zellij-{uid}")))
     } else {
         temp_dir.join(format!("zellij-{uid}"))
-    };
-    base.join("contract_version_1").join(session_name)
+    }
 }
 
 pub(crate) fn validate_headroom(headroom: ZellijSocketHeadroom) -> Result<()> {

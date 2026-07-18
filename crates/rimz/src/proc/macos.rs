@@ -49,6 +49,14 @@ pub fn env_var(pid: u32, key: &str) -> Option<String> {
     )
 }
 
+pub fn environ(pid: u32) -> Option<Vec<(String, String)>> {
+    process_with(
+        pid,
+        ProcessRefreshKind::nothing().with_environ(UpdateKind::Always),
+        |process| Some(environment_pairs(process.environ())),
+    )
+}
+
 pub fn cmdline(pid: u32) -> Option<String> {
     process_with(
         pid,
@@ -205,6 +213,17 @@ fn env_value(environ: &[OsString], key: &str) -> Option<String> {
         .find_map(|entry| entry.strip_prefix(prefix.as_str()).map(str::to_owned))
 }
 
+fn environment_pairs(environ: &[OsString]) -> Vec<(String, String)> {
+    environ
+        .iter()
+        .filter_map(|entry| {
+            let entry = entry.to_string_lossy();
+            let (key, value) = entry.split_once('=')?;
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
 fn os_to_string(value: &OsStr) -> Option<String> {
     let value = value.to_string_lossy().trim().to_owned();
     (!value.is_empty()).then_some(value)
@@ -253,6 +272,22 @@ mod tests {
         assert_eq!(env_value(&env, "ZELLIJ_PANE_ID").as_deref(), Some("3"));
         assert_eq!(env_value(&env, "RIMZ"), None);
         assert_eq!(env_value(&[OsString::from("RIMZ")], "RIMZ"), None);
+    }
+
+    #[test]
+    fn environment_pairs_preserve_empty_and_equals_values() {
+        let env = [
+            OsString::from("EMPTY="),
+            OsString::from("TOKEN=left=right"),
+            OsString::from("BARE"),
+        ];
+        assert_eq!(
+            environment_pairs(&env),
+            vec![
+                ("EMPTY".to_owned(), String::new()),
+                ("TOKEN".to_owned(), "left=right".to_owned()),
+            ]
+        );
     }
 
     #[test]

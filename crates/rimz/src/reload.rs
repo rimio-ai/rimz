@@ -842,6 +842,7 @@ fn assemble_reap_candidates(
     inputs: ReapCandidateInputs<'_>,
     mut process_start: impl FnMut(u32) -> Option<jiff::Timestamp>,
     mut attributed_pane: impl FnMut(u32, MuxName) -> Option<PaneId>,
+    mut same_domain: impl FnMut(u32) -> bool,
 ) -> Vec<ReapCandidate> {
     let mut candidates = Vec::new();
     for proc in inputs.procs {
@@ -852,6 +853,7 @@ fn assemble_reap_candidates(
                 inputs.workspace.workspace_id.as_str(),
                 &inputs.workspace.session_name,
             )
+            || !same_domain(proc.pid)
             || process_start(proc.pid).is_some_and(|start| {
                 crate::sidebar::born_recently(start, inputs.now, crate::sidebar::FRESH_PANE_GRACE)
             })
@@ -952,9 +954,11 @@ fn sidebar_orphan_reaped_events(
         .collect()
 }
 
-/// SIGTERM→SIGKILL this user's sidebar *processes* for `ws` only after two
-/// authoritative mux rosters omit their panes. A process we cannot attribute
-/// to a pane is left alone, and any authoritative failure aborts the reap.
+/// SIGTERM→SIGKILL this user's sidebar *processes* for `ws` only after proving
+/// they share this room's mux endpoint namespace and two authoritative mux
+/// rosters omit their panes. Foreign or unreadable environments and processes
+/// we cannot attribute to a pane are left alone; any authoritative failure
+/// aborts the reap.
 fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorkspace) -> usize {
     let now = jiff::Timestamp::now();
     let floor_ms =
@@ -986,6 +990,7 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
     };
     let procs = crate::proc::list_processes();
     let protected = recovery::protected_pids(&procs, std::process::id());
+    let own_domain = crate::mux::domain::ProcessDomain::current();
     let candidates = assemble_reap_candidates(
         ReapCandidateInputs {
             procs: &procs,
@@ -998,6 +1003,10 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         },
         crate::proc::process_start,
         recovery::attributed_pane,
+        |pid| {
+            crate::mux::domain::ProcessDomain::of_process(pid)
+                .is_some_and(|candidate| own_domain.same_mux_endpoint(&candidate, mux))
+        },
     );
     if candidates.is_empty() {
         return 0;
