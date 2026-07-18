@@ -144,11 +144,18 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         "daemon tab must lead the session; saw {:?}",
         tab_names_in_order(xdg.path(), &name),
     );
+    wait_for_tab_count(xdg.path(), &name, 2);
     // Two tabs: the daemon tab and the working tab born beside it.
+    let tab_names = poll_until(
+        Duration::from_secs(10),
+        || Ok(tab_names_in_order(xdg.path(), &name)),
+        |names| names.len() >= 2,
+        "daemon and working tab names",
+    );
     assert_eq!(
-        tab_names_in_order(xdg.path(), &name).len(),
+        tab_names.len(),
         2,
-        "birth layout should produce exactly the daemon + working tabs",
+        "birth layout should produce exactly the daemon + working tabs: {tab_names:?}",
     );
     let panes = wait_for_tab_pane_count(xdg.path(), &name, "rimzd", 4);
     assert_eq!(
@@ -177,24 +184,18 @@ fn tab_names_in_order(xdg: &Path, session: &str) -> Vec<String> {
 
 /// Poll `list_panes` until `tab_name` has `want` terminal panes, or time out.
 fn wait_for_tab_pane_count(xdg: &Path, session: &str, tab_name: &str, want: usize) -> Vec<PaneRef> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut last = Vec::new();
-    loop {
-        if let Ok(snapshot) = list_panes(xdg, session) {
-            last = snapshot
+    poll_until(
+        Duration::from_secs(20),
+        || {
+            Ok(list_panes(xdg, session)?
                 .pane_refs()
                 .into_iter()
                 .filter(|pane| pane.view_name.as_deref() == Some(tab_name))
-                .collect();
-            if last.len() == want {
-                return last;
-            }
-        }
-        if Instant::now() >= deadline {
-            return last;
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
+                .collect())
+        },
+        |panes: &Vec<PaneRef>| panes.len() == want,
+        &format!("{want} terminal panes in {session}/{tab_name}"),
+    )
 }
 
 /// Poll until the session's first tab is `expected`, or time out.

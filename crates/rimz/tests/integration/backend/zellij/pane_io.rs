@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use rimz::mux::{
-    ClientFocusOptions, MuxBackend, NamedKey, PaneListOptions, SplitDirection, SplitPaneOptions,
-    ZellijBackend,
+    MuxBackend, NamedKey, PaneListOptions, SplitDirection, SplitPaneOptions, ZellijBackend,
 };
 use tempfile::TempDir;
 
@@ -226,13 +225,7 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     assert!(authoritative.panes.iter().any(|pane| {
         pane.pane_id == target.pane_id && pane.view_id.as_deref() == Some(first_tab.as_str())
     }));
-    let focused_before = backend
-        .client_view(ClientFocusOptions {
-            session_name: Some(name.clone()),
-            ..Default::default()
-        })
-        .expect("client focus before targeted split")
-        .viewed_panes;
+    let focused_before = wait_for_client_view_count(xdg.path(), &name, 1);
     assert_eq!(
         focused_before.len(),
         1,
@@ -363,7 +356,7 @@ fn semantic_answer_keys_reach_a_live_pane() {
     backend
         .send_key(&pane_id, NamedKey::Enter)
         .expect("start raw key reader");
-    std::thread::sleep(Duration::from_millis(100));
+    // Queue writes in PTY order; stty's TCSANOW mode switch preserves pending input, so keep this delay-free.
     backend
         .send_key(&pane_id, NamedKey::Escape)
         .expect("send escape");
@@ -371,19 +364,12 @@ fn semantic_answer_keys_reach_a_live_pane() {
         .send_key(&pane_id, NamedKey::ShiftTab)
         .expect("send shift-tab");
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let bytes = loop {
-        if let Ok(bytes) = std::fs::read(&key_bytes)
-            && bytes.len() == 4
-        {
-            break bytes;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "named keys did not reach Zellij pane"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let bytes = poll_until(
+        Duration::from_secs(10),
+        || std::fs::read(&key_bytes).map_err(|err| err.to_string()),
+        |bytes| bytes.len() == 4,
+        "named keys in the raw reader",
+    );
     assert_eq!(bytes, b"\x1b\x1b[Z");
 }
 /// `client_view` reads each client's focused pane from `list-clients`.
@@ -413,27 +399,13 @@ fn client_view_tracks_the_attached_client() {
     );
     wait_until_session_ready(xdg.path(), &name);
 
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
     // `--create-background` births the session without attaching, but the
     // bootstrap client that created it can still surface in `list-clients` for a
     // beat before it detaches — a window that widens under load. Poll until the
     // roster drains, then assert the steady state: a background session with no
     // client focuses nothing. A real regression (a detached session that keeps a
     // focused client) never drains and still fails here.
-    let deadline = Instant::now() + SPAWN_TIMEOUT;
-    let detached = loop {
-        let panes = backend
-            .client_view(ClientFocusOptions {
-                session_name: Some(name.clone()),
-                ..Default::default()
-            })
-            .map(|view| view.viewed_panes)
-            .expect("client_view detached");
-        if panes.is_empty() || Instant::now() >= deadline {
-            break panes;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let detached = wait_for_client_view_count(xdg.path(), &name, 0);
     assert!(
         detached.is_empty(),
         "a background session with no client focuses nothing: {detached:?}",
@@ -441,23 +413,9 @@ fn client_view_tracks_the_attached_client() {
 
     // Attach a client; its focused terminal pane is now reported.
     let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);
-    wait_for_attached_client(xdg.path(), &name);
+    let focused = wait_for_client_view_count(xdg.path(), &name, 1);
     let pane_id = wait_for_pane_count(xdg.path(), &name, 1)[0].pane_id.clone();
 
-    let deadline = Instant::now() + SPAWN_TIMEOUT;
-    let focused = loop {
-        let panes = backend
-            .client_view(ClientFocusOptions {
-                session_name: Some(name.clone()),
-                ..Default::default()
-            })
-            .map(|view| view.viewed_panes)
-            .expect("client_view attached");
-        if !panes.is_empty() || Instant::now() >= deadline {
-            break panes;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
     assert_eq!(
         focused.len(),
         1,

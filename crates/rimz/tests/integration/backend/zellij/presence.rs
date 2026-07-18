@@ -333,27 +333,39 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
         .status()
         .expect("load presence plugin from disposable cwd");
     assert!(loaded.success(), "presence plugin load command failed");
-    let deadline = Instant::now() + SPAWN_TIMEOUT;
-    let before = loop {
-        if let Ok(bytes) = std::fs::read(&stamp_path)
-            && let Ok(stamp) = serde_json::from_slice::<rimz::sidebar::cache::PresenceStamp>(&bytes)
-        {
-            break stamp.written_at_ms;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "presence plugin never wrote {}",
-            stamp_path.display(),
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let mut last_written_at_ms = None;
+    let mut stable_observations = 0;
+    let before = poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            let bytes = std::fs::read(&stamp_path).map_err(|err| err.to_string())?;
+            serde_json::from_slice::<rimz::sidebar::cache::PresenceStamp>(&bytes)
+                .map_err(|err| err.to_string())
+        },
+        |stamp| {
+            if last_written_at_ms == Some(stamp.written_at_ms) {
+                stable_observations += 1;
+            } else {
+                last_written_at_ms = Some(stamp.written_at_ms);
+                stable_observations = 1;
+            }
+            stable_observations == 10
+        },
+        "settled initial presence stamp",
+    )
+    .written_at_ms;
 
     launch_cwd.close().expect("delete plugin launch cwd");
-    std::thread::sleep(Duration::from_millis(61_000));
-
-    let bytes = std::fs::read(&stamp_path).expect("presence stamp survives launch cwd deletion");
-    let after: rimz::sidebar::cache::PresenceStamp =
-        serde_json::from_slice(&bytes).expect("presence stamp JSON");
+    let after = poll_until(
+        Duration::from_secs(150),
+        || {
+            let bytes = std::fs::read(&stamp_path).map_err(|err| err.to_string())?;
+            serde_json::from_slice::<rimz::sidebar::cache::PresenceStamp>(&bytes)
+                .map_err(|err| err.to_string())
+        },
+        |stamp| stamp.written_at_ms > before,
+        "presence keepalive after deleting the plugin launch cwd",
+    );
     assert!(
         after.written_at_ms > before,
         "presence keepalive stopped after its launch cwd was deleted: before={before}, after={}",

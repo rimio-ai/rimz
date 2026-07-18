@@ -116,10 +116,13 @@ fn open_sidebar_births_native_layout_and_template() {
     backend
         .send_key(&work_pane, rimz::mux::NamedKey::Enter)
         .expect("run direct copilot shim");
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !marker.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    let expected_marker = format!("{}\nfalse\n", runtime.copilot_otel_path().display());
+    let marker_text = poll_until(
+        Duration::from_secs(15),
+        || std::fs::read_to_string(&marker).map_err(|err| err.to_string()),
+        |text| text == &expected_marker,
+        "direct copilot shim marker",
+    );
     let capture = backend
         .capture_pane(&work_pane, Some(20), false)
         .expect("capture direct copilot pane");
@@ -127,10 +130,7 @@ fn open_sidebar_births_native_layout_and_template() {
         marker.exists(),
         "direct copilot shim did not run; panes={panes:#?}; capture={capture:#?}",
     );
-    assert_eq!(
-        std::fs::read_to_string(&marker).expect("direct copilot shim output"),
-        format!("{}\nfalse\n", runtime.copilot_otel_path().display()),
-    );
+    assert_eq!(marker_text, expected_marker, "direct copilot shim output",);
 
     let template = new_tab_template_dump(xdg.path(), &name);
     assert!(

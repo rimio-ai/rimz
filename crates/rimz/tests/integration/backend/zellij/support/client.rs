@@ -20,32 +20,42 @@ fn viewed_panes(backend: &ZellijBackend, session: &str) -> Result<Vec<PaneId>, S
 }
 
 pub(in crate::backend::zellij) fn wait_for_attached_client(xdg: &Path, session: &str) {
+    wait_for_client_view_count(xdg, session, 1);
+}
+
+pub(in crate::backend::zellij) fn wait_for_client_view_count(
+    xdg: &Path,
+    session: &str,
+    want: usize,
+) -> Vec<PaneId> {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
-    let mut prior_nonempty = false;
+    let mut consecutive_matches = 0;
     let mut last_view = Vec::new();
     let mut last_error = String::new();
     let backend = ZellijBackend::with_runtime_dir(xdg);
     loop {
         match viewed_panes(&backend, session) {
-            Ok(view) if !view.is_empty() => {
+            Ok(view) if view.len() == want => {
                 last_view = view;
-                if prior_nonempty {
-                    return;
+                last_error.clear();
+                consecutive_matches += 1;
+                if consecutive_matches == 2 {
+                    return last_view;
                 }
-                prior_nonempty = true;
             }
             Ok(view) => {
                 last_view = view;
-                prior_nonempty = false;
+                last_error.clear();
+                consecutive_matches = 0;
             }
             Err(err) => {
                 last_error = err;
-                prior_nonempty = false;
+                consecutive_matches = 0;
             }
         }
         if Instant::now() >= deadline {
             panic!(
-                "no stable client attached to {session}; last view: {last_view:?}; last error: {last_error}"
+                "client view for {session} did not stabilize at {want} panes; last view: {last_view:?}; last error: {last_error}"
             );
         }
         std::thread::sleep(Duration::from_millis(100));

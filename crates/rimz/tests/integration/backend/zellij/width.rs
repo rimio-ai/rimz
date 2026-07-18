@@ -31,13 +31,13 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     backend
         .nudge_sidebar_width(&name, &pane, initial_cols, u16::MAX)
         .expect("widen sidebar");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while raw_sidebar_pane(xdg.path(), &name).pane_columns <= initial
-        && std::time::Instant::now() < deadline
-    {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let wider = raw_sidebar_pane(xdg.path(), &name).pane_columns;
+    let wider = wait_for_sidebar_columns_matching(
+        xdg.path(),
+        &name,
+        listed.id,
+        |columns| columns > initial,
+        "native wider sidebar step",
+    );
     assert!(
         wider > initial,
         "native wider step did not grow {initial}: {wider}"
@@ -47,14 +47,15 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     backend
         .nudge_sidebar_width(&name, &pane, wider_cols, 1)
         .expect("narrow sidebar");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while raw_sidebar_pane(xdg.path(), &name).pane_columns >= wider
-        && std::time::Instant::now() < deadline
-    {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    let narrower = wait_for_sidebar_columns_matching(
+        xdg.path(),
+        &name,
+        listed.id,
+        |columns| columns < wider,
+        "native narrower sidebar step",
+    );
     assert!(
-        raw_sidebar_pane(xdg.path(), &name).pane_columns < wider,
+        narrower < wider,
         "native narrower step did not shrink {wider}",
     );
 
@@ -84,20 +85,40 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     backend
         .nudge_sidebar_width(&name, &pane, explicit_cols, u16::MAX)
         .expect("widen explicit-layout sidebar");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let resized = loop {
-        let resized = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
-            .expect("explicit tab keeps sidebar");
-        if resized.columns > explicit.columns || std::time::Instant::now() >= deadline {
-            break resized;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
+    let resized = wait_for_sidebar_columns_matching(
+        xdg.path(),
+        &name,
+        explicit.id,
+        |columns| columns > explicit.columns,
+        "explicit-layout wider sidebar step",
+    );
     assert!(
-        resized.columns > explicit.columns,
+        resized > explicit.columns,
         "explicit-layout sidebar stayed resize-pinned at {} columns",
         explicit.columns,
     );
+}
+
+fn wait_for_sidebar_columns_matching(
+    xdg: &std::path::Path,
+    session: &str,
+    pane_id: u64,
+    mut ready: impl FnMut(u64) -> bool,
+    label: &str,
+) -> u64 {
+    poll_until(
+        std::time::Duration::from_secs(15),
+        || {
+            Ok(list_panes(xdg, session)?
+                .panes
+                .iter()
+                .find(|pane| !pane.is_plugin && pane.id == pane_id)
+                .map(|pane| pane.pane_columns))
+        },
+        |columns| columns.as_ref().is_some_and(|columns| ready(*columns)),
+        label,
+    )
+    .unwrap_or_else(|| panic!("sidebar pane terminal_{pane_id} disappeared from {session}"))
 }
 
 #[test]
