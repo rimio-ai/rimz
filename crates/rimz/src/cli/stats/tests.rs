@@ -870,3 +870,191 @@ fn fmt_day_reads_month_and_day() {
     assert_eq!(fmt_day(0), "Jan 1");
     assert_eq!(fmt_day(31), "Feb 1");
 }
+
+#[test]
+fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
+    use rimz::harness::assist_log::{Assist, AssistRecord, AssistWindowReset};
+    use rimz::harness::auto_redeem::RedeemReason;
+    use rimz::harness::schedule::run_log::{
+        LoopRunMode, LoopRunRecord, LoopRunResult, PingWindowOutcome,
+    };
+    use rimz::ids::{AgentKind, AgentSessionId};
+
+    let ts = |second| jiff::Timestamp::from_second(second).unwrap();
+    let records = vec![
+        AssistRecord {
+            at: ts(4_000),
+            assist: Assist::AutoRedeem {
+                kind: "codex".to_owned(),
+                reason: RedeemReason::ExpiryRescue,
+                request_id: "request-1".to_owned(),
+                credits: 1,
+                soonest_expiry: None,
+                natural_reset: None,
+                outcome: Some("reset".to_owned()),
+                windows_reset: true,
+                window_resets: Vec::new(),
+                error: None,
+            },
+        },
+        AssistRecord {
+            at: ts(3_600),
+            assist: Assist::AutoContinue {
+                kind: AgentKind::new_unchecked("codex"),
+                agent_id: AgentSessionId::from("session-1"),
+                label: Some("@coder".to_owned()),
+                park: "rate_limit_window_reset".to_owned(),
+                parked_since: Some(ts(0)),
+                delivered: true,
+                message_id: "msg_1".to_owned(),
+            },
+        },
+        AssistRecord {
+            at: ts(3_700),
+            assist: Assist::AutoContinue {
+                kind: AgentKind::new_unchecked("codex"),
+                agent_id: AgentSessionId::from("session-1"),
+                label: Some("@coder".to_owned()),
+                park: "overloaded_backoff_retry".to_owned(),
+                parked_since: Some(ts(3_600)),
+                delivered: false,
+                message_id: "msg_2".to_owned(),
+            },
+        },
+    ];
+    let mut ping = LoopRunRecord::new(
+        "autoping-codex",
+        LoopRunResult::Completed,
+        LoopRunMode::Scheduled,
+        10,
+    );
+    ping.at = ts(5_000);
+    ping.cost_usd = Some(0.09);
+    ping.window = Some(PingWindowOutcome {
+        shortest: Some(AssistWindowReset {
+            duration_mins: Some(300),
+            resets_at: Some(ts(23_000)),
+        }),
+        longest: None,
+    });
+
+    let stats = AssistStats::from_records("7d", records, vec![ping]);
+
+    assert_eq!(
+        stats.rollup,
+        AssistRollup {
+            pings: 1,
+            ping_cost_usd: 0.09,
+            redeems: 1,
+            resets: 1,
+            resumes: 1,
+            recovered_secs: 3_600,
+        }
+    );
+    assert_eq!(stats.events.len(), 4, "failed delivery remains forensic");
+    let zone = jiff::tz::TimeZone::UTC;
+    let lines = stats
+        .events
+        .iter()
+        .map(|event| benefit_line(event, &zone))
+        .collect::<Vec<_>>();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("codex ping — window"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("expiry rescue → budget reset ✓"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("@coder resumed — limit park"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("resume held — overload park"))
+    );
+
+    let json = serde_json::to_value(&stats).unwrap();
+    assert_eq!(json["rollup"]["resumes"], 1);
+    assert_eq!(json["events"][0]["assist"], "ping");
+}
+
+#[test]
+fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
+    let mut lines = Vec::new();
+    panel_lines(&mut lines, &AssistStats::default(), 80, 5);
+    assert!(lines.is_empty());
+
+    let stats = AssistStats {
+        window: "7d".to_owned(),
+        rollup: AssistRollup {
+            pings: 9,
+            ping_cost_usd: 0.09,
+            redeems: 2,
+            resets: 1,
+            resumes: 5,
+            recovered_secs: 22_320,
+        },
+        events: Vec::new(),
+    };
+    let summary = summary(&stats.rollup);
+    assert_eq!(
+        summary,
+        "9 pings $0.09 · 2 redeems (1 reset) · 5 resumes +6.2h"
+    );
+}
+
+#[test]
+fn assists_load_scopes_both_logs_to_the_selected_window() {
+    use rimz::harness::assist_log::{self, Assist, AssistRecord};
+    use rimz::harness::auto_redeem::RedeemReason;
+    use rimz::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
+
+    let dir = tempfile::tempdir().unwrap();
+    let now = jiff::Timestamp::from_second(10 * DAY_SECS).unwrap();
+    let old = AssistRecord {
+        at: jiff::Timestamp::from_second(DAY_SECS).unwrap(),
+        assist: Assist::AutoRedeem {
+            kind: "codex".to_owned(),
+            reason: RedeemReason::ExpiryRescue,
+            request_id: "old".to_owned(),
+            credits: 1,
+            soonest_expiry: None,
+            natural_reset: None,
+            outcome: Some("reset".to_owned()),
+            windows_reset: true,
+            window_resets: Vec::new(),
+            error: None,
+        },
+    };
+    let assist_path = assist_log::log_path(dir.path());
+    std::fs::create_dir_all(assist_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        assist_path,
+        format!("{}\n", serde_json::to_string(&old).unwrap()),
+    )
+    .unwrap();
+
+    let mut recent_ping = LoopRunRecord::new(
+        "autoping-codex",
+        LoopRunResult::Completed,
+        LoopRunMode::Scheduled,
+        10,
+    );
+    recent_ping.at = now;
+    std::fs::write(
+        run_log::log_path(dir.path()),
+        format!("{}\n", serde_json::to_string(&recent_ping).unwrap()),
+    )
+    .unwrap();
+
+    let stats = AssistStats::load(dir.path(), Window::Week, now);
+    assert_eq!(stats.rollup.pings, 1);
+    assert_eq!(stats.rollup.redeems, 0);
+    assert_eq!(stats.events.len(), 1);
+}

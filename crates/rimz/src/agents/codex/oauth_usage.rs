@@ -355,7 +355,7 @@ pub(crate) fn fetch_reset_credit_state(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ConsumeCode {
+pub enum ConsumeCode {
     Reset,
     NothingToReset,
     NoCredit,
@@ -365,7 +365,7 @@ pub(crate) enum ConsumeCode {
 }
 
 impl ConsumeCode {
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Reset => "reset",
             Self::NothingToReset => "nothing_to_reset",

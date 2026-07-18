@@ -10,8 +10,10 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
+use jiff::Timestamp;
 use std::time::Duration;
 
+use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use rimz::message::{DeliveryGate, MessageRecord, MessageSender, deliver};
 use rimz::store::workspace_record;
@@ -35,6 +37,10 @@ pub struct AutoContinueArgs {
     reason: String,
     #[arg(long)]
     message_id: Option<String>,
+    #[arg(long)]
+    parked_since: Option<Timestamp>,
+    #[arg(long)]
+    label: Option<String>,
 }
 
 pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
@@ -119,7 +125,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         deliver::DeliveryPolicy::Boundary,
     )
     .context("delivering auto-continue resume message")?;
-    if !delivered {
+    let delivery_failure = if !delivered {
         let reason = format!("resume delivery gate closed ({})", args.reason);
         store
             .record_message_delivery_failures(
@@ -129,7 +135,25 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
                 &reason,
                 &workspace.session_name,
             )
-            .context("recording auto-continue delivery miss")?;
+            .context("recording auto-continue delivery miss")
+            .err()
+    } else {
+        None
+    };
+    rimz::harness::assist_log::append(&AssistRecord {
+        at: Timestamp::now(),
+        assist: Assist::AutoContinue {
+            kind,
+            agent_id,
+            label: args.label,
+            park: args.reason,
+            parked_since: args.parked_since,
+            delivered,
+            message_id: message_id.to_string(),
+        },
+    });
+    if let Some(err) = delivery_failure {
+        return Err(err);
     }
     Ok(())
 }

@@ -13,14 +13,16 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::account::ProviderCapacity;
+pub use crate::agents::codex::oauth_usage::ConsumeCode;
 use crate::agents::codex::oauth_usage::{
-    ConsumeCode, ResetCreditDetail, consume_reset_credit, fetch_reset_credit_state,
-    fetch_usage_with_url, load_configured_credentials, reset_credits_url, usage_url,
+    ResetCreditDetail, consume_reset_credit, fetch_reset_credit_state, fetch_usage_with_url,
+    load_configured_credentials, reset_credits_url, usage_url,
 };
 use crate::agents::{AccountUsageSnapshot, ResetCredits};
 #[cfg(not(test))]
 use crate::child_process::detached_rimz_command;
 use crate::config::ResumeConfig;
+use crate::harness::assist_log::AssistWindowReset;
 use crate::store::atomic::write_temp_then_rename_cache;
 use crate::{RuntimePaths, SidebarProviderPanel};
 
@@ -82,6 +84,32 @@ pub enum AutoRedeemErr {
     Stamp(#[from] crate::store::atomic::AtomicErr),
     #[error("Codex auto-redeem request failed: {0}")]
     Codex(String),
+    #[error("{error}")]
+    Attempted {
+        report: Box<RedeemReport>,
+        error: String,
+    },
+}
+
+impl AutoRedeemErr {
+    pub fn attempted_report(&self) -> Option<&RedeemReport> {
+        match self {
+            Self::Attempted { report, .. } => Some(report),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedeemReport {
+    pub reason: RedeemReason,
+    pub credits: u32,
+    pub soonest_expiry: Option<Timestamp>,
+    pub natural_reset: Option<Timestamp>,
+    pub outcome: Option<ConsumeCode>,
+    pub windows_reset: bool,
+    pub window_resets: Vec<AssistWindowReset>,
+    pub reset: bool,
 }
 
 /// Decide whether current provider-neutral capacity and reset credits warrant
@@ -225,21 +253,22 @@ pub(crate) fn redeem_credits(
     }
 }
 
-/// Run the provider-specific action behind the hidden helper. Returns `true`
-/// after a successful reset was published so the caller can wake renderers.
+/// Run the provider-specific action behind the hidden helper. Silent no-ops
+/// return `None`; once the consume request starts, its evidence and outcome are
+/// retained in a report, including on an attempted error.
 pub fn execute_auto_redeem(
     runtime: &RuntimePaths,
     kind: &str,
     requested_reason: &str,
     request_id: &str,
     config: &ResumeConfig,
-) -> Result<bool, AutoRedeemErr> {
+) -> Result<Option<RedeemReport>, AutoRedeemErr> {
     if kind != CODEX_KIND {
         return Err(AutoRedeemErr::UnsupportedKind(kind.to_owned()));
     }
     let requested_reason = requested_reason.parse::<RedeemReason>()?;
     if crate::agents::credits::oauth_usage_offline() {
-        return Ok(false);
+        return Ok(None);
     }
 
     let _guard =
@@ -251,7 +280,7 @@ pub fn execute_auto_redeem(
         .as_ref()
         .is_some_and(|stamp| stamp.request_id == request_id && stamp.outcome.is_none());
     if !owns_reservation && !stamp_allows_attempt(prior_stamp.as_ref(), now) {
-        return Ok(false);
+        return Ok(None);
     }
 
     let (credentials, base_url) =
@@ -273,7 +302,21 @@ pub fn execute_auto_redeem(
         config.auto_redeem,
         now,
     ) else {
-        return Ok(false);
+        return Ok(None);
+    };
+
+    let natural_reset = capacity
+        .as_ref()
+        .and_then(|capacity| capacity.latest_spent_window_reset(now));
+    let mut report = RedeemReport {
+        reason,
+        credits: credits.count,
+        soonest_expiry: credits.soonest_expiry,
+        natural_reset,
+        outcome: None,
+        windows_reset: false,
+        window_resets: Vec::new(),
+        reset: false,
     };
 
     let credit_id = soonest_credit_id(&details);
@@ -293,9 +336,12 @@ pub fn execute_auto_redeem(
         "auto-redeem: consuming reset credit",
     );
     let outcome = consume_reset_credit(&credentials, base_url.as_deref(), request_id, credit_id)
-        .map_err(|err| AutoRedeemErr::Codex(err.to_string()))?;
+        .map_err(|err| attempted_error(&report, AutoRedeemErr::Codex(err.to_string())))?;
+    report.outcome = Some(outcome.code);
+    report.windows_reset = outcome.windows_reset > 0;
+    report.reset = outcome.code == ConsumeCode::Reset;
     stamp.outcome = Some(outcome.code.as_str().to_owned());
-    write_stamp(&stamp_path, &stamp)?;
+    write_stamp(&stamp_path, &stamp).map_err(|err| attempted_error(&report, err))?;
 
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
@@ -306,17 +352,39 @@ pub fn execute_auto_redeem(
         "auto-redeem: reset-credit outcome",
     );
     if outcome.code != ConsumeCode::Reset {
-        return Ok(false);
+        return Ok(Some(report));
     }
 
     let mut refreshed = fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials)
-        .map_err(|err| AutoRedeemErr::Codex(err.to_string()))?;
+        .map_err(|err| attempted_error(&report, AutoRedeemErr::Codex(err.to_string())))?;
+    report.window_resets = refreshed
+        .rate_limits
+        .as_ref()
+        .map(|limits| {
+            limits
+                .windows
+                .iter()
+                .filter(|window| window.scope.is_none())
+                .map(|window| AssistWindowReset {
+                    duration_mins: window.duration_mins.map(u64::from),
+                    resets_at: window.resets_at,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     refreshed.reset_credits =
         fetch_reset_credit_state(&reset_credits_url(base_url.as_deref()), &credentials)
             .ok()
             .map(|(credits, _)| credits);
     publish_usage(runtime, usage_identity, refreshed);
-    Ok(true)
+    Ok(Some(report))
+}
+
+fn attempted_error(report: &RedeemReport, error: AutoRedeemErr) -> AutoRedeemErr {
+    AutoRedeemErr::Attempted {
+        report: Box::new(report.clone()),
+        error: error.to_string(),
+    }
 }
 
 fn soonest_credit_id(details: &[ResetCreditDetail]) -> Option<&str> {

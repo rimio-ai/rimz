@@ -25,11 +25,12 @@ use crate::agents::{
     TurnLifecycleNeed, WindowSurplus, find_adapter, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use crate::harness::assist_log::AssistWindowReset;
 use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::catalog::{self, TaskCatalog};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
-    RunTransition,
+    PingWindowOutcome, RunTransition,
 };
 use crate::harness::schedule::{ResetSignal, TaskAction};
 use crate::harness::spec::{self as agents_spec, Cell, LayoutSpec};
@@ -234,6 +235,19 @@ impl FireScope {
             return Ok(Some(format!("{kind} budget window is not enforced")));
         }
         Ok((running == Some(true)).then(|| format!("{kind} budget window already counting down")))
+    }
+
+    fn refreshed_ping_window(&self) -> Option<PingWindowOutcome> {
+        let prior = self.capacity().ok().flatten().and_then(ping_window_outcome);
+        let runtime = self.capacity_runtime().ok()?;
+        let fresh = capacity_for(
+            &runtime,
+            self.kind.as_str(),
+            self.provider_account_binding.as_ref(),
+        )
+        .as_ref()
+        .and_then(ping_window_outcome)?;
+        (prior.as_ref() != Some(&fresh)).then_some(fresh)
     }
 }
 
@@ -495,6 +509,18 @@ impl<'a> TaskFire<'a> {
                 let mut record = self.terminal_record(LoopRunResult::Completed);
                 let (presentation, notice) =
                     finish_spawn_effect(&mut record, outcome, check, stream);
+                if record.result == LoopRunResult::Completed
+                    && let Some(scope) = self
+                        .context
+                        .as_ref()
+                        .and_then(|context| context.scope.as_ref())
+                    && scope
+                        .resolved
+                        .as_ref()
+                        .is_some_and(|resolved| resolved.is_ping)
+                {
+                    record.window = scope.refreshed_ping_window();
+                }
                 Ok(self.finish_record(record, presentation, notice, None))
             }
             (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered) => {
@@ -848,6 +874,25 @@ impl<'a> TaskFire<'a> {
             transition,
             notice,
         }
+    }
+}
+
+fn ping_window_outcome(capacity: &ProviderCapacity) -> Option<PingWindowOutcome> {
+    let shortest = capacity
+        .duration_windows()
+        .min_by_key(|window| window.duration_mins)
+        .map(assist_window_reset);
+    let longest = capacity
+        .duration_windows()
+        .max_by_key(|window| window.duration_mins)
+        .map(assist_window_reset);
+    (shortest.is_some() || longest.is_some()).then_some(PingWindowOutcome { shortest, longest })
+}
+
+fn assist_window_reset(window: &crate::agents::RateLimitWindow) -> AssistWindowReset {
+    AssistWindowReset {
+        duration_mins: window.duration_mins.map(u64::from),
+        resets_at: window.resets_at,
     }
 }
 
@@ -2004,6 +2049,26 @@ mod tests {
                 .expect("lifted reset window needs no primer"),
             Some("claude budget window is not enforced".to_owned())
         );
+    }
+
+    #[test]
+    fn ping_window_outcome_selects_shortest_and_longest_duration() {
+        let capacity = ProviderCapacity::from_windows(vec![
+            crate::agents::RateLimitWindow {
+                duration_mins: Some(10_080),
+                resets_at: Some(Timestamp::from_second(20_000).unwrap()),
+                ..Default::default()
+            },
+            crate::agents::RateLimitWindow {
+                duration_mins: Some(300),
+                resets_at: Some(Timestamp::from_second(10_000).unwrap()),
+                ..Default::default()
+            },
+        ]);
+
+        let outcome = ping_window_outcome(&capacity).expect("window outcome");
+        assert_eq!(outcome.shortest.unwrap().duration_mins, Some(300));
+        assert_eq!(outcome.longest.unwrap().duration_mins, Some(10_080));
     }
 
     #[test]

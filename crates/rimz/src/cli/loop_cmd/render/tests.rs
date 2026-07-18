@@ -107,6 +107,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         cost_usd: None,
         input_tokens: None,
         output_tokens: None,
+        window: None,
     }
 }
 
@@ -509,6 +510,27 @@ fn record_note_prefers_error_then_failed_check_output() {
 
     failed.error = Some("outer error\nignored detail".to_owned());
     assert_eq!(record_note(&failed), Some("outer error".to_owned()));
+}
+
+#[test]
+fn ping_window_outcome_renders_as_a_run_note() {
+    let mut ping = record(20, LoopRunResult::Completed);
+    ping.window = Some(rimz::harness::schedule::run_log::PingWindowOutcome {
+        shortest: Some(rimz::harness::assist_log::AssistWindowReset {
+            duration_mins: Some(300),
+            resets_at: Some("2026-07-20T12:00:00Z".parse().unwrap()),
+        }),
+        longest: Some(rimz::harness::assist_log::AssistWindowReset {
+            duration_mins: Some(10_080),
+            resets_at: Some("2026-07-24T12:00:00Z".parse().unwrap()),
+        }),
+    });
+
+    let note = record_window_label(&ping).expect("window note");
+    assert!(note.contains("window →"), "{note}");
+    assert!(note.contains("(5h)"), "{note}");
+    assert!(note.contains("7d → Jul 24"), "{note}");
+    assert!(record_has_detail(&ping));
 }
 
 #[test]

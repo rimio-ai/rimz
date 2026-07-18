@@ -24,6 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use clap::Args;
+use jiff::Timestamp;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde::Serialize;
 use unicode_width::UnicodeWidthChar;
@@ -41,6 +42,7 @@ use rimz::agents::spending::{
     write_provider_spending_cache_with_day,
 };
 use rimz::config::{GlyphRole, MachineConfig, Semantic, ThemeConfig};
+use rimz::store::paths::state_home;
 use rimz::store::single_flight::{Coalesced, coalesce};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 
@@ -87,6 +89,9 @@ pub struct StatsArgs {
     /// Emit the stats as JSON instead of the panel.
     #[arg(long)]
     pub json: bool,
+    /// Print the complete system-assist timeline instead of the dashboard.
+    #[arg(long, conflicts_with_all = ["json", "refresh"])]
+    pub assists: bool,
     /// Hold the panel open, refresh stats every 60s, and re-centre on resize.
     #[arg(long, conflicts_with = "json")]
     pub refresh: bool,
@@ -151,17 +156,25 @@ impl Window {
 }
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
+    if args.assists {
+        let assists = AssistStats::load(&state_home(), Window::AllTime, Timestamp::now());
+        return render_full(&assists);
+    }
     if args.refresh {
         return run_refresh(args.dollars, args.hold);
     }
     let loaded = load_stats(!args.json)?;
     let today_day = unix_secs_now() as i64 / DAY_SECS;
+    let assists = AssistStats::load(&state_home(), Window::AllTime, Timestamp::now());
     if args.json {
-        return emit_json(&loaded.stats, today_day, args.dollars);
+        return emit_json(&loaded.stats, &assists, today_day, args.dollars);
     }
     let glyphs = resolve_panel_glyphs(&super::machine_config().theme);
     render_panel(
-        &loaded.stats,
+        panel::PanelStats {
+            usage: &loaded.stats,
+            assists: &assists,
+        },
         today_day,
         args.dollars,
         &glyphs,
@@ -171,16 +184,18 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     )
 }
 
+mod assists;
 mod fmt;
 mod hold;
 mod json;
 mod panel;
 
+use assists::{AssistStats, render_full};
 use hold::{load_cold_stats_with_spinner, run_refresh, should_animate_cold_stats};
 use json::emit_json;
 use panel::{render_panel, resolve_panel_glyphs};
 #[cfg(test)]
-use {fmt::*, hold::*, panel::*};
+use {assists::*, fmt::*, hold::*, panel::*};
 struct LoadedStats {
     stats: Stats,
     header_printed: bool,

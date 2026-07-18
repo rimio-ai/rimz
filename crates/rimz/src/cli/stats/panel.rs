@@ -146,8 +146,13 @@ impl PanelGeometry {
     }
 }
 
+pub(super) struct PanelStats<'a> {
+    pub(super) usage: &'a Stats,
+    pub(super) assists: &'a AssistStats,
+}
+
 pub(super) fn render_panel(
-    stats: &Stats,
+    stats: PanelStats<'_>,
     today_day: i64,
     dollars: bool,
     glyphs: &PanelGlyphs,
@@ -155,6 +160,10 @@ pub(super) fn render_panel(
     nl: &str,
     active: Option<Window>,
 ) -> Result<()> {
+    let PanelStats {
+        usage: stats,
+        assists,
+    } = stats;
     let geometry = PanelGeometry::current();
     let mut lines: Vec<String> = Vec::new();
     if include_header {
@@ -168,6 +177,10 @@ pub(super) fn render_panel(
             message.chars().count(),
             geometry.panel_width,
         ));
+        if !assists.is_empty() {
+            lines.push(String::new());
+            assists::panel_lines(&mut lines, assists, geometry.panel_width, 5);
+        }
         return emit(&lines, geometry.outer, nl);
     }
 
@@ -198,6 +211,10 @@ pub(super) fn render_panel(
     }
     lines.push(String::new());
     insights_lines(&mut lines, stats, today_day, geometry.panel_width, selected);
+    if !assists.is_empty() {
+        lines.push(String::new());
+        assists::panel_lines(&mut lines, assists, geometry.panel_width, 5);
+    }
 
     emit(&lines, geometry.outer, nl)
 }

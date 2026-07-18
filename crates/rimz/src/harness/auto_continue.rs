@@ -383,6 +383,8 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     let Some(pane_id) = live_pane(&ctx.snapshot.agent_panes, &agent.kind, &agent.agent_id) else {
         return;
     };
+    let peers = ctx.snapshot.agents.iter().collect::<Vec<_>>();
+    let label = crate::harness::target::agent_handle(agent, &peers, false);
     if !spawn_auto_continue(
         ctx.runtime,
         &agent.kind,
@@ -390,11 +392,21 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
         &pane_id,
         retry_message_id.as_ref(),
         ctx.text,
-        reason,
+        AutoContinueFacts {
+            reason,
+            parked_since: record.parked_at_activity,
+            label: Some(&label),
+        },
     ) {
         return;
     }
     write_park(path, &nudged_record(record, ctx.now));
+}
+
+struct AutoContinueFacts<'a> {
+    reason: &'a str,
+    parked_since: Timestamp,
+    label: Option<&'a str>,
 }
 
 /// Whether the agent has done nothing since the park was armed. Equal or
@@ -634,7 +646,7 @@ fn spawn_auto_continue(
     pane_id: &PaneId,
     message_id: Option<&MessageId>,
     text: &str,
-    reason: &str,
+    facts: AutoContinueFacts<'_>,
 ) -> bool {
     let exe = crate::proc::rimz_exe();
     let mut cmd = detached_rimz_command(exe, runtime);
@@ -652,16 +664,21 @@ fn spawn_auto_continue(
         "--text",
         text,
         "--reason",
-        reason,
+        facts.reason,
+        "--parked-since",
+        &facts.parked_since.to_string(),
     ]);
     if let Some(message_id) = message_id {
         cmd.args(["--message-id", message_id.as_str()]);
+    }
+    if let Some(label) = facts.label {
+        cmd.args(["--label", label]);
     }
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
         kind = %kind,
-        reason,
+        reason = facts.reason,
         "sidebar: auto-continuing parked agent",
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agent-auto-continue") {
@@ -688,9 +705,24 @@ fn spawn_auto_continue(
     pane_id: &PaneId,
     message_id: Option<&MessageId>,
     text: &str,
-    reason: &str,
+    facts: AutoContinueFacts<'_>,
 ) -> bool {
-    let _ = (runtime, kind, agent_id, pane_id, message_id, text, reason);
+    let AutoContinueFacts {
+        reason,
+        parked_since,
+        label,
+    } = facts;
+    let _ = (
+        runtime,
+        kind,
+        agent_id,
+        pane_id,
+        message_id,
+        text,
+        reason,
+        parked_since,
+        label,
+    );
     true
 }
 

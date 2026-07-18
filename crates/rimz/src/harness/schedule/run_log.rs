@@ -14,6 +14,7 @@ use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
 use crate::config::TaskEntry;
+use crate::harness::assist_log::AssistWindowReset;
 use crate::harness::run::RunStatus;
 use crate::harness::schedule::{pauses, strikes};
 use crate::store::paths::state_home;
@@ -103,6 +104,8 @@ pub struct LoopRunRecord {
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<PingWindowOutcome>,
 }
 
 impl LoopRunRecord {
@@ -127,8 +130,17 @@ impl LoopRunRecord {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
+            window: None,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PingWindowOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortest: Option<AssistWindowReset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub longest: Option<AssistWindowReset>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,6 +264,15 @@ pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
     let mut records = Vec::new();
     append_task_records(&rotated_path(&path), task, &mut records);
     append_task_records(&path, task, &mut records);
+    records
+}
+
+pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<LoopRunRecord> {
+    let path = log_path(state_root);
+    let mut records = Vec::new();
+    append_recent_records(&rotated_path(&path), since, &mut records);
+    append_recent_records(&path, since, &mut records);
+    records.sort_by_key(|record| record.at);
     records
 }
 
@@ -404,6 +425,20 @@ fn append_task_records(path: &Path, task: &str, records: &mut Vec<LoopRunRecord>
     }
 }
 
+fn append_recent_records(path: &Path, since: Option<Timestamp>, records: &mut Vec<LoopRunRecord>) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(record) = serde_json::from_str::<LoopRunRecord>(&line) else {
+            continue;
+        };
+        if since.is_none_or(|since| record.at >= since) {
+            records.push(record);
+        }
+    }
+}
+
 fn capped_record(record: &LoopRunRecord) -> LoopRunRecord {
     let mut capped = record.clone();
     if let Some(error) = &mut capped.error {
@@ -453,6 +488,7 @@ mod tests {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
+            window: None,
         }
     }
 
@@ -505,8 +541,9 @@ mod tests {
                     record.cost_usd,
                     record.input_tokens,
                     record.output_tokens,
+                    record.window,
                 ),
-                (None, None, None, None, None, None, None, None, None)
+                (None, None, None, None, None, None, None, None, None, None)
             );
         }
 
@@ -563,6 +600,41 @@ mod tests {
             LoopRunResult::VerifyFailed
         );
         assert_eq!(LoopRunResult::VerifyFailed.label(), "verify failed");
+    }
+
+    #[test]
+    fn ping_window_outcome_round_trips_and_recent_folds_generations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = log_path(dir.path());
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        let mut old = record("autoping-codex", 10, LoopRunResult::Completed);
+        old.window = Some(PingWindowOutcome {
+            shortest: Some(AssistWindowReset {
+                duration_mins: Some(300),
+                resets_at: Some(Timestamp::from_second(20).expect("reset")),
+            }),
+            longest: None,
+        });
+        let new = record("other", 30, LoopRunResult::Completed);
+        std::fs::write(
+            rotated_path(&path),
+            format!("{}\n", serde_json::to_string(&old).expect("old")),
+        )
+        .expect("rotated");
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string(&new).expect("new")),
+        )
+        .expect("current");
+
+        assert_eq!(
+            recent(dir.path(), Some(Timestamp::from_second(10).unwrap())),
+            vec![old, new.clone()]
+        );
+        assert_eq!(
+            recent(dir.path(), Some(Timestamp::from_second(30).unwrap())),
+            vec![new]
+        );
     }
 
     #[test]

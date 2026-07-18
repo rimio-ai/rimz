@@ -25,6 +25,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 ## Product invariants
 
 - **Durability first.** Correctness lives in durable records, CAS rules, nonces, and per-request sockets. Wakeups and pane reads are latency, never truth.
+- **Automation is accountable.** Every system-initiated intervention appends a durable assist record — trigger, evidence, outcome — and surfaces in `rimz stats`; a new smart strategy ships with its record ([harness.md](./docs/internals/harness/harness.md#assist-log)).
 - **Hook stdout is the decision channel.** Logs go to stderr or RimZ state logs; hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class; core behaviour never depends on a backend-only feature.
 - **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives, and `message` routes human text through the same send path; pane reads stay in rendering, explicit `pane capture` calls, and Codex turn-death confirmation.

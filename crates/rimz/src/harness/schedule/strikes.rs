@@ -156,6 +156,7 @@ mod tests {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
+            window: None,
         }
     }
 

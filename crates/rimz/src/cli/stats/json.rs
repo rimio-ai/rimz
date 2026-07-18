@@ -2,7 +2,7 @@ use super::panel::*;
 use super::*;
 
 #[derive(Serialize)]
-struct StatsJson {
+struct StatsJson<'a> {
     unit: &'static str,
     sessions: u32,
     active_days_28: u32,
@@ -14,6 +14,7 @@ struct StatsJson {
     models: Vec<ModelJson>,
     agents: Vec<AgentJson>,
     days: Vec<DayJson>,
+    assists: &'a AssistStats,
 }
 
 #[derive(Serialize)]
@@ -58,7 +59,12 @@ struct DayJson {
     usd: f64,
 }
 
-pub(super) fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
+pub(super) fn emit_json(
+    stats: &Stats,
+    assists: &AssistStats,
+    today_day: i64,
+    dollars: bool,
+) -> Result<()> {
     let active = Window::AllTime;
     let activity = Activity::of(&stats.by_day, today_day, active);
     let total_usd: f64 = stats
@@ -147,6 +153,7 @@ pub(super) fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<
         models,
         agents,
         days,
+        assists,
     };
     crate::cli::render::json_pretty(&doc)
 }

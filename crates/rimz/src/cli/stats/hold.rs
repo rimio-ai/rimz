@@ -231,8 +231,12 @@ pub(super) fn repaint(
 
     execute!(std::io::stdout(), MoveTo(0, 0))?;
     let today_day = unix_secs_now() as i64 / DAY_SECS;
+    let assists = AssistStats::load(&state_home(), active, Timestamp::now());
     render_panel(
-        stats,
+        panel::PanelStats {
+            usage: stats,
+            assists: &assists,
+        },
         today_day,
         dollars,
         glyphs,

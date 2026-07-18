@@ -315,7 +315,7 @@ impl ProviderCapacity {
         }
     }
 
-    fn duration_windows(&self) -> impl Iterator<Item = &RateLimitWindow> {
+    pub(crate) fn duration_windows(&self) -> impl Iterator<Item = &RateLimitWindow> {
         self.windows.iter().filter(|window| {
             window.scope.is_none()
                 && window.duration_mins.is_some_and(|mins| {

@@ -301,3 +301,21 @@ fn credit_selection_prefers_the_soonest_known_expiry() {
         None
     );
 }
+
+#[test]
+fn attempted_errors_retain_the_redeem_decision_report() {
+    let report = RedeemReport {
+        reason: RedeemReason::BlockedGain,
+        credits: 2,
+        soonest_expiry: Some(ts(300)),
+        natural_reset: Some(ts(200)),
+        outcome: None,
+        windows_reset: false,
+        window_resets: Vec::new(),
+        reset: false,
+    };
+
+    let error = attempted_error(&report, AutoRedeemErr::Codex("offline".to_owned()));
+    assert_eq!(error.attempted_report(), Some(&report));
+    assert!(error.to_string().contains("offline"));
+}

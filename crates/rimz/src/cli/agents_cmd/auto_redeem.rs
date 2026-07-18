@@ -6,6 +6,7 @@ use clap::Args;
 
 use rimz::RuntimePaths;
 use rimz::config::MachineConfig;
+use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::ids::WorkspaceId;
 
 #[derive(Debug, Args)]
@@ -26,16 +27,55 @@ pub(super) fn run_auto_redeem(args: AutoRedeemArgs) -> Result<()> {
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     let config = MachineConfig::load().context("loading auto-redeem config")?;
 
-    let reset = rimz::harness::auto_redeem::execute_auto_redeem(
+    let result = rimz::harness::auto_redeem::execute_auto_redeem(
         &runtime,
         &args.kind,
         &args.reason,
         &args.request_id.to_string(),
         &config.resume,
-    )
-    .context("redeeming Codex reset credit")?;
-    if reset {
-        let _ = rimz::store::wakeup::wake_sidebars(&runtime);
+    );
+    match result {
+        Ok(Some(report)) => {
+            append_report(&args.kind, args.request_id, &report, None);
+            if report.reset {
+                let _ = rimz::store::wakeup::wake_sidebars(&runtime);
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            if let Some(report) = err.attempted_report() {
+                append_report(&args.kind, args.request_id, report, Some(err.to_string()));
+            }
+            return Err(err).context("redeeming Codex reset credit");
+        }
     }
     Ok(())
+}
+
+fn append_report(
+    kind: &str,
+    request_id: uuid::Uuid,
+    report: &rimz::harness::auto_redeem::RedeemReport,
+    error: Option<String>,
+) {
+    let outcome = if error.is_none() {
+        report.outcome.map(|outcome| outcome.as_str().to_owned())
+    } else {
+        None
+    };
+    rimz::harness::assist_log::append(&AssistRecord {
+        at: jiff::Timestamp::now(),
+        assist: Assist::AutoRedeem {
+            kind: kind.to_owned(),
+            reason: report.reason,
+            request_id: request_id.to_string(),
+            credits: report.credits,
+            soonest_expiry: report.soonest_expiry,
+            natural_reset: report.natural_reset,
+            outcome,
+            windows_reset: report.windows_reset,
+            window_resets: report.window_resets.clone(),
+            error,
+        },
+    });
 }
