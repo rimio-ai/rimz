@@ -355,18 +355,18 @@ impl AgentAdapter for AntigravityAdapter {
             event if ANTIGRAVITY_EVENT_NAMES.contains(&event) => Some(serde_json::json!({})),
             _ => None,
         };
-        decoded.lifecycle =
-            observe_lifecycle_with_prompt_reader(event_name, payload, session::latest_prompt);
-        if let Some(observation) = decoded.lifecycle.as_ref() {
-            decoded.agent_id = observation.agent_id.as_ref().map(ToString::to_string);
-            decoded.context_agent_id = decoded.agent_id.clone();
-            decoded.worktree_path = observation.worktree_path.clone();
-            if event_name == "Stop" {
-                decoded.final_message = observation
-                    .transcript_path
-                    .as_deref()
-                    .and_then(|path| session::last_assistant_message(Path::new(path)));
-            }
+        let fields = decode_lifecycle_fields(event_name, payload, session::latest_prompt);
+        decoded.agent_id = fields.agent_id;
+        decoded.context_agent_id = decoded.agent_id.clone();
+        decoded.worktree_path = fields.worktree_path;
+        decoded.lifecycle = fields.lifecycle;
+        if event_name == "Stop"
+            && let Some(observation) = decoded.lifecycle.as_ref()
+        {
+            decoded.final_message = observation
+                .transcript_path
+                .as_deref()
+                .and_then(|path| session::last_assistant_message(Path::new(path)));
         }
         Ok(decoded)
     }
@@ -523,19 +523,32 @@ impl AgentAdapter for AntigravityAdapter {
     }
 }
 
-fn observe_lifecycle_with_prompt_reader(
+#[derive(Default)]
+struct DecodedLifecycleFields {
+    agent_id: Option<String>,
+    worktree_path: Option<String>,
+    lifecycle: Option<AgentLifecycleObservation>,
+}
+
+fn decode_lifecycle_fields(
     event_name: &str,
     payload: &Value,
     prompt_reader: impl FnOnce(&Path, &str) -> Option<String>,
-) -> Option<AgentLifecycleObservation> {
+) -> DecodedLifecycleFields {
     let (common, signal) = match event_name {
         "PreInvocation" => {
-            let invocation = payloads::parse_invocation(payload)?;
-            (invocation.invocation_num == Some(0))
-                .then_some((invocation.common, LifecycleSignal::TurnStarted))?
+            let Some(invocation) = payloads::parse_invocation(payload) else {
+                return DecodedLifecycleFields::default();
+            };
+            (
+                invocation.common,
+                (invocation.invocation_num == Some(0)).then_some(LifecycleSignal::TurnStarted),
+            )
         }
         "PostToolUse:edit" | "PostToolUse:mutating" | "PostToolUse:observed" => {
-            let tool = payloads::parse_post_tool(payload)?;
+            let Some(tool) = payloads::parse_post_tool(payload) else {
+                return DecodedLifecycleFields::default();
+            };
             let failed = tool.failed();
             let (mutates, edits) = match event_name {
                 "PostToolUse:edit" if !failed => (true, true),
@@ -544,41 +557,61 @@ fn observe_lifecycle_with_prompt_reader(
             };
             (
                 tool.common,
-                LifecycleSignal::ToolUsed {
+                Some(LifecycleSignal::ToolUsed {
                     mutates,
                     edits,
                     native_key: None,
-                },
+                }),
             )
         }
         "Stop" => {
-            let stop = payloads::parse_stop(payload)?;
-            let fully_idle = stop.fully_idle?;
+            let Some(stop) = payloads::parse_stop(payload) else {
+                return DecodedLifecycleFields::default();
+            };
+            let fully_idle = stop.fully_idle;
             let failed = stop.failed();
             (
                 stop.common,
-                LifecycleSignal::TurnEnded {
+                fully_idle.map(|fully_idle| LifecycleSignal::TurnEnded {
                     errored: failed,
                     parked_on_background: !fully_idle && !failed,
-                },
+                }),
             )
         }
-        _ => return None,
+        _ => {
+            let Some(common) = payloads::parse_common(payload) else {
+                return DecodedLifecycleFields::default();
+            };
+            (common, None)
+        }
     };
     observation_with_prompt_reader(common, signal, prompt_reader)
 }
 
 fn observation_with_prompt_reader(
     common: payloads::CommonPayload,
-    signal: LifecycleSignal,
+    signal: Option<LifecycleSignal>,
     prompt_reader: impl FnOnce(&Path, &str) -> Option<String>,
-) -> Option<AgentLifecycleObservation> {
-    let agent_id = common
-        .conversation_id
-        .as_deref()
+) -> DecodedLifecycleFields {
+    let Some(agent_id) = common
+        .conversation_id()
         .map(str::trim)
-        .filter(|id| !id.is_empty())?
-        .to_owned();
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return DecodedLifecycleFields::default();
+    };
+    let worktree_path = common
+        .workspace_paths
+        .into_iter()
+        .find(|path| !path.trim().is_empty());
+    let Some(signal) = signal else {
+        return DecodedLifecycleFields {
+            agent_id: Some(agent_id),
+            worktree_path,
+            lifecycle: None,
+        };
+    };
     let transcript_path = common
         .transcript_path
         .filter(|path| !path.trim().is_empty());
@@ -586,12 +619,22 @@ fn observation_with_prompt_reader(
         .then(|| prompt_reader(Path::new(transcript_path.as_deref()?), agent_id.as_str()))
         .flatten();
     let mut observation = AgentLifecycleObservation::new(Some(agent_id.as_str().into()), signal);
-    observation.worktree_path = common
-        .workspace_paths
-        .into_iter()
-        .find(|path| !path.trim().is_empty());
+    observation.worktree_path = worktree_path.clone();
     observation.prompt = prompt;
     observation.transcript_path = transcript_path;
     observation.launch.model = common.model_name.filter(|model| !model.trim().is_empty());
-    Some(observation)
+    DecodedLifecycleFields {
+        agent_id: Some(agent_id),
+        worktree_path,
+        lifecycle: Some(observation),
+    }
+}
+
+#[cfg(test)]
+fn observe_lifecycle_with_prompt_reader(
+    event_name: &str,
+    payload: &Value,
+    prompt_reader: impl FnOnce(&Path, &str) -> Option<String>,
+) -> Option<AgentLifecycleObservation> {
+    decode_lifecycle_fields(event_name, payload, prompt_reader).lifecycle
 }

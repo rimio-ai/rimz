@@ -151,6 +151,31 @@ fn native_hooks_normalize_lifecycle() {
         assert_eq!(signal, expected);
     }
 }
+
+#[test]
+fn catalog_events_without_lifecycle_signal_keep_context_identity() {
+    let camel = AntigravityAdapter
+        .decode_hook("PostInvocation", &hook_payload())
+        .expect("test hook decodes");
+    assert_eq!(camel.agent_id.as_deref(), Some(SESSION_ID));
+    assert_eq!(camel.context_agent_id.as_deref(), Some(SESSION_ID));
+    assert_eq!(camel.worktree_path.as_deref(), Some("/workspace/project"));
+    assert!(camel.lifecycle.is_none());
+
+    let snake = AntigravityAdapter
+        .decode_hook(
+            "PostInvocation",
+            &json!({
+                "conversation_id": SESSION_ID,
+                "conversationId": "camel-fallback",
+                "workspacePaths": ["/workspace/project"],
+            }),
+        )
+        .expect("test hook decodes");
+    assert_eq!(snake.agent_id.as_deref(), Some(SESSION_ID));
+    assert_eq!(snake.context_agent_id.as_deref(), Some(SESSION_ID));
+    assert!(snake.lifecycle.is_none());
+}
 #[test]
 fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
     for error in [

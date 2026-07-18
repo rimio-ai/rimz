@@ -601,3 +601,14 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
         })
     );
 }
+
+#[test]
+fn notification_without_lifecycle_signal_keeps_context_identity() {
+    let decoded = DroidAdapter
+        .decode_hook("Notification", &json!({"session_id": "sess-1"}))
+        .expect("test hook decodes");
+
+    assert_eq!(decoded.agent_id.as_deref(), Some("sess-1"));
+    assert_eq!(decoded.context_agent_id.as_deref(), Some("sess-1"));
+    assert!(decoded.lifecycle.is_none());
+}

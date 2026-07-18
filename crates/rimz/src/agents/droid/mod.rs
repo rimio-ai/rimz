@@ -236,6 +236,9 @@ impl AgentAdapter for DroidAdapter {
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let mut decoded = DecodedHook::new(classify_catalog_hook(DROID_HOOKS, event_name, None));
+        let agent_id = optional_payload_string(payload, &["session_id"]);
+        decoded.agent_id = agent_id.clone();
+        decoded.context_agent_id = agent_id.clone();
         let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let signal = match event_name {
             "SessionStart" => match session_start.as_ref().map(|start| &start.source) {
@@ -257,9 +260,6 @@ impl AgentAdapter for DroidAdapter {
             "SessionEnd" => LifecycleSignal::Ended,
             _ => return Ok(decoded),
         };
-        let agent_id = optional_payload_string(payload, &["session_id"]);
-        decoded.agent_id = agent_id.clone();
-        decoded.context_agent_id = agent_id.clone();
         let mut observation =
             AgentLifecycleObservation::new(agent_id.as_deref().map(AgentSessionId::from), signal)
                 .with_worktree_from_payload(payload);

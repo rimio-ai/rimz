@@ -6,14 +6,23 @@ use serde_json::Value;
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct CommonPayload {
-    #[serde(rename = "conversationId")]
     pub conversation_id: Option<String>,
+    #[serde(rename = "conversationId")]
+    pub conversation_id_camel: Option<String>,
     #[serde(rename = "workspacePaths")]
     pub workspace_paths: Vec<String>,
     #[serde(rename = "transcriptPath")]
     pub transcript_path: Option<String>,
     #[serde(rename = "modelName")]
     pub model_name: Option<String>,
+}
+
+impl CommonPayload {
+    pub(super) fn conversation_id(&self) -> Option<&str> {
+        self.conversation_id
+            .as_deref()
+            .or(self.conversation_id_camel.as_deref())
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -81,6 +90,10 @@ fn value_is_error(value: Option<&Value>) -> bool {
 }
 
 pub(super) fn parse_invocation(payload: &Value) -> Option<InvocationPayload> {
+    serde_json::from_value(payload.clone()).ok()
+}
+
+pub(super) fn parse_common(payload: &Value) -> Option<CommonPayload> {
     serde_json::from_value(payload.clone()).ok()
 }
 
