@@ -169,6 +169,8 @@ pub fn write_record(
         if record.locally_priced_cost.is_empty() {
             record.locally_priced_cost = prior.locally_priced_cost;
         }
+        // Local folds advance only through merge_local_context under this lock;
+        // whole-record writers preserve the latest fold if their read raced it.
         record.spend_fold = prior.spend_fold;
     }
     if observed_cost {
