@@ -93,6 +93,60 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
 }
 
 #[test]
+fn managed_launch_state_selects_only_applicable_capacity() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let kind_wide = |kind: &str| {
+        (
+            kind.to_owned(),
+            RateLimitCacheEntry {
+                scope: ProviderAccountScope::KindWide,
+                limits: AgentRateLimits {
+                    windows: vec![window(now, Some(20), 3_600, Some(300))],
+                },
+                ..Default::default()
+            },
+        )
+    };
+    let mut cache = RateLimitsCache {
+        entries: BTreeMap::from([kind_wide("claude"), kind_wide("qwen")]),
+        ..Default::default()
+    };
+    let (_dir, runtime) = runtime();
+    write_cache(&runtime, &cache);
+
+    assert!(
+        ManagedLaunchState::Unsupported
+            .capacity(&runtime, "claude")
+            .is_some()
+    );
+    assert!(
+        ManagedLaunchState::Unresolved
+            .capacity(&runtime, "qwen")
+            .is_none()
+    );
+
+    let scope = ProviderAccountScope::sub_provider("alibaba", "international");
+    cache.entries.insert(
+        "qwen".to_owned(),
+        RateLimitCacheEntry {
+            scope: scope.clone(),
+            account_key: Some("cached".to_owned()),
+            limits: AgentRateLimits {
+                windows: vec![window(now, Some(20), 3_600, Some(300))],
+            },
+            ..Default::default()
+        },
+    );
+    write_cache(&runtime, &cache);
+    let other = ProviderAccountBinding::new(scope, "other".to_owned()).unwrap();
+    assert!(
+        ManagedLaunchState::Bound(other)
+            .capacity(&runtime, "qwen")
+            .is_none()
+    );
+}
+
+#[test]
 fn capacity_selects_temporal_windows_and_measures_surplus() {
     let now = Timestamp::from_second(1_000_000).unwrap();
     let five_hours = 5 * 60;

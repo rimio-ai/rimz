@@ -100,6 +100,40 @@ impl ProviderAccountBinding {
     }
 }
 
+/// Account-binding resolution for one managed launch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ManagedLaunchState {
+    /// Final cwd, environment, model, and argv still need compilation.
+    PendingResolution,
+    /// This adapter has no exact managed-account selection.
+    Unsupported,
+    /// Exact selection applies, but current inputs prove no account.
+    Unresolved,
+    /// Current inputs prove one exact provider account.
+    Bound(ProviderAccountBinding),
+}
+
+impl ManagedLaunchState {
+    pub fn binding(&self) -> Option<&ProviderAccountBinding> {
+        match self {
+            Self::Bound(binding) => Some(binding),
+            Self::PendingResolution | Self::Unsupported | Self::Unresolved => None,
+        }
+    }
+
+    pub fn capacity(&self, runtime: &RuntimePaths, kind: &str) -> Option<ProviderCapacity> {
+        match self {
+            Self::Unsupported => ProviderCapacity::read(runtime, kind),
+            Self::Bound(binding) => ProviderCapacity::read_bound(runtime, kind, binding),
+            Self::PendingResolution | Self::Unresolved => None,
+        }
+    }
+
+    pub fn exact_account_applies(&self) -> bool {
+        matches!(self, Self::Unresolved | Self::Bound(_))
+    }
+}
+
 /// Cache identity of the credentials behind one provider usage probe.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountUsageIdentity {

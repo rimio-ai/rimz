@@ -555,8 +555,7 @@ fn into_supervised_request(
         loop_zone: args.loop_zone,
         loop_task: args.loop_task,
         passthrough: args.passthrough,
-        managed_provider_binding: None,
-        managed_provider_binding_resolved: false,
+        managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
     };
     Ok((
         request,

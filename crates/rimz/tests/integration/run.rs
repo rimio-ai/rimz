@@ -48,6 +48,8 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
         .expect("Qwen launch argv");
     let binding = adapter
         .resolve_managed_launch(&env.project_root, &launch_env, None, &argv)
+        .binding()
+        .cloned()
         .expect("exact Qwen binding");
     let encoded = serde_json::to_value(&binding).expect("serialize binding");
     let account_key = encoded["account_key"]

@@ -573,7 +573,7 @@ impl AgentAdapter for QwenAdapter {
         env: &std::collections::BTreeMap<String, String>,
         model: Option<&str>,
         argv: &[String],
-    ) -> Option<super::ProviderAccountBinding> {
+    ) -> super::ManagedLaunchState {
         selection::resolve_managed_launch(cwd, env, model, argv)
     }
     fn transcript_files(&self) -> Vec<PathBuf> {

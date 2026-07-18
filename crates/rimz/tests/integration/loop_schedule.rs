@@ -651,6 +651,8 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
         .expect("Qwen launch argv");
     let binding = adapter
         .resolve_managed_launch(&env.project_root, &launch_env, None, &argv)
+        .binding()
+        .cloned()
         .expect("exact Qwen binding");
     let encoded = serde_json::to_value(&binding).expect("serialize binding");
     let account_key = encoded["account_key"]

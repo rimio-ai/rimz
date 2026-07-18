@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::agents::ManagedLaunchState;
+#[cfg(test)]
 use crate::agents::ProviderAccountBinding;
 use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentAccount, ProviderAccountScope};
@@ -219,39 +221,49 @@ pub(crate) fn resolve() -> SelectionState {
 }
 
 /// Prove the exact Alibaba account selected by one fresh managed launch.
-/// Unsupported Qwen configuration layers and mutable provider overrides stay
-/// unbound rather than borrowing the passive dashboard selection.
+/// Ambiguous Qwen configuration layers and mutable provider overrides remain
+/// unresolved rather than borrowing the passive dashboard selection.
 pub(crate) fn resolve_managed_launch(
     cwd: &Path,
     env: &BTreeMap<String, String>,
     model: Option<&str>,
     argv: &[String],
-) -> Option<ProviderAccountBinding> {
+) -> ManagedLaunchState {
     if unsupported_config_layer(cwd, env) || has_provider_override(env) {
-        return None;
+        return ManagedLaunchState::Unresolved;
     }
-    let argv_model = parse_launch_model(argv).ok()?;
-    let settings_path = settings_path(env)?;
+    let Ok(argv_model) = parse_launch_model(argv) else {
+        return ManagedLaunchState::Unresolved;
+    };
+    let Some(settings_path) = settings_path(env) else {
+        return ManagedLaunchState::Unresolved;
+    };
     let dotenv_path = settings_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(".env");
-    let configured_model = managed_model_override(&settings_path, &dotenv_path, env)?;
-    let model = unique_value(
+    let Some(configured_model) = managed_model_override(&settings_path, &dotenv_path, env) else {
+        return ManagedLaunchState::Unresolved;
+    };
+    let Some(model) = unique_value(
         [model, argv_model.as_deref(), configured_model.as_deref()]
             .into_iter()
             .flatten(),
-    )?;
+    ) else {
+        return ManagedLaunchState::Unresolved;
+    };
     let SelectionState::Found(selection) =
         resolve_at(&settings_path, &dotenv_path, model.as_deref(), |name| {
             env.get(name).cloned()
         })
     else {
-        return None;
+        return ManagedLaunchState::Unresolved;
     };
     matches!(selection.provider, SelectedProvider::Alibaba(_))
         .then(|| selection.account_usage_identity().binding())
         .flatten()
+        .map(ManagedLaunchState::Bound)
+        .unwrap_or(ManagedLaunchState::Unresolved)
 }
 
 fn managed_model_override(
@@ -720,6 +732,8 @@ mod tests {
                 .map(|value| (*value).to_owned())
                 .collect::<Vec<_>>(),
         )
+        .binding()
+        .cloned()
     }
 
     #[test]
@@ -950,7 +964,7 @@ mod tests {
                 Some("qwen3-coder-plus"),
                 &["qwen".to_owned(), "--model=qwen3-coder-plus".to_owned()],
             ),
-            None
+            ManagedLaunchState::Unresolved
         );
 
         std::fs::write(
@@ -965,7 +979,7 @@ mod tests {
                 Some("qwen3-coder-plus"),
                 &["qwen".to_owned(), "--model=qwen3-coder-plus".to_owned()],
             ),
-            None
+            ManagedLaunchState::Unresolved
         );
     }
 

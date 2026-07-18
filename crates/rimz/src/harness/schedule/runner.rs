@@ -21,8 +21,8 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{
-    HookPreflightErr, LongestWindowSignal, ProviderAccountBinding, ProviderCapacity,
-    TurnLifecycleNeed, WindowSurplus, find_adapter, preflight_hooks,
+    HookPreflightErr, LongestWindowSignal, ManagedLaunchState, ProviderAccountBinding,
+    ProviderCapacity, TurnLifecycleNeed, WindowSurplus, find_adapter, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use crate::harness::assist_log::AssistWindowReset;
@@ -127,7 +127,7 @@ struct FireScope {
     workspace_id: WorkspaceId,
     scope_runtime: RuntimePaths,
     resolved: Option<ResolvedTaskSpec>,
-    provider_account_binding: Option<ProviderAccountBinding>,
+    managed_launch: ManagedLaunchState,
     capacity: OnceCell<Option<ProviderCapacity>>,
     #[cfg(test)]
     capacity_reads: std::cell::Cell<usize>,
@@ -147,7 +147,7 @@ impl FireScope {
             workspace_id,
             scope_runtime,
             resolved,
-            provider_account_binding: None,
+            managed_launch: ManagedLaunchState::Unsupported,
             capacity: OnceCell::new(),
             #[cfg(test)]
             capacity_reads: std::cell::Cell::new(0),
@@ -161,13 +161,7 @@ impl FireScope {
             #[cfg(test)]
             self.capacity_reads.set(self.capacity_reads.get() + 1);
             let runtime = self.capacity_runtime()?;
-            let capacity = match self.provider_account_binding.as_ref() {
-                Some(binding) => {
-                    ProviderCapacity::read_bound(&runtime, self.kind.as_str(), binding)
-                }
-                None if self.kind.as_str() == "qwen" => None,
-                None => ProviderCapacity::read(&runtime, self.kind.as_str()),
-            };
+            let capacity = self.managed_launch.capacity(&runtime, self.kind.as_str());
             let _ = self.capacity.set(capacity);
         }
         Ok(self.capacity.get().and_then(Option::as_ref))
@@ -210,8 +204,8 @@ impl FireScope {
 
     fn ping_gate_reason(&self, entry: &TaskEntry, now: Timestamp) -> Result<Option<String>> {
         let kind = self.kind.as_str();
-        let binding_state = if kind == "qwen" {
-            let Some(binding) = self.provider_account_binding.as_ref() else {
+        let binding_state = if self.managed_launch.exact_account_applies() {
+            let Some(binding) = self.managed_launch.binding() else {
                 return Ok(qwen_ping_cache_reason(false, None, None));
             };
             let runtime = self.capacity_runtime()?;
@@ -224,7 +218,7 @@ impl FireScope {
             None
         };
         let running = self.window_running_state(entry.every.as_deref() == Some("reset"), now)?;
-        if kind == "qwen" {
+        if self.managed_launch.exact_account_applies() {
             return Ok(qwen_ping_cache_reason(true, binding_state, running));
         }
         if entry.every.as_deref() == Some("reset")
@@ -240,13 +234,9 @@ impl FireScope {
     fn refreshed_ping_window(&self) -> Option<PingWindowOutcome> {
         let prior = self.capacity().ok().flatten().and_then(ping_window_outcome);
         let runtime = self.capacity_runtime().ok()?;
-        let fresh = capacity_for(
-            &runtime,
-            self.kind.as_str(),
-            self.provider_account_binding.as_ref(),
-        )
-        .as_ref()
-        .and_then(ping_window_outcome)?;
+        let fresh = capacity_for(&runtime, self.kind.as_str(), &self.managed_launch)
+            .as_ref()
+            .and_then(ping_window_outcome)?;
         (prior.as_ref() != Some(&fresh)).then_some(fresh)
     }
 }
@@ -267,23 +257,27 @@ impl FireContext {
         let scope = match &action {
             TaskAction::Spawn(spec) => {
                 let resolved = resolve_task_spec(spec, &workspace)?;
-                let provider_account_binding =
-                    resolve_managed_spawn_binding(entry, &workspace, &resolved, config)?;
+                let managed_launch =
+                    resolve_managed_spawn_state(entry, &workspace, &resolved, config)?;
                 let mut scope = FireScope::new(
                     crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
                     workspace_id,
                     runtime,
                     Some(resolved),
                 );
-                scope.provider_account_binding = provider_account_binding;
+                scope.managed_launch = managed_launch;
                 scope
             }
-            TaskAction::Deliver(target) => FireScope::new(
-                crate::ids::AgentKind::new_unchecked(target.kind.clone()),
-                workspace_id,
-                runtime,
-                None,
-            ),
+            TaskAction::Deliver(target) => {
+                let mut scope = FireScope::new(
+                    crate::ids::AgentKind::new_unchecked(target.kind.clone()),
+                    workspace_id,
+                    runtime,
+                    None,
+                );
+                scope.managed_launch = unresolved_managed_state(entry, &target.kind);
+                scope
+            }
             TaskAction::CheckOnly => unreachable!("check-only context returned above"),
         };
         Ok(Self {
@@ -432,7 +426,7 @@ impl<'a> TaskFire<'a> {
             return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
         }
         if let Some(scope) = &context.scope
-            && let Some(binding) = scope.provider_account_binding.as_ref()
+            && let Some(binding) = scope.managed_launch.binding()
             && let Some(reason) = crate::agents::provider_budget_gate(
                 &scope.scope_runtime,
                 scope.kind.as_str(),
@@ -635,7 +629,7 @@ impl<'a> TaskFire<'a> {
         spec: String,
         fired_check: Option<FiredCheck>,
     ) -> Result<TaskFirePlan> {
-        let (resolved_kind, is_ping, provider_account_binding) = {
+        let (resolved_kind, is_ping, managed_launch) = {
             let scope = self
                 .context
                 .as_ref()
@@ -649,17 +643,12 @@ impl<'a> TaskFire<'a> {
             (
                 resolved.kind.clone(),
                 resolved.is_ping,
-                scope.provider_account_binding.clone(),
+                scope.managed_launch.clone(),
             )
         };
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
-        let request = self.compile_spawn_request(
-            spec,
-            prompt,
-            is_ping,
-            &resolved_kind,
-            provider_account_binding.as_ref(),
-        )?;
+        let request =
+            self.compile_spawn_request(spec, prompt, is_ping, &resolved_kind, managed_launch)?;
         self.consume_ephemeral()?;
         let check = fired_check.as_ref().map(|check| check.record.clone());
         let stream = self.mode == LoopRunMode::Manual;
@@ -680,7 +669,7 @@ impl<'a> TaskFire<'a> {
         prompt: String,
         is_ping: bool,
         resolved_kind: &str,
-        provider_account_binding: Option<&ProviderAccountBinding>,
+        managed_launch: ManagedLaunchState,
     ) -> Result<SupervisedRunRequest> {
         let system_prompt_file = self
             .entry
@@ -749,8 +738,7 @@ impl<'a> TaskFire<'a> {
             loop_zone: self.mode == LoopRunMode::Scheduled,
             loop_task: Some(self.name.clone()),
             passthrough: Vec::new(),
-            managed_provider_binding: provider_account_binding.cloned(),
-            managed_provider_binding_resolved: resolved_kind == "qwen",
+            managed_launch,
         })
     }
 
@@ -1169,17 +1157,29 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-fn resolve_managed_spawn_binding(
+fn resolve_managed_spawn_state(
     entry: &TaskEntry,
     workspace: &crate::workspace::ResolvedWorkspace,
     resolved: &ResolvedTaskSpec,
     config: &MachineConfig,
-) -> Result<Option<ProviderAccountBinding>> {
-    if resolved.kind != "qwen" || entry.worktree.is_some() {
-        return Ok(None);
-    }
+) -> Result<ManagedLaunchState> {
     let adapter = find_adapter(&resolved.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", resolved.kind))?;
+    if entry.worktree.is_some() {
+        let applicability = adapter.resolve_managed_launch(
+            &workspace.worktree_root,
+            &std::collections::BTreeMap::new(),
+            resolved.model.as_deref(),
+            &resolved.args,
+        );
+        return Ok(
+            if matches!(applicability, ManagedLaunchState::Unsupported) {
+                ManagedLaunchState::Unsupported
+            } else {
+                ManagedLaunchState::Unresolved
+            },
+        );
+    }
     let launch = crate::agents::LaunchParams {
         model: resolved.model.clone(),
         ..crate::agents::LaunchParams::default()
@@ -1663,10 +1663,10 @@ pub fn tail_output(bytes: &[u8], cap: usize) -> String {
 pub fn window_already_running(
     entry: &TaskEntry,
     kind: &str,
-    binding: Option<&ProviderAccountBinding>,
+    managed_launch: &ManagedLaunchState,
 ) -> Result<Option<bool>> {
     let runtime = entry_runtime(entry)?;
-    Ok(capacity_for(&runtime, kind, binding)
+    Ok(capacity_for(&runtime, kind, managed_launch)
         .and_then(|capacity| capacity.shortest_window_running(Timestamp::now())))
 }
 
@@ -1675,10 +1675,10 @@ pub fn window_already_running(
 pub fn reset_window_already_running(
     entry: &TaskEntry,
     kind: &str,
-    binding: Option<&ProviderAccountBinding>,
+    managed_launch: &ManagedLaunchState,
 ) -> Result<Option<bool>> {
     let runtime = entry_runtime(entry)?;
-    Ok(capacity_for(&runtime, kind, binding)
+    Ok(capacity_for(&runtime, kind, managed_launch)
         .and_then(|capacity| capacity.longest_window_running(Timestamp::now())))
 }
 
@@ -1694,25 +1694,39 @@ pub fn binding_cache_matches(
 }
 
 /// Resolve the exact provider account a fresh ping task would launch with.
-fn managed_ping_binding(entry: &TaskEntry, kind: &str) -> Option<ProviderAccountBinding> {
-    if kind != "qwen" || entry.worktree.is_some() {
-        return None;
-    }
+fn managed_ping_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState {
     let config = MachineConfig::load_lenient();
-    let result = (|| -> Result<Option<ProviderAccountBinding>> {
+    let result = (|| -> Result<ManagedLaunchState> {
         let workspace = WorkspaceResolver::resolve(entry.resolved_root(), None)?;
-        let resolved = resolve_task_spec("qwen-ping", &workspace)?;
+        let resolved = resolve_task_spec(&format!("{kind}-ping"), &workspace)?;
         if resolved.kind() != kind {
-            return Ok(None);
+            return Ok(ManagedLaunchState::Unsupported);
         }
-        resolve_managed_spawn_binding(entry, &workspace, &resolved, &config)
+        resolve_managed_spawn_state(entry, &workspace, &resolved, &config)
     })();
     result
         .inspect_err(|err| {
-            tracing::debug!(error = %err, "Qwen ping account binding skipped: launch resolution failed");
+            tracing::debug!(kind, error = %err, "managed ping account binding skipped: launch resolution failed");
         })
         .ok()
-        .flatten()
+        .unwrap_or_else(|| unresolved_managed_state(entry, kind))
+}
+
+fn unresolved_managed_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState {
+    let Some(adapter) = find_adapter(kind) else {
+        return ManagedLaunchState::Unsupported;
+    };
+    let state = adapter.resolve_managed_launch(
+        &entry.resolved_root(),
+        &std::collections::BTreeMap::new(),
+        None,
+        &[],
+    );
+    if matches!(state, ManagedLaunchState::Unsupported) {
+        state
+    } else {
+        ManagedLaunchState::Unresolved
+    }
 }
 
 fn qwen_ping_cache_reason(
@@ -1737,7 +1751,7 @@ fn qwen_ping_cache_reason(
 pub fn surplus_gate(
     entry: &TaskEntry,
     kind: &str,
-    binding: Option<&ProviderAccountBinding>,
+    managed_launch: &ManagedLaunchState,
     now: Timestamp,
 ) -> Result<Option<String>> {
     if entry.surplus.is_none() && entry.surplus_after.is_none() {
@@ -1747,7 +1761,7 @@ pub fn surplus_gate(
     Ok(surplus_gate_in(
         entry,
         kind,
-        capacity_for(&runtime, kind, binding)
+        capacity_for(&runtime, kind, managed_launch)
             .and_then(|capacity| capacity.longest_window_surplus(now)),
     ))
 }
@@ -1835,10 +1849,10 @@ fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
 fn reset_signal_for_binding(
     runtime: &RuntimePaths,
     kind: &str,
-    binding: Option<&ProviderAccountBinding>,
+    managed_launch: &ManagedLaunchState,
     now: Timestamp,
 ) -> ResetSignal {
-    match capacity_for(runtime, kind, binding)
+    match capacity_for(runtime, kind, managed_launch)
         .as_ref()
         .map(|capacity| capacity.longest_window_signal(now))
     {
@@ -1860,8 +1874,8 @@ pub(super) fn window_reset_signal_in(
     kind: &str,
     now: Timestamp,
 ) -> ResetSignal {
-    let binding = managed_ping_binding(entry, kind);
-    reset_signal_for_binding(runtime, kind, binding.as_ref(), now)
+    let managed_launch = managed_ping_state(entry, kind);
+    reset_signal_for_binding(runtime, kind, &managed_launch, now)
 }
 
 #[cfg(test)]
@@ -1871,19 +1885,18 @@ pub(super) fn reset_signal_for_test_binding(
     binding: Option<&ProviderAccountBinding>,
     now: Timestamp,
 ) -> ResetSignal {
-    reset_signal_for_binding(runtime, kind, binding, now)
+    let managed_launch = binding.map_or(ManagedLaunchState::Unsupported, |binding| {
+        ManagedLaunchState::Bound(binding.clone())
+    });
+    reset_signal_for_binding(runtime, kind, &managed_launch, now)
 }
 
 fn capacity_for(
     runtime: &RuntimePaths,
     kind: &str,
-    binding: Option<&ProviderAccountBinding>,
+    managed_launch: &ManagedLaunchState,
 ) -> Option<ProviderCapacity> {
-    match binding {
-        Some(binding) => ProviderCapacity::read_bound(runtime, kind, binding),
-        None if kind == "qwen" => None,
-        None => ProviderCapacity::read(runtime, kind),
-    }
+    managed_launch.capacity(runtime, kind)
 }
 
 fn entry_runtime(entry: &TaskEntry) -> Result<RuntimePaths> {

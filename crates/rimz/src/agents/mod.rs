@@ -76,8 +76,8 @@ pub(crate) use account::WindowSurplus;
 #[doc(hidden)]
 pub use account::provider_budget_gate;
 pub use account::{
-    AccountUsageIdentity, PendingRefill, ProviderAccountBinding, ProviderCapacity,
-    RateLimitCacheEntry, RateLimitsCache,
+    AccountUsageIdentity, ManagedLaunchState, PendingRefill, ProviderAccountBinding,
+    ProviderCapacity, RateLimitCacheEntry, RateLimitsCache,
 };
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
@@ -1146,17 +1146,15 @@ pub trait AgentAdapter: Send + Sync {
         AccountUsageProbe::Unsupported
     }
 
-    /// Resolve an exact provider-account binding for a fresh managed launch.
-    /// Multi-provider adapters return `None` whenever the final launch inputs
-    /// do not prove one official account identity.
+    /// Resolve exact provider-account applicability and identity for a managed launch.
     fn resolve_managed_launch(
         &self,
         _cwd: &Path,
         _env: &BTreeMap<String, String>,
         _model: Option<&str>,
         _argv: &[String],
-    ) -> Option<ProviderAccountBinding> {
-        None
+    ) -> ManagedLaunchState {
+        ManagedLaunchState::Unsupported
     }
 
     /// Probe the provider's own realtime account channel while idle.

@@ -92,11 +92,9 @@ pub struct SupervisedRunRequest {
     pub loop_zone: bool,
     pub loop_task: Option<String>,
     pub passthrough: Vec<String>,
-    /// Exact provider identity resolved by an upstream managed-launch gate.
-    /// `managed_provider_binding_resolved` distinguishes an intentionally
-    /// unbound launch from one the supervised boundary still needs to resolve.
-    pub managed_provider_binding: Option<crate::agents::ProviderAccountBinding>,
-    pub managed_provider_binding_resolved: bool,
+    /// Managed-account state: pending inputs, unsupported selection, unresolved
+    /// exact selection, or one proven binding.
+    pub managed_launch: crate::agents::ManagedLaunchState,
 }
 
 /// Command-neutral result of attempting one supervised turn.

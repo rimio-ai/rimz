@@ -481,9 +481,9 @@ pub fn compile_agent_process(
     })
 }
 
-/// Compile the wrapper transition for an optional managed provider binding.
-/// Pending bindings re-enter through the login shell once; finalized bindings
-/// execute raw provider argv after verifying the effective account identity.
+/// Compile the serialized wrapper stage for a proven managed provider binding.
+/// Pending stages re-enter through the login shell once; finalized stages
+/// execute raw provider argv after the adapter verifies the effective binding.
 pub fn compile_agent_process_stage(
     project_root: &Path,
     rtk: crate::config::RtkMode,
@@ -492,11 +492,30 @@ pub fn compile_agent_process_stage(
     rimz_bin: &Path,
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
     let bound = !matches!(&request.provider_account, ProviderAccountState::Unbound);
-    if bound && (request.kind != "qwen" || !matches!(&request.action, ExecAction::Launch { .. })) {
+    if bound && !matches!(&request.action, ExecAction::Launch { .. }) {
         return Err(AgentProcessStageErr::InvalidProviderBinding);
     }
 
     let process = compile_agent_process(project_root, rtk, request, cwd)?;
+    let managed_launch = if bound {
+        let adapter = crate::agents::find_adapter(request.kind.as_str()).ok_or_else(|| {
+            AgentProcessCompileErr::UnknownAgent {
+                kind: request.kind.to_string(),
+            }
+        })?;
+        let state = adapter.resolve_managed_launch(
+            cwd,
+            &effective_launch_env(&process.env),
+            request.identity.params.model.as_deref(),
+            &process.provider_argv,
+        );
+        if !state.exact_account_applies() {
+            return Err(AgentProcessStageErr::InvalidProviderBinding);
+        }
+        Some(state)
+    } else {
+        None
+    };
     match &request.provider_account {
         ProviderAccountState::Unbound => Ok(AgentProcessStage::Wrapped(process)),
         ProviderAccountState::Pending { binding } => {
@@ -512,18 +531,7 @@ pub fn compile_agent_process_stage(
             Ok(AgentProcessStage::LoginShellReentry { process, argv })
         }
         ProviderAccountState::Finalized { binding } => {
-            let adapter = crate::agents::find_adapter(request.kind.as_str()).ok_or_else(|| {
-                AgentProcessCompileErr::UnknownAgent {
-                    kind: request.kind.to_string(),
-                }
-            })?;
-            let actual = adapter.resolve_managed_launch(
-                cwd,
-                &effective_launch_env(&process.env),
-                request.identity.params.model.as_deref(),
-                &process.provider_argv,
-            );
-            if actual.as_ref() != Some(binding) {
+            if managed_launch.as_ref().and_then(|state| state.binding()) != Some(binding) {
                 return Err(AgentProcessStageErr::FinalizedProviderMismatch);
             }
             Ok(AgentProcessStage::FinalizedRaw(process))

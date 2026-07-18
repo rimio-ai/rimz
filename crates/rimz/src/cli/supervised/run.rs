@@ -133,7 +133,7 @@ struct PreparedRun {
     prompt: String,
     output_format: OutputFormat,
     stream_text: bool,
-    provider_account_binding: Option<rimz::agents::ProviderAccountBinding>,
+    managed_launch: rimz::agents::ManagedLaunchState,
 }
 
 struct PresentationWaiter {
@@ -341,15 +341,14 @@ fn prepare_supervised(
         &launch_invocation,
         &launch.cwd,
     )?;
-    let provider_account_binding = if request.managed_provider_binding_resolved {
-        request.managed_provider_binding.clone()
-    } else {
-        adapter.resolve_managed_launch(
+    let managed_launch = match &request.managed_launch {
+        rimz::agents::ManagedLaunchState::PendingResolution => adapter.resolve_managed_launch(
             &launch.cwd,
             &rimz::harness::launch::effective_launch_env(&process.env),
             agent_cell.launch.model.as_deref(),
             &process.provider_argv,
-        )
+        ),
+        state => state.clone(),
     };
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(&process)?;
@@ -378,7 +377,7 @@ fn prepare_supervised(
         prompt: request.prompt.clone(),
         output_format: presentation.output_format,
         stream_text: presentation.stream_text,
-        provider_account_binding,
+        managed_launch,
     })
 }
 
@@ -450,7 +449,7 @@ fn execute_attempt(
         cleanup_worktree: (request.worktree.is_some() || request.from_pr.is_some()) && retries == 0,
         permission_args: &agent_cell.args,
         self_cleanup_on_completion: request.background && !request.keep,
-        provider_account_binding: prepared.provider_account_binding.as_ref(),
+        provider_account_binding: prepared.managed_launch.binding(),
     })?;
     let waiter = if request.background {
         None
@@ -614,7 +613,7 @@ pub(in crate::cli) fn run_supervised(
     globals: &GlobalFlags,
 ) -> Result<SupervisedRunOutcome> {
     let prepared = prepare_supervised(&request, &presentation, globals)?;
-    if let Some(binding) = prepared.provider_account_binding.as_ref()
+    if let Some(binding) = prepared.managed_launch.binding()
         && let Some(reason) = rimz::agents::provider_budget_gate(
             prepared.store.runtime_paths(),
             prepared.kind.as_str(),
@@ -651,7 +650,7 @@ pub(in crate::cli) fn run_supervised(
     let mut retry_of = None;
     let mut attempt = 0;
     loop {
-        if let Some(binding) = prepared.provider_account_binding.as_ref()
+        if let Some(binding) = prepared.managed_launch.binding()
             && let Some(reason) = rimz::agents::provider_budget_gate(
                 prepared.store.runtime_paths(),
                 prepared.kind.as_str(),
