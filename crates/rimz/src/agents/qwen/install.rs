@@ -17,7 +17,6 @@ static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
     legacy_command_marker: RIMZ_HOOK_MARKER,
     timeout: QWEN_HOOK_TIMEOUT_MS,
     sync: SyncEncoding::HandlerAsync,
-    legacy_matcherless_blocking_events: &[],
     status_lines: &[&STATUS_LINE],
 };
 

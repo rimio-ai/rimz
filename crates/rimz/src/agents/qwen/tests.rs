@@ -156,13 +156,13 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
 }
 
 #[test]
-fn reinstall_reclaims_stale_managed_pre_tool_use_hook() {
+fn reinstall_reclaims_stale_and_matcherless_owned_pre_tool_use_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     fs::write(
         &path,
         format!(
-            r#"{{"hooks":{{"PreToolUse":[{{"matcher":"exit_plan_mode|ask_user_question","_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}"}}]}},{{"matcher":"custom_tool","hooks":[{{"type":"command","command":"custom-hook"}}]}}]}}}}"#
+            r#"{{"hooks":{{"PreToolUse":[{{"matcher":"exit_plan_mode|ask_user_question","_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}"}}]}},{{"_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}"}}]}},{{"matcher":"custom_tool","hooks":[{{"type":"command","command":"custom-hook"}}]}}]}}}}"#
         ),
     )
     .unwrap();

@@ -14,7 +14,6 @@ static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
     legacy_command_marker: RIMZ_HOOK_MARKER,
     timeout: DROID_HOOK_TIMEOUT_SECS,
     sync: SyncEncoding::None,
-    legacy_matcherless_blocking_events: &[],
     status_lines: &[],
 };
 

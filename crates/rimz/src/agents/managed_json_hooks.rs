@@ -30,7 +30,6 @@ pub(crate) struct ManagedJsonHookSpec {
     pub legacy_command_marker: &'static str,
     pub timeout: u64,
     pub sync: SyncEncoding,
-    pub legacy_matcherless_blocking_events: &'static [&'static str],
     pub status_lines: &'static [&'static ManagedStatusLineSpec],
 }
 
@@ -195,11 +194,7 @@ impl ManagedJsonHookSpec {
                     continue;
                 };
                 let actual_matcher = entry.get("matcher").and_then(Value::as_str);
-                let legacy_matcherless = actual_matcher.is_none()
-                    && self
-                        .legacy_matcherless_blocking_events
-                        .contains(&hook.event);
-                if !matcher_matches(hook.matcher, actual_matcher) && !legacy_matcherless {
+                if !matcher_matches(hook.matcher, actual_matcher) {
                     continue;
                 }
                 let invalid = match self.sync {
