@@ -351,14 +351,9 @@ fn non_codex_local_refresh_preserves_turn_error_marker() {
     prior.context.turn_error = Some(marker.clone());
     write_record(&runtime, &prior).unwrap();
 
-    merge_local_context(
-        &runtime,
-        descriptor("pi"),
-        "sess-1",
-        unpriced_refresh(),
-        observed_at,
-    )
-    .unwrap();
+    let mut refresh = unpriced_refresh();
+    refresh.context.turn_error = FieldPatch::Keep;
+    merge_local_context(&runtime, descriptor("pi"), "sess-1", refresh, observed_at).unwrap();
 
     let merged = read_one(&runtime, "pi", "sess-1").unwrap();
     assert_eq!(merged.context.turn_error, Some(marker));
