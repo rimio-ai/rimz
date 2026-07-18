@@ -1,3 +1,5 @@
+//! Pure shell/process command parsing shared outside process consumers.
+
 /// The base name of the program a command runs, seeing past a `sudo` wrapper
 /// and through known wrappers to the real command: `npm` for `sudo npm install
 /// …`, `codex` for `node /usr/bin/codex`, `opencode` for `bun
@@ -38,7 +40,7 @@ pub(crate) fn command_program_basename(command: &str) -> String {
 
 /// The file name of a path-or-bare token (`codex` from `/usr/bin/codex`), or
 /// the token itself when it has no path component.
-fn basename(token: &str) -> &str {
+pub(crate) fn basename(token: &str) -> &str {
     std::path::Path::new(token)
         .file_name()
         .and_then(|name| name.to_str())
@@ -104,13 +106,13 @@ fn effective_program(command: &str) -> &str {
     effective_program_info(command).program
 }
 
-#[derive(Clone, Copy)]
-struct EffectiveProgram<'a> {
-    program: &'a str,
-    from_launcher: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EffectiveProgram<'a> {
+    pub(crate) program: &'a str,
+    pub(crate) from_launcher: bool,
 }
 
-fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
+pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
     let Some((program, mut tokens)) = effective_program_and_args(command) else {
         return EffectiveProgram {
             program: command,
@@ -148,51 +150,11 @@ const SUDO_VALUE_FLAGS: &[&str] = &["u", "g", "h", "p", "C", "U", "r", "t", "T",
 /// opencode.
 const LAUNCHERS: &[&str] = &["node", "nodejs", "npx", "bun"];
 
-/// The agent kind a command launches, matched against the program it runs
-/// (past any `sudo`, and through a `node`/`npx`/`bun` launcher to its script)
-/// — never an install target.
-pub fn command_agent_kind(command: &str) -> Option<&'static str> {
-    command_agent_kind_with_comm(command, None)
+pub(crate) fn is_launcher(program: &str) -> bool {
+    LAUNCHERS.contains(&basename(program))
 }
 
-pub(crate) fn command_agent_kind_with_comm(
-    command: &str,
-    comm: Option<&str>,
-) -> Option<&'static str> {
-    let program = effective_program_info(command);
-    command_agent_kind_from_program(program).or_else(|| comm.and_then(command_agent_kind_from_comm))
-}
-
-fn command_agent_kind_from_program(program: EffectiveProgram<'_>) -> Option<&'static str> {
-    let label = basename(program.program);
-    crate::agents::all_adapters()
-        .find_map(|adapter| {
-            let descriptor = adapter.descriptor();
-            (descriptor.launches_as(label)
-                || (program.from_launcher
-                    && agent_script_path_names_kind(program.program, descriptor.kind)))
-            .then_some(descriptor.kind)
-        })
-        .or_else(|| {
-            (!program.from_launcher)
-                .then(|| command_agent_kind_from_comm(program.program))
-                .flatten()
-        })
-}
-
-fn command_agent_kind_from_comm(comm: &str) -> Option<&'static str> {
-    let comm = basename(comm.trim());
-    if LAUNCHERS.contains(&comm) {
-        return None;
-    }
-    let mut matches = crate::agents::all_adapters()
-        .filter(|adapter| adapter.descriptor().runs_as(comm))
-        .map(|adapter| adapter.descriptor().kind);
-    let kind = matches.next()?;
-    matches.next().is_none().then_some(kind)
-}
-
-fn agent_script_path_names_kind(script: &str, kind: &str) -> bool {
+pub(crate) fn agent_script_path_names_kind(script: &str, kind: &str) -> bool {
     std::path::Path::new(script).components().any(|component| {
         component
             .as_os_str()
@@ -206,98 +168,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifier_sees_past_sudo_to_the_real_program() {
-        // The bug: a `codex` token buried in install args misread the pane as a
-        // codex agent. Classification keys off the program, never the arguments.
-        assert_eq!(
-            command_agent_kind("sudo npm install -g @openai/codex"),
-            None
-        );
+    fn parser_sees_past_sudo_and_javascript_launchers() {
         assert_eq!(program_label("sudo npm install -g @openai/codex"), "npm");
-        // A real agent under sudo is still that agent; a bare invocation too.
-        assert_eq!(command_agent_kind("sudo codex"), Some("codex"));
-        assert_eq!(command_agent_kind("codex --foo"), Some("codex"));
-        assert_eq!(
-            command_agent_kind("codex-aarch64-apple-darwin"),
-            Some("codex")
-        );
-        assert_eq!(
-            command_agent_kind("/usr/local/bin/codex-x86_64-apple-darwin"),
-            Some("codex")
-        );
         assert_eq!(
             program_label("codex-aarch64-apple-darwin"),
             "codex-aarch64-apple-darwin"
         );
-        assert_eq!(command_agent_kind("claude"), Some("claude"));
-        assert_eq!(command_agent_kind("agy"), Some("antigravity"));
-        assert_eq!(command_agent_kind("antigravity"), None);
-        assert_eq!(command_agent_kind("agent"), Some("cursor"));
-        assert_eq!(command_agent_kind("cursor-agent"), Some("cursor"));
-        assert_eq!(command_agent_kind("kiro-cli-chat"), Some("kiro"));
-        assert_eq!(command_agent_kind("kiro-cli-term"), None);
         assert_eq!(
-            crate::agents::find_adapter("kiro")
-                .unwrap()
-                .descriptor()
-                .bin_names,
-            &["kiro-cli"]
-        );
-        assert_eq!(
-            command_agent_kind("/home/me/.local/bin/agent"),
-            Some("cursor")
-        );
-        // A JS launcher runs its script, so `node …/codex` is codex — the script
-        // is the program, unlike npm's install *target*.
-        assert_eq!(command_agent_kind("node /usr/bin/codex"), Some("codex"));
-        assert_eq!(
-            command_agent_kind("node --inspect /usr/bin/codex"),
-            Some("codex")
+            effective_program_info("node --inspect /usr/bin/codex"),
+            EffectiveProgram {
+                program: "/usr/bin/codex",
+                from_launcher: true,
+            }
         );
         assert_eq!(program_label("node /usr/bin/codex"), "codex");
         assert_eq!(
-            command_agent_kind_with_comm("bun /usr/bin/opencode", Some("bun")),
-            Some("opencode")
+            effective_program_info("bun /usr/bin/opencode").program,
+            "/usr/bin/opencode"
         );
         assert_eq!(program_label("bun /usr/bin/opencode"), "opencode");
-        // A bare launcher with no script is just the host.
-        assert_eq!(command_agent_kind("node"), None);
-        // sudo options, including a value-taking `-u user`, skip to the program.
         assert_eq!(
             program_label("sudo -E -u root npm i -g @openai/codex"),
             "npm"
         );
-        assert_eq!(
-            command_agent_kind("sudo -u root npm i -g @openai/codex"),
-            None
-        );
-        assert_eq!(
-            command_agent_kind("sudo node /usr/bin/codex"),
-            Some("codex")
-        );
-        assert_eq!(
-            command_agent_kind("node /opt/claude/cli.js"),
-            Some("claude")
-        );
-        assert_eq!(
-            command_agent_kind("sudo node /opt/node_modules/@anthropic-ai/claude-code/cli.js"),
-            Some("claude")
-        );
-        assert_eq!(command_agent_kind("node /tmp/claude-test/cli.js"), None);
-        // A path-qualified program resolves to its basename.
         assert_eq!(program_label("/usr/bin/cargo build"), "cargo");
     }
 
     #[test]
-    fn classifier_identifies_qwen_node_bundle_without_claiming_bare_node() {
+    fn parser_identifies_qwen_node_bundle_script() {
         assert_eq!(
-            command_agent_kind(
+            effective_program_info(
                 "/home/u/.local/lib/qwen-code/node/bin/node --expose-gc /home/u/.local/lib/qwen-code/lib/cli.js"
-            ),
-            Some("qwen")
+            )
+            .program,
+            "/home/u/.local/lib/qwen-code/lib/cli.js"
         );
-        assert_eq!(command_agent_kind("node"), None);
-        assert_eq!(command_agent_kind("node /srv/app/server.js"), None);
     }
 
     #[test]
@@ -338,47 +243,20 @@ mod tests {
     }
 
     #[test]
-    fn classifier_can_use_precise_proc_comm_as_a_fallback() {
-        assert_eq!(
-            command_agent_kind_with_comm("", Some("claude")),
-            Some("claude")
-        );
-        assert_eq!(
-            command_agent_kind_with_comm("", Some("codex-aarch64-a")),
-            Some("codex")
-        );
-        assert_eq!(
-            command_agent_kind_with_comm("", Some("agy")),
-            Some("antigravity")
-        );
-        assert_eq!(
-            command_agent_kind_with_comm("", Some("kiro-cli-chat")),
-            Some("kiro")
-        );
-        assert_eq!(command_agent_kind_with_comm("node", Some("node")), None);
-        assert_eq!(command_agent_kind_with_comm("bun", Some("bun")), None);
-        assert_eq!(
-            command_agent_kind_with_comm("bun run dev", Some("bun")),
-            None
-        );
-        assert_eq!(command_agent_kind_with_comm("zsh", Some("zsh")), None);
-    }
-
-    #[test]
-    fn classifier_sees_past_rimz_supervised_agent_wrapper() {
+    fn parser_sees_past_rimz_supervised_agent_wrapper() {
         // `rimz agents --worktree` leaves RimZ's supervised wrapper as the
         // pane's root command while the real agent runs underneath it, so the
         // sidebar must classify the pane by the wrapped agent during the
         // startup gap.
         let wrapped = "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt";
         assert_eq!(program_label(wrapped), "codex");
-        assert_eq!(command_agent_kind(wrapped), Some("codex"));
         assert_eq!(rimz_exec_worktree_path(wrapped), Some("/repo/wt"));
         assert_eq!(
-            command_agent_kind(
+            effective_program_info(
                 "sudo /home/me/.cargo/bin/rimz agents exec codex --request opaque-state"
-            ),
-            Some("codex")
+            )
+            .program,
+            "codex"
         );
         assert_eq!(
             rimz_exec_worktree_path("/bin/rimz agents exec codex --worktree-path=/repo/wt"),
@@ -390,6 +268,5 @@ mod tests {
             ),
             Some("/repo/wt")
         );
-        assert_eq!(command_agent_kind("rimz agents exec unknown"), None);
     }
 }

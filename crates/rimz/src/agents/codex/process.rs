@@ -8,6 +8,13 @@ use crate::ids::AgentSessionId;
 
 const CODEX_BINARY_MARKER: &str = "codex";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodexProcessRole {
+    Interactive,
+    Service,
+    Other,
+}
+
 /// PIDs of the per-user Codex app-server daemon — the process a remote-control
 /// Codex session records as its hook owner (`$PPID`). A daemon-mode session's
 /// recorded pid is the shared daemon, which outlives any one conversation, so
@@ -40,17 +47,16 @@ pub fn pid_is_codex_daemon(pid: u32) -> bool {
 /// binary so an unrelated process that merely mentions a marker is not mistaken
 /// for the daemon.
 fn is_codex_daemon_cmdline(cmdline: &str) -> bool {
-    let on_daemon_surface = cmdline.contains(APP_SERVER_MARKER) || cmdline.contains(COMMAND_MARKER);
-    on_daemon_surface && cmdline.contains(CODEX_BINARY_MARKER)
+    codex_process_role(cmdline) == CodexProcessRole::Service
 }
 
 /// Session id from a resumed Codex CLI command (`codex resume <session-id>`).
 /// Exact rebirth binding reads this instead of guessing by cwd. The parser is
 /// deliberately narrow: daemon/app-server surfaces are excluded by
-/// [`is_codex_cli_cmdline`], and the session id is accepted only when it is the
+/// the process-role classifier, and the session id is accepted only when it is the
 /// token immediately after `resume`.
 pub fn codex_resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSessionId> {
-    if !is_codex_cli_cmdline(cmdline) {
+    if codex_process_role(cmdline) != CodexProcessRole::Interactive {
         return None;
     }
     let mut tokens = cmdline.split_whitespace().peekable();
@@ -74,13 +80,25 @@ pub fn codex_resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSessi
     None
 }
 
-/// Whether a command line runs the in-pane Codex CLI — the bare `codex` TUI a
-/// user launches in a pane — rather than a process whose arguments merely name
-/// Codex, the daemon, or the remote-control host. The effective program decides
-/// the kind; arguments never classify an unrelated process as Codex.
-pub(crate) fn is_codex_cli_cmdline(cmdline: &str) -> bool {
-    crate::store::snapshot::command_agent_kind(cmdline) == Some(CODEX_BINARY_MARKER)
-        && !is_codex_daemon_cmdline(cmdline)
+pub(super) fn is_interactive_process(cmdline: &str) -> bool {
+    codex_process_role(cmdline) == CodexProcessRole::Interactive
+}
+
+fn codex_process_role(cmdline: &str) -> CodexProcessRole {
+    let on_service_surface =
+        cmdline.contains(APP_SERVER_MARKER) || cmdline.contains(COMMAND_MARKER);
+    if on_service_surface && cmdline.contains(CODEX_BINARY_MARKER) {
+        return CodexProcessRole::Service;
+    }
+    let program = crate::proc::command::effective_program_info(cmdline).program;
+    if crate::agents::program_names_kind(
+        crate::proc::command::basename(program),
+        CODEX_BINARY_MARKER,
+    ) {
+        CodexProcessRole::Interactive
+    } else {
+        CodexProcessRole::Other
+    }
 }
 
 #[cfg(test)]
@@ -109,23 +127,23 @@ mod tests {
     #[test]
     fn codex_cli_cmdline_matches_bare_cli_not_daemon() {
         // The in-pane TUI a user launches, including the npm `node` wrapper.
-        assert!(is_codex_cli_cmdline("codex"));
-        assert!(is_codex_cli_cmdline("codex --model gpt-5.5"));
-        assert!(is_codex_cli_cmdline("node /usr/bin/codex"));
-        assert!(is_codex_cli_cmdline("codex-aarch64-apple-darwin"));
+        assert!(is_interactive_process("codex"));
+        assert!(is_interactive_process("codex --model gpt-5.5"));
+        assert!(is_interactive_process("node /usr/bin/codex"));
+        assert!(is_interactive_process("codex-aarch64-apple-darwin"));
         // The daemon, the remote-control host, and RimZ's broker all spell a
         // daemon surface, so none reads as the in-pane CLI.
-        assert!(!is_codex_cli_cmdline("codex app-server"));
-        assert!(!is_codex_cli_cmdline("codex remote-control start"));
-        assert!(!is_codex_cli_cmdline(
+        assert!(!is_interactive_process("codex app-server"));
+        assert!(!is_interactive_process("codex remote-control start"));
+        assert!(!is_interactive_process(
             "rimz codex app-server serve --workspace-id w"
         ));
         // A non-codex process is never the codex CLI.
-        assert!(!is_codex_cli_cmdline("zsh"));
-        assert!(!is_codex_cli_cmdline(
+        assert!(!is_interactive_process("zsh"));
+        assert!(!is_interactive_process(
             "rust-code-analysis-cli -m -l rust -O json -o /tmp/out -p crates/rimz/src/agents/codex/mod.rs"
         ));
-        assert!(!is_codex_cli_cmdline("sudo npm install -g @openai/codex"));
+        assert!(!is_interactive_process("sudo npm install -g @openai/codex"));
     }
 
     #[test]

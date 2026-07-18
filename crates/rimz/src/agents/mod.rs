@@ -777,6 +777,13 @@ pub trait AgentAdapter: Send + Sync {
     /// the trait methods own everything behavioral.
     fn descriptor(&self) -> &'static AgentDescriptor;
 
+    /// Whether a command already matched by this adapter's launch descriptors
+    /// is an interactive agent process. Providers with service subcommands
+    /// override this while ordinary CLIs accept the descriptor match.
+    fn is_interactive_process(&self, _command: &str) -> bool {
+        true
+    }
+
     /// Model slug to use when `rimz agents` launches without a configured
     /// model, and before a lazy-registering agent reports a real session
     /// model. Defaults to the descriptor's provider fallback; adapters with

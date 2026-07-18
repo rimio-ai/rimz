@@ -72,7 +72,7 @@ fn elevated_in_pane_agent_with(
         let wrapper_seen = wrapper_seen || command_starts_with_elevation_wrapper(&command);
         if wrapper_seen
             && let Some(kind) =
-                crate::store::snapshot::command_agent_kind_with_comm(&command, comm.as_deref())
+                crate::agents::registry::command_agent_kind_with_comm(&command, comm.as_deref())
             && let Some(uid) = real_uid(pid)
             && uid != own_uid
         {
@@ -227,9 +227,7 @@ fn hosted_agent_process_for_root_with(
     pane_agent_process_for_root_with(
         root_pid,
         &|cmdline| {
-            let kind = crate::store::snapshot::command_agent_kind(cmdline)?;
-            (kind != "codex" || crate::agents::codex::is_codex_cli_cmdline(cmdline))
-                .then(|| AgentKind::new_unchecked(kind))
+            crate::agents::registry::command_agent_kind(cmdline).map(AgentKind::new_unchecked)
         },
         cmdline,
         children,
@@ -294,10 +292,7 @@ fn hosted_agent_absent_under_root_with(
 }
 
 fn in_pane_agent_cmdline_matches(kind: &str, cmdline: &str) -> bool {
-    if kind == "codex" {
-        return crate::agents::codex::is_codex_cli_cmdline(cmdline);
-    }
-    crate::store::snapshot::command_agent_kind(cmdline) == Some(kind)
+    crate::agents::registry::command_agent_kind(cmdline) == Some(kind)
 }
 
 fn in_pane_agent_probe_supported(kind: &str) -> bool {

@@ -4,14 +4,9 @@
 use jiff::Timestamp;
 
 use super::row::{ProcessCard, ProcessState, RowCard, SidebarRow};
+use crate::agents::registry::command_agent_kind;
 use crate::pane::PaneRef;
-
-mod classify;
-
-pub use classify::command_agent_kind;
-pub(crate) use classify::{
-    command_agent_kind_with_comm, command_program_basename, program_label, rimz_exec_worktree_path,
-};
+use crate::proc::{command_program_basename, program_label, rimz_exec_worktree_path};
 
 /// Whether a pane no agent has bound carries enough identity to render a
 /// process row. Foreground display wins, but a spawn command also admits the

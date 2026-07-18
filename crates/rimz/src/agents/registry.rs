@@ -72,6 +72,63 @@ pub fn known_kinds() -> impl Iterator<Item = &'static str> {
     all_adapters().map(|adapter| adapter.descriptor().kind)
 }
 
+/// Agent kind for an interactive command, after shell syntax and process
+/// wrappers are normalized by [`crate::proc::command`].
+pub fn command_agent_kind(command: &str) -> Option<&'static str> {
+    command_agent_kind_with_comm(command, None)
+}
+
+pub(crate) fn command_agent_kind_with_comm(
+    command: &str,
+    comm: Option<&str>,
+) -> Option<&'static str> {
+    let program = crate::proc::command::effective_program_info(command);
+    if let Some(adapter) = adapter_for_program(program) {
+        return adapter
+            .is_interactive_process(command)
+            .then(|| adapter.descriptor().kind);
+    }
+    let adapter = comm.and_then(adapter_for_comm)?;
+    let policy_command = (!command.trim().is_empty())
+        .then_some(command)
+        .or(comm)
+        .unwrap_or_default();
+    adapter
+        .is_interactive_process(policy_command)
+        .then(|| adapter.descriptor().kind)
+}
+
+fn adapter_for_program(
+    program: crate::proc::command::EffectiveProgram<'_>,
+) -> Option<&'static dyn AgentAdapter> {
+    let label = crate::proc::command::basename(program.program);
+    all_adapters()
+        .find(|adapter| {
+            let descriptor = adapter.descriptor();
+            descriptor.launches_as(label)
+                || (program.from_launcher
+                    && crate::proc::command::agent_script_path_names_kind(
+                        program.program,
+                        descriptor.kind,
+                    ))
+        })
+        .or_else(|| {
+            (!program.from_launcher)
+                .then(|| adapter_for_comm(program.program))
+                .flatten()
+        })
+}
+
+fn adapter_for_comm(comm: &str) -> Option<&'static dyn AgentAdapter> {
+    let comm = crate::proc::command::basename(comm.trim());
+    if crate::proc::command::is_launcher(comm) {
+        return None;
+    }
+    let mut matches = all_adapters().filter(|adapter| adapter.descriptor().runs_as(comm));
+    let adapter = matches.next()?;
+    matches.next().is_none().then_some(adapter)
+}
+
 /// Adapter-owned enrichment environment for a new room. Backends receive one
 /// opaque map and remain independent of provider protocols.
 pub fn room_env(runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {
@@ -144,6 +201,58 @@ mod tests {
         let before = kinds.len();
         kinds.dedup();
         assert_eq!(kinds.len(), before, "duplicate kind in ADAPTERS");
+    }
+
+    #[test]
+    fn command_agent_kind_combines_descriptors_with_process_policy() {
+        for (command, expected) in [
+            ("sudo npm install -g @openai/codex", None),
+            ("sudo codex", Some("codex")),
+            ("codex-aarch64-apple-darwin", Some("codex")),
+            ("/usr/local/bin/codex-x86_64-apple-darwin", Some("codex")),
+            ("claude", Some("claude")),
+            ("agy", Some("antigravity")),
+            ("antigravity", None),
+            ("agent", Some("cursor")),
+            ("cursor-agent", Some("cursor")),
+            ("kiro-cli-chat", Some("kiro")),
+            ("kiro-cli-term", None),
+            ("node /usr/bin/codex", Some("codex")),
+            ("node /opt/claude/cli.js", Some("claude")),
+            ("node /tmp/claude-test/cli.js", None),
+            ("node", None),
+            ("node /srv/app/server.js", None),
+            ("codex app-server", None),
+            ("codex remote-control start", None),
+            (
+                "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt",
+                Some("codex"),
+            ),
+            ("rimz agents exec unknown", None),
+        ] {
+            assert_eq!(command_agent_kind(command), expected, "{command}");
+        }
+        assert_eq!(
+            command_agent_kind(
+                "/home/u/.local/lib/qwen-code/node/bin/node --expose-gc /home/u/.local/lib/qwen-code/lib/cli.js"
+            ),
+            Some("qwen")
+        );
+    }
+
+    #[test]
+    fn command_agent_kind_uses_precise_comm_without_claiming_launchers() {
+        for (comm, expected) in [
+            ("claude", Some("claude")),
+            ("codex-aarch64-a", Some("codex")),
+            ("agy", Some("antigravity")),
+            ("kiro-cli-chat", Some("kiro")),
+            ("node", None),
+            ("bun", None),
+            ("zsh", None),
+        ] {
+            assert_eq!(command_agent_kind_with_comm("", Some(comm)), expected);
+        }
     }
 
     #[test]

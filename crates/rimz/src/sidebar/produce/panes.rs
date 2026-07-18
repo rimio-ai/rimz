@@ -245,7 +245,7 @@ fn stamp_pane_resumed_session_ids(
             .current
             .command
             .as_deref()
-            .and_then(crate::store::snapshot::command_agent_kind)
+            .and_then(crate::agents::registry::command_agent_kind)
             .or_else(|| {
                 pane.current
                     .hosted_agent_kind
@@ -329,7 +329,7 @@ fn backfill_wrapper_spawn_commands(
             continue;
         };
         if let Some(cmdline) = proc_cmdline(pid)
-            .filter(|cmdline| crate::store::snapshot::command_agent_kind(cmdline).is_some())
+            .filter(|cmdline| crate::agents::registry::command_agent_kind(cmdline).is_some())
         {
             pane.current.spawn_command = Some(cmdline);
         }
@@ -554,7 +554,7 @@ fn process_command_probe(
     if command.is_empty() {
         return ProcessCommandProbe::Unknown;
     }
-    let command_label = crate::store::snapshot::program_label(command);
+    let command_label = crate::proc::program_label(command);
     let mut saw_cmdline_mismatch = false;
     match proc_cmdline(pid).map(|cmdline| cmdline.trim().to_owned()) {
         Some(cmdline) if !cmdline.is_empty() => match match_mode {
@@ -563,7 +563,7 @@ fn process_command_probe(
             }
             ProcessCommandMatch::ExactCmdline => return ProcessCommandProbe::Mismatch,
             ProcessCommandMatch::ProgramLabel
-                if crate::store::snapshot::program_label(&cmdline) == command_label =>
+                if crate::proc::program_label(&cmdline) == command_label =>
             {
                 return ProcessCommandProbe::Match(Some(cmdline));
             }
@@ -1245,7 +1245,7 @@ fn pane_drop_evidence(
                             pane.current
                                 .command
                                 .as_deref()
-                                .and_then(crate::store::snapshot::command_agent_kind)
+                                .and_then(crate::agents::registry::command_agent_kind)
                                 .map(AgentKind::new_unchecked)
                         })
                         .map(|agent_kind| ManagedPaneEvidence {

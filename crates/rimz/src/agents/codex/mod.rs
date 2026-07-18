@@ -57,7 +57,6 @@ use self::payloads::{
     parse_pre_compact, parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start,
     parse_subagent_stop, parse_user_prompt_submit,
 };
-pub(crate) use self::process::is_codex_cli_cmdline;
 pub use self::process::{
     codex_daemon_pids, codex_resumed_session_id_from_cmdline, pid_is_codex_daemon,
 };
@@ -426,6 +425,10 @@ pub struct CodexAdapter;
 impl AgentAdapter for CodexAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &CODEX_DESCRIPTOR
+    }
+
+    fn is_interactive_process(&self, command: &str) -> bool {
+        process::is_interactive_process(command)
     }
 
     #[cfg(test)]

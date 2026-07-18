@@ -7,9 +7,12 @@
 //! fall back rather than guessing. It also owns the hot-path subprocess spawn
 //! seams the perf guards count.
 
+pub(crate) mod command;
 #[cfg(target_os = "macos")]
 mod macos;
 mod pane_probe;
+
+pub(crate) use command::{command_program_basename, program_label, rimz_exec_worktree_path};
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
