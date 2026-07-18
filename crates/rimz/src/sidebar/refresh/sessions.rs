@@ -663,7 +663,7 @@ mod tests {
         let mut record = crate::store::agent_context::new_record(
             "codex",
             "sess-1",
-            crate::store::agent_context::empty_context("codex", at),
+            crate::agents::AgentContext::new("codex", at),
         );
         record.context.turn_error = Some(marker);
         crate::store::agent_context::write_record(&runtime, &record).unwrap();
@@ -751,7 +751,7 @@ mod tests {
         let mut record = crate::store::agent_context::new_record(
             "codex",
             "sess-1",
-            crate::store::agent_context::empty_context("codex", Timestamp::now()),
+            crate::agents::AgentContext::new("codex", Timestamp::now()),
         );
         record.transcript_path = Some(path.to_string_lossy().into_owned());
         crate::store::agent_context::write_record(&runtime, &record).unwrap();
@@ -824,7 +824,7 @@ mod tests {
         let mut record = crate::store::agent_context::new_record(
             "codex",
             "sess-1",
-            crate::store::agent_context::empty_context("codex", Timestamp::now()),
+            crate::agents::AgentContext::new("codex", Timestamp::now()),
         );
         record.transcript_path = Some(path.to_string_lossy().into_owned());
         crate::store::agent_context::write_record(&runtime, &record).unwrap();
@@ -877,7 +877,7 @@ mod tests {
         let mut record = crate::store::agent_context::new_record(
             "codex",
             "sess-1",
-            crate::store::agent_context::empty_context("codex", Timestamp::now()),
+            crate::agents::AgentContext::new("codex", Timestamp::now()),
         );
         record.transcript_path = Some(path.to_string_lossy().into_owned());
         crate::store::agent_context::write_record(&runtime, &record).unwrap();

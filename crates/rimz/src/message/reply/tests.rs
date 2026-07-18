@@ -386,10 +386,7 @@ fn detects_delivered_wait_that_opened_reply_turn() {
         agent("b", AgentStatus::Running),
     ];
     let delivered = wait_message(&agents[1], &agents[0], 7, MessageStatus::Delivered);
-    agents[0].context = Some(crate::store::agent_context::empty_context(
-        "codex",
-        Timestamp::now(),
-    ));
+    agents[0].context = Some(crate::agents::AgentContext::new("codex", Timestamp::now()));
     agents[0].context.as_mut().unwrap().turn_opened_by = vec![delivered.message_id.clone()];
 
     let cycle = wait_cycle(&[], &[delivered], &agents, &agents[0].kind, "a", &agents[1])

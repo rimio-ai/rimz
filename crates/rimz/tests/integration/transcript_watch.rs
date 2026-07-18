@@ -5,8 +5,9 @@
 //! driven end-to-end — platform event semantics vary — so this asserts the
 //! refresh the watcher's flush invokes, against real sidecar and rollout files.
 
+use rimz::agents::AgentContext;
 use rimz::sidebar::refresh::refresh_session_transcript_context;
-use rimz::store::agent_context::{self, empty_context, new_record};
+use rimz::store::agent_context::{self, new_record};
 
 use crate::common::Harness;
 
@@ -34,7 +35,7 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
     let mut record = new_record(
         "codex",
         SESSION_ID,
-        empty_context("codex", jiff::Timestamp::UNIX_EPOCH),
+        AgentContext::new("codex", jiff::Timestamp::UNIX_EPOCH),
     );
     record.transcript_path = Some(rollout.to_string_lossy().into_owned());
     agent_context::write_record(runtime, &record).expect("seed sidecar");
@@ -101,7 +102,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
     let mut record = new_record(
         "cursor",
         SESSION_ID,
-        empty_context("cursor", jiff::Timestamp::UNIX_EPOCH),
+        AgentContext::new("cursor", jiff::Timestamp::UNIX_EPOCH),
     );
     record.transcript_path = Some(path.to_string_lossy().into_owned());
     agent_context::write_record(runtime, &record).expect("seed cursor sidecar");

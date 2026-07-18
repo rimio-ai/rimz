@@ -1413,7 +1413,7 @@ fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
     // still reaches the `show --json` payload.
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
+    let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         context_window_size: Some(1_000_000),
         used_percentage: Some(30),

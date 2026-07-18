@@ -1079,7 +1079,7 @@ fn cursor_concurrent_subagents_fold_independently_without_context_sidecars() {
         "conversation_id": "cursor-parent",
         "model_id": "parent-model",
     }));
-    let mut context = rimz::store::agent_context::empty_context("cursor", Timestamp::now());
+    let mut context = rimz::agents::AgentContext::new("cursor", Timestamp::now());
     context.model_id = Some("parent-sidecar-model".to_owned());
     let parent_context = rimz::store::agent_context::new_record("cursor", "cursor-parent", context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &parent_context)
@@ -1691,7 +1691,7 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
         "source": "startup",
     }));
 
-    let mut context = rimz::store::agent_context::empty_context("codex", Timestamp::now());
+    let mut context = rimz::agents::AgentContext::new("codex", Timestamp::now());
     context.model_id = Some("parent-model".to_owned());
     let parent_context =
         rimz::store::agent_context::new_record("codex", "sess-codex-parent", context);

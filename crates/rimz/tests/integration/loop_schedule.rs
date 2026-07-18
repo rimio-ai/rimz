@@ -184,7 +184,7 @@ fn agent_budget_edits_and_views_use_local_day() {
         );
     }
 
-    let mut context = rimz::store::agent_context::empty_context("claude", Timestamp::now());
+    let mut context = rimz::agents::AgentContext::new("claude", Timestamp::now());
     context.cost = Some(rimz::agents::AgentCost {
         total_cost_usd: Some(50.0),
         ..rimz::agents::AgentCost::default()

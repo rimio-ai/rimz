@@ -6,15 +6,13 @@ use jiff::Timestamp;
 use crate::agents::{AgentCardRef, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{
-    AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageSender,
-    MessageStatus, gate_open, queue_head_for_message, same_delivery_lane,
+    AutoCompact, CLAIM_TTL, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord,
+    MessageStatus, claim_expired, delivery_batch_indices,
 };
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 
 use super::super::{Result, Store, UnresolvedMessage, message_store};
 use super::Txn;
-
-const CLAIM_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
@@ -128,22 +126,26 @@ enum MessageUpdate {
 
 struct QueueTxn<'txn, 'paths> {
     txn: &'txn mut Txn<'paths>,
+    /// Message-id order comes from `message_store::list` and is restored by
+    /// `replace_all` at the transaction boundary.
     live: Vec<MessageRecord>,
     history: Vec<MessageRecord>,
     events: Vec<EventEnvelope>,
-    terminal_ids: BTreeSet<String>,
     live_changed: bool,
 }
 
 impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
     fn new(txn: &'txn mut Txn<'paths>) -> Result<Self> {
         let live = message_store::list(&txn.paths.messages_dir)?;
+        debug_assert!(
+            live.windows(2)
+                .all(|pair| pair[0].message_id.as_str() <= pair[1].message_id.as_str())
+        );
         Ok(Self {
             txn,
             live,
             history: Vec::new(),
             events: Vec::new(),
-            terminal_ids: BTreeSet::new(),
             live_changed: false,
         })
     }
@@ -190,14 +192,14 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         let message = normalize_terminal(message, status, now, reason);
         let method = MessageEventMethod::for_terminal_status(status)
             .expect("terminal message statuses have an event method");
-        if self
+        if let Some(index) = self
             .live
             .iter()
-            .any(|live| live.message_id == message.message_id)
+            .position(|live| live.message_id == message.message_id)
         {
+            self.live.remove(index);
             self.live_changed = true;
         }
-        self.terminal_ids.insert(message.message_id.to_string());
         self.history.push(message.clone());
         self.events.push(EventEnvelope::message_event(
             &message,
@@ -215,27 +217,32 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         mut update: impl FnMut(&mut MessageRecord) -> MessageUpdate,
     ) -> Vec<MessageRecord> {
         let mut updated = Vec::new();
-        let mut applied = Vec::new();
-        for message in &mut self.live {
-            match update(message) {
-                MessageUpdate::Keep => {}
+        let mut live = Vec::with_capacity(self.live.len());
+        for mut message in std::mem::take(&mut self.live) {
+            match update(&mut message) {
+                MessageUpdate::Keep => live.push(message),
                 MessageUpdate::SilentRewrite => {
                     self.live_changed = true;
-                    applied.push((message.clone(), MessageUpdate::SilentRewrite));
+                    updated.push(message.clone());
+                    live.push(message);
                 }
                 MessageUpdate::Rewrite { method, reason } => {
                     self.live_changed = true;
-                    applied.push((message.clone(), MessageUpdate::Rewrite { method, reason }));
+                    self.events.push(EventEnvelope::message_event(
+                        &message,
+                        session_name,
+                        method,
+                        reason.as_deref(),
+                    ));
+                    updated.push(message.clone());
+                    live.push(message);
                 }
                 MessageUpdate::Finalize { status, reason } => {
-                    applied.push((message.clone(), MessageUpdate::Finalize { status, reason }));
-                }
-            }
-        }
-        for (message, update) in applied {
-            match update {
-                MessageUpdate::SilentRewrite => updated.push(message),
-                MessageUpdate::Rewrite { method, reason } => {
+                    self.live_changed = true;
+                    let message = normalize_terminal(message, status, now, reason.as_deref());
+                    let method = MessageEventMethod::for_terminal_status(status)
+                        .expect("terminal message statuses have an event method");
+                    self.history.push(message.clone());
                     self.events.push(EventEnvelope::message_event(
                         &message,
                         session_name,
@@ -244,16 +251,9 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
                     ));
                     updated.push(message);
                 }
-                MessageUpdate::Finalize { status, reason } => updated.push(self.terminalize(
-                    message,
-                    status,
-                    session_name,
-                    reason.as_deref(),
-                    now,
-                )),
-                MessageUpdate::Keep => {}
             }
         }
+        self.live = live;
         updated
     }
 
@@ -266,8 +266,7 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         mut update: impl FnMut(&mut MessageRecord),
     ) -> Vec<MessageRecord> {
         debug_assert!(status.is_terminal());
-        let now = Timestamp::now();
-        self.apply_all(session_name, now, |message| {
+        self.apply_all(session_name, Timestamp::now(), |message| {
             if !select(message) {
                 return MessageUpdate::Keep;
             }
@@ -279,90 +278,25 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         })
     }
 
-    fn claimable_queued(&self, message_id: &MessageId, now: Timestamp) -> Option<MessageRecord> {
-        self.live
-            .iter()
-            .find(|message| {
-                message.status == MessageStatus::Queued
-                    && message.message_id == *message_id
-                    && claim_expired(message.last_attempt_at, now)
-            })
-            .cloned()
-    }
-
-    fn boundary_head_is_claimable(&self, head: &MessageRecord, now: Timestamp) -> bool {
-        let current_head = queue_head_for_message(
-            self.live
-                .iter()
-                .filter(|message| message.status == MessageStatus::Queued),
-            head,
-            now,
-        );
-        current_head.is_some_and(|current| current.message_id == head.message_id)
-            && !self.live.iter().any(|message| {
-                message.status == MessageStatus::Claimed
-                    && message.same_card(head.card_ref())
-                    && same_delivery_lane(head.gate, message.gate)
-                    && message.is_deliverable(now)
-                    && message.message_id.as_str() < head.message_id.as_str()
-            })
-    }
-
-    fn compatible_fifo_prefix(
-        &self,
-        head: &MessageRecord,
-        status: AgentStatus,
-        now: Timestamp,
-    ) -> Vec<MessageRecord> {
-        let mut candidates = vec![head.clone()];
-        if !batchable(head) || head.gate == DeliveryGate::Resume {
-            return candidates;
+    fn claim_indices(&mut self, indices: &[usize], now: Timestamp) -> Vec<MessageRecord> {
+        let mut claimed = Vec::with_capacity(indices.len());
+        for index in indices {
+            let message = &mut self.live[*index];
+            message.status = MessageStatus::Claimed;
+            message.attempts = message.attempts.saturating_add(1);
+            message.last_attempt_at = Some(now);
+            message.last_error = None;
+            message.retry_after = None;
+            message.updated_at = now;
+            claimed.push(message.clone());
         }
-        for candidate in self.live.iter().filter(|message| {
-            matches!(
-                message.status,
-                MessageStatus::Queued | MessageStatus::Claimed
-            ) && message.same_card(head.card_ref())
-                && same_delivery_lane(head.gate, message.gate)
-                && message.is_deliverable(now)
-                && message.message_id.as_str() > head.message_id.as_str()
-        }) {
-            if !claim_expired(candidate.last_attempt_at, now)
-                || !batch_compatible(head, candidate, status)
-            {
-                break;
-            }
-            candidates.push(candidate.clone());
-        }
-        candidates
-    }
-
-    fn apply_claims(
-        &mut self,
-        candidates: Vec<MessageRecord>,
-        now: Timestamp,
-    ) -> Vec<MessageRecord> {
-        let mut claimed = candidates
-            .iter()
-            .map(|message| claim_message(message, now))
-            .collect::<Vec<_>>();
-        for message in &claimed {
-            self.upsert(message.clone());
-        }
-        if claimed.len() > 1 {
-            let batch_id = claimed[0].message_id.clone();
-            for message in &mut claimed {
-                message.batch_id = Some(batch_id.clone());
-            }
-        }
+        self.live_changed |= !claimed.is_empty();
         claimed
     }
 
-    fn finish(mut self) -> Result<()> {
+    fn finish(self) -> Result<()> {
         message_store::append_history_many(&self.txn.paths.messages_dir, &self.history)?;
         if self.live_changed {
-            self.live
-                .retain(|message| !self.terminal_ids.contains(message.message_id.as_str()));
             message_store::replace_all(&self.txn.paths.messages_dir, &self.live)?;
         }
         for event in &self.events {
@@ -390,47 +324,6 @@ fn normalize_terminal(
         message.delivered_at = Some(now);
     }
     message
-}
-
-fn claim_message(message: &MessageRecord, now: Timestamp) -> MessageRecord {
-    let mut claimed = message.clone();
-    claimed.status = MessageStatus::Claimed;
-    claimed.attempts = claimed.attempts.saturating_add(1);
-    claimed.last_attempt_at = Some(now);
-    claimed.last_error = None;
-    claimed.retry_after = None;
-    claimed.updated_at = now;
-    claimed
-}
-
-fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool {
-    let Some(last) = last_attempt_at else {
-        return true;
-    };
-    let age = now.duration_since(last);
-    age.is_negative() || (age.as_secs() as u64) >= CLAIM_TTL.as_secs()
-}
-
-fn batch_key(message: &MessageRecord) -> Option<&str> {
-    match &message.sender {
-        MessageSender::Agent { channel, .. } => channel.as_deref(),
-        MessageSender::Human | MessageSender::System => message.channel.as_deref(),
-    }
-}
-
-fn batchable(message: &MessageRecord) -> bool {
-    message.body == MessageBody::Prompt
-        && message.enter
-        && !message.text.trim_start().starts_with('/')
-}
-
-fn batch_compatible(head: &MessageRecord, candidate: &MessageRecord, status: AgentStatus) -> bool {
-    batchable(head)
-        && head.gate != DeliveryGate::Resume
-        && batchable(candidate)
-        && batch_key(candidate) == batch_key(head)
-        && candidate.force == head.force
-        && gate_open(candidate.gate, status)
 }
 
 fn apply_sweep_update(
@@ -665,17 +558,23 @@ impl Store {
         status: AgentStatus,
         now: Timestamp,
     ) -> Result<Option<Vec<MessageRecord>>> {
-        self.commit_queue(|queue| {
-            let Some(head) = queue.claimable_queued(message_id, now) else {
+        let Some(mut claimed) = self.commit_queue(|queue| {
+            let Some(indices) = delivery_batch_indices(queue.live(), message_id, status, now)
+            else {
                 return Ok(None);
             };
-            if !queue.boundary_head_is_claimable(&head, now) {
-                return Ok(None);
+            Ok(Some(queue.claim_indices(&indices, now)))
+        })?
+        else {
+            return Ok(None);
+        };
+        if claimed.len() > 1 {
+            let batch_id = claimed[0].message_id.clone();
+            for message in &mut claimed {
+                message.batch_id = Some(batch_id.clone());
             }
-            let candidates = queue.compatible_fifo_prefix(&head, status, now);
-            let claimed = queue.apply_claims(candidates, now);
-            Ok(Some(claimed))
-        })
+        }
+        Ok(Some(claimed))
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -685,10 +584,19 @@ impl Store {
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
         self.commit_queue(|queue| {
-            let Some(message) = queue.claimable_queued(message_id, now) else {
+            let Some(index) = queue.live().iter().position(|message| {
+                message.message_id == *message_id && message.status == MessageStatus::Queued
+            }) else {
                 return Ok(None);
             };
-            Ok(queue.apply_claims(vec![message], now).into_iter().next())
+            if !claim_expired(queue.live()[index].last_attempt_at, now) {
+                return Ok(None);
+            }
+            let claimed = queue
+                .claim_indices(std::slice::from_ref(&index), now)
+                .pop()
+                .expect("selected claim index returns one message");
+            Ok(Some(claimed))
         })
     }
 

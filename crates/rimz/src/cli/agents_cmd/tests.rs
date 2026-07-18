@@ -1135,7 +1135,7 @@ mod render {
             TurnPhase::Reasoning,
             1_000,
         );
-        let mut context = rimz::store::agent_context::empty_context("droid", now);
+        let mut context = rimz::agents::AgentContext::new("droid", now);
         context.native_permission_wait = Some(Timestamp::from_second(1_010).unwrap());
         native_wait.context = Some(context);
         let mut native_out = anstream::StripStream::new(Vec::new());
@@ -1221,7 +1221,7 @@ fn agent_with_turn_error(
     label: &str,
 ) -> AgentState {
     let at = Timestamp::from_second(at).unwrap();
-    let mut context = rimz::store::agent_context::empty_context(&agent.kind.to_string(), at);
+    let mut context = rimz::agents::AgentContext::new(&agent.kind.to_string(), at);
     context.turn_error = Some(AgentTurnError {
         class,
         at,

@@ -249,10 +249,7 @@ fn fresh_realtime_claude_windows_defer_direct_window_publication() {
         )],
         Timestamp::now(),
     );
-    snapshot.agents[0].context = Some(crate::store::agent_context::empty_context(
-        "claude",
-        snapshot.now,
-    ));
+    snapshot.agents[0].context = Some(crate::agents::AgentContext::new("claude", snapshot.now));
     snapshot.agents[0].context.as_mut().unwrap().rate_limits = Some(AgentRateLimits {
         windows: vec![RateLimitWindow {
             duration_mins: Some(300),

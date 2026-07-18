@@ -91,7 +91,7 @@ fn row_preserves_unknown_context_percentage() {
 fn capacity_and_session_usage_do_not_fabricate_a_context_percentage() {
     let mut state = agent("droid", "sess", AgentStatus::Running, 0);
     state.usage.context_pct = None;
-    let mut context = crate::store::agent_context::empty_context("droid", epoch());
+    let mut context = crate::agents::AgentContext::new("droid", epoch());
     context.tokens = Some(crate::agents::AgentTokenUsage {
         context_window_size: Some(200_000),
         used_percentage: None,

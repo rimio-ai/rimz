@@ -1018,7 +1018,7 @@ mod tests {
         let opener = MessageId::parse("msg_0123456789abcdef").unwrap();
         let mut agent = agent("sess-1", AgentStatus::Running);
         agent.name = Some("coder".to_owned());
-        let mut context = crate::store::agent_context::empty_context("codex", now());
+        let mut context = crate::agents::AgentContext::new("codex", now());
         context.turn_opened_by = vec![opener.clone()];
         agent.context = Some(context);
         let snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![agent], now());

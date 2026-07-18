@@ -897,8 +897,142 @@ fn schedule_parser_accepts_durations_and_rolls_wall_clock_forward() {
     assert!(parse_schedule_at("25:00", &now).is_err());
 }
 
+#[test]
+fn delivery_batch_selector_pins_fifo_lanes_and_compatible_prefix() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let other = agent("other", Some("reviewer"));
+
+    let head = delivery_message(2, &receiver, DeliveryGate::Done, Some("same"));
+    assert!(delivery_batch_indices(&[], &head.message_id, AgentStatus::Idle, now).is_none());
+    let mut sent = head.clone();
+    sent.status = MessageStatus::Sent;
+    assert!(delivery_batch_indices(&[sent], &head.message_id, AgentStatus::Idle, now).is_none());
+    let mut recently_claimed = head.clone();
+    recently_claimed.last_attempt_at = Some(now);
+    assert!(
+        delivery_batch_indices(
+            &[recently_claimed],
+            &head.message_id,
+            AgentStatus::Idle,
+            now,
+        )
+        .is_none()
+    );
+
+    for blocker_status in [MessageStatus::Queued, MessageStatus::Claimed] {
+        let mut blocker = delivery_message(1, &receiver, DeliveryGate::Any, Some("same"));
+        blocker.status = blocker_status;
+        assert!(
+            delivery_batch_indices(
+                &[blocker, head.clone()],
+                &head.message_id,
+                AgentStatus::Idle,
+                now,
+            )
+            .is_none(),
+            "older {blocker_status:?} same-lane record blocks"
+        );
+    }
+
+    let unrelated_card = delivery_message(1, &other, DeliveryGate::Done, Some("same"));
+    let unrelated_lane = delivery_message(2, &receiver, DeliveryGate::Resume, Some("same"));
+    let mut future = delivery_message(3, &receiver, DeliveryGate::Done, Some("same"));
+    future.not_before = Some(now + Duration::from_secs(60));
+    let head = delivery_message(4, &receiver, DeliveryGate::Done, Some("same"));
+    let compatible = delivery_message(5, &receiver, DeliveryGate::Any, Some("same"));
+    let mut blocked = delivery_message(6, &receiver, DeliveryGate::Done, Some("same"));
+    blocked.after.push(AfterCondition {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: "upstream".into(),
+        agent_name: None,
+        address: "@upstream".to_owned(),
+        met_at: None,
+    });
+    let after_blocked = delivery_message(7, &receiver, DeliveryGate::Done, Some("same"));
+    let barrier = delivery_message(8, &receiver, DeliveryGate::Done, Some("other"));
+    let after_barrier = delivery_message(9, &receiver, DeliveryGate::Done, Some("same"));
+    let live = vec![
+        unrelated_card,
+        unrelated_lane,
+        future,
+        head.clone(),
+        compatible,
+        blocked,
+        after_blocked,
+        barrier,
+        after_barrier,
+    ];
+    let selected = delivery_batch_indices(&live, &head.message_id, AgentStatus::Idle, now).unwrap();
+    assert_eq!(selected, vec![3, 4, 6]);
+
+    let head = delivery_message(1, &receiver, DeliveryGate::Done, None);
+    let mut expired = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    expired.status = MessageStatus::Claimed;
+    expired.last_attempt_at = Some(now - CLAIM_TTL);
+    let mut unexpired = delivery_message(3, &receiver, DeliveryGate::Done, None);
+    unexpired.status = MessageStatus::Claimed;
+    unexpired.last_attempt_at = Some(now);
+    let tail = delivery_message(4, &receiver, DeliveryGate::Done, None);
+    assert_eq!(
+        delivery_batch_indices(
+            &[head.clone(), expired, unexpired, tail],
+            &head.message_id,
+            AgentStatus::Idle,
+            now,
+        )
+        .unwrap(),
+        vec![0, 1]
+    );
+
+    let resume = delivery_message(1, &receiver, DeliveryGate::Resume, None);
+    let resume_tail = delivery_message(2, &receiver, DeliveryGate::Resume, None);
+    assert_eq!(
+        delivery_batch_indices(
+            &[resume.clone(), resume_tail],
+            &resume.message_id,
+            AgentStatus::Paused,
+            now,
+        )
+        .unwrap(),
+        vec![0]
+    );
+
+    let head = delivery_message(1, &receiver, DeliveryGate::Any, None);
+    let closed_gate = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    let tail = delivery_message(3, &receiver, DeliveryGate::Any, None);
+    assert_eq!(
+        delivery_batch_indices(
+            &[head.clone(), closed_gate, tail],
+            &head.message_id,
+            AgentStatus::Failed,
+            now,
+        )
+        .unwrap(),
+        vec![0]
+    );
+}
+
 fn message_id(value: u64) -> MessageId {
     MessageId::parse(&format!("msg_{value:016}")).unwrap()
+}
+
+fn delivery_message(
+    id: u64,
+    agent: &AgentState,
+    gate: DeliveryGate,
+    channel: Option<&str>,
+) -> MessageRecord {
+    let mut message = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        agent,
+        format!("message {id}"),
+        true,
+        gate,
+    )
+    .with_channel(channel.map(ToOwned::to_owned));
+    message.message_id = message_id(id);
+    message
 }
 
 fn agent_sender(role: &str, channel: Option<&str>) -> MessageSender {

@@ -2794,7 +2794,7 @@ fn append_claude_assistant(transcript: &Path, text: &str) {
 }
 
 fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
-    let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
+    let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         used_percentage: Some(used_pct),
         ..Default::default()
@@ -2805,7 +2805,7 @@ fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
 }
 
 fn seed_context_tokens(env: &Env, agent_id: &str, used: u64, window: u64) {
-    let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
+    let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         context_window_size: Some(window),
         current_usage: Some(rimz::agents::AgentCurrentUsage {
@@ -2827,7 +2827,7 @@ fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass) {
         .find(|agent| agent.agent_id.as_str() == agent_id)
         .expect("agent");
     let at = agent.last_activity + jiff::SignedDuration::from_secs(1);
-    let mut context = rimz::store::agent_context::empty_context("claude", at);
+    let mut context = rimz::agents::AgentContext::new("claude", at);
     context.turn_error = Some(AgentTurnError {
         class,
         at,

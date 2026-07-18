@@ -215,10 +215,10 @@ fn is_producer(election: &ProducerElectionTracker) -> bool {
 mod tests {
     use super::*;
     use crate::agents::context::AgentContext;
-    use crate::store::agent_context::{empty_context, new_record};
+    use crate::store::agent_context::new_record;
 
     fn context(kind: &str) -> AgentContext {
-        empty_context(kind, jiff::Timestamp::UNIX_EPOCH)
+        AgentContext::new(kind, jiff::Timestamp::UNIX_EPOCH)
     }
 
     fn target(kind: &str, session_id: &str) -> WatchTarget {

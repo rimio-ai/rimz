@@ -92,31 +92,45 @@ pub fn merge_app_server_context(
     context: AgentContext,
 ) -> anyhow::Result<()> {
     let observed_at = context.observed_at;
-    let prior = crate::store::agent_context::read_one(runtime, "codex", session_id);
-    let mut record = prior.unwrap_or_else(|| {
-        crate::store::agent_context::new_record("codex", session_id, {
-            crate::store::agent_context::empty_context("codex", observed_at)
-        })
-    });
-
-    record.context.source = context.source;
-    if context.session_name.is_some() {
-        record.context.session_name = context.session_name;
-    }
-    if context.session_preview.is_some() {
-        record.context.session_preview = context.session_preview;
-    }
-    if context.model_id.is_some() {
-        record.context.model_id = context.model_id;
-    }
-    record.context.model_display_name = context.model_display_name;
-    record.context.agent_version = context.agent_version;
-    record.context.rate_limits = context.rate_limits;
-    record.context.account = context.account;
-    record.context.observed_at = observed_at;
-    record.rate_limits_observed_at = Some(observed_at);
-    crate::store::agent_context::write_record(runtime, &record)
-        .context("writing merged app-server context")
+    crate::store::agent_context::update_record(
+        runtime,
+        "codex",
+        session_id,
+        observed_at,
+        |record, _| {
+            record.context.source.clone_from(&context.source);
+            if context.session_name.is_some() {
+                record
+                    .context
+                    .session_name
+                    .clone_from(&context.session_name);
+            }
+            if context.session_preview.is_some() {
+                record
+                    .context
+                    .session_preview
+                    .clone_from(&context.session_preview);
+            }
+            if context.model_id.is_some() {
+                record.context.model_id.clone_from(&context.model_id);
+            }
+            record
+                .context
+                .model_display_name
+                .clone_from(&context.model_display_name);
+            record
+                .context
+                .agent_version
+                .clone_from(&context.agent_version);
+            record.context.rate_limits.clone_from(&context.rate_limits);
+            record.context.account.clone_from(&context.account);
+            record.context.observed_at = observed_at;
+            record.rate_limits_observed_at = Some(observed_at);
+            true
+        },
+    )
+    .map(|_| ())
+    .context("writing merged app-server context")
 }
 
 /// Short budget for warm unix-socket probes. A stale broker or daemon socket

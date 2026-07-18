@@ -10,7 +10,7 @@ use crate::agents::{
 fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     let (_dir, runtime) = runtime();
     let observed_at = observed_at();
-    let mut prior = new_record("droid", "sess-1", empty_context("droid", observed_at));
+    let mut prior = new_record("droid", "sess-1", AgentContext::new("droid", observed_at));
     prior.context.model_id = Some("deepseek-v4-pro".to_owned());
     prior.context.model_display_name = Some("DeepSeek V4 Pro".to_owned());
     prior.context.cost = Some(AgentCost {
@@ -182,6 +182,74 @@ fn merge_local_context_preserves_prior_fields_by_case() {
         assert_eq!(merged.agent_id.as_str(), "sess-1", "{}", case.name);
         (case.assert)(&merged, prior_at, local_at);
     }
+}
+
+#[test]
+fn stale_provider_observation_updates_latest_locked_record() {
+    let (_dir, runtime) = runtime();
+    let provider_at = Timestamp::from_second(1_700_000_000).unwrap();
+    assert!(
+        update_record(
+            &runtime,
+            "codex",
+            "sess-1",
+            provider_at,
+            |record, existed| {
+                assert!(!existed);
+                record.context.session_name = Some("Initial provider name".to_owned());
+                record.rate_limits_observed_at = Some(provider_at);
+                true
+            },
+        )
+        .unwrap()
+    );
+
+    let local_at = Timestamp::from_second(1_700_000_100).unwrap();
+    let mut refresh = full_local_refresh();
+    refresh.spend_fold = FieldPatch::Set(LocalSpendFold {
+        cursor: crate::agents::spending::SpendCursor {
+            offset: 42,
+            state: None,
+        },
+        total_usd: 0.12,
+    });
+    merge_local_context(&runtime, descriptor("codex"), "sess-1", refresh, local_at).unwrap();
+    let opener = crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
+    merge_turn_opened_by(&runtime, "codex", "sess-1", vec![opener.clone()]).unwrap();
+
+    assert!(
+        update_record(
+            &runtime,
+            "codex",
+            "sess-1",
+            provider_at,
+            |record, existed| {
+                assert!(existed);
+                record.context.session_name = Some("Refined provider name".to_owned());
+                record.context.observed_at = provider_at;
+                record.rate_limits_observed_at = Some(provider_at);
+                true
+            },
+        )
+        .unwrap()
+    );
+
+    let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(
+        merged.context.session_name.as_deref(),
+        Some("Refined provider name")
+    );
+    assert_eq!(used_pct(&merged), Some(40));
+    assert_eq!(total_cost(&merged), Some(0.12));
+    assert_eq!(merged.context.turn_opened_by, vec![opener]);
+    assert_eq!(
+        merged.transcript_path.as_deref(),
+        Some("/tmp/rollout.jsonl")
+    );
+    assert_eq!(merged.transcript_stat, Some(stat()));
+    assert_eq!(merged.spend_fold.unwrap().total_usd, 0.12);
+    assert_eq!(merged.rate_limits_observed_at, Some(provider_at));
+    assert_eq!(merged.context.observed_at, provider_at);
 }
 
 #[test]
@@ -479,9 +547,9 @@ fn observed_context_merge_preserves_fields_cost_coverage_and_monotonicity() {
 #[test]
 fn context_merge_accepts_model_and_effort_only_enrichment() {
     let (_dir, runtime) = runtime();
-    let mut model_context = empty_context("pi", observed_at());
+    let mut model_context = AgentContext::new("pi", observed_at());
     model_context.model_id = Some("gpt-5.5".to_owned());
-    let mut effort_context = empty_context("pi", observed_at());
+    let mut effort_context = AgentContext::new("pi", observed_at());
     effort_context.effort = Some("high".to_owned());
 
     assert!(merge_observed(&runtime, "pi", "sess-1", model_context).unwrap());
@@ -495,7 +563,7 @@ fn context_merge_accepts_model_and_effort_only_enrichment() {
 fn observed_context_merge_replaces_authoritative_scalar_including_zero() {
     let (_dir, runtime) = runtime();
     let observed = |current_context_tokens| {
-        let mut context = empty_context("pi", observed_at());
+        let mut context = AgentContext::new("pi", observed_at());
         context.tokens = Some(AgentTokenUsage {
             current_context_tokens: Some(current_context_tokens),
             ..AgentTokenUsage::default()

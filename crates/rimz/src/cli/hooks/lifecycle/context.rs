@@ -377,7 +377,7 @@ mod tests {
             .expect("session end decodes");
         assert!(decoded.ends_session());
 
-        let mut context = rimz::store::agent_context::empty_context("grok", jiff::Timestamp::now());
+        let mut context = rimz::agents::AgentContext::new("grok", jiff::Timestamp::now());
         context.model_id = Some("stale-model".to_owned());
         rimz::store::agent_context::merge_observed(
             store.runtime_paths(),

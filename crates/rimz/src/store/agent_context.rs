@@ -112,32 +112,22 @@ pub fn write(
     agent_id: &str,
     context: &AgentContext,
 ) -> Result<(), atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
-    let mut context = context.clone();
-    let observed_cost = context.cost.is_some();
-    // Statusline producers own their observed fields, while lifecycle
-    // confirmation owns turn causality. Preserve that independently-written
-    // field across whole-context statusline refreshes.
-    let prior = read_one_unlocked(runtime, kind, agent_id);
-    context.turn_opened_by = prior
-        .as_ref()
-        .map(|record| record.context.turn_opened_by.clone())
-        .unwrap_or_default();
-    if context.cost.is_none() {
-        context.cost = prior
-            .as_ref()
-            .and_then(|record| record.context.cost.clone());
-    }
-    let spend_fold = prior.as_ref().and_then(|record| record.spend_fold.clone());
-    let mut locally_priced_cost = prior
-        .map(|record| record.locally_priced_cost)
-        .unwrap_or_default();
-    if observed_cost {
-        locally_priced_cost.owns_context_cost = false;
-    }
-    write_record_unlocked(
-        runtime,
-        &AgentContextRecord {
+    let observed_at = context.observed_at;
+    update_record(runtime, kind, agent_id, observed_at, |record, _| {
+        let mut context = context.clone();
+        let observed_cost = context.cost.is_some();
+        // Statusline producers own their observed fields, while lifecycle
+        // confirmation owns turn causality. Preserve that independently-written
+        // field across whole-context statusline refreshes.
+        context.turn_opened_by = record.context.turn_opened_by.clone();
+        if context.cost.is_none() {
+            context.cost.clone_from(&record.context.cost);
+        }
+        let mut locally_priced_cost = record.locally_priced_cost.clone();
+        if observed_cost {
+            locally_priced_cost.owns_context_cost = false;
+        }
+        *record = AgentContextRecord {
             kind: AgentKind::new_unchecked(kind),
             agent_id: agent_id.into(),
             context,
@@ -145,38 +135,72 @@ pub fn write(
             rich_observed_at: None,
             transcript_path: None,
             transcript_stat: None,
-            spend_fold,
+            spend_fold: record.spend_fold.clone(),
             locally_priced_cost,
-        },
-    )
+        };
+        true
+    })
+    .map(|_| ())
 }
 
-/// Persist a fully-shaped sidecar record. Used by merge paths that preserve
-/// fields owned by different context producers.
+/// Persist a fully-shaped sidecar fixture while preserving concurrently owned
+/// cost and spend state. Production mutations use [`update_record`].
+#[doc(hidden)]
 pub fn write_record(
     runtime: &RuntimePaths,
     record: &AgentContextRecord,
 ) -> Result<(), atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(runtime, record.kind.as_str(), record.agent_id.as_str())?;
-    let mut record = record.clone();
-    let observed_cost =
-        record.context.cost.is_some() && !record.locally_priced_cost.owns_context_cost;
-    if let Some(prior) = read_one_unlocked(runtime, record.kind.as_str(), record.agent_id.as_str())
-    {
-        if record.context.cost.is_none() {
-            record.context.cost = prior.context.cost;
-        }
-        if record.locally_priced_cost.is_empty() {
-            record.locally_priced_cost = prior.locally_priced_cost;
-        }
-        // Local folds advance only through merge_local_context under this lock;
-        // whole-record writers preserve the latest fold if their read raced it.
-        record.spend_fold = prior.spend_fold;
+    let observed_at = record.context.observed_at;
+    update_record(
+        runtime,
+        record.kind.as_str(),
+        record.agent_id.as_str(),
+        observed_at,
+        |current, existed| {
+            let mut next = record.clone();
+            let observed_cost =
+                next.context.cost.is_some() && !next.locally_priced_cost.owns_context_cost;
+            if next.context.cost.is_none() {
+                next.context.cost.clone_from(&current.context.cost);
+            }
+            if next.locally_priced_cost.is_empty() {
+                next.locally_priced_cost = current.locally_priced_cost.clone();
+            }
+            // Local folds advance only through merge_local_context under this lock;
+            // whole-record writers preserve the latest fold if their read raced it.
+            if existed {
+                next.spend_fold.clone_from(&current.spend_fold);
+            }
+            if observed_cost {
+                next.locally_priced_cost.owns_context_cost = false;
+            }
+            *current = next;
+            true
+        },
+    )
+    .map(|_| ())
+}
+
+/// Mutate one session record against the latest published bytes while holding
+/// its per-record lock. The closure receives whether valid prior bytes existed;
+/// a `false` result leaves the sidecar untouched.
+pub fn update_record(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    observed_at: Timestamp,
+    update: impl FnOnce(&mut AgentContextRecord, bool) -> bool,
+) -> Result<bool, atomic::AtomicErr> {
+    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
+    let prior = read_one_unlocked(runtime, kind, agent_id);
+    let existed = prior.is_some();
+    let mut record =
+        prior.unwrap_or_else(|| new_record(kind, agent_id, AgentContext::new(kind, observed_at)));
+    if !update(&mut record, existed) {
+        return Ok(false);
     }
-    if observed_cost {
-        record.locally_priced_cost.owns_context_cost = false;
-    }
-    write_record_unlocked(runtime, &record)
+    write_record_unlocked(runtime, &record)?;
+    Ok(true)
 }
 
 fn write_record_unlocked(
@@ -226,20 +250,20 @@ pub fn merge_local_context(
     observed_at: Timestamp,
 ) -> Result<(), atomic::AtomicErr> {
     let kind = descriptor.kind;
-    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
-    let mut record = read_one_unlocked(runtime, kind, agent_id)
-        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
-    record.context.source = kind.to_owned();
-    let cost_replaced = !refresh.context.cost.is_keep();
-    refresh.context.apply(&mut record.context, descriptor);
-    if cost_replaced {
-        record.locally_priced_cost.owns_context_cost = false;
-    }
-    record.context.observed_at = observed_at;
-    refresh.spend_fold.apply(&mut record.spend_fold);
-    record.transcript_path = refresh.transcript_path;
-    record.transcript_stat = refresh.transcript_stat;
-    write_record_unlocked(runtime, &record)
+    update_record(runtime, kind, agent_id, observed_at, |record, _| {
+        record.context.source = kind.to_owned();
+        let cost_replaced = !refresh.context.cost.is_keep();
+        refresh.context.apply(&mut record.context, descriptor);
+        if cost_replaced {
+            record.locally_priced_cost.owns_context_cost = false;
+        }
+        record.context.observed_at = observed_at;
+        refresh.spend_fold.apply(&mut record.spend_fold);
+        record.transcript_path = refresh.transcript_path;
+        record.transcript_stat = refresh.transcript_stat;
+        true
+    })
+    .map(|_| ())
 }
 
 /// Merge a sparse hook-observed context (Pi/OpenCode envelope fields) onto the
@@ -252,76 +276,73 @@ pub fn merge_observed(
     agent_id: &str,
     context: AgentContext,
 ) -> Result<bool, atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let observed_at = context.observed_at;
-    let mut record = read_one_unlocked(runtime, kind, agent_id)
-        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
-    let mut changed = false;
-    macro_rules! merge_optional {
-        ($field:ident) => {
-            if let Some(value) = context.$field
-                && record.context.$field.as_ref() != Some(&value)
-            {
-                record.context.$field = Some(value);
-                changed = true;
-            }
-        };
-    }
-    merge_optional!(session_name);
-    merge_optional!(session_preview);
-    merge_optional!(model_display_name);
-    merge_optional!(thinking_enabled);
-    merge_optional!(output_style);
-    merge_optional!(vim_mode);
-    merge_optional!(agent_version);
-    merge_optional!(exceeds_200k_tokens);
-    merge_optional!(pr);
-    merge_optional!(account);
-    merge_optional!(turn_error);
-    merge_optional!(turn_complete);
-    merge_optional!(turn_interrupted);
-    if let Some(rate_limits) = context.rate_limits
-        && record.context.rate_limits.as_ref() != Some(&rate_limits)
-    {
-        record.context.rate_limits = Some(rate_limits);
-        record.rate_limits_observed_at = Some(observed_at);
-        changed = true;
-    }
-    if let Some(tokens) = context.tokens {
-        changed |= merge_observed_tokens(&mut record.context.tokens, tokens);
-    }
-    if let Some(model_id) = context.model_id
-        && record.context.model_id.as_ref() != Some(&model_id)
-    {
-        record.context.model_id = Some(model_id);
-        changed = true;
-    }
-    if let Some(effort) = context.effort
-        && record.context.effort.as_ref() != Some(&effort)
-    {
-        record.context.effort = Some(effort);
-        changed = true;
-    }
-    if let Some(cost) = context.cost
-        && let Some(total_cost_usd) = cost.total_cost_usd
-    {
-        let prior_total_cost = record
-            .context
-            .cost
-            .as_ref()
-            .and_then(|cost| cost.total_cost_usd);
-        if prior_total_cost.is_none_or(|prior| total_cost_usd >= prior) {
-            changed |= merge_observed_cost(&mut record.context.cost, cost, total_cost_usd);
-            record.locally_priced_cost.owns_context_cost = false;
+    update_record(runtime, kind, agent_id, observed_at, |record, _| {
+        let mut changed = false;
+        macro_rules! merge_optional {
+            ($field:ident) => {
+                if let Some(value) = context.$field
+                    && record.context.$field.as_ref() != Some(&value)
+                {
+                    record.context.$field = Some(value);
+                    changed = true;
+                }
+            };
         }
-    }
-    if !changed {
-        return Ok(false);
-    }
-    record.context.source = kind.to_owned();
-    record.context.observed_at = observed_at;
-    write_record_unlocked(runtime, &record)?;
-    Ok(true)
+        merge_optional!(session_name);
+        merge_optional!(session_preview);
+        merge_optional!(model_display_name);
+        merge_optional!(thinking_enabled);
+        merge_optional!(output_style);
+        merge_optional!(vim_mode);
+        merge_optional!(agent_version);
+        merge_optional!(exceeds_200k_tokens);
+        merge_optional!(pr);
+        merge_optional!(account);
+        merge_optional!(turn_error);
+        merge_optional!(turn_complete);
+        merge_optional!(turn_interrupted);
+        if let Some(rate_limits) = context.rate_limits
+            && record.context.rate_limits.as_ref() != Some(&rate_limits)
+        {
+            record.context.rate_limits = Some(rate_limits);
+            record.rate_limits_observed_at = Some(observed_at);
+            changed = true;
+        }
+        if let Some(tokens) = context.tokens {
+            changed |= merge_observed_tokens(&mut record.context.tokens, tokens);
+        }
+        if let Some(model_id) = context.model_id
+            && record.context.model_id.as_ref() != Some(&model_id)
+        {
+            record.context.model_id = Some(model_id);
+            changed = true;
+        }
+        if let Some(effort) = context.effort
+            && record.context.effort.as_ref() != Some(&effort)
+        {
+            record.context.effort = Some(effort);
+            changed = true;
+        }
+        if let Some(cost) = context.cost
+            && let Some(total_cost_usd) = cost.total_cost_usd
+        {
+            let prior_total_cost = record
+                .context
+                .cost
+                .as_ref()
+                .and_then(|cost| cost.total_cost_usd);
+            if prior_total_cost.is_none_or(|prior| total_cost_usd >= prior) {
+                changed |= merge_observed_cost(&mut record.context.cost, cost, total_cost_usd);
+                record.locally_priced_cost.owns_context_cost = false;
+            }
+        }
+        if changed {
+            record.context.source = kind.to_owned();
+            record.context.observed_at = observed_at;
+        }
+        changed
+    })
 }
 
 /// Merge a provider-native turn-error marker into the latest sidecar record.
@@ -334,18 +355,16 @@ pub fn merge_turn_error(
     agent_id: &str,
     marker: AgentTurnError,
 ) -> Result<bool, atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let observed_at = Timestamp::now();
-    let mut record = read_one_unlocked(runtime, kind, agent_id)
-        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
-    if record.context.turn_error.as_ref() == Some(&marker) {
-        return Ok(false);
-    }
-    record.context.source = kind.to_owned();
-    record.context.turn_error = Some(marker);
-    record.context.observed_at = observed_at;
-    write_record_unlocked(runtime, &record)?;
-    Ok(true)
+    update_record(runtime, kind, agent_id, observed_at, |record, _| {
+        if record.context.turn_error.as_ref() == Some(&marker) {
+            return false;
+        }
+        record.context.source = kind.to_owned();
+        record.context.turn_error = Some(marker);
+        record.context.observed_at = observed_at;
+        true
+    })
 }
 
 /// Replace the delivered messages that opened the current turn. An empty set
@@ -356,18 +375,16 @@ pub fn merge_turn_opened_by(
     agent_id: &str,
     message_ids: Vec<MessageId>,
 ) -> Result<bool, atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let observed_at = Timestamp::now();
-    let mut record = read_one_unlocked(runtime, kind, agent_id)
-        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
-    if record.context.turn_opened_by == message_ids {
-        return Ok(false);
-    }
-    record.context.source = kind.to_owned();
-    record.context.turn_opened_by = message_ids;
-    record.context.observed_at = observed_at;
-    write_record_unlocked(runtime, &record)?;
-    Ok(true)
+    update_record(runtime, kind, agent_id, observed_at, |record, _| {
+        if record.context.turn_opened_by == message_ids {
+            return false;
+        }
+        record.context.source = kind.to_owned();
+        record.context.turn_opened_by = message_ids;
+        record.context.observed_at = observed_at;
+        true
+    })
 }
 
 /// Add one hook-priced turn to the session accumulator. Consecutive duplicate
@@ -381,28 +398,26 @@ pub fn merge_locally_priced_cost(
     if priced.turn_id.trim().is_empty() || !priced.cost_usd.is_finite() || priced.cost_usd <= 0.0 {
         return Ok(false);
     }
-    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let observed_at = Timestamp::now();
-    let mut record = read_one_unlocked(runtime, kind, agent_id)
-        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
-    if record.locally_priced_cost.last_turn_id.as_deref() == Some(priced.turn_id.as_str()) {
-        return Ok(false);
-    }
-    let cumulative = record.locally_priced_cost.cumulative_usd + priced.cost_usd;
-    if !cumulative.is_finite() || cumulative < 0.0 {
-        return Ok(false);
-    }
-    record.locally_priced_cost.last_turn_id = Some(priced.turn_id.clone());
-    record.locally_priced_cost.cumulative_usd = cumulative;
-    record.context.source = kind.to_owned();
-    record.context.observed_at = observed_at;
-    if record.locally_priced_cost.owns_context_cost || record.context.cost.is_none() {
-        record.locally_priced_cost.owns_context_cost = true;
-        let cost = record.context.cost.get_or_insert_with(AgentCost::default);
-        cost.total_cost_usd = Some(cumulative);
-    }
-    write_record_unlocked(runtime, &record)?;
-    Ok(true)
+    update_record(runtime, kind, agent_id, observed_at, |record, _| {
+        if record.locally_priced_cost.last_turn_id.as_deref() == Some(priced.turn_id.as_str()) {
+            return false;
+        }
+        let cumulative = record.locally_priced_cost.cumulative_usd + priced.cost_usd;
+        if !cumulative.is_finite() || cumulative < 0.0 {
+            return false;
+        }
+        record.locally_priced_cost.last_turn_id = Some(priced.turn_id.clone());
+        record.locally_priced_cost.cumulative_usd = cumulative;
+        record.context.source = kind.to_owned();
+        record.context.observed_at = observed_at;
+        if record.locally_priced_cost.owns_context_cost || record.context.cost.is_none() {
+            record.locally_priced_cost.owns_context_cost = true;
+            let cost = record.context.cost.get_or_insert_with(AgentCost::default);
+            cost.total_cost_usd = Some(cumulative);
+        }
+        true
+    })
 }
 
 fn merge_observed_tokens(prior: &mut Option<AgentTokenUsage>, incoming: AgentTokenUsage) -> bool {
@@ -449,34 +464,6 @@ fn merge_observed_cost(
         target.total_lines_removed = incoming.total_lines_removed;
     }
     *target != before
-}
-
-pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {
-    AgentContext {
-        source: source.to_owned(),
-        session_name: None,
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
-        agent_version: None,
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: None,
-        pr: None,
-        account: None,
-        turn_opened_by: Vec::new(),
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
-        observed_at,
-    }
 }
 
 struct RecordLock {

@@ -430,8 +430,7 @@ mod tests {
         assert!(decoded.lifecycle().is_none());
         assert_eq!(decoded.routing().context_agent_id(), Some("root-session"));
 
-        let mut context =
-            rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
+        let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
         context.model_id = Some("claude-sonnet".to_owned());
         rimz::store::agent_context::merge_observed(
             store.runtime_paths(),
@@ -730,7 +729,7 @@ mod tests {
         let mut prior = rimz::store::agent_context::new_record(
             "claude",
             "sess-1",
-            rimz::store::agent_context::empty_context("claude", observed_at),
+            rimz::agents::AgentContext::new("claude", observed_at),
         );
         prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
         prior.context.cost = Some(rimz::agents::AgentCost {
@@ -820,7 +819,7 @@ mod tests {
         let mut prior = rimz::store::agent_context::new_record(
             "opencode",
             "sess-1",
-            rimz::store::agent_context::empty_context("opencode", observed_at),
+            rimz::agents::AgentContext::new("opencode", observed_at),
         );
         prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
         prior.transcript_stat = Some(initial_stat);

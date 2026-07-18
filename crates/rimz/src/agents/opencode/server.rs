@@ -21,9 +21,9 @@ const REFRESH_THROTTLE_SECS: i64 = 20;
 const PASSWORD_ENV: &str = "OPENCODE_SERVER_PASSWORD";
 const USERNAME_ENV: &str = "OPENCODE_SERVER_USERNAME";
 
-/// Observe and merge provider-owned rich fields when the session's rich-data
-/// throttle is due. Push-owned lifecycle, usage, cost, and transcript fields
-/// remain sourced from `prior`.
+/// Observe provider-owned rich fields when the session's rich-data throttle is
+/// due. The prior context supplies only the model hint; persistence merges the
+/// observation against the latest locked sidecar record.
 pub fn refresh_rich_context(
     server_url: &str,
     session_id: &str,
@@ -60,28 +60,25 @@ fn refresh_rich_context_with(
     let model_hint =
         current_model.or_else(|| prior.and_then(|context| context.model_id.as_deref()));
     let observed = observe(server_url, Some(session_id), model_hint, now);
-    merge_rich_context(prior, observed)
+    has_rich_fields(&observed).then_some(observed)
 }
 
-fn merge_rich_context(
-    prior: Option<&AgentContext>,
-    observed: AgentContext,
-) -> Option<AgentContext> {
-    if !has_rich_fields(&observed) {
-        return None;
+/// Apply provider-owned rich fields to the latest context. Returns whether the
+/// observation contains substantive rich data and should be persisted.
+pub fn merge_rich_context(current: &mut AgentContext, observed: &AgentContext) -> bool {
+    if !has_rich_fields(observed) {
+        return false;
     }
-    let observed_at = observed.observed_at;
-    let mut context = prior
-        .cloned()
-        .unwrap_or_else(|| AgentContext::new("opencode", observed_at));
-    context.source = observed.source;
+    current.source.clone_from(&observed.source);
     if observed.session_name.is_some() {
-        context.session_name = observed.session_name;
+        current.session_name.clone_from(&observed.session_name);
     }
-    context.model_display_name = observed.model_display_name;
-    context.agent_version = observed.agent_version;
-    context.observed_at = observed_at;
-    Some(context)
+    current
+        .model_display_name
+        .clone_from(&observed.model_display_name);
+    current.agent_version.clone_from(&observed.agent_version);
+    current.observed_at = observed.observed_at;
+    true
 }
 
 fn has_rich_fields(context: &AgentContext) -> bool {
@@ -404,7 +401,8 @@ mod tests {
             ..Default::default()
         });
 
-        let merged = merge_rich_context(Some(&prior), rich_context(rich_at)).unwrap();
+        let mut merged = prior.clone();
+        assert!(merge_rich_context(&mut merged, &rich_context(rich_at)));
 
         assert_eq!(merged.source, "opencode");
         assert_eq!(merged.session_name.as_deref(), Some("Fix auth"));
@@ -428,13 +426,17 @@ mod tests {
 
         let mut unnamed = rich_context(rich_at);
         unnamed.session_name = None;
-        assert_eq!(
-            merge_rich_context(Some(&prior), unnamed)
-                .unwrap()
-                .session_name
-                .as_deref(),
-            Some("Existing name")
-        );
+        let mut preserved = prior.clone();
+        assert!(merge_rich_context(&mut preserved, &unnamed));
+        assert_eq!(preserved.session_name.as_deref(), Some("Existing name"));
+
+        let mut clearing = AgentContext::new("opencode", rich_at);
+        clearing.session_name = Some("Next name".to_owned());
+        let mut cleared = rich_context(push_at);
+        assert!(merge_rich_context(&mut cleared, &clearing));
+        assert_eq!(cleared.session_name.as_deref(), Some("Next name"));
+        assert_eq!(cleared.model_display_name, None);
+        assert_eq!(cleared.agent_version, None);
     }
 
     #[test]

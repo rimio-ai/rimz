@@ -74,7 +74,7 @@ fn refresh_context(
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
     let prior = rimz::store::agent_context::read_one(&runtime, "opencode", session_id);
-    let Some(context) = rimz::agents::opencode::server::refresh_rich_context(
+    let Some(observed) = rimz::agents::opencode::server::refresh_rich_context(
         server_url,
         session_id,
         model,
@@ -84,16 +84,138 @@ fn refresh_context(
     ) else {
         return Ok(());
     };
-    let observed_at = context.observed_at;
-    let mut record = prior.unwrap_or_else(|| {
-        rimz::store::agent_context::new_record("opencode", session_id, {
-            rimz::store::agent_context::empty_context("opencode", observed_at)
-        })
-    });
-    record.context = context;
-    record.rich_observed_at = Some(observed_at);
-    rimz::store::agent_context::write_record(&runtime, &record)
-        .context("writing OpenCode rich-context sidecar")?;
-    let _ = rimz::store::wakeup::wake_sidebars(&runtime);
+    let wrote = merge_observation(&runtime, session_id, observed)?;
+    if wrote {
+        let _ = rimz::store::wakeup::wake_sidebars(&runtime);
+    }
     Ok(())
+}
+
+fn merge_observation(
+    runtime: &RuntimePaths,
+    session_id: &str,
+    observed: rimz::agents::AgentContext,
+) -> Result<bool> {
+    let observed_at = observed.observed_at;
+    rimz::store::agent_context::update_record(
+        runtime,
+        "opencode",
+        session_id,
+        observed_at,
+        |record, _| {
+            if !rimz::agents::opencode::server::merge_rich_context(&mut record.context, &observed) {
+                return false;
+            }
+            record.rich_observed_at = Some(observed_at);
+            true
+        },
+    )
+    .context("writing OpenCode rich-context sidecar")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::agents::{
+        AgentCost, AgentTokenUsage, FieldPatch, LocalContextPatch, LocalContextRefresh,
+        LocalSpendFold, LocalTokenPatch, TranscriptStat,
+    };
+
+    #[test]
+    fn rich_observation_merges_into_latest_local_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let rich_at = Timestamp::from_second(1_700_000_050).unwrap();
+        let mut initial = rimz::agents::AgentContext::new("opencode", rich_at);
+        initial.session_name = Some("Existing name".to_owned());
+        initial.model_display_name = Some("Old model".to_owned());
+        initial.agent_version = Some("1.0".to_owned());
+        assert!(merge_observation(&runtime, "sess-1", initial).unwrap());
+
+        let local_at = Timestamp::from_second(1_700_000_100).unwrap();
+        rimz::store::agent_context::merge_local_context(
+            &runtime,
+            rimz::agents::descriptor_by_kind("opencode").unwrap(),
+            "sess-1",
+            LocalContextRefresh {
+                context: LocalContextPatch {
+                    model_id: FieldPatch::Set("openai/gpt-5".to_owned()),
+                    effort: FieldPatch::Set("high".to_owned()),
+                    tokens: LocalTokenPatch::ReplaceCurrentPreservingSession(Some(
+                        AgentTokenUsage {
+                            used_percentage: Some(25),
+                            ..Default::default()
+                        },
+                    )),
+                    cost: FieldPatch::Set(AgentCost {
+                        total_cost_usd: Some(0.42),
+                        ..Default::default()
+                    }),
+                    ..LocalContextPatch::default()
+                },
+                transcript_path: Some("/tmp/opencode.db".to_owned()),
+                transcript_stat: Some(TranscriptStat {
+                    mtime_secs: 10,
+                    mtime_nanos: 20,
+                    len: 30,
+                    companion: None,
+                }),
+                spend_fold: FieldPatch::Set(LocalSpendFold {
+                    cursor: rimz::agents::spending::SpendCursor {
+                        offset: 42,
+                        state: None,
+                    },
+                    total_usd: 0.42,
+                }),
+            },
+            local_at,
+        )
+        .unwrap();
+        let opener = rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
+        rimz::store::agent_context::merge_turn_opened_by(
+            &runtime,
+            "opencode",
+            "sess-1",
+            vec![opener.clone()],
+        )
+        .unwrap();
+
+        let mut observed = rimz::agents::AgentContext::new("opencode", rich_at);
+        observed.agent_version = Some("2.0".to_owned());
+        assert!(merge_observation(&runtime, "sess-1", observed).unwrap());
+        let merged = rimz::store::agent_context::read_one(&runtime, "opencode", "sess-1").unwrap();
+        assert_eq!(
+            merged.context.session_name.as_deref(),
+            Some("Existing name")
+        );
+        assert_eq!(merged.context.model_display_name, None);
+        assert_eq!(merged.context.agent_version.as_deref(), Some("2.0"));
+        assert_eq!(merged.context.model_id.as_deref(), Some("openai/gpt-5"));
+        assert_eq!(merged.context.effort.as_deref(), Some("high"));
+        assert_eq!(
+            merged
+                .context
+                .tokens
+                .as_ref()
+                .and_then(|tokens| tokens.used_percentage),
+            Some(25)
+        );
+        assert_eq!(
+            merged
+                .context
+                .cost
+                .as_ref()
+                .and_then(|cost| cost.total_cost_usd),
+            Some(0.42)
+        );
+        assert_eq!(merged.context.turn_opened_by, vec![opener]);
+        assert_eq!(merged.transcript_path.as_deref(), Some("/tmp/opencode.db"));
+        assert_eq!(merged.transcript_stat.unwrap().len, 30);
+        assert_eq!(merged.spend_fold.unwrap().total_usd, 0.42);
+        assert_eq!(merged.rate_limits_observed_at, None);
+        assert_eq!(merged.rich_observed_at, Some(rich_at));
+        assert_eq!(merged.context.observed_at, rich_at);
+    }
 }

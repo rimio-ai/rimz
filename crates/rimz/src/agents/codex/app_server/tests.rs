@@ -6,8 +6,8 @@ use serde_json::json;
 
 use super::*;
 use crate::agents::{
-    AgentCost, AgentCurrentUsage, AgentTokenUsage, LocalContextRefresh, RateLimitWindow,
-    TranscriptStat,
+    AgentCost, AgentCurrentUsage, AgentTokenUsage, LocalContextRefresh, LocalSpendFold,
+    RateLimitWindow, TranscriptStat,
 };
 use crate::{RuntimePaths, WorkspaceId};
 
@@ -586,7 +586,7 @@ fn app_server_due_uses_app_server_stamp_not_whole_sidecar() {
     let mut record = crate::store::agent_context::new_record(
         "codex",
         "sess-1",
-        crate::store::agent_context::empty_context("codex", now),
+        crate::agents::AgentContext::new("codex", now),
     );
     assert!(app_server_due(None, REFRESH_THROTTLE_SECS));
     assert!(
@@ -605,10 +605,48 @@ fn app_server_due_uses_app_server_stamp_not_whole_sidecar() {
 #[test]
 fn app_server_merge_preserves_transcript_owned_fields() {
     let (_dir, runtime) = runtime();
-    seed_transcript_context(&runtime);
     let app_at = Timestamp::from_second(1_700_000_050).unwrap();
-    merge_app_server_context(&runtime, "sess-1", app_server_context(app_at)).unwrap();
+    let observation = app_server_context(app_at);
+    merge_app_server_context(&runtime, "sess-1", observation.clone()).unwrap();
+    seed_transcript_context(&runtime);
+    crate::store::agent_context::merge_turn_opened_by(
+        &runtime,
+        "codex",
+        "sess-1",
+        vec![crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap()],
+    )
+    .unwrap();
+    merge_app_server_context(&runtime, "sess-1", observation).unwrap();
     assert_merged_context(&runtime, app_at);
+}
+
+#[test]
+fn app_server_merge_preserves_optional_identity_and_clears_authoritative_fields() {
+    let (_dir, runtime) = runtime();
+    let first_at = Timestamp::from_second(1_700_000_050).unwrap();
+    merge_app_server_context(&runtime, "sess-1", app_server_context(first_at)).unwrap();
+
+    let cleared_at = Timestamp::from_second(1_700_000_100).unwrap();
+    merge_app_server_context(&runtime, "sess-1", AgentContext::new("codex", cleared_at)).unwrap();
+
+    let merged = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(merged.context.source, "codex");
+    assert_eq!(
+        merged.context.session_name.as_deref(),
+        Some("TUI prototype")
+    );
+    assert_eq!(
+        merged.context.session_preview.as_deref(),
+        Some("Create a TUI")
+    );
+    assert_eq!(merged.context.model_id.as_deref(), Some("gpt-5"));
+    assert_eq!(merged.context.model_display_name, None);
+    assert_eq!(merged.context.agent_version, None);
+    assert_eq!(merged.context.rate_limits, None);
+    assert_eq!(merged.context.account, None);
+    assert_eq!(merged.context.observed_at, cleared_at);
+    assert_eq!(merged.rate_limits_observed_at, Some(cleared_at));
+    assert_eq!(merged.rich_observed_at, None);
 }
 
 fn runtime() -> (tempfile::TempDir, RuntimePaths) {
@@ -620,7 +658,7 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths) {
 }
 
 fn seed_transcript_context(runtime: &RuntimePaths) {
-    let transcript_at = Timestamp::from_second(1_700_000_000).unwrap();
+    let transcript_at = Timestamp::from_second(1_700_000_100).unwrap();
     crate::store::agent_context::merge_local_context(
         runtime,
         crate::agents::descriptor_by_kind("codex").expect("Codex adapter is registered"),
@@ -646,7 +684,13 @@ fn seed_transcript_context(runtime: &RuntimePaths) {
                 len: 30,
                 companion: None,
             }),
-            spend_fold: crate::agents::FieldPatch::Keep,
+            spend_fold: crate::agents::FieldPatch::Set(LocalSpendFold {
+                cursor: crate::agents::spending::SpendCursor {
+                    offset: 42,
+                    state: None,
+                },
+                total_usd: 0.42,
+            }),
         },
         transcript_at,
     )
@@ -734,6 +778,23 @@ fn assert_merged_context(runtime: &RuntimePaths, app_at: Timestamp) {
         merged.transcript_path.as_deref(),
         Some("/tmp/rollout.jsonl")
     );
+    assert_eq!(
+        merged.transcript_stat,
+        Some(TranscriptStat {
+            mtime_secs: 10,
+            mtime_nanos: 20,
+            len: 30,
+            companion: None,
+        })
+    );
+    assert_eq!(
+        merged.spend_fold.as_ref().map(|fold| fold.total_usd),
+        Some(0.42)
+    );
+    assert_eq!(
+        merged.context.turn_opened_by,
+        vec![crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap()]
+    );
     assert_eq!(merged.context.model_display_name.as_deref(), Some("GPT-5"));
     assert_eq!(
         merged.context.session_preview.as_deref(),
@@ -754,4 +815,6 @@ fn assert_merged_context(runtime: &RuntimePaths, app_at: Timestamp) {
         Some(55)
     );
     assert_eq!(merged.rate_limits_observed_at, Some(app_at));
+    assert_eq!(merged.rich_observed_at, None);
+    assert_eq!(merged.context.observed_at, app_at);
 }

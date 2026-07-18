@@ -28,6 +28,7 @@ pub const DEFAULT_MAX_DELIVERY_ATTEMPTS: u32 = 3;
 pub const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS";
 /// Cap for pre-send delivery failures after a queued claim.
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
+pub const CLAIM_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "origin")]
@@ -649,6 +650,17 @@ impl MessageRecord {
             _ => None,
         }
     }
+
+    pub fn batch_key(&self) -> Option<&str> {
+        match &self.sender {
+            MessageSender::Agent { channel, .. } => channel.as_deref(),
+            MessageSender::Human | MessageSender::System => self.channel.as_deref(),
+        }
+    }
+
+    pub fn batchable(&self) -> bool {
+        self.body == MessageBody::Prompt && self.enter && !self.text.trim_start().starts_with('/')
+    }
 }
 
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
@@ -771,6 +783,67 @@ pub(crate) fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) 
     }
 }
 
+/// Select one claimable FIFO batch from live records already ordered by
+/// message id. Returned indices retain that source order.
+pub(crate) fn delivery_batch_indices(
+    live: &[MessageRecord],
+    target_id: &MessageId,
+    status: AgentStatus,
+    now: Timestamp,
+) -> Option<Vec<usize>> {
+    let head_index = live
+        .iter()
+        .position(|message| message.message_id == *target_id)?;
+    let head = &live[head_index];
+    if head.status != MessageStatus::Queued
+        || !head.is_deliverable(now)
+        || !claim_expired(head.last_attempt_at, now)
+        || live[..head_index].iter().any(|message| {
+            matches!(
+                message.status,
+                MessageStatus::Queued | MessageStatus::Claimed
+            ) && message.same_card(head.card_ref())
+                && same_delivery_lane(head.gate, message.gate)
+                && message.is_deliverable(now)
+        })
+    {
+        return None;
+    }
+
+    let mut selected = vec![head_index];
+    if !head.batchable() || head.gate == DeliveryGate::Resume {
+        return Some(selected);
+    }
+    for (index, candidate) in live
+        .iter()
+        .enumerate()
+        .skip(head_index + 1)
+        .filter(|(_, message)| {
+            matches!(
+                message.status,
+                MessageStatus::Queued | MessageStatus::Claimed
+            ) && message.same_card(head.card_ref())
+                && same_delivery_lane(head.gate, message.gate)
+                && message.is_deliverable(now)
+        })
+    {
+        if !claim_expired(candidate.last_attempt_at, now)
+            || !batch_compatible(head, candidate, status)
+        {
+            break;
+        }
+        selected.push(index);
+    }
+    Some(selected)
+}
+
+fn batch_compatible(head: &MessageRecord, candidate: &MessageRecord, status: AgentStatus) -> bool {
+    candidate.batchable()
+        && candidate.batch_key() == head.batch_key()
+        && candidate.force == head.force
+        && gate_open(candidate.gate, status)
+}
+
 pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, String> {
     const UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
     if let Ok(duration) = crate::harness::schedule::parse_duration_units(raw, UNITS) {
@@ -846,6 +919,14 @@ pub fn max_delivery_attempts_from_env() -> u32 {
         .and_then(|raw| raw.parse::<u32>().ok())
         .filter(|attempts| *attempts > 0)
         .unwrap_or(DEFAULT_MAX_DELIVERY_ATTEMPTS)
+}
+
+pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool {
+    let Some(last) = last_attempt_at else {
+        return true;
+    };
+    let age = now.duration_since(last);
+    age.is_negative() || (age.as_secs() as u64) >= CLAIM_TTL.as_secs()
 }
 
 #[cfg(test)]

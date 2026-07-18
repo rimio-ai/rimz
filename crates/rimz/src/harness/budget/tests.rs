@@ -12,7 +12,7 @@ fn agent(cost: f64, status: AgentStatus, turn_started_at: Option<Timestamp>) -> 
             ..AgentCost::default()
         }),
         observed_at: now,
-        ..crate::store::agent_context::empty_context("test", now)
+        ..crate::agents::AgentContext::new("test", now)
     });
     agent
 }
