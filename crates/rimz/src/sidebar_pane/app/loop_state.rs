@@ -190,6 +190,7 @@ pub(super) fn handle_wakeup(
 }
 
 impl LoopState {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         workspace_id: WorkspaceId,
         mux: MuxName,
