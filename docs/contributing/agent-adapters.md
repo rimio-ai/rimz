@@ -68,7 +68,7 @@ Implement the context source(s) the worksheet found; either alone is valid, and 
 
 ## Step 8 — Wire account, spend, and pricing
 
-The provider half of the integration is [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider): `probe_account` (login state, plan, rate-limit windows), the OAuth-usage probe where one exists, and full-history cost through `transcript_files` plus `parse_spend`. Ship a `spend_fixture` — conformance requires one yielding a positive session cost unless the descriptor declares `RealtimeCost` unsupported.
+The provider half of the integration is [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider): `probe_account` (login state, plan, rate-limit windows), the OAuth-usage probe where one exists, and full-history cost through `spending_sources` plus `parse_spend`. Keep `transcript_files` for live transcript/session lookup. Ship a `spend_fixture` — conformance requires one yielding a positive session cost unless the descriptor declares `RealtimeCost` unsupported.
 
 `spend.rs` is sidebar-safe by construction: read-only, and the `ensure_spend_parser_boundaries` invariant grep ([`xtask/src/invariants.rs`](../../xtask/src/invariants.rs)) rejects store-write, run-wake, and broker imports in any spend path.
 
@@ -108,7 +108,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] Install / preview / uninstall / `hooks_installed`
 - [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` · `ping_args`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
-- [ ] `probe_account` · `transcript_files` + `parse_spend` · `spend_fixture`
+- [ ] `probe_account` · `spending_sources` + `parse_spend` · `spend_fixture`
 - [ ] The step-9 test set, stdout shapes as inline `insta` goldens
 - [ ] `docs/internals/agents/<kind>.md` + links in model.md, the module contract, and the root documentation map
 - [ ] `agent-support.md` row and section · README matrix
