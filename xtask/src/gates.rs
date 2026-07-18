@@ -24,6 +24,19 @@ const LINT_ARGS: &[&str] = &[
     "-D",
     "warnings",
 ];
+const NON_TEST_HOST_LINT_ARGS: &[&str] = &[
+    "clippy",
+    "-p",
+    "rimz",
+    "--bin",
+    "rimz",
+    "--features",
+    "sentry",
+    "--locked",
+    "--",
+    "-D",
+    "warnings",
+];
 const GATE_TEST_ARGS: &[&str] = &[
     "nextest",
     "run",
@@ -52,7 +65,8 @@ pub(crate) fn fmt(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn lint(root: &Path) -> Result<()> {
-    run(root, "cargo", LINT_ARGS.iter().copied())
+    run(root, "cargo", LINT_ARGS.iter().copied())?;
+    run(root, "cargo", NON_TEST_HOST_LINT_ARGS.iter().copied())
 }
 
 pub(crate) fn deny(root: &Path) -> Result<()> {
@@ -212,7 +226,13 @@ fn gate_docs_links(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateR
 }
 
 fn gate_lint(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
-    captured_cargo_gate(root, LINT_ARGS.iter().copied(), &[], &[], None, progress)
+    for args in [LINT_ARGS, NON_TEST_HOST_LINT_ARGS] {
+        let result = captured_cargo_gate(root, args.iter().copied(), &[], &[], None, progress)?;
+        if matches!(result, GateResult::Fail { .. }) {
+            return Ok(result);
+        }
+    }
+    Ok(GateResult::Pass { note: None })
 }
 
 fn gate_test(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
@@ -572,6 +592,21 @@ mod tests {
             vec!["deny", "--offline", "check", "-D", "warnings"]
         );
         assert_eq!(deny_args(false), vec!["deny", "check", "-D", "warnings"]);
+    }
+
+    #[test]
+    fn non_test_host_lint_excludes_testkit_and_denies_warnings() {
+        assert!(
+            NON_TEST_HOST_LINT_ARGS
+                .windows(2)
+                .any(|pair| pair == ["--features", "sentry"])
+        );
+        assert!(!NON_TEST_HOST_LINT_ARGS.contains(&"--all-features"));
+        assert!(
+            NON_TEST_HOST_LINT_ARGS
+                .windows(2)
+                .any(|pair| pair == ["-D", "warnings"])
+        );
     }
 
     #[test]

@@ -536,20 +536,13 @@ pub(super) fn cursor_home(home: Option<&OsStr>) -> Option<PathBuf> {
         .map(|home| home.join(".cursor"))
 }
 
+#[cfg(any(test, feature = "testkit"))]
 pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
-    let Some((bucket, workspace)) = chats_bucket(home, workspace) else {
-        return Vec::new();
+    let key = DiscoveryKey {
+        home: home.to_path_buf(),
+        workspaces: normalized_workspace_inputs(&[workspace]),
     };
-    let mut observations = newest_chat_dirs(&bucket)
-        .into_iter()
-        .filter_map(|session| observation(home, &bucket, &session, &workspace))
-        .collect::<Vec<_>>();
-    observations.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then(left.session_id.cmp(&right.session_id))
-    });
-    observations
+    CursorDiscoverySnapshot::default().refresh(key, Instant::now())
 }
 
 pub(super) fn discover_subagent_chats(home: &Path, workspace: &Path) -> Vec<CursorSubagentRecord> {
@@ -627,17 +620,6 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
             context_pct: None,
         }),
     }
-}
-
-fn observation(
-    home: &Path,
-    bucket: &Path,
-    session: &Path,
-    workspace: &Path,
-) -> Option<LocalSessionObservation> {
-    let session_id = session.file_name()?.to_str()?;
-    let transcript_path = super::transcript::discover_under(&home.join("projects"), session_id)?;
-    observation_with_transcript(bucket, session, workspace, &transcript_path)
 }
 
 fn observation_with_transcript(
