@@ -30,6 +30,7 @@ const CONNECT_WAIT_STEPS: u32 = 20;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_FRAME_BYTES: u64 = 4 * 1024 * 1024;
+const WRITE_BUFFER_BYTES: usize = 64 * 1024;
 const DISCOVERY_ENV: [&str; 15] = [
     "HOME",
     "XDG_CONFIG_HOME",
@@ -668,7 +669,8 @@ fn serve_connection(
     Ok(())
 }
 
-fn write_json_line(mut writer: impl Write, value: &impl Serialize) -> std::io::Result<()> {
+fn write_json_line(writer: impl Write, value: &impl Serialize) -> std::io::Result<()> {
+    let mut writer = std::io::BufWriter::with_capacity(WRITE_BUFFER_BYTES, writer);
     serde_json::to_writer(&mut writer, value).map_err(std::io::Error::other)?;
     writer.write_all(b"\n")?;
     writer.flush()
@@ -784,6 +786,54 @@ mod tests {
         let decoded: SpendingServiceFrame =
             read_json_line(&mut BufReader::new(bytes.as_slice())).unwrap();
         assert!(matches!(decoded, SpendingServiceFrame::Complete(_)));
+    }
+
+    #[test]
+    fn write_json_line_buffers_large_frames() {
+        #[derive(Default)]
+        struct CountingWriter {
+            bytes: Vec<u8>,
+            writes: usize,
+        }
+
+        impl Write for CountingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let message = "\\\"\n".repeat(WRITE_BUFFER_BYTES);
+        let frame = SpendingServiceFrame::Error(SpendingServiceFailure::new(
+            SpendingServiceErrorCode::Internal,
+            message.clone(),
+        ));
+        let mut writer = CountingWriter::default();
+
+        write_json_line(&mut writer, &frame).unwrap();
+
+        let mut expected = serde_json::to_vec(&frame).unwrap();
+        expected.push(b'\n');
+        assert_eq!(writer.bytes, expected);
+        assert!(writer.bytes.len() > WRITE_BUFFER_BYTES * 3);
+        assert!(
+            writer.writes <= writer.bytes.len() / WRITE_BUFFER_BYTES + 2,
+            "{} writes for {} encoded bytes",
+            writer.writes,
+            writer.bytes.len()
+        );
+        let decoded: SpendingServiceFrame =
+            read_json_line(&mut BufReader::new(writer.bytes.as_slice())).unwrap();
+        let SpendingServiceFrame::Error(decoded) = decoded else {
+            panic!("large error frame changed variants");
+        };
+        assert_eq!(decoded.code, SpendingServiceErrorCode::Internal);
+        assert_eq!(decoded.message, message);
     }
 
     #[test]
