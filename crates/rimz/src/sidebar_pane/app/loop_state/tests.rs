@@ -898,7 +898,7 @@ fn width_target_event_reloads_the_override_without_a_producer_fetch() {
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     crate::sidebar::width_override::write(
         &runtime,
-        std::num::NonZeroU16::new(60).expect("nonzero width"),
+        std::num::NonZeroU16::new(90).expect("nonzero width"),
     )
     .expect("write width override");
     let mut terminal = fixed_terminal();
@@ -913,10 +913,7 @@ fn width_target_event_reloads_the_override_without_a_producer_fetch() {
         &crate::diag::DiagSink::disabled(),
     );
 
-    assert_eq!(
-        state.width_control.override_target(),
-        std::num::NonZeroU16::new(60)
-    );
+    assert_eq!(state.width_control.max_legit_cols(), 90);
     assert!(
         request_rx.try_recv().is_err(),
         "width propagation stays out of the producer path",
@@ -1786,8 +1783,6 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
     .expect("terminal");
     state.prev_width = Some(10);
     state.self_close.seen_sibling = true;
-    state.width_control.set_override(None);
-
     state
         .on_resize(
             &config,
@@ -1816,12 +1811,18 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
 #[test]
 fn room_override_raises_the_legitimate_grow_bound() {
     let ws = workspace();
-    let (_dir, mut state) = loop_state(&ws);
-    state.prev_width = Some(10);
-    state.self_close.seen_sibling = true;
+    let (dir, mut state) = loop_state(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    crate::sidebar::width_override::write(
+        &runtime,
+        std::num::NonZeroU16::new(90).expect("nonzero width"),
+    )
+    .expect("write width override");
     state
         .width_control
-        .set_override(std::num::NonZeroU16::new(90));
+        .reload_target(None, &crate::diag::DiagSink::disabled());
+    state.prev_width = Some(10);
+    state.self_close.seen_sibling = true;
 
     assert!(
         !state.arm_paint_hold_on_grow(90, Instant::now()),

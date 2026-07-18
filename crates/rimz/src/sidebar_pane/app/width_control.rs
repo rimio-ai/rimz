@@ -13,7 +13,7 @@ use crate::mux::WidthAdjust;
 use crate::{RuntimePaths, diag::DiagSink};
 use tracing::{debug, warn};
 
-pub(super) const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(1);
+const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_STEPS: u8 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +23,7 @@ enum WidthTarget {
 }
 
 impl WidthTarget {
-    pub(super) fn from_override(width: Option<NonZeroU16>, cap: NonZeroU16) -> Self {
+    fn from_override(width: Option<NonZeroU16>, cap: NonZeroU16) -> Self {
         width.map_or(Self::CapOnly(cap.get()), Self::Override)
     }
 
@@ -82,7 +82,7 @@ struct WidthControl {
 }
 
 impl WidthControl {
-    pub(super) fn new(target: WidthTarget) -> Self {
+    fn new(target: WidthTarget) -> Self {
         Self {
             target,
             steps_issued: 0,
@@ -94,7 +94,7 @@ impl WidthControl {
         }
     }
 
-    pub(super) fn retarget(&mut self, target: WidthTarget) {
+    fn retarget(&mut self, target: WidthTarget) {
         if self.target == target {
             return;
         }
@@ -106,28 +106,28 @@ impl WidthControl {
         self.traces.clear();
     }
 
-    pub(super) fn target(&self) -> WidthTarget {
+    fn target(&self) -> WidthTarget {
         self.target
     }
 
-    pub(super) fn override_target(&self) -> Option<NonZeroU16> {
+    fn override_target(&self) -> Option<NonZeroU16> {
         match self.target {
             WidthTarget::Override(cols) => Some(cols),
             WidthTarget::CapOnly(_) => None,
         }
     }
 
-    pub(super) fn feedback_deadline(&self) -> Option<Instant> {
+    fn feedback_deadline(&self) -> Option<Instant> {
         self.in_flight.map(|step| step.at + FEEDBACK_TIMEOUT)
     }
 
-    pub(super) fn take_trace(&mut self) -> Option<WidthTransition> {
+    fn take_trace(&mut self) -> Option<WidthTransition> {
         self.traces.pop_front()
     }
 
     /// Return one `(current, target)` actuator request, recording it as the
     /// sole in-flight step until a changed measurement or timeout arrives.
-    pub(super) fn decide(&mut self, own_cols: u16, now: Instant) -> Option<(u16, u16)> {
+    fn decide(&mut self, own_cols: u16, now: Instant) -> Option<(u16, u16)> {
         if own_cols == 0 {
             return None;
         }
@@ -412,17 +412,6 @@ impl WidthController {
         {
             self.observe(cols, SidebarWidthControlTrigger::Backstop, diag);
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn override_target(&self) -> Option<NonZeroU16> {
-        self.convergence.override_target()
-    }
-
-    #[cfg(test)]
-    pub(super) fn set_override(&mut self, target: Option<NonZeroU16>) {
-        self.convergence
-            .retarget(WidthTarget::from_override(target, self.width_cap));
     }
 }
 
