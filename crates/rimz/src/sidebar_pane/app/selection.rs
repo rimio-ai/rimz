@@ -93,28 +93,16 @@ impl InputOutcome {
     }
 }
 
-/// Fire a jump at `pane` and end any make-up filter it leaves behind. A status
-/// filter is a transient lens on one tab's body; carrying it past a jump would
-/// leave that tab silently narrowed on return, out of step with the fleet every
-/// other tab shows. The caller resolves the target in the filtered body first,
-/// so the jump still lands where the user pointed; the clear follows. Clearing
-/// reshapes the body, so the outcome repaints when a filter was actually live.
-fn jump_to(ui: &mut UiState, snapshot: &SidebarSnapshot, pane: PaneId) -> InputOutcome {
-    let mut outcome = InputOutcome::focus(pane);
-    outcome.redraw = set_make_up_filter(ui, snapshot, None);
-    outcome
-}
-
 /// Step the inbox triage list `forward` or backward from the current selection
-/// and jump to that row, focusing its pane — the `n`/`N` (and `Space`) walk
-/// through the rows that need you, oldest episode first. A walk with nothing to
-/// triage does nothing.
+/// and focus that row's pane — the `n`/`N` (and `Space`) walk through the rows
+/// that need you in the visible roster, oldest episode first. A walk with
+/// nothing to triage does nothing.
 fn inbox_jump(ui: &mut UiState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
     let roster = active_roster(snapshot, ui);
     if let Some(index) = step_attention_in(&roster, ui.selected_index, forward)
         && let Some(pane) = roster.pane_at_ordinal(index)
     {
-        return jump_to(ui, snapshot, pane);
+        return InputOutcome::focus(pane);
     }
     InputOutcome::default()
 }
@@ -227,11 +215,11 @@ pub(super) fn handle_key(
         KeyAction::ScreenTop => select_screen_edge(ui, snapshot, End::Top),
         KeyAction::ScreenBottom => select_screen_edge(ui, snapshot, End::Bottom),
         KeyAction::Enter => {
-            // Jump on the current row: fire the focus command at the selected
-            // pane without moving the highlight — it follows once the derived
-            // baseline catches up, identical to a click.
+            // Focus the current visible row without moving the highlight — it
+            // follows once the derived baseline catches up, identical to a
+            // click.
             match ui.selected_pane.clone() {
-                Some(pane) => jump_to(ui, snapshot, pane),
+                Some(pane) => InputOutcome::focus(pane),
                 None => InputOutcome::default(),
             }
         }
@@ -252,7 +240,7 @@ pub(super) fn handle_key(
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
             if let Some(pane) = active_roster(snapshot, ui).pane_at_ordinal(index) {
-                return jump_to(ui, snapshot, pane);
+                return InputOutcome::focus(pane);
             }
             InputOutcome::default()
         }
@@ -326,7 +314,7 @@ pub(super) fn handle_mouse_click(
         }
         Some(HitTarget::Row(index)) => active_roster(snapshot, ui)
             .pane_at_ordinal(index)
-            .map_or_else(InputOutcome::default, |pane| jump_to(ui, snapshot, pane)),
+            .map_or_else(InputOutcome::default, InputOutcome::focus),
         None => InputOutcome::default(),
     }
 }
@@ -438,9 +426,9 @@ fn select_adjacent_worktree(
 
 /// Point the highlight at a visible row by index — the identity-keyed selection
 /// (`selected_pane`) plus its derived render index. A pure positioner for the
-/// arrow-key browse; the jump actions resolve their target through
-/// the active roster instead and never move the highlight. An explicit pick ends
-/// any viewport pin, so the viewport snaps back to following the selection.
+/// arrow-key browse; focus actions resolve their target through the active
+/// roster instead and never move the highlight. An explicit pick ends any
+/// viewport pin, so the viewport snaps back to following the selection.
 fn select_row_in(ui: &mut UiState, roster: &VisibleRoster<'_>, index: usize) {
     ui.selected_index = index;
     ui.selected_pane = roster.pane_at_ordinal(index);

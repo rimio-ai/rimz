@@ -21,6 +21,10 @@ fn worktree_keys_respect_the_make_up_filter() {
         ui.selected_index, 0,
         "only one group remains under the failed filter"
     );
+    assert_eq!(
+        ui.make_up_filter,
+        Some(BodyFilter::Status(AgentStatus::Failed))
+    );
 }
 #[test]
 fn make_up_click_picks_switches_and_clears_the_filter() {
@@ -673,43 +677,127 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
     assert_eq!(ui.selected_index, 0);
 }
 #[test]
-fn jumping_to_a_card_ends_the_make_up_filter() {
+fn focus_jumps_keep_the_make_up_filter() {
     use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-    let running = PaneId::from_parts(MuxName::Zellij, "terminal_1");
 
-    // A digit jump resolves its target in the filtered body, then ends the
-    // filter — a status lens is one tab's transient view, never a mode that
-    // outlives the jump leaving the tab. The body reshapes, so it repaints too.
+    // A digit resolves its target in the filtered body and focuses it without
+    // changing renderer-local state.
     let mut ui = UiState {
         make_up_filter: Some(BodyFilter::Status(AgentStatus::Failed)),
         ..Default::default()
     };
     let outcome = handle_key(KeyAction::Digit(1), &mut ui, &snapshot);
-    assert_eq!(outcome.effect, Some(InputEffect::Focus(failed.clone())));
-    assert!(outcome.redraw, "clearing the filter reshapes the body");
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(outcome, InputOutcome::focus(failed.clone()));
+    assert_eq!(
+        ui.make_up_filter,
+        Some(BodyFilter::Status(AgentStatus::Failed))
+    );
 
-    // Enter on the highlighted row clears it the same way, re-anchoring the
-    // surviving highlight at its show-all ordinal.
+    // Enter focuses the highlighted filtered row with the same pure effect.
     let mut ui = UiState {
         make_up_filter: Some(BodyFilter::Status(AgentStatus::Failed)),
         selected_pane: Some(failed.clone()),
         ..Default::default()
     };
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
-    assert_eq!(outcome.effect, Some(InputEffect::Focus(failed.clone())));
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(outcome, InputOutcome::focus(failed));
     assert_eq!(
-        ui.selected_index, 2,
-        "the held highlight re-anchors under show-all"
+        ui.make_up_filter,
+        Some(BodyFilter::Status(AgentStatus::Failed))
     );
+    assert_eq!(ui.selected_index, 0, "the filtered ordinal stays anchored");
+}
 
-    // With no filter live a jump stays pure: nothing to clear, nothing to
-    // repaint.
+#[test]
+fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
+    use crate::agents::AgentStatus;
+    let ws = workspace();
+    let mut snapshot = filterable_snapshot(&ws);
+
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    let success = &mut snapshot.worktree_groups[0].rows[1];
+    success.name = "claude".to_owned();
+    success.card = crate::RowCard::Agent(Box::new(crate::AgentCard {
+        status: AgentStatus::Success,
+        phase: crate::agents::TurnPhase::Idle,
+        ..crate::AgentCard::default()
+    }));
+    success.unread = true;
+    success.last_activity = snapshot.now - Duration::from_secs(3_600);
+    snapshot.worktree_groups[1].rows[0].unread = true;
+    snapshot.worktree_groups[1].rows[0].last_activity = snapshot.now - Duration::from_secs(1_800);
+
+    let filter = Some(BodyFilter::Unread);
+    let mut ui = UiState {
+        selected_index: 0,
+        selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
+        make_up_filter: filter,
+        ..Default::default()
+    };
+
+    let forward = handle_key(KeyAction::InboxNext, &mut ui, &snapshot);
+    assert_eq!(
+        forward,
+        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
+    );
+    assert_eq!(ui.make_up_filter, filter);
+
+    let backward = handle_key(KeyAction::InboxPrev, &mut ui, &snapshot);
+    assert_eq!(
+        backward,
+        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+    );
+    assert_eq!(ui.make_up_filter, filter);
+}
+
+#[test]
+fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
+    let ws = workspace();
+    let mut snapshot = filterable_snapshot(&ws);
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    snapshot.worktree_groups[1].rows[0].unread = true;
+
     let mut ui = UiState::default();
-    let outcome = handle_key(KeyAction::Digit(1), &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::focus(running));
+    assert_eq!(
+        handle_key(
+            KeyAction::Filter(Some(BodyFilter::Unread)),
+            &mut ui,
+            &snapshot
+        ),
+        InputOutcome::redraw()
+    );
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let first_row = u16::try_from(
+        composed
+            .interactions
+            .line_for_row(0)
+            .expect("first unread row is painted"),
+    )
+    .unwrap();
+    let second_row = u16::try_from(
+        composed
+            .interactions
+            .line_for_row(1)
+            .expect("second unread row is painted"),
+    )
+    .unwrap();
+    ui.interactions = composed.interactions;
+
+    let first = handle_mouse_click(0, first_row, &mut ui, &snapshot);
+    assert_eq!(
+        first,
+        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_1"))
+    );
+    assert_eq!(ui.make_up_filter, Some(BodyFilter::Unread));
+
+    let second = handle_mouse_click(0, second_row, &mut ui, &snapshot);
+    assert_eq!(
+        second,
+        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+    );
+    assert_eq!(ui.make_up_filter, Some(BodyFilter::Unread));
 }
