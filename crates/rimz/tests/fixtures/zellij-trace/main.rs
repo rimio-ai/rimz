@@ -15,6 +15,10 @@ enum Invocation<'a> {
     Web(WebCommand<'a>),
     ActionQuery(ActionQuery),
     ShareSession(Option<&'a str>),
+    PresenceBoot {
+        session: Option<&'a str>,
+        configuration: Option<&'a str>,
+    },
     DumpTopology {
         session: Option<&'a str>,
         configuration: Option<&'a str>,
@@ -66,10 +70,14 @@ fn main() {
         Invocation::Web(command) => handle_web(command, &log_path),
         Invocation::ActionQuery(query) => handle_action_query(query),
         Invocation::ShareSession(session) => handle_share_session(session),
+        Invocation::PresenceBoot {
+            session,
+            configuration,
+        } => handle_presence_boot(&log_path, session, configuration),
         Invocation::DumpTopology {
             session,
             configuration,
-        } => handle_dump_topology(session, configuration),
+        } => handle_dump_topology(&log_path, session, configuration),
         Invocation::Write => handle_write(&log_path, cli),
         Invocation::Birth => handle_birth(&log_path),
         Invocation::Unhandled => {}
@@ -105,6 +113,12 @@ fn classify_nested_invocation(cli: &[String]) -> Option<Invocation<'_>> {
     }
     if has_pair(cli, "--name", "rimz:share_session") {
         return Some(Invocation::ShareSession(arg_after(cli, "--session")));
+    }
+    if has_pair(cli, "--name", "rimz_presence_boot") {
+        return Some(Invocation::PresenceBoot {
+            session: arg_after(cli, "--session"),
+            configuration: arg_after(cli, "--plugin-configuration"),
+        });
     }
     if has_pair(cli, "--name", "rimz:dump_topology") {
         return Some(Invocation::DumpTopology {
@@ -203,13 +217,38 @@ fn handle_share_session(session: Option<&str>) {
     }
 }
 
-fn handle_dump_topology(session: Option<&str>, configuration: Option<&str>) {
+fn handle_presence_boot(log_path: &Path, session: Option<&str>, configuration: Option<&str>) {
+    if let (Some(session), Some(configuration)) = (session, configuration) {
+        let mut configurations = read_presence_configurations(log_path);
+        configurations.insert(session.to_owned(), configuration.to_owned());
+        std::fs::write(
+            presence_configurations_path(log_path),
+            serde_json::to_vec(&configurations).expect("serialize presence configurations"),
+        )
+        .expect("write presence configurations");
+    }
+}
+
+fn handle_dump_topology(log_path: &Path, session: Option<&str>, configuration: Option<&str>) {
+    let recorded =
+        session.and_then(|session| read_presence_configurations(log_path).remove(session));
     if let Some(session) = session
-        && let Some(configuration) = configuration
+        && let Some(configuration) = configuration.or(recorded.as_deref())
         && let Some(workspace_id) = configuration_value(configuration, "workspace_id")
     {
         write_topology_cache(session, workspace_id);
     }
+}
+
+fn presence_configurations_path(log_path: &Path) -> std::path::PathBuf {
+    log_path.with_extension("presence.json")
+}
+
+fn read_presence_configurations(log_path: &Path) -> std::collections::BTreeMap<String, String> {
+    std::fs::read(presence_configurations_path(log_path))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
 }
 
 fn handle_write(log_path: &Path, args: &[String]) {
