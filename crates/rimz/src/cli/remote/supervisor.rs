@@ -866,9 +866,13 @@ impl MasterState {
                         .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
                         .is_ok()
                     {
+                        let release_at = panel.release_at(wait_elapsed);
+                        if wait_elapsed >= release_at {
+                            return Ok(MasterTick::Connected(attempt.into_guard()));
+                        }
                         return Ok(MasterTick::Pending(Self::Ready {
                             attempt,
-                            release_at: panel.release_at(wait_elapsed),
+                            release_at,
                         }));
                     }
                     next_control_check = now + CONTROL_MASTER_CHECK_INTERVAL;
