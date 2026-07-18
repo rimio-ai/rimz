@@ -654,6 +654,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
         current_transcript_path: None,
         prior_transcript_path: Some(&path),
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &pricing_cache_path,
     };
     let refresh = CodexAdapter

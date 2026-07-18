@@ -28,7 +28,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{AgentContext, AgentTurnError};
 use crate::agents::{
-    AgentCost, AgentSessionUsage, AgentTokenUsage, LocalContextRefresh, TranscriptStat,
+    AgentCost, AgentSessionUsage, AgentTokenUsage, LocalContextRefresh, LocalSpendFold,
+    TranscriptStat,
 };
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::atomic;
@@ -61,6 +62,9 @@ pub struct AgentContextRecord {
     /// an unchanged tail without parsing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_stat: Option<TranscriptStat>,
+    /// Resumable per-request pricing state for the local transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend_fold: Option<LocalSpendFold>,
     /// Hook-priced live-session state. Private so only the idempotent merge can
     /// advance the accumulator.
     #[serde(default, skip_serializing_if = "LocallyPricedCostState::is_empty")]
@@ -124,6 +128,7 @@ pub fn write(
             .as_ref()
             .and_then(|record| record.context.cost.clone());
     }
+    let spend_fold = prior.as_ref().and_then(|record| record.spend_fold.clone());
     let mut locally_priced_cost = prior
         .map(|record| record.locally_priced_cost)
         .unwrap_or_default();
@@ -140,6 +145,7 @@ pub fn write(
             rich_observed_at: None,
             transcript_path: None,
             transcript_stat: None,
+            spend_fold,
             locally_priced_cost,
         },
     )
@@ -163,6 +169,7 @@ pub fn write_record(
         if record.locally_priced_cost.is_empty() {
             record.locally_priced_cost = prior.locally_priced_cost;
         }
+        record.spend_fold = prior.spend_fold;
     }
     if observed_cost {
         record.locally_priced_cost.owns_context_cost = false;
@@ -201,6 +208,7 @@ pub fn new_record(kind: &str, agent_id: &str, context: AgentContext) -> AgentCon
         rich_observed_at: None,
         transcript_path: None,
         transcript_stat: None,
+        spend_fold: None,
         locally_priced_cost: LocallyPricedCostState::default(),
     }
 }
@@ -303,6 +311,9 @@ pub fn merge_local_context(
     // records clear it by returning `None`.
     record.context.turn_interrupted = refresh.turn_interrupted;
     record.context.observed_at = observed_at;
+    if refresh.spend_fold.is_some() {
+        record.spend_fold = refresh.spend_fold;
+    }
     record.transcript_path = refresh.transcript_path;
     record.transcript_stat = refresh.transcript_stat;
     write_record_unlocked(runtime, &record)

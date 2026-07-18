@@ -269,6 +269,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &pricing,
     };
     let initial = refresh_resolved_context(&GrokAdapter, &updates, Some(&events), &ctx).unwrap();
@@ -287,6 +288,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     .unwrap();
     let requested_ctx = LocalContextRefreshCtx {
         prior_transcript_stat: initial.transcript_stat.as_ref(),
+        prior_spend_fold: None,
         ..ctx
     };
     let requested =
@@ -295,6 +297,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
 
     let unchanged_ctx = LocalContextRefreshCtx {
         prior_transcript_stat: requested.transcript_stat.as_ref(),
+        prior_spend_fold: None,
         ..ctx
     };
     assert!(

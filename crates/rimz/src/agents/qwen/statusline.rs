@@ -156,13 +156,11 @@ impl StatuslinePayload {
                 continue;
             }
             let price = prices.price(strip_provider_decoration(model))?;
-            let cost = price.cost(
+            let cost = price.session_cost(
                 usage.input_tokens.unwrap_or(0),
                 usage.displayed_output_tokens(),
                 0,
-                0,
                 usage.cache_read_input_tokens.unwrap_or(0),
-                false,
             );
             if !cost.is_finite() {
                 return None;

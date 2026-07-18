@@ -363,6 +363,7 @@ fn local_refresh_prices_exact_builtins_and_fills_gauge_from_last_call() {
         current_transcript_path: Some(&transcript_text),
         prior_transcript_path: None,
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &pricing_cache,
     };
 

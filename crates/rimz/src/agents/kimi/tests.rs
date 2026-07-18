@@ -622,6 +622,7 @@ fn refresh_publishes_the_state_title_as_session_preview() {
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &cache,
     };
 
@@ -670,6 +671,7 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &cache,
     };
     let refresh = refresh_wire_path(&path, "s1", stat, &ctx).unwrap();
@@ -748,6 +750,7 @@ fn wire_without_usage_emits_fresh_sentinel() {
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &cache,
     };
     let tokens = refresh_wire_path(&path, "s1", stat, &ctx)
@@ -943,6 +946,7 @@ fn live_cost_prices_the_full_file_outside_the_bounded_tail() {
         current_transcript_path: None,
         prior_transcript_path: Some(path.to_str().unwrap()),
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &cache,
     };
 
@@ -1025,6 +1029,7 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
         current_transcript_path: None,
         prior_transcript_path: Some(&path_text),
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &cache,
     };
 
@@ -1040,6 +1045,7 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
     let stat = refresh.transcript_stat.unwrap();
     let unchanged = LocalContextRefreshCtx {
         prior_transcript_stat: Some(&stat),
+        prior_spend_fold: None,
         ..ctx
     };
     assert!(

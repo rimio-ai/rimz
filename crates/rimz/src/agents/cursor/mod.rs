@@ -454,6 +454,7 @@ impl AgentAdapter for CursorAdapter {
             model
         };
         let price = prices.price(price_key)?;
+        // Each generation id identifies one turn, so one-request pricing applies.
         let cost_usd = price.cost(
             usage.fresh_input.unwrap_or(0),
             usage.output.unwrap_or(0),

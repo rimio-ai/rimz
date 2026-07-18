@@ -642,6 +642,7 @@ fn seed_transcript_context(runtime: &RuntimePaths) {
                 len: 30,
                 companion: None,
             }),
+            spend_fold: None,
         },
         transcript_at,
     )

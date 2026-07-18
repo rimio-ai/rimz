@@ -289,6 +289,112 @@ fn gpt5_book() -> PriceBook {
     )
 }
 
+fn write_live_rollout(path: &Path, totals: &[(u64, u64, u64)]) {
+    let mut file = std::fs::File::create(path).unwrap();
+    writeln!(
+        file,
+        r#"{{"type":"turn_context","payload":{{"model":"gpt-5.6-sol"}}}}"#
+    )
+    .unwrap();
+    for (index, (input, cached, output)) in totals.iter().enumerate() {
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": format!("2026-01-01T10:00:0{index}.000Z"),
+                "payload": {
+                    "type": "token_count",
+                    "info": {"total_token_usage": {
+                        "input_tokens": input,
+                        "cached_input_tokens": cached,
+                        "output_tokens": output,
+                    }},
+                },
+            })
+        )
+        .unwrap();
+    }
+}
+
+fn append_live_total(path: &Path, index: usize, input: u64, cached: u64, output: u64) {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(
+        file,
+        "{}",
+        serde_json::json!({
+            "type": "event_msg",
+            "timestamp": format!("2026-01-01T10:00:0{index}.000Z"),
+            "payload": {
+                "type": "token_count",
+                "info": {"total_token_usage": {
+                    "input_tokens": input,
+                    "cached_input_tokens": cached,
+                    "output_tokens": output,
+                }},
+            },
+        })
+    )
+    .unwrap();
+}
+
+#[test]
+fn live_fold_resume_matches_a_cold_full_fold() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let prices = PriceBook::embedded();
+    write_live_rollout(&path, &[(200_000, 150_000, 1_000)]);
+    let first = resume_live_fold(
+        &path,
+        None,
+        std::fs::metadata(&path).unwrap().len(),
+        &prices,
+    );
+
+    append_live_total(&path, 1, 400_000, 300_000, 2_000);
+    let resumed = resume_live_fold(
+        &path,
+        Some(&first),
+        std::fs::metadata(&path).unwrap().len(),
+        &prices,
+    );
+    let cold = resume_live_fold(
+        &path,
+        None,
+        std::fs::metadata(&path).unwrap().len(),
+        &prices,
+    );
+
+    assert_eq!(resumed, cold);
+    assert!(resumed.total_usd > first.total_usd);
+}
+
+#[test]
+fn live_fold_resets_when_the_rollout_is_truncated() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let prices = PriceBook::embedded();
+    write_live_rollout(
+        &path,
+        &[(200_000, 150_000, 1_000), (400_000, 300_000, 2_000)],
+    );
+    let full = resume_live_fold(
+        &path,
+        None,
+        std::fs::metadata(&path).unwrap().len(),
+        &prices,
+    );
+
+    write_live_rollout(&path, &[(100_000, 75_000, 500)]);
+    let truncated_len = std::fs::metadata(&path).unwrap().len();
+    assert!(truncated_len < full.cursor.offset);
+    let reset = resume_live_fold(&path, Some(&full), truncated_len, &prices);
+    let cold = resume_live_fold(&path, None, truncated_len, &prices);
+
+    assert_eq!(reset, cold);
+    assert!(reset.total_usd < full.total_usd);
+}
+
 const TOKEN_COUNT_LINE: &str = r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#;
 
 #[test]

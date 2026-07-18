@@ -1,14 +1,12 @@
 use super::*;
-use crate::agents::SessionOrigin;
-use crate::agents::TranscriptStat;
+use crate::agents::{PriceBook, SessionOrigin, TranscriptStat};
 
 #[test]
 fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     let dir = tempfile::tempdir().unwrap();
 
     // Codex reports token usage only in the rollout JSONL. A full `token_count`
-    // event carries the model, the latest-call split, the cumulative billing
-    // totals, and the model context window.
+    // event carries the model, latest-call split, and model context window.
     let full = dir.path().join("rollout-session.jsonl");
     std::fs::write(
         &full,
@@ -30,9 +28,6 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.last_input_tokens, Some(129_200));
     assert_eq!(usage.last_cached_input_tokens, Some(120_000));
     assert_eq!(usage.last_output_tokens, Some(800));
-    assert_eq!(usage.cumulative_input_tokens, Some(1000));
-    assert_eq!(usage.cumulative_output_tokens, Some(200));
-    assert_eq!(usage.cumulative_cached_tokens, 400);
 
     // A brand-new session (rollout opened, no `token_count` yet) reads as an
     // explicit zero with the provider-default window, so the gauge draws an
@@ -58,8 +53,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.total_tokens, None);
 
     // An older `last_token_usage` carrying only input + total leaves the
-    // cached/output sides and the cumulative totals unknown rather than zero,
-    // so no spurious cost estimate is produced.
+    // cached/output sides unknown rather than zero.
     let older = dir.path().join("older.jsonl");
     std::fs::write(
         &older,
@@ -72,9 +66,6 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.last_input_tokens, Some(500));
     assert_eq!(usage.last_cached_input_tokens, None);
     assert_eq!(usage.last_output_tokens, None);
-    assert_eq!(usage.cumulative_input_tokens, None);
-    assert_eq!(usage.cumulative_output_tokens, None);
-    assert_eq!(usage.cumulative_cached_tokens, 0);
 }
 
 #[test]
@@ -98,7 +89,6 @@ fn shared_scan_keeps_latest_usage_and_same_turn_plan_past_older_recovery() {
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
     assert_eq!(usage.effort.as_deref(), Some("high"));
     assert_eq!(usage.last_input_tokens, Some(120));
-    assert_eq!(usage.cumulative_input_tokens, Some(1000));
     let Some(RestingTurnOutcome::PlanProposed(plan)) = outcome else {
         panic!("latest clean turn should rest on its plan")
     };
@@ -559,6 +549,7 @@ fn transcript_refresh_stamps_plan_marker_instead_of_completion() {
         None,
         path.to_str(),
         None,
+        None,
         &dir.path().join("prices.json"),
     )
     .expect("transcript refresh");
@@ -637,6 +628,7 @@ fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
         None,
         Some(path.to_string_lossy().as_ref()),
         None,
+        None,
         &pricing_cache_path,
     )
     .expect("changed transcript refreshes");
@@ -679,6 +671,7 @@ fn messageless_task_complete_refreshes_as_overload_death() {
             None,
             Some(path.to_string_lossy().as_ref()),
             None,
+            None,
             &pricing_cache_path,
         )
         .expect("changed transcript refreshes");
@@ -719,6 +712,7 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         None,
         Some(path.to_string_lossy().as_ref()),
         None,
+        None,
         &pricing_cache_path,
     )
     .expect("changed transcript refreshes");
@@ -739,6 +733,7 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         "sess-1",
         None,
         Some(path.to_string_lossy().as_ref()),
+        None,
         None,
         &pricing_cache_path,
     )
@@ -935,11 +930,10 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
 }
 
 #[test]
-fn transcript_enrichment_maps_split_to_rich_usage_and_prices_cumulative_totals() {
-    let prices = PriceBook::embedded();
+fn transcript_enrichment_maps_split_to_rich_usage() {
     // The latest-call split maps onto `current_usage` (cached slice removed from
     // the input numerator), with no baked percentage — the gauge derives it from
-    // `current_usage` over the window downstream. No cumulative totals → no cost.
+    // `current_usage` over the window downstream.
     let split = TranscriptUsage {
         context_window: Some(10_000),
         context_window_reported: true,
@@ -949,11 +943,8 @@ fn transcript_enrichment_maps_split_to_rich_usage_and_prices_cumulative_totals()
         last_input_tokens: Some(1_200),
         last_cached_input_tokens: Some(1_000),
         last_output_tokens: Some(80),
-        cumulative_input_tokens: None,
-        cumulative_cached_tokens: 0,
-        cumulative_output_tokens: None,
     };
-    let (tokens, cost, model_id) = transcript_enrichment(&split, None, &prices);
+    let (tokens, model_id) = transcript_enrichment(&split, None);
     let tokens = tokens.expect("tokens are mapped");
     let current = tokens.current_usage.expect("current usage is mapped");
     assert_eq!(tokens.context_window_size, Some(10_000));
@@ -970,37 +961,7 @@ fn transcript_enrichment_maps_split_to_rich_usage_and_prices_cumulative_totals()
         split.last_input_tokens.unwrap(),
         "rich context numerator matches the row-level fallback"
     );
-    assert_eq!(cost, None);
     assert_eq!(model_id.as_deref(), Some("gpt-5"));
-
-    // Cumulative totals price against the known model — taken from the usage
-    // record, or from the prior model hint when the tail carries no turn_context.
-    let price = prices.price("gpt-5").unwrap();
-    let expected = 600.0 * price.input + 400.0 * price.cache_read + 200.0 * price.output;
-    let cumulative = |model: Option<&str>| TranscriptUsage {
-        context_window: None,
-        context_window_reported: false,
-        total_tokens: None,
-        model: model.map(ToOwned::to_owned),
-        effort: None,
-        last_input_tokens: None,
-        last_cached_input_tokens: None,
-        last_output_tokens: None,
-        cumulative_input_tokens: Some(1_000),
-        cumulative_cached_tokens: 400,
-        cumulative_output_tokens: Some(200),
-    };
-    for (usage, hint, label) in [
-        (cumulative(Some("gpt-5")), None, "known model from usage"),
-        (cumulative(None), Some("gpt-5"), "prior model hint"),
-    ] {
-        let (_tokens, cost, model_id) = transcript_enrichment(&usage, hint, &prices);
-        let cost = cost
-            .and_then(|cost| cost.total_cost_usd)
-            .unwrap_or_else(|| panic!("{label} prices cumulative totals"));
-        assert!((cost - expected).abs() < f64::EPSILON, "{label}");
-        assert_eq!(model_id.as_deref(), Some("gpt-5"), "{label}");
-    }
 }
 
 #[test]
@@ -1017,20 +978,11 @@ fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
         last_input_tokens: None,
         last_cached_input_tokens: None,
         last_output_tokens: None,
-        cumulative_input_tokens: Some(1_000),
-        cumulative_cached_tokens: 400,
-        cumulative_output_tokens: Some(200),
     };
 
-    let (_tokens, cost, model_id) = with_codex_config_path(&path, || {
-        transcript_enrichment(&usage, None, &PriceBook::embedded())
-    });
+    let (_tokens, model_id) = with_codex_config_path(&path, || transcript_enrichment(&usage, None));
 
     assert_eq!(model_id.as_deref(), Some("gpt-5"));
-    assert!(
-        cost.and_then(|cost| cost.total_cost_usd).is_some(),
-        "configured model prices cumulative totals"
-    );
 }
 
 #[test]
@@ -1051,6 +1003,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
             None,
             Some(&path_string),
             Some(&stat),
+            None,
             &pricing_cache_path,
         )
         .is_none(),
@@ -1072,6 +1025,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         None,
         Some(&path_string),
         Some(&stat),
+        None,
         &pricing_cache_path,
     )
     .expect("changed stat refreshes");
@@ -1099,6 +1053,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
             None,
             Some(&path_string),
             Some(&unchanged_stat),
+            None,
             &pricing_cache_path,
         )
         .is_none(),
@@ -1119,6 +1074,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         None,
         Some(&no_context_path),
         None,
+        None,
         &pricing_cache_path,
     )
     .expect("missing stat refreshes");
@@ -1133,7 +1089,7 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
     std::fs::write(
         &transcript_path,
         "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-9.9-nova\"}}\n\
-         {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+         {\"type\":\"event_msg\",\"timestamp\":\"2026-01-01T10:00:00.000Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\
          \"last_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\
          \"output_tokens\":10,\"total_tokens\":110},\
          \"total_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\
@@ -1151,6 +1107,7 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
         None,
         Some(transcript_path.to_string_lossy().as_ref()),
         None,
+        None,
         &pricing_cache_path,
     )
     .expect("changed transcript refreshes");
@@ -1160,6 +1117,43 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
         refresh.cost.and_then(|cost| cost.total_cost_usd).is_some(),
         "a shared-cache-only model prices the card"
     );
+}
+
+#[test]
+fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript_path = dir.path().join("rollout-session.jsonl");
+    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    std::fs::write(
+        &transcript_path,
+        concat!(
+            r#"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200000,"cached_input_tokens":150000,"output_tokens":1000,"total_tokens":201000},"total_token_usage":{"input_tokens":200000,"cached_input_tokens":150000,"output_tokens":1000},"model_context_window":272000}}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:01.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200000,"cached_input_tokens":150000,"output_tokens":1000,"total_tokens":201000},"total_token_usage":{"input_tokens":400000,"cached_input_tokens":300000,"output_tokens":2000},"model_context_window":272000}}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let refresh = refresh_transcript_context(
+        "sess-1",
+        None,
+        Some(transcript_path.to_string_lossy().as_ref()),
+        None,
+        None,
+        &pricing_cache_path,
+    )
+    .expect("changed transcript refreshes");
+    let actual = refresh.cost.unwrap().total_cost_usd.unwrap();
+    let price = PriceBook::embedded().price("gpt-5.6-sol").unwrap();
+    let per_request = price.cost(50_000, 1_000, 0, 0, 150_000, false);
+    let old_cumulative = price.cost(100_000, 2_000, 0, 0, 300_000, false);
+
+    assert!((actual - per_request * 2.0).abs() < 1e-12);
+    assert!(actual < old_cumulative);
+    assert_eq!(refresh.spend_fold.unwrap().total_usd, actual);
 }
 
 #[test]

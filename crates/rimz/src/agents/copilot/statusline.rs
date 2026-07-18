@@ -131,16 +131,14 @@ impl StatuslinePayload {
         let model = model.id.as_deref()?;
         let usage = self.context_window.as_ref()?.session_usage()?;
         let price = prices.price(model)?;
-        let total_cost_usd = price.cost(
+        let total_cost_usd = price.session_cost(
             usage.input_tokens.unwrap_or(0),
             usage
                 .output_tokens
                 .unwrap_or(0)
                 .saturating_add(usage.thinking_tokens.unwrap_or(0)),
             usage.cache_creation_input_tokens.unwrap_or(0),
-            0,
             usage.cache_read_input_tokens.unwrap_or(0),
-            false,
         );
         (total_cost_usd.is_finite() && total_cost_usd > 0.0).then(|| AgentCost {
             total_cost_usd: Some(total_cost_usd),
@@ -403,9 +401,36 @@ mod tests {
         let expected = prices
             .price("claude-sonnet-4.6")
             .unwrap()
-            .cost(6_000, 205, 7_000, 0, 69_000, false);
+            .session_cost(6_000, 205, 7_000, 69_000);
         assert_eq!(estimated_cost.total_cost_usd, Some(expected));
         assert_eq!(estimated_cost.coverage, CostCoverage::Session);
+    }
+
+    #[test]
+    fn cumulative_session_totals_stay_on_base_rates_above_long_context_threshold() {
+        let payload = json!({
+            "model": {"id": "gpt-5.6-sol"},
+            "context_window": {
+                "total_input_tokens": 500_000,
+                "total_output_tokens": 1_000,
+                "total_cache_write_tokens": 0,
+                "total_cache_read_tokens": 300_000,
+                "total_reasoning_tokens": 0
+            }
+        });
+        let prices = PriceBook::embedded();
+        let price = prices.price("gpt-5.6-sol").unwrap();
+        let actual = StatuslinePayload::parse(&payload)
+            .unwrap()
+            .cost(&prices)
+            .unwrap()
+            .total_cost_usd
+            .unwrap();
+        let expected = price.session_cost(200_000, 1_000, 0, 300_000);
+        let old_cumulative = price.cost(200_000, 1_000, 0, 0, 300_000, false);
+
+        assert!((actual - expected).abs() < f64::EPSILON);
+        assert!(actual < old_cumulative);
     }
 
     #[test]

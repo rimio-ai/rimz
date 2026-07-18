@@ -34,6 +34,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::agents::LocalSpendFold;
 use crate::agents::pricing::{PriceBook, Pricing};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, record_unknown_model,
@@ -190,6 +191,27 @@ pub(crate) fn parse_codex_spend(
         unknown_models,
         replace_entries: false,
     }
+}
+
+/// Resume the live card's exact per-request cost fold from its persisted cursor.
+pub(crate) fn resume_live_fold(
+    path: &Path,
+    prior: Option<&LocalSpendFold>,
+    file_len: u64,
+    prices: &PriceBook,
+) -> LocalSpendFold {
+    let mut fold = prior.cloned().unwrap_or_default();
+    if fold.cursor.offset > file_len {
+        fold = LocalSpendFold::default();
+    }
+    let parsed = parse_codex_spend(path, Some(&fold.cursor), prices);
+    fold.total_usd += parsed
+        .entries
+        .iter()
+        .map(|entry| entry.cost_usd)
+        .sum::<f64>();
+    fold.cursor = parsed.cursor;
+    fold
 }
 
 /// Price one Codex token event. Codex bills cached input at the model's

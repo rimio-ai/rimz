@@ -121,6 +121,7 @@ impl StatuslinePayload {
                 .flatten()
                 .find_map(|key| prices.exact_price(&key))
         })?;
+        // This wire reports current context occupancy, so one-request pricing applies.
         let total_cost_usd = price.cost(
             usage.input_tokens.unwrap_or(0),
             usage.output_tokens.unwrap_or(0),

@@ -163,6 +163,21 @@ impl Pricing {
         };
         cost * multiplier
     }
+
+    /// Price session-cumulative token totals at base rates. A session sum loses
+    /// the per-request boundaries needed to apply long-context tiers exactly.
+    pub(crate) fn session_cost(
+        self,
+        input: u64,
+        output: u64,
+        cache_create: u64,
+        cache_read: u64,
+    ) -> f64 {
+        input as f64 * self.input
+            + output as f64 * self.output
+            + cache_create as f64 * self.cache_create
+            + cache_read as f64 * self.cache_read
+    }
 }
 
 impl Default for Pricing {
@@ -751,6 +766,18 @@ mod tests {
 
         let long = price.cost(300_000, 1_000, 0, 0, 100, false);
         assert!((long - 3.0451).abs() < 1e-9, "long cost was {long}");
+    }
+
+    #[test]
+    fn session_cost_uses_base_rates_above_request_tier_boundaries() {
+        let price = PriceBook::embedded().price("gpt-5.6-sol").unwrap();
+        let cost = price.session_cost(500_000, 10_000, 20_000, 400_000);
+        let expected = 500_000.0 * price.input
+            + 10_000.0 * price.output
+            + 20_000.0 * price.cache_create
+            + 400_000.0 * price.cache_read;
+        assert!((cost - expected).abs() < f64::EPSILON);
+        assert_ne!(cost, price.cost(500_000, 10_000, 20_000, 0, 400_000, true));
     }
 
     #[test]

@@ -518,6 +518,13 @@ pub struct TranscriptStat {
     pub companion: Option<TranscriptCompanionStat>,
 }
 
+/// Resumable per-request spend fold over a session's local transcript.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LocalSpendFold {
+    pub cursor: spending::SpendCursor,
+    pub total_usd: f64,
+}
+
 impl TranscriptStat {
     /// Read the durable identity of a transcript-like file.
     pub fn from_path(path: &Path) -> Option<Self> {
@@ -575,6 +582,7 @@ pub struct LocalContextRefreshCtx<'a> {
     pub current_transcript_path: Option<&'a str>,
     pub prior_transcript_path: Option<&'a str>,
     pub prior_transcript_stat: Option<&'a TranscriptStat>,
+    pub prior_spend_fold: Option<&'a LocalSpendFold>,
     /// Persistent shared `pricing-cache.json`, for adapters that price token
     /// counts into card dollars. The spending producer owns writes.
     pub shared_pricing_cache_path: &'a Path,
@@ -616,6 +624,7 @@ pub struct LocalContextRefresh {
     pub turn_interrupted: Option<Timestamp>,
     pub transcript_path: Option<String>,
     pub transcript_stat: Option<TranscriptStat>,
+    pub spend_fold: Option<LocalSpendFold>,
 }
 
 /// Lifecycle fields projected by a provider-owned local session store.

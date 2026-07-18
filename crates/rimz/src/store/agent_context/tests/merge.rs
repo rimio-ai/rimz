@@ -2,7 +2,8 @@ use super::*;
 use crate::agents::context::WindowSource;
 use crate::agents::{
     AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage, AgentTokenUsage,
-    AgentTurnError, LocalContextRefresh, RateLimitWindow, TranscriptStat, TurnErrorClass,
+    AgentTurnError, LocalContextRefresh, LocalSpendFold, RateLimitWindow, TranscriptStat,
+    TurnErrorClass,
 };
 
 #[test]
@@ -57,6 +58,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
         turn_interrupted: None,
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
         transcript_stat: Some(stat()),
+        spend_fold: None,
     };
     write_record(&runtime, &prior).unwrap();
 
@@ -95,6 +97,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
         turn_interrupted: None,
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
         transcript_stat: Some(stat()),
+        spend_fold: None,
     };
     merge_local_context(&runtime, "droid", "sess-1", unresolved_model, observed_at).unwrap();
     let unresolved = read_one(&runtime, "droid", "sess-1").unwrap();
@@ -164,6 +167,28 @@ fn merge_local_context_preserves_prior_fields_by_case() {
         assert_eq!(merged.agent_id.as_str(), "sess-1", "{}", case.name);
         (case.assert)(&merged, prior_at, local_at);
     }
+}
+
+#[test]
+fn foldless_local_refresh_preserves_prior_spend_fold() {
+    let (_dir, runtime) = runtime();
+    let observed_at = observed_at();
+    let mut prior = codex_record(observed_at);
+    prior.spend_fold = Some(LocalSpendFold {
+        cursor: crate::agents::spending::SpendCursor {
+            offset: 42,
+            state: None,
+        },
+        total_usd: 1.25,
+    });
+    write_record(&runtime, &prior).unwrap();
+
+    merge_local_context(&runtime, "codex", "sess-1", unpriced_refresh(), observed_at).unwrap();
+
+    assert_eq!(
+        read_one(&runtime, "codex", "sess-1").unwrap().spend_fold,
+        prior.spend_fold
+    );
 }
 
 #[test]
@@ -513,6 +538,7 @@ fn full_local_refresh() -> LocalContextRefresh {
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
+        spend_fold: None,
     }
 }
 
@@ -531,6 +557,7 @@ fn unpriced_refresh() -> LocalContextRefresh {
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
+        spend_fold: None,
     }
 }
 
@@ -566,6 +593,7 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
+        spend_fold: None,
     }
 }
 
@@ -584,6 +612,7 @@ fn fallback_window_refresh() -> LocalContextRefresh {
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
+        spend_fold: None,
     }
 }
 

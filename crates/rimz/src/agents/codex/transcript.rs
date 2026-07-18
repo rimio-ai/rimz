@@ -14,14 +14,17 @@ use serde_json::Value;
 
 use super::DEFAULT_CONTEXT_WINDOW;
 use super::install::{codex_config_path, read_existing_table};
-use super::spend::wire::{CodexSessionMeta, CodexSessionSource, CodexTimestamp};
+use super::spend::{
+    resume_live_fold,
+    wire::{CodexSessionMeta, CodexSessionSource, CodexTimestamp},
+};
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass,
 };
-use crate::agents::pricing::{self, PriceBook};
+use crate::agents::pricing;
 use crate::agents::{
-    LocalContextRefresh, ProviderCapacity, SessionOrigin, TranscriptStat, optional_payload_string,
-    read_transcript_tail,
+    LocalContextRefresh, LocalSpendFold, ProviderCapacity, SessionOrigin, TranscriptStat,
+    optional_payload_string, read_transcript_tail,
 };
 
 const MAX_ROLLOUT_HEADER_BYTES: u64 = 1024 * 1024;
@@ -137,6 +140,7 @@ pub fn refresh_transcript_context(
     model_hint: Option<&str>,
     prior_transcript_path: Option<&str>,
     prior_transcript_stat: Option<&TranscriptStat>,
+    prior_spend_fold: Option<&LocalSpendFold>,
     pricing_cache_path: &Path,
 ) -> Option<LocalContextRefresh> {
     let mut path = prior_transcript_path.map(PathBuf::from);
@@ -152,6 +156,10 @@ pub fn refresh_transcript_context(
     }
 
     let prices = pricing::cached_book(pricing_cache_path);
+    let prior_spend_fold = (prior_transcript_path.map(Path::new) == Some(path.as_path()))
+        .then_some(prior_spend_fold)
+        .flatten();
+    let spend_fold = resume_live_fold(&path, prior_spend_fold, stat.len, &prices);
     let tail = read_transcript_tail(&path);
     let (usage, outcome, _) = tail
         .as_deref()
@@ -164,7 +172,11 @@ pub fn refresh_transcript_context(
         Some(RestingTurnOutcome::Died(error)) => (None, None, None, Some(error)),
         None => (None, None, None, None),
     };
-    let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint, &prices);
+    let (tokens, model_id) = transcript_enrichment(&usage, model_hint);
+    let cost = (spend_fold.total_usd > 0.0).then_some(AgentCost {
+        total_cost_usd: Some(spend_fold.total_usd),
+        ..AgentCost::default()
+    });
     Some(LocalContextRefresh {
         model_id,
         effort: usage.effort,
@@ -176,6 +188,7 @@ pub fn refresh_transcript_context(
         turn_interrupted,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
+        spend_fold: Some(spend_fold),
         ..LocalContextRefresh::default()
     })
 }
@@ -215,20 +228,12 @@ pub(super) struct TranscriptUsage {
     pub(super) last_cached_input_tokens: Option<u64>,
     /// The latest call's output from `last_token_usage.output_tokens`.
     pub(super) last_output_tokens: Option<u64>,
-    /// Cumulative session input tokens from the most-recent `total_token_usage`
-    /// block — the billable input total, used to estimate the session cost.
-    pub(super) cumulative_input_tokens: Option<u64>,
-    /// Cumulative cached input tokens from `total_token_usage`.
-    pub(super) cumulative_cached_tokens: u64,
-    /// Cumulative output tokens from `total_token_usage`.
-    pub(super) cumulative_output_tokens: Option<u64>,
 }
 
 pub(super) fn transcript_enrichment(
     usage: &TranscriptUsage,
     model_hint: Option<&str>,
-    prices: &PriceBook,
-) -> (Option<AgentTokenUsage>, Option<AgentCost>, Option<String>) {
+) -> (Option<AgentTokenUsage>, Option<String>) {
     let current_usage = if usage.last_input_tokens.is_some()
         || usage.last_cached_input_tokens.is_some()
         || usage.last_output_tokens.is_some()
@@ -265,31 +270,7 @@ pub(super) fn transcript_enrichment(
         .map(ToOwned::to_owned)
         .or_else(|| usage.model.clone())
         .or_else(configured_model);
-    let cost = match (
-        usage.cumulative_input_tokens,
-        usage.cumulative_output_tokens,
-        model_id.as_deref(),
-    ) {
-        (Some(total_input), Some(total_output), Some(model_id)) => {
-            prices.price(model_id).and_then(|price| {
-                let uncached = total_input.saturating_sub(usage.cumulative_cached_tokens);
-                let cost = price.cost(
-                    uncached,
-                    total_output,
-                    0,
-                    0,
-                    usage.cumulative_cached_tokens,
-                    false,
-                );
-                (cost > 0.0).then_some(AgentCost {
-                    total_cost_usd: Some(cost),
-                    ..AgentCost::default()
-                })
-            })
-        }
-        _ => None,
-    };
-    (tokens, cost, model_id)
+    (tokens, model_id)
 }
 
 pub(super) fn payload_reasoning_effort(payload: &Value) -> Option<String> {
@@ -410,9 +391,6 @@ impl TranscriptUsage {
             last_input_tokens: Some(0),
             last_cached_input_tokens: Some(0),
             last_output_tokens: Some(0),
-            cumulative_input_tokens: None,
-            cumulative_cached_tokens: 0,
-            cumulative_output_tokens: None,
         }
     }
 
@@ -515,11 +493,10 @@ fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
 
 /// Derive context-window usage from the tail of a Codex rollout JSONL. Codex
 /// emits an `event_msg`/`token_count` payload after every assistant turn with
-/// the current `model_context_window`, `last_token_usage` (gauge), and
-/// `total_token_usage` (cumulative billing totals). This reads a bounded tail
-/// and takes the most recent record. Best-effort: any IO or parse failure
-/// yields empty fields (enrichment, never correctness). Test-only: the refresh
-/// path reads the tail once for usage and turn-completion together.
+/// the current `model_context_window` and `last_token_usage` (gauge). This reads
+/// a bounded tail and takes the most recent record. Best-effort: any IO or parse
+/// failure yields empty fields (enrichment, never correctness). Test-only: the
+/// refresh path reads the tail once for usage and turn-completion together.
 #[cfg(test)]
 pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     let Some(text) = read_transcript_tail(path) else {
@@ -956,16 +933,13 @@ pub(super) struct TranscriptScan {
     latest_model: Option<String>,
     latest_effort: Option<String>,
     latest_usage: Option<LastUsage>,
-    latest_cumulative: Option<(u64, u64, u64)>,
     outcome: OutcomeScan,
     raw_error: RawErrorScan,
 }
 
 impl TranscriptScan {
     fn usage_complete(&self) -> bool {
-        self.latest_model.is_some()
-            && self.latest_usage.is_some()
-            && self.latest_cumulative.is_some()
+        self.latest_model.is_some() && self.latest_usage.is_some()
     }
 
     fn complete(&self, need: TranscriptScanNeed) -> bool {
@@ -976,26 +950,11 @@ impl TranscriptScan {
     }
 
     pub(super) fn into_usage(self) -> TranscriptUsage {
-        let (cumulative_input_tokens, cumulative_cached_tokens, cumulative_output_tokens) =
-            match self.latest_cumulative {
-                Some((i, c, o)) => (Some(i), c, Some(o)),
-                None => (None, 0, None),
-            };
         match self.latest_usage {
-            Some(last) => usage_from_last_record(
-                last,
-                self.latest_model,
-                self.latest_effort,
-                cumulative_input_tokens,
-                cumulative_cached_tokens,
-                cumulative_output_tokens,
-            ),
+            Some(last) => usage_from_last_record(last, self.latest_model, self.latest_effort),
             None => TranscriptUsage {
                 model: self.latest_model,
                 effort: self.latest_effort,
-                cumulative_input_tokens,
-                cumulative_cached_tokens,
-                cumulative_output_tokens,
                 ..TranscriptUsage::fresh()
             },
         }
@@ -1069,16 +1028,13 @@ fn scan_transcript_record(value: &Value, scan: &mut TranscriptScan, need: Transc
     if scan.latest_effort.is_none() {
         scan.latest_effort = turn_context_effort(value);
     }
-    if scan.latest_usage.is_none() || scan.latest_cumulative.is_none() {
+    if scan.latest_usage.is_none() {
         let info = value
             .get("payload")
             .filter(|payload| payload.get("type").and_then(Value::as_str) == Some("token_count"))
             .and_then(|payload| payload.get("info"));
         if scan.latest_usage.is_none() {
             scan.latest_usage = last_usage_from_info(info);
-        }
-        if scan.latest_cumulative.is_none() {
-            scan.latest_cumulative = cumulative_usage_from_info(info);
         }
     }
     if need == TranscriptScanNeed::UsageAndOutcome {
@@ -1200,34 +1156,10 @@ fn last_usage_from_info(info: Option<&Value>) -> Option<LastUsage> {
     })
 }
 
-fn cumulative_usage_from_info(info: Option<&Value>) -> Option<(u64, u64, u64)> {
-    let total_usage = info.and_then(|info| info.get("total_token_usage"));
-    let cum_input = total_usage
-        .and_then(|u| u.get("input_tokens"))
-        .and_then(Value::as_u64);
-    let cum_output = total_usage
-        .and_then(|u| u.get("output_tokens"))
-        .and_then(Value::as_u64);
-    let cum_cached = total_usage
-        .and_then(|u| {
-            u.get("cached_input_tokens")
-                .or_else(|| u.get("cache_read_input_tokens"))
-        })
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    match (cum_input, cum_output) {
-        (Some(i), Some(o)) => Some((i, cum_cached, o)),
-        _ => None,
-    }
-}
-
 fn usage_from_last_record(
     last: LastUsage,
     model: Option<String>,
     effort: Option<String>,
-    cumulative_input_tokens: Option<u64>,
-    cumulative_cached_tokens: u64,
-    cumulative_output_tokens: Option<u64>,
 ) -> TranscriptUsage {
     let context_window_reported = last.window > 0;
     let context_window = if context_window_reported {
@@ -1244,8 +1176,5 @@ fn usage_from_last_record(
         last_input_tokens: last.input,
         last_cached_input_tokens: last.cached,
         last_output_tokens: last.output,
-        cumulative_input_tokens,
-        cumulative_cached_tokens,
-        cumulative_output_tokens,
     }
 }

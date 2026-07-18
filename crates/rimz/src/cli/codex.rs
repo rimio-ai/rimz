@@ -135,6 +135,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         prior
             .as_ref()
             .and_then(|record| record.transcript_stat.as_ref()),
+        prior.as_ref().and_then(|record| record.spend_fold.as_ref()),
         &runtime.shared_pricing_cache_path(),
     );
     if let Some(refresh) = transcript_refresh.as_mut() {

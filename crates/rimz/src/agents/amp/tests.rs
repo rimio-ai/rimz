@@ -354,6 +354,7 @@ fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
         current_transcript_path: None,
         prior_transcript_path: Some(&path_text),
         prior_transcript_stat: None,
+        prior_spend_fold: None,
         shared_pricing_cache_path: &pricing,
     };
 
@@ -384,6 +385,7 @@ fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
     let stat = refresh.transcript_stat.unwrap();
     let gated = LocalContextRefreshCtx {
         prior_transcript_stat: Some(&stat),
+        prior_spend_fold: None,
         ..ctx
     };
     assert!(
