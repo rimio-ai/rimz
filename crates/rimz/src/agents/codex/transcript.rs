@@ -3,8 +3,7 @@
 //! This module locates session JSONL files, reads bounded tails, folds token usage, and enriches context/cost fields without touching the live app-server. Costs use the shared cached price book, so refreshed prices heal post-release models.
 
 use std::env;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read};
+use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{LazyLock, Mutex};
@@ -14,10 +13,10 @@ use serde_json::Value;
 
 use super::DEFAULT_CONTEXT_WINDOW;
 use super::install::{codex_config_path, read_existing_table};
-use super::spend::{
-    resume_live_fold,
-    wire::{CodexSessionMeta, CodexSessionSource, CodexTimestamp},
+use super::rollout::{
+    CodexTaskComplete, RolloutError, RolloutKind, RolloutRecord, decode_line, read_rollout_header,
 };
+use super::spend::resume_live_fold;
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass,
 };
@@ -26,112 +25,6 @@ use crate::agents::{
     FieldPatch, LocalContextPatch, LocalContextRefresh, LocalSpendFold, LocalTokenPatch,
     ProviderCapacity, SessionOrigin, TranscriptStat, optional_payload_string, read_transcript_tail,
 };
-
-const MAX_ROLLOUT_HEADER_BYTES: u64 = 1024 * 1024;
-
-/// Normalized identity and child metadata from a rollout's `session_meta`
-/// header. Hooks remain lifecycle authority; every field here is optional
-/// enrichment except `is_subagent`, which local root discovery uses to reject
-/// positively identified child rollouts.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct CodexRolloutHeader {
-    pub(super) session_id: Option<String>,
-    pub(super) cwd: Option<PathBuf>,
-    pub(super) timestamp: Option<Timestamp>,
-    pub(super) forked_from_id: Option<String>,
-    pub(super) is_subagent: bool,
-    pub(super) parent_thread_id: Option<String>,
-    pub(super) depth: Option<u32>,
-    pub(super) agent_nickname: Option<String>,
-    pub(super) agent_path: Option<String>,
-    pub(super) agent_role: Option<String>,
-    pub(super) multi_agent_version: Option<String>,
-}
-
-/// Read and normalize one rollout header without scanning its body.
-pub(super) fn read_rollout_header(path: &Path) -> Option<CodexRolloutHeader> {
-    let file = File::open(path).ok()?;
-    let mut line = String::new();
-    BufReader::new(file)
-        .take(MAX_ROLLOUT_HEADER_BYTES)
-        .read_line(&mut line)
-        .ok()?;
-    let meta = serde_json::from_str::<CodexSessionMeta<'_>>(line.trim()).ok()?;
-    if meta.entry_type.as_deref() != Some("session_meta") {
-        return None;
-    }
-    let payload = meta.payload?;
-    let spawn = match payload.source.as_ref() {
-        Some(CodexSessionSource::Structured(source)) => source
-            .subagent
-            .as_ref()
-            .and_then(|subagent| subagent.thread_spawn.as_ref()),
-        Some(CodexSessionSource::Name(name)) => {
-            let _ = name;
-            None
-        }
-        Some(CodexSessionSource::Other(value)) => {
-            let _ = value;
-            None
-        }
-        None => None,
-    };
-    let is_subagent = payload
-        .thread_source
-        .as_deref()
-        .is_some_and(|source| source.trim().eq_ignore_ascii_case("subagent"))
-        || spawn.is_some();
-    Some(CodexRolloutHeader {
-        session_id: owned_non_empty(payload.id.as_deref()),
-        cwd: owned_non_empty(payload.cwd.as_deref()).map(PathBuf::from),
-        timestamp: codex_timestamp(meta.timestamp.as_ref()),
-        forked_from_id: owned_non_empty(payload.forked_from_id.as_deref()),
-        is_subagent,
-        parent_thread_id: owned_non_empty(payload.parent_thread_id.as_deref())
-            .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.parent_thread_id.as_deref()))),
-        depth: spawn.and_then(|spawn| spawn.depth),
-        agent_nickname: owned_non_empty(payload.agent_nickname.as_deref())
-            .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.agent_nickname.as_deref()))),
-        agent_path: owned_non_empty(payload.agent_path.as_deref())
-            .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.agent_path.as_deref())))
-            .and_then(|path| normalize_agent_path(&path)),
-        agent_role: owned_non_empty(payload.agent_role.as_deref())
-            .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.agent_role.as_deref()))),
-        multi_agent_version: owned_non_empty(payload.multi_agent_version.as_deref()),
-    })
-}
-
-fn owned_non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn normalize_agent_path(path: &str) -> Option<String> {
-    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
-    let first = segments.next()?;
-    let normalized = if first == "root" {
-        segments.collect::<Vec<_>>()
-    } else {
-        std::iter::once(first).chain(segments).collect::<Vec<_>>()
-    };
-    (!normalized.is_empty()).then(|| normalized.join("/"))
-}
-
-fn codex_timestamp(timestamp: Option<&CodexTimestamp<'_>>) -> Option<Timestamp> {
-    match timestamp? {
-        CodexTimestamp::String(raw) => raw.trim().parse().ok(),
-        CodexTimestamp::Number(raw) => {
-            let (seconds, nanos) = if *raw > 10_000_000_000 {
-                (raw / 1_000, (raw % 1_000) * 1_000_000)
-            } else {
-                (*raw, 0)
-            };
-            Timestamp::new(i64::try_from(seconds).ok()?, nanos as i32).ok()
-        }
-    }
-}
 
 /// Refresh Codex's local transcript-derived context for one session, skipping the
 /// tail read when the persisted transcript stat still matches.
@@ -560,8 +453,8 @@ fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
     scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_outcome()
 }
 
-fn completed_turn_fallback(payload: &Value, at: Timestamp) -> RestingTurnOutcome {
-    if task_complete_has_final_message(payload) {
+fn completed_turn_fallback(task: &CodexTaskComplete<'_>, at: Timestamp) -> RestingTurnOutcome {
+    if task_complete_has_final_message(task) {
         RestingTurnOutcome::Complete(at)
     } else {
         RestingTurnOutcome::Died(messageless_task_complete(at))
@@ -569,40 +462,41 @@ fn completed_turn_fallback(payload: &Value, at: Timestamp) -> RestingTurnOutcome
 }
 
 fn plan_proposal_from_record(
-    value: &Value,
+    record: &RolloutRecord<'_>,
     completed_turn_id: &str,
     at: Timestamp,
 ) -> Option<PlanProposal> {
-    let payload = event_msg_payload(value)?;
-    if payload.get("type").and_then(Value::as_str) != Some("item_completed")
-        || payload.get("turn_id").and_then(Value::as_str) != Some(completed_turn_id)
-    {
+    let RolloutKind::ItemCompleted(item) = &record.kind else {
+        return None;
+    };
+    if item.turn_id.as_deref() != Some(completed_turn_id) {
         return None;
     }
-    let item = payload.get("item")?;
-    if item.get("type").and_then(Value::as_str) != Some("Plan") {
-        return None;
-    }
-    item.get("text")
-        .and_then(Value::as_str)
+    item.plan_text
+        .as_deref()
         .and_then(non_empty_text)
         .map(|text| PlanProposal { text, at })
 }
 
-fn terminal_outcome_from_record(value: &Value) -> Option<Option<RestingTurnOutcome>> {
-    if transcript_record_proves_recovery(value) {
+fn terminal_outcome_from_record(record: &RolloutRecord<'_>) -> Option<Option<RestingTurnOutcome>> {
+    if record.proves_recovery() {
         return Some(None);
     }
-    if let Some(error) = turn_error_from_record(value) {
+    if let Some(error) = turn_error_from_record(record) {
         return Some(Some(RestingTurnOutcome::Died(error)));
     }
-    let payload = event_msg_payload(value)?;
-    match payload.get("type").and_then(Value::as_str) {
-        Some("turn_aborted") => Some(record_timestamp(value).map(RestingTurnOutcome::Interrupted)),
-        Some("task_complete") if payload.get("error").is_none() => {
-            Some(record_timestamp(value).map(|at| completed_turn_fallback(payload, at)))
-        }
-        Some("task_complete") => Some(None),
+    match &record.kind {
+        RolloutKind::TurnAborted => Some(
+            record
+                .event_timestamp()
+                .map(RestingTurnOutcome::Interrupted),
+        ),
+        RolloutKind::TaskComplete(task) if !task.error_field_present => Some(
+            record
+                .event_timestamp()
+                .map(|at| completed_turn_fallback(task, at)),
+        ),
+        RolloutKind::TaskComplete(_) => Some(None),
         _ => None,
     }
 }
@@ -725,10 +619,9 @@ fn death_warning_from_frame_scan(frame: &str) -> Option<DeathWarning> {
     None
 }
 
-fn task_complete_has_final_message(payload: &Value) -> bool {
-    payload
-        .get("last_agent_message")
-        .and_then(Value::as_str)
+fn task_complete_has_final_message(task: &CodexTaskComplete<'_>) -> bool {
+    task.last_agent_message
+        .as_deref()
         .is_some_and(|message| !message.trim().is_empty())
 }
 
@@ -740,11 +633,11 @@ fn messageless_task_complete(at: Timestamp) -> AgentTurnError {
     }
 }
 
-fn turn_error_from_record(value: &Value) -> Option<AgentTurnError> {
-    let payload = error_payload(value)?;
-    let at = record_timestamp(value)?;
-    let label = turn_error_label(payload);
-    let class = classify_turn_error(codex_error_info(payload), label.as_deref());
+fn turn_error_from_record(record: &RolloutRecord<'_>) -> Option<AgentTurnError> {
+    let error = record.error.as_ref()?;
+    let at = record.event_timestamp()?;
+    let label = turn_error_label(error);
+    let class = classify_turn_error(&error.kinds, label.as_deref());
     Some(AgentTurnError { class, at, label })
 }
 
@@ -772,81 +665,8 @@ fn is_codex_input_prompt_text(text: &str) -> bool {
     text.starts_with('›')
 }
 
-fn transcript_record_proves_recovery(value: &Value) -> bool {
-    if value.get("type").and_then(Value::as_str) == Some("turn_context") {
-        return true;
-    }
-    let Some(payload) = event_msg_payload(value) else {
-        return false;
-    };
-    matches!(
-        payload.get("type").and_then(Value::as_str),
-        Some("agent_message" | "task_started" | "user_message")
-    )
-}
-
-fn error_payload(value: &Value) -> Option<&Value> {
-    if let Some(payload) = event_msg_payload(value) {
-        return error_payload_from_event_payload(payload);
-    }
-    schema_error_payload(value)
-}
-
-fn error_payload_from_event_payload(payload: &Value) -> Option<&Value> {
-    match payload.get("type").and_then(Value::as_str) {
-        Some("stream_error" | "turn_error" | "error") => Some(payload),
-        Some("task_complete") if has_task_complete_error(payload) => Some(payload),
-        _ => schema_error_payload(payload),
-    }
-}
-
-fn schema_error_payload(payload: &Value) -> Option<&Value> {
-    payload.get("error").filter(|error| {
-        error.get("message").and_then(Value::as_str).is_some()
-            || error
-                .get("codexErrorInfo")
-                .or_else(|| error.get("codex_error_info"))
-                .is_some()
-    })
-}
-
-fn has_task_complete_error(payload: &Value) -> bool {
-    match payload.get("error") {
-        Some(Value::Null) | None => false,
-        Some(Value::Bool(false)) => false,
-        Some(Value::String(text)) => !text.trim().is_empty(),
-        Some(Value::Object(object)) => !object.is_empty(),
-        Some(_) => true,
-    }
-}
-
-fn event_msg_payload(value: &Value) -> Option<&Value> {
-    (value.get("type").and_then(Value::as_str) == Some("event_msg"))
-        .then(|| value.get("payload"))
-        .flatten()
-}
-
-fn record_timestamp(value: &Value) -> Option<Timestamp> {
-    value
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|timestamp| timestamp.parse::<Timestamp>().ok())
-}
-
-fn turn_error_label(payload: &Value) -> Option<String> {
-    let text = payload
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| payload.get("error_message").and_then(Value::as_str))
-        .or_else(|| {
-            payload
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| payload.get("error").and_then(Value::as_str))
-        .or_else(|| payload.get("last_agent_message").and_then(Value::as_str))?;
-    cap_turn_error_label(text)
+fn turn_error_label(error: &RolloutError<'_>) -> Option<String> {
+    error.label.as_deref().and_then(cap_turn_error_label)
 }
 
 fn cap_turn_error_label(text: &str) -> Option<String> {
@@ -857,37 +677,14 @@ fn cap_turn_error_label(text: &str) -> Option<String> {
     Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
 }
 
-fn codex_error_info(payload: &Value) -> Option<&Value> {
-    payload
-        .get("codexErrorInfo")
-        .or_else(|| payload.get("codex_error_info"))
-        .or_else(|| {
-            payload
-                .get("error")
-                .and_then(|error| error.get("codexErrorInfo"))
-        })
-        .or_else(|| {
-            payload
-                .get("error")
-                .and_then(|error| error.get("codex_error_info"))
-        })
-}
-
-fn classify_turn_error(info: Option<&Value>, label: Option<&str>) -> TurnErrorClass {
-    if let Some(class) = info.and_then(class_from_codex_error_info) {
+fn classify_turn_error(kinds: &[std::borrow::Cow<'_, str>], label: Option<&str>) -> TurnErrorClass {
+    if let Some(class) = kinds
+        .iter()
+        .find_map(|kind| class_from_codex_error_kind(kind))
+    {
         return class;
     }
     TurnErrorClass::classify_label(label)
-}
-
-fn class_from_codex_error_info(info: &Value) -> Option<TurnErrorClass> {
-    if let Some(kind) = info.as_str() {
-        return class_from_codex_error_kind(kind);
-    }
-    let object = info.as_object()?;
-    object
-        .keys()
-        .find_map(|kind| class_from_codex_error_kind(kind))
 }
 
 fn class_from_codex_error_kind(kind: &str) -> Option<TurnErrorClass> {
@@ -1013,10 +810,10 @@ pub(super) fn scan_transcript_tail(text: &str, need: TranscriptScanNeed) -> Tran
         if line.is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+        let Some(record) = decode_line(line.as_bytes()) else {
             continue;
         };
-        scan_transcript_record(&value, &mut scan, need);
+        scan_transcript_record(&record, &mut scan, need);
         if scan.complete(need) {
             break;
         }
@@ -1032,67 +829,62 @@ pub(super) fn scan_transcript_tail(text: &str, need: TranscriptScanNeed) -> Tran
     scan
 }
 
-fn scan_transcript_record(value: &Value, scan: &mut TranscriptScan, need: TranscriptScanNeed) {
-    if scan.latest_model.is_none() {
-        scan.latest_model = turn_context_model(value);
-    }
-    if scan.latest_effort.is_none() {
-        scan.latest_effort = turn_context_effort(value);
-    }
-    if scan.latest_usage.is_none() {
-        let info = value
-            .get("payload")
-            .filter(|payload| payload.get("type").and_then(Value::as_str) == Some("token_count"))
-            .and_then(|payload| payload.get("info"));
-        if scan.latest_usage.is_none() {
-            scan.latest_usage = last_usage_from_info(info);
+fn scan_transcript_record(
+    record: &RolloutRecord<'_>,
+    scan: &mut TranscriptScan,
+    need: TranscriptScanNeed,
+) {
+    if let RolloutKind::TurnContext(context) = &record.kind {
+        if scan.latest_model.is_none() {
+            scan.latest_model = context.model().map(ToOwned::to_owned);
+        }
+        if scan.latest_effort.is_none() {
+            scan.latest_effort = context.effort().map(ToOwned::to_owned);
         }
     }
+    if scan.latest_usage.is_none()
+        && let RolloutKind::TokenCount(token_count) = &record.kind
+    {
+        scan.latest_usage = last_usage_from_info(token_count.info());
+    }
     if need == TranscriptScanNeed::UsageAndOutcome {
-        scan_outcome_record(value, &mut scan.outcome);
-        scan_raw_error_record(value, &mut scan.raw_error);
+        scan_outcome_record(record, &mut scan.outcome);
+        scan_raw_error_record(record, &mut scan.raw_error);
     }
 }
 
-fn scan_raw_error_record(value: &Value, state: &mut RawErrorScan) {
+fn scan_raw_error_record(record: &RolloutRecord<'_>, state: &mut RawErrorScan) {
     if !matches!(state, RawErrorScan::Searching) {
         return;
     }
-    if transcript_record_proves_recovery(value) {
+    if record.proves_recovery() {
         *state = RawErrorScan::Resolved(None);
-    } else if let Some(error) = turn_error_from_record(value) {
+    } else if let Some(error) = turn_error_from_record(record) {
         *state = RawErrorScan::Resolved(Some(error));
     }
 }
 
-fn scan_outcome_record(value: &Value, state: &mut OutcomeScan) {
+fn scan_outcome_record(record: &RolloutRecord<'_>, state: &mut OutcomeScan) {
     match state {
         OutcomeScan::Resolved(_) => {}
         OutcomeScan::Searching => {
-            let Some(outcome) = terminal_outcome_from_record(value) else {
+            let Some(outcome) = terminal_outcome_from_record(record) else {
                 return;
             };
-            let clean_completion = event_msg_payload(value).is_some_and(|payload| {
-                payload.get("type").and_then(Value::as_str) == Some("task_complete")
-                    && payload.get("error").is_none()
-            });
+            let RolloutKind::TaskComplete(task) = &record.kind else {
+                *state = OutcomeScan::Resolved(outcome);
+                return;
+            };
+            let clean_completion = !task.error_field_present;
             if !clean_completion {
                 *state = OutcomeScan::Resolved(outcome);
                 return;
             }
-            let Some(payload) = event_msg_payload(value) else {
+            let Some(turn_id) = task.turn_id.as_deref().and_then(non_empty_text) else {
                 *state = OutcomeScan::Resolved(outcome);
                 return;
             };
-            let Some(turn_id) = payload
-                .get("turn_id")
-                .and_then(Value::as_str)
-                .and_then(non_empty_text)
-            else {
-                *state = OutcomeScan::Resolved(outcome);
-                return;
-            };
-            let Some(at) = record_timestamp(value) else {
+            let Some(at) = record.event_timestamp() else {
                 *state = OutcomeScan::Resolved(None);
                 return;
             };
@@ -1107,57 +899,31 @@ fn scan_outcome_record(value: &Value, state: &mut OutcomeScan) {
             at,
             fallback,
         } => {
-            let Some(payload) = event_msg_payload(value) else {
-                return;
-            };
-            if payload.get("type").and_then(Value::as_str) == Some("task_complete") {
+            if matches!(record.kind, RolloutKind::TaskComplete(_)) {
                 *state = OutcomeScan::Resolved(fallback.take());
                 return;
             }
-            if let Some(plan) = plan_proposal_from_record(value, turn_id, *at) {
+            if let Some(plan) = plan_proposal_from_record(record, turn_id, *at) {
                 *state = OutcomeScan::Resolved(Some(RestingTurnOutcome::PlanProposed(plan)));
             }
         }
     }
 }
-
-fn turn_context_model(value: &Value) -> Option<String> {
-    (value.get("type").and_then(Value::as_str) == Some("turn_context"))
-        .then(|| {
-            value
-                .get("payload")
-                .and_then(|p| p.get("model"))
-                .and_then(Value::as_str)
-                .filter(|model| !model.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .flatten()
-}
-
-fn turn_context_effort(value: &Value) -> Option<String> {
-    (value.get("type").and_then(Value::as_str) == Some("turn_context"))
-        .then(|| value.get("payload").and_then(payload_reasoning_effort))
-        .flatten()
-}
-
-fn last_usage_from_info(info: Option<&Value>) -> Option<LastUsage> {
-    let window = info
-        .and_then(|info| info.get("model_context_window"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let last = info.and_then(|info| info.get("last_token_usage"));
+fn last_usage_from_info(info: Option<&super::rollout::CodexUsageInfo<'_>>) -> Option<LastUsage> {
+    let window = info.and_then(|info| info.model_context_window).unwrap_or(0);
+    let last = info.and_then(|info| info.last_token_usage);
     let input = last
-        .and_then(|last| last.get("input_tokens"))
-        .and_then(Value::as_u64);
+        .filter(|usage| usage.input_reported())
+        .map(|usage| usage.input_tokens);
     let total = last
-        .and_then(|last| last.get("total_tokens"))
-        .and_then(Value::as_u64);
+        .filter(|usage| usage.total_reported())
+        .map(|usage| usage.total_tokens);
     let cached = last
-        .and_then(|last| last.get("cached_input_tokens"))
-        .and_then(Value::as_u64);
+        .filter(|usage| usage.cached_reported())
+        .map(|usage| usage.cached_input_tokens);
     let output = last
-        .and_then(|last| last.get("output_tokens"))
-        .and_then(Value::as_u64);
+        .filter(|usage| usage.output_reported())
+        .map(|usage| usage.output_tokens);
     (window > 0 || input.unwrap_or(0) > 0 || total.is_some()).then_some(LastUsage {
         input,
         total,

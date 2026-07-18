@@ -26,7 +26,7 @@
 //!  "timestamp":"2026-01-01T10:00:00.000Z"}
 //! ```
 //!
-//! [`wire::CodexRawUsage`] normalizes field-name variants across providers
+//! [`super::rollout::CodexRawUsage`] normalizes field-name variants across providers
 //! that embed Codex-compatible usage: `prompt_tokens`/`completion_tokens`
 //! (OpenAI), `input`/`output` (compact),
 //! `cached_tokens`/`cached_input_tokens` (cache).
@@ -46,11 +46,11 @@ mod parse;
 mod tests;
 pub(super) mod wire;
 
+#[cfg(test)]
+use parse::codex_line_kind;
 use parse::{CodexSpendState, parse_codex_session};
 #[cfg(test)]
-use parse::{codex_line_kind, millis_to_rfc3339};
-#[cfg(test)]
-use wire::{CodexLogEntry, CodexRawUsage};
+use wire::CodexLogEntry;
 
 // ── Path discovery ────────────────────────────────────────────────────────────
 

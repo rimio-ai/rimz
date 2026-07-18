@@ -11,10 +11,11 @@ use serde::{Deserialize, Serialize};
 use crate::agents::spending::origin_path;
 use crate::agents::transcript_fs::read_spend_lines;
 
-use super::wire::{
-    CodexInfo, CodexLogEntry, CodexModelMetadata, CodexPayload, CodexRawUsage, CodexResultFields,
-    CodexSessionEntry, CodexSessionMeta, CodexTimestamp, CodexTokenEvent,
+use super::super::rollout::{
+    CodexModelMetadata, CodexRawUsage, CodexTimestamp, RolloutKind, RolloutRecord, decode_line,
+    normalize_timestamp,
 };
+use super::wire::{CodexLogEntry, CodexResultFields, CodexTokenEvent};
 
 // ── Line-kind detection ───────────────────────────────────────────────────────
 
@@ -135,21 +136,22 @@ pub(super) fn parse_codex_session(
         match codex_line_kind(line) {
             Some(CodexLineKind::SessionMeta) => {
                 if state.cwd.is_none()
-                    && let Ok(meta) = serde_json::from_slice::<CodexSessionMeta<'_>>(line)
-                    && let Some(cwd) = meta.payload.and_then(|payload| payload.cwd)
+                    && let Some(record) = decode_line(line)
+                    && let RolloutKind::SessionMeta(payload) = record.kind
+                    && let Some(cwd) = payload.cwd
                 {
                     state.cwd = origin_path(Some(cwd.as_ref()));
                 }
             }
             Some(CodexLineKind::Session) => {
-                let Ok(entry) = serde_json::from_slice::<CodexSessionEntry<'_>>(line) else {
+                let Some(record) = decode_line(line) else {
                     continue;
                 };
-                if suppress_replayed_entry(&entry, state) {
+                if suppress_replayed_entry(&record, state) {
                     continue;
                 }
                 visit_session_entry(
-                    entry,
+                    record,
                     &mut state.previous_totals,
                     &mut state.current_model,
                     &mut out,
@@ -207,13 +209,13 @@ fn probe_replay(path: &Path) -> ReplayProbe {
         if !matches!(codex_line_kind(&line), Some(CodexLineKind::Session)) {
             continue;
         }
-        let Ok(entry) = serde_json::from_slice::<CodexSessionEntry<'_>>(&line) else {
+        let Some(record) = decode_line(&line) else {
             continue;
         };
-        if !is_usage_entry(&entry) {
+        if !is_usage_entry(&record) {
             continue;
         }
-        let Some(second) = timestamp_second(entry.timestamp.as_ref()) else {
+        let Some(second) = timestamp_second(record.timestamp.as_ref()) else {
             continue;
         };
         match first {
@@ -224,39 +226,33 @@ fn probe_replay(path: &Path) -> ReplayProbe {
     }
 }
 
-fn suppress_replayed_entry(entry: &CodexSessionEntry<'_>, state: &mut CodexSpendState) -> bool {
-    if !state.skipping_replay || !is_usage_entry(entry) {
+fn suppress_replayed_entry(record: &RolloutRecord<'_>, state: &mut CodexSpendState) -> bool {
+    if !state.skipping_replay || !is_usage_entry(record) {
         return false;
     }
-    let Some(second) = timestamp_second(entry.timestamp.as_ref()) else {
+    let Some(second) = timestamp_second(record.timestamp.as_ref()) else {
         return true;
     };
     if state.replay_second.as_deref() != Some(second.as_str()) {
         state.skipping_replay = false;
         return false;
     }
-    if let Some(total) = entry
-        .payload
-        .as_ref()
-        .and_then(|payload| payload.info.as_ref())
-        .and_then(|info| info.total_token_usage)
+    if let RolloutKind::TokenCount(token_count) = &record.kind
+        && let Some(total) = token_count.info().and_then(|info| info.total_token_usage)
     {
         state.previous_totals = Some(total);
     }
     true
 }
 
-fn is_usage_entry(entry: &CodexSessionEntry<'_>) -> bool {
-    entry.entry_type.as_deref() == Some("event_msg")
-        && entry
-            .payload
-            .as_ref()
-            .is_some_and(|payload| payload.payload_type.as_deref() == Some("token_count"))
-        && entry.payload.as_ref().is_some_and(|payload| {
-            payload.info.as_ref().is_some_and(|info| {
+fn is_usage_entry(record: &RolloutRecord<'_>) -> bool {
+    matches!(
+        &record.kind,
+        RolloutKind::TokenCount(token_count)
+            if token_count.info().is_some_and(|info| {
                 info.last_token_usage.is_some() || info.total_token_usage.is_some()
             })
-        })
+    )
 }
 
 fn timestamp_second(timestamp: Option<&CodexTimestamp<'_>>) -> Option<String> {
@@ -264,32 +260,24 @@ fn timestamp_second(timestamp: Option<&CodexTimestamp<'_>>) -> Option<String> {
 }
 
 fn visit_session_entry(
-    entry: CodexSessionEntry<'_>,
+    record: RolloutRecord<'_>,
     previous_totals: &mut Option<CodexRawUsage>,
     current_model: &mut Option<String>,
     out: &mut Vec<CodexTokenEvent>,
 ) {
-    let entry_type = entry.entry_type.as_deref();
-    if entry_type == Some("turn_context") {
-        if let Some(model) = entry.payload.as_ref().and_then(model_from_payload) {
-            *current_model = Some(model);
+    if let RolloutKind::TurnContext(context) = &record.kind {
+        if let Some(model) = context.model() {
+            *current_model = Some(model.to_owned());
         }
         return;
     }
-    if entry_type != Some("event_msg") {
-        return;
-    }
-    let Some(ts) = normalize_timestamp(entry.timestamp.as_ref()) else {
+    let RolloutKind::TokenCount(token_count) = &record.kind else {
         return;
     };
-    let Some(payload) = entry.payload.as_ref() else {
+    let Some(ts) = normalize_timestamp(record.timestamp.as_ref()) else {
         return;
     };
-    if payload.payload_type.as_deref() != Some("token_count") {
-        return;
-    }
-
-    let info = payload.info.as_ref();
+    let info = token_count.info();
     let total_usage = info.and_then(|i| i.total_token_usage);
     let raw_usage = info
         .and_then(|i| i.last_token_usage)
@@ -302,7 +290,7 @@ fn visit_session_entry(
         return;
     }
 
-    let parsed_model = model_from_payload(payload).or_else(|| info.and_then(model_from_info));
+    let parsed_model = token_count.model().map(ToOwned::to_owned);
     if let Some(ref m) = parsed_model {
         *current_model = Some(m.clone());
     }
@@ -350,14 +338,6 @@ fn visit_headless_entry(
 }
 
 // ── Model resolution ──────────────────────────────────────────────────────────
-
-fn model_from_payload(p: &CodexPayload<'_>) -> Option<String> {
-    model_from_parts(p.model.as_ref(), p.model_name.as_ref(), p.metadata.as_ref())
-}
-
-fn model_from_info(i: &CodexInfo<'_>) -> Option<String> {
-    model_from_parts(i.model.as_ref(), i.model_name.as_ref(), i.metadata.as_ref())
-}
 
 fn headless_model(e: &CodexLogEntry<'_>) -> Option<String> {
     model_from_parts(e.model.as_ref(), e.model_name.as_ref(), e.metadata.as_ref())
@@ -428,25 +408,7 @@ pub(super) fn subtract_raw_usage(
             .reasoning_output_tokens
             .saturating_sub(prev.reasoning_output_tokens),
         total_tokens: current.total_tokens.saturating_sub(prev.total_tokens),
-    }
-}
-
-// ── Timestamp helpers ─────────────────────────────────────────────────────────
-
-fn normalize_timestamp(ts: Option<&CodexTimestamp<'_>>) -> Option<String> {
-    match ts? {
-        CodexTimestamp::String(s) => {
-            let s = s.trim();
-            (!s.is_empty()).then(|| s.to_string())
-        }
-        CodexTimestamp::Number(n) => {
-            let millis = if *n > 10_000_000_000 {
-                *n
-            } else {
-                n.checked_mul(1_000)?
-            };
-            Some(millis_to_rfc3339(millis))
-        }
+        reported: 0,
     }
 }
 
@@ -466,33 +428,13 @@ fn result_fields_timestamp(r: Option<&CodexResultFields<'_>>) -> Option<String> 
         .or_else(|| normalize_timestamp(r.created_at_camel.as_ref()))
 }
 
-pub(super) fn millis_to_rfc3339(millis: u64) -> String {
-    let secs = millis / 1_000;
-    let frac_ms = millis % 1_000;
-    let days = secs / 86_400;
-    let time = secs % 86_400;
-    let h = time / 3_600;
-    let m = (time % 3_600) / 60;
-    let s = time % 60;
-    // Howard Hinnant's civil-from-days algorithm.
-    let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if mo <= 2 { y + 1 } else { y };
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}.{frac_ms:03}Z")
-}
-
 fn file_mtime_rfc3339(path: &Path) -> String {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| millis_to_rfc3339(d.as_millis().min(u64::MAX as u128) as u64))
+        .map(|d| {
+            super::super::rollout::millis_to_rfc3339(d.as_millis().min(u64::MAX as u128) as u64)
+        })
         .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string())
 }

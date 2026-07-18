@@ -70,40 +70,7 @@ fn token_line_classifies_known_usage_shapes_only() {
 }
 
 #[test]
-fn millis_to_rfc3339_known_values() {
-    // 2026-01-01 00:00:00.000 UTC = 1767225600000 ms
-    assert_eq!(
-        millis_to_rfc3339(1_767_225_600_000),
-        "2026-01-01T00:00:00.000Z"
-    );
-    // 1970-01-01 00:00:01.000 UTC
-    assert_eq!(millis_to_rfc3339(1_000), "1970-01-01T00:00:01.000Z");
-    // fractional seconds
-    assert_eq!(millis_to_rfc3339(1_000 + 42), "1970-01-01T00:00:01.042Z");
-}
-
-#[test]
-fn codex_raw_usage_accepts_aliases_strings_and_rejects_non_object_field() {
-    // OpenAI alias names
-    let s = r#"{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}"#;
-    let u: CodexRawUsage = serde_json::from_str(s).unwrap();
-    assert_eq!(u.input_tokens, 100);
-    assert_eq!(u.output_tokens, 50);
-    assert_eq!(u.total_tokens, 150);
-
-    let s = r#"{"input_tokens":200,"cached_tokens":80,"output_tokens":30}"#;
-    let u: CodexRawUsage = serde_json::from_str(s).unwrap();
-    assert_eq!(u.input_tokens, 200);
-    assert_eq!(u.cached_input_tokens, 80);
-    assert_eq!(u.output_tokens, 30);
-    assert_eq!(u.total_tokens, 230);
-
-    // Some Codex log variants write counts as strings.
-    let s = r#"{"input_tokens":"100","output_tokens":"50"}"#;
-    let u: CodexRawUsage = serde_json::from_str(s).unwrap();
-    assert_eq!(u.input_tokens, 100);
-    assert_eq!(u.output_tokens, 50);
-
+fn headless_usage_rejects_non_object_field() {
     // CodexLogEntry.usage may be a boolean in malformed logs — skip gracefully.
     let s = r#"{"timestamp":"2026-01-01T00:00:00Z","usage":true}"#;
     let e: CodexLogEntry<'_> = serde_json::from_str(s).unwrap();

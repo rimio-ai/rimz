@@ -33,6 +33,7 @@ mod local_sessions;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub mod process;
+mod rollout;
 pub(crate) mod spend;
 mod transcript;
 
@@ -60,13 +61,14 @@ use self::payloads::{
 pub use self::process::{
     codex_daemon_pids, codex_resumed_session_id_from_cmdline, pid_is_codex_daemon,
 };
+use self::rollout::{CodexRolloutHeader, parse_messages, read_rollout_header};
 pub(crate) use self::transcript::infer_turn_death_from_spent_window;
 #[cfg(test)]
 pub(crate) use self::transcript::with_codex_sessions_root;
 use self::transcript::{
-    CodexRolloutHeader, RestingTurnOutcome, TranscriptScanNeed, TranscriptUsage, configured_model,
+    RestingTurnOutcome, TranscriptScanNeed, TranscriptUsage, configured_model,
     configured_reasoning_effort, find_session_transcript, payload_reasoning_effort,
-    read_rollout_header, scan_transcript_tail,
+    scan_transcript_tail,
 };
 #[cfg(test)]
 use self::transcript::{
@@ -80,6 +82,8 @@ pub use self::transcript::{
     turn_death_needs_pane_confirmation,
 };
 use super::AskKind;
+#[cfg(test)]
+use super::TranscriptRole;
 use super::context::AgentContext;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
@@ -95,9 +99,9 @@ use super::{
     AnswerStep, AskReply, DecodedHook, ExtraCredits, HookInstallPreview, HookInstallReport,
     HookRouting, HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh,
     LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity,
-    SubagentIdentity, TranscriptMessage, TranscriptRole, non_empty_trimmed,
-    optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    SubagentIdentity, TranscriptMessage, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::transcript::{AskOption, AskQuestion};
 
@@ -1269,40 +1273,6 @@ pub fn loaded_daemon_threads() -> Option<std::collections::BTreeSet<String>> {
     let mut client = CodexAppServer::connect_daemon()?;
     let ids = client.loaded_threads().ok()?;
     Some(ids.into_iter().collect())
-}
-
-fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
-    lines
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() {
-                return None;
-            }
-            let value = serde_json::from_str::<Value>(line).ok()?;
-            if value.get("type").and_then(Value::as_str) != Some("event_msg") {
-                return None;
-            }
-            let payload = value.get("payload")?;
-            let role = match payload.get("type").and_then(Value::as_str) {
-                Some("user_message") => TranscriptRole::User,
-                Some("agent_message") => TranscriptRole::Assistant,
-                _ => return None,
-            };
-            payload
-                .get("message")
-                .and_then(Value::as_str)
-                .and_then(non_empty_trimmed)
-                .map(|text| TranscriptMessage {
-                    role,
-                    at: value
-                        .get("timestamp")
-                        .and_then(Value::as_str)
-                        .and_then(|raw| raw.parse().ok()),
-                    text,
-                })
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use std::time::Instant;
 use jiff::{Timestamp, civil::Date};
 use uuid::Uuid;
 
-use super::transcript::{CodexRolloutHeader, read_rollout_header};
+use super::rollout::{CodexRolloutHeader, read_rollout_header};
 #[cfg(test)]
 use crate::agents::local_session_cache::ValueRefreshKind;
 use crate::agents::local_session_cache::{
