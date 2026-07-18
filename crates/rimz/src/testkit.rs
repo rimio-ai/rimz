@@ -52,6 +52,7 @@ impl ChangedSessionRefreshFixture {
             current_transcript_path: Some(transcript),
             prior_transcript_path: Some(transcript),
             prior_transcript_stat: None,
+            prior_spend_fold: None,
             shared_pricing_cache_path: &self.pricing,
         };
         match self.kind {
