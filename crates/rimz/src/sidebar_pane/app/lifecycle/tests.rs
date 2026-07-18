@@ -81,6 +81,19 @@ fn resize_grew_treats_strictly_larger_width_as_grow() {
 }
 
 #[test]
+fn grow_beyond_legit_allows_rounding_slack() {
+    assert!(!grow_beyond_legit(72, 72), "the bound is legitimate");
+    assert!(
+        !grow_beyond_legit(74, 72),
+        "the rounding slack is legitimate"
+    );
+    assert!(
+        grow_beyond_legit(75, 72),
+        "a width beyond the slack is sibling space"
+    );
+}
+
+#[test]
 fn paint_hold_blocks_until_ceiling_then_expires() {
     let now = Instant::now();
     let mut hold = PaintHold::default();

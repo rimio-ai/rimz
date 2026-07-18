@@ -1893,6 +1893,71 @@ fn paint_path_arms_resize_hold_on_grow_without_advancing_prev_width() {
 }
 
 #[test]
+fn attach_sized_grow_repaints_with_a_seen_sibling() {
+    let ws = workspace();
+    let (dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    let mut terminal = Terminal::with_options(
+        CrosstermBackend::new(io::stdout()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 57, 24)),
+        },
+    )
+    .expect("terminal");
+    state.prev_width = Some(10);
+    state.self_close.seen_sibling = true;
+    state.width_cap = std::num::NonZeroU16::new(72).expect("nonzero cap");
+    state.width_control.retarget(WidthTarget::CapOnly(72));
+
+    state
+        .on_resize(
+            &config,
+            &runtime,
+            &mut fetch,
+            &mut terminal,
+            Some(57),
+            Instant::now(),
+        )
+        .expect("handle attach resize");
+
+    assert!(
+        !state.paint_hold.is_engaged(),
+        "a grow within the legitimate cap paints immediately"
+    );
+    assert!(!state.dirty, "the resize wakeup repaints synchronously");
+    assert_eq!(state.prev_width, Some(57));
+    assert!(
+        request_rx
+            .try_recv()
+            .expect("fresh pane request")
+            .is_producer_fresh_panes()
+    );
+}
+
+#[test]
+fn room_override_raises_the_legitimate_grow_bound() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    state.prev_width = Some(10);
+    state.self_close.seen_sibling = true;
+    state.width_cap = std::num::NonZeroU16::new(72).expect("nonzero cap");
+    state.width_control.retarget(WidthTarget::Override(
+        std::num::NonZeroU16::new(90).expect("nonzero override"),
+    ));
+
+    assert!(
+        !state.arm_paint_hold_on_grow(90, Instant::now()),
+        "the room override is a legitimate width"
+    );
+    assert!(
+        state.arm_paint_hold_on_grow(100, Instant::now()),
+        "a grow beyond the override still arms the hold"
+    );
+}
+
+#[test]
 fn paint_path_does_not_arm_resize_hold_without_grow() {
     let ws = workspace();
     let (_dir, mut state) = loop_state(&ws);

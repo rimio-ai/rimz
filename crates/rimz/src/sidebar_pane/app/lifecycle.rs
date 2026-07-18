@@ -36,6 +36,15 @@ pub(super) fn resize_grew(prev: Option<u16>, new: u16) -> bool {
     prev.is_none_or(|p| new > p)
 }
 
+const GROW_LEGIT_SLACK_COLS: u16 = 2;
+
+/// A grow at or below the legitimate width bound is startup or attach sizing
+/// and paints immediately. Only a grow beyond that bound can be space freed by
+/// a closing sibling.
+pub(super) fn grow_beyond_legit(width: u16, max_legit_cols: u16) -> bool {
+    width > max_legit_cols.saturating_add(GROW_LEGIT_SLACK_COLS)
+}
+
 #[derive(Debug, Default)]
 pub(super) struct SelfCloseState {
     pub(super) seen_sibling: bool,

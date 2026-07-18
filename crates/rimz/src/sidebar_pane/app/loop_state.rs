@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use super::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame};
 use super::gate::apply_gate;
 use super::health::degraded_too_long;
-use super::lifecycle::self_close_decision;
+use super::lifecycle::{grow_beyond_legit, self_close_decision};
 use super::paint::FramePainter;
 use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
@@ -723,11 +723,10 @@ impl LoopState {
         anim_start: Instant,
     ) -> Result<()> {
         self.paint.refresh_caps(config.mux, &config.session_name);
-        // Once a sibling has been seen, a grow is the mux handing the sidebar
-        // freed sibling space — the precondition for the self-close full-width
-        // flash. Hold the paint until the next fresh pane-frame fold carries
-        // the sibling count. Before that first sibling observation, the grow is
-        // startup sizing and the first frame should paint immediately.
+        // Once a sibling has been seen, hold only a grow beyond the configured
+        // cap or room override: that is the shape of space freed by a closing
+        // sibling. Startup and attach relayouts land at the legitimate width
+        // and paint immediately.
         let mut target_recorded = false;
         if let Some(pending) = self.width_adjust_pending {
             if pending.elapsed() <= WIDTH_ADJUST_PENDING_TIMEOUT
@@ -754,16 +753,16 @@ impl LoopState {
                 self.width_control.set_suspended(false);
             }
         }
-        let grew = match settled_width {
+        let held_grow = match settled_width {
             Some(width) => {
                 let grew = resize_grew(self.prev_width, width);
                 self.prev_width = Some(width);
-                grew
+                grew && grow_beyond_legit(width, self.max_legit_cols())
             }
             None => false,
         };
         self.run_width_control(config, terminal);
-        if grew && self.self_close.seen_sibling {
+        if held_grow && self.self_close.seen_sibling {
             self.dirty = true;
             self.paint_hold
                 .engage(Instant::now(), crate::sidebar::timing::unix_now_ms());
@@ -1222,12 +1221,20 @@ impl LoopState {
         if !self.paint_hold.is_engaged()
             && self.self_close.seen_sibling
             && resize_grew(self.prev_width, width)
+            && grow_beyond_legit(width, self.max_legit_cols())
         {
             self.paint_hold
                 .engage(now, crate::sidebar::timing::unix_now_ms());
             return true;
         }
         false
+    }
+
+    fn max_legit_cols(&self) -> u16 {
+        match self.width_control.target() {
+            WidthTarget::Override(cols) => self.width_cap.get().max(cols.get()),
+            WidthTarget::CapOnly(_) => self.width_cap.get(),
+        }
     }
 
     /// Fold one fetch outcome into the render state: gate it against the

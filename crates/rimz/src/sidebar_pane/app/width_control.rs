@@ -78,6 +78,10 @@ impl WidthControl {
         self.suspended = false;
     }
 
+    pub(super) fn target(&self) -> WidthTarget {
+        self.target
+    }
+
     pub(super) fn set_suspended(&mut self, suspended: bool) {
         self.suspended = suspended;
         if suspended {
