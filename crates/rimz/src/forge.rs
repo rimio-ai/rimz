@@ -474,6 +474,7 @@ pub fn parse_tea_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate
     Ok(links)
 }
 
+/// Parse the Gitea payload from `tea api repos/<slug>/pulls/<number>`.
 pub fn parse_tea_pr_detail_json(raw: &str) -> Result<TeaPrDetail, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let text = |value: Option<&Value>| {
@@ -485,7 +486,7 @@ pub fn parse_tea_pr_detail_json(raw: &str) -> Result<TeaPrDetail, String> {
     };
     Ok(TeaPrDetail {
         state: pr_state_from_value(&value),
-        merged_sha: text(value.get("merged_commit_id")),
+        merged_sha: text(value.get("merge_commit_sha")),
         head_sha: text(value.get("head").and_then(|head| head.get("sha"))),
     })
 }

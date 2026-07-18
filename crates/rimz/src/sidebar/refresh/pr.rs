@@ -3,9 +3,9 @@
 //! The probe shells out to the repo's forge CLI on a long TTL, publishes
 //! `pr-state.json`, and lets consumers project the cached map without forking.
 //! `gh` reports `MERGED` as a first-class PR state, so one `gh pr list`
-//! resolves open/closed/merged. `tea pr list` reports only open/closed, so
-//! `probe_tea` follows a closed candidate with a `tea pr <n>` detail read to
-//! tell merged from closed. Both tea list calls page through
+//! resolves open/closed/merged. `tea pr list` omits merge SHAs and CI, so
+//! `probe_tea` follows closed and merged candidates with a Gitea API detail
+//! read that supplies canonical merge state and commit metadata. Both tea list calls page through
 //! [`crate::forge::tea_pr_list_args`] with the same `--limit`. GitHub includes
 //! CI in its open-PR list and reads merge-commit checks after a transition.
 //! Tea reads Gitea's combined commit status for open branches and merge commits.
@@ -842,23 +842,15 @@ fn probe_gh_commit_ci(worktree: &Path, repo_slug: &str, sha: &str) -> Option<Wor
     forge::worst_ci(checks, status)
 }
 
-fn tea_pr_detail_args(number: u64, repo: Option<&str>) -> Vec<String> {
-    let mut args = vec![
-        "pr".to_owned(),
-        number.to_string(),
-        "--output".to_owned(),
-        "json".to_owned(),
-    ];
-    if let Some(repo) = repo {
-        args.extend(["--repo".to_owned(), repo.to_owned()]);
-    }
-    args
+fn tea_pr_detail_args(number: u64, repo: &str) -> Vec<String> {
+    vec!["api".to_owned(), format!("repos/{repo}/pulls/{number}")]
 }
 
 fn probe_tea(worktree: &Path, branch: &str, remote: &str, prior_number: Option<u64>) -> ProbeState {
     let repo = forge::remote_repo_slug(remote);
     if let Some(number) = prior_number
-        && let Some(link) = probe_tea_detail(worktree, repo.as_deref(), number)
+        && let Some(repo) = repo.as_deref()
+        && let Some(link) = probe_tea_detail(worktree, repo, number)
     {
         return ProbeState {
             state: Some(link),
@@ -888,17 +880,18 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str, prior_number: Option<u
             ok: true,
         };
     };
-    if candidate.state == WorktreePrState::Closed {
-        // `tea pr list` omits merged metadata; the detail object carries
-        // `merged`/`merged_at` so closed candidates can become merged.
-        if let Some(link) = probe_tea_detail(worktree, repo.as_deref(), candidate.number)
-            && link.state == WorktreePrState::Merged
-        {
-            return ProbeState {
-                state: Some(link),
-                ok: true,
-            };
-        }
+    // `tea pr list` can report `merged` directly but carries no SHAs or CI.
+    // The API detail object is canonical for merge state, merge SHA, and CI.
+    if matches!(
+        candidate.state,
+        WorktreePrState::Closed | WorktreePrState::Merged
+    ) && let Some(repo) = repo.as_deref()
+        && let Some(link) = probe_tea_detail(worktree, repo, candidate.number)
+    {
+        return ProbeState {
+            state: Some(link),
+            ok: true,
+        };
     }
     ProbeState {
         state: Some(PrLink {
@@ -911,7 +904,7 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str, prior_number: Option<u
     }
 }
 
-fn probe_tea_detail(worktree: &Path, repo: Option<&str>, number: u64) -> Option<PrLink> {
+fn probe_tea_detail(worktree: &Path, repo: &str, number: u64) -> Option<PrLink> {
     let detail_args = tea_pr_detail_args(number, repo);
     let refs = detail_args.iter().map(String::as_str).collect::<Vec<_>>();
     let output = command_stdout(worktree, "tea", &refs)?;
@@ -927,21 +920,19 @@ fn probe_tea_detail(worktree: &Path, repo: Option<&str>, number: u64) -> Option<
         .flatten();
     let ci = (state == WorktreePrState::Merged)
         .then(|| {
-            repo.and_then(|repo_slug| {
-                detail
-                    .merged_sha
-                    .as_deref()
-                    .and_then(|sha| probe_tea_ci(worktree, repo_slug, sha))
-                    .or_else(|| {
-                        detail.head_sha.as_deref().and_then(|head_sha| {
-                            if detail.merged_sha.as_deref() == Some(head_sha) {
-                                None
-                            } else {
-                                probe_tea_ci(worktree, repo_slug, head_sha)
-                            }
-                        })
+            detail
+                .merged_sha
+                .as_deref()
+                .and_then(|sha| probe_tea_ci(worktree, repo, sha))
+                .or_else(|| {
+                    detail.head_sha.as_deref().and_then(|head_sha| {
+                        if detail.merged_sha.as_deref() == Some(head_sha) {
+                            None
+                        } else {
+                            probe_tea_ci(worktree, repo, head_sha)
+                        }
                     })
-            })
+                })
         })
         .flatten();
     Some(PrLink {

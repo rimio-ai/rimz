@@ -211,8 +211,8 @@ fn transition_args_prefer_cached_pr_numbers() {
         ["pr", "list", "--head", "feature"]
     );
     assert_eq!(
-        tea_pr_detail_args(42, Some("org/repo")),
-        ["pr", "42", "--output", "json", "--repo", "org/repo"]
+        tea_pr_detail_args(42, "org/repo"),
+        ["api", "repos/org/repo/pulls/42"]
     );
 }
 

@@ -433,15 +433,12 @@ fn gh_pr_links_accept_null_rollup() {
 
 #[test]
 fn parses_tea_pr_list_and_detail_json() {
-    let list = r#"[
-        {"index": 7, "head": {"label": "me:feature"}, "state": "closed"},
-        {"index": 8, "head": "other", "state": "open"}
-    ]"#;
+    let list = r#"[{"index":"916","state":"merged","head":"mill-cli"}]"#;
     assert_eq!(
-        parse_tea_pr_list_json(list, "feature").unwrap(),
+        parse_tea_pr_list_json(list, "mill-cli").unwrap(),
         Some(PrCandidate {
-            number: 7,
-            state: WorktreePrState::Closed,
+            number: 916,
+            state: WorktreePrState::Merged,
             ci: None,
             merge_sha: None,
         })
@@ -450,20 +447,37 @@ fn parses_tea_pr_list_and_detail_json() {
         parse_tea_pr_detail_json(
             r#"{
                 "state":"closed",
-                "merged_at":"2026-06-01T00:00:00Z",
-                "merged_commit_id":"merged-sha",
-                "head":{"sha":"head-sha"}
+                "merged":true,
+                "merged_at":"2026-07-18T03:25:14+02:00",
+                "merge_commit_sha":"ed3c062267135fa5195374b7b561c458ac399a98",
+                "head":{"sha":"4c915ee98590bad6897a7a864cd635b7cdfe937d"}
             }"#
         )
         .unwrap(),
         TeaPrDetail {
             state: Some(WorktreePrState::Merged),
-            merged_sha: Some("merged-sha".to_owned()),
-            head_sha: Some("head-sha".to_owned()),
+            merged_sha: Some("ed3c062267135fa5195374b7b561c458ac399a98".to_owned()),
+            head_sha: Some("4c915ee98590bad6897a7a864cd635b7cdfe937d".to_owned()),
         }
     );
-    assert_eq!(parse_tea_pr_list_json("[]", "feature").unwrap(), None);
-    assert!(parse_tea_pr_list_json("{}", "feature").is_err());
+    assert_eq!(
+        parse_tea_pr_detail_json(
+            r#"{
+                "state":"closed",
+                "merged":false,
+                "merged_at":null,
+                "head":{"sha":"closed-head-sha"}
+            }"#
+        )
+        .unwrap(),
+        TeaPrDetail {
+            state: Some(WorktreePrState::Closed),
+            merged_sha: None,
+            head_sha: Some("closed-head-sha".to_owned()),
+        }
+    );
+    assert_eq!(parse_tea_pr_list_json("[]", "mill-cli").unwrap(), None);
+    assert!(parse_tea_pr_list_json("{}", "mill-cli").is_err());
 }
 
 #[test]
