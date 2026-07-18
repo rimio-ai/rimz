@@ -18,6 +18,80 @@ fn cursor_compatibility_hooks_are_quarantined() {
         AgentHookClass::Lifecycle
     );
 }
+
+#[test]
+fn final_message_fallback_reads_only_at_output_checkpoints() {
+    use std::cell::Cell;
+
+    let payload = json!({
+        "session_id": "sess-1",
+        "transcript_path": "/tmp/claude-session.jsonl"
+    });
+    let ordinary = AgentLifecycleObservation::new(
+        None,
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            native_key: None,
+        },
+    );
+    let read = Cell::new(false);
+    assert_eq!(
+        final_message_for_lifecycle(&payload, &ordinary, |_| {
+            read.set(true);
+            None
+        }),
+        None
+    );
+    assert!(
+        !read.get(),
+        "ordinary tool hooks must not read the transcript"
+    );
+
+    let stopped = AgentLifecycleObservation::new(
+        None,
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        },
+    );
+    let message = final_message_for_lifecycle(&payload, &stopped, |_| {
+        Some(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#
+                .to_owned(),
+        )
+    });
+    assert_eq!(message.as_deref(), Some("done"));
+
+    assert_eq!(
+        ClaudeAdapter
+            .decode_hook(
+                "PostToolUse",
+                &json!({
+                    "session_id": "sess-1",
+                    "tool_name": "Bash",
+                    "last_assistant_message": "must stay lazy"
+                }),
+            )
+            .expect("test hook decodes")
+            .final_message,
+        None
+    );
+    assert_eq!(
+        ClaudeAdapter
+            .decode_hook(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "last_assistant_message": "  final answer  "
+                }),
+            )
+            .expect("test hook decodes")
+            .final_message
+            .as_deref(),
+        Some("final answer")
+    );
+}
 use crate::agents::AgentHookClass;
 
 #[test]

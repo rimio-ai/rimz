@@ -516,19 +516,9 @@ impl AgentAdapter for ClaudeAdapter {
             decoded.worktree_path = observation.worktree_path.clone();
             decoded.lifecycle = Some(observation);
         }
-        decoded.final_message =
-            optional_payload_string(payload, &["last_assistant_message", "assistant_message"])
-                .as_deref()
-                .and_then(non_empty_trimmed)
-                .or_else(|| {
-                    let path = decoded
-                        .lifecycle
-                        .as_ref()
-                        .and_then(|observation| observation.transcript_path.as_deref())
-                        .or_else(|| payload.get("transcript_path").and_then(Value::as_str))?;
-                    let tail = read_transcript_tail(Path::new(path))?;
-                    statusline::last_assistant_message(&tail)
-                });
+        decoded.final_message = decoded.lifecycle.as_ref().and_then(|observation| {
+            final_message_for_lifecycle(payload, observation, read_transcript_tail)
+        });
         if [
             "model",
             "effort",
@@ -939,6 +929,35 @@ fn build_claude_observation(
     observation.context_window = context_window;
     observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
     observation
+}
+
+fn final_message_for_lifecycle(
+    payload: &Value,
+    observation: &AgentLifecycleObservation,
+    read_tail: impl FnOnce(&Path) -> Option<String>,
+) -> Option<String> {
+    let needs_terminal_message =
+        crate::harness::run::terminal_status_for_signal(&observation.signal).is_some();
+    let needs_conversation_message = observation.parent_agent_id.is_none()
+        && matches!(
+            observation.signal,
+            LifecycleSignal::TurnEnded { .. } | LifecycleSignal::AwaitingInput { .. }
+        );
+    if !needs_terminal_message && !needs_conversation_message {
+        return None;
+    }
+
+    optional_payload_string(payload, &["last_assistant_message", "assistant_message"])
+        .as_deref()
+        .and_then(non_empty_trimmed)
+        .or_else(|| {
+            let path = observation
+                .transcript_path
+                .as_deref()
+                .or_else(|| payload.get("transcript_path").and_then(Value::as_str))?;
+            let tail = read_tail(Path::new(path))?;
+            statusline::last_assistant_message(&tail)
+        })
 }
 
 fn claude_task(payload: &Value, subagent_common: Option<&ClaudeCommon>) -> Option<String> {
