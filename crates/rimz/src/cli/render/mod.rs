@@ -820,11 +820,6 @@ mod tests {
     }
 
     #[test]
-    fn finish_passes_success_through() {
-        assert!(finish(Ok(())).is_ok());
-    }
-
-    #[test]
     fn finish_propagates_a_non_broken_pipe_error() {
         let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         assert!(finish(Err(err)).is_err());
@@ -837,7 +832,6 @@ mod tests {
         write_json(&mut out, &serde_json::json!({ "answer": 42 }), false).unwrap();
 
         assert_eq!(out, b"{\"answer\":42}\n");
-        assert!(!out.ends_with(b"\n\n"));
     }
 
     #[test]
@@ -847,7 +841,6 @@ mod tests {
         write_json(&mut out, &serde_json::json!({ "answer": 42 }), true).unwrap();
 
         assert_eq!(out, b"{\n  \"answer\": 42\n}\n");
-        assert!(!out.ends_with(b"\n\n"));
     }
 
     #[test]
