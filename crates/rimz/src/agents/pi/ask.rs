@@ -3,30 +3,7 @@ use serde_json::Value;
 
 use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use crate::mux::NamedKey;
-use crate::transcript::{AskAnswer, AskOption, AskQuestion};
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct AskInput {
-    questions: Vec<PiAskQuestion>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct PiAskQuestion {
-    question: Option<String>,
-    options: Vec<PiAskOption>,
-    #[serde(rename = "multiSelect")]
-    multi_select: bool,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct PiAskOption {
-    label: Option<String>,
-    description: Option<String>,
-    preview: Option<Value>,
-}
+use crate::transcript::{AskAnswer, AskQuestion};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -49,41 +26,10 @@ pub(super) fn question_detail(tool_name: &str, tool_input: &Value) -> Option<Vec
     if tool_name != "ask_user_question" {
         return None;
     }
-    let parsed: AskInput = serde_json::from_value(tool_input.clone()).ok()?;
-    let questions = parsed
-        .questions
-        .into_iter()
-        .filter_map(structured_question)
-        .collect::<Vec<_>>();
-    (!questions.is_empty()).then_some(questions)
-}
-
-fn structured_question(question: PiAskQuestion) -> Option<AskQuestion> {
-    let question_text = question.question.as_deref().and_then(non_empty)?;
-    let has_option_previews = question.options.iter().any(|option| {
-        option
-            .preview
-            .as_ref()
-            .and_then(Value::as_str)
-            .is_some_and(|preview| !preview.is_empty())
-    });
-    let options = question
-        .options
-        .into_iter()
-        .filter_map(|option| {
-            Some(AskOption {
-                label: option.label.as_deref().and_then(non_empty)?,
-                description: option.description.as_deref().and_then(non_empty),
-                caution: None,
-            })
-        })
-        .collect();
-    Some(AskQuestion {
-        question: question_text,
-        options,
-        multi_select: question.multi_select,
-        has_option_previews,
-    })
+    super::super::question::questions(
+        tool_input,
+        super::super::question::PreviewPolicy::NonEmptyString,
+    )
 }
 
 pub(super) fn answer_detail(payload: &Value) -> Option<Vec<AskAnswer>> {

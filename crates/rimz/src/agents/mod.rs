@@ -47,6 +47,7 @@ pub(crate) mod payload;
 pub mod pi;
 pub mod plugin;
 pub mod pricing;
+pub(crate) mod question;
 pub mod qwen;
 pub mod registry;
 pub(crate) mod settings_json;

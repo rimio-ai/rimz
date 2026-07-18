@@ -12,30 +12,6 @@ const SUBMITTED_PROMPT_MAX_CHARS: usize = 1_000;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-struct CodexQuestionInput {
-    questions: Vec<CodexQuestion>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct CodexQuestion {
-    id: Option<String>,
-    header: Option<String>,
-    question: Option<String>,
-    options: Vec<CodexOption>,
-    #[serde(alias = "multiSelect")]
-    multi_select: bool,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct CodexOption {
-    label: Option<String>,
-    description: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
 struct CodexQuestionResponse {
     answers: HashMap<String, CodexAnswerEntry>,
 }
@@ -50,45 +26,14 @@ pub(super) fn question_detail(tool_name: &str, tool_input: &Value) -> Option<Vec
     if tool_name != REQUEST_USER_INPUT_TOOL {
         return None;
     }
-    let parsed: CodexQuestionInput = serde_json::from_value(tool_input.clone()).ok()?;
-    let questions = parsed
-        .questions
-        .into_iter()
-        .filter_map(structured_question)
-        .collect::<Vec<_>>();
-    (!questions.is_empty()).then_some(questions)
-}
-
-fn structured_question(question: CodexQuestion) -> Option<AskQuestion> {
-    let question_text = non_empty(question.question.as_deref())
-        .or_else(|| non_empty(question.header.as_deref()))?;
-    let options = question
-        .options
-        .into_iter()
-        .filter_map(|option| {
-            Some(AskOption {
-                label: non_empty(option.label.as_deref())?,
-                description: non_empty(option.description.as_deref()),
-                caution: None,
-            })
-        })
-        .collect();
-    Some(AskQuestion {
-        question: question_text,
-        options,
-        multi_select: question.multi_select,
-        has_option_previews: false,
-    })
+    super::super::question::questions_with_header_fallback(
+        tool_input,
+        super::super::question::PreviewPolicy::None,
+    )
 }
 
 pub(super) fn plan_question(plan: &str) -> Option<Vec<AskQuestion>> {
-    let plan = non_empty(Some(plan))?;
-    Some(vec![AskQuestion {
-        question: format!("Requesting plan approval:\n\n{plan}"),
-        options: plan_options(),
-        multi_select: false,
-        has_option_previews: false,
-    }])
+    super::super::question::plan_question(plan, plan_options())
 }
 
 pub(super) fn plan_options() -> Vec<AskOption> {
@@ -110,11 +55,14 @@ pub(super) fn answer_detail(
     if tool_name != REQUEST_USER_INPUT_TOOL {
         return None;
     }
-    let input: CodexQuestionInput = serde_json::from_value(tool_input.clone()).ok()?;
+    let input = super::super::question::decode_with_header_fallback(
+        tool_input,
+        super::super::question::PreviewPolicy::None,
+    )?;
     let mut response: CodexQuestionResponse = serde_json::from_value(tool_response.clone()).ok()?;
     let mut answers = Vec::new();
-    for question in input.questions {
-        let Some(id) = non_empty(question.id.as_deref()) else {
+    for question in input {
+        let Some(id) = question.native_id else {
             continue;
         };
         let Some(entry) = response.answers.remove(&id) else {
@@ -129,8 +77,7 @@ pub(super) fn answer_detail(
             continue;
         }
         answers.push(AskAnswer {
-            question: non_empty(question.question.as_deref())
-                .or_else(|| non_empty(question.header.as_deref())),
+            question: Some(question.question.question),
             chosen,
             note: None,
         });

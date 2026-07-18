@@ -7,42 +7,13 @@ use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-struct AskUserQuestionInput {
-    questions: Vec<ClaudeAskQuestion>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ClaudeAskQuestion {
-    question: Option<String>,
-    options: Vec<ClaudeAskOption>,
-    #[serde(rename = "multiSelect")]
-    multi_select: bool,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ClaudeAskOption {
-    label: Option<String>,
-    description: Option<String>,
-    preview: Option<Value>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
 struct AskUserQuestionResponse {
     #[serde(deserialize_with = "null_to_default")]
     annotations: Map<String, Value>,
     #[serde(deserialize_with = "null_to_default")]
     answers: Map<String, Value>,
     #[serde(deserialize_with = "null_to_default")]
-    questions: Vec<ClaudeAskQuestion>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ExitPlanModeInput {
-    plan: Option<String>,
+    questions: Value,
 }
 
 pub(super) fn question_detail(tool_name: &str, tool_input: &Value) -> Option<Vec<AskQuestion>> {
@@ -66,52 +37,11 @@ pub(super) fn answer_detail(tool_name: &str, tool_response: &Value) -> Option<Ve
 }
 
 fn ask_user_question_detail(tool_input: &Value) -> Option<Vec<AskQuestion>> {
-    let parsed: AskUserQuestionInput = serde_json::from_value(tool_input.clone()).ok()?;
-    let questions = parsed
-        .questions
-        .into_iter()
-        .filter_map(structured_question)
-        .collect::<Vec<_>>();
-    (!questions.is_empty()).then_some(questions)
-}
-
-fn structured_question(question: ClaudeAskQuestion) -> Option<AskQuestion> {
-    let question_text = non_empty(question.question.as_deref())?;
-    let has_option_previews = question
-        .options
-        .iter()
-        .any(|option| option.preview.is_some());
-    let options = question
-        .options
-        .into_iter()
-        .filter_map(|option| {
-            Some(AskOption {
-                label: non_empty(option.label.as_deref())?,
-                description: option
-                    .description
-                    .as_deref()
-                    .and_then(|description| non_empty(Some(description))),
-                caution: None,
-            })
-        })
-        .collect::<Vec<_>>();
-    Some(AskQuestion {
-        question: question_text,
-        options,
-        multi_select: question.multi_select,
-        has_option_previews,
-    })
+    super::super::question::questions(tool_input, super::super::question::PreviewPolicy::AnyValue)
 }
 
 fn exit_plan_mode_detail(tool_input: &Value) -> Option<Vec<AskQuestion>> {
-    let parsed: ExitPlanModeInput = serde_json::from_value(tool_input.clone()).ok()?;
-    let plan = non_empty(parsed.plan.as_deref())?;
-    Some(vec![AskQuestion {
-        question: format!("Requesting plan approval:\n\n{plan}"),
-        options: plan_options(),
-        multi_select: false,
-        has_option_previews: false,
-    }])
+    super::super::question::plan_question(tool_input.get("plan")?.as_str()?, plan_options())
 }
 
 pub(super) fn permission_options() -> Vec<AskOption> {
@@ -262,10 +192,13 @@ fn answers_map_detail(tool_response: &Value) -> Option<Vec<AskAnswer>> {
 
     let mut answers = parsed.answers;
     let mut entries = Vec::new();
-    for question in parsed.questions {
-        let Some(question_text) = non_empty(question.question.as_deref()) else {
-            continue;
-        };
+    let normalized = super::super::question::decode(
+        &serde_json::json!({"questions": parsed.questions}),
+        super::super::question::PreviewPolicy::AnyValue,
+    )
+    .unwrap_or_default();
+    for question in normalized {
+        let question_text = question.question.question;
         if let Some(value) = answers.remove(&question_text)
             && let Some(answer) = answer_entry(Some(question_text), &value, &parsed.annotations)
         {

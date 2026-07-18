@@ -12,7 +12,6 @@ pub mod wire;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-use serde::Deserialize;
 use serde_json::Value;
 use tracing::debug;
 
@@ -33,7 +32,7 @@ use super::{
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
-use crate::transcript::{AskOption, AskQuestion};
+use crate::transcript::AskQuestion;
 
 pub(super) const KIMI_HOOKS: &[HookRecord] = &[
     hook_record!(lifecycle, "SessionStart", r#"{"session_id":"s"}"#).progress(),
@@ -620,56 +619,8 @@ impl KimiAdapter {
     }
 }
 
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct QuestionInput {
-    questions: Vec<QuestionWire>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct QuestionWire {
-    question: Option<String>,
-    options: Vec<QuestionOption>,
-    multi_select: bool,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct QuestionOption {
-    label: Option<String>,
-    description: Option<String>,
-}
-
 fn parse_questions(input: &Value) -> Option<Vec<AskQuestion>> {
-    let input: QuestionInput = serde_json::from_value(input.clone()).ok()?;
-    let questions = input
-        .questions
-        .into_iter()
-        .filter_map(|question| {
-            let text = question.question.as_deref().and_then(non_empty_trimmed)?;
-            let options = question
-                .options
-                .into_iter()
-                .filter_map(|option| {
-                    Some(AskOption {
-                        label: option.label.as_deref().and_then(non_empty_trimmed)?,
-                        description: option
-                            .description
-                            .and_then(|value| non_empty_trimmed(&value)),
-                        caution: None,
-                    })
-                })
-                .collect();
-            Some(AskQuestion {
-                question: text,
-                options,
-                multi_select: question.multi_select,
-                has_option_previews: false,
-            })
-        })
-        .collect::<Vec<_>>();
-    (!questions.is_empty()).then_some(questions)
+    super::question::questions(input, super::question::PreviewPolicy::None)
 }
 
 fn refresh_wire_context(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {

@@ -531,7 +531,15 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             "[session]/agents/agent-0/wire.jsonl",
         ),
         origin: None,
-        usage: AgentUsageSummary::default(),
+        usage: AgentUsageSummary {
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+        },
         pane_id: None,
         pane_stamp: None,
         parent_agent_id: Some(
