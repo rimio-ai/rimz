@@ -1158,21 +1158,10 @@ mod tests {
     }
 
     #[test]
-    fn keyvals_aligns_values_and_indents() {
-        let mut kv = KeyVals::new().indent(2);
-        kv.push("name", cell("right-yard"));
-        kv.push("session", cell("0d52"));
-        assert_eq!(
-            strip(|w| kv.render(w)),
-            "  name:    right-yard\n  session: 0d52\n"
-        );
-    }
-
-    #[test]
     fn keyvals_scopes_span_styles_and_aligns_continuations() {
         let mut kv = KeyVals::new().indent(2);
         kv.push_spans(
-            "money",
+            "m",
             [
                 cell("used "),
                 cell("$12.00").fg(palette::money()),
@@ -1187,21 +1176,21 @@ mod tests {
                 vec![cell("- second")],
             ],
         );
-
         assert_eq!(
             strip(|w| kv.render(w)),
-            "  money: used $12.00 today\n  reset: 2 credits\n         - first\n         - second\n"
+            "  m:     used $12.00 today\n  reset: 2 credits\n         - first\n         - second\n"
         );
-
         let mut raw = Vec::new();
         kv.render(&mut raw).unwrap();
         let raw = String::from_utf8(raw).unwrap();
-        let styled_money = format!(
-            "used {}$12.00{} today",
-            palette::money().render(),
-            palette::money().render_reset()
+        assert!(
+            raw.contains(&format!(
+                "used {}$12.00{} today",
+                palette::money().render(),
+                palette::money().render_reset()
+            )),
+            "{raw:?}"
         );
-        assert!(raw.contains(&styled_money), "{raw:?}");
     }
 
     #[test]
