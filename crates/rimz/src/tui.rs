@@ -40,7 +40,7 @@ pub enum Screen {
 pub struct TerminalModeGuard {
     mouse: MouseCapture,
     screen: Screen,
-    saved_hook: SharedPanicHook,
+    saved_hook: Option<SharedPanicHook>,
 }
 
 /// `NO_COLOR` opt-out shared by every terminal surface. The value is process
@@ -192,7 +192,7 @@ impl TerminalModeGuard {
         Ok(Self {
             mouse,
             screen,
-            saved_hook,
+            saved_hook: Some(saved_hook),
         })
     }
 
@@ -206,17 +206,40 @@ impl TerminalModeGuard {
         // intentional.
         std::mem::forget(self);
     }
+
+    /// Consume the guard while keeping the current screen visible for another
+    /// terminal application to paint over. Input modes and the panic hook are
+    /// restored without switching away from the alternate screen.
+    pub fn release_keep_screen(mut self) -> io::Result<()> {
+        disable_mouse(self.mouse)?;
+        if self.screen == Screen::Alternate {
+            execute!(io::stdout(), terminal::EnableLineWrap, cursor::Show)?;
+        }
+        terminal::disable_raw_mode()?;
+        let hook = self.saved_hook.take().and_then(|saved_hook| {
+            saved_hook
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+        });
+        if let Some(hook) = hook {
+            panic::set_hook(hook);
+        }
+        std::mem::forget(self);
+        Ok(())
+    }
 }
 
 impl Drop for TerminalModeGuard {
     fn drop(&mut self) {
         restore_terminal(self.mouse, self.screen);
-        if let Some(hook) = self
-            .saved_hook
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-        {
+        let hook = self.saved_hook.take().and_then(|saved_hook| {
+            saved_hook
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+        });
+        if let Some(hook) = hook {
             panic::set_hook(hook);
         }
     }
@@ -230,16 +253,16 @@ fn enable_mouse(mouse: MouseCapture) -> io::Result<()> {
     }
 }
 
-pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
+fn disable_mouse(mouse: MouseCapture) -> io::Result<()> {
     match mouse {
-        MouseCapture::Off => {}
-        MouseCapture::Stdout => {
-            let _ = execute!(io::stdout(), Print(DISABLE_CLICK_WHEEL_CAPTURE));
-        }
-        MouseCapture::Stderr => {
-            let _ = execute!(io::stderr(), Print(DISABLE_CLICK_WHEEL_CAPTURE));
-        }
+        MouseCapture::Off => Ok(()),
+        MouseCapture::Stdout => execute!(io::stdout(), Print(DISABLE_CLICK_WHEEL_CAPTURE)),
+        MouseCapture::Stderr => execute!(io::stderr(), Print(DISABLE_CLICK_WHEEL_CAPTURE)),
     }
+}
+
+pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
+    let _ = disable_mouse(mouse);
     if screen == Screen::Alternate {
         let _ = execute!(
             io::stdout(),

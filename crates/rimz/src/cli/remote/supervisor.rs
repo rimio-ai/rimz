@@ -15,7 +15,7 @@ use rimz::remote::link::{
     probe_timeout_from_env,
 };
 use rimz::remote::reachability::{
-    AttemptPacer, DIAL_TIMEOUT, DialPlan, dial_interval_from_env, is_tun_interface,
+    AttemptPacer, DIAL_TIMEOUT, DialPlan, FooterPhase, dial_interval_from_env, is_tun_interface,
     parse_dial_plan, ssh_config_query_spec,
 };
 use rimz::remote::recovery::{
@@ -23,7 +23,7 @@ use rimz::remote::recovery::{
 };
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
-use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent};
+use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent, leave_alternate_screen};
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -97,7 +97,7 @@ pub(super) fn supervise_remote(
         internet_probe_for_wait(&initial_ui),
         dial_plan.as_ref(),
     );
-    let mut ready_master = match wait_for_master(
+    let (mut ready_master, mut held_alt) = match wait_for_master(
         plan,
         control_path,
         dial_plan.as_ref(),
@@ -106,8 +106,8 @@ pub(super) fn supervise_remote(
         &mut initial_ui,
         Some(&stop),
     )? {
-        WaitOutcome::Connected(master) => Some(master),
-        WaitOutcome::NeedsInteractive => None,
+        WaitOutcome::Connected { master, held_alt } => (Some(master), held_alt),
+        WaitOutcome::NeedsInteractive => (None, false),
         WaitOutcome::Interrupted => return Ok(()),
     };
     let mut outage = None;
@@ -126,15 +126,19 @@ pub(super) fn supervise_remote(
         };
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
-        let mut outcome = run_ssh_session(
+        let outcome = run_ssh_session(
             &spec,
             host,
             &events_rx,
             &mut session_link,
             dial_plan.as_ref(),
-        )?;
-        outcome.established |= confirmed_master;
+        );
         guard.restore();
+        if std::mem::take(&mut held_alt) {
+            leave_alternate_screen();
+        }
+        let mut outcome = outcome?;
+        outcome.established |= confirmed_master;
         drop(probe);
         drop(ready_master.take());
         if outcome.established {
@@ -190,7 +194,13 @@ pub(super) fn supervise_remote(
             &mut ui,
             Some(&stop),
         )? {
-            WaitOutcome::Connected(master) => ready_master = Some(master),
+            WaitOutcome::Connected {
+                master,
+                held_alt: next_held_alt,
+            } => {
+                ready_master = Some(master);
+                held_alt = next_held_alt;
+            }
             WaitOutcome::Interrupted => {
                 let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
                 return Ok(());
@@ -355,7 +365,7 @@ fn dial_with_timeout(plan: &DialPlan, timeout: Duration) -> bool {
 }
 
 pub(super) enum WaitOutcome {
-    Connected(MasterGuard),
+    Connected { master: MasterGuard, held_alt: bool },
     NeedsInteractive,
     Interrupted,
 }
@@ -461,9 +471,15 @@ fn wait_for_master(
                 }
             }
             MasterTick::Connected(guard) => {
-                ui.release()?;
+                let frame = outage
+                    .panel
+                    .frame(outage.elapsed(), FooterPhase::Connecting);
+                let held_alt = ui.handoff(&frame)?;
                 ui.report_reattached();
-                return Ok(WaitOutcome::Connected(guard));
+                return Ok(WaitOutcome::Connected {
+                    master: guard,
+                    held_alt,
+                });
             }
         }
 

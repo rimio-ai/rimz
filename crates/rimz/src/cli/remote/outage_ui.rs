@@ -11,7 +11,9 @@ use ratatui::crossterm::style::{
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
 use ratatui::crossterm::{execute, queue};
 use rimz::remote::reachability::FooterPhase;
-use rimz::remote::recovery::{ConnectStage, RecoveryFrame, RecoveryPanel, StageStatus};
+use rimz::remote::recovery::{
+    ConnectStage, RecoveryFrame, RecoveryPanel, RecoveryStage, StageStatus,
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::cli::spinner::{SPINNER_FRAMES, SPINNER_TICK, animation_allowed, format_elapsed};
@@ -182,6 +184,20 @@ impl OutageUi {
             UiState::PendingPanel | UiState::Released => Ok(()),
         }
     }
+
+    pub(super) fn handoff(&mut self, frame: &RecoveryFrame) -> io::Result<bool> {
+        match std::mem::replace(&mut self.state, UiState::Released) {
+            UiState::Panel(panel) => {
+                panel.handoff(frame)?;
+                Ok(true)
+            }
+            UiState::PlainLines => {
+                self.state = UiState::PlainLines;
+                Ok(false)
+            }
+            UiState::PendingPanel | UiState::Released => Ok(false),
+        }
+    }
 }
 
 fn panel_allowed(
@@ -212,10 +228,14 @@ impl OutagePanel {
     }
 
     fn draw(&mut self, frame: &RecoveryFrame) -> io::Result<()> {
-        let (width, height) = terminal::size()?;
         let rows = display_rows(frame, self.frame_index);
         self.frame_index = self.frame_index.wrapping_add(1);
-        let layout = panel_layout(width, height, &rows);
+        self.draw_rows(&rows)
+    }
+
+    fn draw_rows(&mut self, rows: &[DisplayRow]) -> io::Result<()> {
+        let (width, height) = terminal::size()?;
+        let layout = panel_layout(width, height, rows);
         let mut stdout = std::io::stdout().lock();
         if self.last_layout != Some(layout) {
             queue!(stdout, Clear(ClearType::All))?;
@@ -269,9 +289,15 @@ impl OutagePanel {
 
     fn release(mut self) -> io::Result<()> {
         drop(self.guard.take());
-        let mut stdout = std::io::stdout().lock();
-        execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
-        stdout.flush()
+        Ok(())
+    }
+
+    fn handoff(mut self, frame: &RecoveryFrame) -> io::Result<()> {
+        self.draw_rows(&success_rows(frame))?;
+        if let Some(guard) = self.guard.take() {
+            guard.release_keep_screen()?;
+        }
+        Ok(())
     }
 }
 
@@ -284,7 +310,20 @@ struct DisplayRow {
 
 fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
     let spinner = SPINNER_FRAMES[frame_index % SPINNER_FRAMES.len()];
-    let mut rows = Vec::with_capacity(frame.rows.len() + 6);
+    let spinner_stage = match frame.phase {
+        FooterPhase::WaitingForNetwork
+            if frame
+                .rows
+                .iter()
+                .any(|row| row.stage == RecoveryStage::Internet) =>
+        {
+            RecoveryStage::Internet
+        }
+        FooterPhase::WaitingForNetwork
+        | FooterPhase::Connecting
+        | FooterPhase::NextAttemptIn(_) => RecoveryStage::Session,
+    };
+    let mut rows = Vec::with_capacity(frame.rows.len() + 3);
     rows.push(DisplayRow {
         text: match frame.connect_stage {
             ConnectStage::Initial => format!("⚡ Connecting to {}", frame.host),
@@ -295,15 +334,18 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
         dim: false,
     });
     rows.push(DisplayRow {
-        text: format!(
-            "{} {} · attempt {}",
-            match frame.connect_stage {
-                ConnectStage::Initial => "waiting",
-                ConnectStage::Recovery => "down",
-            },
-            format_elapsed(frame.outage_for).replace('m', "m "),
-            frame.attempt
-        ),
+        text: match frame.connect_stage {
+            ConnectStage::Initial => format!(
+                "attempt {} · {} · Ctrl-C stops",
+                frame.attempt,
+                format_elapsed(frame.outage_for).replace('m', "m ")
+            ),
+            ConnectStage::Recovery => format!(
+                "down {} · attempt {} · Ctrl-C stops",
+                format_elapsed(frame.outage_for).replace('m', "m "),
+                frame.attempt
+            ),
+        },
         color: Color::DarkGrey,
         bold: false,
         dim: true,
@@ -315,60 +357,99 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
         dim: false,
     });
     rows.extend(frame.rows.iter().map(|row| {
-        let (symbol, color) = match row.status {
-            StageStatus::Waiting => ('○', Color::DarkGrey),
-            StageStatus::Checking => (spinner, Color::Yellow),
-            StageStatus::Ok => ('✓', Color::Green),
-            StageStatus::Down => ('✗', Color::Red),
-            StageStatus::Suspect => ('!', Color::Yellow),
+        let spinner_target = row.stage == spinner_stage;
+        let session_waiting = frame.phase == FooterPhase::WaitingForNetwork
+            && row.stage == RecoveryStage::Session
+            && !spinner_target;
+        let (symbol, color) = if spinner_target {
+            (spinner, Color::Yellow)
+        } else if session_waiting {
+            ('○', Color::DarkGrey)
+        } else {
+            match row.status {
+                StageStatus::Waiting | StageStatus::Checking => ('○', Color::DarkGrey),
+                StageStatus::Ok => ('✓', Color::Green),
+                StageStatus::Down => ('✗', Color::Red),
+                StageStatus::Suspect => ('!', Color::Yellow),
+            }
+        };
+        let detail = match (row.stage, frame.phase) {
+            (RecoveryStage::Internet, FooterPhase::WaitingForNetwork) => {
+                format!("{} · waiting for network", row.detail)
+            }
+            (RecoveryStage::Session, FooterPhase::Connecting) => match frame.connect_stage {
+                ConnectStage::Initial => "connecting…".to_owned(),
+                ConnectStage::Recovery => "reconnecting…".to_owned(),
+            },
+            (RecoveryStage::Session, FooterPhase::NextAttemptIn(remaining)) => {
+                let retry = format!("retry in {}s", countdown_seconds(remaining));
+                match &frame.last_error {
+                    Some(error) => format!("{error} · {retry}"),
+                    None => retry,
+                }
+            }
+            (RecoveryStage::Session, FooterPhase::WaitingForNetwork) if spinner_target => {
+                "waiting for network".to_owned()
+            }
+            (RecoveryStage::Session, FooterPhase::WaitingForNetwork) => "waiting".to_owned(),
+            _ => row.detail.clone(),
         };
         DisplayRow {
-            text: format!("{symbol}  {:<12} {}", row.label, row.detail),
+            text: format!("{symbol}  {:<12} {detail}", row.label),
             color,
             bold: false,
-            dim: false,
+            dim: session_waiting,
         }
     }));
-    if let Some(error) = &frame.last_error {
-        rows.push(DisplayRow {
-            text: format!("last error: {error}"),
-            color: Color::DarkGrey,
-            bold: false,
-            dim: true,
-        });
-    }
+    rows
+}
+
+fn success_rows(frame: &RecoveryFrame) -> Vec<DisplayRow> {
+    let mut rows = Vec::with_capacity(frame.rows.len() + 3);
+    rows.push(DisplayRow {
+        text: format!("⚡ Connected to {}", frame.host),
+        color: Color::Green,
+        bold: true,
+        dim: false,
+    });
+    rows.push(DisplayRow {
+        text: "opening session…".to_owned(),
+        color: Color::DarkGrey,
+        bold: false,
+        dim: true,
+    });
     rows.push(DisplayRow {
         text: String::new(),
         color: Color::Reset,
         bold: false,
         dim: false,
     });
-    rows.push(DisplayRow {
-        text: match frame.phase {
-            FooterPhase::WaitingForNetwork => format!("{spinner} waiting for network"),
-            FooterPhase::Connecting => {
-                let action = match frame.connect_stage {
-                    ConnectStage::Initial => "connecting",
-                    ConnectStage::Recovery => "reconnecting",
-                };
-                format!("{spinner} {action}… (attempt {})", frame.attempt)
-            }
-            FooterPhase::NextAttemptIn(remaining) => format!(
-                "{spinner} next attempt in {}s",
-                countdown_seconds(remaining)
-            ),
-        },
-        color: Color::Yellow,
+    rows.extend(frame.rows.iter().map(|row| DisplayRow {
+        text: format!("✓  {:<12} {}", row.label, success_detail(row)),
+        color: Color::Green,
         bold: false,
         dim: false,
-    });
-    rows.push(DisplayRow {
-        text: "retrying until it returns · Ctrl-C stops".to_owned(),
-        color: Color::DarkGrey,
-        bold: false,
-        dim: true,
-    });
+    }));
     rows
+}
+
+fn success_detail(row: &rimz::remote::recovery::StageFrame) -> String {
+    if row.stage == RecoveryStage::Session {
+        return "connected".to_owned();
+    }
+    if row.stage == RecoveryStage::Server {
+        if let Some(endpoint) = row.detail.strip_suffix(" · answers TCP · SSH failing") {
+            return endpoint.to_owned();
+        }
+        if let Some(route) = row.detail.strip_suffix(" · SSH failing") {
+            return format!("{route} · TCP check skipped");
+        }
+    }
+    row.detail.clone()
+}
+
+pub(super) fn leave_alternate_screen() {
+    let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -463,6 +544,26 @@ mod tests {
         assert_eq!(layout.row_count, 2);
     }
 
+    fn stage(stage: RecoveryStage, status: StageStatus, label: &str, detail: &str) -> StageFrame {
+        StageFrame {
+            stage,
+            status,
+            label: label.to_owned(),
+            detail: detail.to_owned(),
+        }
+    }
+
+    fn spinner_count(rows: &[DisplayRow]) -> usize {
+        rows.iter()
+            .filter(|row| {
+                row.text
+                    .chars()
+                    .next()
+                    .is_some_and(|glyph| SPINNER_FRAMES.contains(&glyph))
+            })
+            .count()
+    }
+
     #[test]
     fn display_rows_align_stage_columns_and_show_outage_context() {
         let frame = RecoveryFrame {
@@ -473,33 +574,41 @@ mod tests {
             phase: FooterPhase::NextAttemptIn(Duration::from_millis(11_100)),
             last_error: Some("Permission denied (publickey).".to_owned()),
             rows: vec![
-                StageFrame {
-                    stage: RecoveryStage::Internet,
-                    status: StageStatus::Ok,
-                    label: "Internet".to_owned(),
-                    detail: "cp.cloudflare.com".to_owned(),
-                },
-                StageFrame {
-                    stage: RecoveryStage::Server,
-                    status: StageStatus::Suspect,
-                    label: "Server".to_owned(),
-                    detail: "dev-box:22 · answers TCP · SSH failing".to_owned(),
-                },
+                stage(
+                    RecoveryStage::Internet,
+                    StageStatus::Ok,
+                    "Internet",
+                    "cp.cloudflare.com",
+                ),
+                stage(
+                    RecoveryStage::Server,
+                    StageStatus::Suspect,
+                    "Server",
+                    "dev-box:22 · answers TCP · SSH failing",
+                ),
+                stage(
+                    RecoveryStage::Session,
+                    StageStatus::Down,
+                    "SSH session",
+                    "Permission denied (publickey).",
+                ),
             ],
         };
 
         let rows = display_rows(&frame, 2);
         let text = rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>();
 
-        assert_eq!(text[1], "down 2m 13s · attempt 7");
+        assert_eq!(text[1], "down 2m 13s · attempt 7 · Ctrl-C stops");
         assert_eq!(text[3], "✓  Internet     cp.cloudflare.com");
         assert_eq!(
             text[4],
             "!  Server       dev-box:22 · answers TCP · SSH failing"
         );
-        assert_eq!(text[5], "last error: Permission denied (publickey).");
-        assert_eq!(text[7], "⠹ next attempt in 12s");
-        assert_eq!(text[8], "retrying until it returns · Ctrl-C stops");
+        assert_eq!(
+            text[5],
+            "⠹  SSH session  Permission denied (publickey). · retry in 12s"
+        );
+        assert_eq!(rows.len(), 6);
     }
 
     #[test]
@@ -511,14 +620,34 @@ mod tests {
             attempt: 3,
             phase: FooterPhase::WaitingForNetwork,
             last_error: None,
-            rows: Vec::new(),
+            rows: vec![
+                stage(
+                    RecoveryStage::Internet,
+                    StageStatus::Checking,
+                    "Internet",
+                    "cp.cloudflare.com",
+                ),
+                stage(
+                    RecoveryStage::Session,
+                    StageStatus::Down,
+                    "SSH session",
+                    "failed",
+                ),
+            ],
         };
         let waiting = display_rows(&frame, 0);
-        assert_eq!(waiting[4].text, "⠋ waiting for network");
+        assert_eq!(
+            waiting[3].text,
+            "⠋  Internet     cp.cloudflare.com · waiting for network"
+        );
+        assert_eq!(waiting[4].text, "○  SSH session  waiting");
+        assert!(waiting[4].dim);
 
         frame.phase = FooterPhase::Connecting;
         let connecting = display_rows(&frame, 0);
-        assert_eq!(connecting[4].text, "⠋ reconnecting… (attempt 3)");
+        assert_eq!(connecting[3].text, "○  Internet     cp.cloudflare.com");
+        assert_eq!(connecting[4].text, "⠋  SSH session  reconnecting…");
+        assert!(!connecting[4].dim);
     }
 
     #[test]
@@ -530,12 +659,134 @@ mod tests {
             attempt: 1,
             phase: FooterPhase::Connecting,
             last_error: None,
-            rows: Vec::new(),
+            rows: vec![stage(
+                RecoveryStage::Session,
+                StageStatus::Checking,
+                "SSH session",
+                "starting…",
+            )],
         };
 
         let rows = display_rows(&frame, 0);
         assert_eq!(rows[0].text, "⚡ Connecting to dev-box");
-        assert_eq!(rows[1].text, "waiting 2s · attempt 1");
-        assert_eq!(rows[4].text, "⠋ connecting… (attempt 1)");
+        assert_eq!(rows[1].text, "attempt 1 · 2s · Ctrl-C stops");
+        assert_eq!(rows[3].text, "⠋  SSH session  connecting…");
+    }
+
+    #[test]
+    fn display_rows_reserve_the_spinner_for_the_phase_target() {
+        let mut frame = RecoveryFrame {
+            connect_stage: ConnectStage::Recovery,
+            host: "dev-box".to_owned(),
+            outage_for: Duration::from_secs(2),
+            attempt: 3,
+            phase: FooterPhase::WaitingForNetwork,
+            last_error: Some("timed out".to_owned()),
+            rows: vec![
+                stage(
+                    RecoveryStage::Internet,
+                    StageStatus::Checking,
+                    "Internet",
+                    "cp.cloudflare.com",
+                ),
+                stage(
+                    RecoveryStage::Server,
+                    StageStatus::Checking,
+                    "Server",
+                    "dev-box:22",
+                ),
+                stage(
+                    RecoveryStage::Session,
+                    StageStatus::Checking,
+                    "SSH session",
+                    "starting…",
+                ),
+            ],
+        };
+
+        for phase in [
+            FooterPhase::WaitingForNetwork,
+            FooterPhase::Connecting,
+            FooterPhase::NextAttemptIn(Duration::from_secs(2)),
+        ] {
+            frame.phase = phase;
+            assert_eq!(spinner_count(&display_rows(&frame, 0)), 1);
+        }
+    }
+
+    #[test]
+    fn network_wait_spinner_falls_back_to_the_session_without_an_internet_row() {
+        let frame = RecoveryFrame {
+            connect_stage: ConnectStage::Recovery,
+            host: "proxy-box".to_owned(),
+            outage_for: Duration::from_secs(2),
+            attempt: 3,
+            phase: FooterPhase::WaitingForNetwork,
+            last_error: None,
+            rows: vec![stage(
+                RecoveryStage::Session,
+                StageStatus::Waiting,
+                "SSH session",
+                "waiting",
+            )],
+        };
+
+        let rows = display_rows(&frame, 0);
+
+        assert_eq!(rows[3].text, "⠋  SSH session  waiting for network");
+        assert_eq!(spinner_count(&rows), 1);
+    }
+
+    #[test]
+    fn success_rows_mark_every_checkpoint_connected() {
+        let frame = RecoveryFrame {
+            connect_stage: ConnectStage::Initial,
+            host: "dev-box".to_owned(),
+            outage_for: Duration::from_secs(2),
+            attempt: 1,
+            phase: FooterPhase::Connecting,
+            last_error: None,
+            rows: vec![
+                stage(
+                    RecoveryStage::Internet,
+                    StageStatus::Down,
+                    "Internet",
+                    "cp.cloudflare.com",
+                ),
+                stage(
+                    RecoveryStage::Server,
+                    StageStatus::Suspect,
+                    "Server",
+                    "dev-box:22 · answers TCP · SSH failing",
+                ),
+                stage(
+                    RecoveryStage::Session,
+                    StageStatus::Checking,
+                    "SSH session",
+                    "starting…",
+                ),
+            ],
+        };
+
+        let rows = success_rows(&frame);
+        let text = rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(text[0], "⚡ Connected to dev-box");
+        assert!(rows[0].bold);
+        assert_eq!(text[1], "opening session…");
+        assert!(rows[1].dim);
+        assert_eq!(text[3], "✓  Internet     cp.cloudflare.com");
+        assert_eq!(text[4], "✓  Server       dev-box:22");
+        assert_eq!(text[5], "✓  SSH session  connected");
+        assert!(rows[3..].iter().all(|row| row.color == Color::Green));
+        assert_eq!(
+            success_detail(&stage(
+                RecoveryStage::Server,
+                StageStatus::Suspect,
+                "Server",
+                "dev-box:22 · via TUN utun9 · SSH failing",
+            )),
+            "dev-box:22 · via TUN utun9 · TCP check skipped"
+        );
     }
 }
