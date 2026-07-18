@@ -14,7 +14,7 @@ use crate::runner::{ensure_success, run, run_streamed, run_with_env_and_removed}
 use crate::sandbox::HostSandbox;
 use crate::spinner::Spinner;
 
-const LINT_ARGS: &[&str] = &[
+const ALL_FEATURE_LINT_ARGS: &[&str] = &[
     "clippy",
     "--workspace",
     "--all-targets",
@@ -24,7 +24,10 @@ const LINT_ARGS: &[&str] = &[
     "-D",
     "warnings",
 ];
-const NON_TEST_HOST_LINT_ARGS: &[&str] = &[
+const INSTALL_HOST_LINT_ARGS: &[&str] = &[
+    "clippy", "-p", "rimz", "--bin", "rimz", "--locked", "--", "-D", "warnings",
+];
+const INSTALL_DEV_HOST_LINT_ARGS: &[&str] = &[
     "clippy",
     "-p",
     "rimz",
@@ -36,6 +39,13 @@ const NON_TEST_HOST_LINT_ARGS: &[&str] = &[
     "--",
     "-D",
     "warnings",
+];
+// All features enables `testkit`, so lint both installed host shapes separately
+// to keep test-only references from masking dead code.
+const LINT_ARG_SETS: &[&[&str]] = &[
+    ALL_FEATURE_LINT_ARGS,
+    INSTALL_HOST_LINT_ARGS,
+    INSTALL_DEV_HOST_LINT_ARGS,
 ];
 const GATE_TEST_ARGS: &[&str] = &[
     "nextest",
@@ -65,8 +75,10 @@ pub(crate) fn fmt(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn lint(root: &Path) -> Result<()> {
-    run(root, "cargo", LINT_ARGS.iter().copied())?;
-    run(root, "cargo", NON_TEST_HOST_LINT_ARGS.iter().copied())
+    for args in LINT_ARG_SETS {
+        run(root, "cargo", args.iter().copied())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn deny(root: &Path) -> Result<()> {
@@ -226,7 +238,7 @@ fn gate_docs_links(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateR
 }
 
 fn gate_lint(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
-    for args in [LINT_ARGS, NON_TEST_HOST_LINT_ARGS] {
+    for args in LINT_ARG_SETS {
         let result = captured_cargo_gate(root, args.iter().copied(), &[], &[], None, progress)?;
         if matches!(result, GateResult::Fail { .. }) {
             return Ok(result);
@@ -595,18 +607,25 @@ mod tests {
     }
 
     #[test]
-    fn non_test_host_lint_excludes_testkit_and_denies_warnings() {
-        assert!(
-            NON_TEST_HOST_LINT_ARGS
+    fn install_host_lints_cover_both_non_test_feature_shapes() {
+        assert!(!INSTALL_HOST_LINT_ARGS.contains(&"--features"));
+        assert_eq!(
+            INSTALL_DEV_HOST_LINT_ARGS
                 .windows(2)
-                .any(|pair| pair == ["--features", "sentry"])
+                .filter(|pair| pair[0] == "--features")
+                .map(|pair| pair[1])
+                .collect::<Vec<_>>(),
+            ["sentry"]
         );
-        assert!(!NON_TEST_HOST_LINT_ARGS.contains(&"--all-features"));
-        assert!(
-            NON_TEST_HOST_LINT_ARGS
-                .windows(2)
-                .any(|pair| pair == ["-D", "warnings"])
-        );
+        for args in [INSTALL_HOST_LINT_ARGS, INSTALL_DEV_HOST_LINT_ARGS] {
+            assert!(!args.contains(&"--all-features"));
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg.split(',').any(|feature| feature == "testkit"))
+            );
+            assert!(args.windows(2).any(|pair| pair == ["-D", "warnings"]));
+        }
     }
 
     #[test]

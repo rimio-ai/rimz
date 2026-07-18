@@ -93,8 +93,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "lint",
-        summary: "Run all-feature and non-test host clippy with warnings as errors.",
-        runs: "cargo clippy for all workspace targets and for the sentry host without testkit; both deny warnings",
+        summary: "Run all-feature and install-host clippy with warnings as errors.",
+        runs: "cargo clippy for all workspace targets and both host install feature shapes without testkit; every pass denies warnings",
     },
     TaskInfo {
         name: "test",
@@ -179,7 +179,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "gate",
         summary: "Run the fast pre-PR gate stack.",
-        runs: "fmt --all (fix), invariants, docs-links, all-feature + non-test host lint, test (nextest -P gate)",
+        runs: "fmt --all (fix), invariants, docs-links, all-feature + install-host lint, test (nextest -P gate)",
     },
     TaskInfo {
         name: "checks",
