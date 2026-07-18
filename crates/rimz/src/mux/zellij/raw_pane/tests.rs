@@ -541,6 +541,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
         None,
         "multi-column work layouts are left untouched instead of collapsed",
     );
+    assert_eq!(
+        nested_work_pane_ids(by_id(26), &panes, &excluded),
+        Some(vec![28, 27, 29]),
+        "a newly added nested sidebar can stack every live work pane without replacing it",
+    );
     assert!(
         sidebar_geometry_off_spec(by_id(30), &panes, &excluded, width, None),
         "a sidebar narrower than the repair band grows",

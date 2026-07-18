@@ -220,6 +220,34 @@ pub(super) fn sidebar_dock_verdict(
     })
 }
 
+/// Every live work pane in a nested sidebar shape, ordered from right to left
+/// for `stack-panes`. A newly added sidebar can stack this full set to recover
+/// from Zellij mounting it into one row; repair of an existing user layout uses
+/// [`repairable_nested_work_pane_ids`] and keeps multi-column layouts intact.
+pub(super) fn nested_work_pane_ids(
+    sidebar: &PaneTopologyPane,
+    panes: &[PaneTopologyPane],
+    excluded: &HashSet<u64>,
+) -> Option<Vec<u64>> {
+    if sidebar_dock_verdict(sidebar, panes, excluded) != Some(SidebarDock::NestedRow) {
+        return None;
+    }
+    let mut work: Vec<_> = panes
+        .iter()
+        .filter(|pane| {
+            pane.tab_position == sidebar.tab_position
+                && pane.is_live_terminal()
+                && !is_sidebar_pane(pane)
+                && !excluded.contains(&pane.id)
+        })
+        .collect();
+    if work.len() < 2 || work.iter().any(|pane| pane.pane_x.is_none()) {
+        return None;
+    }
+    work.sort_by_key(|pane| (std::cmp::Reverse(pane.pane_x.unwrap_or(0)), pane.id));
+    Some(work.into_iter().map(|pane| pane.id).collect())
+}
+
 /// Pane ids in the narrow nested-sidebar shape that RimZ can safely repair:
 /// one right-side work column plus one or more live work panes intruding from
 /// `x=0`. Newer Zellij can stack these panes in place; older supported Zellij

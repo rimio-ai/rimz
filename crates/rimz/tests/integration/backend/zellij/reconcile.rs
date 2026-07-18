@@ -685,9 +685,8 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
     );
     assert_sidebar_identity(&xdg, &name, sidebar_id, "the renderer pane is not rebuilt");
 }
-/// A missing sidebar in a wide tab is docked after best-effort focus placement,
-/// independent of where the attached client began. Reconcile keeps every work
-/// pane alive and restores the user's original focus after docking.
+/// A missing sidebar in a wide tab is docked while keeping every work pane
+/// alive and restoring the user's focused work pane after docking.
 #[test]
 fn reconcile_add_docks_sidebar_in_wide_tab() {
     require_zellij!();
@@ -699,12 +698,13 @@ fn reconcile_add_docks_sidebar_in_wide_tab() {
         xdg: xdg_dir.path().to_path_buf(),
     };
     let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
+    let (_stub_dir, stub) = sidebar_stub_alive_for(120);
     let layout = write_kdl_layout(cwd.path(), &stub, "wide-add.kdl", |cwd_kdl, _| {
         let work = (1..=6)
             .map(|index| {
+                let focus = if index == 6 { " focus=true" } else { "" };
                 format!(
-                    r#"        pane name="wide-add-work-{index}" cwd={cwd_kdl} {{
+                    r#"        pane name="wide-add-work-{index}"{focus} cwd={cwd_kdl} {{
             command "sleep"
             args "600"
             start_suspended false
@@ -737,31 +737,25 @@ fn reconcile_add_docks_sidebar_in_wide_tab() {
         .map(|pane| pane.x)
         .min()
         .expect("leftmost work pane");
-    let focused_work_id = before
-        .iter()
-        .max_by_key(|pane| pane.x)
-        .map(|pane| pane.id)
-        .expect("rightmost work pane");
-    assert!(
-        before
-            .iter()
-            .find(|pane| pane.id == focused_work_id)
-            .is_some_and(|pane| pane.x > leftmost_x),
-        "fixture focus must be away from the left edge: {before:?}",
-    );
-    let tab_id = expect_list_panes(&xdg, &name)
-        .panes
-        .iter()
-        .find(|pane| pane.id == focused_work_id)
-        .map(|pane| pane.tab_id)
-        .expect("work pane tab");
-    focus_nonplugin_pane_until(
-        &xdg,
-        &name,
-        tab_id,
-        focused_work_id,
-        "rightmost work pane before sidebar add",
-    );
+    let (focused_work_id, tab_id) = poll_until(
+        Duration::from_secs(10),
+        || {
+            let snapshot = list_panes(&xdg, &name)?;
+            Ok(snapshot
+                .panes
+                .iter()
+                .find(|pane| {
+                    pane.is_live_terminal()
+                        && !pane.is_sidebar()
+                        && pane.is_focused
+                        && pane.pane_x > leftmost_x
+                })
+                .map(|pane| (pane.id, pane.tab_id)))
+        },
+        Option::is_some,
+        "wide-tab fixture focus away from the left edge",
+    )
+    .expect("poll required a focused work pane");
 
     let opts = reconcile_opts(
         &name,
@@ -774,14 +768,24 @@ fn reconcile_add_docks_sidebar_in_wide_tab() {
     write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
     let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &SidebarLiveness::default());
+    let after_reconcile = expect_list_panes(&xdg, &name);
 
     assert_eq!(
         report.recovered, 1,
-        "the missing sidebar is added once: {report:?}",
+        "the missing sidebar is added once: report={report:?}, panes={after_reconcile:?}",
     );
-    assert_eq!(report.closed, 0);
-    assert_eq!(report.failed, 0);
-    assert_eq!(report.misdocked, 0);
+    assert_eq!(
+        report.closed, 0,
+        "report={report:?}, panes={after_reconcile:?}"
+    );
+    assert_eq!(
+        report.failed, 0,
+        "report={report:?}, panes={after_reconcile:?}"
+    );
+    assert_eq!(
+        report.misdocked, 0,
+        "report={report:?}, panes={after_reconcile:?}"
+    );
     assert_sidebar_is_left_docked(&xdg, &name);
     let after_ids: BTreeSet<u64> = work_pane_geometry(&xdg, &name)
         .into_iter()

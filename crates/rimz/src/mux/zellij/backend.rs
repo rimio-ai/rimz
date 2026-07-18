@@ -1251,30 +1251,52 @@ fn restore_tab_focus(
     tab_position: u64,
     focused_in_tab: &HashMap<u64, u64>,
 ) {
-    const ATTEMPTS: u32 = 5;
     const CYCLE_STEPS: u32 = 8;
-    const RETRY_DELAY: Duration = Duration::from_millis(50);
 
     let Some(work) = focused_in_tab.get(&tab_position).copied() else {
         return;
     };
-    for attempt in 0..ATTEMPTS {
-        let _ = backend.focus_terminal(session_name, work);
-        if tab_focus_is(backend, session_name, workspace_id, tab_position, work) {
-            return;
-        }
-        if attempt + 1 < ATTEMPTS {
-            std::thread::sleep(RETRY_DELAY);
-        }
+    if settle_tab_focus(backend, session_name, workspace_id, tab_position, work) {
+        return;
     }
     for action in ["focus-previous-pane", "focus-next-pane"] {
         for _ in 0..CYCLE_STEPS {
             let _ = backend.zellij_action(session_name).arg(action).run();
-            std::thread::sleep(RETRY_DELAY);
-            if tab_focus_is(backend, session_name, workspace_id, tab_position, work) {
+            std::thread::sleep(super::FOCUS_RESTORE_CONFIRM_STEP);
+            if tab_focus_is(backend, session_name, workspace_id, tab_position, work)
+                && settle_tab_focus(backend, session_name, workspace_id, tab_position, work)
+            {
                 return;
             }
         }
+    }
+}
+
+fn settle_tab_focus(
+    backend: &ZellijBackend,
+    session_name: &str,
+    workspace_id: &WorkspaceId,
+    tab_position: u64,
+    raw_id: u64,
+) -> bool {
+    const STABLE_FOR: Duration = Duration::from_millis(500);
+
+    let deadline = Instant::now() + super::FOCUS_RESTORE_CONFIRM_WINDOW;
+    let mut stable_since = None;
+    loop {
+        let _ = backend.focus_terminal(session_name, raw_id);
+        if tab_focus_is(backend, session_name, workspace_id, tab_position, raw_id) {
+            let since = stable_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= STABLE_FOR {
+                return true;
+            }
+        } else {
+            stable_since = None;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(super::FOCUS_RESTORE_CONFIRM_STEP);
     }
 }
 
@@ -1291,14 +1313,14 @@ fn tab_focus_is(
     raw_id: u64,
 ) -> bool {
     backend
-        .topology_panes_for_workspace(
+        .authoritative_pane_listing(
             session_name,
-            workspace_id,
             None,
+            Some(workspace_id),
             crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
         )
-        .is_ok_and(|panes| {
-            panes.iter().any(|pane| {
+        .is_ok_and(|listing| {
+            listing.panes.iter().any(|pane| {
                 pane.is_terminal()
                     && pane.tab_position == tab_position
                     && pane.id == raw_id

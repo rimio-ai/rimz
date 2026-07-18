@@ -11,8 +11,8 @@ use super::parse::{
 };
 use super::raw_pane::{
     RawPaneListing, SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
-    parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
-    tab_view_cols, wrong_tab_mounted_sidebar_pane,
+    nested_work_pane_ids, parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids,
+    sidebar_dock_verdict, tab_view_cols, wrong_tab_mounted_sidebar_pane,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -324,7 +324,7 @@ impl ZellijBackend {
             if let Some(previous) = fallback_misdocked.take() {
                 self.cleanup_failed_add(opts, previous);
             }
-            let floor = self.converge_sidebar_geometry(opts, tab_position, raw_id);
+            let floor = self.converge_added_sidebar_geometry(opts, tab_position, raw_id);
             match self.sidebar_dock_outcome(
                 &opts.session_name,
                 &opts.workspace_id,
@@ -497,6 +497,25 @@ impl ZellijBackend {
         tab_position: u64,
         raw_id: u64,
     ) -> Option<u64> {
+        self.converge_sidebar_geometry_with(opts, tab_position, raw_id, false)
+    }
+
+    fn converge_added_sidebar_geometry(
+        &self,
+        opts: &SidebarPaneOptions,
+        tab_position: u64,
+        raw_id: u64,
+    ) -> Option<u64> {
+        self.converge_sidebar_geometry_with(opts, tab_position, raw_id, true)
+    }
+
+    fn converge_sidebar_geometry_with(
+        &self,
+        opts: &SidebarPaneOptions,
+        tab_position: u64,
+        raw_id: u64,
+        stack_multicolumn_work: bool,
+    ) -> Option<u64> {
         let pane_raw = format!("terminal_{raw_id}");
         let mut floor = None;
         let Ok(mut listing) =
@@ -545,15 +564,33 @@ impl ZellijBackend {
         let verdict = sidebar_pane(&listing.panes, tab_position, raw_id)
             .and_then(|pane| sidebar_dock_verdict(pane, &listing.panes, &excluded));
         if verdict == Some(SidebarDock::NestedRow)
-            && let Some(action_ms) = self.stack_nested_work_panes(opts, tab_position, raw_id, floor)
+            && let Some(action_ms) = self.stack_nested_work_panes(
+                opts,
+                tab_position,
+                raw_id,
+                floor,
+                stack_multicolumn_work,
+            )
         {
             floor = Some(action_ms);
-            let Ok(next) =
-                self.structural_geometry_listing(&opts.session_name, &opts.workspace_id, floor)
-            else {
-                return floor;
-            };
-            listing = next;
+            let deadline = Instant::now() + STACK_REPAIR_SETTLE;
+            loop {
+                if let Ok(next) =
+                    self.structural_geometry_listing(&opts.session_name, &opts.workspace_id, floor)
+                {
+                    let docked = sidebar_pane(&next.panes, tab_position, raw_id)
+                        .and_then(|pane| sidebar_dock_verdict(pane, &next.panes, &excluded))
+                        == Some(SidebarDock::Docked);
+                    listing = next;
+                    if docked {
+                        break;
+                    }
+                }
+                if Instant::now() >= deadline {
+                    return floor;
+                }
+                std::thread::sleep(MOUNT_POLL_STEP);
+            }
         }
         let verdict = sidebar_pane(&listing.panes, tab_position, raw_id)
             .and_then(|pane| sidebar_dock_verdict(pane, &listing.panes, &excluded));
@@ -662,15 +699,17 @@ impl ZellijBackend {
     }
 
     /// A nested row has a valid sidebar process at `x=0`, but at least one work
-    /// pane also starts inside that column band. On Zellij versions that expose
-    /// `stack-panes`, a narrow class of nested rows can be promoted into a
-    /// single right-side stack without replacing their processes.
+    /// pane also starts inside that column band. Existing user layouts stack
+    /// only the narrow one-column repair shape; a sidebar created by this add
+    /// transaction can stack every work pane because the transaction itself
+    /// introduced the nested shape. Both paths preserve every process.
     fn stack_nested_work_panes(
         &self,
         opts: &SidebarPaneOptions,
         tab_position: u64,
         raw_id: u64,
         min_topology_produced_at_ms: Option<u64>,
+        allow_multicolumn: bool,
     ) -> Option<u64> {
         let deadline = Instant::now() + STACK_REPAIR_SETTLE;
         let work = loop {
@@ -684,7 +723,12 @@ impl ZellijBackend {
             let panes = listing.panes;
             let sidebar = sidebar_pane(&panes, tab_position, raw_id)?;
             let excluded = HashSet::new();
-            if let Some(work) = repairable_nested_work_pane_ids(sidebar, &panes, &excluded) {
+            let work = if allow_multicolumn {
+                nested_work_pane_ids(sidebar, &panes, &excluded)
+            } else {
+                repairable_nested_work_pane_ids(sidebar, &panes, &excluded)
+            };
+            if let Some(work) = work {
                 break work;
             }
             if sidebar_dock_verdict(sidebar, &panes, &excluded) == Some(SidebarDock::Docked)
