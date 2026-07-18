@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::MessageId;
 
+use super::descriptor::AgentDescriptor;
+
 /// Cache identity for account facts exposed by an agent adapter.
 ///
 /// Most agents authenticate one provider per agent kind. Multi-provider agents
@@ -188,6 +190,279 @@ impl AgentContext {
             observed_at,
         }
     }
+}
+
+/// Explicit update for one optional local-context field.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum FieldPatch<T> {
+    /// Preserve the value already stored by another producer.
+    #[default]
+    Keep,
+    /// Replace the stored value.
+    Set(T),
+    /// Remove the stored value.
+    Clear,
+}
+
+impl<T> FieldPatch<T> {
+    pub fn apply(self, target: &mut Option<T>) {
+        match self {
+            Self::Keep => {}
+            Self::Set(value) => *target = Some(value),
+            Self::Clear => *target = None,
+        }
+    }
+
+    pub fn is_keep(&self) -> bool {
+        matches!(self, Self::Keep)
+    }
+
+    pub fn as_set(&self) -> Option<&T> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Keep | Self::Clear => None,
+        }
+    }
+
+    pub fn into_set(self) -> Option<T> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Keep | Self::Clear => None,
+        }
+    }
+}
+
+/// Merge policy for token readings from a machine-local source.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum LocalTokenPatch {
+    /// Preserve the stored token reading.
+    #[default]
+    Keep,
+    /// Accept a new gauge unless it is the fresh-zero sentinel, preserving an
+    /// established gauge and its exact provider-reported window in that case.
+    PreserveEstablished(Option<AgentTokenUsage>),
+    /// Replace current-call occupancy while retaining monotonic session totals.
+    ReplaceCurrentPreservingSession(Option<AgentTokenUsage>),
+}
+
+/// Fields one local transcript, rollout, or telemetry refresh may update.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LocalContextPatch {
+    pub session_preview: FieldPatch<String>,
+    pub model_id: FieldPatch<String>,
+    pub model_display_name: FieldPatch<String>,
+    pub effort: FieldPatch<String>,
+    pub tokens: LocalTokenPatch,
+    pub cost: FieldPatch<AgentCost>,
+    pub turn_error: FieldPatch<AgentTurnError>,
+    pub turn_complete: FieldPatch<Timestamp>,
+    pub plan_proposed: FieldPatch<Timestamp>,
+    pub native_permission_wait: FieldPatch<Timestamp>,
+    pub turn_interrupted: FieldPatch<Timestamp>,
+}
+
+impl LocalContextPatch {
+    pub fn authoritative_current() -> Self {
+        Self {
+            turn_complete: FieldPatch::Clear,
+            plan_proposed: FieldPatch::Clear,
+            native_permission_wait: FieldPatch::Clear,
+            turn_interrupted: FieldPatch::Clear,
+            ..Self::default()
+        }
+    }
+
+    /// Apply adapter-owned policy without consulting provider identity.
+    pub fn apply(self, context: &mut AgentContext, descriptor: &AgentDescriptor) {
+        let prior_model_id = context.model_id.clone();
+        let prior_model_display_name = context.model_display_name.clone();
+        let prior_tokens = context.tokens.clone();
+
+        self.session_preview.apply(&mut context.session_preview);
+        self.model_id.apply(&mut context.model_id);
+        self.model_display_name
+            .apply(&mut context.model_display_name);
+        self.effort.apply(&mut context.effort);
+
+        let model_changed = prior_model_id != context.model_id
+            || prior_model_display_name != context.model_display_name;
+        self.tokens.apply(
+            &mut context.tokens,
+            prior_tokens.as_ref(),
+            model_changed,
+            descriptor.default_context_window,
+            prior_model_id.as_deref(),
+            context.model_id.as_deref(),
+        );
+        self.cost.apply(&mut context.cost);
+        self.turn_error.apply(&mut context.turn_error);
+        self.turn_complete.apply(&mut context.turn_complete);
+        self.plan_proposed.apply(&mut context.plan_proposed);
+        self.native_permission_wait
+            .apply(&mut context.native_permission_wait);
+        self.turn_interrupted.apply(&mut context.turn_interrupted);
+    }
+}
+
+impl LocalTokenPatch {
+    pub fn as_value(&self) -> Option<&AgentTokenUsage> {
+        match self {
+            Self::PreserveEstablished(value) | Self::ReplaceCurrentPreservingSession(value) => {
+                value.as_ref()
+            }
+            Self::Keep => None,
+        }
+    }
+
+    pub fn into_value(self) -> Option<AgentTokenUsage> {
+        match self {
+            Self::PreserveEstablished(value) | Self::ReplaceCurrentPreservingSession(value) => {
+                value
+            }
+            Self::Keep => None,
+        }
+    }
+
+    fn apply(
+        self,
+        target: &mut Option<AgentTokenUsage>,
+        prior: Option<&AgentTokenUsage>,
+        model_changed: bool,
+        default_context_window: Option<u64>,
+        prior_model_id: Option<&str>,
+        final_model_id: Option<&str>,
+    ) {
+        match self {
+            Self::Keep => return,
+            Self::PreserveEstablished(mut incoming) => {
+                preserve_established_tokens(prior, &mut incoming);
+                preserve_cached_context_window(
+                    prior,
+                    default_context_window,
+                    prior_model_id,
+                    final_model_id,
+                    incoming.as_mut(),
+                );
+                *target = incoming;
+            }
+            Self::ReplaceCurrentPreservingSession(mut incoming) => {
+                replace_current_preserving_session(prior, &mut incoming, model_changed);
+                *target = incoming;
+            }
+        }
+    }
+}
+
+fn replace_current_preserving_session(
+    prior: Option<&AgentTokenUsage>,
+    incoming: &mut Option<AgentTokenUsage>,
+    model_changed: bool,
+) {
+    let Some(prior) = prior else {
+        return;
+    };
+    let Some(incoming) = incoming.as_mut() else {
+        let mut preserved = prior.clone();
+        preserved.used_percentage = None;
+        preserved.remaining_percentage = None;
+        preserved.current_context_tokens = None;
+        preserved.current_usage = None;
+        if model_changed {
+            preserved.context_window_size = None;
+        }
+        *incoming = Some(preserved);
+        return;
+    };
+    if !model_changed && incoming.context_window_size.is_none() {
+        incoming.context_window_size = prior.context_window_size;
+    }
+    merge_session_usage(&mut incoming.session_usage, prior.session_usage.clone());
+}
+
+pub(crate) fn merge_session_usage(
+    target: &mut Option<AgentSessionUsage>,
+    incoming: Option<AgentSessionUsage>,
+) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    let target = target.get_or_insert_with(AgentSessionUsage::default);
+    target.input_tokens = monotonic_count(target.input_tokens, incoming.input_tokens);
+    target.output_tokens = monotonic_count(target.output_tokens, incoming.output_tokens);
+    target.cache_creation_input_tokens = monotonic_count(
+        target.cache_creation_input_tokens,
+        incoming.cache_creation_input_tokens,
+    );
+    target.cache_read_input_tokens = monotonic_count(
+        target.cache_read_input_tokens,
+        incoming.cache_read_input_tokens,
+    );
+    target.thinking_tokens = monotonic_count(target.thinking_tokens, incoming.thinking_tokens);
+}
+
+fn monotonic_count(prior: Option<u64>, incoming: Option<u64>) -> Option<u64> {
+    match (prior, incoming) {
+        (Some(prior), Some(incoming)) => Some(prior.max(incoming)),
+        (prior, incoming) => prior.or(incoming),
+    }
+}
+
+fn preserve_established_tokens(
+    prior: Option<&AgentTokenUsage>,
+    refresh: &mut Option<AgentTokenUsage>,
+) {
+    let Some(prior) = prior.filter(|tokens| established_token_usage(tokens)) else {
+        return;
+    };
+    match refresh {
+        None => *refresh = Some(prior.clone()),
+        Some(tokens) if inferred_fresh_tokens(tokens) => *tokens = prior.clone(),
+        Some(_) => {}
+    }
+}
+
+fn established_token_usage(tokens: &AgentTokenUsage) -> bool {
+    tokens.used_percentage.is_some_and(|pct| pct > 0)
+        || tokens
+            .current_context_tokens
+            .is_some_and(|tokens| tokens > 0)
+        || tokens
+            .current_usage
+            .as_ref()
+            .is_some_and(|usage| !usage.is_zero())
+}
+
+fn inferred_fresh_tokens(tokens: &AgentTokenUsage) -> bool {
+    tokens.used_percentage.is_none()
+        && tokens.current_context_tokens.is_none()
+        && tokens
+            .current_usage
+            .as_ref()
+            .is_some_and(AgentCurrentUsage::is_zero)
+}
+
+fn preserve_cached_context_window(
+    prior: Option<&AgentTokenUsage>,
+    default_context_window: Option<u64>,
+    prior_model_id: Option<&str>,
+    final_model_id: Option<&str>,
+    incoming: Option<&mut AgentTokenUsage>,
+) {
+    let (Some(prior), Some(default_context_window), Some(incoming)) =
+        (prior, default_context_window, incoming)
+    else {
+        return;
+    };
+    let Some(prior_context_window) = prior.context_window_size else {
+        return;
+    };
+    if incoming.context_window_size != Some(default_context_window)
+        || prior_context_window == default_context_window
+        || prior_model_id != final_model_id
+    {
+        return;
+    }
+    incoming.context_window_size = Some(prior_context_window);
 }
 
 /// Round and clamp a reported percentage to the `0..=100` gauge range.
@@ -783,6 +1058,95 @@ pub struct AgentPullRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn field_patch_keeps_sets_and_clears_optional_values() {
+        let mut value = Some("prior".to_owned());
+        FieldPatch::Keep.apply(&mut value);
+        assert_eq!(value.as_deref(), Some("prior"));
+        FieldPatch::Set("next".to_owned()).apply(&mut value);
+        assert_eq!(value.as_deref(), Some("next"));
+        FieldPatch::Clear.apply(&mut value);
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn local_token_patches_preserve_established_and_replace_current_usage() {
+        let descriptor =
+            crate::agents::descriptor_by_kind("codex").expect("Codex descriptor is registered");
+        let exact_window = descriptor.default_context_window.unwrap() - 1_000;
+        let mut context = AgentContext::new("codex", Timestamp::now());
+        context.model_id = Some("gpt-5.5".to_owned());
+        context.tokens = Some(AgentTokenUsage {
+            context_window_size: Some(exact_window),
+            used_percentage: Some(42),
+            current_usage: Some(AgentCurrentUsage {
+                input_tokens: Some(100),
+                ..AgentCurrentUsage::default()
+            }),
+            session_usage: Some(AgentSessionUsage {
+                input_tokens: Some(500),
+                output_tokens: Some(20),
+                ..AgentSessionUsage::default()
+            }),
+            ..AgentTokenUsage::default()
+        });
+
+        LocalContextPatch {
+            tokens: LocalTokenPatch::PreserveEstablished(Some(AgentTokenUsage {
+                context_window_size: descriptor.default_context_window,
+                current_usage: Some(AgentCurrentUsage::default()),
+                ..AgentTokenUsage::default()
+            })),
+            ..LocalContextPatch::default()
+        }
+        .apply(&mut context, descriptor);
+        let preserved = context.tokens.as_ref().unwrap();
+        assert_eq!(preserved.used_percentage, Some(42));
+        assert_eq!(preserved.context_window_size, Some(exact_window));
+
+        LocalContextPatch {
+            tokens: LocalTokenPatch::ReplaceCurrentPreservingSession(Some(AgentTokenUsage {
+                current_usage: Some(AgentCurrentUsage {
+                    input_tokens: Some(7),
+                    ..AgentCurrentUsage::default()
+                }),
+                session_usage: Some(AgentSessionUsage {
+                    input_tokens: Some(450),
+                    output_tokens: Some(25),
+                    ..AgentSessionUsage::default()
+                }),
+                ..AgentTokenUsage::default()
+            })),
+            ..LocalContextPatch::default()
+        }
+        .apply(&mut context, descriptor);
+        let replaced = context.tokens.as_ref().unwrap();
+        assert_eq!(replaced.context_window_size, Some(exact_window));
+        assert_eq!(
+            replaced.current_usage.as_ref().unwrap().input_tokens,
+            Some(7)
+        );
+        assert_eq!(
+            replaced.session_usage.as_ref().unwrap().input_tokens,
+            Some(500)
+        );
+        assert_eq!(
+            replaced.session_usage.as_ref().unwrap().output_tokens,
+            Some(25)
+        );
+
+        LocalContextPatch {
+            model_id: FieldPatch::Set("gpt-next".to_owned()),
+            tokens: LocalTokenPatch::ReplaceCurrentPreservingSession(None),
+            ..LocalContextPatch::default()
+        }
+        .apply(&mut context, descriptor);
+        let cleared = context.tokens.as_ref().unwrap();
+        assert_eq!(cleared.context_window_size, None);
+        assert_eq!(cleared.current_usage, None);
+        assert!(cleared.session_usage.is_some());
+    }
 
     #[test]
     fn percentage_clamp_rejects_non_finite_values_and_bounds_finite_values() {

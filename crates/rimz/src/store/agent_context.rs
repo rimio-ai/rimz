@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{AgentContext, AgentTurnError};
 use crate::agents::{
-    AgentCost, AgentSessionUsage, AgentTokenUsage, LocalContextRefresh, LocalSpendFold,
+    AgentCost, AgentDescriptor, AgentTokenUsage, LocalContextRefresh, LocalSpendFold,
     TranscriptStat,
 };
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
@@ -220,102 +220,23 @@ pub fn new_record(kind: &str, agent_id: &str, context: AgentContext) -> AgentCon
 /// the transcript stat gate; a tail that misses effort preserves the prior value.
 pub fn merge_local_context(
     runtime: &RuntimePaths,
-    kind: &str,
+    descriptor: &AgentDescriptor,
     agent_id: &str,
     refresh: LocalContextRefresh,
     observed_at: Timestamp,
 ) -> Result<(), atomic::AtomicErr> {
+    let kind = descriptor.kind;
     let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let mut record = read_one_unlocked(runtime, kind, agent_id)
         .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
-    let prior_model_id = record.context.model_id.clone();
-    let prior_model_display_name = record.context.model_display_name.clone();
-    let prior_context_window = record
-        .context
-        .tokens
-        .as_ref()
-        .and_then(|tokens| tokens.context_window_size);
-    let prior_tokens = record.context.tokens.clone();
-    let refresh_model_id = refresh.model_id.clone();
-    let refresh_model_display_name = refresh.model_display_name.clone();
-    let droid_model_changed = kind == "droid"
-        && (refresh_model_id != prior_model_id
-            || refresh_model_display_name != prior_model_display_name);
     record.context.source = kind.to_owned();
-    if kind == "droid" {
-        // A parsed Droid snapshot owns the effective selector mapping. Replacing
-        // with `None` clears stale canonical identity after an unresolved model
-        // switch instead of silently pricing the new selector as the old one.
-        record.context.model_id = refresh.model_id;
-        record.context.model_display_name = refresh.model_display_name;
-    } else if refresh.model_id.is_some() {
-        record.context.model_id = refresh.model_id;
-        if refresh.model_display_name.is_some() {
-            record.context.model_display_name = refresh.model_display_name;
-        }
-    } else if refresh.model_display_name.is_some() {
-        record.context.model_display_name = refresh.model_display_name;
-    }
-    if refresh.session_preview.is_some() {
-        record.context.session_preview = refresh.session_preview;
-    }
-    if refresh.effort.is_some() {
-        record.context.effort = refresh.effort;
-    }
-    let mut refresh_tokens = refresh.tokens;
-    if kind == "droid" {
-        merge_droid_local_tokens(
-            prior_tokens.as_ref(),
-            &mut refresh_tokens,
-            droid_model_changed,
-        );
-    } else {
-        preserve_established_tokens(prior_tokens.as_ref(), &mut refresh_tokens);
-    }
-    record.context.tokens = refresh_tokens;
-    preserve_cached_context_window(
-        kind,
-        prior_model_id.as_deref(),
-        prior_context_window,
-        refresh_model_id.as_deref(),
-        record.context.tokens.as_mut(),
-    );
-    // A missing local cost means the latest transcript tail could not be priced,
-    // not that the already-spent session returned to zero.
-    if kind == "droid" {
-        // Exact pricing is re-derived with every parsed snapshot. An unknown or
-        // newly unpriced model clears the earlier local cost.
-        record.context.cost = refresh.cost;
-    } else if refresh.cost.is_some() {
-        record.context.cost = refresh.cost;
+    let cost_replaced = !refresh.context.cost.is_keep();
+    refresh.context.apply(&mut record.context, descriptor);
+    if cost_replaced {
         record.locally_priced_cost.owns_context_cost = false;
     }
-    // Codex and Cursor re-derive turn death from the transcript tail each
-    // refresh: a still-present marker re-stamps identically, and a fresh turn
-    // clears it by returning `None`. Other local-refresh users do not run that
-    // detector, so they must not clear hook/statusline-owned errors.
-    if matches!(kind, "codex" | "cursor") {
-        record.context.turn_error = refresh.turn_error;
-    }
-    // Overwrite each refresh: a clean `task_complete` at the tail sets the
-    // marker, and a fresh turn already underway clears it (the detector returns
-    // `None`), so a stale completion never outlives its turn.
-    record.context.turn_complete = refresh.turn_complete;
-    // Plan proposals use the same overwrite/self-clear rule, but settle the
-    // row to waiting while Codex displays its client-side selector.
-    record.context.plan_proposed = refresh.plan_proposed;
-    // Read-only native prompt detectors overwrite on every refresh: a current
-    // AskUser/permission record stamps the marker and a newer transcript state
-    // clears it without manufacturing durable lifecycle truth.
-    record.context.native_permission_wait = refresh.native_permission_wait;
-    // Same latest-refresh semantics as `turn_complete`: an at-rest
-    // `turn_aborted` stamps the interrupted marker, and newer live rollout
-    // records clear it by returning `None`.
-    record.context.turn_interrupted = refresh.turn_interrupted;
     record.context.observed_at = observed_at;
-    if refresh.spend_fold.is_some() {
-        record.spend_fold = refresh.spend_fold;
-    }
+    refresh.spend_fold.apply(&mut record.spend_fold);
     record.transcript_path = refresh.transcript_path;
     record.transcript_stat = refresh.transcript_stat;
     write_record_unlocked(runtime, &record)
@@ -502,7 +423,7 @@ fn merge_observed_tokens(prior: &mut Option<AgentTokenUsage>, incoming: AgentTok
     if let Some(current_usage) = incoming.current_usage {
         target.current_usage = Some(current_usage);
     }
-    merge_session_usage(&mut target.session_usage, incoming.session_usage);
+    crate::agents::context::merge_session_usage(&mut target.session_usage, incoming.session_usage);
     *target != before
 }
 
@@ -528,133 +449,6 @@ fn merge_observed_cost(
         target.total_lines_removed = incoming.total_lines_removed;
     }
     *target != before
-}
-
-fn merge_droid_local_tokens(
-    prior: Option<&AgentTokenUsage>,
-    incoming: &mut Option<AgentTokenUsage>,
-    model_changed: bool,
-) {
-    let Some(prior) = prior else {
-        return;
-    };
-    let Some(incoming) = incoming.as_mut() else {
-        let mut preserved = prior.clone();
-        preserved.used_percentage = None;
-        preserved.remaining_percentage = None;
-        preserved.current_context_tokens = None;
-        preserved.current_usage = None;
-        if model_changed {
-            preserved.context_window_size = None;
-        }
-        *incoming = Some(preserved);
-        return;
-    };
-    if !model_changed && incoming.context_window_size.is_none() {
-        incoming.context_window_size = prior.context_window_size;
-    }
-    merge_session_usage(&mut incoming.session_usage, prior.session_usage.clone());
-}
-
-fn merge_session_usage(
-    target: &mut Option<AgentSessionUsage>,
-    incoming: Option<AgentSessionUsage>,
-) {
-    let Some(incoming) = incoming else {
-        return;
-    };
-    let target = target.get_or_insert_with(AgentSessionUsage::default);
-    target.input_tokens = monotonic_count(target.input_tokens, incoming.input_tokens);
-    target.output_tokens = monotonic_count(target.output_tokens, incoming.output_tokens);
-    target.cache_creation_input_tokens = monotonic_count(
-        target.cache_creation_input_tokens,
-        incoming.cache_creation_input_tokens,
-    );
-    target.cache_read_input_tokens = monotonic_count(
-        target.cache_read_input_tokens,
-        incoming.cache_read_input_tokens,
-    );
-    target.thinking_tokens = monotonic_count(target.thinking_tokens, incoming.thinking_tokens);
-}
-
-fn monotonic_count(prior: Option<u64>, incoming: Option<u64>) -> Option<u64> {
-    match (prior, incoming) {
-        (Some(prior), Some(incoming)) => Some(prior.max(incoming)),
-        (prior, incoming) => prior.or(incoming),
-    }
-}
-
-fn preserve_established_tokens(
-    prior: Option<&AgentTokenUsage>,
-    refresh: &mut Option<AgentTokenUsage>,
-) {
-    let Some(prior) = prior.filter(|tokens| established_token_usage(tokens)) else {
-        return;
-    };
-    match refresh {
-        None => *refresh = Some(prior.clone()),
-        Some(tokens) if should_preserve_tokens(tokens) => *tokens = prior.clone(),
-        Some(_) => {}
-    }
-}
-
-fn established_token_usage(tokens: &AgentTokenUsage) -> bool {
-    tokens.used_percentage.is_some_and(|pct| pct > 0)
-        || tokens
-            .current_context_tokens
-            .is_some_and(|tokens| tokens > 0)
-        || tokens
-            .current_usage
-            .as_ref()
-            .is_some_and(|usage| !usage.is_zero())
-}
-
-fn should_preserve_tokens(refresh: &AgentTokenUsage) -> bool {
-    inferred_fresh_tokens(refresh)
-}
-
-fn inferred_fresh_tokens(tokens: &AgentTokenUsage) -> bool {
-    // A fresh rollout tail (no `token_count` event yet) carries an all-zero
-    // current usage and no percentage. The zeroed `current_usage` under an
-    // absent percentage is the fresh sentinel — recognise it and keep the prior
-    // established record rather than overwriting real context with zeros and a
-    // default window.
-    tokens.used_percentage.is_none()
-        && tokens.current_context_tokens.is_none()
-        && tokens
-            .current_usage
-            .as_ref()
-            .is_some_and(|usage| usage.is_zero())
-}
-
-fn preserve_cached_context_window(
-    kind: &str,
-    prior_model_id: Option<&str>,
-    prior_context_window: Option<u64>,
-    refresh_model_id: Option<&str>,
-    tokens: Option<&mut crate::agents::AgentTokenUsage>,
-) {
-    let Some(tokens) = tokens else {
-        return;
-    };
-    let Some(prior_context_window) = prior_context_window else {
-        return;
-    };
-    let Some(default_context_window) = crate::agents::descriptor_by_kind(kind)
-        .and_then(|descriptor| descriptor.default_context_window)
-    else {
-        return;
-    };
-    if tokens.context_window_size != Some(default_context_window) {
-        return;
-    }
-    if prior_context_window == default_context_window {
-        return;
-    }
-    if refresh_model_id.is_some_and(|model| prior_model_id != Some(model)) {
-        return;
-    }
-    tokens.context_window_size = Some(prior_context_window);
 }
 
 pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {

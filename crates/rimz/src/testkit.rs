@@ -34,17 +34,14 @@ pub fn agent_state(kind: &str, agent_id: &str, at: jiff::Timestamp) -> crate::ag
 
 /// Provider-local changed-session fixture used only by allocation/time benches.
 pub struct ChangedSessionRefreshFixture {
-    kind: &'static str,
+    adapter: &'static dyn crate::agents::AgentAdapter,
     session_id: String,
     transcript: std::path::PathBuf,
-    events: Option<std::path::PathBuf>,
     pricing: std::path::PathBuf,
 }
 
 impl ChangedSessionRefreshFixture {
     pub fn refresh(&self) -> Option<crate::agents::LocalContextRefresh> {
-        use crate::agents::AgentAdapter as _;
-
         let transcript = self.transcript.to_str()?;
         let ctx = crate::agents::LocalContextRefreshCtx {
             agent_id: &self.session_id,
@@ -55,18 +52,8 @@ impl ChangedSessionRefreshFixture {
             prior_spend_fold: None,
             shared_pricing_cache_path: &self.pricing,
         };
-        match self.kind {
-            "kimi" => crate::agents::KimiAdapter
-                .local_context_refresh(crate::agents::RefreshTrigger::Watch, &ctx),
-            "grok" => crate::agents::grok::refresh_resolved_context(
-                &self.transcript,
-                self.events.as_deref(),
-                &ctx,
-            ),
-            "droid" => crate::agents::DroidAdapter
-                .local_context_refresh(crate::agents::RefreshTrigger::Watch, &ctx),
-            _ => None,
-        }
+        self.adapter
+            .local_context_refresh(crate::agents::RefreshTrigger::Watch, &ctx)
     }
 }
 
@@ -85,10 +72,9 @@ pub fn changed_kimi_session_fixture(
     }
     std::fs::write(&transcript, body).expect("Kimi fixture");
     ChangedSessionRefreshFixture {
-        kind: "kimi",
+        adapter: crate::agents::find_adapter("kimi").expect("Kimi fixture adapter is registered"),
         session_id: "s1".to_owned(),
         transcript,
-        events: None,
         pricing: root.join("prices.json"),
     }
 }
@@ -116,10 +102,9 @@ pub fn changed_grok_session_fixture(
     }
     std::fs::write(&transcript, body).expect("Grok fixture");
     ChangedSessionRefreshFixture {
-        kind: "grok",
+        adapter: crate::agents::find_adapter("grok").expect("Grok fixture adapter is registered"),
         session_id: "s1".to_owned(),
         transcript,
-        events: None,
         pricing: root.join("prices.json"),
     }
 }
@@ -150,10 +135,9 @@ pub fn changed_droid_session_fixture(
     )
     .expect("Droid settings fixture");
     ChangedSessionRefreshFixture {
-        kind: "droid",
+        adapter: crate::agents::find_adapter("droid").expect("Droid fixture adapter is registered"),
         session_id: "s1".to_owned(),
         transcript,
-        events: None,
         pricing: root.join("prices.json"),
     }
 }

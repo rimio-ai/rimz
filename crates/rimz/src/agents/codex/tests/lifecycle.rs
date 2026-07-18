@@ -665,8 +665,9 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     // it into the sidecar.
     assert_eq!(
         refresh
+            .context
             .tokens
-            .as_ref()
+            .as_value()
             .and_then(|tokens| tokens.context_window_size),
         Some(1000)
     );

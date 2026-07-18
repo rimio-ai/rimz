@@ -628,7 +628,10 @@ fn refresh_publishes_the_state_title_as_session_preview() {
 
     let refresh =
         refresh_wire_path(&path, "s1", TranscriptStat::from_path(&path).unwrap(), &ctx).unwrap();
-    assert_eq!(refresh.session_preview.as_deref(), Some("Stable task"));
+    assert_eq!(
+        refresh.context.session_preview.as_set().map(String::as_str),
+        Some("Stable task")
+    );
 
     std::fs::write(session.join("state.json"), r#"{"title":"  "}"#).unwrap();
     assert_eq!(subagents::session_title(&session), None);
@@ -675,15 +678,30 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
         shared_pricing_cache_path: &cache,
     };
     let refresh = refresh_wire_path(&path, "s1", stat, &ctx).unwrap();
-    let tokens = refresh.tokens.clone().unwrap();
+    let tokens = refresh.context.tokens.clone().into_value().unwrap();
     assert_eq!(tokens.used_percentage, Some(19));
     assert_eq!(
         tokens.current_usage.unwrap().cache_read_input_tokens,
         Some(10_000)
     );
-    assert_eq!(refresh.model_id.as_deref(), Some("kimi-for-coding"));
-    assert_eq!(refresh.effort.as_deref(), Some("high"));
-    assert!(refresh.cost.unwrap().total_cost_usd.unwrap() > 0.0);
+    assert_eq!(
+        refresh.context.model_id.as_set().map(String::as_str),
+        Some("kimi-for-coding")
+    );
+    assert_eq!(
+        refresh.context.effort.as_set().map(String::as_str),
+        Some("high")
+    );
+    assert!(
+        refresh
+            .context
+            .cost
+            .into_set()
+            .unwrap()
+            .total_cost_usd
+            .unwrap()
+            > 0.0
+    );
     assert_eq!(refresh.transcript_path.as_deref(), path.to_str());
 
     let parsed = spend::parse(&path, None, &super::super::PriceBook::embedded());
@@ -801,7 +819,9 @@ fn wire_without_usage_emits_fresh_sentinel() {
     };
     let tokens = refresh_wire_path(&path, "s1", stat, &ctx)
         .unwrap()
+        .context
         .tokens
+        .into_value()
         .unwrap();
     assert_eq!(tokens.used_percentage, None);
     assert!(tokens.current_usage.unwrap().is_zero());
@@ -997,8 +1017,26 @@ fn live_cost_prices_the_full_file_outside_the_bounded_tail() {
     };
 
     let refresh = refresh_wire_path(&path, "s1", stat, &ctx).unwrap();
-    assert!(refresh.cost.unwrap().total_cost_usd.unwrap() > 0.0);
-    assert!(refresh.tokens.unwrap().current_usage.unwrap().is_zero());
+    assert!(
+        refresh
+            .context
+            .cost
+            .into_set()
+            .unwrap()
+            .total_cost_usd
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        refresh
+            .context
+            .tokens
+            .into_value()
+            .unwrap()
+            .current_usage
+            .unwrap()
+            .is_zero()
+    );
 }
 
 #[test]

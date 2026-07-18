@@ -28,10 +28,10 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, SessionSource, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, ClassifiedHook, LocalContextRefresh,
-    LocalContextRefreshCtx, ManagedSource, RefreshTrigger, Result, SessionOrigin,
-    TranscriptMessage, TranscriptPage, TranscriptPosition, optional_payload_string,
-    read_transcript_lines, sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, ClassifiedHook, FieldPatch,
+    LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch, ManagedSource,
+    RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
+    optional_payload_string, read_transcript_lines, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -426,15 +426,24 @@ impl AgentAdapter for DroidAdapter {
             session_usage: refresh.telemetry.session_usage,
         });
         Some(LocalContextRefresh {
-            model_id,
-            model_display_name,
-            effort: refresh.telemetry.reasoning_effort,
-            tokens,
-            cost,
-            native_permission_wait: refresh.telemetry.native_permission_wait,
+            context: LocalContextPatch {
+                model_id: model_id.map_or(FieldPatch::Clear, FieldPatch::Set),
+                model_display_name: model_display_name.map_or(FieldPatch::Clear, FieldPatch::Set),
+                effort: refresh
+                    .telemetry
+                    .reasoning_effort
+                    .map_or(FieldPatch::Keep, FieldPatch::Set),
+                tokens: LocalTokenPatch::ReplaceCurrentPreservingSession(tokens),
+                cost: cost.map_or(FieldPatch::Clear, FieldPatch::Set),
+                native_permission_wait: refresh
+                    .telemetry
+                    .native_permission_wait
+                    .map_or(FieldPatch::Clear, FieldPatch::Set),
+                ..LocalContextPatch::authoritative_current()
+            },
             transcript_path: Some(refresh.transcript_path.to_string_lossy().into_owned()),
             transcript_stat: Some(refresh.stat),
-            ..LocalContextRefresh::default()
+            ..LocalContextRefresh::authoritative_current()
         })
     }
 

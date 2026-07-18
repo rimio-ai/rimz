@@ -1407,7 +1407,10 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
         shared_pricing_cache_path: &pricing,
     })
     .expect("torn transcript still registers its path");
-    assert!(refresh.turn_complete.is_none());
+    assert_eq!(
+        refresh.context.turn_complete,
+        crate::agents::FieldPatch::Clear
+    );
 
     std::fs::write(&path, format!("{terminal}\n{terminal}\n")).unwrap();
     let healed = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
@@ -1420,7 +1423,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
         shared_pricing_cache_path: &pricing,
     })
     .expect("new complete terminal refresh");
-    assert!(healed.turn_complete.is_some());
+    assert!(healed.context.turn_complete.as_set().is_some());
 }
 
 #[test]
@@ -1441,10 +1444,19 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     })
     .expect("file identity refresh");
     assert_eq!(first.transcript_path.as_deref(), Some(path_string.as_str()));
-    assert_eq!(first.model_id.as_deref(), Some("cursor/model"));
-    assert!(first.turn_complete.is_none());
-    assert!(first.turn_interrupted.is_none());
-    assert!(first.turn_error.is_none());
+    assert_eq!(
+        first.context.model_id.as_set().map(String::as_str),
+        Some("cursor/model")
+    );
+    assert_eq!(
+        first.context.turn_complete,
+        crate::agents::FieldPatch::Clear
+    );
+    assert_eq!(
+        first.context.turn_interrupted,
+        crate::agents::FieldPatch::Clear
+    );
+    assert_eq!(first.context.turn_error, crate::agents::FieldPatch::Clear);
 
     std::fs::write(
         &path,
@@ -1461,9 +1473,9 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
         shared_pricing_cache_path: &pricing,
     })
     .expect("changed transcript refresh");
-    assert!(interrupted.turn_interrupted.is_some());
-    assert!(interrupted.tokens.is_none());
-    assert!(interrupted.cost.is_none());
+    assert!(interrupted.context.turn_interrupted.as_set().is_some());
+    assert!(interrupted.context.tokens.as_value().is_none());
+    assert!(interrupted.context.cost.as_set().is_none());
 }
 
 #[test]
@@ -1489,7 +1501,11 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
         shared_pricing_cache_path: &pricing,
     })
     .expect("first completed snapshot");
-    let first_complete = first.turn_complete.expect("first terminal marker");
+    let first_complete = *first
+        .context
+        .turn_complete
+        .as_set()
+        .expect("first terminal marker");
     let first_stat = first.transcript_stat.expect("first transcript stat");
 
     let two_turns = concat!(
@@ -1524,8 +1540,10 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
     assert_ne!(rewritten.transcript_stat, Some(first_stat));
     assert!(
         rewritten
+            .context
             .turn_complete
-            .is_some_and(|at| at > first_complete)
+            .as_set()
+            .is_some_and(|at| *at > first_complete)
     );
     assert!(
         CursorAdapter

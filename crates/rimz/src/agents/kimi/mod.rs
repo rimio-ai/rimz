@@ -25,10 +25,10 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTurnError, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx,
-    RefreshTrigger, Result, TranscriptStat, TurnErrorClass, non_empty_trimmed,
-    sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, AgentTurnError, ClassifiedHook, FieldPatch,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextPatch,
+    LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result,
+    TranscriptStat, TurnErrorClass, non_empty_trimmed, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -756,14 +756,19 @@ fn refresh_wire_path(
         .and_then(Path::parent)
         .and_then(subagents::session_title);
     Some(LocalContextRefresh {
-        session_preview,
-        model_id,
-        effort: attribution.thinking_effort,
-        tokens,
-        cost,
+        context: LocalContextPatch {
+            session_preview: session_preview.map_or(FieldPatch::Keep, FieldPatch::Set),
+            model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
+            effort: attribution
+                .thinking_effort
+                .map_or(FieldPatch::Keep, FieldPatch::Set),
+            tokens: LocalTokenPatch::PreserveEstablished(tokens),
+            cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
-        ..LocalContextRefresh::default()
+        ..LocalContextRefresh::authoritative_current()
     })
 }
 

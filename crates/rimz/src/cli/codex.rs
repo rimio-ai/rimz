@@ -144,7 +144,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     if let Some(refresh) = transcript_refresh {
         rimz::store::agent_context::merge_local_context(
             &runtime,
-            "codex",
+            agents::descriptor_by_kind("codex").context("Codex descriptor is registered")?,
             session_id,
             refresh,
             Timestamp::now(),
@@ -202,7 +202,7 @@ fn confirm_codex_turn_death(
     session_id: &str,
     refresh: &mut agents::LocalContextRefresh,
 ) {
-    let Some(error) = refresh.turn_error.as_mut() else {
+    let agents::FieldPatch::Set(error) = &mut refresh.context.turn_error else {
         return;
     };
     if !codex::turn_death_needs_pane_confirmation(error) {

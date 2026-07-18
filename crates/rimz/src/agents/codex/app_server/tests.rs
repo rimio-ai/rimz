@@ -623,23 +623,22 @@ fn seed_transcript_context(runtime: &RuntimePaths) {
     let transcript_at = Timestamp::from_second(1_700_000_000).unwrap();
     crate::store::agent_context::merge_local_context(
         runtime,
-        "codex",
+        crate::agents::descriptor_by_kind("codex").expect("Codex adapter is registered"),
         "sess-1",
         LocalContextRefresh {
-            session_preview: None,
-            model_id: Some("gpt-5".to_owned()),
-            model_display_name: None,
-            effort: Some("xhigh".to_owned()),
-            tokens: Some(transcript_tokens()),
-            cost: Some(AgentCost {
-                total_cost_usd: Some(0.42),
-                ..AgentCost::default()
-            }),
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
+            context: crate::agents::LocalContextPatch {
+                model_id: crate::agents::FieldPatch::Set("gpt-5".to_owned()),
+                effort: crate::agents::FieldPatch::Set("xhigh".to_owned()),
+                tokens: crate::agents::LocalTokenPatch::PreserveEstablished(Some(
+                    transcript_tokens(),
+                )),
+                cost: crate::agents::FieldPatch::Set(AgentCost {
+                    total_cost_usd: Some(0.42),
+                    ..AgentCost::default()
+                }),
+                turn_error: crate::agents::FieldPatch::Clear,
+                ..crate::agents::LocalContextPatch::authoritative_current()
+            },
             transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
             transcript_stat: Some(TranscriptStat {
                 mtime_secs: 10,
@@ -647,7 +646,7 @@ fn seed_transcript_context(runtime: &RuntimePaths) {
                 len: 30,
                 companion: None,
             }),
-            spend_fold: None,
+            spend_fold: crate::agents::FieldPatch::Keep,
         },
         transcript_at,
     )

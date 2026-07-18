@@ -2,8 +2,8 @@ use super::*;
 use crate::agents::context::WindowSource;
 use crate::agents::{
     AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage, AgentTokenUsage,
-    AgentTurnError, LocalContextRefresh, LocalSpendFold, RateLimitWindow, TranscriptStat,
-    TurnErrorClass,
+    AgentTurnError, FieldPatch, LocalContextPatch, LocalContextRefresh, LocalSpendFold,
+    LocalTokenPatch, RateLimitWindow, TranscriptStat, TurnErrorClass,
 };
 
 #[test]
@@ -32,37 +32,42 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
         }),
     });
     let refresh = LocalContextRefresh {
-        session_preview: None,
-        model_id: Some("deepseek-v4-pro".to_owned()),
-        model_display_name: Some("DeepSeek V4 Pro".to_owned()),
-        effort: Some("high".to_owned()),
-        tokens: Some(AgentTokenUsage {
-            context_window_size: Some(200_000),
-            used_percentage: None,
-            remaining_percentage: None,
-            current_context_tokens: None,
-            current_usage: None,
-            session_usage: Some(AgentSessionUsage {
-                input_tokens: Some(90),
-                output_tokens: Some(25),
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: Some(390),
-                thinking_tokens: Some(7),
-            }),
-        }),
-        cost: None,
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: Some(Timestamp::from_second(1_700_000_001).unwrap()),
-        turn_interrupted: None,
+        context: LocalContextPatch {
+            model_id: FieldPatch::Set("deepseek-v4-pro".to_owned()),
+            model_display_name: FieldPatch::Set("DeepSeek V4 Pro".to_owned()),
+            effort: FieldPatch::Set("high".to_owned()),
+            tokens: LocalTokenPatch::ReplaceCurrentPreservingSession(Some(AgentTokenUsage {
+                context_window_size: Some(200_000),
+                used_percentage: None,
+                remaining_percentage: None,
+                current_context_tokens: None,
+                current_usage: None,
+                session_usage: Some(AgentSessionUsage {
+                    input_tokens: Some(90),
+                    output_tokens: Some(25),
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: Some(390),
+                    thinking_tokens: Some(7),
+                }),
+            })),
+            cost: FieldPatch::Clear,
+            native_permission_wait: FieldPatch::Set(Timestamp::from_second(1_700_000_001).unwrap()),
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
         transcript_stat: Some(stat()),
-        spend_fold: None,
+        spend_fold: FieldPatch::Keep,
     };
     write_record(&runtime, &prior).unwrap();
 
-    merge_local_context(&runtime, "droid", "sess-1", refresh, observed_at).unwrap();
+    merge_local_context(
+        &runtime,
+        descriptor("droid"),
+        "sess-1",
+        refresh,
+        observed_at,
+    )
+    .unwrap();
     let merged = read_one(&runtime, "droid", "sess-1").unwrap();
     let tokens = merged.context.tokens.as_ref().unwrap();
     assert_eq!(tokens.context_window_size, Some(200_000));
@@ -84,22 +89,25 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     );
 
     let unresolved_model = LocalContextRefresh {
-        session_preview: None,
-        model_id: None,
-        model_display_name: Some("Other Model".to_owned()),
-        effort: None,
-        tokens: None,
-        cost: None,
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        context: LocalContextPatch {
+            model_id: FieldPatch::Clear,
+            model_display_name: FieldPatch::Set("Other Model".to_owned()),
+            tokens: LocalTokenPatch::ReplaceCurrentPreservingSession(None),
+            cost: FieldPatch::Clear,
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
         transcript_stat: Some(stat()),
-        spend_fold: None,
+        spend_fold: FieldPatch::Keep,
     };
-    merge_local_context(&runtime, "droid", "sess-1", unresolved_model, observed_at).unwrap();
+    merge_local_context(
+        &runtime,
+        descriptor("droid"),
+        "sess-1",
+        unresolved_model,
+        observed_at,
+    )
+    .unwrap();
     let unresolved = read_one(&runtime, "droid", "sess-1").unwrap();
     let tokens = unresolved.context.tokens.unwrap();
     assert_eq!(tokens.context_window_size, None);
@@ -161,7 +169,14 @@ fn merge_local_context_preserves_prior_fields_by_case() {
         let local_at = Timestamp::from_second(1_700_000_030).unwrap();
         write_record(&runtime, &(case.prior)(prior_at)).unwrap();
 
-        merge_local_context(&runtime, "codex", "sess-1", (case.refresh)(), local_at).unwrap();
+        merge_local_context(
+            &runtime,
+            descriptor("codex"),
+            "sess-1",
+            (case.refresh)(),
+            local_at,
+        )
+        .unwrap();
 
         let merged = read_one(&runtime, "codex", "sess-1").unwrap();
         assert_eq!(merged.agent_id.as_str(), "sess-1", "{}", case.name);
@@ -183,7 +198,14 @@ fn foldless_local_refresh_preserves_prior_spend_fold() {
     });
     write_record(&runtime, &prior).unwrap();
 
-    merge_local_context(&runtime, "codex", "sess-1", unpriced_refresh(), observed_at).unwrap();
+    merge_local_context(
+        &runtime,
+        descriptor("codex"),
+        "sess-1",
+        unpriced_refresh(),
+        observed_at,
+    )
+    .unwrap();
 
     assert_eq!(
         read_one(&runtime, "codex", "sess-1").unwrap().spend_fold,
@@ -200,8 +222,15 @@ fn local_session_preview_updates_only_when_the_refresh_has_one() {
     write_record(&runtime, &prior).unwrap();
 
     let mut refresh = unpriced_refresh();
-    refresh.session_preview = Some("New title".to_owned());
-    merge_local_context(&runtime, "codex", "sess-1", refresh, observed_at).unwrap();
+    refresh.context.session_preview = FieldPatch::Set("New title".to_owned());
+    merge_local_context(
+        &runtime,
+        descriptor("codex"),
+        "sess-1",
+        refresh,
+        observed_at,
+    )
+    .unwrap();
     assert_eq!(
         read_one(&runtime, "codex", "sess-1")
             .unwrap()
@@ -211,7 +240,14 @@ fn local_session_preview_updates_only_when_the_refresh_has_one() {
         Some("New title")
     );
 
-    merge_local_context(&runtime, "codex", "sess-1", unpriced_refresh(), observed_at).unwrap();
+    merge_local_context(
+        &runtime,
+        descriptor("codex"),
+        "sess-1",
+        unpriced_refresh(),
+        observed_at,
+    )
+    .unwrap();
     assert_eq!(
         read_one(&runtime, "codex", "sess-1")
             .unwrap()
@@ -237,14 +273,21 @@ fn codex_local_refresh_overwrites_turn_error_marker() {
     write_record(&runtime, &prior).unwrap();
 
     let mut refresh = unpriced_refresh();
-    refresh.turn_error = Some(next_marker.clone());
-    merge_local_context(&runtime, "codex", "sess-1", refresh, observed_at).unwrap();
+    refresh.context.turn_error = FieldPatch::Set(next_marker.clone());
+    merge_local_context(
+        &runtime,
+        descriptor("codex"),
+        "sess-1",
+        refresh,
+        observed_at,
+    )
+    .unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.turn_error, Some(next_marker));
 
     let mut clear = unpriced_refresh();
-    clear.turn_error = None;
-    merge_local_context(&runtime, "codex", "sess-1", clear, observed_at).unwrap();
+    clear.context.turn_error = FieldPatch::Clear;
+    merge_local_context(&runtime, descriptor("codex"), "sess-1", clear, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(
         merged.context.turn_error, None,
@@ -264,14 +307,28 @@ fn local_refresh_overwrites_turn_settle_markers() {
     write_record(&runtime, &prior).unwrap();
 
     let mut refresh = unpriced_refresh();
-    refresh.plan_proposed = Some(new);
-    refresh.turn_interrupted = Some(new);
-    merge_local_context(&runtime, "codex", "sess-1", refresh, observed_at).unwrap();
+    refresh.context.plan_proposed = FieldPatch::Set(new);
+    refresh.context.turn_interrupted = FieldPatch::Set(new);
+    merge_local_context(
+        &runtime,
+        descriptor("codex"),
+        "sess-1",
+        refresh,
+        observed_at,
+    )
+    .unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.plan_proposed, Some(new));
     assert_eq!(merged.context.turn_interrupted, Some(new));
 
-    merge_local_context(&runtime, "codex", "sess-1", unpriced_refresh(), observed_at).unwrap();
+    merge_local_context(
+        &runtime,
+        descriptor("codex"),
+        "sess-1",
+        unpriced_refresh(),
+        observed_at,
+    )
+    .unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.plan_proposed, None);
     assert_eq!(
@@ -294,7 +351,14 @@ fn non_codex_local_refresh_preserves_turn_error_marker() {
     prior.context.turn_error = Some(marker.clone());
     write_record(&runtime, &prior).unwrap();
 
-    merge_local_context(&runtime, "pi", "sess-1", unpriced_refresh(), observed_at).unwrap();
+    merge_local_context(
+        &runtime,
+        descriptor("pi"),
+        "sess-1",
+        unpriced_refresh(),
+        observed_at,
+    )
+    .unwrap();
 
     let merged = read_one(&runtime, "pi", "sess-1").unwrap();
     assert_eq!(merged.context.turn_error, Some(marker));
@@ -515,105 +579,95 @@ fn prior_exact_codex_window(observed_at: Timestamp) -> AgentContextRecord {
 
 fn full_local_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
-        session_preview: None,
-        model_id: Some("gpt-5.5".to_owned()),
-        model_display_name: None,
-        effort: Some("xhigh".to_owned()),
-        tokens: Some(tokens(
-            1_000,
-            40,
-            60,
-            Some(AgentCurrentUsage {
-                input_tokens: Some(30),
-                output_tokens: Some(4),
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: Some(10),
-            }),
-        )),
-        cost: Some(cost(0.12)),
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        context: LocalContextPatch {
+            model_id: FieldPatch::Set("gpt-5.5".to_owned()),
+            effort: FieldPatch::Set("xhigh".to_owned()),
+            tokens: LocalTokenPatch::PreserveEstablished(Some(tokens(
+                1_000,
+                40,
+                60,
+                Some(AgentCurrentUsage {
+                    input_tokens: Some(30),
+                    output_tokens: Some(4),
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: Some(10),
+                }),
+            ))),
+            cost: FieldPatch::Set(cost(0.12)),
+            turn_error: FieldPatch::Clear,
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
-        spend_fold: None,
+        spend_fold: FieldPatch::Keep,
     }
 }
 
 fn unpriced_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
-        session_preview: None,
-        model_id: Some("gpt-5".to_owned()),
-        model_display_name: None,
-        effort: Some("high".to_owned()),
-        tokens: Some(tokens(1_000, 10, 90, None)),
-        cost: None,
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        context: LocalContextPatch {
+            model_id: FieldPatch::Set("gpt-5".to_owned()),
+            effort: FieldPatch::Set("high".to_owned()),
+            tokens: LocalTokenPatch::PreserveEstablished(Some(tokens(1_000, 10, 90, None))),
+            turn_error: FieldPatch::Clear,
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
-        spend_fold: None,
+        spend_fold: FieldPatch::Keep,
     }
 }
 
 fn unknown_tokens_refresh() -> LocalContextRefresh {
-    LocalContextRefresh {
-        tokens: None,
-        ..unpriced_refresh()
-    }
+    let mut refresh = unpriced_refresh();
+    refresh.context.tokens = LocalTokenPatch::PreserveEstablished(None);
+    refresh
 }
 
 fn unknown_effort_refresh() -> LocalContextRefresh {
-    LocalContextRefresh {
-        effort: None,
-        ..unpriced_refresh()
-    }
+    let mut refresh = unpriced_refresh();
+    refresh.context.effort = FieldPatch::Keep;
+    refresh
 }
 
 fn fresh_zero_codex_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: Some("high".to_owned()),
-        tokens: Some(codex_tokens(
-            codex_default_window(),
-            Some(current_usage(0, 0, 0, 0)),
-        )),
-        cost: None,
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        context: LocalContextPatch {
+            effort: FieldPatch::Set("high".to_owned()),
+            tokens: LocalTokenPatch::PreserveEstablished(Some(codex_tokens(
+                codex_default_window(),
+                Some(current_usage(0, 0, 0, 0)),
+            ))),
+            turn_error: FieldPatch::Clear,
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
-        spend_fold: None,
+        spend_fold: FieldPatch::Keep,
     }
 }
 
 fn fallback_window_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: Some("high".to_owned()),
-        tokens: Some(tokens(codex_default_window(), 10, 90, None)),
-        cost: None,
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        context: LocalContextPatch {
+            effort: FieldPatch::Set("high".to_owned()),
+            tokens: LocalTokenPatch::PreserveEstablished(Some(tokens(
+                codex_default_window(),
+                10,
+                90,
+                None,
+            ))),
+            turn_error: FieldPatch::Clear,
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
-        spend_fold: None,
+        spend_fold: FieldPatch::Keep,
     }
+}
+
+fn descriptor(kind: &str) -> &'static crate::agents::AgentDescriptor {
+    crate::agents::descriptor_by_kind(kind).expect("fixture adapter is registered")
 }
 
 /// Codex's descriptor-default fallback window — what a refresh carries before a

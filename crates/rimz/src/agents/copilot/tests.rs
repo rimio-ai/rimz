@@ -879,8 +879,11 @@ fn statusline_health_suppresses_otel_and_replacement_restores_it() {
     );
     let fallback = local_context_refresh_with_statusline(false, RefreshTrigger::Tick, &ctx)
         .expect("missing or replaced statusline restores OTel");
-    assert_eq!(fallback.model_id.as_deref(), Some("gpt-5-mini"));
-    assert!(fallback.tokens.is_some());
+    assert_eq!(
+        fallback.context.model_id.as_set().map(String::as_str),
+        Some("gpt-5-mini")
+    );
+    assert!(fallback.context.tokens.as_value().is_some());
 }
 
 #[test]

@@ -382,11 +382,15 @@ fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
     let refresh = AmpAdapter
         .local_context_refresh(RefreshTrigger::Hook("agent_end"), &ctx)
         .unwrap();
-    assert_eq!(refresh.model_id.as_deref(), Some("gpt-5"));
+    assert_eq!(
+        refresh.context.model_id.as_set().map(String::as_str),
+        Some("gpt-5")
+    );
     assert_eq!(
         refresh
+            .context
             .tokens
-            .as_ref()
+            .as_value()
             .and_then(|tokens| tokens.current_usage.as_ref())
             .unwrap(),
         &AgentCurrentUsage {
@@ -398,8 +402,9 @@ fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
     );
     assert!(
         refresh
+            .context
             .cost
-            .as_ref()
+            .as_set()
             .and_then(|cost| cost.total_cost_usd)
             .is_some_and(|cost| cost > 0.0)
     );

@@ -737,8 +737,9 @@ mod tests {
 
         let refresh = refresh.expect("turn end reconciles resumed cost");
         let cost = refresh
+            .context
             .cost
-            .as_ref()
+            .as_set()
             .and_then(|cost| cost.total_cost_usd)
             .expect("supplemented total cost");
         assert!((cost - 15.91).abs() < 1e-9);
@@ -836,7 +837,11 @@ mod tests {
         let refresh = refresh.expect("the WAL change invalidates turn-end cost");
         assert_eq!(refresh.transcript_stat, Some(updated_stat));
         assert_eq!(
-            refresh.cost.and_then(|cost| cost.total_cost_usd),
+            refresh
+                .context
+                .cost
+                .into_set()
+                .and_then(|cost| cost.total_cost_usd),
             Some(9.75)
         );
     }

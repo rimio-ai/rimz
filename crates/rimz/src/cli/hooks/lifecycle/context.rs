@@ -235,7 +235,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     };
     if let Err(err) = rimz::store::agent_context::merge_local_context(
         store.runtime_paths(),
-        agent.descriptor().kind,
+        agent.descriptor(),
         context_agent_id,
         refresh,
         jiff::Timestamp::now(),
@@ -309,20 +309,8 @@ pub(super) fn supplement_realtime_cost(
         return;
     }
 
-    let refresh = refresh.get_or_insert_with(|| rimz::agents::LocalContextRefresh {
-        model_id: None,
-        model_display_name: prior.and_then(|record| record.context.model_display_name.clone()),
-        effort: prior.and_then(|record| record.context.effort.clone()),
-        tokens: prior.and_then(|record| record.context.tokens.clone()),
-        cost: None,
-        turn_error: prior.and_then(|record| record.context.turn_error.clone()),
-        turn_complete: prior.and_then(|record| record.context.turn_complete),
-        plan_proposed: prior.and_then(|record| record.context.plan_proposed),
-        native_permission_wait: prior.and_then(|record| record.context.native_permission_wait),
-        turn_interrupted: prior.and_then(|record| record.context.turn_interrupted),
-        ..rimz::agents::LocalContextRefresh::default()
-    });
-    refresh.cost = Some(cost);
+    let refresh = refresh.get_or_insert_with(rimz::agents::LocalContextRefresh::sparse);
+    refresh.context.cost = rimz::agents::FieldPatch::Set(cost);
     refresh.transcript_path = Some(path.to_string_lossy().into_owned());
     refresh.transcript_stat = Some(stat);
 }
@@ -337,7 +325,10 @@ pub(super) fn refresh_total_cost(
     refresh: Option<&rimz::agents::LocalContextRefresh>,
 ) -> Option<f64> {
     refresh
-        .and_then(|refresh| refresh.cost.as_ref())
+        .and_then(|refresh| match &refresh.context.cost {
+            rimz::agents::FieldPatch::Set(cost) => Some(cost),
+            rimz::agents::FieldPatch::Keep | rimz::agents::FieldPatch::Clear => None,
+        })
         .and_then(|cost| cost.total_cost_usd)
 }
 

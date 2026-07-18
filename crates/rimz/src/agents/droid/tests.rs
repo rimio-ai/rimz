@@ -378,8 +378,11 @@ fn local_refresh_prices_exact_builtins_and_fills_gauge_from_last_call() {
     let refresh = DroidAdapter
         .local_context_refresh(RefreshTrigger::Hook("Stop"), &ctx)
         .unwrap();
-    let tokens = refresh.tokens.unwrap();
-    assert_eq!(refresh.model_id.as_deref(), Some("gpt-5"));
+    assert_eq!(
+        refresh.context.model_id.as_set().map(String::as_str),
+        Some("gpt-5")
+    );
+    let tokens = refresh.context.tokens.into_value().unwrap();
     assert_eq!(tokens.context_window_size, Some(400_000));
     assert!(tokens.used_percentage.is_none());
     assert!(tokens.remaining_percentage.is_none());
@@ -389,7 +392,7 @@ fn local_refresh_prices_exact_builtins_and_fills_gauge_from_last_call() {
     assert_eq!(current.cache_creation_input_tokens, Some(1_200));
     assert_eq!(current.cache_read_input_tokens, Some(56_900));
     assert_eq!(tokens.session_usage.unwrap().thinking_tokens, Some(5_000));
-    let cost = refresh.cost.unwrap();
+    let cost = refresh.context.cost.into_set().unwrap();
     assert_eq!(cost.coverage, crate::agents::CostCoverage::Session);
     assert!(cost.total_cost_usd.unwrap() > 0.0);
     assert_eq!(

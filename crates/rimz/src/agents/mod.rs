@@ -81,8 +81,9 @@ pub use account::{
 };
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostCoverage, ProviderAccountScope,
-    RateLimitWindow, RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass,
+    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostCoverage, FieldPatch,
+    LocalContextPatch, LocalTokenPatch, ProviderAccountScope, RateLimitWindow,
+    RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
@@ -633,38 +634,28 @@ pub struct LocalContextRefreshCtx<'a> {
 /// sidecar.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalContextRefresh {
-    /// Stable provider-owned session title published as the card's short
-    /// activity description instead of tracking the latest prompt.
-    pub session_preview: Option<String>,
-    pub model_id: Option<String>,
-    pub model_display_name: Option<String>,
-    pub effort: Option<String>,
-    pub tokens: Option<AgentTokenUsage>,
-    pub cost: Option<AgentCost>,
-    /// Provider turn-death marker derived from a local transcript tail. Codex
-    /// uses it for failures that write no hook-owned error; non-detector local
-    /// refreshes leave sidecar error state untouched at merge time.
-    pub turn_error: Option<AgentTurnError>,
-    /// Timestamp of a cleanly-completed turn read from the rollout tail
-    /// (`detect_turn_complete`), set when the session is at rest on a
-    /// `task_complete` that fired no `Stop` hook (a `/review` turn). The
-    /// projection reads it to settle a falsely-`running` row to `success`.
-    pub turn_complete: Option<Timestamp>,
-    /// Timestamp of a cleanly-completed planning turn whose rollout carries a
-    /// `Plan` item. The projection settles a falsely-`running` row to `waiting`.
-    pub plan_proposed: Option<Timestamp>,
-    /// Timestamp of a provider-native input dialog derived from a read-only
-    /// local source. It raises a display-only waiting card while the native
-    /// pane remains the answer surface.
-    pub native_permission_wait: Option<Timestamp>,
-    /// Timestamp of an interrupted turn read from the rollout tail
-    /// (`turn_aborted`), set when the session is at rest after an abort that
-    /// fired no `Stop` hook (Codex `/clear` mid-turn or Esc). The projection
-    /// reads it to settle a falsely-`running` row to `idle`.
-    pub turn_interrupted: Option<Timestamp>,
+    /// Explicit field and token merge policy owned by the adapter.
+    pub context: LocalContextPatch,
+    /// Latest local source. `None` means the prior source disappeared.
     pub transcript_path: Option<String>,
     pub transcript_stat: Option<TranscriptStat>,
-    pub spend_fold: Option<LocalSpendFold>,
+    /// Resumable pricing state is sparse: an absent new fold preserves the old one.
+    pub spend_fold: FieldPatch<LocalSpendFold>,
+}
+
+impl LocalContextRefresh {
+    /// Sparse enrichment updates only fields explicitly set by its producer.
+    pub fn sparse() -> Self {
+        Self::default()
+    }
+
+    /// A current local snapshot owns the four latest-turn attention markers.
+    pub fn authoritative_current() -> Self {
+        Self {
+            context: LocalContextPatch::authoritative_current(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Lifecycle fields projected by a provider-owned local session store.

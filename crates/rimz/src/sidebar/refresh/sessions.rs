@@ -213,7 +213,7 @@ fn refresh_session_transcript_context_core(
     }
     crate::store::agent_context::merge_local_context(
         runtime,
-        kind,
+        adapter.descriptor(),
         session_id,
         refresh,
         Timestamp::now(),
@@ -243,7 +243,7 @@ fn confirm_codex_turn_death_from_snapshot(
     session_id: &str,
     refresh: &mut LocalContextRefresh,
 ) {
-    let Some(error) = refresh.turn_error.as_mut() else {
+    let crate::agents::FieldPatch::Set(error) = &mut refresh.context.turn_error else {
         return;
     };
     if kind != "codex" || !crate::agents::codex::turn_death_needs_pane_confirmation(error) {

@@ -23,8 +23,8 @@ use crate::agents::context::{
 };
 use crate::agents::pricing;
 use crate::agents::{
-    LocalContextRefresh, LocalSpendFold, ProviderCapacity, SessionOrigin, TranscriptStat,
-    optional_payload_string, read_transcript_tail,
+    FieldPatch, LocalContextPatch, LocalContextRefresh, LocalSpendFold, LocalTokenPatch,
+    ProviderCapacity, SessionOrigin, TranscriptStat, optional_payload_string, read_transcript_tail,
 };
 
 const MAX_ROLLOUT_HEADER_BYTES: u64 = 1024 * 1024;
@@ -178,18 +178,20 @@ pub fn refresh_transcript_context(
         ..AgentCost::default()
     });
     Some(LocalContextRefresh {
-        model_id,
-        effort: usage.effort,
-        tokens,
-        cost,
-        turn_error,
-        turn_complete,
-        plan_proposed,
-        turn_interrupted,
+        context: LocalContextPatch {
+            model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
+            effort: usage.effort.map_or(FieldPatch::Keep, FieldPatch::Set),
+            tokens: LocalTokenPatch::PreserveEstablished(tokens),
+            cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
+            turn_error: turn_error.map_or(FieldPatch::Clear, FieldPatch::Set),
+            turn_complete: turn_complete.map_or(FieldPatch::Clear, FieldPatch::Set),
+            plan_proposed: plan_proposed.map_or(FieldPatch::Clear, FieldPatch::Set),
+            turn_interrupted: turn_interrupted.map_or(FieldPatch::Clear, FieldPatch::Set),
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
-        spend_fold: Some(spend_fold),
-        ..LocalContextRefresh::default()
+        spend_fold: FieldPatch::Set(spend_fold),
     })
 }
 

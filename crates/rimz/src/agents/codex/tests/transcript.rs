@@ -554,11 +554,14 @@ fn transcript_refresh_stamps_plan_marker_instead_of_completion() {
     )
     .expect("transcript refresh");
     assert_eq!(
-        refresh.plan_proposed,
-        Some("2026-07-13T10:00:02Z".parse().unwrap())
+        refresh.context.plan_proposed,
+        crate::agents::FieldPatch::Set("2026-07-13T10:00:02Z".parse().unwrap())
     );
-    assert_eq!(refresh.turn_complete, None);
-    assert_eq!(refresh.turn_error, None);
+    assert_eq!(
+        refresh.context.turn_complete,
+        crate::agents::FieldPatch::Clear
+    );
+    assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
 }
 
 #[test]
@@ -633,15 +636,18 @@ fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
     )
     .expect("changed transcript refreshes");
     assert_eq!(
-        refresh.turn_interrupted,
-        Some(
+        refresh.context.turn_interrupted,
+        crate::agents::FieldPatch::Set(
             "2026-07-07T14:12:00.000Z"
                 .parse::<jiff::Timestamp>()
                 .unwrap()
         )
     );
-    assert_eq!(refresh.turn_error, None);
-    assert_eq!(refresh.turn_complete, None);
+    assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
+    assert_eq!(
+        refresh.context.turn_complete,
+        crate::agents::FieldPatch::Clear
+    );
 }
 
 #[test]
@@ -675,7 +681,11 @@ fn messageless_task_complete_refreshes_as_overload_death() {
             &pricing_cache_path,
         )
         .expect("changed transcript refreshes");
-        let error = refresh.turn_error.expect("shape death is stamped");
+        let error = refresh
+            .context
+            .turn_error
+            .into_set()
+            .expect("shape death is stamped");
         assert_eq!(error.class, crate::agents::TurnErrorClass::Unknown);
         assert_eq!(
             error.at,
@@ -687,7 +697,10 @@ fn messageless_task_complete_refreshes_as_overload_death() {
             error.label.as_deref(),
             Some("turn ended with no final message")
         );
-        assert_eq!(refresh.turn_complete, None);
+        assert_eq!(
+            refresh.context.turn_complete,
+            crate::agents::FieldPatch::Clear
+        );
     }
 }
 
@@ -716,8 +729,11 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         &pricing_cache_path,
     )
     .expect("changed transcript refreshes");
-    assert_eq!(refresh.turn_error, None);
-    assert_eq!(refresh.turn_complete, None);
+    assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
+    assert_eq!(
+        refresh.context.turn_complete,
+        crate::agents::FieldPatch::Clear
+    );
 
     let path = dir.path().join("rollout-error.jsonl");
     let real_error = json!({
@@ -738,13 +754,20 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         &pricing_cache_path,
     )
     .expect("changed transcript refreshes");
-    let error = refresh.turn_error.expect("real error wins");
+    let error = refresh
+        .context
+        .turn_error
+        .into_set()
+        .expect("real error wins");
     assert_eq!(
         error.label.as_deref(),
         Some("Server is busy. Try again later.")
     );
     assert_eq!(error.class, crate::agents::TurnErrorClass::PausedOverloaded);
-    assert_eq!(refresh.turn_complete, None);
+    assert_eq!(
+        refresh.context.turn_complete,
+        crate::agents::FieldPatch::Clear
+    );
 }
 
 #[test]
@@ -1029,12 +1052,16 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         &pricing_cache_path,
     )
     .expect("changed stat refreshes");
-    assert_eq!(refresh.effort.as_deref(), Some("xhigh"));
+    assert_eq!(
+        refresh.context.effort.as_set().map(String::as_str),
+        Some("xhigh")
+    );
     // The refresh carries the derivation inputs (window + current usage), not a
     // baked percentage — the gauge derives 50% (50 of 100) downstream.
     let tokens = refresh
+        .context
         .tokens
-        .as_ref()
+        .as_value()
         .expect("changed stat refreshes tokens");
     assert_eq!(tokens.context_window_size, Some(100));
     assert_eq!(
@@ -1078,7 +1105,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         &pricing_cache_path,
     )
     .expect("missing stat refreshes");
-    assert_eq!(refresh.effort, None);
+    assert_eq!(refresh.context.effort, crate::agents::FieldPatch::Keep);
 }
 
 #[test]
@@ -1112,9 +1139,17 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
     )
     .expect("changed transcript refreshes");
 
-    assert_eq!(refresh.model_id.as_deref(), Some("gpt-9.9-nova"));
+    assert_eq!(
+        refresh.context.model_id.as_set().map(String::as_str),
+        Some("gpt-9.9-nova")
+    );
     assert!(
-        refresh.cost.and_then(|cost| cost.total_cost_usd).is_some(),
+        refresh
+            .context
+            .cost
+            .into_set()
+            .and_then(|cost| cost.total_cost_usd)
+            .is_some(),
         "a shared-cache-only model prices the card"
     );
 }
@@ -1146,14 +1181,20 @@ fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
         &pricing_cache_path,
     )
     .expect("changed transcript refreshes");
-    let actual = refresh.cost.unwrap().total_cost_usd.unwrap();
+    let actual = refresh
+        .context
+        .cost
+        .as_set()
+        .unwrap()
+        .total_cost_usd
+        .unwrap();
     let price = PriceBook::embedded().price("gpt-5.6-sol").unwrap();
     let per_request = price.cost(50_000, 1_000, 0, 0, 150_000, false);
     let old_cumulative = price.cost(100_000, 2_000, 0, 0, 300_000, false);
 
     assert!((actual - per_request * 2.0).abs() < 1e-12);
     assert!(actual < old_cumulative);
-    assert_eq!(refresh.spend_fold.unwrap().total_usd, actual);
+    assert_eq!(refresh.spend_fold.into_set().unwrap().total_usd, actual);
 }
 
 #[test]

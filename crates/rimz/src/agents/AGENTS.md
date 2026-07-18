@@ -24,6 +24,7 @@ Provider modules own native protocol and process interpretation. Generic hook in
 - **Read upstream JSONC without rewriting it.** Read-only probes of user-editable upstream JSON files parse through [`jsonc.rs`](./jsonc.rs); install flows that rewrite a file keep strict parsing so comments are never silently discarded.
 
 - **Adapters never touch the store.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) calls the adapter for classification, neutral rendering, and normalized run output, then submits lifecycle write intent to Store.
+- **Local context policy stays in adapters.** Local refreshes emit explicit `FieldPatch` and `LocalTokenPatch` operations; Store applies them under the record lock without branching on provider kind.
 - **Emit only the normalized outputs generic flows consume** — lifecycle observations, blocking-ask classifications, hook ingress ownership, interactive process identity, and supervised-run final messages. Keep provider-only capabilities in deep provider modules until a second generic consumer proves an adapter seam.
 
 ## Hook discipline

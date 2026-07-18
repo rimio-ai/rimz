@@ -21,9 +21,9 @@ use super::hook_types::{HookRecord, hook_record};
 use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
     AgentAdapter, AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError,
-    ClassifiedHook, LocalContextRefresh, LocalContextRefreshCtx, ManagedSource, RefreshTrigger,
-    Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition, TurnErrorClass,
-    non_empty_trimmed, sanitize_user_prompt,
+    ClassifiedHook, FieldPatch, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
+    LocalTokenPatch, ManagedSource, RefreshTrigger, Result, SessionOrigin, TranscriptMessage,
+    TranscriptPage, TranscriptPosition, TurnErrorClass, non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -599,16 +599,29 @@ pub(crate) fn refresh_resolved_context(
         .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
     let cost = spend::cost_from_folded(path, &folded, ctx.agent_id);
     Some(LocalContextRefresh {
-        session_preview: summary.as_ref().and_then(transcript::Summary::title),
-        model_display_name: model_id.as_deref().map(super::model_display::display_model),
-        model_id,
-        effort: summary.and_then(|value| value.reasoning_effort),
-        tokens,
-        cost,
-        native_permission_wait: events.and_then(transcript::native_permission_wait),
+        context: LocalContextPatch {
+            session_preview: summary
+                .as_ref()
+                .and_then(transcript::Summary::title)
+                .map_or(FieldPatch::Keep, FieldPatch::Set),
+            model_display_name: model_id
+                .as_deref()
+                .map(super::model_display::display_model)
+                .map_or(FieldPatch::Keep, FieldPatch::Set),
+            model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
+            effort: summary
+                .and_then(|value| value.reasoning_effort)
+                .map_or(FieldPatch::Keep, FieldPatch::Set),
+            tokens: LocalTokenPatch::PreserveEstablished(tokens),
+            cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
+            native_permission_wait: events
+                .and_then(transcript::native_permission_wait)
+                .map_or(FieldPatch::Clear, FieldPatch::Set),
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
-        ..LocalContextRefresh::default()
+        ..LocalContextRefresh::authoritative_current()
     })
 }
 

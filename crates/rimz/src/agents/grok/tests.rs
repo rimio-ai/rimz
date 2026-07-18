@@ -273,7 +273,10 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
         shared_pricing_cache_path: &pricing,
     };
     let initial = refresh_resolved_context(&updates, Some(&events), &ctx).unwrap();
-    assert!(initial.native_permission_wait.is_none());
+    assert_eq!(
+        initial.context.native_permission_wait,
+        crate::agents::FieldPatch::Clear
+    );
 
     let requested_at = "2026-07-18T04:21:46.248Z";
     std::fs::write(
@@ -292,7 +295,10 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
         ..ctx
     };
     let requested = refresh_resolved_context(&updates, Some(&events), &requested_ctx).unwrap();
-    assert_eq!(requested.native_permission_wait, requested_at.parse().ok());
+    assert_eq!(
+        requested.context.native_permission_wait.as_set().copied(),
+        requested_at.parse().ok()
+    );
 
     let unchanged_ctx = LocalContextRefreshCtx {
         prior_transcript_stat: requested.transcript_stat.as_ref(),
@@ -320,7 +326,10 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     )
     .unwrap();
     let resolved = refresh_resolved_context(&updates, Some(&events), &unchanged_ctx).unwrap();
-    assert!(resolved.native_permission_wait.is_none());
+    assert_eq!(
+        resolved.context.native_permission_wait,
+        crate::agents::FieldPatch::Clear
+    );
     assert!(
         GrokAdapter
             .observe_lifecycle(

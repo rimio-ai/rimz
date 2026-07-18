@@ -13,7 +13,9 @@ use serde::Deserialize;
 use crate::agents::context::{AgentTurnError, TurnErrorClass};
 use crate::agents::local_session_cache::StampedPaths;
 use crate::agents::transcript_fs::deserialize_optional_string_lossy;
-use crate::agents::{LocalContextRefresh, LocalContextRefreshCtx, TranscriptStat};
+use crate::agents::{
+    FieldPatch, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, TranscriptStat,
+};
 
 #[derive(Debug, Deserialize)]
 struct TerminalRecord {
@@ -51,13 +53,25 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     }
     let markers = turn_markers_at(&path, stat)?;
     Some(LocalContextRefresh {
-        model_id: ctx.model_hint.map(ToOwned::to_owned),
-        turn_error: markers.turn_error,
-        turn_complete: markers.turn_complete,
-        turn_interrupted: markers.turn_interrupted,
+        context: LocalContextPatch {
+            model_id: ctx
+                .model_hint
+                .map(ToOwned::to_owned)
+                .map_or(FieldPatch::Keep, FieldPatch::Set),
+            turn_error: markers
+                .turn_error
+                .map_or(FieldPatch::Clear, FieldPatch::Set),
+            turn_complete: markers
+                .turn_complete
+                .map_or(FieldPatch::Clear, FieldPatch::Set),
+            turn_interrupted: markers
+                .turn_interrupted
+                .map_or(FieldPatch::Clear, FieldPatch::Set),
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
-        ..LocalContextRefresh::default()
+        ..LocalContextRefresh::authoritative_current()
     })
 }
 

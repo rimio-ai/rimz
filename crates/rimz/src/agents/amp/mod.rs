@@ -26,8 +26,9 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentCost, AgentCurrentUsage, AgentErr, AgentLifecycleObservation,
-    AgentTokenUsage, AskKind, ClassifiedHook, LocalContextRefresh, LocalContextRefreshCtx,
-    RefreshTrigger, Result, SessionOrigin, TranscriptStat, non_empty_trimmed, sanitize_user_prompt,
+    AgentTokenUsage, AskKind, ClassifiedHook, FieldPatch, LocalContextPatch, LocalContextRefresh,
+    LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result, SessionOrigin, TranscriptStat,
+    non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -360,15 +361,20 @@ impl AgentAdapter for AmpAdapter {
         let (entries, _) = spend::entries_from_thread(&parsed, &prices);
         let cost_usd = entries.iter().map(|entry| entry.cost_usd).sum::<f64>();
         Some(LocalContextRefresh {
-            model_id,
-            tokens,
-            cost: (cost_usd > 0.0).then_some(AgentCost {
-                total_cost_usd: Some(cost_usd),
-                ..AgentCost::default()
-            }),
+            context: LocalContextPatch {
+                model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
+                tokens: LocalTokenPatch::PreserveEstablished(tokens),
+                cost: (cost_usd > 0.0)
+                    .then(|| AgentCost {
+                        total_cost_usd: Some(cost_usd),
+                        ..AgentCost::default()
+                    })
+                    .map_or(FieldPatch::Keep, FieldPatch::Set),
+                ..LocalContextPatch::authoritative_current()
+            },
             transcript_path: Some(path.to_string_lossy().into_owned()),
             transcript_stat: Some(stat),
-            ..LocalContextRefresh::default()
+            ..LocalContextRefresh::authoritative_current()
         })
     }
 

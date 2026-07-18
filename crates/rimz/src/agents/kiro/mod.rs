@@ -21,8 +21,8 @@ use super::descriptor::{
 };
 use super::{
     AgentAdapter, AgentErr, AgentHookClass, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx, LocalSessionObservation,
-    RefreshTrigger, Result, TranscriptMessage, TranscriptStat,
+    HookUninstallReport, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
+    LocalSessionObservation, RefreshTrigger, Result, TranscriptMessage, TranscriptStat,
 };
 
 const HOOK_INSTALL_UNAVAILABLE: &str = "the v3 engine does not execute standalone hook configs (verified against Kiro CLI 2.12.1); re-enable after a pinned v3 release provides a reproducible native hook contract";
@@ -254,9 +254,10 @@ impl AgentAdapter for KiroAdapter {
             return None;
         }
         Some(LocalContextRefresh {
+            context: LocalContextPatch::authoritative_current(),
             transcript_path: Some(path.to_string_lossy().into_owned()),
             transcript_stat: Some(stat),
-            ..LocalContextRefresh::default()
+            ..LocalContextRefresh::authoritative_current()
         })
     }
 

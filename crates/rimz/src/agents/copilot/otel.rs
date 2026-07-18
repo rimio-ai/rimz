@@ -7,8 +7,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::super::{
-    AgentCurrentUsage, AgentTokenUsage, LocalContextRefresh, LocalContextRefreshCtx,
-    TranscriptStat, read_transcript_tail,
+    AgentCurrentUsage, AgentTokenUsage, FieldPatch, LocalContextPatch, LocalContextRefresh,
+    LocalContextRefreshCtx, LocalTokenPatch, TranscriptStat, read_transcript_tail,
 };
 use super::paths;
 
@@ -54,20 +54,25 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         return None;
     }
     let usage = latest_chat_usage(&read_transcript_tail(&path)?, ctx.agent_id);
+    let model_id = usage
+        .as_ref()
+        .and_then(|usage| usage.model_id.clone())
+        .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
+    let tokens = usage
+        .and_then(|usage| usage.current_usage)
+        .map(|current_usage| AgentTokenUsage {
+            current_usage: Some(current_usage),
+            ..AgentTokenUsage::default()
+        });
     Some(LocalContextRefresh {
-        model_id: usage
-            .as_ref()
-            .and_then(|usage| usage.model_id.clone())
-            .or_else(|| ctx.model_hint.map(ToOwned::to_owned)),
-        tokens: usage
-            .and_then(|usage| usage.current_usage)
-            .map(|current_usage| AgentTokenUsage {
-                current_usage: Some(current_usage),
-                ..AgentTokenUsage::default()
-            }),
+        context: LocalContextPatch {
+            model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
+            tokens: LocalTokenPatch::PreserveEstablished(tokens),
+            ..LocalContextPatch::authoritative_current()
+        },
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
-        ..LocalContextRefresh::default()
+        ..LocalContextRefresh::authoritative_current()
     })
 }
 
@@ -289,7 +294,10 @@ mod tests {
             shared_pricing_cache_path: &pricing,
         })
         .unwrap();
-        assert_eq!(first.model_id.as_deref(), Some("gpt-5-mini"));
+        assert_eq!(
+            first.context.model_id.as_set().map(String::as_str),
+            Some("gpt-5-mini")
+        );
         let stat = first.transcript_stat.unwrap();
         assert!(
             refresh(&LocalContextRefreshCtx {
@@ -320,7 +328,10 @@ mod tests {
             shared_pricing_cache_path: &pricing,
         })
         .unwrap();
-        assert_eq!(next.model_id.as_deref(), Some("next-model"));
+        assert_eq!(
+            next.context.model_id.as_set().map(String::as_str),
+            Some("next-model")
+        );
         assert_ne!(next.transcript_stat, Some(stat));
     }
 
@@ -341,7 +352,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(anchored.transcript_path.as_deref(), path.to_str());
-        assert!(anchored.tokens.is_none());
+        assert!(anchored.context.tokens.as_value().is_none());
 
         let mut file = std::fs::OpenOptions::new()
             .append(true)
@@ -362,7 +373,10 @@ mod tests {
             shared_pricing_cache_path: &pricing,
         })
         .unwrap();
-        assert_eq!(refreshed.model_id.as_deref(), Some("gpt-a-new"));
-        assert!(refreshed.tokens.is_some());
+        assert_eq!(
+            refreshed.context.model_id.as_set().map(String::as_str),
+            Some("gpt-a-new")
+        );
+        assert!(refreshed.context.tokens.as_value().is_some());
     }
 }
