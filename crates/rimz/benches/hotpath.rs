@@ -209,8 +209,7 @@ fn consumer_adopt_fixture(warm_parse: bool) -> ConsumerAdoptFixture {
             fresh_roots: None,
             config: None,
             lanes: None,
-            local_sessions: Vec::new(),
-            wiring: Default::default(),
+            agent_projection: Default::default(),
         },
         &rimz::diag::DiagSink::disabled(),
     );
@@ -583,8 +582,7 @@ fn enrich_cached(bencher: Bencher) {
                     fresh_roots: None,
                     config: None,
                     lanes: None,
-                    local_sessions: Vec::new(),
-                    wiring: Default::default(),
+                    agent_projection: Default::default(),
                 },
                 &rimz::diag::DiagSink::disabled(),
             ));
