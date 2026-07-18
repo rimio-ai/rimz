@@ -380,6 +380,7 @@ fn tail_projection(path: &Path) -> TailProjection {
             .flatten();
         }
         if !found_assistant_identity
+            && record.record_type.as_deref() == Some("message")
             && role == Some(TranscriptRole::Assistant)
             && let Some(message) = record.message
         {

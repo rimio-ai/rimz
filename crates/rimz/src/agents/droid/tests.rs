@@ -258,6 +258,14 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
     );
 
     std::fs::remove_file(path.with_file_name("session.settings.json")).unwrap();
+    let transcript = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{transcript}{{\"type\":\"status\",\"message\":{{\"role\":\"assistant\",\"modelId\":\"bogus\",\"reasoningEffort\":\"low\"}}}}\n"
+        ),
+    )
+    .unwrap();
     let fallback = DroidAdapter
         .observe_lifecycle(
             "Stop",
