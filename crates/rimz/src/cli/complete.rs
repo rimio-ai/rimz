@@ -31,8 +31,11 @@ fn room_context_from(
     runtime: RuntimePaths,
 ) -> Option<RoomContext> {
     let store = Store::open_existing(paths, runtime.clone())?;
-    let mut snapshot = store.snapshot_cached().ok()?;
-    super::apply_cached_daemon_reap(&mut snapshot, &runtime, &workspace.session_name);
+    let snapshot = rimz::sidebar::consumer::reap_cached_daemon_sessions(
+        store.snapshot_cached().ok()?,
+        &runtime,
+        &workspace.session_name,
+    );
     Some(RoomContext {
         workspace,
         store,

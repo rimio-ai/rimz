@@ -668,34 +668,10 @@ pub(crate) fn alive_snapshot(
     runtime: &RuntimePaths,
     session: &str,
 ) -> Result<rimz::SidebarSnapshot> {
-    let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    apply_cached_daemon_reap(&mut snapshot, runtime, session);
-    if let Some(frame) =
-        rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
-    {
-        let panes = rimz::SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
-        let inputs = rimz::sidebar::local_sessions::LocalSessionInputs::from_panes(&panes);
-        let observations = rimz::sidebar::local_sessions::read_published(runtime, session, &inputs);
-        snapshot = snapshot.with_local_sessions(&panes, observations);
-    }
-    Ok(snapshot)
-}
-
-pub(crate) fn apply_cached_daemon_reap(
-    snapshot: &mut rimz::SidebarSnapshot,
-    runtime: &RuntimePaths,
-    session: &str,
-) {
-    let cache = rimz::sidebar::refresh::read_codex_daemon_reap(runtime).unwrap_or_default();
-    let frame_panes =
-        rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
-            .map(|frame| frame.to_pane_refs());
-    snapshot.reap_runtime(rimz::store::snapshot::RuntimeReapInputs {
-        daemon_pids: &cache.daemon_pids,
-        loaded: cache.loaded.as_ref(),
-        frame_panes: frame_panes.as_deref(),
-        exclude_pane: None,
-    });
+    let base = store.snapshot_cached().context("reading agent snapshot")?;
+    Ok(rimz::sidebar::consumer::cached_alive_snapshot(
+        base, runtime, session,
+    ))
 }
 
 #[cfg(test)]
@@ -730,58 +706,6 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             mux_hint: None,
         }
-    }
-
-    fn test_agent(
-        id: &str,
-        worktree_path: &str,
-        last_seen: jiff::Timestamp,
-    ) -> rimz::agents::AgentState {
-        rimz::agents::AgentState {
-            name: Some(id.to_owned()),
-            status: rimz::agents::AgentStatus::Success,
-            worktree_path: Some(worktree_path.to_owned()),
-            ..rimz::testkit::agent_state("codex", id, last_seen)
-        }
-    }
-
-    #[test]
-    fn cached_daemon_reap_drops_paneless_codex_ghost_before_worktree_pins() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace_id = rimz::ids::WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let daemon_pid = std::process::id();
-        rimz::sidebar::refresh::write_codex_daemon_reap(
-            &runtime,
-            &rimz::sidebar::refresh::CodexDaemonReap {
-                produced_at_ms: 1,
-                daemon_pids: std::collections::BTreeSet::from([daemon_pid]),
-                loaded: Some(std::collections::BTreeSet::new()),
-            },
-        )
-        .unwrap();
-
-        let worktree_path = "/repo-worktrees/ghost";
-        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-        let mut ghost = test_agent("ghost", worktree_path, now);
-        ghost.runtime_owner = Some(rimz::store::runtime::current_process_owner(
-            rimz::RuntimeOwnerKind::Daemon,
-            "ghost",
-        ));
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(workspace_id, vec![ghost], now);
-        assert!(
-            rimz::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
-                .protects(std::path::Path::new(worktree_path))
-        );
-
-        apply_cached_daemon_reap(&mut snapshot, &runtime, "rimz-test");
-
-        assert!(snapshot.agents.is_empty());
-        assert!(
-            !rimz::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
-                .protects(std::path::Path::new(worktree_path))
-        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::store::atomic;
 use crate::{RuntimePaths, SidebarSnapshot, SidebarWorktreeKind, StatePaths};
 use jiff::Timestamp;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn cached_opts() -> FoldOpts<'static> {
@@ -97,6 +98,164 @@ fn write_stamp_file(path: &Path, value: &str) {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(path, format!("{value}-baseline")).unwrap();
+}
+
+fn daemon_codex(
+    id: &str,
+    worktree: &Path,
+    pane: Option<crate::pane::PaneRef>,
+    owner_pid: u32,
+) -> crate::agents::AgentState {
+    let mut agent = crate::testkit::agent_state("codex", id, Timestamp::now());
+    agent.name = Some(id.to_owned());
+    agent.status = crate::agents::AgentStatus::Success;
+    agent.worktree_path = Some(worktree.to_string_lossy().into_owned());
+    agent.pane = pane;
+    agent.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Daemon,
+        id,
+        owner_pid,
+        None,
+    ));
+    agent
+}
+
+fn local_observation(
+    session: &str,
+    workspace: &Path,
+    now: Timestamp,
+) -> crate::agents::LocalSessionObservation {
+    crate::agents::LocalSessionObservation {
+        kind: crate::ids::AgentKind::new_unchecked("kiro"),
+        session_id: crate::ids::AgentSessionId::from(session),
+        workspace: workspace.to_path_buf(),
+        transcript_path: workspace.join(format!("{session}.json")),
+        created_at: now,
+        fresh_binding_at: Some(now),
+        first_event_at: Some(now),
+        last_activity: now,
+        projection: crate::agents::LocalSessionProjection::IdentityOnly,
+    }
+}
+
+#[test]
+fn cached_alive_snapshot_binds_safe_local_session_intersection() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let live_worktree = dir.path().join("live");
+    let removed_worktree = dir.path().join("removed");
+    std::fs::create_dir_all(&live_worktree).unwrap();
+    std::fs::create_dir_all(&removed_worktree).unwrap();
+    let live_pane = pane(
+        "terminal_kiro",
+        "kiro-cli",
+        &live_worktree.to_string_lossy(),
+    );
+    let removed_pane = pane(
+        "terminal_removed",
+        "kiro-cli",
+        &removed_worktree.to_string_lossy(),
+    );
+    let frame = assemble_frame(vec![live_pane.clone()], unix_now_ms(), "rimz-test");
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+    let published_inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&[
+        live_pane.clone(),
+        removed_pane,
+    ]);
+    let now = Timestamp::now();
+    let live_observation = local_observation("kiro-live", &live_worktree, now);
+    let removed_observation = local_observation("kiro-removed", &removed_worktree, now);
+    atomic::write_temp_then_rename_cache(
+        &runtime.local_sessions_path(),
+        &crate::sidebar::local_sessions::PublishedLocalSessions {
+            session_name: "rimz-test".to_owned(),
+            inputs: published_inputs,
+            observations: vec![live_observation.clone(), removed_observation.clone()],
+        },
+    )
+    .unwrap();
+    let mut durable = root_agent("kiro", "durable", None);
+    durable.worktree_path = Some(live_worktree.to_string_lossy().into_owned());
+    durable.pane = Some(live_pane);
+    let base = SidebarSnapshot::build_with_agents(workspace, vec![durable], now);
+
+    let snapshot = cached_alive_snapshot(base, &runtime, "rimz-test");
+
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == live_observation.session_id),
+    );
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != removed_observation.session_id),
+        "published observations bind only through current card-admitted panes",
+    );
+}
+
+#[test]
+fn cached_daemon_reap_drops_paneless_codex_ghost_before_worktree_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let owner_pid = std::process::id();
+    crate::sidebar::refresh::write_codex_daemon_reap(
+        &runtime,
+        &crate::sidebar::refresh::CodexDaemonReap {
+            produced_at_ms: 1,
+            daemon_pids: BTreeSet::from([owner_pid]),
+            loaded: Some(BTreeSet::new()),
+        },
+    )
+    .unwrap();
+    let worktree = dir.path().join("ghost");
+    let ghost = daemon_codex("ghost", &worktree, None, owner_pid);
+    let snapshot = SidebarSnapshot::build_with_agents(workspace, vec![ghost], Timestamp::now());
+    assert!(
+        crate::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
+            .protects(&worktree),
+    );
+
+    let snapshot = reap_cached_daemon_sessions(snapshot, &runtime, "rimz-test");
+
+    assert!(snapshot.agents.is_empty());
+    assert!(
+        !crate::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
+            .protects(&worktree),
+    );
+}
+
+#[test]
+fn cached_daemon_reap_forwards_published_live_panes() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
+    let pane = crate::pane::PaneRef::from_id(pane_id.clone());
+    let codex = daemon_codex("live-pane", dir.path(), Some(pane.clone()), 77);
+    crate::sidebar::refresh::write_codex_daemon_reap(
+        &runtime,
+        &crate::sidebar::refresh::CodexDaemonReap {
+            produced_at_ms: 1,
+            daemon_pids: BTreeSet::from([77]),
+            loaded: Some(BTreeSet::new()),
+        },
+    )
+    .unwrap();
+    let frame = assemble_frame(vec![pane], 1, "rimz-test");
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+    let snapshot = SidebarSnapshot::build_with_agents(workspace, vec![codex], Timestamp::now());
+
+    let snapshot = reap_cached_daemon_sessions(snapshot, &runtime, "rimz-test");
+
+    assert_eq!(snapshot.agents[0].agent_id.as_str(), "live-pane");
 }
 
 #[test]

@@ -11,9 +11,7 @@ use rimz::forge::Forge;
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
-use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
-use rimz::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
-use rimz::sidebar::refresh::CodexDaemonReap;
+use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -870,50 +868,6 @@ mod runs {
 
 mod render {
     use super::*;
-
-    #[test]
-    fn cached_daemon_reap_forwards_published_live_panes() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let runtime = rimz::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
-        let mut codex = agent_with_status(
-            "live-pane",
-            AgentStatus::Running,
-            TurnPhase::Reasoning,
-            1_000,
-        );
-        codex.kind = AgentKind::new_unchecked("codex");
-        codex.pane = Some(PaneRef::from_id(pane_id.clone()));
-        codex.runtime_owner = Some(RuntimeOwner::new(
-            RuntimeOwnerKind::Daemon,
-            "live-pane",
-            77,
-            None,
-        ));
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
-            workspace_id,
-            vec![codex],
-            Timestamp::from_second(1_020).unwrap(),
-        );
-        rimz::sidebar::refresh::write_codex_daemon_reap(
-            &runtime,
-            &CodexDaemonReap {
-                produced_at_ms: 1,
-                daemon_pids: BTreeSet::from([77]),
-                loaded: Some(BTreeSet::new()),
-            },
-        )
-        .unwrap();
-        let frame =
-            rimz::sidebar::frame::assemble_frame(vec![PaneRef::from_id(pane_id)], 1, "rimz-test");
-        rimz::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
-            .unwrap();
-
-        crate::cli::apply_cached_daemon_reap(&mut snapshot, &runtime, "rimz-test");
-        assert_eq!(snapshot.agents[0].agent_id.as_str(), "live-pane");
-    }
 
     #[test]
     fn agents_table_projects_public_row_contract() {

@@ -128,9 +128,7 @@ pub fn read_published_snapshot(
     let local_sessions = cache
         .as_deref()
         .map(|frame| {
-            let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude);
-            let inputs = super::local_sessions::LocalSessionInputs::from_panes(&panes);
-            super::local_sessions::read_published(runtime, session, &inputs)
+            read_published_local_sessions(frame.to_pane_refs(), runtime, session, exclude).1
         })
         .unwrap_or_default();
     Ok(enrich(
@@ -148,6 +146,64 @@ pub fn read_published_snapshot(
         },
         &crate::diag::DiagSink::disabled(),
     ))
+}
+
+/// Apply cheap producer-published liveness to a cached store rollup.
+pub fn cached_alive_snapshot(
+    mut base: SidebarSnapshot,
+    runtime: &RuntimePaths,
+    session: &str,
+) -> SidebarSnapshot {
+    let frame_panes =
+        read_snapshot_cache(&runtime.pane_frame_path(), session).map(|frame| frame.to_pane_refs());
+    reap_cached_daemon_sessions_with(&mut base, runtime, frame_panes.as_deref());
+    if let Some(frame_panes) = frame_panes {
+        let (panes, observations) =
+            read_published_local_sessions(frame_panes, runtime, session, None);
+        base = base.with_local_sessions(&panes, observations);
+    }
+    base
+}
+
+/// Apply cached daemon-session reap without local-session enrichment.
+pub fn reap_cached_daemon_sessions(
+    mut snapshot: SidebarSnapshot,
+    runtime: &RuntimePaths,
+    session: &str,
+) -> SidebarSnapshot {
+    let frame_panes =
+        read_snapshot_cache(&runtime.pane_frame_path(), session).map(|frame| frame.to_pane_refs());
+    reap_cached_daemon_sessions_with(&mut snapshot, runtime, frame_panes.as_deref());
+    snapshot
+}
+
+fn reap_cached_daemon_sessions_with(
+    snapshot: &mut SidebarSnapshot,
+    runtime: &RuntimePaths,
+    frame_panes: Option<&[crate::pane::PaneRef]>,
+) {
+    let cache = super::refresh::read_codex_daemon_reap(runtime).unwrap_or_default();
+    snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
+        daemon_pids: &cache.daemon_pids,
+        loaded: cache.loaded.as_ref(),
+        frame_panes,
+        exclude_pane: None,
+    });
+}
+
+fn read_published_local_sessions(
+    frame_panes: Vec<crate::pane::PaneRef>,
+    runtime: &RuntimePaths,
+    session: &str,
+    exclude: Option<&PaneId>,
+) -> (
+    Vec<crate::pane::PaneRef>,
+    Vec<crate::agents::LocalSessionObservation>,
+) {
+    let panes = SidebarSnapshot::card_admitted_live_panes(frame_panes, exclude);
+    let inputs = super::local_sessions::LocalSessionInputs::from_panes(&panes);
+    let observations = super::local_sessions::read_published(runtime, session, &inputs);
+    (panes, observations)
 }
 
 /// Cheap identity of the files a consumer fold reads. A matching stamp lets a
