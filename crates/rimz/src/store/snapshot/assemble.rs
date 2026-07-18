@@ -155,10 +155,6 @@ pub(crate) fn display_name_for(paths: &StatePaths) -> String {
         Err(WorkspaceRecordErr::Io { source, .. })
             if source.kind() == std::io::ErrorKind::NotFound =>
         {
-            tracing::debug!(
-                path = %paths.workspace_record.display(),
-                "workspace record is not present while resolving the display name",
-            );
             return paths.workspace_id.as_str().to_owned();
         }
         Err(err) => {
