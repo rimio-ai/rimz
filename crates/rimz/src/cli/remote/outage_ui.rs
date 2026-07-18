@@ -712,6 +712,12 @@ mod tests {
             frame.phase = phase;
             assert_eq!(spinner_count(&display_rows(&frame, 0)), 1);
         }
+        frame.phase = FooterPhase::NextAttemptIn(Duration::from_secs(2));
+        frame.last_error = None;
+        assert_eq!(
+            display_rows(&frame, 0)[5].text,
+            "⠋  SSH session  retry in 2s"
+        );
     }
 
     #[test]
