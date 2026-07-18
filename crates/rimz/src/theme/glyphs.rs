@@ -161,8 +161,10 @@ impl GlyphSet {
         let mut glyphs = GLYPH_CATALOG
             .iter()
             .map(|row| match kind {
-                GlyphSetKind::Unicode => Cow::Borrowed(row.unicode),
-                GlyphSetKind::NerdFont => Cow::Borrowed(row.nerd_font.unwrap_or(row.unicode)),
+                GlyphSetKind::Unicode => Cow::Borrowed(unicode_glyph(row.role)),
+                GlyphSetKind::NerdFont => Cow::Borrowed(
+                    nerd_font_glyph(row.role).unwrap_or_else(|| unicode_glyph(row.role)),
+                ),
             })
             .collect::<Vec<_>>();
 
