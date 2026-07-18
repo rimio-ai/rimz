@@ -2,12 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
-
 use super::{QWEN_HOOK_TIMEOUT_MS, QWEN_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, STATUS_LINE};
 use crate::agents::managed_json_hooks::{ManagedJsonHookSpec, SyncEncoding};
 use crate::agents::managed_source::ManagedSource;
-use crate::agents::managed_statusline;
 use crate::agents::{Result, agent_config_path};
 
 static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
@@ -38,12 +35,4 @@ pub(super) fn qwen_settings_path() -> Result<PathBuf> {
         "RIMZ_QWEN_SETTINGS",
         Path::new(".qwen/settings.json"),
     )
-}
-
-pub(super) fn read_existing_json(path: &Path) -> Result<Map<String, Value>> {
-    SPEC.read_json(path)
-}
-
-pub(super) fn wrapped_status_line_command_from(root: &Map<String, Value>) -> Option<String> {
-    managed_statusline::wrapped_command(root, &STATUS_LINE)
 }

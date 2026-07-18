@@ -42,6 +42,17 @@ const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source antigravity";
 const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source antigravity";
 const STATUS_LINE_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source antigravity";
+const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
+    super::managed_statusline::ManagedStatusLineSpec {
+        key_path: &["statusLine"],
+        command: STATUS_LINE_COMMAND,
+        command_marker: RIMZ_STATUS_LINE_MARKER,
+        rendering_options: super::managed_statusline::RenderingOptions::Only(&[
+            "stack_with_default",
+        ]),
+        wrap_policy: super::managed_statusline::WrapPolicy::ObjectOnly,
+        required_for_install: true,
+    };
 
 pub(super) struct AntigravityHook {
     pub(super) hook: HookRecord,

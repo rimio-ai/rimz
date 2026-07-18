@@ -96,6 +96,14 @@ impl ManagedSource {
         (self.path)().is_ok_and(|path| self.managed_artifacts_at(&path))
     }
 
+    pub fn wrapped_status_line_command(&self) -> Option<String> {
+        self.wrapped_status_line_command_at(0)
+    }
+
+    pub fn wrapped_subagent_status_line_command(&self) -> Option<String> {
+        self.wrapped_status_line_command_at(1)
+    }
+
     /// Install is whole-file ownership: the embedded source overwrites the path
     /// verbatim - idempotent by construction. A marked file (RimZ wrote it,
     /// however edited since) is reclaimed byte-for-byte; an unmarked file is
@@ -183,6 +191,16 @@ impl ManagedSource {
         match &self.backend {
             ManagedSourceBackend::WholeFile { .. } => self.installed_at(path),
             ManagedSourceBackend::JsonHooks(spec) => spec.managed_artifacts_at(path),
+        }
+    }
+
+    fn wrapped_status_line_command_at(&self, index: usize) -> Option<String> {
+        let path = (self.path)().ok()?;
+        match &self.backend {
+            ManagedSourceBackend::WholeFile { .. } => None,
+            ManagedSourceBackend::JsonHooks(spec) => {
+                spec.wrapped_status_line_command_at(&path, index)
+            }
         }
     }
 

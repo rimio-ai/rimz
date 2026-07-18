@@ -12,6 +12,7 @@ use super::{
 use crate::agents::StatusLineChange;
 use crate::agents::managed_json_hooks::{ManagedJsonHookSpec, SyncEncoding};
 use crate::agents::managed_source::ManagedSource;
+#[cfg(test)]
 use crate::agents::managed_statusline::{self, ManagedStatusLineSpec};
 use crate::agents::{Result, agent_config_path};
 
@@ -52,6 +53,7 @@ pub(super) fn classify_status_line_change(
     managed_statusline::classify(root, spec).expect("Claude wraps every statusline shape")
 }
 
+#[cfg(test)]
 pub(super) fn wrapped_status_line_command_from(
     root: &Map<String, Value>,
     spec: &ManagedStatusLineSpec,

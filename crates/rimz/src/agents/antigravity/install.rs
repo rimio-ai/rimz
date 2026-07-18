@@ -16,16 +16,10 @@ use crate::agents::{
     settings_json::{self, PendingWrite},
 };
 
-use super::{
-    ANTIGRAVITY_HOOKS, HOOK_TIMEOUT_SECS, RIMZ_HOOK_MARKER, RIMZ_STATUS_LINE_MARKER,
-    STATUS_LINE_COMMAND,
-};
+use super::{ANTIGRAVITY_HOOKS, HOOK_TIMEOUT_SECS, RIMZ_HOOK_MARKER, STATUS_LINE};
 
 const AGENT: &str = "antigravity";
 const RIMZ_HOOK_NAME: &str = "rimz";
-const STATUS_LINE_KEY: &str = "statusLine";
-const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
-const RIMZ_WRAPPED_KEY: &str = "_rimz_wrapped";
 
 pub(super) fn hooks_path() -> Result<PathBuf> {
     agent_config_path(
@@ -157,18 +151,7 @@ pub(super) fn managed(hooks_path: &Path, settings_path: &Path) -> bool {
 
 pub(super) fn wrapped_statusline_command(settings_path: &Path) -> Option<String> {
     let root = settings_json::read_json_object(AGENT, settings_path).ok()?;
-    let statusline = root.get(STATUS_LINE_KEY)?.as_object()?;
-    statusline
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER))
-        .then_some(())?;
-    statusline
-        .get(RIMZ_WRAPPED_KEY)
-        .and_then(Value::as_object)
-        .and_then(|wrapped| wrapped.get("command"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
+    super::super::managed_statusline::wrapped_command(&root, &STATUS_LINE)
 }
 
 fn installed_event_names() -> Vec<String> {
@@ -294,67 +277,38 @@ fn strip_owned_hooks(root: &mut Map<String, Value>) -> bool {
 
 fn statusline_candidate(path: &Path) -> Result<(Map<String, Value>, StatusLineChange)> {
     let mut root = settings_json::read_json_object(AGENT, path)?;
-    let existing = root.remove(STATUS_LINE_KEY);
-    let (original, change) = match existing {
-        Some(Value::Object(mut object))
-            if object
-                .get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER)) =>
-        {
-            (object.remove(RIMZ_WRAPPED_KEY), StatusLineChange::Unchanged)
-        }
-        Some(Value::Object(object)) => {
-            let change = object
-                .get("command")
-                .and_then(Value::as_str)
-                .filter(|command| !command.trim().is_empty())
-                .map(|command| StatusLineChange::Wrapping {
-                    original: command.to_owned(),
-                })
-                .unwrap_or(StatusLineChange::Added);
-            (Some(Value::Object(object)), change)
-        }
-        Some(other) => {
-            return Err(AgentErr::Install {
-                agent: AGENT,
-                reason: format!(
-                    "expected `{STATUS_LINE_KEY}` in {} to be a JSON object; found {}",
-                    path.display(),
-                    settings_json::json_type_name(&other)
-                ),
-            });
-        }
-        None => (None, StatusLineChange::Added),
-    };
-
-    let mut managed = Map::new();
-    managed.insert("type".to_owned(), Value::String("command".to_owned()));
-    managed.insert(
-        "command".to_owned(),
-        Value::String(STATUS_LINE_COMMAND.to_owned()),
-    );
-    managed.insert(RIMZ_MANAGED_KEY.to_owned(), Value::Bool(true));
-    if let Some(original) = original {
-        if let Some(stack) = original.get("stack_with_default").cloned() {
-            managed.insert("stack_with_default".to_owned(), stack);
-        }
-        managed.insert(RIMZ_WRAPPED_KEY.to_owned(), original);
-    } else {
-        managed.insert("stack_with_default".to_owned(), Value::Bool(true));
+    let fresh = !root.contains_key(STATUS_LINE.key_path[0]);
+    let change = super::super::managed_statusline::classify(&root, &STATUS_LINE)
+        .ok_or_else(|| incompatible_statusline(path, &root))?;
+    super::super::managed_statusline::upsert(&mut root, &STATUS_LINE);
+    if fresh
+        && let Some(statusline) = root
+            .get_mut(STATUS_LINE.key_path[0])
+            .and_then(Value::as_object_mut)
+    {
+        statusline.insert("stack_with_default".to_owned(), Value::Bool(true));
     }
-    root.insert(STATUS_LINE_KEY.to_owned(), Value::Object(managed));
     Ok((root, change))
 }
 
+fn incompatible_statusline(path: &Path, root: &Map<String, Value>) -> AgentErr {
+    let found = root
+        .get(STATUS_LINE.key_path[0])
+        .map(settings_json::json_type_name)
+        .unwrap_or("missing");
+    AgentErr::Install {
+        agent: AGENT,
+        reason: format!(
+            "expected `{}` in {} to be a JSON object; found {found}",
+            STATUS_LINE.key_path[0],
+            path.display(),
+        ),
+    }
+}
+
 fn statusline_managed_at(path: &Path) -> bool {
-    settings_json::read_json_object(AGENT, path).is_ok_and(|root| {
-        root.get(STATUS_LINE_KEY)
-            .and_then(Value::as_object)
-            .and_then(|statusline| statusline.get("command"))
-            .and_then(Value::as_str)
-            .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER))
-    })
+    settings_json::read_json_object(AGENT, path)
+        .is_ok_and(|root| super::super::managed_statusline::is_managed(&root, &STATUS_LINE))
 }
 
 fn uninstall_statusline_file(path: &Path) -> Result<()> {
@@ -362,19 +316,8 @@ fn uninstall_statusline_file(path: &Path) -> Result<()> {
         return Ok(());
     }
     let mut root = settings_json::read_json_object(AGENT, path)?;
-    let Some(Value::Object(mut statusline)) = root.remove(STATUS_LINE_KEY) else {
-        return Ok(());
-    };
-    if !statusline
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER))
-    {
-        root.insert(STATUS_LINE_KEY.to_owned(), Value::Object(statusline));
-        return Ok(());
+    if super::super::managed_statusline::strip(&mut root, &STATUS_LINE) {
+        settings_json::write_json(AGENT, path, &root)?;
     }
-    if let Some(original) = statusline.remove(RIMZ_WRAPPED_KEY) {
-        root.insert(STATUS_LINE_KEY.to_owned(), original);
-    }
-    settings_json::write_json(AGENT, path, &root)
+    Ok(())
 }

@@ -14,9 +14,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde_json::Value;
 
-use self::install::{
-    MANAGED_SOURCE, qwen_settings_path, read_existing_json, wrapped_status_line_command_from,
-};
+use self::install::MANAGED_SOURCE;
 use self::payloads::{
     QwenStopError, parse_compact, parse_session_start, parse_stop, parse_stop_failure,
     parse_subagent, parse_tool_use, parse_user_prompt_submit,
@@ -543,10 +541,6 @@ impl AgentAdapter for QwenAdapter {
         parse_physical_assistant_messages(new_lines)
     }
 
-    fn wrapped_status_line_command(&self) -> Option<String> {
-        let root = read_existing_json(&qwen_settings_path().ok()?).ok()?;
-        wrapped_status_line_command_from(&root)
-    }
     fn managed_source(&self) -> Option<&'static ManagedSource> {
         Some(&MANAGED_SOURCE)
     }

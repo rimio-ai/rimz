@@ -291,6 +291,41 @@ fn hook_install_round_trips_existing_and_absent_statuslines() {
         assert_eq!(read_json(&settings_path), original);
     }
 }
+
+#[test]
+fn hook_install_accepts_only_object_statuslines() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let settings_path = dir.path().join("settings.json");
+    std::fs::write(&hooks_path, r#"{"mine":{"Stop":[]}}"#).unwrap();
+
+    let object = json!({"custom": "kept", "stack_with_default": false});
+    std::fs::write(
+        &settings_path,
+        serde_json::to_string(&json!({"statusLine": object})).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        install::preview(&hooks_path, &settings_path)
+            .unwrap()
+            .status_line_change,
+        Some(StatusLineChange::Added)
+    );
+    install::install(&hooks_path, &settings_path).unwrap();
+    let installed = read_json(&settings_path);
+    assert_eq!(installed["statusLine"]["stack_with_default"], false);
+    assert_eq!(installed["statusLine"]["_rimz_wrapped"], object);
+    install::uninstall(&hooks_path, &settings_path).unwrap();
+    assert_eq!(read_json(&settings_path)["statusLine"], object);
+
+    let hooks_original = std::fs::read(&hooks_path).unwrap();
+    let settings_original = br#"{"statusLine":"user command"}"#;
+    std::fs::write(&settings_path, settings_original).unwrap();
+    let error = install::install(&hooks_path, &settings_path).unwrap_err();
+    assert!(error.to_string().contains("to be a JSON object"));
+    assert_eq!(std::fs::read(&hooks_path).unwrap(), hooks_original);
+    assert_eq!(std::fs::read(&settings_path).unwrap(), settings_original);
+}
 #[test]
 fn hook_install_refuses_a_user_owned_rimz_hook_name() {
     let dir = tempfile::tempdir().unwrap();

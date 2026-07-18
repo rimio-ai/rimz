@@ -1282,7 +1282,8 @@ pub trait AgentAdapter: Send + Sync {
     /// its pass-through target. Best-effort: a read/parse failure reads as
     /// `None`.
     fn wrapped_status_line_command(&self) -> Option<String> {
-        None
+        self.managed_source()
+            .and_then(ManagedSource::wrapped_status_line_command)
     }
 
     /// Match the provider's invocation contract when forwarding a wrapped
@@ -1298,7 +1299,8 @@ pub trait AgentAdapter: Send + Sync {
     /// or no wrap is configured. Best-effort: a read/parse failure reads as
     /// `None`.
     fn wrapped_subagent_status_line_command(&self) -> Option<String> {
-        None
+        self.managed_source()
+            .and_then(ManagedSource::wrapped_subagent_status_line_command)
     }
 
     /// Whether this agent's per-user config currently carries RimZ-managed

@@ -19,6 +19,7 @@ pub(crate) enum RenderingOptions {
 pub(crate) enum WrapPolicy {
     Any,
     CommandMode,
+    ObjectOnly,
 }
 
 pub(crate) struct ManagedStatusLineSpec {
@@ -128,6 +129,15 @@ pub(crate) fn classify(
         Some(Value::Object(object)) if object_is_managed(object) => {
             Some(StatusLineChange::Unchanged)
         }
+        Some(Value::Object(object))
+            if matches!(spec.wrap_policy, WrapPolicy::ObjectOnly)
+                && object
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_none_or(|command| command.trim().is_empty()) =>
+        {
+            Some(StatusLineChange::Added)
+        }
         Some(value) if wrap_allowed(Some(value), spec.wrap_policy) => {
             Some(StatusLineChange::Wrapping {
                 original: display(value),
@@ -155,6 +165,7 @@ pub(crate) fn wrapped_command(
 fn wrap_allowed(value: Option<&Value>, policy: WrapPolicy) -> bool {
     match policy {
         WrapPolicy::Any => true,
+        WrapPolicy::ObjectOnly => value.is_none_or(Value::is_object),
         WrapPolicy::CommandMode => match value {
             None => true,
             Some(Value::Object(object)) if object_is_managed(object) => true,

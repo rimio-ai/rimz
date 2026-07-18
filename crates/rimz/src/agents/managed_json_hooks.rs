@@ -158,6 +158,12 @@ impl ManagedJsonHookSpec {
         settings_json::render_json(self.agent, root)
     }
 
+    pub fn wrapped_status_line_command_at(&self, path: &Path, index: usize) -> Option<String> {
+        let spec = *self.status_lines.get(index)?;
+        let root = self.read_json(path).ok()?;
+        managed_statusline::wrapped_command(&root, spec)
+    }
+
     fn candidate(&self, path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
         let mut root = self.read_json(path)?;
         self.reject_async_blocking(&root)?;

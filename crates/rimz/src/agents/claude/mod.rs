@@ -35,11 +35,11 @@ use jiff::Timestamp;
 use serde_json::Map;
 use serde_json::Value;
 
-use self::install::{
-    MANAGED_SOURCE, claude_settings_path, read_existing_json, wrapped_status_line_command_from,
-};
+use self::install::MANAGED_SOURCE;
 #[cfg(test)]
 use self::install::{classify_status_line_change, upsert_rimz_status_line};
+#[cfg(test)]
+use self::install::{read_existing_json, wrapped_status_line_command_from};
 use self::payloads::{
     ClaudeCommon, ClaudePermissionRequest, ClaudePostCompact, ClaudePostToolUse, ClaudePreToolUse,
     ClaudeSessionStart, ClaudeStop, ClaudeStopFailure, ClaudeSubagentStart, ClaudeSubagentStop,
@@ -630,18 +630,6 @@ impl AgentAdapter for ClaudeAdapter {
             return Vec::new();
         };
         parsed.into_observations(Timestamp::now())
-    }
-
-    fn wrapped_status_line_command(&self) -> Option<String> {
-        let path = claude_settings_path().ok()?;
-        let root = read_existing_json(&path).ok()?;
-        wrapped_status_line_command_from(&root, &STATUS_LINE)
-    }
-
-    fn wrapped_subagent_status_line_command(&self) -> Option<String> {
-        let path = claude_settings_path().ok()?;
-        let root = read_existing_json(&path).ok()?;
-        wrapped_status_line_command_from(&root, &SUBAGENT_STATUS_LINE)
     }
 
     fn managed_source(&self) -> Option<&'static ManagedSource> {
