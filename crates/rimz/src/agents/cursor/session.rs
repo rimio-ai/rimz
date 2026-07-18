@@ -309,7 +309,8 @@ impl CursorDiscoverySnapshot {
         selected_ids.sort();
         selected_ids.dedup();
         let transcript_topology_changed = !self.transcript_topology.unchanged();
-        if self.transcripts.is_none()
+        if forced
+            || self.transcripts.is_none()
             || self.selected_ids != selected_ids
             || transcript_topology_changed
         {
