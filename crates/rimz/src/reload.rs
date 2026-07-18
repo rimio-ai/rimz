@@ -555,6 +555,14 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
                 focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
                 mouse_click_through: mux_config.zellij.mouse_click_through,
             };
+            if let Err(err) = backend.ensure_presence_plugin(&presence) {
+                tracing::warn!(
+                    session = %ws.session_name,
+                    tags.operation = "sidebar.repair.presence_ensure",
+                    error = &err as &dyn std::error::Error,
+                    "sidebar repair: presence plugin ensure failed",
+                );
+            }
             if let Err(err) = crate::mux::ZellijBackend::new().dump_topology_for(&presence) {
                 tracing::warn!(
                     session = %ws.session_name,

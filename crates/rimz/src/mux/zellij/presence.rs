@@ -287,12 +287,15 @@ impl ZellijBackend {
         self.pipe_to_presence_plugin(opts, PRESENCE_SHARE_PIPE, "share")
     }
 
+    /// Ask existing presence-plugin instances to publish topology. Readers
+    /// broadcast by name and degrade when none runs; only owner flows launch.
     pub(crate) fn dump_topology_for(
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
-        self.ensure_presence_plugin_for(opts)?;
-        match self.pipe_to_presence_plugin(opts, PRESENCE_TOPOLOGY_PIPE, "dump") {
+        // Generic readers reach whichever presence-plugin instances already
+        // serve the session and degrade if none do; owner flows launch them.
+        match self.broadcast_presence_pipe(&opts.session_name, PRESENCE_TOPOLOGY_PIPE, "dump") {
             Ok(()) | Err(MuxErr::Timeout { .. }) => Ok(()),
             Err(err) => Err(err),
         }
@@ -354,15 +357,24 @@ impl ZellijBackend {
             program: "zellij".to_owned(),
             reason: format!("serializing presence retire generation failed: {err}"),
         })?;
+        self.broadcast_presence_pipe(session_name, PRESENCE_RETIRE_PIPE, &payload)
+    }
+
+    fn broadcast_presence_pipe(
+        &self,
+        session_name: &str,
+        pipe_name: &str,
+        payload: &str,
+    ) -> Result<()> {
         self.cmd()
             .args([
                 "--session",
                 session_name,
                 "pipe",
                 "--name",
-                PRESENCE_RETIRE_PIPE,
+                pipe_name,
                 "--",
-                &payload,
+                payload,
             ])
             .run_with_timeout(PRESENCE_PIPE_TIMEOUT)
             .map(|_| ())
@@ -743,6 +755,30 @@ fi
         assert!(
             !log.contains("--name rimz:retire"),
             "an unproven replacement must not retire the old plugin:\n{log}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn topology_dumps_broadcast_without_launching_plugins() {
+        let (temp, shim) = zellij_shim(
+            r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+exit 0
+"#,
+        );
+        let backend = ZellijBackend::with_program_for_test(&shim);
+        let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+
+        backend.dump_topology_for(&opts).expect("first dump");
+        backend.dump_topology_for(&opts).expect("second dump");
+
+        let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+        assert_eq!(log.matches("--name rimz:dump_topology -- dump").count(), 2);
+        assert!(
+            !log.contains("--plugin"),
+            "generic topology reads must not launch a build-specific plugin:\n{log}",
         );
     }
 
