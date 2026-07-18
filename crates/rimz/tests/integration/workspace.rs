@@ -15,6 +15,103 @@ use rimz::store::event::EventEnvelope;
 
 use crate::common::{Env, canonical};
 
+fn init_git_repo(path: &std::path::Path) -> bool {
+    std::fs::create_dir_all(path).expect("mkdir repo");
+    let status = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(path)
+        .status();
+    match status {
+        Ok(status) if status.success() => true,
+        _ => {
+            tracing::warn!("skipping: git unavailable");
+            false
+        }
+    }
+}
+
+fn resolve_workspace_json(env: &Env, path: &std::path::Path) -> rimz::ResolvedWorkspace {
+    let assert = env
+        .rimz()
+        .arg("workspace")
+        .arg("resolve")
+        .arg(path)
+        .assert()
+        .success();
+    serde_json::from_slice(&assert.get_output().stdout).expect("workspace JSON")
+}
+
+fn assert_normalized_root(path: &std::path::Path) {
+    assert!(
+        path.is_absolute(),
+        "root must be absolute: {}",
+        path.display()
+    );
+    assert!(
+        path.components().all(|component| !matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )),
+        "root must not contain dot components: {}",
+        path.display(),
+    );
+}
+
+#[test]
+fn workspace_resolve_uses_nested_git_probe_cwd_for_the_common_dir() {
+    let env = Env::new();
+    let repo = env.project_root.join("repo");
+    if !init_git_repo(&repo) {
+        return;
+    }
+    let deep = repo.join("one/two/three");
+    std::fs::create_dir_all(&deep).expect("mkdir nested cwd");
+
+    let resolved = resolve_workspace_json(&env, &deep);
+
+    assert_eq!(resolved.project_root, canonical(&repo));
+    assert_normalized_root(&resolved.project_root);
+}
+
+#[test]
+fn workspace_resolve_from_linked_worktree_uses_the_main_repo_root() {
+    let env = Env::new();
+    let repo = env.project_root.join("repo");
+    let linked = env.project_root.join("linked");
+    if !init_git_repo(&repo) {
+        return;
+    }
+    let commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.email=rimz@example.invalid",
+            "-c",
+            "user.name=RimZ",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ])
+        .current_dir(&repo)
+        .status()
+        .expect("run git commit");
+    assert!(commit.success(), "git commit failed");
+    let add = std::process::Command::new("git")
+        .args(["worktree", "add", "-q", "-b", "linked"])
+        .arg(&linked)
+        .current_dir(&repo)
+        .status()
+        .expect("run git worktree add");
+    assert!(add.success(), "git worktree add failed");
+    let deep = linked.join("one/two");
+    std::fs::create_dir_all(&deep).expect("mkdir linked nested cwd");
+
+    let resolved = resolve_workspace_json(&env, &deep);
+
+    assert_eq!(resolved.project_root, canonical(&repo));
+    assert_normalized_root(&resolved.project_root);
+}
+
 #[test]
 fn workspace_migrate_moves_store_and_rewrites_workspace_ids() {
     let env = Env::new();
@@ -229,18 +326,7 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
 /// self-skip, per the suite contract).
 fn init_nested_repo(env: &Env) -> Option<PathBuf> {
     let nested = env.project_root.join("code").join("query-engine");
-    std::fs::create_dir_all(&nested).expect("mkdir nested repo");
-    let status = std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&nested)
-        .status();
-    match status {
-        Ok(status) if status.success() => Some(nested),
-        _ => {
-            tracing::warn!("skipping: git unavailable");
-            None
-        }
-    }
+    init_git_repo(&nested).then_some(nested)
 }
 
 #[test]

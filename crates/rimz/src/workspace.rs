@@ -438,6 +438,8 @@ impl WorkspaceResolver {
         } else {
             (start.clone(), start.clone(), RootClass::Directory)
         };
+        let project_root = normalized_root(project_root);
+        let worktree_root = normalized_root(worktree_root);
 
         let workspace_id = WorkspaceId::from_project_root(&project_root);
         let session_name = session_name_for(&project_root);
@@ -452,6 +454,25 @@ impl WorkspaceResolver {
             session_name,
             mux_hint: None,
         })
+    }
+}
+
+/// Absolute, `.`/`..`-free root: canonicalize when the path exists, else
+/// absolutize against the cwd and fold components lexically, so the identity
+/// hash and the persisted record never see a relative or dotted path.
+fn normalized_root(root: PathBuf) -> PathBuf {
+    match root.canonicalize() {
+        Ok(root) => root,
+        Err(_) => {
+            let abs = if root.is_absolute() {
+                root
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(&root))
+                    .unwrap_or(root)
+            };
+            crate::worktree::normalize_path_lexical(&abs)
+        }
     }
 }
 
@@ -532,7 +553,7 @@ fn resolve_git(start: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
     let common_dir_abs = if common_dir_path.is_absolute() {
         common_dir_path
     } else {
-        worktree_root.join(common_dir_path)
+        start.join(common_dir_path)
     };
     let common_dir_abs = common_dir_abs.canonicalize().unwrap_or(common_dir_abs);
 

@@ -403,6 +403,53 @@ fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
 }
 
 #[test]
+fn record_workspace_republishes_only_when_snapshot_record_fields_change() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first_project = dir.path().join("first-project");
+    let second_project = dir.path().join("second-project");
+    std::fs::create_dir_all(&first_project).expect("first project dir");
+    std::fs::create_dir_all(&second_project).expect("second project dir");
+    let first = WorkspaceResolver::resolve(&first_project, None).expect("first workspace");
+    let second = WorkspaceResolver::resolve(&second_project, None).expect("second workspace");
+    let paths = StatePaths::under(first.workspace_id.clone(), dir.path()).expect("state");
+    let runtime = RuntimePaths::under(first.workspace_id.clone(), dir.path()).expect("runtime");
+    let store = Store::open(paths.clone(), runtime).expect("open store");
+
+    store
+        .record_workspace(&first)
+        .expect("record first workspace");
+    let initial_bytes = std::fs::read(&paths.latest_snapshot).expect("initial latest snapshot");
+    let initial: snapshot::SidebarSnapshot =
+        serde_json::from_slice(&initial_bytes).expect("parse initial snapshot");
+    assert_eq!(initial.display_name, "first-project");
+
+    store
+        .record_workspace(&first)
+        .expect("re-record identical workspace");
+    assert_eq!(
+        std::fs::read(&paths.latest_snapshot).expect("unchanged latest snapshot"),
+        initial_bytes,
+        "an identical record must not republish latest.json",
+    );
+
+    store
+        .record_workspace(&second)
+        .expect("record changed workspace");
+    let changed_bytes = std::fs::read(&paths.latest_snapshot).expect("changed latest snapshot");
+    let changed: snapshot::SidebarSnapshot =
+        serde_json::from_slice(&changed_bytes).expect("parse changed snapshot");
+    assert_eq!(changed.display_name, "second-project");
+    assert_eq!(
+        changed.project_root.as_deref(),
+        Some(second.project_root.as_path())
+    );
+    assert!(
+        !paths.events_log.exists(),
+        "record-only publication must not need an event"
+    );
+}
+
+#[test]
 fn rotate_event_log_writes_carryover_before_archiving_active_log() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());

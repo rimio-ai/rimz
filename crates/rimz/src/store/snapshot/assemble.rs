@@ -16,7 +16,7 @@ use crate::store::event_log::{self};
 use crate::store::parse_cache::ParseCache;
 use crate::store::paths::StatePaths;
 use crate::store::runtime::{RuntimeProjection, RuntimeScope};
-use crate::store::workspace_record;
+use crate::store::workspace_record::{self, WorkspaceRecordErr};
 use crate::workspace::RootClass;
 
 /// Rebuild the snapshot caches from the live store and persist both: the
@@ -150,17 +150,39 @@ thread_local! {
 }
 
 pub(crate) fn display_name_for(paths: &StatePaths) -> String {
-    workspace_record::read(&paths.workspace_record)
-        .ok()
-        .and_then(|record| {
-            record
-                .project_root
-                .file_name()
-                .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| paths.workspace_id.as_str().to_owned())
+    let record = match workspace_record::read(&paths.workspace_record) {
+        Ok(record) => record,
+        Err(WorkspaceRecordErr::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            tracing::debug!(
+                path = %paths.workspace_record.display(),
+                "workspace record is not present while resolving the display name",
+            );
+            return paths.workspace_id.as_str().to_owned();
+        }
+        Err(err) => {
+            tracing::debug!(
+                path = %paths.workspace_record.display(),
+                error = %err,
+                "workspace record is unreadable while resolving the display name",
+            );
+            return paths.workspace_id.as_str().to_owned();
+        }
+    };
+    let root = crate::worktree::normalize_path_lexical(&record.project_root);
+    let Some(name) = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+    else {
+        tracing::debug!(
+            root = %root.display(),
+            "workspace project root has no usable display name",
+        );
+        return paths.workspace_id.as_str().to_owned();
+    };
+    name.to_owned()
 }
 
 pub(crate) fn project_root_for(paths: &StatePaths) -> Option<PathBuf> {
@@ -188,6 +210,45 @@ mod tests {
     use crate::agents::{AgentLifecycleObservation, LaunchParams};
     use crate::ids::{AgentSessionId, WorkspaceId};
     use crate::store::event::EventEnvelope;
+
+    fn write_workspace_record(paths: &StatePaths, project_root: PathBuf) {
+        workspace_record::write(
+            paths,
+            &workspace_record::WorkspaceRecord {
+                workspace_id: paths.workspace_id.clone(),
+                project_root,
+                worktree_root: None,
+                session_name: "rimz-legacy".to_owned(),
+                root_class: RootClass::Repo,
+                rimz_bin: None,
+                rimz_build: None,
+                updated_at: Timestamp::UNIX_EPOCH,
+            },
+        )
+        .expect("write workspace record");
+    }
+
+    #[test]
+    fn display_name_normalizes_a_legacy_dotted_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace, dir.path()).expect("state paths");
+        paths.ensure_dirs().expect("state dirs");
+        write_workspace_record(&paths, PathBuf::from("/srv/projects/rimz/child/.."));
+
+        assert_eq!(display_name_for(&paths), "rimz");
+    }
+
+    #[test]
+    fn display_name_falls_back_to_the_id_for_a_root_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).expect("state paths");
+        paths.ensure_dirs().expect("state dirs");
+        write_workspace_record(&paths, PathBuf::from("/tmp/.."));
+
+        assert_eq!(display_name_for(&paths), workspace.as_str());
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

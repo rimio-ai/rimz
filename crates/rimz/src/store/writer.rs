@@ -164,11 +164,20 @@ impl Store {
     }
 
     /// Persist the project-root index used by maintenance commands. This does
-    /// not change agent state and does not wake sidebars.
+    /// not change agent state or wake sidebars, and republishes the snapshot
+    /// when identity-visible record fields change.
     #[must_use = "durability barrier; check the result"]
     pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
         self.commit(|txn| {
-            let record = workspace_record_preserving_rimz_target(txn.paths, workspace, None);
+            let prior = workspace_record::read(&txn.paths.workspace_record).ok();
+            let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
+            if prior.as_ref().is_none_or(|prior| {
+                prior.project_root != record.project_root
+                    || prior.session_name != record.session_name
+                    || prior.root_class != record.root_class
+            }) {
+                txn.force_publish();
+            }
             workspace_record::write(txn.paths, &record)?;
             Ok(())
         })
@@ -184,12 +193,20 @@ impl Store {
         rimz_build: String,
     ) -> Result<()> {
         self.commit(|txn| {
+            let prior = workspace_record::read(&txn.paths.workspace_record).ok();
             let room_bin_target = rimz_bin.clone();
             let record = workspace_record_preserving_rimz_target(
-                txn.paths,
+                prior.as_ref(),
                 workspace,
                 Some((rimz_bin, rimz_build)),
             );
+            if prior.as_ref().is_none_or(|prior| {
+                prior.project_root != record.project_root
+                    || prior.session_name != record.session_name
+                    || prior.root_class != record.root_class
+            }) {
+                txn.force_publish();
+            }
             workspace_record::write(txn.paths, &record)?;
             crate::store::atomic::link_executable_atomically(&room_bin_target, &txn.paths.room_bin)
                 .map_err(workspace_record::WorkspaceRecordErr::from)?;
@@ -230,8 +247,8 @@ impl Store {
             }
             event_log::replace_all(&self.inner.paths.events_log, &events)?;
 
-            let record =
-                workspace_record_preserving_rimz_target(&self.inner.paths, workspace, None);
+            let prior = workspace_record::read(&self.inner.paths.workspace_record).ok();
+            let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
             workspace_record::write(&self.inner.paths, &record)?;
             // The log was wholesale-replaced; reseed fold caches before rebuilding.
             invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Reseed)?;
@@ -537,7 +554,7 @@ impl Store {
 }
 
 fn workspace_record_preserving_rimz_target(
-    paths: &StatePaths,
+    prior: Option<&workspace_record::WorkspaceRecord>,
     workspace: &ResolvedWorkspace,
     rimz_target: Option<(PathBuf, String)>,
 ) -> workspace_record::WorkspaceRecord {
@@ -548,9 +565,9 @@ fn workspace_record_preserving_rimz_target(
             record.rimz_build = Some(rimz_build);
         }
         None => {
-            if let Ok(prior) = workspace_record::read(&paths.workspace_record) {
-                record.rimz_bin = prior.rimz_bin;
-                record.rimz_build = prior.rimz_build;
+            if let Some(prior) = prior {
+                record.rimz_bin.clone_from(&prior.rimz_bin);
+                record.rimz_build.clone_from(&prior.rimz_build);
             }
         }
     }

@@ -403,6 +403,32 @@ fn bare_directory_resolves_as_a_directory_workspace() {
 }
 
 #[test]
+fn nonexistent_dotted_root_override_is_normalized_before_identity() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dotted = dir.path().join("missing").join("..").join("project");
+    assert!(!dotted.exists(), "fixture root must stay nonexistent");
+
+    let resolved = WorkspaceResolver::resolve(dir.path(), Some(dotted)).expect("resolve");
+    let expected = crate::worktree::normalize_path_lexical(&dir.path().join("project"));
+
+    assert!(resolved.project_root.is_absolute());
+    assert!(
+        resolved
+            .project_root
+            .components()
+            .all(|component| !matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            ))
+    );
+    assert_eq!(resolved.project_root, expected);
+    assert_eq!(
+        resolved.workspace_id,
+        WorkspaceId::from_project_root(&expected),
+    );
+}
+
+#[test]
 fn create_mode_accepts_home_like_directory_root() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let home = dir.path().join("home");
