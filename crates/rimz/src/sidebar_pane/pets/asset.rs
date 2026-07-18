@@ -669,7 +669,7 @@ mod tests {
             assert!(
                 decode_resolved(
                     ResolvedAsset {
-                        bytes: b"sheet".to_vec(),
+                        bytes: std::fs::read(path).expect("read local sheet"),
                         evictable_cache: None,
                     },
                     fail,
