@@ -7,7 +7,7 @@
 //! alone. The elder renderer produces in process on its fetch worker, so this
 //! arm serves inspection and scripting.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
