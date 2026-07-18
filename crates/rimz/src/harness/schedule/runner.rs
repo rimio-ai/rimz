@@ -1832,22 +1832,20 @@ fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
     }
 }
 
-fn reset_signal(capacity: Option<&ProviderCapacity>, now: Timestamp) -> ResetSignal {
-    match capacity.map(|capacity| capacity.longest_window_signal(now)) {
-        Some(LongestWindowSignal::At(reset_at)) => ResetSignal::At(reset_at),
-        Some(LongestWindowSignal::ConfirmedDown) => ResetSignal::ConfirmedDown,
-        Some(LongestWindowSignal::Unknown) | None => ResetSignal::Unknown,
-    }
-}
-
 fn reset_signal_for_binding(
     runtime: &RuntimePaths,
     kind: &str,
     binding: Option<&ProviderAccountBinding>,
     now: Timestamp,
 ) -> ResetSignal {
-    let capacity = capacity_for(runtime, kind, binding);
-    reset_signal(capacity.as_ref(), now)
+    match capacity_for(runtime, kind, binding)
+        .as_ref()
+        .map(|capacity| capacity.longest_window_signal(now))
+    {
+        Some(LongestWindowSignal::At(reset_at)) => ResetSignal::At(reset_at),
+        Some(LongestWindowSignal::ConfirmedDown) => ResetSignal::ConfirmedDown,
+        Some(LongestWindowSignal::Unknown) | None => ResetSignal::Unknown,
+    }
 }
 
 /// Reset signal for `entry`'s provider longest budget window.

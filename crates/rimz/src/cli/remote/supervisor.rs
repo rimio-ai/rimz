@@ -170,7 +170,7 @@ pub(super) fn supervise_remote(
                 dial_plan.as_ref(),
             )
         });
-        if retry_cause == RetryCause::Dropped {
+        if matches!(retry_cause, RetryCause::Dropped) {
             if ui.is_plain() {
                 let _ = writeln!(
                     std::io::stderr().lock(),
@@ -202,7 +202,6 @@ pub(super) fn supervise_remote(
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum RetryCause {
     Zombie,
     Dropped,
