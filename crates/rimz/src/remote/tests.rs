@@ -14,6 +14,7 @@ fn attach_plan(
     SshAttachPlan::new(SshAttachOptions {
         target: parse(target),
         lineage: "0123456789abcdef".to_owned(),
+        force_version: false,
         no_resume,
         mux,
         term,
@@ -537,6 +538,7 @@ fn ssh_attach_plan_exports_client_size_when_present() {
     let plan = SshAttachPlan::new(SshAttachOptions {
         target: parse("dev-box:query-engine"),
         lineage: "0123456789abcdef".to_owned(),
+        force_version: false,
         no_resume: false,
         mux: None,
         term: TermPlan::Keep,
@@ -589,6 +591,30 @@ fn ssh_attach_plan_marks_retries_only() {
             .contains("export RIMZ_REMOTE_RECONNECT=1;"),
         "retry snippet marks an unattended reconnect"
     );
+}
+
+#[test]
+fn ssh_attach_plan_exports_force_version_on_every_attempt_when_set() {
+    let mut plan = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false);
+    assert!(
+        !plan
+            .initial()
+            .plain()
+            .args
+            .last()
+            .unwrap()
+            .contains(REMOTE_FORCE_VERSION_ENV),
+        "force stays opt-in"
+    );
+
+    plan.options.force_version = true;
+    for attempt in [plan.initial().plain(), plan.retry().plain()] {
+        let snippet = attempt.args.last().unwrap();
+        assert!(
+            snippet.contains("export RIMZ_REMOTE_FORCE_VERSION=1;"),
+            "forced attach carries the bypass across reconnects: {snippet}"
+        );
+    }
 }
 
 #[test]

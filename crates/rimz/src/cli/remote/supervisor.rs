@@ -226,16 +226,24 @@ pub(super) fn supervise_remote(
 }
 
 pub(super) fn fatal_session_message(code: i32, host: &str, setup_hint: &str) -> String {
-    if code == rimz::remote::REMOTE_RIMZ_MISSING_EXIT {
-        format!(
+    match code {
+        rimz::remote::REMOTE_RIMZ_MISSING_EXIT => format!(
             "rimz is not installed on {host}; install it over SSH with:\n    \
              rimz remote setup {setup_hint}"
-        )
-    } else {
-        format!(
+        ),
+        rimz::remote::REMOTE_VERSION_SKEW_EXIT => format!(
+            "your rimz and {host}'s rimz differ by a minor version; upgrade the older side \
+             (`rimz remote setup {setup_hint}` upgrades the remote), or retry with \
+             --force-version to attach anyway"
+        ),
+        rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT => format!(
+            "your rimz and {host}'s rimz differ by a major version; upgrade required — \
+             `rimz remote setup {setup_hint}` upgrades the remote"
+        ),
+        _ => format!(
             "ssh to {host} exited with status {code}; not reconnecting \
              (only a dropped link on an established session is retried)"
-        )
+        ),
     }
 }
 

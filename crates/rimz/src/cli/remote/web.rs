@@ -208,6 +208,7 @@ pub(super) fn run_remote_web(
             rimz::remote::web::WebPrepOptions {
                 confirm_resume: std::io::stdin().is_terminal(),
                 no_resume: remote.no_resume,
+                force_version: remote.force_version,
                 client_size,
             },
         ),
@@ -322,14 +323,17 @@ fn run_web_prep(
     if status.success() {
         return Ok(stdout);
     }
-    if status.code() == Some(rimz::remote::REMOTE_RIMZ_MISSING_EXIT) {
+    if let Some(code) = status.code()
+        && matches!(
+            code,
+            rimz::remote::REMOTE_RIMZ_MISSING_EXIT
+                | rimz::remote::REMOTE_VERSION_SKEW_EXIT
+                | rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT
+        )
+    {
         bail!(
             "{}",
-            super::supervisor::fatal_session_message(
-                rimz::remote::REMOTE_RIMZ_MISSING_EXIT,
-                host,
-                setup_hint
-            )
+            super::supervisor::fatal_session_message(code, host, setup_hint)
         );
     }
     bail!("{label} failed with {status}");

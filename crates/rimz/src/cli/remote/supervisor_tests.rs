@@ -45,6 +45,29 @@ fn fatal_session_message_keeps_reconnect_tail_for_other_codes() {
 }
 
 #[test]
+fn fatal_session_message_explains_minor_version_bypass() {
+    let message = fatal_session_message(rimz::remote::REMOTE_VERSION_SKEW_EXIT, "dev-box", "dev");
+
+    assert!(message.contains("differ by a minor version"), "{message}");
+    assert!(message.contains("rimz remote setup dev"), "{message}");
+    assert!(message.contains("--force-version"), "{message}");
+}
+
+#[test]
+fn fatal_session_message_keeps_major_version_refusal_hard() {
+    let message = fatal_session_message(
+        rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT,
+        "dev-box",
+        "dev",
+    );
+
+    assert!(message.contains("differ by a major version"), "{message}");
+    assert!(message.contains("upgrade required"), "{message}");
+    assert!(message.contains("rimz remote setup dev"), "{message}");
+    assert!(!message.contains("--force-version"), "{message}");
+}
+
+#[test]
 fn plain_retry_wait_reports_interruption() {
     let stop = AtomicBool::new(true);
 

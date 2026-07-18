@@ -16,6 +16,7 @@ pub mod reachability;
 pub mod recovery;
 pub mod setup;
 pub mod tty;
+pub mod version;
 pub mod web;
 
 use std::path::Path;
@@ -43,6 +44,9 @@ pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
 /// notices.
 pub const REMOTE_CLIENT_VERSION_ENV: &str = "RIMZ_REMOTE_CLIENT_VERSION";
 
+/// Marks a remote attach that may proceed across a minor version mismatch.
+pub const REMOTE_FORCE_VERSION_ENV: &str = "RIMZ_REMOTE_FORCE_VERSION";
+
 /// Binary override for tests, mirroring `RIMZ_SSH_BIN`.
 pub const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";
 
@@ -53,6 +57,12 @@ pub const SSH_TRANSPORT_EXIT: i32 = 255;
 /// The exit code the guarded snippet returns when the remote host has no
 /// `rimz` on a repaired PATH; the snippet has already printed the install fix.
 pub const REMOTE_RIMZ_MISSING_EXIT: i32 = 127;
+
+/// The remote host refused a bypassable minor version mismatch.
+pub const REMOTE_VERSION_SKEW_EXIT: i32 = 65;
+
+/// The remote host refused a hard major version mismatch.
+pub const REMOTE_VERSION_INCOMPATIBLE_EXIT: i32 = 66;
 
 /// What the part after the `:` names on the remote host.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -281,6 +291,7 @@ pub fn infocmp_program() -> String {
 pub struct SshAttachOptions {
     pub target: RemoteTarget,
     pub lineage: String,
+    pub force_version: bool,
     pub no_resume: bool,
     pub mux: Option<MuxName>,
     pub term: TermPlan,
@@ -514,6 +525,9 @@ fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase) -> String {
         "export {REMOTE_CLIENT_VERSION_ENV}={}; ",
         sh_quote(crate::build_id::VERSION)
     ));
+    if options.force_version {
+        env_setup.push_str(&format!("export {REMOTE_FORCE_VERSION_ENV}=1; "));
+    }
     if matches!(phase, AttemptPhase::Retry) {
         env_setup.push_str("export RIMZ_REMOTE_RECONNECT=1; ");
     }

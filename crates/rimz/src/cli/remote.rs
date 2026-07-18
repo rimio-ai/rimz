@@ -74,6 +74,9 @@ enum RemoteSubcmd {
         /// Hand the link to a single ssh run instead of supervising reconnects.
         #[arg(long)]
         no_reconnect: bool,
+        /// Attach despite a minor version mismatch with the host.
+        #[arg(long)]
+        force_version: bool,
         /// Open the remote Zellij room in the local browser through an SSH tunnel.
         #[arg(long)]
         web: bool,
@@ -99,6 +102,9 @@ enum RemoteSubcmd {
         /// Hand the link to a single ssh run instead of supervising reconnects.
         #[arg(long)]
         no_reconnect: bool,
+        /// Attach despite a minor version mismatch with the host.
+        #[arg(long)]
+        force_version: bool,
         /// Open the remote Zellij room in the local browser through an SSH tunnel.
         #[arg(long)]
         web: bool,
@@ -224,6 +230,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             alias_or_target,
             reset,
             no_reconnect,
+            force_version,
             web,
             web_port,
             attach,
@@ -231,6 +238,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             alias_or_target,
             reset,
             no_reconnect,
+            force_version,
             web::RemoteWebOptions {
                 enabled: web,
                 port: web_port,
@@ -242,6 +250,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
         RemoteSubcmd::Reset {
             alias_or_target,
             no_reconnect,
+            force_version,
             web,
             web_port,
             attach,
@@ -249,6 +258,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             alias_or_target,
             true,
             no_reconnect,
+            force_version,
             web::RemoteWebOptions {
                 enabled: web,
                 port: web_port,
@@ -286,6 +296,7 @@ struct RemoteConnect {
     target: RemoteTarget,
     reconnect: bool,
     no_resume: bool,
+    force_version: bool,
     mux: Option<MuxName>,
     web: web::RemoteWebOptions,
 }
@@ -303,6 +314,7 @@ fn resolve_connect(
             target: RemoteTarget::parse(input)?,
             reconnect: !no_reconnect,
             no_resume: reset,
+            force_version: false,
             mux: cli_mux,
             web: web::RemoteWebOptions::default(),
         });
@@ -315,6 +327,7 @@ fn resolve_connect(
         target: RemoteTarget::parse(&alias.target)?,
         reconnect: alias.reconnect && !no_reconnect,
         no_resume: alias.no_resume || reset,
+        force_version: false,
         mux: cli_mux.or(alias.mux),
         web: web::RemoteWebOptions::default(),
     })
@@ -337,12 +350,14 @@ fn connect(
     alias_or_target: String,
     reset: bool,
     no_reconnect: bool,
+    force_version: bool,
     web: web::RemoteWebOptions,
     attach: AttachFlags,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let aliases = RemoteAliases::load().context("loading remote aliases")?;
     let mut remote = resolve_connect(&alias_or_target, reset, no_reconnect, globals.mux, &aliases)?;
+    remote.force_version = force_version;
     remote.web = web;
     attach_remote(remote, attach.mode())
 }
@@ -370,6 +385,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             let plan = SshAttachPlan::new(SshAttachOptions {
                 target: remote.target,
                 lineage,
+                force_version: remote.force_version,
                 no_resume: remote.no_resume,
                 mux: remote.mux,
                 term,
@@ -396,6 +412,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             let plan = SshAttachPlan::new(SshAttachOptions {
                 target: remote.target,
                 lineage,
+                force_version: remote.force_version,
                 no_resume: remote.no_resume,
                 mux: remote.mux,
                 term,

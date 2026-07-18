@@ -106,12 +106,39 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
     Ok(())
 }
 
-fn remote_client_skew_notice(client: &str, host: &str) -> Option<String> {
-    (client != host).then(|| {
+#[derive(Debug, PartialEq, Eq)]
+enum SkewAction {
+    Warn(String),
+    Refuse { message: String, code: i32 },
+}
+
+fn remote_skew_action(client: &str, host: &str, forced: bool) -> Option<SkewAction> {
+    use rimz::remote::version::Skew;
+
+    let warning = || {
         format!(
             "you connected with rimz {client} but this host runs rimz {host}; upgrade the older side to keep them matched"
         )
-    })
+    };
+    match rimz::remote::version::classify(client, host) {
+        Skew::Match => None,
+        Skew::Patch | Skew::Unparseable => Some(SkewAction::Warn(warning())),
+        Skew::Minor if forced => Some(SkewAction::Warn(format!(
+            "you connected with rimz {client} but this host runs rimz {host}; continuing because --force-version was given; upgrade the older side to keep them matched"
+        ))),
+        Skew::Minor => Some(SkewAction::Refuse {
+            message: format!(
+                "rimz {client} cannot connect to this host running rimz {host} because they differ by a minor version; upgrade the older side (`rimz remote setup <host>` upgrades the remote), or retry with --force-version to attach anyway"
+            ),
+            code: rimz::remote::REMOTE_VERSION_SKEW_EXIT,
+        }),
+        Skew::Major => Some(SkewAction::Refuse {
+            message: format!(
+                "rimz {client} cannot connect to this host running rimz {host} because they differ by a major version; upgrade required (`rimz remote setup <host>` upgrades the remote); --force-version does not apply to major mismatches"
+            ),
+            code: rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT,
+        }),
+    }
 }
 
 fn build_drift_notice(drift: &SessionBuildDrift, own_version: &str) -> String {
@@ -132,10 +159,17 @@ pub(super) fn report_version_mismatch_notices(
     was_live: bool,
 ) -> Result<()> {
     let mut notices = Vec::new();
-    if let Ok(client_version) = std::env::var(rimz::remote::REMOTE_CLIENT_VERSION_ENV)
-        && let Some(notice) = remote_client_skew_notice(&client_version, rimz::build_id::VERSION)
-    {
-        notices.push(notice);
+    if let Ok(client_version) = std::env::var(rimz::remote::REMOTE_CLIENT_VERSION_ENV) {
+        let forced = std::env::var_os(rimz::remote::REMOTE_FORCE_VERSION_ENV)
+            .is_some_and(|value| value == "1");
+        match remote_skew_action(&client_version, rimz::build_id::VERSION, forced) {
+            Some(SkewAction::Warn(notice)) => notices.push(notice),
+            Some(SkewAction::Refuse { message, code }) => {
+                let _ = writeln!(std::io::stderr().lock(), "rimz: {message}");
+                std::process::exit(code);
+            }
+            None => {}
+        }
     }
     if was_live
         && let Some(drift) = workspace_id
@@ -250,14 +284,60 @@ mod tests {
     }
 
     #[test]
-    fn remote_client_skew_notice_names_both_versions() {
-        assert_eq!(remote_client_skew_notice("0.5.0", "0.5.0"), None);
-        assert_eq!(
-            remote_client_skew_notice("0.5.0", "0.4.1").as_deref(),
-            Some(
-                "you connected with rimz 0.5.0 but this host runs rimz 0.4.1; upgrade the older side to keep them matched"
-            ),
+    fn remote_skew_action_maps_compatibility_tiers() {
+        assert_eq!(remote_skew_action("0.5.0", "0.5.0", false), None);
+
+        let Some(SkewAction::Warn(patch)) = remote_skew_action("0.5.0", "0.5.1", false) else {
+            panic!("patch skew warns");
+        };
+        assert!(patch.contains("rimz 0.5.0"), "{patch}");
+        assert!(patch.contains("rimz 0.5.1"), "{patch}");
+
+        let Some(SkewAction::Refuse { message, code }) =
+            remote_skew_action("0.5.0", "0.4.9", false)
+        else {
+            panic!("minor skew refuses");
+        };
+        assert_eq!(code, rimz::remote::REMOTE_VERSION_SKEW_EXIT);
+        assert!(message.contains("rimz 0.5.0"), "{message}");
+        assert!(message.contains("rimz 0.4.9"), "{message}");
+        assert!(message.contains("rimz remote setup <host>"), "{message}");
+        assert!(message.contains("--force-version"), "{message}");
+
+        let Some(SkewAction::Warn(forced)) = remote_skew_action("1.5.0", "1.4.9", true) else {
+            panic!("forced minor skew warns");
+        };
+        assert!(
+            forced.contains("continuing because --force-version was given"),
+            "{forced}"
         );
+    }
+
+    #[test]
+    fn remote_skew_action_keeps_major_mismatches_hard() {
+        for forced in [false, true] {
+            let Some(SkewAction::Refuse { message, code }) =
+                remote_skew_action("1.0.0", "0.5.0", forced)
+            else {
+                panic!("major skew refuses");
+            };
+            assert_eq!(code, rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT);
+            assert!(message.contains("rimz 1.0.0"), "{message}");
+            assert!(message.contains("rimz 0.5.0"), "{message}");
+            assert!(
+                message.contains("--force-version does not apply"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_skew_action_warns_when_versions_cannot_be_parsed() {
+        let Some(SkewAction::Warn(message)) = remote_skew_action("dev", "0.5.0", false) else {
+            panic!("unparseable skew warns");
+        };
+        assert!(message.contains("rimz dev"), "{message}");
+        assert!(message.contains("rimz 0.5.0"), "{message}");
     }
 
     #[test]

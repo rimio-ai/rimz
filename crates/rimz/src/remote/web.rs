@@ -7,14 +7,15 @@ use crate::mux::CommandSpec;
 use crate::web::WebEngine;
 
 use super::{
-    REMOTE_CLIENT_VERSION_ENV, RemoteSpec, RemoteTarget, client_size_env_setup, quote_remote_path,
-    remote_exec_snippet, sh_quote, ssh_program,
+    REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV, RemoteSpec, RemoteTarget,
+    client_size_env_setup, quote_remote_path, remote_exec_snippet, sh_quote, ssh_program,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WebPrepOptions {
     pub confirm_resume: bool,
     pub no_resume: bool,
+    pub force_version: bool,
     pub client_size: Option<(u16, u16)>,
 }
 
@@ -36,6 +37,7 @@ pub fn web_prep_spec(target: &RemoteTarget, options: WebPrepOptions) -> CommandS
         target,
         &format!("rimz web {rimz_args}"),
         options.client_size,
+        options.force_version,
     )
 }
 
@@ -44,7 +46,12 @@ pub fn web_token_ensure_spec(target: &RemoteTarget, engine: WebEngine) -> Comman
         WebEngine::Zellij => "zellij",
         WebEngine::Ttyd => "tmux",
     };
-    one_shot_spec(target, &format!("rimz --mux {mux} web token ensure"), None)
+    one_shot_spec(
+        target,
+        &format!("rimz --mux {mux} web token ensure"),
+        None,
+        false,
+    )
 }
 
 pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16) -> CommandSpec {
@@ -71,19 +78,28 @@ fn one_shot_spec(
     target: &RemoteTarget,
     rimz: &str,
     client_size: Option<(u16, u16)>,
+    force_version: bool,
 ) -> CommandSpec {
     CommandSpec::new(ssh_program())
         .args(["-o", "ConnectTimeout=10", "--"])
         .arg(target.ssh_destination().as_str())
-        .arg(web_snippet(target, rimz, client_size))
+        .arg(web_snippet(target, rimz, client_size, force_version))
 }
 
-fn web_snippet(target: &RemoteTarget, rimz: &str, client_size: Option<(u16, u16)>) -> String {
-    let env_setup = format!(
-        "export TERM=xterm-256color; export COLORTERM=truecolor; export {REMOTE_CLIENT_VERSION_ENV}={}; {}",
+fn web_snippet(
+    target: &RemoteTarget,
+    rimz: &str,
+    client_size: Option<(u16, u16)>,
+    force_version: bool,
+) -> String {
+    let mut env_setup = format!(
+        "export TERM=xterm-256color; export COLORTERM=truecolor; export {REMOTE_CLIENT_VERSION_ENV}={}; ",
         sh_quote(crate::build_id::VERSION),
-        client_size_env_setup(client_size),
     );
+    if force_version {
+        env_setup.push_str(&format!("export {REMOTE_FORCE_VERSION_ENV}=1; "));
+    }
+    env_setup.push_str(&client_size_env_setup(client_size));
     remote_exec_snippet(target.host_display(), &env_setup, rimz)
 }
 
@@ -102,6 +118,7 @@ mod tests {
             WebPrepOptions {
                 confirm_resume: true,
                 no_resume: true,
+                force_version: true,
                 client_size: Some((180, 50)),
             },
         );
@@ -125,6 +142,11 @@ mod tests {
             "{}",
             session.args[4]
         );
+        assert!(
+            session.args[4].contains("export RIMZ_REMOTE_FORCE_VERSION=1;"),
+            "{}",
+            session.args[4]
+        );
 
         let path = web_prep_spec(
             &parse("dev-box:~/code/query-engine"),
@@ -134,6 +156,11 @@ mod tests {
             path.args[4]
                 .contains("exec rimz web open --print --json -- \"$HOME\"'/code/query-engine'"),
             "{}",
+            path.args[4]
+        );
+        assert!(
+            !path.args[4].contains(REMOTE_FORCE_VERSION_ENV),
+            "force stays opt-in: {}",
             path.args[4]
         );
     }
