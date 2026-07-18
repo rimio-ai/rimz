@@ -83,7 +83,7 @@ impl AskKind {
 }
 
 /// The agent-agnostic intent each native lifecycle event carries. An adapter's
-/// `observe_lifecycle` maps a native event onto exactly one of these (plus the
+/// `decode_hook` maps a native event onto exactly one of these (plus the
 /// enrichment); it no longer decides an [`AgentStatus`].
 ///
 /// Wire format is internally tagged on `signal` (snake_case), e.g.

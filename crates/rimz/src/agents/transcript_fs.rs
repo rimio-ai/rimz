@@ -6,7 +6,7 @@
 //! consumer is [`super::spending`]. The walk helpers they share live here.
 //!
 //! This is the *full-history* read — distinct from the bounded-tail context
-//! gauge each adapter reads in its `observe_lifecycle`: that scans only the
+//! gauge an adapter may read while decoding a lifecycle hook: that scans only the
 //! trailing window for the live row's `context_pct`/`total_tokens`; this walks
 //! the whole log for spend. Spend parsers are read-only and sidebar-safe — no
 //! store writes, run-wake, or broker imports (CI grep).

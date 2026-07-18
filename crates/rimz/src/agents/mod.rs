@@ -322,7 +322,7 @@ pub enum AgentHookClass {
     /// the agent rollup (`SessionStart`, `UserPromptSubmit`, `Stop`, …). Per
     /// `docs/internals/agents/model.md`, lifecycle is the durable state channel.
     /// Whether a lifecycle event records anything is decided by
-    /// [`AgentAdapter::observe_lifecycle`] returning `Some`.
+    /// [`DecodedHook::lifecycle`] carrying an observation.
     Lifecycle,
     AwaitingUser,
     Unknown,
@@ -649,7 +649,8 @@ impl LocalContextRefresh {
         Self::default()
     }
 
-    /// A current local snapshot owns the four latest-turn attention markers.
+    /// A current local snapshot owns the latest-turn attention markers and
+    /// reports an absent token reading while preserving an established gauge.
     pub fn authoritative_current() -> Self {
         Self {
             context: LocalContextPatch::authoritative_current(),
@@ -835,7 +836,7 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Test-only transcript-backed ask fixture for native prompts whose hook
     /// payload remains lifecycle-only. Conformance materializes the transcript
-    /// and feeds the event through [`Self::observe_lifecycle`].
+    /// and feeds the event through [`Self::decode_hook`].
     #[cfg(test)]
     fn derived_ask_fixture(&self) -> Option<DerivedAskFixture> {
         None
@@ -848,8 +849,6 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// Render the neutral no-op — the "agent's own UI is the answer" fallback
-    /// path. `None` means the hook should print nothing on this event.
     /// Derive provider-store-backed subagent lifecycle observations for parents in this workspace.
     /// Hook ingestion owns rollup deduplication and durable appends; adapters only map local truth.
     fn derive_subagent_observations(&self, _workspace: &Path) -> Vec<AgentLifecycleObservation> {
@@ -913,7 +912,7 @@ pub trait AgentAdapter: Send + Sync {
     /// or recovered, the transcript is unreadable, or the adapter has no local
     /// marker shape. The marker itself is display-only enrichment: it rides the
     /// context sidecar and refines the displayed row. An adapter may also use the
-    /// same evidence inside [`observe_lifecycle`](Self::observe_lifecycle) to set
+    /// same evidence inside [`decode_hook`](Self::decode_hook) to set
     /// a lifecycle error bit when the native turn-end payload lacks one.
     fn observe_turn_error(&self, _payload: &Value) -> Option<AgentTurnError> {
         None
