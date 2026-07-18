@@ -602,8 +602,11 @@ fn producer_fast_fold_publishes_workspace_content_without_a_pane_refresh() {
         generation: 0,
         offset: 0,
     });
-    crate::store::atomic::write_temp_then_rename_cache(&fixture.state.latest_snapshot, &rollup)
-        .unwrap();
+    std::fs::write(
+        &fixture.state.latest_snapshot,
+        serde_json::to_vec(&rollup).unwrap(),
+    )
+    .unwrap();
     let mut worker = fixture.worker();
 
     let first = fixture.run_with(FetchRequest::default(), &mut worker);
@@ -621,8 +624,11 @@ fn producer_fast_fold_publishes_workspace_content_without_a_pane_refresh() {
     let source = published.source;
 
     rollup.display_name = "second-and-longer".to_owned();
-    crate::store::atomic::write_temp_then_rename_cache(&fixture.state.latest_snapshot, &rollup)
-        .unwrap();
+    std::fs::write(
+        &fixture.state.latest_snapshot,
+        serde_json::to_vec(&rollup).unwrap(),
+    )
+    .unwrap();
     let second = fixture.run_with(FetchRequest::default(), &mut worker);
     assert!(matches!(
         second[0],
