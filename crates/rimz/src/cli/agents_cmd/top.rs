@@ -283,19 +283,13 @@ fn render_top(w: &mut impl Write, sample: &TopSample, rows: &[TopRow]) -> std::i
 }
 
 fn repaint(sample: &TopSample, rows: &[TopRow]) -> Result<()> {
-    use ratatui::crossterm::{
-        cursor::MoveTo,
-        execute,
-        terminal::{Clear, ClearType},
-    };
+    use ratatui::crossterm::{queue, terminal::Clear, terminal::ClearType};
 
     let mut stdout = std::io::stdout();
-    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
+    queue!(stdout, Clear(ClearType::All))?;
     let mut frame = Vec::new();
     render_top(&mut frame, sample, rows)?;
-    rimz::tui::write_crlf(&mut stdout, &frame)?;
-    execute!(stdout, Clear(ClearType::FromCursorDown))?;
-    stdout.flush()?;
+    rimz::tui::replace_frame(&mut stdout, &frame)?;
     Ok(())
 }
 

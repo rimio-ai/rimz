@@ -146,15 +146,14 @@ pub(crate) fn render_agents_table(
     let glyph = rimz::sidebar_pane::render::theme_glyphs(theme);
     let mut table = render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"])
         .right(&[3, 4, 5])
-        .max_width(max_width)
-        .card_rows();
+        .max_width(max_width);
     for group in groups {
         table.section_cells(group_header_cells(&group, snapshot, &glyph));
         for &agent in &group.agents {
-            table.row(agent_row(agent, &ordered_agents, now));
-            if let Some(line) = agent.activity_line() {
-                table.sub(render::cell(line).fg(render::palette::muted()));
-            }
+            let detail = agent
+                .activity_line()
+                .map(|line| render::cell(line).fg(render::palette::muted()));
+            table.card(agent_row(agent, &ordered_agents, now), detail);
         }
     }
     table.render(w)

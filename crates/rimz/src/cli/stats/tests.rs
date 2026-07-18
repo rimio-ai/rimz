@@ -410,6 +410,104 @@ fn refresh_key_outcome_ignores_other_keys() {
 }
 
 #[test]
+fn held_stats_applies_window_keys_without_a_current_frame() {
+    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut out = Vec::new();
+
+    for expected in [Window::Week, Window::Month, Window::Year, Window::AllTime] {
+        assert_eq!(
+            state
+                .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out,)
+                .unwrap(),
+            KeyOutcome::NextWindow
+        );
+        assert_eq!(state.active(), expected);
+    }
+    assert!(
+        out.is_empty(),
+        "window changes do not paint before first stats"
+    );
+
+    assert_eq!(
+        state
+            .apply_key(
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+                &mut out,
+            )
+            .unwrap(),
+        KeyOutcome::PrevWindow
+    );
+    assert_eq!(state.active(), Window::Year);
+    assert!(out.is_empty());
+}
+
+#[test]
+fn held_stats_preserves_reload_quit_and_hold_outcomes() {
+    let mut out = Vec::new();
+    let mut state = HeldStats::new(false, panel_glyphs(), false);
+
+    assert_eq!(
+        state
+            .apply_key(
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+                &mut out,
+            )
+            .unwrap(),
+        KeyOutcome::Reload
+    );
+    assert_eq!(
+        state
+            .apply_key(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &mut out,
+            )
+            .unwrap(),
+        KeyOutcome::Quit
+    );
+
+    let mut held = HeldStats::new(false, panel_glyphs(), true);
+    assert_eq!(
+        held.apply_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &mut out,
+        )
+        .unwrap(),
+        KeyOutcome::Ignore
+    );
+    assert!(out.is_empty());
+}
+
+#[test]
+fn refresh_event_carries_success_and_error_without_unwinding() {
+    let success = refresh_event(|| {
+        let mut stats = Stats {
+            by_day: BTreeMap::new(),
+            by_model: BTreeMap::new(),
+            by_agent: BTreeMap::new(),
+            total: SpendTally::default(),
+        };
+        stats.total.year.tokens = 42;
+        Ok(stats)
+    });
+    match success.stats {
+        Some(Ok(stats)) => assert_eq!(stats.total.year.tokens, 42),
+        _ => panic!("successful refresh must carry stats"),
+    }
+
+    let error = refresh_event(|| Err(anyhow!("refresh failed")));
+    match error.stats {
+        Some(Err(error)) => assert_eq!(error.to_string(), "refresh failed"),
+        _ => panic!("ordinary refresh failure must stay in the event"),
+    }
+
+    let panic = refresh_event(|| -> Result<Stats> { panic!("refresh panic") });
+    assert!(
+        panic.stats.is_none(),
+        "panic becomes an empty refresh event"
+    );
+}
+
+#[test]
 fn progress_bar_tracks_file_count() {
     assert_eq!(progress_bar(0, 10), "░".repeat(PROGRESS_BAR_WIDTH));
     assert_eq!(

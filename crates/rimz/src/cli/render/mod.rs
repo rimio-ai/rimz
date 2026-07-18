@@ -414,15 +414,31 @@ impl Cell {
     }
 }
 
-/// One body entry: a row of cells, a full-width follow-on block belonging to
-/// the preceding row, or a section label heading a group of following rows.
+/// One body entry: a dense row, an atomic card with optional detail, or a
+/// section label heading a group of following rows.
 enum Body {
     Row(Vec<Cell>),
-    Sub(Cell),
+    Card {
+        cells: Vec<Cell>,
+        detail: Option<Cell>,
+    },
     Section(Vec<Cell>),
 }
 
-const SUB_MAX_LINES: usize = 3;
+impl Body {
+    fn row_cells(&self) -> Option<&[Cell]> {
+        match self {
+            Self::Row(cells) | Self::Card { cells, .. } => Some(cells),
+            Self::Section(_) => None,
+        }
+    }
+
+    fn is_card(&self) -> bool {
+        matches!(self, Self::Card { .. })
+    }
+}
+
+const CARD_DETAIL_MAX_LINES: usize = 3;
 
 /// A borderless table whose columns auto-fit their widest cell. Headers render
 /// in the [`palette::header()`] tone; every body cell keeps its own style. Cells
@@ -436,7 +452,6 @@ pub(crate) struct Table {
     rows: Vec<Body>,
     indent: usize,
     max_width: Option<usize>,
-    card_rows: bool,
 }
 
 impl Table {
@@ -453,7 +468,6 @@ impl Table {
             rows: Vec::new(),
             indent: 0,
             max_width: None,
-            card_rows: false,
         }
     }
 
@@ -477,23 +491,19 @@ impl Table {
         self.rows.push(Body::Row(cells.into_iter().collect()));
     }
 
-    /// Add a full-width follow-on block to the preceding row. Its text must be
+    /// Add one card row and its optional full-width detail. Detail text must be
     /// pre-collapsed to one line; [`Self::max_width`] wraps it when configured.
-    pub(crate) fn sub(&mut self, cell: Cell) {
-        self.rows.push(Body::Sub(cell));
+    pub(crate) fn card<I: IntoIterator<Item = Cell>>(&mut self, cells: I, detail: Option<Cell>) {
+        self.rows.push(Body::Card {
+            cells: cells.into_iter().collect(),
+            detail,
+        });
     }
 
     /// Bound every rendered line to `max_total_width` where the table shape
-    /// permits it. Plain rows clip their trailing column; sub-blocks wrap.
+    /// permits it. Plain rows clip their trailing column; card details wrap.
     pub(crate) fn max_width(mut self, max_total_width: usize) -> Self {
         self.max_width = Some(max_total_width);
-        self
-    }
-
-    /// Separate each row and its optional sub-block as a visual card. Dense
-    /// tables retain their compact default spacing.
-    pub(crate) fn card_rows(mut self) -> Self {
-        self.card_rows = true;
         self
     }
 
@@ -509,13 +519,27 @@ impl Table {
     }
 
     pub(crate) fn render(&self, w: &mut impl Write) -> std::io::Result<()> {
+        let widths = self.column_widths();
+        let header_cells: Vec<Cell> = self
+            .headers
+            .iter()
+            .map(|h| cell(h.clone()).fg(palette::header()))
+            .collect();
+        self.write_row(w, &header_cells, &widths)?;
+        let mut previous_was_card = false;
+        for body in &self.rows {
+            self.write_body(w, body, &widths, previous_was_card)?;
+            previous_was_card = body.is_card();
+        }
+        Ok(())
+    }
+
+    fn column_widths(&self) -> Vec<usize> {
         let cols = self.headers.len();
         let mut widths: Vec<usize> = self.headers.iter().map(|h| h.width()).collect();
-        for body in &self.rows {
-            if let Body::Row(row) = body {
-                for (col, cell) in row.iter().enumerate().take(cols) {
-                    widths[col] = widths[col].max(cell.width());
-                }
+        for row in self.rows.iter().filter_map(Body::row_cells) {
+            for (col, cell) in row.iter().enumerate().take(cols) {
+                widths[col] = widths[col].max(cell.width());
             }
         }
         if let Some(max_total_width) = self.max_width
@@ -529,39 +553,44 @@ impl Table {
                 widths[last] = available.max(1).min(widths[last]);
             }
         }
-        let header_cells: Vec<Cell> = self
-            .headers
-            .iter()
-            .map(|h| cell(h.clone()).fg(palette::header()))
-            .collect();
-        self.write_row(w, &header_cells, &widths)?;
-        let mut previous: Option<&Body> = None;
-        for body in &self.rows {
-            match body {
-                Body::Row(row) => {
-                    if self.card_rows && matches!(previous, Some(Body::Row(_) | Body::Sub(_))) {
-                        writeln!(w)?;
-                    }
-                    self.write_row(w, row, &widths)?;
-                }
-                Body::Sub(cell) => self.write_sub(w, cell)?,
-                Body::Section(cells) => {
-                    writeln!(w)?;
-                    for (idx, cell) in cells.iter().enumerate() {
-                        if idx > 0 {
-                            write!(w, " ")?;
-                        }
-                        cell.write_styled(w)?;
-                    }
-                    writeln!(w)?;
-                }
-            }
-            previous = Some(body);
-        }
-        Ok(())
+        widths
     }
 
-    fn write_sub(&self, w: &mut impl Write, cell: &Cell) -> std::io::Result<()> {
+    fn write_body(
+        &self,
+        w: &mut impl Write,
+        body: &Body,
+        widths: &[usize],
+        previous_was_card: bool,
+    ) -> std::io::Result<()> {
+        match body {
+            Body::Row(row) => self.write_row(w, row, widths),
+            Body::Card { cells, detail } => {
+                if previous_was_card {
+                    writeln!(w)?;
+                }
+                self.write_row(w, cells, widths)?;
+                if let Some(detail) = detail {
+                    self.write_card_detail(w, detail)?;
+                }
+                Ok(())
+            }
+            Body::Section(cells) => self.write_section(w, cells),
+        }
+    }
+
+    fn write_section(&self, w: &mut impl Write, cells: &[Cell]) -> std::io::Result<()> {
+        writeln!(w)?;
+        for (idx, cell) in cells.iter().enumerate() {
+            if idx > 0 {
+                write!(w, " ")?;
+            }
+            cell.write_styled(w)?;
+        }
+        writeln!(w)
+    }
+
+    fn write_card_detail(&self, w: &mut impl Write, cell: &Cell) -> std::io::Result<()> {
         let indent = self.indent + 2;
         let Some(max_width) = self.max_width else {
             write!(w, "{:indent$}", "", indent = indent)?;
@@ -571,8 +600,8 @@ impl Table {
         };
         let budget = max_width.saturating_sub(indent);
         let mut lines = wrap_words(&cell.text, budget);
-        let truncated = lines.len() > SUB_MAX_LINES;
-        lines.truncate(SUB_MAX_LINES);
+        let truncated = lines.len() > CARD_DETAIL_MAX_LINES;
+        lines.truncate(CARD_DETAIL_MAX_LINES);
         if truncated
             && budget > 0
             && let Some(last) = lines.last_mut()
@@ -994,10 +1023,9 @@ mod tests {
     }
 
     #[test]
-    fn table_sub_wraps_with_an_aligned_indent() {
+    fn table_card_detail_wraps_with_an_aligned_indent() {
         let mut table = Table::new(["NAME"]).indent(2).max_width(20);
-        table.row([cell("agent")]);
-        table.sub(cell("one two three four five"));
+        table.card([cell("agent")], Some(cell("one two three four five")));
 
         assert_eq!(
             strip(|w| table.render(w)),
@@ -1006,10 +1034,12 @@ mod tests {
     }
 
     #[test]
-    fn table_sub_caps_lines_and_marks_truncation() {
+    fn table_card_detail_caps_lines_and_marks_truncation() {
         let mut table = Table::new(["NAME"]).max_width(10);
-        table.row([cell("agent")]);
-        table.sub(cell("one two three four five six seven eight"));
+        table.card(
+            [cell("agent")],
+            Some(cell("one two three four five six seven eight")),
+        );
 
         let rendered = strip(|w| table.render(w));
 
@@ -1018,28 +1048,35 @@ mod tests {
     }
 
     #[test]
-    fn table_sub_without_max_width_stays_on_one_line() {
+    fn table_card_detail_without_max_width_stays_on_one_line() {
         let mut table = Table::new(["NAME"]);
-        table.row([cell("agent")]);
-        table.sub(cell("one two three"));
+        table.card([cell("agent")], Some(cell("one two three")));
 
         assert_eq!(strip(|w| table.render(w)), "NAME\nagent\n  one two three\n");
     }
 
     #[test]
-    fn table_card_rows_separate_cards_without_section_gaps() {
-        let mut table = Table::new(["NAME"]).card_rows().max_width(20);
+    fn table_cards_separate_without_section_gaps() {
+        let mut table = Table::new(["NAME"]).max_width(20);
         table.section("first");
-        table.row([cell("one")]);
-        table.sub(cell("detail"));
-        table.row([cell("two")]);
+        table.card([cell("one")], Some(cell("detail")));
+        table.card([cell("two")], None);
         table.section("second");
-        table.row([cell("three")]);
+        table.card([cell("three")], None);
 
         assert_eq!(
             strip(|w| table.render(w)),
             "NAME\n\nfirst\none\n  detail\n\ntwo\n\nsecond\nthree\n"
         );
+    }
+
+    #[test]
+    fn table_cards_without_detail_still_separate() {
+        let mut table = Table::new(["NAME"]);
+        table.card([cell("one")], None);
+        table.card([cell("two")], None);
+
+        assert_eq!(strip(|w| table.render(w)), "NAME\none\n\ntwo\n");
     }
 
     #[test]

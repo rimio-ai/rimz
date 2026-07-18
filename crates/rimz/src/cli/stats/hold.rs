@@ -11,8 +11,7 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     // Raw mode makes keypresses typed events instead of echoed cooked input;
     // mouse reports from a sibling sidebar pane are drained below.
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Main)?;
-    let mut current: Option<Stats> = None;
-    let mut active = Window::AllTime;
+    let mut state = HeldStats::new(dollars, glyphs, hold);
     loop {
         let (tx, rx) = mpsc::channel();
         let worker_paths = paths.clone();
@@ -20,7 +19,7 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
             let event = refresh_event(|| load_or_refresh_stats_via_service(&worker_paths));
             let _ = tx.send(event);
         });
-        match hold_cycle(hold, &mut current, &rx, dollars, &glyphs, &mut active)? {
+        match hold_cycle(&mut state, &rx)? {
             CycleExit::Refresh => {}
             CycleExit::Reload => {
                 if let Some(target) = rimz::reload::current_reexec_target() {
@@ -69,7 +68,7 @@ pub(super) enum CycleExit {
 }
 
 pub(super) struct RefreshEvent {
-    stats: Option<Result<Stats>>,
+    pub(super) stats: Option<Result<Stats>>,
 }
 
 pub(super) fn refresh_event(load: impl FnOnce() -> Result<Stats>) -> RefreshEvent {
@@ -95,13 +94,84 @@ pub(super) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
     }
 }
 
-pub(super) fn hold_cycle(
-    hold: bool,
-    current: &mut Option<Stats>,
-    rx: &mpsc::Receiver<RefreshEvent>,
+pub(super) struct HeldStats {
+    current: Option<Stats>,
+    active: Window,
     dollars: bool,
-    glyphs: &PanelGlyphs,
-    active: &mut Window,
+    glyphs: PanelGlyphs,
+    hold: bool,
+}
+
+impl HeldStats {
+    pub(super) fn new(dollars: bool, glyphs: PanelGlyphs, hold: bool) -> Self {
+        Self {
+            current: None,
+            active: Window::AllTime,
+            dollars,
+            glyphs,
+            hold,
+        }
+    }
+
+    fn accept_refresh(&mut self, event: RefreshEvent, w: &mut impl Write) -> Result<()> {
+        if let Some(stats) = event.stats {
+            self.current = Some(stats?);
+            self.repaint(w)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_key(&mut self, key: KeyEvent, w: &mut impl Write) -> Result<KeyOutcome> {
+        let outcome = key_outcome(key, self.hold);
+        match outcome {
+            KeyOutcome::NextWindow => {
+                self.active = self.active.next();
+                self.repaint(w)?;
+            }
+            KeyOutcome::PrevWindow => {
+                self.active = self.active.prev();
+                self.repaint(w)?;
+            }
+            KeyOutcome::Reload | KeyOutcome::Quit | KeyOutcome::Ignore => {}
+        }
+        Ok(outcome)
+    }
+
+    #[cfg(test)]
+    pub(super) fn active(&self) -> Window {
+        self.active
+    }
+
+    fn repaint(&self, w: &mut impl Write) -> Result<()> {
+        let Some(stats) = self.current.as_ref() else {
+            return Ok(());
+        };
+        let today_day = unix_secs_now() as i64 / DAY_SECS;
+        let assists = AssistStats::load(&state_home(), self.active, Timestamp::now());
+        let stdout = std::io::stdout();
+        let choice = anstream::AutoStream::choice(&stdout);
+        let mut frame = anstream::AutoStream::new(Vec::new(), choice);
+        render_panel(
+            &mut frame,
+            panel::PanelStats {
+                usage: stats,
+                assists: &assists,
+                active: Some(self.active),
+            },
+            today_day,
+            self.dollars,
+            &self.glyphs,
+            true,
+            "\n",
+        )?;
+        rimz::tui::replace_frame(w, &frame.into_inner())?;
+        Ok(())
+    }
+}
+
+pub(super) fn hold_cycle(
+    state: &mut HeldStats,
+    rx: &mpsc::Receiver<RefreshEvent>,
 ) -> Result<CycleExit> {
     let deadline = Instant::now() + REFRESH_INTERVAL;
     let mut refresh_finished = false;
@@ -111,12 +181,7 @@ pub(super) fn hold_cycle(
         }
         match rx.try_recv() {
             Ok(event) => {
-                if let Some(stats) = event.stats {
-                    *current = Some(stats?);
-                    if let Some(stats) = current.as_ref() {
-                        repaint(stats, dollars, glyphs, *active)?;
-                    }
-                }
+                state.accept_refresh(event, &mut std::io::stdout().lock())?;
                 refresh_finished = true;
             }
             Err(mpsc::TryRecvError::Empty) => {}
@@ -137,26 +202,13 @@ pub(super) fn hold_cycle(
         match event::poll(timeout) {
             Ok(true) => match event::read() {
                 Ok(Event::Resize(_, _)) => {
-                    if let Some(stats) = current.as_ref() {
-                        repaint(stats, dollars, glyphs, *active)?;
-                    }
+                    state.repaint(&mut std::io::stdout().lock())?;
                 }
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                    match key_outcome(key, hold) {
+                    match state.apply_key(key, &mut std::io::stdout().lock())? {
                         KeyOutcome::Reload => return Ok(CycleExit::Reload),
                         KeyOutcome::Quit => return Ok(CycleExit::Quit),
-                        KeyOutcome::NextWindow => {
-                            *active = active.next();
-                            if let Some(stats) = current.as_ref() {
-                                repaint(stats, dollars, glyphs, *active)?;
-                            }
-                        }
-                        KeyOutcome::PrevWindow => {
-                            *active = active.prev();
-                            if let Some(stats) = current.as_ref() {
-                                repaint(stats, dollars, glyphs, *active)?;
-                            }
-                        }
+                        KeyOutcome::NextWindow | KeyOutcome::PrevWindow => {}
                         KeyOutcome::Ignore => {}
                     }
                 }
@@ -215,42 +267,15 @@ pub(super) fn reexec(target: &Path) -> anyhow::Error {
     )
 }
 
-/// Repaint the held panel in place: home the cursor, overwrite each line
-/// (clearing to its end), then clear anything below without a whole-screen blank.
-pub(super) fn repaint(
-    stats: &Stats,
-    dollars: bool,
-    glyphs: &PanelGlyphs,
-    active: Window,
-) -> Result<()> {
-    use ratatui::crossterm::{
-        cursor::MoveTo,
-        execute,
-        terminal::{Clear, ClearType},
-    };
-
-    execute!(std::io::stdout(), MoveTo(0, 0))?;
-    let today_day = unix_secs_now() as i64 / DAY_SECS;
-    let assists = AssistStats::load(&state_home(), active, Timestamp::now());
-    render_panel(
-        panel::PanelStats {
-            usage: stats,
-            assists: &assists,
-        },
-        today_day,
-        dollars,
-        glyphs,
-        true,
-        REFRESH_NL,
-        Some(active),
-    )?;
-    execute!(std::io::stdout(), Clear(ClearType::FromCursorDown))?;
-    Ok(())
-}
-
 pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
     let geometry = PanelGeometry::current();
-    emit(&header_lines(geometry.panel_width), geometry.outer, "\n")?;
+    let mut out = render::out();
+    emit(
+        &mut out,
+        &header_lines(geometry.panel_width),
+        geometry.outer,
+        "\n",
+    )?;
 
     let file_count = discover_spending_files().len();
     let spinner = Spinner::delayed(

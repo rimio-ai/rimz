@@ -66,9 +66,6 @@ const STAT_GUTTER: usize = 3;
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-/// Refresh-repaint line terminator: clear-to-EOL, then CRLF (raw mode). Lets a
-/// repaint overwrite the prior frame in place without a whole-screen blank.
-const REFRESH_NL: &str = "\x1b[K\r\n";
 const REFRESH_POLL_TICK: Duration = Duration::from_millis(100);
 
 /// The wordmark, spaced for a monospace terminal (the README carries a variant
@@ -170,17 +167,19 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
         return emit_json(&loaded.stats, &assists, today_day, args.dollars);
     }
     let glyphs = resolve_panel_glyphs(&super::machine_config().theme);
+    let mut out = render::out();
     render_panel(
+        &mut out,
         panel::PanelStats {
             usage: &loaded.stats,
             assists: &assists,
+            active: None,
         },
         today_day,
         args.dollars,
         &glyphs,
         !loaded.header_printed,
         "\n",
-        None,
     )
 }
 

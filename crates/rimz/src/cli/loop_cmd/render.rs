@@ -228,12 +228,6 @@ pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn repaint_watch(project_root: Option<&Path>, hold: bool) -> Result<()> {
-    use ratatui::crossterm::{
-        cursor::MoveTo,
-        execute,
-        terminal::{Clear, ClearType},
-    };
-
     let mut frame = Vec::new();
     render_watch_frame(&mut frame, project_root, hold)?;
     if frame.last() == Some(&b'\n') {
@@ -243,10 +237,7 @@ fn repaint_watch(project_root: Option<&Path>, hold: bool) -> Result<()> {
         }
     }
     let mut stdout = std::io::stdout();
-    execute!(stdout, MoveTo(0, 0))?;
-    rimz::tui::write_crlf(&mut stdout, &frame)?;
-    execute!(stdout, Clear(ClearType::FromCursorDown))?;
-    stdout.flush()?;
+    rimz::tui::replace_frame(&mut stdout, &frame)?;
     Ok(())
 }
 

@@ -149,20 +149,22 @@ impl PanelGeometry {
 pub(super) struct PanelStats<'a> {
     pub(super) usage: &'a Stats,
     pub(super) assists: &'a AssistStats,
+    pub(super) active: Option<Window>,
 }
 
 pub(super) fn render_panel(
+    w: &mut impl Write,
     stats: PanelStats<'_>,
     today_day: i64,
     dollars: bool,
     glyphs: &PanelGlyphs,
     include_header: bool,
     nl: &str,
-    active: Option<Window>,
 ) -> Result<()> {
     let PanelStats {
         usage: stats,
         assists,
+        active,
     } = stats;
     let geometry = PanelGeometry::current();
     let mut lines: Vec<String> = Vec::new();
@@ -181,7 +183,7 @@ pub(super) fn render_panel(
             lines.push(String::new());
             assists::panel_lines(&mut lines, assists, geometry.panel_width, 5);
         }
-        return emit(&lines, geometry.outer, nl);
+        return emit(w, &lines, geometry.outer, nl);
     }
 
     heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
@@ -216,7 +218,7 @@ pub(super) fn render_panel(
         assists::panel_lines(&mut lines, assists, geometry.panel_width, 5);
     }
 
-    emit(&lines, geometry.outer, nl)
+    emit(w, &lines, geometry.outer, nl)
 }
 
 pub(super) fn header_lines(panel_width: usize) -> Vec<String> {
@@ -246,14 +248,13 @@ pub(super) fn header_lines(panel_width: usize) -> Vec<String> {
 }
 
 /// Print the assembled panel, each line indented to centre the block on screen.
-pub(super) fn emit(lines: &[String], outer: usize, nl: &str) -> Result<()> {
+pub(super) fn emit(w: &mut impl Write, lines: &[String], outer: usize, nl: &str) -> Result<()> {
     let pad = " ".repeat(outer);
-    let mut out = render::out();
     for line in lines {
         if line.is_empty() {
-            write!(out, "{nl}")?;
+            write!(w, "{nl}")?;
         } else {
-            write!(out, "{pad}{line}{nl}")?;
+            write!(w, "{pad}{line}{nl}")?;
         }
     }
     Ok(())

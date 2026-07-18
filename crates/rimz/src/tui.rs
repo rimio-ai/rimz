@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ratatui::crossterm::execute;
+use ratatui::crossterm::queue;
 use ratatui::crossterm::style::Print;
 use ratatui::crossterm::{cursor, terminal};
 
@@ -104,6 +105,14 @@ pub fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
         w.write_all(b"\x1b[K")?;
     }
     Ok(())
+}
+
+/// Replace the visible terminal frame with one buffered write and flush.
+pub fn replace_frame(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+    queue!(w, cursor::MoveTo(0, 0))?;
+    write_crlf(w, bytes)?;
+    queue!(w, terminal::Clear(terminal::ClearType::FromCursorDown))?;
+    w.flush()
 }
 
 fn terminfo_truecolor() -> bool {
@@ -245,8 +254,28 @@ pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DISABLE_CLICK_WHEEL_CAPTURE, ENABLE_CLICK_WHEEL_CAPTURE, TruecolorSignals, write_crlf,
+        DISABLE_CLICK_WHEEL_CAPTURE, ENABLE_CLICK_WHEEL_CAPTURE, TruecolorSignals, replace_frame,
+        write_crlf,
     };
+    use std::io::Write;
+
+    #[derive(Default)]
+    struct RecordingWriter {
+        bytes: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes += 1;
+            Ok(())
+        }
+    }
 
     fn signals(colorterm: Option<&str>, terminfo: bool) -> TruecolorSignals {
         TruecolorSignals {
@@ -274,6 +303,36 @@ mod tests {
         write_crlf(&mut out, b"head\nrow\r\ntail").expect("write frame");
 
         assert_eq!(out, b"head\x1b[K\r\nrow\x1b[K\r\ntail\x1b[K");
+    }
+
+    #[test]
+    fn frame_replacement_orders_multiline_output_and_flushes_once() {
+        let mut out = RecordingWriter::default();
+
+        replace_frame(&mut out, b"head\nrow").expect("replace frame");
+
+        assert_eq!(out.bytes, b"\x1b[1;1Hhead\x1b[K\r\nrow\x1b[K\x1b[J");
+        assert_eq!(out.flushes, 1);
+    }
+
+    #[test]
+    fn frame_replacement_preserves_trailing_newline() {
+        let mut out = RecordingWriter::default();
+
+        replace_frame(&mut out, b"head\n").expect("replace frame");
+
+        assert_eq!(out.bytes, b"\x1b[1;1Hhead\x1b[K\r\n\x1b[J");
+        assert_eq!(out.flushes, 1);
+    }
+
+    #[test]
+    fn frame_replacement_clears_unterminated_final_line() {
+        let mut out = RecordingWriter::default();
+
+        replace_frame(&mut out, b"head").expect("replace frame");
+
+        assert_eq!(out.bytes, b"\x1b[1;1Hhead\x1b[K\x1b[J");
+        assert_eq!(out.flushes, 1);
     }
 
     #[test]
