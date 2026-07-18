@@ -931,11 +931,9 @@ fn sidebar_orphan_reaped_events(
     first_confirmed_at_ms: u64,
     second_confirmed_at_ms: u64,
 ) -> Vec<DiagEvent> {
-    let signalled = outcome.signalled.iter().copied().collect::<HashSet<_>>();
     let sigkilled = outcome.sigkilled.iter().copied().collect::<HashSet<_>>();
     confirmed
         .iter()
-        .filter(|candidate| signalled.contains(&candidate.pid))
         .map(|candidate| DiagEvent::SidebarOrphanReaped {
             pane_id: candidate.pane.to_string(),
             pid: candidate.pid as i32,
