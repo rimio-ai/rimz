@@ -60,6 +60,7 @@ const PANE_PROBE_WAIT_STEPS: u32 = 20;
 const PANE_GONE_STRIKES: u8 = 3;
 const SELF_CLOSE_RECONFIRM_DELAY: Duration = Duration::from_millis(500);
 pub const RELOAD_EXIT_CODE: i32 = 100;
+#[cfg(test)]
 const PANIC_EXIT_CODE: i32 = 101;
 pub const RESPAWN_EXIT_CODE: i32 = 102;
 pub const SELF_CLOSE_EXIT_CODE: i32 = 103;
@@ -135,8 +136,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
             .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
         let worker = wait_for_worker_and_reap_strays(
             worker_pid,
-            &mut pane_watchdog,
-            WorkerConvergence {
+            WorkerMonitor {
                 record_watch: &mut record_watch,
                 exec_state: &mut exec_state,
                 worker_build: worker_build.as_deref(),
@@ -144,28 +144,23 @@ pub fn run(config: ServeConfig) -> Result<()> {
                 started,
                 runtime: runtime.as_ref(),
                 config: &config,
+                watchdog: &mut pane_watchdog,
+                orphan_reap_pending: false,
+                handoff_deadline: None,
             },
         );
         drop(child);
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
         }
-        let worker = match worker? {
-            WaitOutcome::Worker(worker) => worker,
-            WaitOutcome::OrphanReaped => {
+        let worker = worker?;
+        match worker {
+            WorkerExit::OrphanReaped => {
                 record_orphan_reap(&config, worker_pid.as_raw());
                 remove_orphan_runtime_files(&config);
                 return Ok(());
             }
-        };
-
-        let action = if worker.handoff {
-            SuperviseAction::ReloadReexec
-        } else {
-            supervise_action(worker.termination.exit_code, worker.termination.signal)
-        };
-        match action {
-            SuperviseAction::ReloadReexec => {
+            WorkerExit::Reload => {
                 if let Some(target) = exec_state.promotable(
                     worker_build.as_deref(),
                     started.elapsed(),
@@ -187,37 +182,30 @@ pub fn run(config: ServeConfig) -> Result<()> {
                     }
                 }
             }
-            SuperviseAction::ConfirmSelfClose => {
-                match confirm_self_close(&config, &pane_watchdog) {
-                    SelfCloseConfirmation::Close | SelfCloseConfirmation::PaneGone => {
-                        restore_terminal(MouseCapture::Stdout, Screen::Main);
-                        remove_orphan_runtime_files(&config);
-                        record_confirmed_self_close(&config);
-                        return Ok(());
-                    }
-                    SelfCloseConfirmation::Keep { siblings, reason } => {
-                        record_self_close_rejected(&config, siblings, &reason);
-                        sleep_respawn_backoff(
-                            respawn_delay(RESPAWN_BACKOFF_INITIAL),
-                            &mut record_watch,
-                            &mut exec_state,
-                            supervisor_build.as_deref(),
-                        );
-                    }
+            WorkerExit::ConfirmSelfClose => match confirm_self_close(&config, &pane_watchdog) {
+                SelfCloseConfirmation::Close | SelfCloseConfirmation::PaneGone => {
+                    restore_terminal(MouseCapture::Stdout, Screen::Main);
+                    remove_orphan_runtime_files(&config);
+                    record_confirmed_self_close(&config);
+                    return Ok(());
                 }
-            }
-            SuperviseAction::Respawn => {
+                SelfCloseConfirmation::Keep { siblings, reason } => {
+                    record_self_close_rejected(&config, siblings, &reason);
+                    sleep_respawn_backoff(
+                        respawn_delay(RESPAWN_BACKOFF_INITIAL),
+                        &mut record_watch,
+                        &mut exec_state,
+                        supervisor_build.as_deref(),
+                    );
+                }
+            },
+            WorkerExit::Respawn { signal, exit_code } => {
                 let stderr_excerpt = stderr_tail
                     .lock()
                     .map(|tail| tail.excerpt())
                     .unwrap_or_default();
                 restore_terminal(MouseCapture::Stdout, Screen::Main);
-                record_signal_death(
-                    &config,
-                    worker.termination.signal,
-                    worker.termination.exit_code,
-                    stderr_excerpt,
-                );
+                record_signal_death(&config, signal, exit_code, stderr_excerpt);
                 let (delay, next) = respawn_backoff(backoff, started.elapsed());
                 debug!(
                     delay_ms = delay.as_millis(),
@@ -275,23 +263,32 @@ fn exec_supervisor(exe: &Path, args: &[OsString], config: &ServeConfig) -> Resul
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SuperviseAction {
-    ReloadReexec,
+enum WorkerExit {
+    Reload,
     ConfirmSelfClose,
-    Respawn,
+    Respawn {
+        signal: Option<i32>,
+        exit_code: Option<i32>,
+    },
+    OrphanReaped,
 }
 
-fn supervise_action(exit_code: Option<i32>, signal: Option<i32>) -> SuperviseAction {
-    match (exit_code, signal) {
-        (Some(RELOAD_EXIT_CODE), None) => SuperviseAction::ReloadReexec,
-        (Some(SELF_CLOSE_EXIT_CODE), None) => SuperviseAction::ConfirmSelfClose,
-        (Some(PANIC_EXIT_CODE), None)
-        | (Some(RESPAWN_EXIT_CODE), None)
-        | (Some(0), None)
-        | (None, Some(_))
-        | (Some(_), None) => SuperviseAction::Respawn,
-        _ => SuperviseAction::Respawn,
+fn classify_worker_exit(
+    orphan_reap_pending: bool,
+    handoff_requested: bool,
+    exit_code: Option<i32>,
+    signal: Option<i32>,
+) -> WorkerExit {
+    if orphan_reap_pending {
+        return WorkerExit::OrphanReaped;
     }
+    if handoff_requested || exit_code == Some(RELOAD_EXIT_CODE) && signal.is_none() {
+        return WorkerExit::Reload;
+    }
+    if exit_code == Some(SELF_CLOSE_EXIT_CODE) && signal.is_none() {
+        return WorkerExit::ConfirmSelfClose;
+    }
+    WorkerExit::Respawn { signal, exit_code }
 }
 
 fn respawn_backoff(current: Duration, run_duration: Duration) -> (Duration, Duration) {
@@ -301,24 +298,6 @@ fn respawn_backoff(current: Duration, run_duration: Duration) -> (Duration, Dura
         current
     };
     (delay, delay.saturating_mul(2).min(RESPAWN_BACKOFF_MAX))
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct WorkerTermination {
-    signal: Option<i32>,
-    exit_code: Option<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct WorkerWait {
-    termination: WorkerTermination,
-    handoff: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum WaitOutcome {
-    Worker(WorkerWait),
-    OrphanReaped,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -792,7 +771,7 @@ fn worker_pid(child: &Child) -> nix::unistd::Pid {
 }
 
 #[cfg(unix)]
-struct WorkerConvergence<'a> {
+struct WorkerMonitor<'a> {
     record_watch: &'a mut RecordWatch,
     exec_state: &'a mut PendingExec,
     worker_build: Option<&'a str>,
@@ -800,49 +779,95 @@ struct WorkerConvergence<'a> {
     started: Instant,
     runtime: Option<&'a crate::RuntimePaths>,
     config: &'a ServeConfig,
+    watchdog: &'a mut Option<PaneWatchdog>,
+    orphan_reap_pending: bool,
+    handoff_deadline: Option<Instant>,
+}
+
+#[cfg(unix)]
+impl WorkerMonitor<'_> {
+    fn terminal(&self, exit_code: Option<i32>, signal: Option<i32>) -> WorkerExit {
+        classify_worker_exit(
+            self.orphan_reap_pending,
+            self.handoff_deadline.is_some(),
+            exit_code,
+            signal,
+        )
+    }
+
+    fn poll(&mut self, worker_pid: nix::unistd::Pid, now: Instant) -> Result<()> {
+        use nix::sys::signal::Signal;
+
+        if let Some(change) = self.record_watch.poll_if_due(now) {
+            let worker_is_stale = apply_record_change(
+                self.exec_state,
+                &change,
+                self.supervisor_build,
+                self.worker_build,
+            );
+            if worker_is_stale && self.handoff_deadline.is_none() {
+                self.request_handoff(now);
+            }
+        }
+        if self.handoff_deadline.is_none()
+            && self
+                .exec_state
+                .promotable(
+                    self.worker_build,
+                    now.saturating_duration_since(self.started),
+                    respawn_stable_run(),
+                )
+                .is_some()
+        {
+            self.request_handoff(now);
+        }
+        if self
+            .handoff_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            kill_worker(worker_pid, Signal::SIGKILL)?;
+        }
+        if !self.orphan_reap_pending
+            && self
+                .watchdog
+                .as_mut()
+                .is_some_and(|watchdog| watchdog.probe_if_due(now))
+        {
+            kill_worker(worker_pid, Signal::SIGKILL)?;
+            self.orphan_reap_pending = true;
+        }
+        Ok(())
+    }
+
+    fn request_handoff(&mut self, now: Instant) {
+        request_worker_handoff(self.runtime, self.config, self.exec_state.target.as_ref());
+        self.handoff_deadline = Some(now + worker_handoff_grace());
+    }
+}
+
+#[cfg(unix)]
+fn kill_worker(worker_pid: nix::unistd::Pid, signal: nix::sys::signal::Signal) -> Result<()> {
+    match nix::sys::signal::kill(worker_pid, signal) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(err) => Err(SidebarSuperviseErr::Wait(wait_error(err))),
+    }
 }
 
 #[cfg(unix)]
 fn wait_for_worker_and_reap_strays(
     worker_pid: nix::unistd::Pid,
-    watchdog: &mut Option<PaneWatchdog>,
-    convergence: WorkerConvergence<'_>,
-) -> Result<WaitOutcome> {
-    use nix::sys::signal::{Signal, kill};
+    mut monitor: WorkerMonitor<'_>,
+) -> Result<WorkerExit> {
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
 
-    let mut orphan_reap_pending = false;
-    let mut handoff_deadline = None;
     loop {
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::Exited(pid, status)) if pid == worker_pid => {
-                let worker = WorkerTermination {
-                    exit_code: Some(status),
-                    signal: None,
-                };
-                return Ok(if orphan_reap_pending {
-                    WaitOutcome::OrphanReaped
-                } else {
-                    WaitOutcome::Worker(WorkerWait {
-                        termination: worker,
-                        handoff: handoff_deadline.is_some(),
-                    })
-                });
+                return Ok(monitor.terminal(Some(status), None));
             }
             Ok(WaitStatus::Signaled(pid, signal, _)) if pid == worker_pid => {
-                let worker = WorkerTermination {
-                    exit_code: None,
-                    signal: Some(signal as i32),
-                };
-                return Ok(if orphan_reap_pending {
-                    WaitOutcome::OrphanReaped
-                } else {
-                    WaitOutcome::Worker(WorkerWait {
-                        termination: worker,
-                        handoff: handoff_deadline.is_some(),
-                    })
-                });
+                return Ok(monitor.terminal(None, Some(signal as i32)));
             }
             Ok(WaitStatus::Exited(pid, status)) => {
                 debug!(
@@ -858,70 +883,14 @@ fn wait_for_worker_and_reap_strays(
                 );
             }
             Ok(WaitStatus::StillAlive) => {
-                let now = Instant::now();
-                if let Some(change) = convergence.record_watch.poll_if_due(now) {
-                    let worker_is_stale = apply_record_change(
-                        convergence.exec_state,
-                        &change,
-                        convergence.supervisor_build,
-                        convergence.worker_build,
-                    );
-                    if worker_is_stale && handoff_deadline.is_none() {
-                        request_worker_handoff(
-                            convergence.runtime,
-                            convergence.config,
-                            convergence.exec_state.target.as_ref(),
-                        );
-                        handoff_deadline = Some(now + worker_handoff_grace());
-                    }
-                }
-                if handoff_deadline.is_none()
-                    && convergence
-                        .exec_state
-                        .promotable(
-                            convergence.worker_build,
-                            now.saturating_duration_since(convergence.started),
-                            respawn_stable_run(),
-                        )
-                        .is_some()
-                {
-                    request_worker_handoff(
-                        convergence.runtime,
-                        convergence.config,
-                        convergence.exec_state.target.as_ref(),
-                    );
-                    handoff_deadline = Some(now + worker_handoff_grace());
-                }
-                if handoff_deadline.is_some_and(|deadline| now >= deadline) {
-                    match kill(worker_pid, Signal::SIGKILL) {
-                        Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
-                        Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
-                    }
-                }
-                if !orphan_reap_pending
-                    && watchdog
-                        .as_mut()
-                        .is_some_and(|watchdog| watchdog.probe_if_due(now))
-                {
-                    match kill(worker_pid, Signal::SIGKILL) {
-                        Ok(()) | Err(nix::errno::Errno::ESRCH) => orphan_reap_pending = true,
-                        Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
-                    }
-                }
+                monitor.poll(worker_pid, Instant::now())?;
                 thread::sleep(reap_poll_interval());
             }
             Ok(status) => {
                 debug!(status = ?status, "observed non-terminal child status");
             }
             Err(nix::errno::Errno::ECHILD) => {
-                return Ok(if orphan_reap_pending {
-                    WaitOutcome::OrphanReaped
-                } else {
-                    WaitOutcome::Worker(WorkerWait {
-                        termination: WorkerTermination::default(),
-                        handoff: handoff_deadline.is_some(),
-                    })
-                });
+                return Ok(monitor.terminal(None, None));
             }
             Err(nix::errno::Errno::EINTR) => continue,
             Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
@@ -1392,26 +1361,40 @@ mod tests {
     }
 
     #[test]
-    fn supervise_action_classifies_worker_exit() {
+    fn worker_exit_classifier_honours_orphan_then_handoff_then_status() {
         assert_eq!(
-            supervise_action(Some(RELOAD_EXIT_CODE), None),
-            SuperviseAction::ReloadReexec
+            classify_worker_exit(false, false, Some(RELOAD_EXIT_CODE), None),
+            WorkerExit::Reload
         );
         assert_eq!(
-            supervise_action(Some(PANIC_EXIT_CODE), None),
-            SuperviseAction::Respawn
+            classify_worker_exit(false, false, Some(PANIC_EXIT_CODE), None),
+            WorkerExit::Respawn {
+                signal: None,
+                exit_code: Some(PANIC_EXIT_CODE)
+            }
         );
         assert_eq!(
-            supervise_action(Some(RESPAWN_EXIT_CODE), None),
-            SuperviseAction::Respawn
+            classify_worker_exit(false, false, Some(SELF_CLOSE_EXIT_CODE), None),
+            WorkerExit::ConfirmSelfClose
         );
         assert_eq!(
-            supervise_action(Some(SELF_CLOSE_EXIT_CODE), None),
-            SuperviseAction::ConfirmSelfClose
+            classify_worker_exit(false, true, Some(SELF_CLOSE_EXIT_CODE), None),
+            WorkerExit::Reload,
+            "requested handoff outranks an exit code"
         );
-        assert_eq!(supervise_action(Some(0), None), SuperviseAction::Respawn);
-        assert_eq!(supervise_action(None, Some(9)), SuperviseAction::Respawn);
-        assert_eq!(supervise_action(Some(1), None), SuperviseAction::Respawn);
+        assert_eq!(
+            classify_worker_exit(true, true, Some(RELOAD_EXIT_CODE), None),
+            WorkerExit::OrphanReaped,
+            "orphan reap outranks handoff and exit code"
+        );
+        assert_eq!(
+            classify_worker_exit(false, false, None, None),
+            WorkerExit::Respawn {
+                signal: None,
+                exit_code: None
+            },
+            "ECHILD's unknown status is abnormal termination"
+        );
     }
 
     #[test]
