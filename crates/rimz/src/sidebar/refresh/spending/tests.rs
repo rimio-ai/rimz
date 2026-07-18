@@ -668,6 +668,7 @@ fn producer_missing_scope_applies_live_origin_before_reusing_warm_memo() {
         &spec,
         &origin_overrides,
         true,
+        now_secs,
     )
     .expect("producer derives the missing scope");
 

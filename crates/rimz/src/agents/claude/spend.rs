@@ -160,6 +160,34 @@ pub fn claude_config_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Config roots without filesystem filtering, for the process-local discovery
+/// index to retain across a transiently unavailable provider home.
+pub(super) fn claude_config_roots() -> Vec<PathBuf> {
+    if let Ok(env_val) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let roots = env_val
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(expand_tilde)
+            .map(|path| {
+                if path.file_name().is_some_and(|name| name == "projects") {
+                    path.parent().map(Path::to_path_buf).unwrap_or(path)
+                } else {
+                    path
+                }
+            })
+            .collect::<Vec<_>>();
+        if !roots.is_empty() {
+            return roots;
+        }
+    }
+    let home = home_dir();
+    let xdg = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home.join(".config"));
+    vec![xdg.join("claude"), home.join(".claude")]
+}
+
 fn env_config_dir(raw: &str) -> Option<PathBuf> {
     let raw = raw.trim();
     if raw.is_empty() {

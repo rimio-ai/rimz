@@ -5,7 +5,7 @@
 //! elected [`service`] owner of one warm [`SpendingWalker`], aggregates
 //! account-global and workspace-scoped windows, and publishes stamped
 //! provider/workspace caches. Discovery and parsing
-//! dispatch through the adapter ([`AgentAdapter::transcript_files`] /
+//! dispatch through the adapter ([`AgentAdapter::spending_sources`] /
 //! [`AgentAdapter::parse_spend`]): a dollar-logging provider (Claude's legacy
 //! `costUSD`, Pi) reads its figures verbatim, a token-only provider (Codex,
 //! current Claude) multiplies counts through the
@@ -15,6 +15,7 @@
 
 mod aggregate;
 mod cache;
+mod discovery;
 mod publish;
 mod refresh;
 pub mod service;
@@ -42,9 +43,9 @@ pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
 };
 #[cfg(test)]
-pub(crate) use aggregate::{
-    RAW_RETAIN_SECS, SKIP_PARSE_MARGIN_SECS, WIDEST_SPEND_WINDOW_SECS, cold_parse_out_of_window,
-};
+pub(crate) use aggregate::{RAW_RETAIN_SECS, cold_parse_out_of_window};
+#[cfg(test)]
+pub(crate) use aggregate::{SKIP_PARSE_MARGIN_SECS, WIDEST_SPEND_WINDOW_SECS};
 pub(crate) use cache::{CacheStamp, SPENDING_CACHE_VERSION, cache_stamp};
 pub use cache::{
     CachedEntry, FileCacheEntry, SpendCursor, SpendParse, SpendingDiskCache, read_spending_cache,
@@ -52,6 +53,7 @@ pub use cache::{
 };
 #[cfg(test)]
 pub(crate) use cache::{compact_spending_cache, peek_cache_version};
+pub use discovery::{SpendingSource, SpendingSourceGroup, SpendingSourceTree};
 pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
@@ -175,6 +177,7 @@ pub struct SpendingWalker {
     cache_stamp: Option<CacheStamp>,
     last_persisted_now_secs: Option<u64>,
     memo: Option<SpendingMemo>,
+    discovery: discovery::SpendingDiscoveryIndex,
 }
 
 #[derive(Clone, Debug)]
@@ -209,7 +212,47 @@ impl SpendingWalker {
             cache_stamp: None,
             last_persisted_now_secs: None,
             memo: None,
+            discovery: discovery::SpendingDiscoveryIndex::default(),
         }
+    }
+
+    /// Discover the historical spend stores through this walker's warm,
+    /// process-local directory frontier.
+    pub fn discover_spending_files(
+        &mut self,
+        now_secs: u64,
+    ) -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
+        #[cfg(test)]
+        if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.borrow().clone()) {
+            if files.is_empty() {
+                self.discovery.mark_non_authoritative_for_test();
+            }
+            return files;
+        }
+
+        self.discovery
+            .discover(crate::agents::all_adapters(), now_secs)
+    }
+
+    pub(crate) fn spending_discovery_is_authoritative(&self) -> bool {
+        self.discovery.last_scan_authoritative()
+    }
+
+    /// Exercise the production discovery index with an explicit source set.
+    /// Performance fixtures use this without mutating provider-home globals.
+    #[cfg(feature = "testkit")]
+    #[doc(hidden)]
+    pub fn discover_declared_spending_files(
+        &mut self,
+        adapter: &'static dyn AgentAdapter,
+        sources: Vec<SpendingSource>,
+        now_secs: u64,
+    ) -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
+        self.discovery
+            .discover_sources_for_testkit(sources, now_secs)
+            .into_iter()
+            .map(|path| (adapter, path))
+            .collect()
     }
 
     pub fn recorded_unknown_models(
@@ -296,6 +339,7 @@ impl SpendingWalker {
                 },
             );
         }
+        self.discovery.reconcile(&self.cache, req.now_secs);
         if checkpoint_written {
             stats.cache_written = true;
             self.last_persisted_now_secs = Some(req.now_secs);
@@ -457,22 +501,6 @@ impl Default for SpendingWalker {
 }
 
 // ── Spending computation ──────────────────────────────────────────────────────
-
-pub fn discover_spending_files() -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
-    #[cfg(test)]
-    if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.borrow().clone()) {
-        return files;
-    }
-
-    crate::agents::all_adapters()
-        .flat_map(|adapter| {
-            adapter
-                .transcript_files()
-                .into_iter()
-                .map(move |file| (adapter, file))
-        })
-        .collect()
-}
 
 /// Compute one live session's cumulative USD cost from the transcript/store the
 /// adapter already parses for historical spending. Native thread ids select the

@@ -547,6 +547,16 @@ impl AgentAdapter for KimiAdapter {
         spend::files()
     }
 
+    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+        crate::agents::spending::SpendingSourceTree::new(
+            wire::kimi_home().join("sessions"),
+            "*/*/agents/main/wire.jsonl",
+        )
+        .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
+        .into_iter()
+        .collect()
+    }
+
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| valid_main_wire(path, session_id)) {
             return Some(path.to_path_buf());

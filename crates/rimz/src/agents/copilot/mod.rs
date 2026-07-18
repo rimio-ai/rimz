@@ -604,6 +604,19 @@ impl AgentAdapter for CopilotAdapter {
         paths::transcript_files()
     }
 
+    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+        paths::copilot_home()
+            .and_then(|home| {
+                crate::agents::spending::SpendingSourceTree::new(
+                    home.join("session-state"),
+                    "*/events.jsonl",
+                )
+            })
+            .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
+            .into_iter()
+            .collect()
+    }
+
     fn parse_spend(
         &self,
         path: &Path,

@@ -1279,10 +1279,9 @@ pub trait AgentAdapter: Send + Sync {
         })
     }
 
-    /// Every full-history spending source this agent has on disk, fleet-wide —
-    /// the discovery walk for [`spending::SpendingWalker`]. This remains empty
-    /// when historical spend is unsupported, independently of conversation
-    /// parsing, local-session discovery, and [`Self::session_transcript`].
+    /// Conversation/store candidates used to resolve a live session for
+    /// transcript UI and session-cost lookup. Historical fleet spending uses
+    /// [`spending_sources`](Self::spending_sources) instead.
     fn transcript_files(&self) -> Vec<PathBuf> {
         Vec::new()
     }
@@ -1293,6 +1292,13 @@ pub trait AgentAdapter: Send + Sync {
     /// invalidation without discovering companions as duplicate sources.
     fn transcript_stat(&self, path: &Path) -> Option<TranscriptStat> {
         TranscriptStat::from_path(path)
+    }
+
+    /// Declarative historical-spend stores consumed by the persistent
+    /// [`spending::SpendingWalker`]. An adapter with no historical spend keeps
+    /// the empty default even when it exposes transcripts for session lookup.
+    fn spending_sources(&self) -> Vec<spending::SpendingSource> {
+        Vec::new()
     }
 
     /// Resolve the local conversation/store that carries a live session's spend.

@@ -787,6 +787,30 @@ impl AgentAdapter for CodexAdapter {
         spend::codex_session_files()
     }
 
+    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+        spend::codex_homes()
+            .into_iter()
+            .filter_map(|home| {
+                let active = crate::agents::spending::SpendingSourceTree::new(
+                    home.join("sessions"),
+                    "**/*.jsonl",
+                )?
+                .codex_dates();
+                let archived = crate::agents::spending::SpendingSourceTree::new(
+                    home.join("archived_sessions"),
+                    "**/*.jsonl",
+                )?
+                .codex_dates();
+                let legacy = crate::agents::spending::SpendingSourceTree::new(home, "**/*.jsonl")?
+                    .filtered("codex-legacy", spend::legacy_spend_relative)
+                    .descend_filtered("codex-legacy-dirs", spend::legacy_spend_relative);
+                Some(crate::agents::spending::SpendingSource::group(vec![
+                    active, archived, legacy,
+                ]))
+            })
+            .collect()
+    }
+
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| path.is_file()) {
             return Some(path.to_path_buf());

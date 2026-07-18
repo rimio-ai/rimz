@@ -277,11 +277,10 @@ pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<Loade
         "\n",
     )?;
 
-    let file_count = discover_spending_files().len();
     let spinner = Spinner::delayed(
         progress_line(SpendProgress {
             finished_files: 0,
-            total_files: file_count,
+            total_files: 0,
         }),
         SPINNER_MIN_AGE,
     );

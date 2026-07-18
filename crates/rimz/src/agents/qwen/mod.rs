@@ -577,6 +577,15 @@ impl AgentAdapter for QwenAdapter {
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::all_jsonl_files()
     }
+    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+        crate::agents::spending::SpendingSourceTree::new(
+            spend::runtime_base().join("projects"),
+            "*/chats/*.jsonl",
+        )
+        .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
+        .into_iter()
+        .collect()
+    }
     fn parse_spend(
         &self,
         path: &Path,

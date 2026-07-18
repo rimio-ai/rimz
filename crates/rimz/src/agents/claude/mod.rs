@@ -698,6 +698,16 @@ impl AgentAdapter for ClaudeAdapter {
         spend::all_jsonl_files()
     }
 
+    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+        spend::claude_config_roots()
+            .into_iter()
+            .filter_map(|dir| {
+                crate::agents::spending::SpendingSourceTree::new(dir.join("projects"), "**/*.jsonl")
+            })
+            .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
+            .collect()
+    }
+
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| path.is_file()) {
             return Some(path.to_path_buf());

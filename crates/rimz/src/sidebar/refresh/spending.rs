@@ -9,8 +9,7 @@ use std::time::Duration;
 
 use crate::agents::spending::{
     ProviderSpendingCache, SESSION_GAP_SECS, SpendProgress, SpendScope, SpendingCaches,
-    WorkspaceSpendingCache, compute_scoped_spending, discover_spending_files,
-    read_provider_spending_cache, user_input,
+    WorkspaceSpendingCache, compute_scoped_spending, read_provider_spending_cache, user_input,
 };
 use crate::sidebar::timing::SPENDING_STALE_GRACE;
 use crate::sidebar::timing::unix_now_ms;
@@ -39,7 +38,7 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 /// leaves the shared files to the elected producer.
 ///
 /// Every registered adapter is discovered fleet-wide
-/// ([`transcript_files`](crate::agents::AgentAdapter::transcript_files)) so each
+/// ([`spending_sources`](crate::agents::AgentAdapter::spending_sources)) so each
 /// counts on the same footing, and the dashboard panel and fleet store read
 /// one provider's spend the same way regardless of which project it ran in.
 #[cfg(test)]
@@ -189,7 +188,8 @@ fn compute_fleet_spending(
         crate::store::single_flight::Coalesced::Shared(cache) => cache,
         crate::store::single_flight::Coalesced::Produce(_guard) => {
             let provider = read_provider_spending_cache(&provider_path);
-            let files = discover_spending_files();
+            let now_secs = crate::agents::spending::unix_secs_now();
+            let files = walker.discover_spending_files(now_secs);
             if provider.is_fresh(unix_now_ms())
                 && let Some(workspace) = workspace_cache_from_shared_entries_inner(
                     walker,
@@ -201,6 +201,7 @@ fn compute_fleet_spending(
                     spec,
                     &context.origin_overrides,
                     true,
+                    now_secs,
                 )
             {
                 crate::agents::spending::SpendingCaches {
@@ -208,12 +209,15 @@ fn compute_fleet_spending(
                     workspace,
                 }
             } else {
-                walk_fleet_spending_context(walker, runtime, context, spec, true, progress)
+                walk_fleet_spending_files(
+                    walker, runtime, context, spec, true, progress, &files, now_secs,
+                )
             }
         }
         crate::store::single_flight::Coalesced::ProduceLocal => {
             let provider = read_provider_spending_cache(&provider_path);
-            let files = discover_spending_files();
+            let now_secs = crate::agents::spending::unix_secs_now();
+            let files = walker.discover_spending_files(now_secs);
             if provider.is_fresh(unix_now_ms())
                 && let Some(workspace) = workspace_cache_from_shared_entries_inner(
                     walker,
@@ -225,6 +229,7 @@ fn compute_fleet_spending(
                     spec,
                     &context.origin_overrides,
                     false,
+                    now_secs,
                 )
             {
                 crate::agents::spending::SpendingCaches {
@@ -240,7 +245,9 @@ fn compute_fleet_spending(
                 })
             } else {
                 served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
-                    walk_fleet_spending_context(walker, runtime, context, spec, false, progress)
+                    walk_fleet_spending_files(
+                        walker, runtime, context, spec, false, progress, &files, now_secs,
+                    )
                 })
             }
         }
@@ -318,6 +325,7 @@ fn serve_prev_on_young_regression(
     }
 }
 
+#[cfg(test)]
 fn walk_fleet_spending_context(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
@@ -326,11 +334,32 @@ fn walk_fleet_spending_context(
     publish: bool,
     progress: &mut dyn FnMut(SpendProgress),
 ) -> crate::agents::spending::SpendingCaches {
+    let now_secs = crate::agents::spending::unix_secs_now();
+    let files = walker.discover_spending_files(now_secs);
+    walk_fleet_spending_files(
+        walker, runtime, context, spec, publish, progress, &files, now_secs,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one request carries its single discovery/time snapshot through publication"
+)]
+fn walk_fleet_spending_files(
+    walker: &mut crate::agents::spending::SpendingWalker,
+    runtime: &RuntimePaths,
+    context: &SpendingRequestContext<'_>,
+    spec: &crate::agents::spending::HeadlineSpec,
+    publish: bool,
+    progress: &mut dyn FnMut(SpendProgress),
+    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    now_secs: u64,
+) -> crate::agents::spending::SpendingCaches {
     use crate::agents::pricing;
     use crate::agents::spending::{
         PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SilentWalk, SpendScope, Spending,
         SpendingCaches, WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
-        read_provider_spending_cache, unix_secs_now, write_provider_spending_cache,
+        read_provider_spending_cache, write_provider_spending_cache,
         write_workspace_spending_cache,
     };
 
@@ -341,15 +370,11 @@ fn walk_fleet_spending_context(
         context.worktree_home,
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
-    // Tag each file with its adapter at discovery — the source knows the kind,
-    // so pricing/bucketing never has to guess it from the path.
-    let files = discover_spending_files();
     if files.is_empty() {
-        // Empty discovery is not authoritative once a prior walk has found spend:
-        // transcript homes can be transiently unreadable, and publishing a fresh
-        // zero would blank the provider dashboard until the next successful walk.
+        // A non-authoritative empty scan retains prior publications; an
+        // authoritative empty index is a real deletion and publishes zero.
         let published = read_provider_spending_cache(&provider_path);
-        if !published.spending.total.is_zero() {
+        if !walker.spending_discovery_is_authoritative() && !published.spending.total.is_zero() {
             return SpendingCaches {
                 provider: published,
                 workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
@@ -359,11 +384,11 @@ fn walk_fleet_spending_context(
         let spending = Spending::default();
         let user_inputs = user_input::load();
         let scoped = compute_scoped_spending(
-            &files,
+            files,
             &Default::default(),
             &user_inputs,
             &scope,
-            unix_secs_now(),
+            now_secs,
             spec,
         );
         let workspace = WorkspaceSpendingCache {
@@ -407,9 +432,8 @@ fn walk_fleet_spending_context(
     // remote refresh, including the unknown-model chase) rides the stale arm
     // with it. A local fallback reads the shared pricing cache without writing;
     // only the producer refreshes it while holding the spending lock.
-    let now_secs = unix_secs_now();
     let prices = if publish {
-        let unknowns = walker.recorded_unknown_models(&cache_path, &files, now_secs);
+        let unknowns = walker.recorded_unknown_models(&cache_path, files, now_secs);
         Arc::new(pricing::load_for_spending(
             &runtime.shared_pricing_cache_path(),
             &unknowns,
@@ -419,7 +443,7 @@ fn walk_fleet_spending_context(
     };
     let user_inputs = user_input::load();
     let req = WalkRequest {
-        files: &files,
+        files,
         prices: &prices,
         now_secs,
         origin_overrides: &context.origin_overrides,
@@ -431,7 +455,7 @@ fn walk_fleet_spending_context(
         let mut observer = PublishingWalkObserver {
             runtime,
             provider_path: provider_path.clone(),
-            files: &files,
+            files,
             user_inputs: &user_inputs,
             now_secs,
             scope: Some(&scope),
@@ -604,8 +628,9 @@ fn workspace_cache_from_shared_entries_inner(
     spec: &crate::agents::spending::HeadlineSpec,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
     publish: bool,
+    now_secs: u64,
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
-    use crate::agents::spending::{unix_secs_now, write_workspace_spending_cache};
+    use crate::agents::spending::write_workspace_spending_cache;
     let Some(scope_hash) = scope_hash else {
         return Some(Default::default());
     };
@@ -613,7 +638,7 @@ fn workspace_cache_from_shared_entries_inner(
         &runtime.shared_spending_cursor_path(),
         origin_overrides,
         publish,
-        unix_secs_now(),
+        now_secs,
     );
     let user_inputs = user_input::load();
     let cached = walker.scoped_from_cache(
@@ -621,7 +646,7 @@ fn workspace_cache_from_shared_entries_inner(
         files,
         &user_inputs,
         scope,
-        unix_secs_now(),
+        now_secs,
         spec,
     );
     if !provider.spending.total.is_zero() && !cached.has_discovered_file {
@@ -672,6 +697,7 @@ fn workspace_cache_from_shared_entries(
         spec,
         &HashMap::new(),
         true,
+        crate::agents::spending::unix_secs_now(),
     )
 }
 

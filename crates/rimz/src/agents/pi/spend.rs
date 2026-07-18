@@ -130,26 +130,7 @@ struct PiCost {
 /// `PI_CODING_AGENT_DIR` / `~/.pi/agent`. Pi sessions are not project-scoped,
 /// so all sessions are included regardless of worktree paths.
 pub fn pi_session_files() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-
-    if let Ok(env_val) = std::env::var("PI_AGENT_DIR") {
-        for raw in env_val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            let p = PathBuf::from(raw);
-            if p.is_dir() {
-                roots.push(p);
-            }
-        }
-    } else if let Ok(raw) = std::env::var("PI_CODING_AGENT_SESSION_DIR") {
-        let candidate = PathBuf::from(raw);
-        if candidate.is_dir() {
-            roots.push(candidate);
-        }
-    } else {
-        let candidate = pi_config_dir().join("sessions");
-        if candidate.is_dir() {
-            roots.push(candidate);
-        }
-    }
+    let roots = pi_session_roots();
 
     let mut files = Vec::new();
     for dir in &roots {
@@ -158,6 +139,23 @@ pub fn pi_session_files() -> Vec<PathBuf> {
     files.sort();
     files.dedup();
     files
+}
+
+pub(super) fn pi_session_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Ok(env_val) = std::env::var("PI_AGENT_DIR") {
+        for raw in env_val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let p = PathBuf::from(raw);
+            roots.push(p);
+        }
+    } else if let Ok(raw) = std::env::var("PI_CODING_AGENT_SESSION_DIR") {
+        roots.push(PathBuf::from(raw));
+    } else {
+        roots.push(pi_config_dir().join("sessions"));
+    }
+
+    roots
 }
 
 pub(crate) fn pi_config_dir() -> PathBuf {

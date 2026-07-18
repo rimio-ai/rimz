@@ -36,9 +36,19 @@ pub(crate) fn refresh_spending_cache(
     let mut finished_files = 0;
     let mut jobs = Vec::new();
     for (adapter, file) in files {
-        let stat = adapter.transcript_stat(file).unwrap_or_default();
         let key = file.to_string_lossy().into_owned();
         let entry = cache.files.get(&key);
+        let Some(stat) = adapter.transcript_stat(file) else {
+            finished_files += 1;
+            (callbacks.tick)(
+                cache,
+                SpendProgress {
+                    finished_files,
+                    total_files,
+                },
+            );
+            continue;
+        };
         let override_origin = origin_overrides
             .get(file)
             .and_then(|origin| normalized_absolute_path(origin));

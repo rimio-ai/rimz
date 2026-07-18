@@ -63,7 +63,11 @@ use wire::{CodexLogEntry, CodexRawUsage};
 /// **Note:** Codex files are not scoped to a project directory — all sessions
 /// are returned.  Computing USD cost from these files requires a pricing table.
 pub fn codex_session_files() -> Vec<PathBuf> {
-    let homes = if let Ok(env_val) = std::env::var("CODEX_HOME") {
+    codex_session_files_from_homes(&codex_homes())
+}
+
+pub(super) fn codex_homes() -> Vec<PathBuf> {
+    if let Ok(env_val) = std::env::var("CODEX_HOME") {
         env_val
             .split(',')
             .map(str::trim)
@@ -72,8 +76,16 @@ pub fn codex_session_files() -> Vec<PathBuf> {
             .collect()
     } else {
         vec![home_dir().join(".codex")]
-    };
-    codex_session_files_from_homes(&homes)
+    }
+}
+
+pub(super) fn legacy_spend_relative(path: &Path) -> bool {
+    path.components().next().is_none_or(|component| {
+        !matches!(
+            component.as_os_str().to_str(),
+            Some("sessions" | "archived_sessions")
+        )
+    })
 }
 
 fn codex_session_files_from_homes(homes: &[PathBuf]) -> Vec<PathBuf> {

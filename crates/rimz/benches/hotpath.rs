@@ -85,6 +85,7 @@ struct SpendingFixture {
     files: Vec<(&'static dyn rimz::agents::AgentAdapter, PathBuf)>,
     prices: rimz::agents::PriceBook,
     walker: rimz::agents::spending::SpendingWalker,
+    sources: Vec<rimz::agents::spending::SpendingSource>,
 }
 
 struct ChangedSessionFixture {
@@ -197,11 +198,16 @@ fn spending_fixture_scaled(
 ) -> SpendingFixture {
     let tempdir = TempDir::new().expect("tempdir");
     let cache_path = tempdir.path().join("spending.json");
+    let history_root = tempdir.path().join("history");
     let mut cache = rimz::agents::spending::read_spending_cache(&cache_path);
     cache.files = HashMap::new();
     let mut files = Vec::new();
     for file_index in 0..files_count {
-        let transcript = tempdir.path().join(format!("cached-{file_index}.jsonl"));
+        let transcript = history_root
+            .join(format!("{:04}", file_index / 100))
+            .join(format!("cached-{file_index}.jsonl"));
+        std::fs::create_dir_all(transcript.parent().expect("history parent"))
+            .expect("history directory");
         std::fs::write(&transcript, b"").expect("transcript");
         let entries = (0..entries_per_file)
             .map(|offset| {
@@ -243,6 +249,10 @@ fn spending_fixture_scaled(
     }
     rimz::agents::spending::write_spending_cache(&cache_path, &cache);
     let prices = rimz::agents::PriceBook::default();
+    let sources = vec![rimz::agents::spending::SpendingSource::group(vec![
+        rimz::agents::spending::SpendingSourceTree::new(&history_root, "**/*.jsonl")
+            .expect("benchmark pattern"),
+    ])];
     let mut walker = rimz::agents::spending::SpendingWalker::new();
     if warm {
         let origin_overrides = HashMap::new();
@@ -265,7 +275,20 @@ fn spending_fixture_scaled(
         files,
         prices,
         walker,
+        sources,
     }
+}
+
+fn spending_discovery_fixture(warm: bool) -> SpendingFixture {
+    let mut fixture = spending_fixture_scaled(6_000, 17, true, true);
+    if warm {
+        let _ = fixture.walker.discover_declared_spending_files(
+            &rimz::agents::ClaudeAdapter,
+            fixture.sources.clone(),
+            SPENDING_NOW_SECS,
+        );
+    }
+    fixture
 }
 
 #[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
@@ -376,6 +399,66 @@ fn spending_live_scale_warm_global_refresh(bencher: Bencher) {
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
                 files: &fixture.files,
+                prices: &fixture.prices,
+                now_secs: SPENDING_NOW_SECS,
+                origin_overrides: &origin_overrides,
+                user_inputs: &user_inputs,
+                scope: None,
+                spec: &spec,
+            };
+            divan::black_box(fixture.walker.walk(
+                &fixture.cache_path,
+                &req,
+                &mut rimz::agents::spending::SilentWalk,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
+fn spending_live_scale_cold_discovery_inclusive(bencher: Bencher) {
+    bencher
+        .with_inputs(|| spending_discovery_fixture(false))
+        .bench_local_values(|mut fixture| {
+            let files = fixture.walker.discover_declared_spending_files(
+                &rimz::agents::ClaudeAdapter,
+                fixture.sources.clone(),
+                SPENDING_NOW_SECS,
+            );
+            let origin_overrides = HashMap::new();
+            let user_inputs = Vec::new();
+            let spec = rimz::agents::spending::HeadlineSpec::default();
+            let req = rimz::agents::spending::WalkRequest {
+                files: &files,
+                prices: &fixture.prices,
+                now_secs: SPENDING_NOW_SECS,
+                origin_overrides: &origin_overrides,
+                user_inputs: &user_inputs,
+                scope: None,
+                spec: &spec,
+            };
+            divan::black_box(fixture.walker.walk(
+                &fixture.cache_path,
+                &req,
+                &mut rimz::agents::spending::SilentWalk,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
+fn spending_live_scale_warm_discovery_inclusive(bencher: Bencher) {
+    bencher
+        .with_inputs(|| spending_discovery_fixture(true))
+        .bench_local_values(|mut fixture| {
+            let files = fixture.walker.discover_declared_spending_files(
+                &rimz::agents::ClaudeAdapter,
+                fixture.sources.clone(),
+                SPENDING_NOW_SECS,
+            );
+            let origin_overrides = HashMap::new();
+            let user_inputs = Vec::new();
+            let spec = rimz::agents::spending::HeadlineSpec::default();
+            let req = rimz::agents::spending::WalkRequest {
+                files: &files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
                 origin_overrides: &origin_overrides,

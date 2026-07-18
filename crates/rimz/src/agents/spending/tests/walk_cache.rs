@@ -62,6 +62,39 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
 }
 
 #[test]
+fn transient_file_stat_failure_preserves_the_cached_parse() {
+    let dir = TempDir::new().unwrap();
+    let file = write_jsonl(
+        dir.path(),
+        "chat.jsonl",
+        &[&claude_line(&utc_date(NOW_SECS), 0.5, "msg-1", "req-1")],
+    );
+    let files = vec![(claude_adapter(), file.clone())];
+    let cache_path = dir.path().join("spending.json");
+    let mut walker = SpendingWalker::new();
+    let first = walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut SilentWalk
+    );
+
+    std::fs::rename(&file, dir.path().join("parked.jsonl")).unwrap();
+    let retry = walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut SilentWalk
+    );
+    assert_eq!(retry.spending, first.spending);
+    assert_eq!(retry.stats.parse_jobs, 0);
+}
+
+#[test]
 fn spending_walk_threads_user_inputs_into_session_headline() {
     let dir = TempDir::new().unwrap();
     let file = write_jsonl(

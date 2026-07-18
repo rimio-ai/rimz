@@ -11,7 +11,7 @@ use crate::agents::transcript_fs::home_dir;
 
 use super::payloads::{TranscriptRecord, fold_transcript};
 
-fn runtime_base() -> PathBuf {
+pub(super) fn runtime_base() -> PathBuf {
     std::env::var_os("QWEN_RUNTIME_DIR")
         .filter(|value| !value.is_empty())
         .or_else(|| std::env::var_os("QWEN_HOME").filter(|value| !value.is_empty()))

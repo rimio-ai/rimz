@@ -78,11 +78,7 @@ fn stock_store_transcript_context_and_lifecycle_are_normalized() {
 #[test]
 fn unsupported_history_stays_out_of_spending_discovery() {
     assert!(KiroAdapter.transcript_files().is_empty());
-    assert!(
-        crate::agents::spending::discover_spending_files()
-            .into_iter()
-            .all(|(adapter, _)| adapter.descriptor().kind != "kiro")
-    );
+    assert!(KiroAdapter.spending_sources().is_empty());
 }
 
 #[test]

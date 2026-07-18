@@ -499,6 +499,13 @@ impl AgentAdapter for GrokAdapter {
         spend::files()
     }
 
+    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+        crate::agents::spending::SpendingSourceTree::new(paths::sessions_root(), "**/updates.jsonl")
+            .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
+            .into_iter()
+            .collect()
+    }
+
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
         paths::resolve_transcript(session_id, None, prior_path)
     }

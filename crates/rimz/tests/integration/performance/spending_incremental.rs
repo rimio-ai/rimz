@@ -17,11 +17,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rimz::agents::spending::{
-    CachedEntry, FileCacheEntry, HeadlineSpec, SilentWalk, SpendCursor, SpendingWalker,
-    WalkRequest, read_spending_cache, write_spending_cache,
+    CachedEntry, FileCacheEntry, HeadlineSpec, SilentWalk, SpendCursor, SpendingSource,
+    SpendingSourceTree, SpendingWalker, WalkRequest, read_spending_cache, write_spending_cache,
 };
 use rimz::agents::{AgentAdapter, ClaudeAdapter, PriceBook, TranscriptStat};
 
@@ -506,5 +506,41 @@ fn spending_walk_skips_entirely_within_ttl() {
         std::fs::read(&cache_path).expect("published provider-spending cache"),
         published,
         "the fresh path must not re-stamp or rewrite the published cache"
+    );
+}
+
+#[test]
+fn spending_discovery_retires_a_large_historical_tree_from_warm_passes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("history");
+    let old_mtime = UNIX_EPOCH + Duration::from_secs(NOW_SECS.saturating_sub(368 * 86_400 + 1));
+    for index in 0..2_000 {
+        let path = root
+            .join(format!("archive/{:04}", index / 20))
+            .join(format!("old-{index}.jsonl"));
+        std::fs::create_dir_all(path.parent().expect("historical parent")).unwrap();
+        std::fs::write(&path, "{}\n").unwrap();
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(old_mtime)
+            .unwrap();
+    }
+    let active = root.join("active/session.jsonl");
+    std::fs::create_dir_all(active.parent().unwrap()).unwrap();
+    std::fs::write(&active, "{}\n").unwrap();
+    let sources = vec![SpendingSource::group(vec![
+        SpendingSourceTree::new(&root, "**/*.jsonl").unwrap(),
+    ])];
+    let mut walker = SpendingWalker::new();
+
+    let cold = walker.discover_declared_spending_files(claude_adapter(), sources.clone(), NOW_SECS);
+    assert_eq!(
+        cold.into_iter().map(|(_, path)| path).collect::<Vec<_>>(),
+        std::slice::from_ref(&active)
+    );
+    let warm = walker.discover_declared_spending_files(claude_adapter(), sources, NOW_SECS);
+    assert_eq!(
+        warm.into_iter().map(|(_, path)| path).collect::<Vec<_>>(),
+        [active]
     );
 }

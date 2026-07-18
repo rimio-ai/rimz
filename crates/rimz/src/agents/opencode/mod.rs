@@ -580,6 +580,22 @@ impl AgentAdapter for OpencodeAdapter {
         database::logical_stat(path)
     }
 
+    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+        database::data_dirs()
+            .into_iter()
+            .filter_map(|root| {
+                let primary =
+                    crate::agents::spending::SpendingSourceTree::new(root.clone(), "opencode.db")?;
+                let channels =
+                    crate::agents::spending::SpendingSourceTree::new(root, "opencode-*.db")?
+                        .filtered("opencode-channel", database::is_channel_relative);
+                Some(crate::agents::spending::SpendingSource::first(vec![
+                    primary, channels,
+                ]))
+            })
+            .collect()
+    }
+
     fn session_transcript(&self, _session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| path.is_file()) {
             return Some(path.to_path_buf());

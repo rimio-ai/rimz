@@ -515,6 +515,14 @@ impl AgentAdapter for PiAdapter {
         spend::pi_session_files()
     }
 
+    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+        spend::pi_session_roots()
+            .into_iter()
+            .filter_map(|root| crate::agents::spending::SpendingSourceTree::new(root, "**/*.jsonl"))
+            .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
+            .collect()
+    }
+
     /// Pi's present non-negative `costUSD` is authoritative. Token-bearing
     /// records without a usable direct cost fall back to the shared price book.
     /// The resume cursor carries the session header cwd so appended usage

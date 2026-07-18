@@ -329,6 +329,22 @@ impl AgentAdapter for PluginAdapter {
         files
     }
 
+    fn spending_sources(&self) -> Vec<super::spending::SpendingSource> {
+        let Some(transcripts) = &self.manifest.transcripts else {
+            return Vec::new();
+        };
+        if self.manifest.probes.spend.is_none() {
+            return Vec::new();
+        }
+        transcripts
+            .globs
+            .iter()
+            .filter_map(|pattern| {
+                spending_source_for_pattern(&expand_pattern(self.plugin_dir, pattern))
+            })
+            .collect()
+    }
+
     fn parse_spend(
         &self,
         path: &Path,
@@ -697,6 +713,43 @@ fn expand_pattern(plugin_dir: &Path, pattern: &str) -> String {
     }
 }
 
+fn spending_source_for_pattern(pattern: &str) -> Option<super::spending::SpendingSource> {
+    let path = Path::new(pattern);
+    let components = path.components().collect::<Vec<_>>();
+    let split = components
+        .iter()
+        .position(|component| glob_component_has_magic(&component.as_os_str().to_string_lossy()));
+    let Some(split) = split else {
+        return Some(super::spending::SpendingSource::exact(path));
+    };
+    let root = components[..split].iter().collect::<PathBuf>();
+    let relative = components[split..].iter().collect::<PathBuf>();
+    let root = if root.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        root
+    };
+    let relative = relative.to_str()?.to_owned();
+    super::spending::SpendingSourceTree::new(root, relative)
+        .map(|tree| super::spending::SpendingSource::group(vec![tree]))
+}
+
+fn glob_component_has_magic(component: &str) -> bool {
+    let mut escaped = false;
+    for ch in component.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+        } else if matches!(ch, '*' | '?' | '[') {
+            return true;
+        }
+    }
+    false
+}
+
 fn unknown(event_name: &str) -> ClassifiedHook {
     debug!(
         event = event_name,
@@ -811,6 +864,44 @@ account = ["sh", "-c", "touch {}; printf '{{}}'"]
         build_adapter(manifest, dir)
     }
 
+    fn transcript_adapter(with_spend: bool) -> &'static PluginAdapter {
+        let root = TempDir::new().unwrap();
+        let root = root.keep();
+        let dir = root.join(if with_spend {
+            "spendbot"
+        } else {
+            "transcriptbot"
+        });
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("README.md"), "setup").unwrap();
+        let probe = if with_spend {
+            "[probes]\nspend = [\"sh\", \"-c\", \"printf '{}'\"]\n"
+        } else {
+            ""
+        };
+        let manifest = PluginManifest::parse(
+            &dir.join("agent.toml"),
+            &format!(
+                r#"protocol = 1
+kind = "{}"
+display-name = "Transcript Bot"
+process-names = ["transcriptbot"]
+emits = ["session_start"]
+setup-doc = "README.md"
+[transcripts]
+globs = ["history/**/*.jsonl"]
+{probe}"#,
+                if with_spend {
+                    "spendbot"
+                } else {
+                    "transcriptbot"
+                },
+            ),
+        )
+        .unwrap();
+        build_adapter(manifest, dir)
+    }
+
     fn payload(event: &str) -> Value {
         json!({
             "protocol": 1,
@@ -867,6 +958,12 @@ account = ["sh", "-c", "touch {}; printf '{{}}'"]
                 .kind(),
             LifecycleSignalKind::SubagentStopped
         );
+    }
+
+    #[test]
+    fn historical_discovery_requires_transcripts_and_spend_probe() {
+        assert!(transcript_adapter(false).spending_sources().is_empty());
+        assert_eq!(transcript_adapter(true).spending_sources().len(), 1);
     }
 
     #[test]

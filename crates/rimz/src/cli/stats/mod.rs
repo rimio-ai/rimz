@@ -37,9 +37,8 @@ use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
 use rimz::agents::spending::{
     DaySpend, ProviderSpendingCache, SilentWalk, SpendProgress, SpendTally, SpendWindow, Spending,
-    SpendingWalker, WalkObserver, WalkRequest, discover_spending_files,
-    read_provider_spending_cache, unix_secs_now, user_input, utc_date,
-    write_provider_spending_cache_with_day,
+    SpendingWalker, WalkObserver, WalkRequest, read_provider_spending_cache, unix_secs_now,
+    user_input, utc_date, write_provider_spending_cache_with_day,
 };
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig};
 use rimz::store::paths::state_home;
@@ -266,7 +265,7 @@ fn load_published_stats(paths: &RuntimePaths) -> Option<Stats> {
 
 fn load_or_refresh_stats(
     paths: &RuntimePaths,
-    progress: Option<&mut dyn FnMut(SpendProgress)>,
+    mut progress: Option<&mut dyn FnMut(SpendProgress)>,
     walker: &mut SpendingWalker,
 ) -> Result<Stats> {
     if let Some(stats) = load_published_stats(paths) {
@@ -280,20 +279,32 @@ fn load_or_refresh_stats(
         fresh,
     ) {
         Coalesced::Shared(stats) => Ok(stats),
-        Coalesced::Produce(_guard) => Ok(compute_stats_from_files(
-            paths,
-            discover_spending_files(),
-            true,
-            progress,
-            walker,
-        )),
-        Coalesced::ProduceLocal => Ok(compute_stats_from_files(
-            paths,
-            discover_spending_files(),
-            false,
-            progress,
-            walker,
-        )),
+        Coalesced::Produce(_guard) => {
+            let now_secs = unix_secs_now();
+            let files = walker.discover_spending_files(now_secs);
+            if let Some(progress) = progress.as_deref_mut() {
+                progress(SpendProgress {
+                    finished_files: 0,
+                    total_files: files.len(),
+                });
+            }
+            Ok(compute_stats_from_files_at(
+                paths, files, true, progress, walker, now_secs,
+            ))
+        }
+        Coalesced::ProduceLocal => {
+            let now_secs = unix_secs_now();
+            let files = walker.discover_spending_files(now_secs);
+            if let Some(progress) = progress.as_deref_mut() {
+                progress(SpendProgress {
+                    finished_files: 0,
+                    total_files: files.len(),
+                });
+            }
+            Ok(compute_stats_from_files_at(
+                paths, files, false, progress, walker, now_secs,
+            ))
+        }
     }
 }
 
@@ -331,6 +342,7 @@ impl WalkObserver for ProgressObserver<'_> {
     }
 }
 
+#[cfg(test)]
 fn compute_stats_from_files(
     paths: &RuntimePaths,
     files: Vec<(&'static dyn AgentAdapter, PathBuf)>,
@@ -338,8 +350,18 @@ fn compute_stats_from_files(
     progress: Option<&mut dyn FnMut(SpendProgress)>,
     walker: &mut SpendingWalker,
 ) -> Stats {
+    compute_stats_from_files_at(paths, files, publish, progress, walker, unix_secs_now())
+}
+
+fn compute_stats_from_files_at(
+    paths: &RuntimePaths,
+    files: Vec<(&'static dyn AgentAdapter, PathBuf)>,
+    publish: bool,
+    progress: Option<&mut dyn FnMut(SpendProgress)>,
+    walker: &mut SpendingWalker,
+    now_secs: u64,
+) -> Stats {
     let cursor_path = paths.shared_spending_cursor_path();
-    let now_secs = unix_secs_now();
     let prices = if publish {
         let unknowns = walker.recorded_unknown_models(&cursor_path, &files, now_secs);
         Arc::new(pricing::load_for_spending(

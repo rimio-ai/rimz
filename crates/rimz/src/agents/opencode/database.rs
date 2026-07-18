@@ -101,6 +101,14 @@ fn is_channel_filename(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
+pub(super) fn is_channel_relative(path: &Path) -> bool {
+    path.components().count() == 1
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_channel_filename)
+}
+
 pub(super) fn open_readonly(path: &Path) -> Option<Connection> {
     Connection::open_with_flags(
         path,
