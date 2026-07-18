@@ -25,13 +25,16 @@ mod shell {
         engine: Option<Engine>,
         /// The shell owns command counters and feeds them into telemetry.
         commands: wire::CommandCounters,
+        /// Zellij answers this through plugin stdio, so cache it at load.
+        zellij_version: String,
     }
 
-    struct ShellHost {
+    struct ShellHost<'a> {
         commands: wire::CommandCounters,
+        zellij_version: &'a str,
     }
 
-    impl Host for ShellHost {
+    impl Host for ShellHost<'_> {
         fn pane_pid(&self, pane_id: u32) -> Option<u32> {
             get_pane_pid(PaneId::Terminal(pane_id))
                 .ok()
@@ -50,7 +53,7 @@ mod shell {
                 stale_writer_rejections: self.commands.stale_writer_rejections,
                 topology_failures: self.commands.topology_failures,
                 other_failures: self.commands.other_failures,
-                zellij_version: get_zellij_version(),
+                zellij_version: self.zellij_version.to_owned(),
             }
         }
     }
@@ -66,6 +69,7 @@ mod shell {
             request_permission(&permissions);
             subscribe(&subscribed_events());
             let now = now_ms();
+            self.zellij_version = get_zellij_version();
             let config = EngineConfig {
                 workspace_id: configuration.get("workspace_id").cloned(),
                 session_name: configuration.get("session_name").cloned(),
@@ -84,6 +88,7 @@ mod shell {
             let mut engine = Engine::new(now, config);
             let host = ShellHost {
                 commands: self.commands,
+                zellij_version: &self.zellij_version,
             };
             execute(engine.on_load(now, &host));
             self.engine = Some(engine);
@@ -101,6 +106,7 @@ mod shell {
                 };
                 let host = ShellHost {
                     commands: self.commands,
+                    zellij_version: &self.zellij_version,
                 };
                 execute(engine.on_run_command_result(exit_code, published_topology, now, &host));
                 return false;
@@ -110,6 +116,7 @@ mod shell {
             };
             let host = ShellHost {
                 commands: self.commands,
+                zellij_version: &self.zellij_version,
             };
             let effects = match event {
                 Event::PermissionRequestResult(PermissionStatus::Granted) => {
@@ -186,6 +193,7 @@ mod shell {
             if pipe_message.name == DUMP_TOPOLOGY_PIPE {
                 let host = ShellHost {
                     commands: self.commands,
+                    zellij_version: &self.zellij_version,
                 };
                 execute(engine.on_dump_topology_pipe(now, &host));
                 return false;
