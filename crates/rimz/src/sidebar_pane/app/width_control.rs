@@ -362,6 +362,9 @@ impl WidthController {
         trigger: SidebarWidthControlTrigger,
         diag: &DiagSink,
     ) {
+        if self.own_pane.is_none() {
+            return;
+        }
         let nudge = self.convergence.decide(measured_cols, Instant::now());
         while let Some(transition) = self.convergence.take_trace() {
             match transition {
@@ -587,6 +590,26 @@ mod tests {
             crate::sidebar::width_override::load(&runtime),
             NonZeroU16::new(96),
         );
+    }
+
+    #[test]
+    fn observation_without_an_owned_pane_stays_idle() {
+        let (_dir, runtime, _) = controller(MuxName::Tmux);
+        let mut controller = WidthController::new(
+            runtime,
+            "rimz-test".to_owned(),
+            None,
+            MuxName::Tmux,
+            NonZeroU16::new(72).expect("width cap"),
+        );
+
+        controller.observe(
+            80,
+            SidebarWidthControlTrigger::ResizeFeedback,
+            &crate::diag::DiagSink::disabled(),
+        );
+
+        assert_eq!(controller.feedback_deadline(), None);
     }
 
     #[test]
