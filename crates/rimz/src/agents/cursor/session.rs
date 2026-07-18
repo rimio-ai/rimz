@@ -1,6 +1,7 @@
 //! Version-pinned, read-only Cursor CLI local wait and subagent discovery.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read as _;
@@ -357,7 +358,7 @@ impl CursorDiscoverySnapshot {
                 observations.push(observation);
             }
         }
-        let catalog = self.catalog.entries();
+        let catalog = self.catalog.entries().iter().collect::<HashSet<_>>();
         self.candidates
             .retain(|candidate| catalog.contains(candidate));
         observations.sort_by(|left, right| {

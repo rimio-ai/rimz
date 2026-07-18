@@ -1,7 +1,7 @@
 //! Validated Kiro CLI v3 local-session discovery and transcript projection.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -448,7 +448,7 @@ impl KiroDiscoverySnapshot {
             self.refresh_catalog(&key, now);
             (observations, _) = self.fold_candidates(true);
         }
-        let catalog = self.catalog.entries();
+        let catalog = self.catalog.entries().iter().collect::<HashSet<_>>();
         self.candidates
             .retain(|candidate| catalog.contains(candidate));
         observations.sort_by(|left, right| {
@@ -505,9 +505,13 @@ impl KiroDiscoverySnapshot {
                     if parsed.kind() != ValueRefreshKind::Cached {
                         work.candidate_parses += 1;
                     }
-                    if matches!(parsed.current(), Some(ParsedCandidate::Valid(_))) {
-                        admitted += 1;
-                        catalog.push(candidate);
+                    match parsed.kind() {
+                        ValueRefreshKind::Invalidated => catalog.push(candidate),
+                        _ if matches!(parsed.current(), Some(ParsedCandidate::Valid(_))) => {
+                            admitted += 1;
+                            catalog.push(candidate);
+                        }
+                        _ => {}
                     }
                 }
             }
