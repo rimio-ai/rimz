@@ -451,28 +451,13 @@ fn materialize(
 
 #[cfg(test)]
 pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
-    if !workspace.is_absolute() {
-        return Vec::new();
-    }
-    let current = latest_conversation(home, workspace);
-    let mut transcripts = transcript_files_under(home);
-    transcripts.sort_by_key(|path| {
-        fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .map(std::cmp::Reverse)
-    });
-    let mut observations = transcripts
-        .into_iter()
-        .take(MAX_DISCOVERED_SESSIONS)
-        .filter_map(|path| observation(&path, workspace, current.as_deref()))
-        .collect::<Vec<_>>();
-    observations.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then(left.session_id.cmp(&right.session_id))
-    });
-    observations
+    AntigravityDiscoverySnapshot::default().refresh(
+        DiscoveryKey {
+            home: home.to_path_buf(),
+            workspaces: normalized_workspace_inputs(&[workspace]),
+        },
+        Instant::now(),
+    )
 }
 
 pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
@@ -751,44 +736,6 @@ pub(super) fn resolve_home(override_home: Option<&OsStr>, home: Option<&OsStr>) 
         })
 }
 
-#[cfg(test)]
-fn latest_conversation(home: &Path, workspace: &Path) -> Option<String> {
-    let path = home.join("cache/last_conversations.json");
-    regular_file(&path).then_some(())?;
-    let values = serde_json::from_slice::<std::collections::BTreeMap<PathBuf, String>>(
-        &fs::read(path).ok()?,
-    )
-    .ok()?;
-    values
-        .get(workspace)
-        .map(String::as_str)
-        .filter(|id| valid_conversation_id(id))
-        .map(ToOwned::to_owned)
-}
-
-#[cfg(test)]
-fn transcript_files_under(home: &Path) -> Vec<PathBuf> {
-    let brain = home.join("brain");
-    if !regular_dir(&brain) {
-        return Vec::new();
-    }
-    let Ok(entries) = fs::read_dir(&brain) else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            entry
-                .file_type()
-                .ok()
-                .filter(|file_type| file_type.is_dir())?;
-            let id = entry.file_name().into_string().ok()?;
-            valid_conversation_id(&id).then_some(())?;
-            transcript_for_session_under(home, &id)
-        })
-        .collect()
-}
-
 fn transcript_for_session_under(home: &Path, session_id: &str) -> Option<PathBuf> {
     valid_conversation_id(session_id).then_some(())?;
     TRANSCRIPT_BASENAMES.iter().find_map(|basename| {
@@ -829,41 +776,6 @@ fn valid_transcript_under(home: &Path, path: &Path, session_id: &str) -> bool {
                     .join(".system_generated/logs")
                     .join(basename)
         })
-}
-
-#[cfg(test)]
-fn observation(
-    path: &Path,
-    workspace: &Path,
-    current_session_id: Option<&str>,
-) -> Option<LocalSessionObservation> {
-    let session_id = path.ancestors().nth(3)?.file_name()?.to_str()?.to_owned();
-    valid_conversation_id(&session_id).then_some(())?;
-    let lines = read_transcript_tail(path)?;
-    let folded = fold(&lines);
-    let created_at = folded.first_event_at?;
-    let last_activity = folded.last_activity?;
-    Some(LocalSessionObservation {
-        kind: AgentKind::new_unchecked("antigravity"),
-        session_id: AgentSessionId::from(session_id.clone()),
-        workspace: workspace.to_path_buf(),
-        transcript_path: path.to_path_buf(),
-        created_at,
-        // Only the provider's current-workspace cache authorizes fresh-session
-        // pairing. Other conversations remain available solely for exact
-        // `--conversation` command-line binding.
-        fresh_binding_at: (current_session_id == Some(session_id.as_str())).then_some(created_at),
-        first_event_at: Some(created_at),
-        last_activity,
-        projection: LocalSessionProjection::Lifecycle(LocalSessionState {
-            status: folded.status,
-            phase: folded.phase,
-            latest_prompt: folded.latest_prompt,
-            native_prompt_detail: folded.native_prompt_detail,
-            waiting_since: folded.waiting_since,
-            context_pct: None,
-        }),
-    })
 }
 
 fn fold(lines: &str) -> FoldedSession {

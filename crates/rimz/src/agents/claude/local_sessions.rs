@@ -199,27 +199,14 @@ fn collect_catalog(
 
 #[cfg(test)]
 pub(super) fn discover_under(config_dir: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
-    if !workspace.is_absolute() {
+    let key = DiscoveryKey {
+        config_dirs: vec![config_dir.to_path_buf()],
+        workspaces: normalized_workspace_inputs(&[workspace]),
+    };
+    if key.workspaces.is_empty() {
         return Vec::new();
     }
-    let project_dir = config_dir
-        .join("projects")
-        .join(project_directory_name(workspace));
-    let mut transcripts = Vec::new();
-    crate::agents::transcript_fs::collect_jsonl(&project_dir, &mut transcripts);
-    transcripts.sort_by_key(|path| {
-        fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .map(std::cmp::Reverse)
-    });
-    let mut observations = transcripts
-        .into_iter()
-        .take(MAX_DISCOVERED_SESSIONS)
-        .filter_map(|path| observation(path, workspace))
-        .collect::<Vec<_>>();
-    observations.sort_by(observation_cmp);
-    observations
+    ClaudeDiscoverySnapshot::default().refresh(key, Instant::now())
 }
 
 fn observation_cmp(

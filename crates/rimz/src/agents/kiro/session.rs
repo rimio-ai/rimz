@@ -563,35 +563,13 @@ fn parse_candidate(candidate: &SessionCandidate) -> ParsedCandidate {
 
 #[cfg(test)]
 pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
-    let Some(bucket_name) = workspace_bucket(workspace) else {
-        return Vec::new();
-    };
-    let sessions_root = home.join("sessions");
-    let bucket = sessions_root.join(bucket_name);
-    if !regular_dir(&sessions_root)
-        || !regular_dir(&bucket)
-        || fs::canonicalize(&bucket)
-            .ok()
-            .and_then(|bucket| bucket.parent().map(Path::to_path_buf))
-            != fs::canonicalize(&sessions_root).ok()
-    {
-        return Vec::new();
-    }
-    let Ok(entries) = fs::read_dir(&bucket) else {
-        return Vec::new();
-    };
-    let mut observations = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| validate_session(&bucket, &entry.path(), workspace))
-        .take(MAX_SESSIONS_PER_WORKSPACE)
-        .filter_map(|session| observation(session, workspace))
-        .collect::<Vec<_>>();
-    observations.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then(left.session_id.cmp(&right.session_id))
-    });
-    observations
+    KiroDiscoverySnapshot::default().refresh(
+        DiscoveryKey {
+            home: home.to_path_buf(),
+            workspaces: normalized_workspace_inputs(&[workspace]),
+        },
+        Instant::now(),
+    )
 }
 
 pub(super) fn transcript_for_session_under(home: &Path, session_id: &str) -> Option<PathBuf> {

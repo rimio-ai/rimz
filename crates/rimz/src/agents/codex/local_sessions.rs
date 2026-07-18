@@ -246,118 +246,15 @@ fn recent_dates(today: Date) -> Vec<Date> {
 
 #[cfg(test)]
 pub(super) fn discover_under(home: &Path, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
-    let workspaces = workspaces
-        .iter()
-        .copied()
-        .filter(|workspace| workspace.is_absolute())
-        .collect::<HashSet<_>>();
-    if workspaces.is_empty() {
-        return Vec::new();
-    }
-    let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
-    let mut cutoff = today;
-    for _ in 0..MAX_SESSION_AGE_DAYS {
-        let Ok(previous) = cutoff.yesterday() else {
-            break;
-        };
-        cutoff = previous;
-    }
-
-    let mut examined = 0;
-    let mut session_ids_seen = HashSet::new();
-    let mut observations = Vec::new();
-    let active = active_rollouts(&home.join("sessions"), cutoff);
-    let archived = archived_rollouts(&home.join("archived_sessions"), cutoff);
-    let active_session_ids = active
-        .iter()
-        .filter_map(|path| session_id_from_filename(path))
-        .collect::<HashSet<_>>();
-    let mut candidates = active
-        .into_iter()
-        .map(|path| RolloutCandidate { path, active: true })
-        .chain(archived.into_iter().map(|path| RolloutCandidate {
-            path,
-            active: false,
-        }))
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| {
-        rollout_filename(&right.path)
-            .cmp(&rollout_filename(&left.path))
-            .then_with(|| right.active.cmp(&left.active))
-    });
-    for candidate in candidates {
-        let path = candidate.path;
-        let filename_session = session_id_from_filename(&path);
-        if !candidate.active
-            && filename_session
-                .as_ref()
-                .is_some_and(|session_id| active_session_ids.contains(session_id))
-        {
-            continue;
-        }
-        if examined >= MAX_EXAMINED_FILES {
-            break;
-        }
-        examined += 1;
-        if filename_session
-            .as_ref()
-            .is_some_and(|session_id| session_ids_seen.contains(session_id))
-        {
-            continue;
-        }
-        if let Some(observation) = observation(path, &workspaces) {
-            if let Some(session_id) = filename_session {
-                session_ids_seen.insert(session_id);
-            }
-            session_ids_seen.insert(observation.session_id.to_string());
-            observations.push(observation);
-        }
-    }
-    observations.sort_by(|left, right| {
-        right
-            .last_activity
-            .cmp(&left.last_activity)
-            .then_with(|| left.session_id.cmp(&right.session_id))
-    });
-    observations
-}
-
-#[cfg(test)]
-fn active_rollouts(root: &Path, cutoff: Date) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for (_, _, date_dir) in date_directories(root, cutoff) {
-        let Ok(entries) = fs::read_dir(date_dir) else {
-            continue;
-        };
-        let mut day = entries
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-            .map(|entry| entry.path())
-            .filter(|path| rollout_filename(path).is_some())
-            .collect::<Vec<_>>();
-        day.sort_by(|left, right| right.file_name().cmp(&left.file_name()));
-        files.extend(day);
-    }
-    files
-}
-
-#[cfg(test)]
-fn archived_rollouts(root: &Path, cutoff: Date) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(root) else {
-        return Vec::new();
+    let key = DiscoveryKey {
+        home: home.to_path_buf(),
+        workspaces: normalized_workspace_inputs(workspaces),
+        today: Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date(),
     };
-    let mut files = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-        .map(|entry| entry.path())
-        .filter(|path| {
-            rollout_filename(path)
-                .and_then(rollout_filename_date)
-                .is_some_and(|date| date >= cutoff)
-        })
-        .collect::<Vec<_>>();
-    files.sort_by(|left, right| right.file_name().cmp(&left.file_name()));
-    files
+    if key.workspaces.is_empty() {
+        return Vec::new();
+    }
+    CodexDiscoverySnapshot::default().refresh(key, Instant::now())
 }
 
 fn rollout_filename(path: &Path) -> Option<&str> {
@@ -369,65 +266,6 @@ fn rollout_filename(path: &Path) -> Option<&str> {
 
 fn rollout_filename_date(filename: &str) -> Option<Date> {
     filename.get(..10)?.parse().ok()
-}
-
-#[cfg(test)]
-fn date_directories(root: &Path, cutoff: Date) -> Vec<(Date, PathBuf, PathBuf)> {
-    let mut dates = Vec::new();
-    let Ok(years) = fs::read_dir(root) else {
-        return dates;
-    };
-    for year in years.filter_map(Result::ok) {
-        if !year.file_type().is_ok_and(|kind| kind.is_dir()) {
-            continue;
-        }
-        let Ok(months) = fs::read_dir(year.path()) else {
-            continue;
-        };
-        for month in months.filter_map(Result::ok) {
-            if !month.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            let Ok(days) = fs::read_dir(month.path()) else {
-                continue;
-            };
-            for day in days.filter_map(Result::ok) {
-                if !day.file_type().is_ok_and(|kind| kind.is_dir()) {
-                    continue;
-                }
-                let relative = PathBuf::from(year.file_name())
-                    .join(month.file_name())
-                    .join(day.file_name());
-                let Some(date) = relative_date(&relative) else {
-                    continue;
-                };
-                if date >= cutoff {
-                    dates.push((date, relative, day.path()));
-                }
-            }
-        }
-    }
-    dates.sort_by_key(|(date, _, _)| std::cmp::Reverse(*date));
-    dates
-}
-
-#[cfg(test)]
-fn relative_date(relative: &Path) -> Option<Date> {
-    let parts = relative
-        .iter()
-        .map(|part| part.to_str())
-        .collect::<Option<Vec<_>>>()?;
-    let [year, month, day] = parts.as_slice() else {
-        return None;
-    };
-    format!("{year}-{month}-{day}").parse().ok()
-}
-
-#[cfg(test)]
-fn observation(path: PathBuf, workspaces: &HashSet<&Path>) -> Option<LocalSessionObservation> {
-    let header = read_rollout_header(&path)?;
-    let stamp = ProviderPathStamp::read(&path);
-    observation_from_header(path, header, stamp, workspaces)
 }
 
 fn observation_from_header(
