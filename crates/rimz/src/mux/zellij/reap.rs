@@ -66,7 +66,7 @@ pub fn reap_lineage_clients(
     }
 
     let mut outcome = ReapOutcome::default();
-    let pre_clients = query_client_count(engine, session_name, deadline)?;
+    let pre_clients = query_client_count_until(engine, session_name, deadline)?;
     outcome.pre_clients = Some(pre_clients);
     let expected_drop = victims.len();
 
@@ -161,6 +161,35 @@ fn query_client_count(
             command_timeout: Some(CLIENT_QUERY_TIMEOUT.min(remaining)),
         })
         .map(|view| view.presence.human_clients)
+}
+
+fn query_client_count_until(
+    engine: &dyn MuxBackend,
+    session_name: &str,
+    deadline: Instant,
+) -> MuxResult<usize> {
+    query_client_count_until_with(deadline, CLIENT_POLL_STEP, |deadline| {
+        query_client_count(engine, session_name, deadline)
+    })
+}
+
+fn query_client_count_until_with(
+    deadline: Instant,
+    poll_step: Duration,
+    mut query: impl FnMut(Instant) -> MuxResult<usize>,
+) -> MuxResult<usize> {
+    loop {
+        match query(deadline) {
+            Ok(count) => return Ok(count),
+            Err(err) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(err);
+                }
+                std::thread::sleep(poll_step.min(deadline - now));
+            }
+        }
+    }
 }
 
 fn protected_processes(processes: &[ProcInfo], own_pid: u32) -> HashSet<u32> {
@@ -351,5 +380,29 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn initial_client_count_retries_transient_mux_errors() {
+        let mut attempts = 0;
+        let count = query_client_count_until_with(
+            Instant::now() + Duration::from_secs(1),
+            Duration::ZERO,
+            |_| {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(MuxErr::Output {
+                        program: "zellij".to_owned(),
+                        reason: "transient list-clients failure".to_owned(),
+                    })
+                } else {
+                    Ok(1)
+                }
+            },
+        )
+        .expect("client count after transient failures");
+
+        assert_eq!(count, 1);
+        assert_eq!(attempts, 3);
     }
 }

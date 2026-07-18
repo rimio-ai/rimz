@@ -26,6 +26,40 @@ struct TerminalState {
     title: Option<String>,
 }
 
+fn wait_for_stable_terminal_state(
+    xdg: &Path,
+    session: &str,
+    stable_for: Duration,
+) -> BTreeMap<u64, TerminalState> {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let mut candidate = None;
+    let mut unchanged_since = None;
+    let mut last_error = String::new();
+    loop {
+        match list_panes(xdg, session).map(|snapshot| terminal_state(&snapshot)) {
+            Ok(state) if candidate.as_ref() == Some(&state) => {
+                if unchanged_since.is_some_and(|since: Instant| since.elapsed() >= stable_for) {
+                    return state;
+                }
+            }
+            Ok(state) => {
+                candidate = Some(state);
+                unchanged_since = Some(Instant::now());
+            }
+            Err(err) => {
+                last_error = err;
+                candidate = None;
+                unchanged_since = None;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "terminal state for {session} did not stabilize; last observation: {candidate:?}; last error: {last_error}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn terminal_state(snapshot: &PaneSnapshot) -> BTreeMap<u64, TerminalState> {
     snapshot
         .panes
@@ -65,7 +99,7 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
     let env = Env::new();
-    let (_stub_dir, stub) = sidebar_command_stub();
+    let (_stub_dir, stub) = sidebar_stub_alive_for(120);
     let layout = write_kdl_layout(cwd.path(), &stub, "reload-keep.kdl", |cwd_kdl, stub_kdl| {
         format!(
             r#"layout {{
@@ -131,8 +165,11 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     );
     let runtime = RuntimePaths::under(workspace_id.clone(), xdg.path()).expect("runtime paths");
     runtime.ensure_dirs().expect("runtime dirs");
+    // A client can register before the background layout has adopted its PTY
+    // size, so record a settled baseline rather than a transient birth frame.
+    let before_terminals =
+        wait_for_stable_terminal_state(xdg.path(), &name, Duration::from_millis(500));
     let before = expect_list_panes(xdg.path(), &name);
-    let before_terminals = terminal_state(&before);
     let mut receivers = Vec::new();
     for pane in before.panes.iter().filter(|pane| pane.is_sidebar()) {
         let socket = runtime.sock_dir.join(format!("reload-{}.sock", pane.id));

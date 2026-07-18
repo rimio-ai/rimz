@@ -2,8 +2,6 @@ use std::time::{Duration, Instant};
 
 use rimz::mux::{ClientFocusOptions, MuxBackend, ZellijBackend, zellij};
 
-use crate::common::CommandTimeoutExt;
-
 use super::support::*;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -17,14 +15,6 @@ fn remote_lineage_reap_kills_only_the_matching_attached_client() {
         name: name.clone(),
         xdg: xdg.path().to_path_buf(),
     };
-    let created = scoped_zellij(xdg.path())
-        .args(["attach", "--create-background", &name])
-        .bounded_output()
-        .expect("create background session");
-    assert!(created.status.success(), "create background session failed");
-    wait_until_session_ready(xdg.path(), &name);
-    wait_for_client_count(xdg.path(), &name, 0);
-
     let _client =
         AttachedClient::attach_with_lineage(xdg.path(), &name, "0123456789abcdef", 120, 40);
     wait_for_client_count(xdg.path(), &name, 1);
@@ -49,20 +39,38 @@ fn remote_lineage_reap_kills_only_the_matching_attached_client() {
 fn wait_for_client_count(xdg: &std::path::Path, session: &str, want: usize) {
     let backend = ZellijBackend::with_runtime_dir(xdg);
     let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let mut consecutive_matches = 0;
+    let mut last_count = None;
+    let mut last_error = String::new();
     loop {
-        let count = backend
+        match backend
             .client_view(ClientFocusOptions {
                 session_name: Some(session.to_owned()),
                 command_timeout: Some(Duration::from_secs(2)),
             })
             .map(|view| view.presence.human_clients)
-            .unwrap_or(usize::MAX);
-        if count == want {
-            return;
+        {
+            Ok(count) if count == want => {
+                last_count = Some(count);
+                last_error.clear();
+                consecutive_matches += 1;
+                if consecutive_matches == 2 {
+                    return;
+                }
+            }
+            Ok(count) => {
+                last_count = Some(count);
+                last_error.clear();
+                consecutive_matches = 0;
+            }
+            Err(err) => {
+                last_error = err.to_string();
+                consecutive_matches = 0;
+            }
         }
         assert!(
             Instant::now() < deadline,
-            "client count for {session} did not reach {want}; last count {count}"
+            "client count for {session} did not stabilize at {want}; last count {last_count:?}; last error: {last_error}"
         );
         std::thread::sleep(Duration::from_millis(100));
     }
