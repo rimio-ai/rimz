@@ -187,6 +187,10 @@ fn reset_credits_parse_available_count_and_soonest_expiry() {
                 },
                 {
                     "status": "available",
+                    "expires_at": "2026-07-06T06:30:00Z"
+                },
+                {
+                    "status": "available",
                     "expires_at": "not-a-timestamp"
                 }
             ]
@@ -198,6 +202,14 @@ fn reset_credits_parse_available_count_and_soonest_expiry() {
     assert_eq!(
         credits.soonest_expiry,
         Some("2026-07-06T06:30:00Z".parse::<Timestamp>().unwrap())
+    );
+    assert_eq!(
+        credits.expiries,
+        [
+            "2026-07-06T06:30:00Z".parse::<Timestamp>().unwrap(),
+            "2026-07-06T06:30:00Z".parse::<Timestamp>().unwrap(),
+            "2026-07-06T12:00:00Z".parse::<Timestamp>().unwrap(),
+        ]
     );
 }
 
@@ -218,6 +230,10 @@ fn reset_credits_falls_back_to_available_entries() {
     assert_eq!(
         credits.soonest_expiry,
         Some("2026-07-08T00:00:00Z".parse::<Timestamp>().unwrap())
+    );
+    assert_eq!(
+        credits.expiries,
+        ["2026-07-08T00:00:00Z".parse::<Timestamp>().unwrap()]
     );
 }
 

@@ -148,6 +148,7 @@ fn protocol_fixture(
     provider.reset_credits = Some(ResetCredits {
         count: 2,
         soonest_expiry: Some(now + SignedDuration::from_secs(3 * 86_400)),
+        expiries: Vec::new(),
     });
     provider.spending = Some(SpendTally {
         week: SpendWindow {

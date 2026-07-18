@@ -354,6 +354,10 @@ fn rate_limits_response_maps_reset_credit_summary() {
         Some(ResetCredits {
             count: 3,
             soonest_expiry: Timestamp::from_second(1_780_000_200).ok(),
+            expiries: [1_780_000_200, 1_780_000_300]
+                .into_iter()
+                .filter_map(|seconds| Timestamp::from_second(seconds).ok())
+                .collect(),
         })
     );
 
@@ -371,6 +375,7 @@ fn rate_limits_response_maps_reset_credit_summary() {
         Some(ResetCredits {
             count: 0,
             soonest_expiry: None,
+            expiries: Vec::new(),
         })
     );
 }

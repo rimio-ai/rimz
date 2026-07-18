@@ -232,6 +232,19 @@ pub struct ResetCredits {
     pub count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soonest_expiry: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expiries: Vec<Timestamp>,
+}
+
+impl ResetCredits {
+    pub(crate) fn normalized(count: u32, mut expiries: Vec<Timestamp>) -> Self {
+        expiries.sort_unstable();
+        Self {
+            count,
+            soonest_expiry: expiries.first().copied(),
+            expiries,
+        }
+    }
 }
 
 impl ExtraCredits {
@@ -422,6 +435,31 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn reset_credits_serde_keeps_old_caches_compatible_and_adds_expiries() {
+        let old: ResetCredits =
+            serde_json::from_str(r#"{"count":2,"soonest_expiry":"2026-07-06T06:30:00Z"}"#).unwrap();
+        assert!(old.expiries.is_empty());
+
+        let first = "2026-07-06T06:30:00Z".parse::<Timestamp>().unwrap();
+        let second = "2026-07-06T12:00:00Z".parse::<Timestamp>().unwrap();
+        let populated = ResetCredits::normalized(3, vec![second, first, first]);
+        assert_eq!(populated.soonest_expiry, Some(first));
+        assert_eq!(populated.expiries, [first, first, second]);
+        assert_eq!(
+            serde_json::to_value(populated).unwrap(),
+            serde_json::json!({
+                "count": 3,
+                "soonest_expiry": "2026-07-06T06:30:00Z",
+                "expiries": [
+                    "2026-07-06T06:30:00Z",
+                    "2026-07-06T06:30:00Z",
+                    "2026-07-06T12:00:00Z"
+                ]
+            })
+        );
+    }
 
     fn serve_many(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

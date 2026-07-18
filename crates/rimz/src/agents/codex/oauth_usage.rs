@@ -317,10 +317,13 @@ fn summarize_reset_credits(
     details: &[ResetCreditDetail],
 ) -> ResetCredits {
     let fallback_count = details.len().min(u32::MAX as usize) as u32;
-    ResetCredits {
-        count: available_count.unwrap_or(fallback_count),
-        soonest_expiry: details.iter().filter_map(|credit| credit.expires_at).min(),
-    }
+    ResetCredits::normalized(
+        available_count.unwrap_or(fallback_count),
+        details
+            .iter()
+            .filter_map(|credit| credit.expires_at)
+            .collect(),
+    )
 }
 
 fn fetch_reset_credits(url: &str, credentials: &CodexOauthCredentials) -> Result<ResetCredits> {

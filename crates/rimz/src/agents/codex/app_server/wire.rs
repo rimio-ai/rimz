@@ -305,7 +305,7 @@ pub(super) fn collect_reset_credits(parsed: &RateLimitsResponse) -> Option<Reset
     let count = reset
         .available_count
         .and_then(|count| u32::try_from(count).ok())?;
-    let soonest_expiry = reset
+    let expiries = reset
         .credits
         .as_deref()
         .unwrap_or_default()
@@ -313,11 +313,8 @@ pub(super) fn collect_reset_credits(parsed: &RateLimitsResponse) -> Option<Reset
         .filter(|credit| credit.status.as_deref() == Some("available"))
         .filter_map(|credit| credit.expires_at)
         .filter_map(|seconds| Timestamp::from_second(seconds).ok())
-        .min();
-    Some(ResetCredits {
-        count,
-        soonest_expiry,
-    })
+        .collect();
+    Some(ResetCredits::normalized(count, expiries))
 }
 
 /// Extract the Codex version from the server's `userAgent`. The first token is

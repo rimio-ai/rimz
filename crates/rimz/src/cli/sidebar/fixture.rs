@@ -613,6 +613,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
     codex_panel.reset_credits = Some(rimz::ResetCredits {
         count: 2,
         soonest_expiry: None,
+        expiries: Vec::new(),
     });
     snapshot.providers = vec![
         provider_panel(
@@ -1015,6 +1016,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     codex_panel.reset_credits = Some(rimz::ResetCredits {
         count: 2,
         soonest_expiry: None,
+        expiries: Vec::new(),
     });
     snapshot.providers = vec![
         provider_panel(

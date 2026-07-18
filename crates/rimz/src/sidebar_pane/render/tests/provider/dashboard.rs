@@ -427,6 +427,7 @@ fn render_provider_dashboard_shows_codex_reset_credit_header() {
     codex.reset_credits = Some(crate::ResetCredits {
         count: 3,
         soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
+        expiries: Vec::new(),
     });
 
     let (lines, _) = provider_panel_lines(
@@ -471,6 +472,7 @@ fn codex_reset_marker_blinks_only_while_a_window_is_spent() {
     spent.reset_credits = Some(crate::ResetCredits {
         count: 2,
         soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
+        expiries: Vec::new(),
     });
     let blinking = (0..32)
         .map(|phase| marker_style(&spent, phase).expect("reset marker"))
@@ -506,11 +508,13 @@ fn render_provider_dashboard_hides_reset_credit_header_when_not_actionable() {
     non_codex.reset_credits = Some(crate::ResetCredits {
         count: 3,
         soonest_expiry: None,
+        expiries: Vec::new(),
     });
     let mut zero = provider_panel("codex", "Codex", 33, false, false, None);
     zero.reset_credits = Some(crate::ResetCredits {
         count: 0,
         soonest_expiry: None,
+        expiries: Vec::new(),
     });
     let absent = provider_panel("codex", "Codex", 33, false, false, None);
 

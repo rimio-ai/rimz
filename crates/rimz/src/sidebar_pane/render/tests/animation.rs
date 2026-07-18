@@ -61,6 +61,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     codex.reset_credits = Some(crate::ResetCredits {
         count: 1,
         soonest_expiry: None,
+        expiries: Vec::new(),
     });
     reset_attention.providers = vec![codex];
     assert_eq!(

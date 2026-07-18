@@ -29,6 +29,7 @@ fn credits(now: Timestamp, expiry: Option<Duration>) -> ResetCredits {
     ResetCredits {
         count: 1,
         soonest_expiry: expiry.map(|duration| now + duration),
+        expiries: Vec::new(),
     }
 }
 
@@ -125,6 +126,7 @@ fn verdict_covers_gain_hold_and_missing_data_matrix() {
             &ResetCredits {
                 count: 0,
                 soonest_expiry: Some(now + Duration::from_secs(60)),
+                expiries: Vec::new(),
             },
             now,
         ),

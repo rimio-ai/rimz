@@ -81,6 +81,7 @@ fn account_usage_completion_decision_matrix() {
         reset_credits: Some(crate::agents::ResetCredits {
             count: 1,
             soonest_expiry: None,
+            expiries: Vec::new(),
         }),
         ..Default::default()
     };

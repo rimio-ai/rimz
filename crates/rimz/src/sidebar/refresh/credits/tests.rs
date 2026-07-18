@@ -74,6 +74,7 @@ fn claimed_entry(nonce: Uuid, scope: ProviderAccountScope) -> ProviderCreditsEnt
         reset_credits: Some(ResetCredits {
             count: 3,
             soonest_expiry: None,
+            expiries: Vec::new(),
         }),
         direct_query_claim: Some(DirectQueryClaim {
             nonce,
@@ -718,6 +719,7 @@ fn successful_partial_read_preserves_prior_optional_credits() {
                     reset_credits: Some(ResetCredits {
                         count: 3,
                         soonest_expiry: None,
+                        expiries: Vec::new(),
                     }),
                     ..Default::default()
                 },
@@ -773,6 +775,7 @@ fn realtime_write_preserves_attempt_and_claim() {
                     reset_credits: Some(ResetCredits {
                         count: 2,
                         soonest_expiry: None,
+                        expiries: Vec::new(),
                     }),
                     direct_query_claim: Some(claim.clone()),
                     ..Default::default()
@@ -812,6 +815,7 @@ fn realtime_write_preserves_attempt_and_claim() {
             reset_credits: Some(ResetCredits {
                 count: 0,
                 soonest_expiry: None,
+                expiries: Vec::new(),
             }),
             ..Default::default()
         },
