@@ -191,6 +191,10 @@ fn permission_tail_accepts_a_complete_final_record_and_excludes_a_torn_one() {
         format!("{request}\n{resolved}\n{{\"ts\":\"{at}\",\"type\":\"permission_requested\""),
     )
     .unwrap();
+    assert_eq!(
+        read_transcript_tail(&path).as_deref(),
+        Some(format!("{request}\n{resolved}\n").as_str())
+    );
     assert!(native_permission_wait(&path).is_none());
 }
 
