@@ -238,8 +238,10 @@ fn quote_and_display_are_shell_safe() {
 
 #[test]
 fn master_spec_is_unattended_and_has_no_remote_command() {
-    let spec = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false)
-        .master(Path::new("/tmp/rimz.sock"));
+    let spec = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false).master(
+        Path::new("/tmp/rimz.sock"),
+        ReconnectPolicy::default().master_connect_timeout,
+    );
 
     assert_eq!(
         spec.args,
@@ -249,7 +251,7 @@ fn master_spec_is_unattended_and_has_no_remote_command() {
             "-o",
             "ServerAliveCountMax=3",
             "-o",
-            "ConnectTimeout=10",
+            "ConnectTimeout=5",
             "-o",
             "Compression=yes",
             "-M",
@@ -263,6 +265,10 @@ fn master_spec_is_unattended_and_has_no_remote_command() {
         ]
     );
     assert!(!spec.args.iter().any(|arg| arg == "-t"));
+
+    let subsecond = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false)
+        .master(Path::new("/tmp/rimz.sock"), Duration::from_millis(1));
+    assert!(subsecond.args.iter().any(|arg| arg == "ConnectTimeout=1"));
 }
 
 #[test]

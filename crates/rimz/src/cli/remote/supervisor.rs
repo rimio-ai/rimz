@@ -482,7 +482,10 @@ fn wait_for_master(
                 outage.begin_attempt();
                 outage.panel.session_starting();
                 reachability.begin_attempt(now);
-                match MasterAttempt::spawn(plan.master(control_path), control_path.to_path_buf()) {
+                match MasterAttempt::spawn(
+                    plan.master(control_path, policy.master_connect_timeout),
+                    control_path.to_path_buf(),
+                ) {
                     Ok(attempt) => master = MasterState::connecting(attempt, now),
                     Err(err) => {
                         note_master_failure(

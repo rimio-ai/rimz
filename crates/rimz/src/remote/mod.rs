@@ -370,7 +370,8 @@ impl SshAttachPlan {
 
     /// Compile the unattended ControlMaster used to prove transport and auth
     /// behind the recovery panel before the tty attach begins.
-    pub fn master(&self, control_path: &Path) -> CommandSpec {
+    pub fn master(&self, control_path: &Path, connect_timeout: Duration) -> CommandSpec {
+        let connect_timeout_secs = connect_timeout.as_millis().div_ceil(1000).max(1);
         CommandSpec::new(ssh_program())
             .args([
                 "-o",
@@ -378,7 +379,9 @@ impl SshAttachPlan {
                 "-o",
                 "ServerAliveCountMax=3",
                 "-o",
-                "ConnectTimeout=10",
+            ])
+            .arg(format!("ConnectTimeout={connect_timeout_secs}"))
+            .args([
                 "-o",
                 "Compression=yes",
                 "-M",
@@ -652,6 +655,9 @@ pub struct ReconnectPolicy {
     pub reachable_retry: Duration,
     /// Outage window that keeps reachable-endpoint retries flat and fast.
     pub flat_window: Duration,
+    /// Maximum wait for one background master's TCP connect and SSH banner
+    /// exchange. The visible attach retains its ten-second connect budget.
+    pub master_connect_timeout: Duration,
     /// Maximum lifetime of one background ControlMaster connection attempt.
     pub master_deadline: Duration,
 }
@@ -663,6 +669,7 @@ impl Default for ReconnectPolicy {
             backoff_cap: Duration::from_secs(30),
             reachable_retry: Duration::from_secs(2),
             flat_window: Duration::from_secs(3 * 60),
+            master_connect_timeout: Duration::from_secs(5),
             master_deadline: Duration::from_secs(30),
         }
     }
@@ -672,7 +679,7 @@ impl ReconnectPolicy {
     /// Resolve the policy, honoring the hidden test seams
     /// (`RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_CAP_MS`,
     /// `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`,
-    /// `RIMZ_REMOTE_MASTER_TIMEOUT_MS`).
+    /// `RIMZ_REMOTE_MASTER_CONNECT_MS`, `RIMZ_REMOTE_MASTER_TIMEOUT_MS`).
     pub fn from_env() -> Self {
         let mut policy = Self::default();
         if let Some(gatetime) = env_ms("RIMZ_REMOTE_GATETIME_MS") {
@@ -686,6 +693,9 @@ impl ReconnectPolicy {
         }
         if let Some(window) = env_ms("RIMZ_REMOTE_FLAT_WINDOW_MS") {
             policy.flat_window = window;
+        }
+        if let Some(connect_timeout) = env_ms("RIMZ_REMOTE_MASTER_CONNECT_MS") {
+            policy.master_connect_timeout = connect_timeout;
         }
         if let Some(deadline) = env_ms("RIMZ_REMOTE_MASTER_TIMEOUT_MS") {
             policy.master_deadline = deadline;
