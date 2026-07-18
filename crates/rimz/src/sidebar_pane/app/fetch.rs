@@ -342,8 +342,9 @@ impl FetchWorker {
         let now_ms = crate::sidebar::timing::unix_now_ms();
         let frame_stamps =
             crate::sidebar::cache::published_frame_stamps(&self.runtime, &self.config.session_name);
+        let last_was_adoption = self.consumer_memo.last_was_adoption();
         let mut fold_stamp = consumer_stamp_recordable(request, role.is_producer()).then(|| {
-            if self.consumer_memo.last_was_adoption() {
+            if last_was_adoption {
                 self.reader.projection_inputs_stamp(state)
             } else {
                 self.reader.inputs_stamp(state)
@@ -385,7 +386,7 @@ impl FetchWorker {
                 fold_started.elapsed(),
             );
         }
-        if consumer_stamp_recordable(request, role.is_producer()) {
+        if consumer_stamp_recordable(request, role.is_producer()) && adopted != last_was_adoption {
             fold_stamp = Some(if adopted {
                 self.reader.projection_inputs_stamp(state)
             } else {
