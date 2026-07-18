@@ -132,28 +132,29 @@ mod tests {
     #[test]
     fn swatch_writes_background_chips_in_grouped_order() {
         let swatch = scheme::SchemeSwatch {
-            background: (1, 2, 3),
-            foreground: (4, 5, 6),
-            red: (7, 8, 9),
-            green: (10, 11, 12),
-            yellow: (13, 14, 15),
-            blue: (16, 17, 18),
-            magenta: (19, 20, 21),
-            cyan: (22, 23, 24),
+            background: (0, 0, 0),
+            foreground: (255, 255, 255),
+            red: (255, 0, 0),
+            green: (0, 255, 0),
+            yellow: (255, 255, 0),
+            blue: (0, 0, 255),
+            magenta: (255, 0, 255),
+            cyan: (0, 255, 255),
         };
         let mut raw = Vec::new();
         write_swatch(&mut raw, &swatch).expect("render swatch");
         let raw = String::from_utf8(raw).expect("utf-8");
         let sequences = [
-            "\u{1b}[48;2;1;2;3m",
-            "\u{1b}[48;2;4;5;6m",
-            "\u{1b}[48;2;7;8;9m",
-            "\u{1b}[48;2;10;11;12m",
-            "\u{1b}[48;2;13;14;15m",
-            "\u{1b}[48;2;16;17;18m",
-            "\u{1b}[48;2;19;20;21m",
-            "\u{1b}[48;2;22;23;24m",
-        ];
+            swatch.background,
+            swatch.foreground,
+            swatch.red,
+            swatch.green,
+            swatch.yellow,
+            swatch.blue,
+            swatch.magenta,
+            swatch.cyan,
+        ]
+        .map(|rgb| bg_style(rgb).render().to_string());
         let positions = sequences
             .iter()
             .map(|sequence| {
