@@ -93,9 +93,10 @@ impl ClaudeDiscoverySnapshot {
             self.rebuild_catalog(&key, now);
         }
 
-        let mut selected = Vec::new();
-        for config_dir in &key.config_dirs {
-            for workspace in &key.workspaces {
+        let mut observations = Vec::new();
+        for workspace in &key.workspaces {
+            let mut workspace_observations = Vec::new();
+            for config_dir in &key.config_dirs {
                 let mut bucket = self
                     .catalog
                     .iter()
@@ -114,20 +115,23 @@ impl ClaudeDiscoverySnapshot {
                         .cmp(&left.1.modified)
                         .then_with(|| left.0.path.cmp(&right.0.path))
                 });
-                selected.extend(bucket.into_iter().take(MAX_DISCOVERED_SESSIONS));
+                workspace_observations.extend(
+                    bucket
+                        .into_iter()
+                        .take(MAX_DISCOVERED_SESSIONS)
+                        .filter_map(|(entry, stamp)| self.refresh_candidate(entry, stamp, forced)),
+                );
             }
+            workspace_observations.sort_by(observation_cmp);
+            let mut seen = HashSet::new();
+            workspace_observations
+                .retain(|observation| seen.insert(observation.session_id.clone()));
+            workspace_observations.truncate(MAX_DISCOVERED_SESSIONS);
+            observations.extend(workspace_observations);
         }
 
-        let mut observations = selected
-            .into_iter()
-            .filter_map(|(entry, stamp)| self.refresh_candidate(entry, stamp, forced))
-            .collect::<Vec<_>>();
         self.candidates
             .retain(|entry, _| self.catalog.contains(entry));
-        observations.sort_by(observation_cmp);
-        let mut seen = HashSet::new();
-        observations.retain(|observation| seen.insert(observation.session_id.clone()));
-        observations.truncate(MAX_DISCOVERED_SESSIONS);
         observations
     }
 
@@ -490,5 +494,74 @@ mod tests {
         );
         assert_eq!(snapshot.work.full_scans, 2);
         assert_eq!(snapshot.work.candidate_parses, 3);
+    }
+
+    #[test]
+    fn batched_discovery_retains_the_cap_for_each_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().to_path_buf();
+        let first = PathBuf::from("/workspace/first");
+        let second = PathBuf::from("/workspace/second");
+        let key = DiscoveryKey {
+            config_dirs: vec![config_dir.clone()],
+            workspaces: vec![first.clone(), second.clone()],
+        };
+        let start = Instant::now();
+        let mut snapshot = ClaudeDiscoverySnapshot {
+            key: Some(key.clone()),
+            last_full_scan: Some(start),
+            ..ClaudeDiscoverySnapshot::default()
+        };
+
+        for (workspace, count, timestamp) in [(&first, MAX_DISCOVERED_SESSIONS, 2), (&second, 2, 1)]
+        {
+            for index in 0..count {
+                let path = temp.path().join(format!("{}-{index}.jsonl", timestamp));
+                fs::write(&path, []).unwrap();
+                let entry = CatalogEntry {
+                    config_dir: config_dir.clone(),
+                    workspace: workspace.clone(),
+                    path: path.clone(),
+                };
+                let at = Timestamp::from_second(timestamp).unwrap();
+                let observation = LocalSessionObservation {
+                    kind: AgentKind::new_unchecked("claude"),
+                    session_id: AgentSessionId::from(format!("{timestamp}-{index}")),
+                    workspace: workspace.clone(),
+                    transcript_path: path,
+                    created_at: at,
+                    fresh_binding_at: Some(at),
+                    first_event_at: Some(at),
+                    last_activity: at,
+                    projection: LocalSessionProjection::IdentityOnly,
+                };
+                let stamp = ProviderPathStamp::read(&entry.path);
+                snapshot.catalog.push(entry.clone());
+                snapshot.candidates.insert(
+                    entry,
+                    CachedCandidate {
+                        stamp,
+                        observation: Some(observation),
+                    },
+                );
+            }
+        }
+
+        let observations = snapshot.refresh(key, start);
+        assert_eq!(observations.len(), MAX_DISCOVERED_SESSIONS + 2);
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|observation| observation.workspace == first)
+                .count(),
+            MAX_DISCOVERED_SESSIONS
+        );
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|observation| observation.workspace == second)
+                .count(),
+            2
+        );
     }
 }
