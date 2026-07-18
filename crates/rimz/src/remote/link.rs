@@ -401,12 +401,17 @@ fn control_path_under(runtime_root: &Path, pid: u32) -> PathBuf {
         .join(format!("link-{pid}.sock"))
 }
 
+/// Compile the interactive attach's control options. The attach can create the
+/// master, so its lifetime stays tied to the supervised child rather than an
+/// inherited `ControlPersist` background process holding RimZ's socket.
 pub fn control_options(path: &Path) -> Vec<String> {
     vec![
         "-o".to_owned(),
         "ControlMaster=auto".to_owned(),
         "-o".to_owned(),
         format!("ControlPath={}", path.display()),
+        "-o".to_owned(),
+        "ControlPersist=no".to_owned(),
     ]
 }
 
@@ -1080,6 +1085,8 @@ mod tests {
                 "ControlMaster=auto",
                 "-o",
                 "ControlPath=/tmp/rimz.sock",
+                "-o",
+                "ControlPersist=no",
             ]
         );
         let path_spec = probe_stream_spec(&target("dev-box:~/code/query-engine"), &control);

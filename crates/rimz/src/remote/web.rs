@@ -68,6 +68,8 @@ pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16)
             "ConnectTimeout=10",
             "-o",
             "Compression=yes",
+            "-o",
+            "ControlPersist=no",
             "-L",
         ])
         .arg(format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"))
@@ -182,6 +184,8 @@ mod tests {
                 "ConnectTimeout=10",
                 "-o",
                 "Compression=yes",
+                "-o",
+                "ControlPersist=no",
                 "-L",
                 "127.0.0.1:8301:127.0.0.1:8082",
                 "--",

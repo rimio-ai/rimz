@@ -237,7 +237,7 @@ fn quote_and_display_are_shell_safe() {
 }
 
 #[test]
-fn master_spec_is_unattended_and_has_no_remote_command() {
+fn master_spec_pins_supervised_lifecycle_and_has_no_remote_command() {
     let spec = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false).master(
         Path::new("/tmp/rimz.sock"),
         ReconnectPolicy::default().master_connect_timeout,
@@ -258,6 +258,12 @@ fn master_spec_is_unattended_and_has_no_remote_command() {
             "-N",
             "-o",
             "BatchMode=yes",
+            "-o",
+            "ControlPersist=no",
+            "-o",
+            "ConnectionAttempts=1",
+            "-o",
+            "ClearAllForwardings=yes",
             "-o",
             "ControlPath=/tmp/rimz.sock",
             "--",
@@ -408,7 +414,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
             term: TermPlan::Keep,
             truecolor: false,
             control: Some(Path::new("/tmp/rimz.sock")),
-            destination_index: 14,
+            destination_index: 16,
             snippet_contains: &["exec rimz attach --attach -- 'query-engine'"],
         },
         SpecCase {
@@ -494,12 +500,14 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
         );
         if case.control.is_some() {
             assert_eq!(
-                spec.args[8..12],
+                spec.args[8..14],
                 [
                     "-o",
                     "ControlMaster=auto",
                     "-o",
                     "ControlPath=/tmp/rimz.sock",
+                    "-o",
+                    "ControlPersist=no",
                 ],
                 "{}",
                 case.name

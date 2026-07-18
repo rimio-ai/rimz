@@ -369,7 +369,9 @@ impl SshAttachPlan {
     }
 
     /// Compile the unattended ControlMaster used to prove transport and auth
-    /// behind the recovery panel before the tty attach begins.
+    /// behind the recovery panel before the tty attach begins. The lifecycle
+    /// and attempt options preserve the supervisor's child-alive iff
+    /// master-alive invariant despite inherited SSH configuration.
     pub fn master(&self, control_path: &Path, connect_timeout: Duration) -> CommandSpec {
         let connect_timeout_secs = connect_timeout.as_millis().div_ceil(1000).max(1);
         CommandSpec::new(ssh_program())
@@ -388,6 +390,12 @@ impl SshAttachPlan {
                 "-N",
                 "-o",
                 "BatchMode=yes",
+                "-o",
+                "ControlPersist=no",
+                "-o",
+                "ConnectionAttempts=1",
+                "-o",
+                "ClearAllForwardings=yes",
                 "-o",
             ])
             .arg(format!("ControlPath={}", control_path.display()))
