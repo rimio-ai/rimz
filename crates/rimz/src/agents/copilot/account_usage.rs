@@ -1,14 +1,10 @@
 //! Bounded Copilot account-plan and monthly-quota enrichment.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{
     AgentRateLimits, RateLimitWindow, RateLimitWindowScope, WindowSource, clamp_pct,
 };
@@ -51,26 +47,6 @@ impl crate::agents::credits::AccountUsageReportable for CopilotUsageErr {
 }
 
 type Result<T> = std::result::Result<T, CopilotUsageErr>;
-
-#[derive(Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct UsageConfig {
-    last_logged_in_user: Option<LoginIdentity>,
-    logged_in_users: Vec<LoginIdentity>,
-    copilot_tokens: BTreeMap<String, Value>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct LoginIdentity {
-    host: Option<String>,
-    login: Option<String>,
-}
-
-struct ActiveIdentity {
-    host: String,
-    login: String,
-}
 
 #[derive(Default)]
 struct CredentialEnv {
@@ -146,34 +122,20 @@ pub(super) fn probe_usage() -> crate::agents::AccountUsageProbe {
     )
 }
 
-fn process_config() -> Result<(Option<UsageConfig>, Option<u64>)> {
-    let path = config_path();
-    let credentials_stamp = path.as_deref().and_then(file_mtime_ms);
-    let config = path.as_deref().map(load_config).transpose()?.flatten();
-    Ok((config, credentials_stamp))
-}
-
-fn config_path() -> Option<PathBuf> {
-    Some(super::paths::copilot_home()?.join("config.json"))
-}
-
-fn load_config(path: &Path) -> Result<Option<UsageConfig>> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(CopilotUsageErr::ConfigUnavailable),
-    };
-    crate::agents::jsonc::from_slice(&bytes)
-        .map(Some)
-        .map_err(|_| CopilotUsageErr::ConfigUnavailable)
+fn process_config() -> Result<(Option<super::account::CopilotConfig>, Option<u64>)> {
+    match super::account::load_process_config() {
+        super::account::CopilotConfigLoad::Missing => Ok((None, None)),
+        super::account::CopilotConfigLoad::Unavailable => Err(CopilotUsageErr::ConfigUnavailable),
+        super::account::CopilotConfigLoad::Loaded { config, stamp } => Ok((Some(config), stamp)),
+    }
 }
 
 fn select_credential(
-    config: Option<&UsageConfig>,
+    config: Option<&super::account::CopilotConfig>,
     env: &CredentialEnv,
     config_stamp: Option<u64>,
 ) -> Result<SelectedCredential> {
-    let active = config.and_then(UsageConfig::active_identity);
+    let active = config.and_then(super::account::CopilotConfig::active_identity);
     let host = match env.host() {
         Some(host) => super::account::normalized_host(host).ok_or(CopilotUsageErr::InvalidHost)?,
         None => active
@@ -203,56 +165,6 @@ fn select_credential(
         host,
         token,
         identity,
-    })
-}
-
-impl UsageConfig {
-    fn active_identity(&self) -> Option<ActiveIdentity> {
-        self.last_logged_in_user
-            .iter()
-            .chain(&self.logged_in_users)
-            .find_map(LoginIdentity::normalized)
-    }
-
-    fn token_for(&self, identity: &ActiveIdentity) -> Option<&str> {
-        self.copilot_tokens.iter().find_map(|(key, value)| {
-            let candidate = token_key_identity(key)?;
-            (candidate.host == identity.host && candidate.login == identity.login)
-                .then(|| value.as_str().map(str::trim))
-                .flatten()
-                .filter(|token| !token.is_empty())
-        })
-    }
-}
-
-impl LoginIdentity {
-    fn normalized(&self) -> Option<ActiveIdentity> {
-        let login = self.login.as_deref()?.trim();
-        if login.is_empty() {
-            return None;
-        }
-        let host = self
-            .host
-            .as_deref()
-            .map(str::trim)
-            .filter(|host| !host.is_empty())
-            .unwrap_or("github.com");
-        Some(ActiveIdentity {
-            host: super::account::normalized_host(host)?,
-            login: login.to_owned(),
-        })
-    }
-}
-
-fn token_key_identity(key: &str) -> Option<ActiveIdentity> {
-    let (host, login) = key.rsplit_once(':')?;
-    let login = login.trim();
-    if login.is_empty() {
-        return None;
-    }
-    Some(ActiveIdentity {
-        host: super::account::normalized_host(host)?,
-        login: login.to_owned(),
     })
 }
 
@@ -525,8 +437,8 @@ mod tests {
 
     use super::*;
 
-    fn config(body: &str) -> UsageConfig {
-        crate::agents::jsonc::from_slice(body.as_bytes()).unwrap()
+    fn config(body: &str) -> super::super::account::CopilotConfig {
+        super::super::account::parse_config_for_test(body)
     }
 
     fn env_with_token(token: &str) -> CredentialEnv {

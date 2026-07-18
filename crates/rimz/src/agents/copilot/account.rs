@@ -1,24 +1,41 @@
 //! Secret-safe Copilot login-identity probe from local application state.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::agents::account::AccountProbe;
 use crate::agents::context::AgentAccount;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Config {
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(super) struct CopilotConfig {
     last_logged_in_user: Option<LoginIdentity>,
-    #[serde(default)]
     logged_in_users: Vec<LoginIdentity>,
+    copilot_tokens: BTreeMap<String, Value>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
+#[serde(default)]
 struct LoginIdentity {
     host: Option<String>,
     login: Option<String>,
+}
+
+pub(super) struct CopilotIdentity {
+    pub(super) host: String,
+    pub(super) login: String,
+}
+
+pub(super) enum CopilotConfigLoad {
+    Missing,
+    Loaded {
+        config: CopilotConfig,
+        stamp: Option<u64>,
+    },
+    Unavailable,
 }
 
 pub(super) fn probe() -> AccountProbe {
@@ -33,45 +50,112 @@ fn probe_home(home: Option<&Path>) -> AccountProbe {
 }
 
 fn probe_at(path: &Path) -> AccountProbe {
+    let (config, stamp) = match load_config(path) {
+        CopilotConfigLoad::Missing => return AccountProbe::LoggedOut,
+        CopilotConfigLoad::Unavailable => return AccountProbe::Unavailable,
+        CopilotConfigLoad::Loaded { config, stamp } => (config, stamp),
+    };
+    let Some(account_id) = config.account_id() else {
+        return AccountProbe::LoggedOut;
+    };
+    found_account(account_id, stamp)
+}
+
+pub(super) fn load_process_config() -> CopilotConfigLoad {
+    let Some(home) = super::paths::copilot_home() else {
+        return CopilotConfigLoad::Missing;
+    };
+    load_config(&home.join("config.json"))
+}
+
+pub(super) fn load_config(path: &Path) -> CopilotConfigLoad {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return AccountProbe::LoggedOut;
+            return CopilotConfigLoad::Missing;
         }
-        Err(_) => return AccountProbe::Unavailable,
+        Err(_) => return CopilotConfigLoad::Unavailable,
     };
-    let config = match crate::agents::jsonc::from_slice::<Config>(&bytes) {
-        Ok(config) => config,
-        Err(_) => return AccountProbe::Unavailable,
-    };
-    let Some(account_id) = config
-        .last_logged_in_user
-        .into_iter()
-        .chain(config.logged_in_users)
-        .find_map(normalized_identity)
-    else {
-        return AccountProbe::LoggedOut;
-    };
-    found_account(account_id, crate::agents::account::file_mtime_ms(path))
+    match crate::agents::jsonc::from_slice::<CopilotConfig>(&bytes) {
+        Ok(config) => CopilotConfigLoad::Loaded {
+            config,
+            stamp: crate::agents::account::file_mtime_ms(path),
+        },
+        Err(_) => CopilotConfigLoad::Unavailable,
+    }
 }
 
-fn normalized_identity(identity: LoginIdentity) -> Option<String> {
-    let login = identity.login?.trim().to_owned();
+impl CopilotConfig {
+    pub(super) fn active_identity(&self) -> Option<CopilotIdentity> {
+        self.last_logged_in_user
+            .iter()
+            .chain(&self.logged_in_users)
+            .find_map(LoginIdentity::normalized)
+    }
+
+    pub(super) fn account_id(&self) -> Option<String> {
+        let identity = self.active_identity()?;
+        if identity.host == "github.com" {
+            Some(identity.login)
+        } else {
+            Some(format!("{}@{}", identity.login, identity.host))
+        }
+    }
+
+    pub(super) fn token_for(&self, identity: &CopilotIdentity) -> Option<&str> {
+        self.copilot_tokens.iter().find_map(|(key, value)| {
+            let candidate = token_key_identity(key)?;
+            (candidate.host == identity.host && candidate.login == identity.login)
+                .then(|| value.as_str().map(str::trim))
+                .flatten()
+                .filter(|token| !token.is_empty())
+        })
+    }
+}
+
+impl LoginIdentity {
+    fn normalized(&self) -> Option<CopilotIdentity> {
+        let login = self.login.as_deref()?.trim();
+        if login.is_empty() {
+            return None;
+        }
+        let host = self
+            .host
+            .as_deref()
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .unwrap_or("github.com");
+        Some(CopilotIdentity {
+            host: normalized_host(host)?,
+            login: login.to_owned(),
+        })
+    }
+}
+
+fn token_key_identity(key: &str) -> Option<CopilotIdentity> {
+    let (host, login) = key.rsplit_once(':')?;
+    let login = login.trim();
     if login.is_empty() {
         return None;
     }
-    let host = identity
-        .host
-        .as_deref()
-        .map(str::trim)
-        .filter(|host| !host.is_empty())
-        .map(normalized_host)
-        .unwrap_or_else(|| Some("github.com".to_owned()))?;
-    if host == "github.com" {
-        Some(login)
-    } else {
-        Some(format!("{login}@{host}"))
+    Some(CopilotIdentity {
+        host: normalized_host(host)?,
+        login: login.to_owned(),
+    })
+}
+
+#[cfg(test)]
+pub(super) fn parse_config_for_test(body: &str) -> CopilotConfig {
+    crate::agents::jsonc::from_slice(body.as_bytes()).unwrap()
+}
+
+#[cfg(test)]
+fn normalized_identity(identity: LoginIdentity) -> Option<String> {
+    CopilotConfig {
+        last_logged_in_user: Some(identity),
+        ..CopilotConfig::default()
     }
+    .account_id()
 }
 
 pub(super) fn normalized_host(raw: &str) -> Option<String> {
