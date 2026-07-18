@@ -1,8 +1,8 @@
 //! OpenCode account path and active-provider discovery.
 
 use super::database;
+use crate::agents::AccountUsageProbe;
 use crate::agents::delegated_account::{Adapter, Config};
-use crate::agents::{AccountUsageIdentity, AccountUsageProbe};
 
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/opencode-oauth-account-key/v1";
 
@@ -22,8 +22,4 @@ pub(crate) fn probe() -> crate::agents::account::AccountProbe {
 
 pub(crate) fn probe_usage() -> AccountUsageProbe {
     crate::agents::delegated_account::probe_account_usage(&config())
-}
-
-pub(crate) fn account_usage_identity() -> AccountUsageIdentity {
-    crate::agents::delegated_account::account_usage_identity(&config())
 }

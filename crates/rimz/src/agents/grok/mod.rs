@@ -56,6 +56,7 @@ static GROK_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
+        direct_account_usage: false,
         same_pane_session: SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,

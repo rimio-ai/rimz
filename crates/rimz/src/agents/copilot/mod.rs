@@ -70,6 +70,7 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
+        direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
@@ -663,10 +664,6 @@ impl AgentAdapter for CopilotAdapter {
 
     fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
         account_usage::probe_usage()
-    }
-
-    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
-        Some(account_usage::account_usage_identity())
     }
 }
 

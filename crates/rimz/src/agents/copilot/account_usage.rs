@@ -146,22 +146,6 @@ pub(super) fn probe_usage() -> crate::agents::AccountUsageProbe {
     )
 }
 
-pub(super) fn account_usage_identity() -> AccountUsageIdentity {
-    let Ok((config, credentials_stamp)) = process_config() else {
-        return AccountUsageIdentity::default();
-    };
-    select_credential(
-        config.as_ref(),
-        &CredentialEnv::from_process(),
-        credentials_stamp,
-    )
-    .map(|selected| selected.identity)
-    .unwrap_or(AccountUsageIdentity {
-        credentials_stamp,
-        ..Default::default()
-    })
-}
-
 fn process_config() -> Result<(Option<UsageConfig>, Option<u64>)> {
     let path = config_path();
     let credentials_stamp = path.as_deref().and_then(file_mtime_ms);

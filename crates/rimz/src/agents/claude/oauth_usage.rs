@@ -189,20 +189,6 @@ pub(crate) fn credentials_stamp() -> Option<u64> {
     file_mtime_ms(&credentials_path())
 }
 
-pub(crate) fn current_account_key() -> Option<String> {
-    load_credentials()
-        .ok()
-        .map(|credentials| credentials.account_key)
-}
-
-pub(crate) fn account_usage_identity() -> crate::agents::AccountUsageIdentity {
-    crate::agents::AccountUsageIdentity {
-        credentials_stamp: credentials_stamp(),
-        account_key: current_account_key(),
-        ..Default::default()
-    }
-}
-
 pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {
     let parsed: CredentialsFile = serde_json::from_slice(bytes)?;
     let Some(oauth) = parsed.claude_ai_oauth else {

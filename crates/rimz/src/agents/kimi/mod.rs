@@ -88,6 +88,7 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
+        direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
@@ -565,13 +566,6 @@ impl AgentAdapter for KimiAdapter {
 
     fn probe_account_usage(&self) -> super::AccountUsageProbe {
         oauth_usage::probe()
-    }
-
-    fn account_usage_identity(&self) -> Option<super::AccountUsageIdentity> {
-        Some(super::AccountUsageIdentity {
-            credentials_stamp: oauth_usage::credentials_stamp(),
-            ..Default::default()
-        })
     }
 }
 

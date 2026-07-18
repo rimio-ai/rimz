@@ -52,6 +52,7 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
+        direct_account_usage: false,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,

@@ -196,21 +196,6 @@ pub(crate) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
     super::credits::map_account_usage_probe(result, identity, config.adapter.name())
 }
 
-pub(crate) fn account_usage_identity(config: &Config) -> AccountUsageIdentity {
-    let credentials_stamp = config.auth_path.as_deref().and_then(file_mtime_ms);
-    let Ok(selected) = select_usage_from_config(config) else {
-        return AccountUsageIdentity {
-            credentials_stamp,
-            ..Default::default()
-        };
-    };
-    AccountUsageIdentity {
-        scope: selected.scope,
-        account_key: Some(selected.account_key),
-        credentials_stamp,
-    }
-}
-
 fn select_display<'a>(
     credentials: &'a BTreeMap<String, Credential>,
     used_provider: Option<&str>,

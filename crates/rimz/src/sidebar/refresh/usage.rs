@@ -45,11 +45,12 @@ fn refresh_account_usage_with(
             trace_claim(runtime, kind, "adapter_missing", started.elapsed());
             continue;
         };
-        let Some(identity) = scheduling_identity(runtime, kind, adapter) else {
+        if !adapter.descriptor().capabilities.direct_account_usage {
             trace_claim(runtime, kind, "unsupported", started.elapsed());
             continue;
-        };
-        let Some(claim_id) = claim_provider_account_usage(runtime, kind, identity) else {
+        }
+        let cached_hint = cached_account_usage_hint(runtime, kind);
+        let Some(claim_id) = claim_provider_account_usage(runtime, kind, cached_hint) else {
             trace_claim(runtime, kind, "not_due", started.elapsed());
             continue;
         };
@@ -74,30 +75,6 @@ fn trace_claim(runtime: &RuntimePaths, kind: &str, outcome: &str, elapsed: Durat
         outcome,
         elapsed_ms,
     });
-}
-
-fn scheduling_identity(
-    runtime: &RuntimePaths,
-    kind: &str,
-    adapter: &dyn crate::agents::AgentAdapter,
-) -> Option<AccountUsageIdentity> {
-    let mut identity = adapter.account_usage_identity()?;
-    let cached_hint = cached_account_usage_hint(runtime, kind);
-    if let Some((scope, Some(credentials_stamp))) = cached_hint.as_ref() {
-        identity.scope = scope.clone();
-        identity.credentials_stamp = Some(*credentials_stamp);
-    } else if let Some((scope, stamp)) = cached_hint {
-        identity.scope = scope;
-        identity.credentials_stamp = identity.credentials_stamp.or(stamp);
-    }
-    if identity.account_key.is_none() {
-        identity.account_key = super::credits::read_credits_cache(&runtime.shared_credits_path())
-            .entries
-            .get(kind)
-            .filter(|entry| entry.scope == identity.scope)
-            .and_then(|entry| entry.account_key.clone());
-    }
-    Some(identity)
 }
 
 /// Run one producer-created claim. The helper validates the nonce before any
@@ -345,10 +322,11 @@ fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_windows:
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return false;
     };
-    let Some(identity) = scheduling_identity(runtime, kind, adapter) else {
+    if !adapter.descriptor().capabilities.direct_account_usage {
         return false;
-    };
-    let Some(claim_id) = claim_provider_account_usage(runtime, kind, identity) else {
+    }
+    let cached_hint = cached_account_usage_hint(runtime, kind);
+    let Some(claim_id) = claim_provider_account_usage(runtime, kind, cached_hint) else {
         return false;
     };
     complete_direct_account_usage(

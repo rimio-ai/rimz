@@ -177,6 +177,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: true,
+        direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
@@ -673,10 +674,6 @@ impl AgentAdapter for CodexAdapter {
 
     fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
         oauth_usage::probe_usage()
-    }
-
-    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
-        Some(oauth_usage::account_usage_identity())
     }
 
     /// Codex has no statusline, so app-server-owned metadata (rate-limit

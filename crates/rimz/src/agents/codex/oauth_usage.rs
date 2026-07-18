@@ -146,21 +146,6 @@ pub(crate) fn credentials_stamp() -> Option<u64> {
     file_mtime_ms(&codex_home()?.join("auth.json"))
 }
 
-pub(crate) fn account_key() -> Option<String> {
-    let home = codex_home()?;
-    load_credentials_from(&home.join("auth.json"))
-        .ok()?
-        .account_id
-}
-
-pub(crate) fn account_usage_identity() -> crate::agents::AccountUsageIdentity {
-    crate::agents::AccountUsageIdentity {
-        credentials_stamp: credentials_stamp(),
-        account_key: account_key(),
-        ..Default::default()
-    }
-}
-
 pub(crate) fn load_configured_credentials() -> Result<(CodexOauthCredentials, Option<String>)> {
     let home = codex_home().ok_or(CodexOauthUsageErr::NoCredentials)?;
     let credentials = load_credentials_from(&home.join("auth.json"))?;

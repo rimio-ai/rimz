@@ -330,7 +330,7 @@ fn usage_identity(owner: Option<&str>) -> AccountUsageIdentity {
 }
 
 fn claim(runtime: &RuntimePaths) -> Uuid {
-    claim_provider_account_usage(runtime, "antigravity", Default::default()).unwrap()
+    claim_provider_account_usage(runtime, "antigravity", None).unwrap()
 }
 
 fn windows(runtime: &RuntimePaths) -> Vec<RateLimitWindow> {
@@ -411,13 +411,123 @@ fn unknown_owner_source_reuses_same_scope_owner_until_ttl() {
         true,
     ));
 
-    let adapter = crate::agents::find_adapter("antigravity").unwrap();
-    let identity = scheduling_identity(&runtime, "antigravity", adapter).unwrap();
-    assert_eq!(identity.account_key.as_deref(), Some("owner-a"));
     assert_eq!(
-        claim_provider_account_usage(&runtime, "antigravity", identity),
+        claim_provider_account_usage(&runtime, "antigravity", None),
         None
     );
+}
+
+#[test]
+fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    super::super::accounts::write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            providers: BTreeMap::from([(
+                "claude".to_owned(),
+                ProviderRecord {
+                    probed_at_ms: 1,
+                    ok: true,
+                    account: Some(AgentAccount {
+                        metered: Some(true),
+                        credentials_updated_at_ms: Some(7),
+                        ..Default::default()
+                    }),
+                },
+            )]),
+        },
+    );
+    super::super::credits::write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            entries: BTreeMap::from([(
+                "claude".to_owned(),
+                ProviderCreditsEntry {
+                    oauth_read_at_ms: crate::sidebar::timing::unix_now_ms(),
+                    credentials_stamp: Some(7),
+                    account_key: Some("owner".to_owned()),
+                    ok: true,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+    let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    let mut spawn_attempts = 0;
+
+    refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+        spawn_attempts += 1;
+        true
+    });
+
+    assert_eq!(spawn_attempts, 0);
+    assert!(!merge_account_usage_if_due(&runtime, "claude", true));
+    assert_eq!(
+        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries["claude"]
+            .direct_query_claim,
+        None
+    );
+}
+
+#[test]
+fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    super::super::accounts::write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            providers: BTreeMap::from([(
+                "claude".to_owned(),
+                ProviderRecord {
+                    probed_at_ms: 1,
+                    ok: true,
+                    account: Some(AgentAccount {
+                        metered: Some(true),
+                        credentials_updated_at_ms: Some(8),
+                        ..Default::default()
+                    }),
+                },
+            )]),
+        },
+    );
+    super::super::credits::write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            entries: BTreeMap::from([(
+                "claude".to_owned(),
+                ProviderCreditsEntry {
+                    oauth_read_at_ms: crate::sidebar::timing::unix_now_ms(),
+                    credentials_stamp: Some(7),
+                    account_key: Some("owner".to_owned()),
+                    ok: true,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+    let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    let mut spawn_attempts = 0;
+
+    refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+        spawn_attempts += 1;
+        true
+    });
+
+    assert_eq!(spawn_attempts, 1);
+    let claim =
+        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries["claude"]
+            .direct_query_claim
+            .clone()
+            .unwrap();
+    assert_eq!(claim.credentials_stamp, Some(8));
+    assert_eq!(claim.preflight_account_key.as_deref(), Some("owner"));
 }
 
 #[test]
@@ -479,10 +589,10 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
         claim_provider_account_usage(
             &runtime,
             "claude",
-            AccountUsageIdentity {
+            Some(AccountUsageIdentity {
                 credentials_stamp: Some(7),
                 ..Default::default()
-            }
+            })
         )
         .is_some()
     );

@@ -76,6 +76,7 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
+        direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
@@ -563,14 +564,6 @@ impl AgentAdapter for QwenAdapter {
                 super::AccountUsageProbe::Failed(Default::default())
             }
         }
-    }
-    fn account_usage_identity(&self) -> Option<super::AccountUsageIdentity> {
-        Some(match selection::resolve() {
-            selection::SelectionState::Found(selection) => selection.account_usage_identity(),
-            selection::SelectionState::LoggedOut | selection::SelectionState::Unavailable => {
-                super::AccountUsageIdentity::default()
-            }
-        })
     }
     fn resolve_managed_launch(
         &self,

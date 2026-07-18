@@ -192,10 +192,14 @@ pub(crate) fn cached_accounts_for_snapshot(
 pub(crate) fn cached_account_usage_hint(
     runtime: &RuntimePaths,
     kind: &str,
-) -> Option<(crate::agents::ProviderAccountScope, Option<u64>)> {
+) -> Option<crate::agents::AccountUsageIdentity> {
     let cache = read_accounts_cache(&runtime.shared_accounts_path());
     let account = cache.providers.get(kind)?.account.as_ref()?;
-    Some((account.scope.clone(), account.credentials_updated_at_ms))
+    Some(crate::agents::AccountUsageIdentity {
+        scope: account.scope.clone(),
+        credentials_stamp: account.credentials_updated_at_ms,
+        account_key: None,
+    })
 }
 
 fn due_provider_kinds(

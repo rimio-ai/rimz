@@ -7,13 +7,12 @@ use crate::agents::{AgentErr, AgentHookClass, AgentStatus, LaunchPreset, PresetE
 use serde_json::json;
 
 #[test]
-fn account_usage_surface_publishes_a_kind_wide_scheduling_identity() {
-    let identity = CopilotAdapter
-        .account_usage_identity()
-        .expect("Copilot has a direct account-usage surface");
-    assert_eq!(
-        identity.scope,
-        crate::agents::ProviderAccountScope::KindWide
+fn account_usage_surface_is_declared_statically() {
+    assert!(
+        CopilotAdapter
+            .descriptor()
+            .capabilities
+            .direct_account_usage
     );
 }
 

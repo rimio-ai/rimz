@@ -159,6 +159,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
+        direct_account_usage: true,
         same_pane_session: SamePaneSessionPolicy::FollowLatest,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
@@ -312,10 +313,6 @@ impl AgentAdapter for AntigravityAdapter {
 
     fn probe_account_usage(&self) -> super::AccountUsageProbe {
         local_api::probe_account_usage()
-    }
-
-    fn account_usage_identity(&self) -> Option<super::AccountUsageIdentity> {
-        Some(super::AccountUsageIdentity::default())
     }
 
     fn probe_version(&self) -> Option<String> {

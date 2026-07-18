@@ -1158,13 +1158,6 @@ pub trait AgentAdapter: Send + Sync {
         AccountUsageProbe::Unsupported
     }
 
-    /// Cheap scheduling identity for a direct account-usage source. `None`
-    /// means this adapter has no source, so the producer creates no claim or
-    /// helper. `Some` may still carry an unknown account owner.
-    fn account_usage_identity(&self) -> Option<AccountUsageIdentity> {
-        None
-    }
-
     /// Resolve an exact provider-account binding for a fresh managed launch.
     /// Multi-provider adapters return `None` whenever the final launch inputs
     /// do not prove one official account identity.

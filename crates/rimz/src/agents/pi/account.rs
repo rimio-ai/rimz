@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use super::spend::{pi_config_dir, pi_session_files};
 use crate::agents::delegated_account::{Adapter, Config};
-use crate::agents::{AccountUsageIdentity, AccountUsageProbe, read_transcript_tail};
+use crate::agents::{AccountUsageProbe, read_transcript_tail};
 
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/pi-oauth-account-key/v1";
 
@@ -24,10 +24,6 @@ pub(crate) fn probe() -> crate::agents::account::AccountProbe {
 
 pub(crate) fn probe_usage() -> AccountUsageProbe {
     crate::agents::delegated_account::probe_account_usage(&config())
-}
-
-pub(crate) fn account_usage_identity() -> AccountUsageIdentity {
-    crate::agents::delegated_account::account_usage_identity(&config())
 }
 
 /// Provider of the freshest Pi session, tail-scanned newest-first.

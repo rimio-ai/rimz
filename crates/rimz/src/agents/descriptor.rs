@@ -500,6 +500,9 @@ pub struct Capabilities {
     /// conversation, so a new session may succeed another in the same pane
     /// before the reaper clears the stamp.
     pub daemon_hooked_sessions: bool,
+    /// Provides an authoritative, identity-bearing direct account-usage
+    /// probe. Scheduling uses this static declaration before provider work.
+    pub direct_account_usage: bool,
     /// Which co-resident root session owns a live pane when one agent process
     /// carries more than one session id.
     pub same_pane_session: SamePaneSessionPolicy,

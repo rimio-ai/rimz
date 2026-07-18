@@ -1357,9 +1357,11 @@ mod local_account_api {
         );
         assert_eq!(snapshot.rate_limits.unwrap().windows.len(), 2);
         assert!(identity.account_key.is_some());
-        assert_eq!(
-            AntigravityAdapter.account_usage_identity(),
-            Some(Default::default())
+        assert!(
+            AntigravityAdapter
+                .descriptor()
+                .capabilities
+                .direct_account_usage
         );
     }
     #[test]

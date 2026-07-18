@@ -355,14 +355,6 @@ impl AgentAdapter for PluginAdapter {
         probes::account_usage(self.descriptor.kind, self.plugin_dir, argv)
     }
 
-    fn account_usage_identity(&self) -> Option<super::AccountUsageIdentity> {
-        self.manifest
-            .probes
-            .account
-            .as_ref()
-            .map(|_| super::AccountUsageIdentity::default())
-    }
-
     fn probe_version(&self) -> Option<String> {
         let argv = self.manifest.probes.version.as_deref()?;
         probes::version(self.descriptor.kind, self.plugin_dir, argv)
@@ -485,6 +477,7 @@ fn build_descriptor(
             registers_lazily: manifest.capabilities.registers_lazily,
             local_session_discovery: false,
             daemon_hooked_sessions: false,
+            direct_account_usage: manifest.probes.account.is_some(),
             same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
             realtime_usage: RealtimeUsageChannel {
                 windows_defer_to_fresh_realtime: false,
@@ -940,10 +933,7 @@ account = ["sh", "-c", "touch {}; printf '{{}}'"]
         let root = TempDir::new().unwrap();
         let marker = root.path().join("probe-ran");
         let adapter = account_adapter(&marker);
-        assert_eq!(
-            adapter.account_usage_identity(),
-            Some(super::super::AccountUsageIdentity::default())
-        );
+        assert!(adapter.descriptor().capabilities.direct_account_usage);
         assert!(!marker.exists());
     }
 

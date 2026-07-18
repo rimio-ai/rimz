@@ -59,6 +59,7 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
+        direct_account_usage: false,
         // `/clear` skips lifecycle hooks; its next `beforeSubmitPrompt` introduces a
         // new conversation in this process and pane. Cursor has no fork surface,
         // and derived subagents carry parent linkage and never compete for the pane.

@@ -70,6 +70,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
+        direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::FollowLatest,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
@@ -630,10 +631,6 @@ impl AgentAdapter for OpencodeAdapter {
 
     fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
         account::probe_usage()
-    }
-
-    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
-        Some(account::account_usage_identity())
     }
 }
 

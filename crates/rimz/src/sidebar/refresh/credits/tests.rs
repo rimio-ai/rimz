@@ -29,6 +29,38 @@ fn nonce(value: u128) -> Uuid {
     Uuid::from_u128(value)
 }
 
+#[test]
+fn account_usage_cache_derived_claim_identity_uses_only_same_scope_fallbacks() {
+    let prior_scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let entry = ProviderCreditsEntry {
+        scope: prior_scope.clone(),
+        credentials_stamp: Some(7),
+        account_key: Some("owner".to_owned()),
+        ..Default::default()
+    };
+    for (hint, expected) in [
+        (None, identity(Some(7), Some("owner"), prior_scope.clone())),
+        (
+            Some(identity(None, None, prior_scope.clone())),
+            identity(Some(7), Some("owner"), prior_scope.clone()),
+        ),
+        (
+            Some(identity(Some(8), None, prior_scope.clone())),
+            identity(Some(8), Some("owner"), prior_scope.clone()),
+        ),
+        (
+            Some(identity(None, None, ProviderAccountScope::KindWide)),
+            identity(None, None, ProviderAccountScope::KindWide),
+        ),
+        (
+            Some(identity(Some(9), None, ProviderAccountScope::KindWide)),
+            identity(Some(9), None, ProviderAccountScope::KindWide),
+        ),
+    ] {
+        assert_eq!(cache_derived_claim_identity(&entry, hint), expected);
+    }
+}
+
 fn claimed_entry(nonce: Uuid, scope: ProviderAccountScope) -> ProviderCreditsEntry {
     ProviderCreditsEntry {
         scope: scope.clone(),
@@ -286,6 +318,46 @@ fn account_usage_fresh_attempt_blocks_claim_but_identity_changes_are_due() {
 }
 
 #[test]
+fn account_usage_cache_derived_claim_suppresses_fresh_reads_and_reopens_on_published_changes() {
+    let now = 1_000_000;
+    let prior_scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    for (hint, expected_claim) in [
+        (None, false),
+        (Some(identity(None, None, prior_scope.clone())), false),
+        (Some(identity(Some(7), None, prior_scope.clone())), false),
+        (Some(identity(Some(8), None, prior_scope.clone())), true),
+        (
+            Some(identity(Some(7), None, ProviderAccountScope::KindWide)),
+            true,
+        ),
+    ] {
+        let (_dir, runtime) = runtime();
+        write_credits_cache(
+            &runtime.shared_credits_path(),
+            &CreditsCache {
+                entries: BTreeMap::from([(
+                    "codex".to_owned(),
+                    ProviderCreditsEntry {
+                        scope: prior_scope.clone(),
+                        oauth_read_at_ms: now,
+                        credentials_stamp: Some(7),
+                        account_key: Some("owner".to_owned()),
+                        ok: true,
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            claim_provider_account_usage_with_hint_at(&runtime, "codex", hint, now + 1, nonce(11),)
+                .is_some(),
+            expected_claim
+        );
+    }
+}
+
+#[test]
 fn settled_attempt_waits_for_long_ttl_unless_credentials_change() {
     let (_dir, runtime) = runtime();
     let now = 1_000_000;
@@ -320,6 +392,48 @@ fn settled_attempt_waits_for_long_ttl_unless_credentials_change() {
             "claude",
             identity(Some(8), None, ProviderAccountScope::KindWide),
             now + 1,
+            nonce(2),
+        ),
+        Some(nonce(2))
+    );
+}
+
+#[test]
+fn account_usage_cache_derived_settled_attempt_waits_for_long_ttl() {
+    let (_dir, runtime) = runtime();
+    let now = 1_000_000;
+    write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            entries: BTreeMap::from([(
+                "claude".to_owned(),
+                ProviderCreditsEntry {
+                    oauth_read_at_ms: now,
+                    auth_settled: true,
+                    credentials_stamp: Some(7),
+                    account_key: Some("owner".to_owned()),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        claim_provider_account_usage_with_hint_at(
+            &runtime,
+            "claude",
+            Some(identity(Some(7), None, ProviderAccountScope::KindWide,)),
+            now + OAUTH_USAGE_TTL.as_millis() as u64 + 1,
+            nonce(1),
+        ),
+        None
+    );
+    assert_eq!(
+        claim_provider_account_usage_with_hint_at(
+            &runtime,
+            "claude",
+            Some(identity(Some(7), None, ProviderAccountScope::KindWide,)),
+            now + OAUTH_USAGE_SETTLED_TTL.as_millis() as u64 + 1,
             nonce(2),
         ),
         Some(nonce(2))

@@ -104,6 +104,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
+        direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: true,
@@ -666,10 +667,6 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
         oauth_usage::probe_usage(None)
-    }
-
-    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
-        Some(oauth_usage::account_usage_identity())
     }
 
     fn remote_control_status(

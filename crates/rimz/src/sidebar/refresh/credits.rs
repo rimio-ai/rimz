@@ -197,6 +197,8 @@ pub struct DirectQueryClaim {
     pub requested_scope: ProviderAccountScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_stamp: Option<u64>,
+    /// Cache-derived owner fallback for normalizing a failed or unsupported
+    /// authoritative probe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preflight_account_key: Option<String>,
 }
@@ -270,11 +272,30 @@ pub fn merge_provider_realtime_usage(
 pub fn claim_provider_account_usage(
     runtime: &RuntimePaths,
     kind: &str,
-    identity: AccountUsageIdentity,
+    cached_hint: Option<AccountUsageIdentity>,
 ) -> Option<Uuid> {
-    claim_provider_account_usage_at(runtime, kind, identity, unix_now_ms(), Uuid::now_v7())
+    claim_provider_account_usage_with_hint_at(
+        runtime,
+        kind,
+        cached_hint,
+        unix_now_ms(),
+        Uuid::now_v7(),
+    )
 }
 
+fn claim_provider_account_usage_with_hint_at(
+    runtime: &RuntimePaths,
+    kind: &str,
+    cached_hint: Option<AccountUsageIdentity>,
+    now_ms: u64,
+    nonce: Uuid,
+) -> Option<Uuid> {
+    claim_provider_account_usage_locked(runtime, kind, now_ms, nonce, |entry| {
+        cache_derived_claim_identity(entry, cached_hint)
+    })
+}
+
+#[cfg(test)]
 fn claim_provider_account_usage_at(
     runtime: &RuntimePaths,
     kind: &str,
@@ -282,12 +303,23 @@ fn claim_provider_account_usage_at(
     now_ms: u64,
     nonce: Uuid,
 ) -> Option<Uuid> {
+    claim_provider_account_usage_locked(runtime, kind, now_ms, nonce, |_| identity)
+}
+
+fn claim_provider_account_usage_locked(
+    runtime: &RuntimePaths,
+    kind: &str,
+    now_ms: u64,
+    nonce: Uuid,
+    identity: impl FnOnce(&ProviderCreditsEntry) -> AccountUsageIdentity,
+) -> Option<Uuid> {
     let path = runtime.shared_credits_path();
     let _guard = crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
         .ok()
         .flatten()?;
     let mut cache = read_credits_cache(&path);
     let entry = cache.entries.entry(kind.to_owned()).or_default();
+    let identity = identity(entry);
     if entry.direct_query_claim.as_ref().is_some_and(|claim| {
         now_ms.saturating_sub(claim.claimed_at_ms) <= ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64
     }) || oauth_read_is_fresh(entry, now_ms, &identity)
@@ -304,6 +336,25 @@ fn claim_provider_account_usage_at(
     cache.refreshed_at_ms = now_ms;
     write_credits_cache(&path, &cache);
     Some(nonce)
+}
+
+fn cache_derived_claim_identity(
+    entry: &ProviderCreditsEntry,
+    cached_hint: Option<AccountUsageIdentity>,
+) -> AccountUsageIdentity {
+    let prior = AccountUsageIdentity {
+        scope: entry.scope.clone(),
+        account_key: entry.account_key.clone(),
+        credentials_stamp: entry.credentials_stamp,
+    };
+    let Some(mut hint) = cached_hint else {
+        return prior;
+    };
+    if hint.scope == entry.scope {
+        hint.account_key = hint.account_key.or(prior.account_key);
+        hint.credentials_stamp = hint.credentials_stamp.or(prior.credentials_stamp);
+    }
+    hint
 }
 
 pub fn account_usage_claim_matches(runtime: &RuntimePaths, kind: &str, nonce: Uuid) -> bool {
@@ -488,7 +539,7 @@ fn oauth_read_is_fresh(
         return false;
     }
     if entry.scope != identity.scope
-        || preflight_account_key_changed(entry, identity)
+        || claim_account_key_changed(entry, identity)
         || identity
             .credentials_stamp
             .is_some_and(|stamp| entry.credentials_stamp != Some(stamp))
@@ -506,15 +557,14 @@ fn oauth_read_is_fresh(
     now_ms.saturating_sub(entry.oauth_read_at_ms) <= ttl.as_millis() as u64
 }
 
-fn preflight_account_key_changed(
+fn claim_account_key_changed(
     entry: &ProviderCreditsEntry,
     identity: &AccountUsageIdentity,
 ) -> bool {
     match identity.account_key.as_deref() {
         Some(current) => entry.account_key.as_deref() != Some(current),
-        // File-stamped scheduling hints omit owner to avoid rereading
-        // credentials every tick. Without a stamp, `None` is the exact source
-        // result and detects Some -> None symmetrically.
+        // Stamped cache hints omit owner. An explicit unstamped identity can
+        // still prove Some -> None symmetrically in pure claim tests.
         None => identity.credentials_stamp.is_none() && entry.account_key.is_some(),
     }
 }
