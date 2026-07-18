@@ -332,6 +332,7 @@ fn observe_task_timing(
     let reset_signal = if (retain_overlaid_next || (blocked.is_none() && !active_pause))
         && last_fire.is_some()
         && task.reset_ping_kind().is_some()
+        && task.schedule().is_ok()
     {
         reset_signal_for(task, now_zoned.timestamp())
     } else {
