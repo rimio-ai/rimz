@@ -37,12 +37,13 @@ fn snapshot(update: &FetchUpdate) -> &SidebarSnapshot {
 #[test]
 fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
     let (_dir, mut reader) = guarded_reader();
-    let result = run_produce_guarded(&mut reader, |_| {
-        Err(crate::sidebar::produce::ProduceErr::Fixture {
-            path: PathBuf::from("/nonexistent/panes.json"),
-            reason: "injected failure".to_owned(),
-        })
-    });
+    let result: std::result::Result<SidebarSnapshot, String> =
+        run_produce_guarded(&mut reader, |_| {
+            Err(crate::sidebar::produce::ProduceErr::Fixture {
+                path: PathBuf::from("/nonexistent/panes.json"),
+                reason: "injected failure".to_owned(),
+            })
+        });
     assert!(result.unwrap_err().contains("injected failure"));
 
     let _hook_guard = crate::sidebar_pane::app::PANIC_HOOK_TEST_LOCK
@@ -58,7 +59,8 @@ fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
         );
     }));
 
-    let result = run_produce_guarded(&mut reader, |_| panic!("boom"));
+    let result: std::result::Result<SidebarSnapshot, String> =
+        run_produce_guarded(&mut reader, |_| panic!("boom"));
     std::panic::set_hook(previous_hook);
 
     assert_eq!(result.unwrap_err(), "sidebar produce panicked: boom");
@@ -521,16 +523,36 @@ impl ConsumerFixture {
     }
 
     fn write_pane_frame(&self) {
-        let frame = crate::sidebar::frame::assemble_frame(
+        let mut frame = crate::sidebar::frame::assemble_frame(
             vec![pane("terminal_7", "tab_1", false)],
             crate::sidebar::timing::unix_now_ms(),
             "rimz-test",
         );
+        frame.topology_stamp_ms = Some(11);
+        frame.metrics_stamp_ms = Some(12);
         std::fs::write(
             self.runtime.pane_frame_path(),
             serde_json::to_vec(&frame).unwrap(),
         )
         .unwrap();
+    }
+
+    fn publish_projection(&self) {
+        let snapshot: SidebarSnapshot =
+            serde_json::from_slice(&std::fs::read(&self.state.latest_snapshot).unwrap()).unwrap();
+        let frame = crate::sidebar::cache::read_snapshot_cache(
+            &self.runtime.pane_frame_path(),
+            "rimz-test",
+        )
+        .unwrap();
+        crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
+            .publish(
+                &self.runtime,
+                "rimz-test",
+                &crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+                &frame,
+            )
+            .unwrap();
     }
 }
 
@@ -562,6 +584,112 @@ fn unchanged_consumer_inputs_skip_the_second_fold() {
     assert_eq!(second.len(), 1);
     assert!(matches!(second[0], FetchUpdate::Unchanged { .. }));
     assert!(second[0].is_final());
+}
+
+#[test]
+fn producer_fast_fold_publishes_workspace_content_without_a_pane_refresh() {
+    let fixture = ConsumerFixture::new();
+    fixture.write_pane_frame();
+    std::fs::remove_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
+    std::fs::create_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
+    let mut rollup = SidebarSnapshot::build(
+        fixture.workspace_id.clone(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    rollup.display_name = "first".to_owned();
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    crate::store::atomic::write_temp_then_rename_cache(&fixture.state.latest_snapshot, &rollup)
+        .unwrap();
+    let mut worker = fixture.worker();
+
+    let first = fixture.run_with(FetchRequest::default(), &mut worker);
+    assert!(matches!(
+        first[0],
+        FetchUpdate::Snapshot {
+            role: FetchRole::Producer,
+            ..
+        }
+    ));
+    let published =
+        crate::sidebar::workspace_projection::read_workspace_projection(&fixture.runtime)
+            .expect("producer fast-fold projection");
+    assert_eq!(published.projection.snapshot().display_name, "first");
+    let source = published.source;
+
+    rollup.display_name = "second-and-longer".to_owned();
+    crate::store::atomic::write_temp_then_rename_cache(&fixture.state.latest_snapshot, &rollup)
+        .unwrap();
+    let second = fixture.run_with(FetchRequest::default(), &mut worker);
+    assert!(matches!(
+        second[0],
+        FetchUpdate::Snapshot {
+            role: FetchRole::Producer,
+            ..
+        }
+    ));
+    let republished =
+        crate::sidebar::workspace_projection::read_workspace_projection(&fixture.runtime)
+            .expect("republished producer fast-fold projection");
+    assert_eq!(republished.source, source);
+    assert_eq!(
+        republished.projection.snapshot().display_name,
+        "second-and-longer",
+    );
+}
+
+#[test]
+fn adopted_consumer_uses_slim_stamp_until_truth_moves() {
+    let fixture = ConsumerFixture::new();
+    fixture.write_pane_frame();
+    let mut rollup = SidebarSnapshot::build(
+        fixture.workspace_id.clone(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    std::fs::write(
+        &fixture.state.latest_snapshot,
+        serde_json::to_vec(&rollup).unwrap(),
+    )
+    .unwrap();
+    fixture.publish_projection();
+    let mut worker = fixture.worker();
+
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Snapshot { .. }
+    ));
+    assert!(worker.consumer_memo.last_was_adoption());
+
+    std::fs::write(fixture.runtime.diff_stats_path(), b"producer-owned-change").unwrap();
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Unchanged { .. }
+    ));
+
+    crate::store::event_log::append(
+        &fixture.state.events_log,
+        &crate::store::event::EventEnvelope::session_rebirth(
+            fixture.workspace_id.clone(),
+            "rimz-test",
+        ),
+    )
+    .unwrap();
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Snapshot { .. }
+    ));
+    assert!(
+        !worker.consumer_memo.last_was_adoption(),
+        "a stale projection falls back and restores the full stamp"
+    );
 }
 
 #[test]

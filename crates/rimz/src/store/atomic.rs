@@ -57,6 +57,18 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
+/// Write pre-serialized cache bytes through temp+rename without fsync. This is
+/// the raw-byte twin of [`write_temp_then_rename_cache`] for callers that must
+/// reuse one serialization for content comparison and publication.
+pub fn write_cache_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    replace_whole_file(path, Fsync::Skip, None, |writer, tmp| {
+        writer.write_all(bytes).map_err(|source| AtomicErr::Io {
+            path: tmp.to_path_buf(),
+            source,
+        })
+    })
+}
+
 /// Write executable bytes through a mode-0755 temp file and atomically rename
 /// it into place. The executable mode is present as soon as the destination
 /// becomes visible.

@@ -1,6 +1,6 @@
 use super::*;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::sidebar::enrich::{FoldOpts, enrich};
+use crate::sidebar::enrich::{FoldOpts, WorkspaceSnapshot, enrich};
 use crate::sidebar::frame::{CarriedPane, assemble_frame};
 use crate::sidebar::refresh::PrStateCache;
 use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
@@ -1025,5 +1025,187 @@ fn published_reader_sees_republished_rollup_and_incremental_event_with_one_pane_
             .ok()
             .map(|meta| meta.len()),
         "reader folds only the append past the warm published base",
+    );
+}
+
+struct AdoptionFixture {
+    _dir: tempfile::TempDir,
+    runtime: RuntimePaths,
+    state: StatePaths,
+    frame: crate::sidebar::frame::PaneFrame,
+}
+
+impl AdoptionFixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        state.ensure_dirs().unwrap();
+        let extent = crate::store::event_log::LogExtent {
+            generation: 0,
+            offset: 0,
+        };
+        let mut durable = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
+        durable.display_name = "durable".to_owned();
+        durable.reflects_log = Some(extent);
+        atomic::write_temp_then_rename_cache(&state.latest_snapshot, &durable).unwrap();
+
+        let mut frame = assemble_frame(Vec::new(), 10, "rimz-test");
+        frame.topology_stamp_ms = Some(11);
+        frame.metrics_stamp_ms = Some(12);
+        atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+
+        let mut projected = durable;
+        projected.display_name = "projected".to_owned();
+        let workspace = WorkspaceSnapshot(projected);
+        let mut publisher =
+            crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default();
+        publisher
+            .publish(&runtime, "rimz-test", &workspace, &frame)
+            .unwrap();
+        Self {
+            _dir: dir,
+            runtime,
+            state,
+            frame,
+        }
+    }
+
+    fn read(&self) -> ConsumerSnapshotRead {
+        PublishedSnapshotReader::new(self.runtime.clone(), "rimz-test", None)
+            .read_adopting(&self.state)
+            .unwrap()
+    }
+}
+
+#[test]
+fn consumer_adopts_only_an_exact_workspace_projection() {
+    let fixture = AdoptionFixture::new();
+    let read = fixture.read();
+    assert_eq!(read.source, ConsumerSnapshotSource::Adoption);
+    assert_eq!(read.snapshot.display_name, "projected");
+
+    for (field, value) in [
+        ("schema_version", serde_json::json!(99)),
+        ("session", serde_json::json!("other-session")),
+    ] {
+        let fixture = AdoptionFixture::new();
+        let path =
+            crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime);
+        let mut projection: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        projection[field] = value;
+        atomic::write_temp_then_rename_cache(&path, &projection).unwrap();
+        assert_eq!(
+            fixture.read().source,
+            ConsumerSnapshotSource::Fallback,
+            "{field}"
+        );
+    }
+
+    let fixture = AdoptionFixture::new();
+    std::fs::write(
+        crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime),
+        b"{broken projection",
+    )
+    .unwrap();
+    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+
+    let fixture = AdoptionFixture::new();
+    std::fs::remove_file(
+        crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime),
+    )
+    .unwrap();
+    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+}
+
+#[test]
+fn consumer_falls_back_for_stale_truth_or_legacy_frame() {
+    let fixture = AdoptionFixture::new();
+    crate::store::event_log::append(
+        &fixture.state.events_log,
+        &crate::store::event::EventEnvelope::session_rebirth(
+            fixture.runtime.workspace_id.clone(),
+            "rimz-test",
+        ),
+    )
+    .unwrap();
+    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+
+    let mut fixture = AdoptionFixture::new();
+    fixture.frame.metrics_stamp_ms = Some(99);
+    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
+        .unwrap();
+    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+
+    let mut fixture = AdoptionFixture::new();
+    fixture.frame.topology_stamp_ms = None;
+    fixture.frame.metrics_stamp_ms = None;
+    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
+        .unwrap();
+    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+}
+
+#[test]
+fn presence_only_frame_publication_keeps_projection_match() {
+    let mut fixture = AdoptionFixture::new();
+    let source = (
+        fixture.frame.topology_stamp_ms,
+        fixture.frame.metrics_stamp_ms,
+    );
+    fixture.frame.presence = Some(crate::PresenceSample {
+        human_clients: 0,
+        last_input_ms: None,
+        sampled_at_ms: unix_now_ms(),
+    });
+    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
+        .unwrap();
+
+    let read = fixture.read();
+    assert_eq!(read.source, ConsumerSnapshotSource::Adoption);
+    assert_eq!(
+        (
+            fixture.frame.topology_stamp_ms,
+            fixture.frame.metrics_stamp_ms
+        ),
+        source
+    );
+    assert_eq!(
+        read.snapshot.presence,
+        Some(crate::SidebarPresence::Detached)
+    );
+}
+
+#[test]
+fn slim_projection_stamp_detects_store_delta_and_projection_republish() {
+    let fixture = AdoptionFixture::new();
+    let baseline = consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime);
+    crate::store::event_log::append(
+        &fixture.state.events_log,
+        &crate::store::event::EventEnvelope::session_rebirth(
+            fixture.runtime.workspace_id.clone(),
+            "rimz-test",
+        ),
+    )
+    .unwrap();
+    assert_ne!(
+        consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime),
+        baseline,
+        "a durable append invalidates the slim unchanged check"
+    );
+
+    let fixture = AdoptionFixture::new();
+    let baseline = consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime);
+    let path = crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime);
+    let mut projection: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    projection["projection"]["display_name"] = serde_json::json!("time-transition");
+    atomic::write_temp_then_rename_cache(&path, &projection).unwrap();
+    assert_ne!(
+        consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime),
+        baseline,
+        "content republish invalidates the slim unchanged check"
     );
 }

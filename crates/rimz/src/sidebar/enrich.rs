@@ -306,7 +306,7 @@ static LOGGED_LAZY_PAIRINGS: OnceLock<Mutex<HashMap<LazyPairingLogKey, u64>>> = 
 /// snapshot reaches rendering or notification evaluation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct WorkspaceSnapshot(SidebarSnapshot);
+pub struct WorkspaceSnapshot(pub(crate) SidebarSnapshot);
 
 impl WorkspaceSnapshot {
     pub(crate) fn snapshot(&self) -> &SidebarSnapshot {

@@ -10,7 +10,11 @@ use crate::store::parse_cache::StampedPath;
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::cache::read_snapshot_cache;
-use super::enrich::{FoldOpts, enrich};
+use super::enrich::{FoldOpts, WorkspaceSnapshot, enrich_workspace, project_local};
+use super::workspace_projection::{
+    WORKSPACE_PROJECTION_SCHEMA_VERSION, WorkspaceProjectionSource, read_workspace_projection,
+    workspace_projection_path,
+};
 
 #[cfg(test)]
 mod tests;
@@ -47,8 +51,55 @@ impl PublishedSnapshotReader {
         )
     }
 
+    pub(crate) fn read_workspace(
+        &mut self,
+        state: &StatePaths,
+    ) -> crate::store::snapshot::Result<(
+        WorkspaceSnapshot,
+        Option<std::sync::Arc<super::frame::PaneFrame>>,
+    )> {
+        read_published_workspace_snapshot(&mut self.cursor, state, &self.runtime, &self.session)
+    }
+
     pub fn inputs_stamp(&self, state: &StatePaths) -> ConsumerFoldInputsStamp {
         consumer_fold_inputs_stamp(state, &self.runtime)
+    }
+
+    pub fn projection_inputs_stamp(&self, state: &StatePaths) -> ConsumerFoldInputsStamp {
+        consumer_projection_inputs_stamp(state, &self.runtime)
+    }
+
+    pub fn read_adopting(
+        &mut self,
+        state: &StatePaths,
+    ) -> crate::store::snapshot::Result<ConsumerSnapshotRead> {
+        let frame = read_snapshot_cache(&self.runtime.pane_frame_path(), &self.session);
+        let adopted = frame.as_deref().and_then(|frame| {
+            let published = read_workspace_projection(&self.runtime)?;
+            if published.schema_version != WORKSPACE_PROJECTION_SCHEMA_VERSION
+                || published.session != self.session
+            {
+                return None;
+            }
+            let current = WorkspaceProjectionSource::current(state, frame)?;
+            (current.is_matchable() && published.source == current).then(|| {
+                project_local(
+                    published.projection.clone(),
+                    Some(frame),
+                    self.exclude.as_ref(),
+                )
+            })
+        });
+        match adopted {
+            Some(snapshot) => Ok(ConsumerSnapshotRead {
+                snapshot,
+                source: ConsumerSnapshotSource::Adoption,
+            }),
+            None => self.read(state).map(|snapshot| ConsumerSnapshotRead {
+                snapshot,
+                source: ConsumerSnapshotSource::Fallback,
+            }),
+        }
     }
 
     /// Producer lane escape hatch for sharing the warm rollup with pane production.
@@ -60,6 +111,17 @@ impl PublishedSnapshotReader {
     pub(crate) fn reset_after_unwind(&mut self) {
         self.cursor = RollupCursor::new();
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsumerSnapshotSource {
+    Adoption,
+    Fallback,
+}
+
+pub struct ConsumerSnapshotRead {
+    pub snapshot: SidebarSnapshot,
+    pub source: ConsumerSnapshotSource,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,6 +185,19 @@ pub fn read_published_snapshot(
     session: &str,
     exclude: Option<&PaneId>,
 ) -> crate::store::snapshot::Result<SidebarSnapshot> {
+    let (workspace, frame) = read_published_workspace_snapshot(cursor, state, runtime, session)?;
+    Ok(project_local(workspace, frame.as_deref(), exclude))
+}
+
+fn read_published_workspace_snapshot(
+    cursor: &mut RollupCursor,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    session: &str,
+) -> crate::store::snapshot::Result<(
+    WorkspaceSnapshot,
+    Option<std::sync::Arc<super::frame::PaneFrame>>,
+)> {
     let base = rollup_snapshot(state, cursor)?;
     let cache = read_snapshot_cache(&runtime.pane_frame_path(), session);
     let local_sessions = cache
@@ -130,12 +205,11 @@ pub fn read_published_snapshot(
         .map(|frame| read_published_local_sessions(frame.to_pane_refs(), runtime, session, None).1)
         .unwrap_or_default();
     let wiring = super::agent_wiring::read_published(runtime, session);
-    Ok(enrich(
+    let workspace = enrich_workspace(
         base,
         cache.as_deref(),
         runtime,
         Some(&state.messages_dir),
-        exclude,
         FoldOpts {
             producing: false,
             fresh_roots: None,
@@ -145,7 +219,8 @@ pub fn read_published_snapshot(
             wiring,
         },
         &crate::diag::DiagSink::disabled(),
-    ))
+    );
+    Ok((workspace, cache))
 }
 
 /// Apply cheap producer-published liveness to a cached store rollup.
@@ -256,6 +331,30 @@ pub fn consumer_fold_inputs_stamp(
             .collect::<Vec<_>>(),
         runtime: runtime_stamps,
         dirs: dirs.into_iter().map(StampedPath::of).collect::<Vec<_>>(),
+        config_generation: crate::config::MachineConfig::load_stamp_generation(),
+    }
+}
+
+/// Slim unchanged identity after a successful projection adoption. Every
+/// source-identity input and the projection publication itself remains in the
+/// set; broad enrichment sidecars return only after a fallback.
+pub fn consumer_projection_inputs_stamp(
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+) -> ConsumerFoldInputsStamp {
+    ConsumerFoldInputsStamp {
+        state: [state.events_log.clone(), state.latest_snapshot.clone()]
+            .into_iter()
+            .map(|path| StampedPath::of(&path))
+            .collect(),
+        runtime: [
+            runtime.pane_frame_path(),
+            workspace_projection_path(runtime),
+        ]
+        .into_iter()
+        .map(|path| StampedPath::of(&path))
+        .collect(),
+        dirs: Vec::new(),
         config_generation: crate::config::MachineConfig::load_stamp_generation(),
     }
 }

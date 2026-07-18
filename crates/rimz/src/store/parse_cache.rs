@@ -2,8 +2,9 @@
 //! identity `(mtime, len)` — the shared core behind every single-slot
 //! stat-gated parse cache (`rollup.json`, `latest.json`, the published
 //! `snapshot.json`).
-//! [`FileStamp`] and [`StampedPath`] expose that same cheap identity outside a
-//! parse cache when callers only need change detection.
+//! [`FileStamp`] and [`StampedPath`] expose the same cheap identity outside a
+//! parse cache, extended with the device/inode pair on Unix so atomic
+//! replacements remain distinguishable at equal byte length and timestamp.
 //!
 //! Every file it fronts is republished by atomic rename of a fresh temp
 //! file, so a changed payload almost surely changes the identity; a hit
@@ -26,11 +27,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct FileStamp {
     pub(crate) len: u64,
     pub(crate) modified_secs: u64,
     pub(crate) modified_nanos: u32,
+    device: u64,
+    inode: u64,
 }
 
 impl FileStamp {
@@ -40,6 +46,8 @@ impl FileStamp {
                 len: 0,
                 modified_secs: 0,
                 modified_nanos: 0,
+                device: 0,
+                inode: 0,
             };
         };
         let modified = meta
@@ -50,6 +58,14 @@ impl FileStamp {
             len: meta.len(),
             modified_secs: modified.as_ref().map_or(0, |duration| duration.as_secs()),
             modified_nanos: modified.map_or(0, |duration| duration.subsec_nanos()),
+            #[cfg(unix)]
+            device: meta.dev(),
+            #[cfg(not(unix))]
+            device: 0,
+            #[cfg(unix)]
+            inode: meta.ino(),
+            #[cfg(not(unix))]
+            inode: 0,
         }
     }
 }
@@ -75,9 +91,13 @@ pub(crate) struct ParseCache<T> {
 
 struct Entry<T> {
     path: PathBuf,
-    mtime: SystemTime,
-    len: u64,
+    stamp: EntryStamp,
     value: Arc<T>,
+}
+
+enum EntryStamp {
+    Metadata { mtime: SystemTime, len: u64 },
+    File(FileStamp),
 }
 
 impl<T> ParseCache<T> {
@@ -91,8 +111,15 @@ impl<T> ParseCache<T> {
     /// last [`Self::store`].
     pub(crate) fn get(&self, path: &Path, mtime: SystemTime, len: u64) -> Option<Arc<T>> {
         self.slot.borrow().as_ref().and_then(|entry| {
-            (entry.path == path && entry.mtime == mtime && entry.len == len)
-                .then(|| Arc::clone(&entry.value))
+            (entry.path == path
+                && matches!(
+                    entry.stamp,
+                    EntryStamp::Metadata {
+                        mtime: cached_mtime,
+                        len: cached_len,
+                    } if cached_mtime == mtime && cached_len == len
+                ))
+            .then(|| Arc::clone(&entry.value))
         })
     }
 
@@ -101,8 +128,27 @@ impl<T> ParseCache<T> {
     pub(crate) fn store(&self, path: &Path, mtime: SystemTime, len: u64, value: Arc<T>) {
         *self.slot.borrow_mut() = Some(Entry {
             path: path.to_path_buf(),
-            mtime,
-            len,
+            stamp: EntryStamp::Metadata { mtime, len },
+            value,
+        });
+    }
+
+    /// The cached parse when the full atomic-file identity matches. Unlike the
+    /// ordinary `(mtime, len)` key, the Unix device/inode pair distinguishes
+    /// equal-length replacements inside one timestamp tick.
+    pub(crate) fn get_stamped(&self, stamped: &StampedPath) -> Option<Arc<T>> {
+        self.slot.borrow().as_ref().and_then(|entry| {
+            (entry.path == stamped.path
+                && matches!(entry.stamp, EntryStamp::File(stamp) if stamp == stamped.stamp))
+            .then(|| Arc::clone(&entry.value))
+        })
+    }
+
+    /// Remember `value` under the full atomic-file identity.
+    pub(crate) fn store_stamped(&self, stamped: &StampedPath, value: Arc<T>) {
+        *self.slot.borrow_mut() = Some(Entry {
+            path: stamped.path.clone(),
+            stamp: EntryStamp::File(stamped.stamp),
             value,
         });
     }

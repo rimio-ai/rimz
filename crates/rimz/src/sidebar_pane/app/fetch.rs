@@ -15,7 +15,9 @@ use crate::config::NotificationsPrefs;
 use crate::diag::record::{FetchFoldCause, TickLoop};
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar::ProducerElectionTracker;
-use crate::sidebar::consumer::{ConsumerFoldInputsStamp, PublishedSnapshotReader, RollupCursor};
+use crate::sidebar::consumer::{
+    ConsumerFoldInputsStamp, ConsumerSnapshotSource, PublishedSnapshotReader, RollupCursor,
+};
 use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::meter::{FetchFoldOutcome, TickMeter};
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
@@ -39,10 +41,10 @@ use super::{ServeConfig, tick_for};
 /// a panic can interrupt the fold mid-update, so the next cycle refolds cold
 /// rather than trusting a torn base. Everything else the closure captures is
 /// read-only paths and options.
-fn run_produce_guarded(
+fn run_produce_guarded<T>(
     reader: &mut PublishedSnapshotReader,
-    produce: impl FnOnce(&mut RollupCursor) -> crate::sidebar::produce::Result<SidebarSnapshot>,
-) -> std::result::Result<SidebarSnapshot, String> {
+    produce: impl FnOnce(&mut RollupCursor) -> crate::sidebar::produce::Result<T>,
+) -> std::result::Result<T, String> {
     let result = super::with_produce_panic_diagnostic_suppressed(|| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             produce(reader.cursor_mut())
@@ -192,18 +194,27 @@ const CONSUMER_UNCHANGED_BACKSTOP_MS: u64 = 30_000;
 
 #[derive(Default)]
 struct ConsumerFoldMemo {
-    last_ok: Option<(ConsumerFoldInputsStamp, u64)>,
+    last_ok: Option<(ConsumerFoldInputsStamp, u64, bool)>,
 }
 
 impl ConsumerFoldMemo {
     fn should_skip(&self, stamp: &ConsumerFoldInputsStamp, now_ms: u64) -> bool {
-        self.last_ok.as_ref().is_some_and(|(last, folded_at_ms)| {
-            last == stamp && now_ms.saturating_sub(*folded_at_ms) < CONSUMER_UNCHANGED_BACKSTOP_MS
-        })
+        self.last_ok
+            .as_ref()
+            .is_some_and(|(last, folded_at_ms, _)| {
+                last == stamp
+                    && now_ms.saturating_sub(*folded_at_ms) < CONSUMER_UNCHANGED_BACKSTOP_MS
+            })
     }
 
-    fn record(&mut self, stamp: ConsumerFoldInputsStamp, at_ms: u64) {
-        self.last_ok = Some((stamp, at_ms));
+    fn record(&mut self, stamp: ConsumerFoldInputsStamp, at_ms: u64, adopted: bool) {
+        self.last_ok = Some((stamp, at_ms, adopted));
+    }
+
+    fn last_was_adoption(&self) -> bool {
+        self.last_ok
+            .as_ref()
+            .is_some_and(|(_, _, adopted)| *adopted)
     }
 
     fn clear(&mut self) {
@@ -282,6 +293,7 @@ struct FetchWorker {
     link_notifications: LinkNotificationState,
     last_election: Option<ProducerElection>,
     meter: TickMeter,
+    projection_publisher: crate::sidebar::workspace_projection::WorkspaceProjectionPublisher,
 }
 
 struct FastFold {
@@ -291,6 +303,7 @@ struct FastFold {
     pane_frame: PaneFrame,
     stamp: Option<ConsumerFoldInputsStamp>,
     now_ms: u64,
+    adopted: bool,
 }
 
 impl FetchWorker {
@@ -320,6 +333,7 @@ impl FetchWorker {
             link_notifications: LinkNotificationState::default(),
             last_election: None,
             meter,
+            projection_publisher: Default::default(),
         }
     }
 
@@ -328,8 +342,13 @@ impl FetchWorker {
         let now_ms = crate::sidebar::timing::unix_now_ms();
         let frame_stamps =
             crate::sidebar::cache::published_frame_stamps(&self.runtime, &self.config.session_name);
-        let mut fold_stamp = consumer_stamp_recordable(request, role.is_producer())
-            .then(|| self.reader.inputs_stamp(state));
+        let mut fold_stamp = consumer_stamp_recordable(request, role.is_producer()).then(|| {
+            if self.consumer_memo.last_was_adoption() {
+                self.reader.projection_inputs_stamp(state)
+            } else {
+                self.reader.inputs_stamp(state)
+            }
+        });
         if self.consumer_fold_unchanged(request, role, fold_stamp.as_ref(), now_ms) {
             self.meter.record_fetch_fold(
                 request.causes.iter(),
@@ -341,13 +360,37 @@ impl FetchWorker {
         }
 
         let fold_started = Instant::now();
-        let fast = self.reader.read(state);
+        let (fast, fold_outcome, adopted) = if role.is_producer() {
+            (
+                self.read_and_publish_workspace(state),
+                FetchFoldOutcome::Full,
+                false,
+            )
+        } else {
+            match self.reader.read_adopting(state) {
+                Ok(read) => {
+                    let (outcome, adopted) = match read.source {
+                        ConsumerSnapshotSource::Adoption => (FetchFoldOutcome::Adoption, true),
+                        ConsumerSnapshotSource::Fallback => (FetchFoldOutcome::Fallback, false),
+                    };
+                    (Ok(read.snapshot), outcome, adopted)
+                }
+                Err(err) => (Err(err), FetchFoldOutcome::Fallback, false),
+            }
+        };
         if fast.is_ok() {
             self.meter.record_fetch_fold(
                 request.causes.iter(),
-                FetchFoldOutcome::Full,
+                fold_outcome,
                 fold_started.elapsed(),
             );
+        }
+        if consumer_stamp_recordable(request, role.is_producer()) {
+            fold_stamp = Some(if adopted {
+                self.reader.projection_inputs_stamp(state)
+            } else {
+                self.reader.inputs_stamp(state)
+            });
         }
         let produce = self.start_produce_if_due(request, role, frame_stamps, &fast, now_ms);
         let pane_frame = fast_pane_frame(request, frame_stamps, &fast);
@@ -360,6 +403,7 @@ impl FetchWorker {
                 pane_frame,
                 stamp: fold_stamp.take(),
                 now_ms,
+                adopted,
             },
             sink,
         );
@@ -382,6 +426,28 @@ impl FetchWorker {
         };
         emit_producer_transition(&self.diag, &mut self.last_election, election);
         role
+    }
+
+    fn read_and_publish_workspace(
+        &mut self,
+        state: &StatePaths,
+    ) -> crate::store::snapshot::Result<SidebarSnapshot> {
+        let (workspace, frame) = self.reader.read_workspace(state)?;
+        if let Some(frame) = frame.as_deref()
+            && let Err(err) = self.projection_publisher.publish(
+                &self.runtime,
+                &self.config.session_name,
+                &workspace,
+                frame,
+            )
+        {
+            tracing::debug!(error = %err, "workspace projection publish failed");
+        }
+        Ok(crate::sidebar::enrich::project_local(
+            workspace,
+            frame.as_deref(),
+            self.config.own_pane.as_ref(),
+        ))
     }
 
     fn consumer_fold_unchanged(
@@ -444,7 +510,7 @@ impl FetchWorker {
                     sink,
                 );
                 if let Some(stamp) = fold.stamp {
-                    self.consumer_memo.record(stamp, fold.now_ms);
+                    self.consumer_memo.record(stamp, fold.now_ms, fold.adopted);
                     return true;
                 }
                 false
@@ -483,13 +549,28 @@ impl FetchWorker {
         };
         let fold_started = Instant::now();
         match run_produce_guarded(&mut self.reader, |cursor| {
-            crate::sidebar::produce::produce_snapshot(cursor, state, &self.runtime, &opts)
+            crate::sidebar::produce::produce_workspace_snapshot(cursor, state, &self.runtime, &opts)
         }) {
-            Ok(snapshot) => {
+            Ok(produced) => {
                 self.meter.record_fetch_fold(
                     request.causes.iter(),
                     FetchFoldOutcome::Full,
                     fold_started.elapsed(),
+                );
+                if role.is_producer()
+                    && let Err(err) = self.projection_publisher.publish(
+                        &self.runtime,
+                        &self.config.session_name,
+                        &produced.workspace,
+                        &produced.frame,
+                    )
+                {
+                    tracing::debug!(error = %err, "workspace projection publish failed");
+                }
+                let snapshot = crate::sidebar::enrich::project_local(
+                    produced.workspace,
+                    Some(&produced.frame),
+                    self.config.own_pane.as_ref(),
                 );
                 self.publish_snapshot(
                     state,

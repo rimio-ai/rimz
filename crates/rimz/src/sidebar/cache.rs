@@ -17,7 +17,7 @@ use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
     EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, unix_now_ms,
 };
-use crate::store::parse_cache::ParseCache;
+use crate::store::parse_cache::{ParseCache, StampedPath};
 
 // The shared pane frame cache is keyed to one `(workspace, session)`: the
 // per-workspace runtime root scopes the workspace, and `session_name` prevents
@@ -36,16 +36,14 @@ thread_local! {
 /// when it is absent, for another session, or unreadable. Used as the
 /// hold-last-good base for a consumer read and the degraded-read fallback.
 ///
-/// Skips the JSON parse when this thread already parsed a byte-identical file
-/// (same path, mtime, and length). On a stat miss it re-reads and re-caches; a
+/// Skips the JSON parse when this thread already parsed the same atomic file
+/// identity. On a stat miss it re-reads and re-caches; a
 /// file replaced (atomic rename) between the stat and the read just costs one
 /// redundant parse next call, never a stale or torn value.
 pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<Arc<PaneFrame>> {
-    let meta = std::fs::metadata(cache_path).ok()?;
-    let mtime = meta.modified().ok()?;
-    let len = meta.len();
+    let stamped = StampedPath::of(cache_path);
 
-    let cache = match SNAPSHOT_PARSE_CACHE.with(|cache| cache.get(cache_path, mtime, len)) {
+    let cache = match SNAPSHOT_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped)) {
         Some(cache) => cache,
         None => {
             let bytes = std::fs::read(cache_path).ok()?;
@@ -53,7 +51,7 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<Arc<PaneF
             normalize_observed_stamp(&mut parsed);
             let parsed = Arc::new(parsed);
             SNAPSHOT_PARSE_CACHE.with(|cache| {
-                cache.store(cache_path, mtime, len, Arc::clone(&parsed));
+                cache.store_stamped(&stamped, Arc::clone(&parsed));
             });
             parsed
         }

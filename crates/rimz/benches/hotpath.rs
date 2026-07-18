@@ -73,6 +73,12 @@ struct EnrichFixture {
     frame: rimz::sidebar::frame::PaneFrame,
 }
 
+struct ConsumerAdoptFixture {
+    _workspace: BenchWorkspace,
+    paths: rimz::StatePaths,
+    reader: rimz::sidebar::consumer::PublishedSnapshotReader,
+}
+
 struct FoldFixture {
     _workspace: BenchWorkspace,
     paths: rimz::StatePaths,
@@ -166,6 +172,74 @@ fn enrich_fixture() -> EnrichFixture {
         _workspace: workspace,
         snapshot,
         frame,
+    }
+}
+
+fn consumer_adopt_fixture(warm_parse: bool) -> ConsumerAdoptFixture {
+    let workspace = BenchWorkspace::new();
+    workspace.seed_fleet(FLEET, HISTORY_EVENTS);
+    workspace.publish_inputs(FLEET);
+    let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
+    let snapshot =
+        rimz::sidebar::consumer::rollup_snapshot(&workspace.paths, &mut cursor).expect("rollup");
+    std::fs::write(
+        &workspace.paths.latest_snapshot,
+        serde_json::to_vec(&snapshot).expect("serialize latest"),
+    )
+    .expect("publish latest");
+    let mut frame = rimz::sidebar::frame::assemble_frame(
+        rimz::testkit::fleet::synthetic_panes(FLEET),
+        rimz::sidebar::timing::unix_now_ms(),
+        rimz::testkit::fleet::SESSION_NAME,
+    );
+    frame.topology_stamp_ms = Some(1);
+    frame.metrics_stamp_ms = Some(1);
+    std::fs::write(
+        workspace.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).expect("serialize frame"),
+    )
+    .expect("publish frame");
+    let projection = rimz::sidebar::enrich::enrich_workspace(
+        snapshot,
+        Some(&frame),
+        &workspace.runtime,
+        None,
+        rimz::sidebar::enrich::FoldOpts {
+            producing: false,
+            fresh_roots: None,
+            config: None,
+            lanes: None,
+            local_sessions: Vec::new(),
+            wiring: Default::default(),
+        },
+        &rimz::diag::DiagSink::disabled(),
+    );
+    rimz::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
+        .publish(
+            &workspace.runtime,
+            rimz::testkit::fleet::SESSION_NAME,
+            &projection,
+            &frame,
+        )
+        .expect("publish workspace projection");
+    let mut reader = rimz::sidebar::consumer::PublishedSnapshotReader::new(
+        workspace.runtime.clone(),
+        rimz::testkit::fleet::SESSION_NAME,
+        None,
+    );
+    if warm_parse {
+        let read = reader
+            .read_adopting(&workspace.paths)
+            .expect("warm adoption");
+        assert_eq!(
+            read.source,
+            rimz::sidebar::consumer::ConsumerSnapshotSource::Adoption
+        );
+    }
+    ConsumerAdoptFixture {
+        paths: workspace.paths.clone(),
+        reader,
+        _workspace: workspace,
     }
 }
 
@@ -514,6 +588,34 @@ fn enrich_cached(bencher: Bencher) {
                 },
                 &rimz::diag::DiagSink::disabled(),
             ));
+        });
+}
+
+#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
+fn consumer_adopt_parse_cached(bencher: Bencher) {
+    bencher
+        .with_inputs(|| consumer_adopt_fixture(true))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(
+                fixture
+                    .reader
+                    .read_adopting(&fixture.paths)
+                    .expect("cached adoption"),
+            );
+        });
+}
+
+#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
+fn consumer_adopt_changed_file(bencher: Bencher) {
+    bencher
+        .with_inputs(|| consumer_adopt_fixture(false))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(
+                fixture
+                    .reader
+                    .read_adopting(&fixture.paths)
+                    .expect("changed-file adoption"),
+            );
         });
 }
 

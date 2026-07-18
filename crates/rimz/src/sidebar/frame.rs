@@ -25,6 +25,14 @@ pub struct PaneFrame {
     /// normalize it to `produced_at_ms`.
     #[serde(default)]
     pub observed_at_ms: u64,
+    /// Monotonic identity of the topology-bearing frame section. Missing on a
+    /// mixed-build legacy frame and therefore ineligible for projection match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology_stamp_ms: Option<u64>,
+    /// Monotonic identity of the process-metrics frame section. Presence-only
+    /// publications preserve both section stamps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_stamp_ms: Option<u64>,
     /// Build id of the producer that assembled this frame
     /// ([`crate::build_id`]); absent when the running image is unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -363,6 +371,8 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         client_viewed,
         prior,
     } = inputs;
+    let topology_stamp_ms = prior.and_then(|frame| frame.topology_stamp_ms);
+    let metrics_stamp_ms = prior.and_then(|frame| frame.metrics_stamp_ms);
     let mut tabs: BTreeMap<ViewId, TabFrame> = BTreeMap::new();
     let mut raw_focused = Vec::new();
     let mut seen_panes = HashSet::new();
@@ -436,6 +446,8 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         PaneFrame {
             produced_at_ms,
             observed_at_ms,
+            topology_stamp_ms,
+            metrics_stamp_ms,
             build: crate::build_id::current().map(str::to_owned),
             session_name,
             tabs: tabs.into_values().collect(),

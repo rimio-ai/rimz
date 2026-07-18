@@ -30,7 +30,9 @@ use std::{
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::sidebar::agent_wiring::WiredAgentProjection;
 use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
-use crate::sidebar::enrich::{FoldOpts, enrich};
+use crate::sidebar::enrich::{
+    FoldOpts, WorkspaceSnapshot, enrich, enrich_workspace, project_local,
+};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::refresh_heavy_lanes;
 use crate::sidebar::timing::unix_now_ms;
@@ -104,11 +106,30 @@ pub fn produce_snapshot(
     runtime: &RuntimePaths,
     opts: &ProduceOptions,
 ) -> Result<SidebarSnapshot> {
+    let produced = produce_workspace_snapshot(cursor, state, runtime, opts)?;
+    Ok(project_local(
+        produced.workspace,
+        Some(&produced.frame),
+        opts.exclude.as_ref(),
+    ))
+}
+
+pub(crate) struct ProducedWorkspaceSnapshot {
+    pub(crate) workspace: WorkspaceSnapshot,
+    pub(crate) frame: PaneFrame,
+}
+
+pub(crate) fn produce_workspace_snapshot(
+    cursor: &mut RollupCursor,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    opts: &ProduceOptions,
+) -> Result<ProducedWorkspaceSnapshot> {
     let frame = produce_pane_frame(runtime, opts)?;
     let snapshot = rollup_snapshot(state, cursor)?;
-    Ok(enrich_producing_projecting(
+    let workspace = enrich_producing_workspace(
         snapshot,
-        Some(frame),
+        Some(&frame),
         ProducerEnrich {
             runtime,
             messages_dir: &state.messages_dir,
@@ -116,7 +137,8 @@ pub fn produce_snapshot(
             min_pane_cache_ms: opts.min_pane_cache_ms,
             diag: &opts.diag,
         },
-    ))
+    );
+    Ok(ProducedWorkspaceSnapshot { workspace, frame })
 }
 
 pub fn live_roster_from_snapshot(
@@ -405,19 +427,20 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::pane::PaneRef>>> {
 ///   resolved worktree during the row fold.
 /// - The per-machine config loads once (best-effort — a read failure falls
 ///   back to defaults, so display preference is enrichment, never a precondition).
-fn enrich_producing_projecting(
+fn enrich_producing_workspace(
     snapshot: SidebarSnapshot,
-    frame: Option<PaneFrame>,
+    frame: Option<&PaneFrame>,
     opts: ProducerEnrich<'_>,
-) -> SidebarSnapshot {
+) -> WorkspaceSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
-    let local_sessions = refresh_local_sessions(frame.as_ref(), &opts);
-    let wiring = refresh_agent_wiring(frame.as_ref(), &opts);
-    enrich_producing_with(
+    let local_sessions = refresh_local_sessions(frame, &opts);
+    let wiring = refresh_agent_wiring(frame, &opts);
+    enrich_workspace(
         snapshot,
         frame,
-        opts,
+        opts.runtime,
+        Some(opts.messages_dir),
         FoldOpts {
             producing: true,
             fresh_roots: roots,
@@ -426,6 +449,7 @@ fn enrich_producing_projecting(
             local_sessions,
             wiring,
         },
+        opts.diag,
     )
 }
 
