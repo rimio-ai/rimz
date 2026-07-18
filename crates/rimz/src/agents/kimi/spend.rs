@@ -1,7 +1,7 @@
 //! Read-only Kimi Wire token spend parser.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -14,10 +14,6 @@ use super::wire;
 #[serde(default)]
 struct KimiSpendState {
     request: Option<wire::RequestAttribution>,
-}
-
-pub fn files() -> Vec<PathBuf> {
-    wire::transcript_files()
 }
 
 pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {

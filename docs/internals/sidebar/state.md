@@ -139,7 +139,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | PR state | `PR_STATE_HOT_TTL` for hot/focused repos, `PR_STATE_TTL` for idle repos; escalating failure backoff starts at `PR_STATE_RETRY_TTL` and caps at the repo tier; HEAD changes bypass the TTL | Worktree header PR glyphs after diverged stats; each due repo enumerates open PRs once, and failed repos keep last-known-good state |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
 | process metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
-| Spending walk | `SPENDING_TTL` | Provider dashboard, fleet store, and the floor under the live cockpit spend |
+| Spending service request/publication fold | spending-domain `SPENDING_TTL` | Provider dashboard, fleet store, and the floor under the live cockpit spend |
 | Provider-local sessions | producer data tick; unchanged provider snapshots perform metadata checks only; a 30-second backstop forces bounded catalog and candidate validation; write/wake only on a semantic observation or admitted-input change | Hookless identity binding without per-renderer provider-store scans |
 | Accounts | Per provider: `ACCOUNTS_TTL` success; `ACCOUNTS_RETRY_TTL` failure with last-known-good data | Provider dashboard login, plan, and account state |
 | Live-session context | `SESSION_REFRESH_INTERVAL` | Provider dashboard budget windows and session sidecars |

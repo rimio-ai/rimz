@@ -16,6 +16,7 @@
 mod aggregate;
 mod cache;
 mod discovery;
+mod engine;
 mod publish;
 mod refresh;
 pub mod service;
@@ -32,7 +33,17 @@ use std::time::{Duration, Instant};
 use super::pricing::PriceBook;
 use super::{AgentAdapter, AgentCost};
 
-pub use crate::sidebar::timing::SPENDING_TTL;
+/// How long a published fleet-spending walk remains fresh.
+pub const SPENDING_TTL: Duration = Duration::from_secs(15);
+
+/// Maximum age served while another producer owns the global walk.
+pub(crate) const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
+
+pub(crate) fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64)
+}
 
 pub(crate) use aggregate::{
     CountedLocation, CountedPayload, HeadlineContext, NO_BURST_CUTOFF, SESSION_GAP_SECS,

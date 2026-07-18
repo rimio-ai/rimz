@@ -369,30 +369,6 @@ pub fn wire_path(session_id: &str, cwd: Option<&Path>) -> Option<PathBuf> {
     Some(session_dir(session_id, cwd)?.join("agents/main/wire.jsonl"))
 }
 
-pub fn transcript_files() -> Vec<PathBuf> {
-    transcript_files_under(&kimi_home())
-}
-
-pub(crate) fn transcript_files_under(root: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Ok(work_dirs) = std::fs::read_dir(root.join("sessions")) else {
-        return files;
-    };
-    for work_dir in work_dirs.filter_map(Result::ok) {
-        let Ok(sessions) = std::fs::read_dir(work_dir.path()) else {
-            continue;
-        };
-        for session in sessions.filter_map(Result::ok) {
-            let path = session.path().join("agents/main/wire.jsonl");
-            if path.is_file() {
-                files.push(path);
-            }
-        }
-    }
-    files.sort();
-    files
-}
-
 #[derive(Deserialize)]
 struct RawWireRecord {
     #[serde(rename = "type")]

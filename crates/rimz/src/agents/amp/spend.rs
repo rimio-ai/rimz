@@ -17,31 +17,6 @@ pub(super) fn data_root() -> PathBuf {
         .unwrap_or_else(|| home_dir().join(".local/share/amp"))
 }
 
-pub(super) fn session_files() -> Vec<PathBuf> {
-    session_files_under(&data_root())
-}
-
-fn session_files_under(root: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(root.join("threads")) else {
-        return Vec::new();
-    };
-    let mut files = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension().and_then(|value| value.to_str()) == Some("json")
-                && path
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .is_some_and(valid_session_id)
-        })
-        .collect::<Vec<_>>();
-    files.sort();
-    files.dedup();
-    files
-}
-
 pub(super) fn resolve_session_file(session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
     if let Some(path) = prior_path.filter(|path| path.is_file()) {
         return Some(path.to_path_buf());
@@ -149,23 +124,6 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn discovery_is_immediate_filtered_sorted_and_deduplicated() {
-        let dir = tempfile::tempdir().unwrap();
-        let threads = dir.path().join("threads");
-        std::fs::create_dir_all(threads.join("nested")).unwrap();
-        for name in ["T-b.json", "T-a.json", "not-a-thread.json", "T-c.txt"] {
-            std::fs::write(threads.join(name), "{}").unwrap();
-        }
-        std::fs::write(threads.join("nested/T-c.json"), "{}").unwrap();
-
-        let files = session_files_under(dir.path());
-        assert_eq!(
-            files,
-            vec![threads.join("T-a.json"), threads.join("T-b.json")]
-        );
-    }
 
     #[test]
     fn exact_resolution_rejects_traversal_and_reuses_a_valid_prior() {

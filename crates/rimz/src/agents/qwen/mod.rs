@@ -9,7 +9,7 @@ mod selection;
 pub(crate) mod spend;
 mod statusline;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use jiff::Timestamp;
 use serde_json::Value;
@@ -567,9 +567,6 @@ impl AgentAdapter for QwenAdapter {
         argv: &[String],
     ) -> super::ManagedLaunchState {
         selection::resolve_managed_launch(cwd, env, model, argv)
-    }
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        spend::all_jsonl_files()
     }
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         crate::agents::spending::SpendingSourceTree::new(

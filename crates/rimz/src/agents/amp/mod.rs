@@ -383,10 +383,6 @@ impl AgentAdapter for AmpAdapter {
         })
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        spend::session_files()
-    }
-
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         crate::agents::spending::SpendingSourceTree::new(
             spend::data_root().join("threads"),

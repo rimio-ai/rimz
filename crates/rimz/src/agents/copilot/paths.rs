@@ -35,10 +35,6 @@ pub(super) fn session_transcript_path(session_id: &str) -> Option<PathBuf> {
     session_transcript_path_from(copilot_home().as_deref(), session_id)
 }
 
-pub(super) fn transcript_files() -> Vec<PathBuf> {
-    transcript_files_from(copilot_home().as_deref())
-}
-
 pub(super) fn validated_transcript_path(path: &Path, session_id: &str) -> Option<PathBuf> {
     validated_transcript_path_from(path, session_id)
 }
@@ -126,28 +122,6 @@ pub(super) fn session_transcript_path_from(
             .join(session_id)
             .join(EVENTS_FILE),
     )
-}
-
-pub(super) fn transcript_files_from(copilot_home: Option<&Path>) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Some(copilot_home) = copilot_home else {
-        return files;
-    };
-    let Ok(sessions) = std::fs::read_dir(copilot_home.join("session-state")) else {
-        return files;
-    };
-    for session in sessions.filter_map(|entry| entry.ok()) {
-        if !session.file_type().is_ok_and(|kind| kind.is_dir()) {
-            continue;
-        }
-        let path = session.path().join(EVENTS_FILE);
-        if path.is_file() {
-            files.push(path);
-        }
-    }
-    files.sort();
-    files.dedup();
-    files
 }
 
 pub(super) fn validated_transcript_path_from(path: &Path, session_id: &str) -> Option<PathBuf> {
@@ -274,27 +248,6 @@ mod tests {
                 "session-1"
             )
             .is_none()
-        );
-    }
-
-    #[test]
-    fn transcript_discovery_accepts_only_direct_session_event_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let sessions = dir.path().join("session-state");
-        std::fs::create_dir_all(sessions.join("session-b/nested")).unwrap();
-        std::fs::create_dir_all(sessions.join("session-a")).unwrap();
-        std::fs::write(sessions.join("session-a/events.jsonl"), "{}\n").unwrap();
-        std::fs::write(sessions.join("session-b/events.jsonl"), "{}\n").unwrap();
-        std::fs::write(sessions.join("session-b/other.jsonl"), "{}\n").unwrap();
-        std::fs::write(sessions.join("session-b/nested/events.jsonl"), "{}\n").unwrap();
-        std::fs::write(sessions.join("loose.jsonl"), "{}\n").unwrap();
-
-        assert_eq!(
-            transcript_files_from(Some(dir.path())),
-            vec![
-                sessions.join("session-a/events.jsonl"),
-                sessions.join("session-b/events.jsonl"),
-            ]
         );
     }
 

@@ -37,9 +37,7 @@ use crate::agents::spending::{
     record_unknown_model,
 };
 
-use crate::agents::transcript_fs::{
-    bytes_contains, collect_jsonl, expand_tilde, home_dir, read_spend_lines,
-};
+use crate::agents::transcript_fs::{bytes_contains, expand_tilde, home_dir, read_spend_lines};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
@@ -200,21 +198,6 @@ fn env_config_dir(raw: &str) -> Option<PathBuf> {
         path
     };
     path.join("projects").is_dir().then_some(path)
-}
-
-/// Every Claude `*.jsonl` across all project dirs — fleet-wide, the same footing
-/// as Codex and Pi (their session logs are not project-scoped either). Walks
-/// `~/.claude/projects/` recursively, covering both modern
-/// `session_id/chat.jsonl` and subagent `session_id/subagents/worker.jsonl`
-/// layouts.
-pub fn all_jsonl_files() -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for config_dir in claude_config_dirs() {
-        collect_jsonl(&config_dir.join("projects"), &mut files);
-    }
-    files.sort();
-    files.dedup();
-    files
 }
 
 // ── Validation helpers ────────────────────────────────────────────────────────

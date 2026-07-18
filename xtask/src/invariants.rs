@@ -42,6 +42,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_sidebar_renderer_boundaries(root, &files)?;
     ensure_spend_parser_boundaries(root, &files)?;
     ensure_spending_walker_ownership(root, &files)?;
+    ensure_agents_do_not_depend_on_sidebar(root, &files)?;
     ensure_sidebar_library_boundaries(root, &files)?;
     ensure_sidebar_enrich_projection_only(root, &files)?;
     ensure_no_zellij_runtime_list_panes(root, &files)?;
@@ -63,6 +64,71 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_inline_tests_stay_small(&files)?;
     Ok(())
+}
+
+fn ensure_agents_do_not_depend_on_sidebar(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let agents = root.join("crates/rimz/src/agents");
+    let needle = concat!("crate", "::sidebar");
+    let mut offenders = Vec::new();
+    for path in files
+        .iter()
+        .filter(|path| path.starts_with(&agents) && !is_test_source_path(root, path))
+    {
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("read invariant source {}", path.display()))?;
+        if code_without_comments(&source).contains(needle) {
+            offenders.push(path.display().to_string());
+        }
+    }
+    if !offenders.is_empty() {
+        bail!(
+            "agent domain must not depend on sidebar code; project inputs flow into agents::spending\n{}",
+            offenders.join("\n")
+        );
+    }
+    Ok(())
+}
+
+fn code_without_comments(source: &str) -> String {
+    let mut code = String::with_capacity(source.len());
+    let mut block_comment = false;
+    for line in source.lines() {
+        let mut rest = line;
+        loop {
+            if block_comment {
+                let Some((_, after)) = rest.split_once("*/") else {
+                    break;
+                };
+                block_comment = false;
+                rest = after;
+                continue;
+            }
+            let line_comment = rest.find("//");
+            let block_start = rest.find("/*");
+            match (line_comment, block_start) {
+                (Some(line_at), Some(block_at)) if block_at < line_at => {
+                    code.push_str(&rest[..block_at]);
+                    rest = &rest[block_at + 2..];
+                    block_comment = true;
+                }
+                (Some(line_at), _) => {
+                    code.push_str(&rest[..line_at]);
+                    break;
+                }
+                (None, Some(block_at)) => {
+                    code.push_str(&rest[..block_at]);
+                    rest = &rest[block_at + 2..];
+                    block_comment = true;
+                }
+                (None, None) => {
+                    code.push_str(rest);
+                    break;
+                }
+            }
+        }
+        code.push('\n');
+    }
+    code
 }
 
 fn ensure_normalized_agent_process_decisions(root: &Path, files: &[PathBuf]) -> Result<()> {

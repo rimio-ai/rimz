@@ -33,19 +33,6 @@ pub(crate) fn expand_tilde(raw: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
-pub(crate) fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    for entry in rd.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let Ok(ft) = entry.file_type() else { continue };
-        if ft.is_file() && path.extension().is_some_and(|e| e == "jsonl") {
-            out.push(path);
-        } else if ft.is_dir() {
-            collect_jsonl(&path, out);
-        }
-    }
-}
-
 pub(crate) fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.len() > haystack.len() {
         return false;

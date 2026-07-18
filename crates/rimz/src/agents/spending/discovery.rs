@@ -37,10 +37,25 @@ impl SpendingSource {
         Self::Group(SpendingSourceGroup::first(trees))
     }
 
-    fn key(&self) -> String {
+    pub(crate) fn fingerprint(&self) -> Vec<u8> {
+        let mut fingerprint = Vec::new();
         match self {
-            Self::Exact(path) => format!("exact\0{}", path.to_string_lossy()),
-            Self::Group(group) => group.key(),
+            Self::Exact(path) => {
+                fingerprint.push(0);
+                encode_path(&mut fingerprint, path);
+            }
+            Self::Group(group) => {
+                fingerprint.push(1);
+                group.encode(&mut fingerprint);
+            }
+        }
+        fingerprint
+    }
+
+    pub(crate) fn complete_files(&self) -> Vec<PathBuf> {
+        match self {
+            Self::Exact(path) => path.is_file().then(|| path.clone()).into_iter().collect(),
+            Self::Group(group) => group.complete_files(),
         }
     }
 }
@@ -73,16 +88,33 @@ impl SpendingSourceGroup {
         }
     }
 
-    fn key(&self) -> String {
-        let mut key = match self.selection {
-            GroupSelection::AllRelativeFirst => "group:all".to_owned(),
-            GroupSelection::FirstPath => "group:first".to_owned(),
-        };
+    fn encode(&self, fingerprint: &mut Vec<u8>) {
+        fingerprint.push(match self.selection {
+            GroupSelection::AllRelativeFirst => 0,
+            GroupSelection::FirstPath => 1,
+        });
+        encode_usize(fingerprint, self.trees.len());
         for tree in &self.trees {
-            key.push('\0');
-            key.push_str(&tree.key());
+            tree.encode(fingerprint);
         }
-        key
+    }
+
+    fn complete_files(&self) -> Vec<PathBuf> {
+        let mut by_relative = BTreeMap::<PathBuf, PathBuf>::new();
+        for tree in &self.trees {
+            let tree_files = tree.complete_relative_files();
+            if matches!(self.selection, GroupSelection::FirstPath)
+                && let Some(relative) = tree_files.first()
+            {
+                return vec![tree.root.join(relative)];
+            }
+            for relative in tree_files {
+                by_relative
+                    .entry(relative.clone())
+                    .or_insert_with(|| tree.root.join(relative));
+            }
+        }
+        by_relative.into_values().collect()
     }
 }
 
@@ -147,15 +179,12 @@ impl SpendingSourceTree {
         self
     }
 
-    fn key(&self) -> String {
-        format!(
-            "{}\0{}\0{}\0{}\0{}",
-            self.root.to_string_lossy(),
-            self.pattern,
-            self.codex_date_partitions,
-            self.filter.map_or("", |(name, _)| name),
-            self.descend_filter.map_or("", |(name, _)| name),
-        )
+    fn encode(&self, fingerprint: &mut Vec<u8>) {
+        encode_path(fingerprint, &self.root);
+        encode_bytes(fingerprint, self.pattern.as_bytes());
+        fingerprint.push(u8::from(self.codex_date_partitions));
+        encode_filter(fingerprint, self.filter);
+        encode_filter(fingerprint, self.descend_filter);
     }
 
     fn matches(&self, relative: &Path) -> bool {
@@ -168,6 +197,55 @@ impl SpendingSourceTree {
             .collect::<Vec<_>>();
         relative_components_match(&self.matcher, &components)
             && self.filter.is_none_or(|(_, filter)| filter(relative))
+    }
+
+    fn complete_relative_files(&self) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        self.collect_complete(Path::new(""), &mut files);
+        files.sort();
+        files.dedup();
+        files
+    }
+
+    fn collect_complete(&self, relative: &Path, files: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(self.root.join(relative)) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let child_relative = relative.join(entry.file_name());
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() && self.should_descend(&child_relative) {
+                self.collect_complete(&child_relative, files);
+            } else if kind.is_file() && self.matches(&child_relative) {
+                files.push(child_relative);
+            }
+        }
+    }
+}
+
+fn encode_path(out: &mut Vec<u8>, path: &Path) {
+    let normalized = crate::worktree::normalize_path_lexical(path);
+    encode_bytes(out, normalized.as_os_str().as_encoded_bytes());
+}
+
+fn encode_bytes(out: &mut Vec<u8>, value: &[u8]) {
+    out.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    out.extend_from_slice(value);
+}
+
+fn encode_usize(out: &mut Vec<u8>, value: usize) {
+    out.extend_from_slice(&(value as u64).to_le_bytes());
+}
+
+fn encode_filter(out: &mut Vec<u8>, filter: Option<RelativeFilter>) {
+    match filter {
+        Some((name, _)) => {
+            out.push(1);
+            encode_bytes(out, name.as_bytes());
+        }
+        None => out.push(0),
     }
 }
 
@@ -206,7 +284,7 @@ pub(crate) struct SpendingDiscoveryIndex {
 }
 
 struct AdapterState {
-    key: String,
+    key: Vec<u8>,
     sources: Vec<SourceState>,
 }
 
@@ -385,12 +463,14 @@ impl SpendingDiscoveryIndex {
     }
 }
 
-fn source_set_key(sources: &[SpendingSource]) -> String {
-    sources
-        .iter()
-        .map(SpendingSource::key)
-        .collect::<Vec<_>>()
-        .join("\u{1f}")
+fn source_set_key(sources: &[SpendingSource]) -> Vec<u8> {
+    let mut key = Vec::new();
+    encode_usize(&mut key, sources.len());
+    for source in sources {
+        let fingerprint = source.fingerprint();
+        encode_bytes(&mut key, &fingerprint);
+    }
+    key
 }
 
 impl From<SpendingSource> for SourceState {
@@ -507,15 +587,13 @@ impl GroupState {
         let mut by_relative = BTreeMap::<PathBuf, PathBuf>::new();
         let mut authoritative = true;
         for tree in &mut self.trees {
-            let complete = scan_directory(
-                &tree.declaration,
-                Path::new(""),
-                &mut tree.root,
+            let complete = DirectoryScanner {
+                tree: &tree.declaration,
                 now_secs,
                 full,
-                true,
-                stats.as_deref_mut(),
-            );
+                stats: stats.as_deref_mut(),
+            }
+            .scan(Path::new(""), &mut tree.root, true);
             authoritative &= complete;
             let mut tree_files = Vec::new();
             collect_active_files(Path::new(""), &tree.root, &mut tree_files);
@@ -535,113 +613,108 @@ impl GroupState {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn scan_directory(
-    tree: &SpendingSourceTree,
-    relative: &Path,
-    node: &mut DirectoryNode,
+struct DirectoryScanner<'a, 's> {
+    tree: &'a SpendingSourceTree,
     now_secs: u64,
     full: bool,
-    is_root: bool,
-    mut stats: Option<&mut DiscoveryStats>,
-) -> bool {
-    if !full && !is_root && !node.active_frontier && !node.due {
-        return true;
+    stats: Option<&'s mut DiscoveryStats>,
+}
+
+enum DirectoryProbe {
+    Ready(SystemTime),
+    MissingEmpty,
+    Failed,
+}
+
+#[derive(Default)]
+struct DirectorySnapshot {
+    seen_files: BTreeSet<PathBuf>,
+    seen_dirs: BTreeSet<PathBuf>,
+    entries_complete: bool,
+    children_authoritative: bool,
+}
+
+impl DirectorySnapshot {
+    fn new() -> Self {
+        Self {
+            entries_complete: true,
+            children_authoritative: true,
+            ..Self::default()
+        }
     }
-    let path = tree.root.join(relative);
-    count_directory_stat(stats.as_deref_mut());
-    let before_meta = match std::fs::metadata(&path) {
-        Ok(meta) => meta,
-        Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound
-                && node.files.is_empty()
-                && node.children.is_empty() =>
-        {
-            node.due = true;
+}
+
+impl DirectoryScanner<'_, '_> {
+    fn scan(&mut self, relative: &Path, node: &mut DirectoryNode, is_root: bool) -> bool {
+        if self.skip(node, is_root) {
             return true;
         }
-        Err(_) => {
-            node.due = true;
-            return false;
-        }
-    };
-    let Ok(before_stamp) = before_meta.modified() else {
-        node.due = true;
-        return false;
-    };
-    if !before_meta.is_dir() {
-        node.due = true;
-        return false;
+        let path = self.tree.root.join(relative);
+        let before_stamp = match self.probe(&path, node) {
+            DirectoryProbe::Ready(stamp) => stamp,
+            DirectoryProbe::MissingEmpty => return true,
+            DirectoryProbe::Failed => return false,
+        };
+        let authoritative = if self.full || node.stamp != Some(before_stamp) || node.due {
+            self.enumerate(relative, &path, node, before_stamp)
+        } else {
+            self.scan_active_children(relative, node)
+        };
+        refresh_frontier(node);
+        authoritative
     }
 
-    let must_enumerate = full || node.stamp != Some(before_stamp) || node.due;
-    let mut authoritative = true;
-    if must_enumerate {
+    fn skip(&self, node: &DirectoryNode, is_root: bool) -> bool {
+        !self.full && !is_root && !node.active_frontier && !node.due
+    }
+
+    fn probe(&mut self, path: &Path, node: &mut DirectoryNode) -> DirectoryProbe {
+        count_directory_stat(self.stats.as_deref_mut());
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.is_dir() => match meta.modified() {
+                Ok(stamp) => DirectoryProbe::Ready(stamp),
+                Err(_) => {
+                    node.due = true;
+                    DirectoryProbe::Failed
+                }
+            },
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && node.files.is_empty()
+                    && node.children.is_empty() =>
+            {
+                node.due = true;
+                DirectoryProbe::MissingEmpty
+            }
+            Ok(_) | Err(_) => {
+                node.due = true;
+                DirectoryProbe::Failed
+            }
+        }
+    }
+
+    fn enumerate(
+        &mut self,
+        relative: &Path,
+        path: &Path,
+        node: &mut DirectoryNode,
+        before_stamp: SystemTime,
+    ) -> bool {
         let prior = node.clone();
-        count_read_dir(stats.as_deref_mut());
+        count_read_dir(self.stats.as_deref_mut());
         let Ok(entries) = std::fs::read_dir(&path) else {
             node.due = true;
             return false;
         };
-        let mut seen_files = BTreeSet::new();
-        let mut seen_dirs = BTreeSet::new();
-        let mut complete_entries = true;
+        let mut snapshot = DirectorySnapshot::new();
         for entry in entries {
             let Ok(entry) = entry else {
-                complete_entries = false;
+                snapshot.entries_complete = false;
                 continue;
             };
-            let name = PathBuf::from(entry.file_name());
-            let child_relative = relative.join(&name);
-            let Ok(kind) = entry.file_type() else {
-                complete_entries = false;
-                continue;
-            };
-            if kind.is_dir() {
-                if !tree.should_descend(&child_relative) {
-                    continue;
-                }
-                seen_dirs.insert(name.clone());
-                let child = node.children.entry(name).or_insert_with(|| DirectoryNode {
-                    due: true,
-                    ..DirectoryNode::default()
-                });
-                if !full
-                    && tree.codex_date_partitions
-                    && codex_partition_is_old(&child_relative, now_secs)
-                    && !child.active_frontier
-                {
-                    continue;
-                }
-                authoritative &= scan_directory(
-                    tree,
-                    &child_relative,
-                    child,
-                    now_secs,
-                    full,
-                    false,
-                    stats.as_deref_mut(),
-                );
-            } else if kind.is_file() && tree.matches(&child_relative) {
-                seen_files.insert(name.clone());
-                let should_stat = full || !node.files.contains_key(&name);
-                if should_stat {
-                    count_candidate_stat(stats.as_deref_mut());
-                    match entry.metadata() {
-                        Ok(meta) => {
-                            node.files.insert(
-                                name,
-                                KnownFile {
-                                    active: metadata_is_active(&meta, now_secs),
-                                },
-                            );
-                        }
-                        Err(_) => complete_entries = false,
-                    }
-                }
-            }
+            self.visit_entry(relative, node, entry, &mut snapshot);
         }
-        count_directory_stat(stats.as_deref_mut());
+        count_directory_stat(self.stats.as_deref_mut());
         let after_stamp = std::fs::metadata(&path)
             .ok()
             .and_then(|meta| meta.modified().ok());
@@ -650,34 +723,95 @@ fn scan_directory(
             node.due = true;
             return false;
         };
-        if complete_entries {
-            node.files.retain(|name, _| seen_files.contains(name));
-            node.children.retain(|name, _| seen_dirs.contains(name));
-        } else {
-            authoritative = false;
+        if snapshot.entries_complete {
+            node.files
+                .retain(|name, _| snapshot.seen_files.contains(name));
+            node.children
+                .retain(|name, _| snapshot.seen_dirs.contains(name));
         }
         node.stamp = Some(after_stamp);
-        node.due = before_stamp != after_stamp || !complete_entries;
-    } else {
-        let active_children = node
-            .children
-            .iter_mut()
-            .filter(|(_, child)| child.active_frontier)
-            .collect::<Vec<_>>();
-        for (name, child) in active_children {
-            authoritative &= scan_directory(
-                tree,
-                &relative.join(name),
-                child,
-                now_secs,
-                full,
-                false,
-                stats.as_deref_mut(),
-            );
+        node.due = before_stamp != after_stamp || !snapshot.entries_complete;
+        snapshot.entries_complete && snapshot.children_authoritative
+    }
+
+    fn visit_entry(
+        &mut self,
+        relative: &Path,
+        node: &mut DirectoryNode,
+        entry: std::fs::DirEntry,
+        snapshot: &mut DirectorySnapshot,
+    ) {
+        let name = PathBuf::from(entry.file_name());
+        let child_relative = relative.join(&name);
+        let Ok(kind) = entry.file_type() else {
+            snapshot.entries_complete = false;
+            return;
+        };
+        if kind.is_dir() {
+            self.visit_directory(node, name, &child_relative, snapshot);
+        } else if kind.is_file() && self.tree.matches(&child_relative) {
+            self.visit_file(node, name, entry, snapshot);
         }
     }
-    refresh_frontier(node);
-    authoritative
+
+    fn visit_directory(
+        &mut self,
+        node: &mut DirectoryNode,
+        name: PathBuf,
+        child_relative: &Path,
+        snapshot: &mut DirectorySnapshot,
+    ) {
+        if !self.tree.should_descend(child_relative) {
+            return;
+        }
+        snapshot.seen_dirs.insert(name.clone());
+        let child = node.children.entry(name).or_insert_with(|| DirectoryNode {
+            due: true,
+            ..DirectoryNode::default()
+        });
+        let old_inactive_partition = !self.full
+            && self.tree.codex_date_partitions
+            && codex_partition_is_old(child_relative, self.now_secs)
+            && !child.active_frontier;
+        if !old_inactive_partition {
+            snapshot.children_authoritative &= self.scan(child_relative, child, false);
+        }
+    }
+
+    fn visit_file(
+        &mut self,
+        node: &mut DirectoryNode,
+        name: PathBuf,
+        entry: std::fs::DirEntry,
+        snapshot: &mut DirectorySnapshot,
+    ) {
+        snapshot.seen_files.insert(name.clone());
+        if !self.full && node.files.contains_key(&name) {
+            return;
+        }
+        count_candidate_stat(self.stats.as_deref_mut());
+        match entry.metadata() {
+            Ok(meta) => {
+                node.files.insert(
+                    name,
+                    KnownFile {
+                        active: metadata_is_active(&meta, self.now_secs),
+                    },
+                );
+            }
+            Err(_) => snapshot.entries_complete = false,
+        }
+    }
+
+    fn scan_active_children(&mut self, relative: &Path, node: &mut DirectoryNode) -> bool {
+        let mut authoritative = true;
+        for (name, child) in &mut node.children {
+            if child.active_frontier {
+                authoritative &= self.scan(&relative.join(name), child, false);
+            }
+        }
+        authoritative
+    }
 }
 
 impl SpendingSourceTree {

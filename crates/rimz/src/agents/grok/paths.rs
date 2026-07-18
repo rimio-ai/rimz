@@ -76,49 +76,28 @@ pub(super) fn resolve_transcript(
     session_id: &str,
     current: Option<&Path>,
     prior: Option<&Path>,
+    files: impl IntoIterator<Item = PathBuf>,
 ) -> Option<PathBuf> {
     current
         .and_then(|path| validate_transcript(path, session_id))
         .or_else(|| prior.and_then(|path| validate_transcript(path, session_id)))
-        .or_else(|| transcript_for_session(session_id))
+        .or_else(|| transcript_for_session(session_id, files))
 }
 
-pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
+pub(super) fn transcript_for_session(
+    session_id: &str,
+    files: impl IntoIterator<Item = PathBuf>,
+) -> Option<PathBuf> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         return None;
     }
-    transcript_files().into_iter().find(|path| {
+    files.into_iter().find(|path| {
         path.parent()
             .and_then(Path::file_name)
             .and_then(|v| v.to_str())
             == Some(session_id)
     })
-}
-
-pub(super) fn transcript_files() -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    collect_updates(&sessions_root(), &mut files);
-    files.sort();
-    files.dedup();
-    files
-}
-
-fn collect_updates(root: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.filter_map(std::result::Result::ok) {
-        let path = entry.path();
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
-        if kind.is_dir() {
-            collect_updates(&path, files);
-        } else if kind.is_file() && path.file_name().is_some_and(|name| name == "updates.jsonl") {
-            files.push(path);
-        }
-    }
 }
 
 #[cfg(test)]

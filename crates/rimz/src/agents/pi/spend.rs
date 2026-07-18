@@ -39,7 +39,7 @@ use crate::agents::spending::{
 };
 
 use crate::agents::transcript_fs::{
-    collect_jsonl, deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
+    deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
     deserialize_optional_string_lossy, deserialize_optional_u64_lossy, home_dir, read_spend_lines,
 };
 
@@ -122,24 +122,6 @@ struct PiCost {
 }
 
 // ── Path discovery ────────────────────────────────────────────────────────────
-
-/// Collect all Pi session `*.jsonl` files from `~/.pi/agent/sessions/`.
-///
-/// Respects `PI_AGENT_DIR` (comma-separated RimZ test override) first, then
-/// Pi's own `PI_CODING_AGENT_SESSION_DIR`, then the session directory below
-/// `PI_CODING_AGENT_DIR` / `~/.pi/agent`. Pi sessions are not project-scoped,
-/// so all sessions are included regardless of worktree paths.
-pub fn pi_session_files() -> Vec<PathBuf> {
-    let roots = pi_session_roots();
-
-    let mut files = Vec::new();
-    for dir in &roots {
-        collect_jsonl(dir, &mut files);
-    }
-    files.sort();
-    files.dedup();
-    files
-}
 
 pub(super) fn pi_session_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();

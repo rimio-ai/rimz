@@ -242,6 +242,40 @@ fn long_lived_renderers_cannot_construct_spending_walkers() {
 }
 
 #[test]
+fn agent_domain_cannot_depend_on_sidebar_code() {
+    let root = temp_repo_root("agents-sidebar-boundary");
+    let production = root.join("crates/rimz/src/agents/spending/engine.rs");
+    let comment_only = root.join("crates/rimz/src/agents/account.rs");
+    let tests = root.join("crates/rimz/src/agents/spending/tests.rs");
+    for path in [&production, &comment_only, &tests] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    std::fs::write(&production, "fn f() { crate::sidebar::refresh(); }\n").expect("source");
+    std::fs::write(
+        &comment_only,
+        "//! `crate::sidebar` consumes published state.\n/* crate::sidebar */\n",
+    )
+    .expect("comments");
+    std::fs::write(&tests, "fn f() { crate::sidebar::fixture(); }\n").expect("tests");
+
+    let err = ensure_agents_do_not_depend_on_sidebar(
+        &root,
+        &[production.clone(), comment_only.clone(), tests.clone()],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("must not depend on sidebar"));
+    assert!(err.to_string().contains(&production.display().to_string()));
+    assert!(
+        !err.to_string()
+            .contains(&comment_only.display().to_string())
+    );
+    assert!(!err.to_string().contains(&tests.display().to_string()));
+
+    ensure_agents_do_not_depend_on_sidebar(&root, &[comment_only, tests]).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn snapshot_projection_diagnostics_stay_debug_level() {
     let root = temp_repo_root("snapshot-projection-diagnostics");
     let bad = root.join("crates/rimz/src/store/snapshot/view/bad.rs");

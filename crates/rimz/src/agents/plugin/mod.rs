@@ -254,39 +254,21 @@ impl AgentAdapter for PluginAdapter {
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {
-        let Some(transcripts) = &self.manifest.transcripts else {
-            return Vec::new();
-        };
-        let mut files = Vec::new();
-        for pattern in &transcripts.globs {
-            let pattern = expand_pattern(self.plugin_dir, pattern);
-            match glob::glob(&pattern) {
-                Ok(paths) => files.extend(paths.filter_map(std::result::Result::ok)),
-                Err(err) => {
-                    debug!(kind = self.descriptor.kind, %err, "invalid plugin transcript glob")
-                }
-            }
-        }
-        files.retain(|path| path.is_file());
+        let mut files = self
+            .transcript_sources()
+            .into_iter()
+            .flat_map(|source| source.complete_files())
+            .collect::<Vec<_>>();
         files.sort();
         files.dedup();
         files
     }
 
     fn spending_sources(&self) -> Vec<super::spending::SpendingSource> {
-        let Some(transcripts) = &self.manifest.transcripts else {
-            return Vec::new();
-        };
-        if self.manifest.probes.spend.is_none() {
+        if self.manifest.transcripts.is_none() || self.manifest.probes.spend.is_none() {
             return Vec::new();
         }
-        transcripts
-            .globs
-            .iter()
-            .filter_map(|pattern| {
-                spending_source_for_pattern(&expand_pattern(self.plugin_dir, pattern))
-            })
-            .collect()
+        self.transcript_sources()
     }
 
     fn parse_spend(
@@ -338,6 +320,18 @@ impl AgentAdapter for PluginAdapter {
             .to_string_lossy()
             .into_owned();
         Some(argv)
+    }
+}
+
+impl PluginAdapter {
+    fn transcript_sources(&self) -> Vec<super::spending::SpendingSource> {
+        self.manifest
+            .transcripts
+            .as_ref()
+            .into_iter()
+            .flat_map(|transcripts| &transcripts.globs)
+            .filter_map(|pattern| spending_source_for_pattern(self.plugin_dir, pattern))
+            .collect()
     }
 }
 
@@ -621,25 +615,24 @@ fn normalize_context(source: &str, payload: &Value, envelope: &Envelope) -> Opti
     Some(context)
 }
 
-fn expand_pattern(plugin_dir: &Path, pattern: &str) -> String {
+fn spending_source_for_pattern(
+    plugin_dir: &Path,
+    pattern: &str,
+) -> Option<super::spending::SpendingSource> {
     if let Some(rest) = pattern.strip_prefix("~/")
         && let Some(home) = std::env::var_os("HOME")
     {
-        return PathBuf::from(home)
-            .join(rest)
-            .to_string_lossy()
-            .into_owned();
+        return spending_source_for_relative_pattern(PathBuf::from(home), rest);
     }
     let path = Path::new(pattern);
     if path.is_absolute() {
-        pattern.to_owned()
+        spending_source_for_expanded_pattern(path)
     } else {
-        plugin_dir.join(path).to_string_lossy().into_owned()
+        spending_source_for_relative_pattern(plugin_dir.to_path_buf(), pattern)
     }
 }
 
-fn spending_source_for_pattern(pattern: &str) -> Option<super::spending::SpendingSource> {
-    let path = Path::new(pattern);
+fn spending_source_for_expanded_pattern(path: &Path) -> Option<super::spending::SpendingSource> {
     let components = path.components().collect::<Vec<_>>();
     let split = components
         .iter()
@@ -656,6 +649,24 @@ fn spending_source_for_pattern(pattern: &str) -> Option<super::spending::Spendin
     };
     let relative = relative.to_str()?.to_owned();
     super::spending::SpendingSourceTree::new(root, relative)
+        .map(|tree| super::spending::SpendingSource::group(vec![tree]))
+}
+
+fn spending_source_for_relative_pattern(
+    base: PathBuf,
+    pattern: &str,
+) -> Option<super::spending::SpendingSource> {
+    let path = Path::new(pattern);
+    let components = path.components().collect::<Vec<_>>();
+    let split = components
+        .iter()
+        .position(|component| glob_component_has_magic(&component.as_os_str().to_string_lossy()));
+    let Some(split) = split else {
+        return Some(super::spending::SpendingSource::exact(base.join(path)));
+    };
+    let root = base.join(components[..split].iter().collect::<PathBuf>());
+    let relative = components[split..].iter().collect::<PathBuf>();
+    super::spending::SpendingSourceTree::new(root, relative.to_str()?.to_owned())
         .map(|tree| super::spending::SpendingSource::group(vec![tree]))
 }
 
@@ -798,7 +809,9 @@ account = ["sh", "-c", "touch {}; printf '{{}}'"]
             "transcriptbot"
         });
         fs::create_dir(&dir).unwrap();
+        fs::create_dir_all(dir.join("history/archive")).unwrap();
         fs::write(dir.join("README.md"), "setup").unwrap();
+        fs::write(dir.join("history/archive/session.jsonl"), "{}\n").unwrap();
         let probe = if with_spend {
             "[probes]\nspend = [\"sh\", \"-c\", \"printf '{}'\"]\n"
         } else {
@@ -895,7 +908,9 @@ globs = ["history/**/*.jsonl"]
 
     #[test]
     fn historical_discovery_requires_transcripts_and_spend_probe() {
-        assert!(transcript_adapter(false).spending_sources().is_empty());
+        let transcript_only = transcript_adapter(false);
+        assert_eq!(transcript_only.transcript_files().len(), 1);
+        assert!(transcript_only.spending_sources().is_empty());
         assert_eq!(transcript_adapter(true).spending_sources().len(), 1);
     }
 

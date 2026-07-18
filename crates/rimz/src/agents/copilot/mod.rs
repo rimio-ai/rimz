@@ -587,10 +587,6 @@ impl AgentAdapter for CopilotAdapter {
         paths::session_transcript_path(session_id)
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        paths::transcript_files()
-    }
-
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         paths::copilot_home()
             .and_then(|home| {

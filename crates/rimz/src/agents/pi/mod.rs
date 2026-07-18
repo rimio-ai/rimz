@@ -483,10 +483,6 @@ impl AgentAdapter for PiAdapter {
         transcript::parse_messages(lines)
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        spend::pi_session_files()
-    }
-
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         spend::pi_session_roots()
             .into_iter()

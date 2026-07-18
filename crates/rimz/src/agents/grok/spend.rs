@@ -1,6 +1,6 @@
 //! Exact-cost Grok Build completed-turn spend parsing.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path};
 use crate::agents::{PriceBook, read_transcript_lines};
@@ -8,10 +8,6 @@ use crate::agents::{PriceBook, read_transcript_lines};
 use super::transcript::{self, ModelUsage, TurnCompletion};
 
 const USD_TICKS_PER_USD: f64 = 10_000_000_000.0;
-
-pub(super) fn files() -> Vec<PathBuf> {
-    super::paths::transcript_files()
-}
 
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, _prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);

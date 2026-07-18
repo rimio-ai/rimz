@@ -18,7 +18,7 @@ An adapter is the *single* place an agent protocol is normalized. Its `decode_ho
 
 Provider modules own native protocol and process interpretation. Generic hook ingress consumes `hook_ingress`, and generic process discovery consumes registry command identity; provider-only product coordinators may call deep provider modules when the behavior remains unique to that provider.
 
-`AgentAdapter::probe_account_usage` returns one identity-bearing provider-neutral result. Provider transports parse native wire shapes, provider account modules normalize plan/windows/credits, and sidebar refresh code alone owns cadence, durable claims, and cache publication.
+`AgentAdapter::probe_account_usage` returns one identity-bearing provider-neutral result. Provider transports parse native wire shapes and provider account modules normalize plan/windows/credits. Sidebar refresh owns account cadence, durable claims, and cache publication; `agents::spending` owns fleet-spending cadence, refresh, and publication while sidebar supplies workspace inputs and consumes its durable results.
 
 - **Plugin manifests derive claims.** The declared canonical event list, capabilities, and probes generate both descriptor matrices. Keep hook installation self-managed and neutral output empty; probes stay bounded, read-only, and off the store import graph.
 - **Read upstream JSONC without rewriting it.** Read-only probes of user-editable upstream JSON files parse through [`jsonc.rs`](./jsonc.rs); install flows that rewrite a file keep strict parsing so comments are never silently discarded.

@@ -19,38 +19,6 @@ pub(super) fn runtime_base() -> PathBuf {
         .unwrap_or_else(|| home_dir().join(".qwen"))
 }
 
-pub(crate) fn all_jsonl_files() -> Vec<PathBuf> {
-    session_files_under(&runtime_base())
-}
-
-fn session_files_under(runtime: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Ok(projects) = std::fs::read_dir(runtime.join("projects")) else {
-        return files;
-    };
-    for project in projects.filter_map(Result::ok) {
-        if !project.file_type().is_ok_and(|kind| kind.is_dir()) {
-            continue;
-        }
-        let Ok(chats) = std::fs::read_dir(project.path().join("chats")) else {
-            continue;
-        };
-        for entry in chats.filter_map(Result::ok) {
-            let path = entry.path();
-            if entry.file_type().is_ok_and(|kind| kind.is_file())
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension == "jsonl")
-            {
-                files.push(path);
-            }
-        }
-    }
-    files.sort();
-    files.dedup();
-    files
-}
-
 /// Qwen rewinds can invalidate any earlier root assistant, so a readable file
 /// is cold-folded and atomically replaces that file's cached entry set.
 pub(crate) fn parse_qwen_spend(
@@ -272,27 +240,5 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let parsed = parse_qwen_spend(dir.path(), None, &PriceBook::embedded());
         assert!(!parsed.replace_entries);
-    }
-
-    #[test]
-    fn discovery_accepts_only_direct_chat_jsonl_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let chats = dir.path().join("projects/project-a/chats");
-        std::fs::create_dir_all(chats.join("nested")).unwrap();
-        std::fs::create_dir_all(dir.path().join("projects/project-b/other/chats")).unwrap();
-        std::fs::write(chats.join("session.jsonl"), "{}\n").unwrap();
-        std::fs::write(chats.join("session.json"), "{}").unwrap();
-        std::fs::write(chats.join("session.jsonl.sidecar"), "{}").unwrap();
-        std::fs::write(chats.join("nested/child.jsonl"), "{}\n").unwrap();
-        std::fs::write(
-            dir.path()
-                .join("projects/project-b/other/chats/outside.jsonl"),
-            "{}\n",
-        )
-        .unwrap();
-        assert_eq!(
-            session_files_under(dir.path()),
-            [chats.join("session.jsonl")]
-        );
     }
 }

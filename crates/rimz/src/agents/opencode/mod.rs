@@ -565,10 +565,6 @@ impl AgentAdapter for OpencodeAdapter {
         Some(RefreshSpawn { args })
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        database::files()
-    }
-
     fn transcript_stat(&self, path: &Path) -> Option<crate::agents::TranscriptStat> {
         database::logical_stat(path)
     }

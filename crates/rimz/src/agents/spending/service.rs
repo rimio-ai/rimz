@@ -6,7 +6,6 @@
 //! one in-memory [`super::SpendingWalker`].
 
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -31,62 +30,48 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_FRAME_BYTES: u64 = 4 * 1024 * 1024;
 const WRITE_BUFFER_BYTES: usize = 64 * 1024;
-const DISCOVERY_ENV: [&str; 15] = [
-    "HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "CLAUDE_CONFIG_DIR",
-    "CODEX_HOME",
-    "AMP_DATA_DIR",
-    "PI_AGENT_DIR",
-    "PI_CODING_AGENT_SESSION_DIR",
-    "PI_CODING_AGENT_DIR",
-    "KIMI_CODE_HOME",
-    "RIMZ_OPENCODE_DATA_DIR",
-    "QWEN_RUNTIME_DIR",
-    "QWEN_HOME",
-    "KIRO_HOME",
-    "RIMZ_ANTIGRAVITY_HOME",
-];
-
 /// Persistent-cache and provider-discovery identity for one warm walker.
-/// Different state homes or transcript-home environments must never share a
-/// service even when they use the same runtime root.
+/// Different state homes or source declarations never share a service even
+/// when they use the same runtime root.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 struct SpendingServiceNamespace(String);
 
 impl SpendingServiceNamespace {
     fn for_runtime(runtime: &RuntimePaths) -> Self {
-        let persistent_shared_root =
-            crate::worktree::normalize_path_lexical(&runtime.persistent_shared_root);
-        Self::from_parts(
-            &persistent_shared_root,
-            DISCOVERY_ENV
-                .into_iter()
-                .map(|name| (name, std::env::var_os(name))),
-        )
+        let declarations = crate::agents::all_adapters()
+            .flat_map(|adapter| {
+                let kind = adapter.descriptor().kind;
+                adapter
+                    .spending_sources()
+                    .into_iter()
+                    .map(move |source| (kind, source.fingerprint()))
+            })
+            .collect();
+        Self::from_declarations(&runtime.persistent_shared_root, declarations)
     }
 
-    fn from_parts(
+    fn from_declarations(
         persistent_shared_root: &Path,
-        environment: impl IntoIterator<Item = (&'static str, Option<OsString>)>,
+        mut declarations: Vec<(&str, Vec<u8>)>,
     ) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(b"rimz.spending-service.namespace.v1\0");
+        hasher.update(b"rimz.spending-service.namespace.v2\0");
+        let persistent_shared_root =
+            crate::worktree::normalize_path_lexical(persistent_shared_root);
         hash_namespace_part(
             &mut hasher,
             persistent_shared_root.as_os_str().as_encoded_bytes(),
         );
-        for (name, value) in environment {
-            hash_namespace_part(&mut hasher, name.as_bytes());
-            match value {
-                Some(value) => {
-                    hasher.update([1]);
-                    hash_namespace_part(&mut hasher, value.as_encoded_bytes());
-                }
-                None => hasher.update([0]),
-            }
+        declarations.sort_by(|(left_kind, left_source), (right_kind, right_source)| {
+            left_kind
+                .as_bytes()
+                .cmp(right_kind.as_bytes())
+                .then_with(|| left_source.cmp(right_source))
+        });
+        for (kind, source) in declarations {
+            hash_namespace_part(&mut hasher, kind.as_bytes());
+            hash_namespace_part(&mut hasher, &source);
         }
         let digest = hasher.finalize();
         Self(hex::encode(&digest[..12]))
@@ -395,11 +380,7 @@ fn direct_fallback(
     }
     let mut walker = SpendingWalker::new();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::sidebar::refresh::spending::serve_spending_direct_request(
-            &mut walker,
-            runtime,
-            request,
-        )
+        super::engine::serve_direct(&mut walker, runtime, request)
     }))
     .map_err(|_| {
         SpendingServiceFailure::new(
@@ -599,9 +580,7 @@ fn serve_connection(
         },
         None => owner_runtime.clone(),
     };
-    if let Some(caches) =
-        crate::sidebar::refresh::spending::fresh_spending_service_publication(&runtime, &request)
-    {
+    if let Some(caches) = super::engine::fresh_publication(&runtime, &request) {
         write_json_line(
             &mut writer,
             &SpendingServiceFrame::Complete(Box::new(caches)),
@@ -642,12 +621,7 @@ fn serve_connection(
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut ignore_progress = |_| {};
-        crate::sidebar::refresh::spending::serve_spending_service_request(
-            &mut walker,
-            &runtime,
-            &request,
-            &mut ignore_progress,
-        )
+        super::engine::serve_request(&mut walker, &runtime, &request, &mut ignore_progress)
     }));
     match result {
         Ok(caches) => {
@@ -765,9 +739,9 @@ mod tests {
             wrong_workspace.validate(&namespace).unwrap_err().code,
             SpendingServiceErrorCode::VersionMismatch
         );
-        let other_namespace = SpendingServiceNamespace::from_parts(
+        let other_namespace = SpendingServiceNamespace::from_declarations(
             Path::new("/tmp/other-state/rimz/shared"),
-            std::iter::empty(),
+            Vec::new(),
         );
         assert_eq!(
             SpendingServiceRequest::global(&runtime, HeadlineSpec::default())
@@ -837,22 +811,89 @@ mod tests {
     }
 
     #[test]
-    fn namespace_separates_persistent_roots_and_discovery_environments() {
-        let base = SpendingServiceNamespace::from_parts(
+    fn namespace_tracks_sorted_canonical_source_declarations() {
+        let copilot_a = super::super::SpendingSourceTree::new(
+            "/home/a/.copilot/session-state",
+            "*/events.jsonl",
+        )
+        .map(|tree| super::super::SpendingSource::group(vec![tree]))
+        .unwrap()
+        .fingerprint();
+        let copilot_b = super::super::SpendingSourceTree::new(
+            "/home/b/.copilot/session-state",
+            "*/events.jsonl",
+        )
+        .map(|tree| super::super::SpendingSource::group(vec![tree]))
+        .unwrap()
+        .fingerprint();
+        let grok_a =
+            super::super::SpendingSourceTree::new("/home/a/.grok/sessions", "**/updates.jsonl")
+                .map(|tree| super::super::SpendingSource::group(vec![tree]))
+                .unwrap()
+                .fingerprint();
+        let grok_b =
+            super::super::SpendingSourceTree::new("/home/b/.grok/sessions", "**/updates.jsonl")
+                .map(|tree| super::super::SpendingSource::group(vec![tree]))
+                .unwrap()
+                .fingerprint();
+        let plugin = super::super::SpendingSourceTree::new("/plugins/history", "**/*.jsonl")
+            .map(|tree| super::super::SpendingSource::group(vec![tree]))
+            .unwrap()
+            .fingerprint();
+        let base = SpendingServiceNamespace::from_declarations(
             Path::new("/state-a/rimz/shared"),
-            [("HOME", Some(OsString::from("/home/a")))],
+            vec![
+                ("copilot", copilot_a.clone()),
+                ("grok", grok_a.clone()),
+                ("plugin", plugin.clone()),
+            ],
         );
-        let other_state = SpendingServiceNamespace::from_parts(
+        let reordered = SpendingServiceNamespace::from_declarations(
+            Path::new("/state-a/rimz/./shared"),
+            vec![
+                ("plugin", plugin.clone()),
+                ("grok", grok_a.clone()),
+                ("copilot", copilot_a.clone()),
+            ],
+        );
+        let other_state = SpendingServiceNamespace::from_declarations(
             Path::new("/state-b/rimz/shared"),
-            [("HOME", Some(OsString::from("/home/a")))],
+            vec![
+                ("copilot", copilot_a.clone()),
+                ("grok", grok_a.clone()),
+                ("plugin", plugin.clone()),
+            ],
         );
-        let other_discovery = SpendingServiceNamespace::from_parts(
+        let other_copilot_root = SpendingServiceNamespace::from_declarations(
             Path::new("/state-a/rimz/shared"),
-            [("HOME", Some(OsString::from("/home/b")))],
+            vec![
+                ("copilot", copilot_b),
+                ("grok", grok_a.clone()),
+                ("plugin", plugin.clone()),
+            ],
+        );
+        let other_grok_root = SpendingServiceNamespace::from_declarations(
+            Path::new("/state-a/rimz/shared"),
+            vec![
+                ("copilot", copilot_a.clone()),
+                ("grok", grok_b),
+                ("plugin", plugin.clone()),
+            ],
+        );
+        let other_plugin = SpendingServiceNamespace::from_declarations(
+            Path::new("/state-a/rimz/shared"),
+            vec![
+                ("copilot", copilot_a),
+                ("grok", grok_a),
+                ("plugin", [plugin, vec![1]].concat()),
+            ],
         );
 
+        assert_eq!(base, reordered);
         assert_ne!(base, other_state);
-        assert_ne!(base, other_discovery);
+        assert_ne!(base, other_copilot_root);
+        assert_ne!(base, other_grok_root);
+        assert_ne!(base, other_plugin);
     }
 
     #[test]
@@ -894,7 +935,7 @@ mod tests {
 
         let mut direct_walker = SpendingWalker::new();
         let mut ignore_progress = |_| {};
-        let direct = crate::sidebar::refresh::spending::serve_spending_service_request(
+        let direct = super::super::engine::serve_request(
             &mut direct_walker,
             &runtime,
             &request,
@@ -927,7 +968,7 @@ mod tests {
         runtime.ensure_dirs().unwrap();
         super::super::write_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
-            crate::sidebar::timing::unix_now_ms(),
+            super::super::unix_now_ms(),
             &Default::default(),
         );
 
@@ -1056,7 +1097,7 @@ mod tests {
         runtime.ensure_shared_dirs().unwrap();
         super::super::write_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
-            crate::sidebar::timing::unix_now_ms(),
+            super::super::unix_now_ms(),
             &Default::default(),
         );
         let namespace = SpendingServiceNamespace::for_runtime(&runtime);
@@ -1072,11 +1113,7 @@ mod tests {
         });
         drop(held);
 
-        assert!(
-            caches
-                .provider
-                .is_fresh(crate::sidebar::timing::unix_now_ms())
-        );
+        assert!(caches.provider.is_fresh(super::super::unix_now_ms()));
     }
 
     #[test]

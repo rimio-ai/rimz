@@ -21,28 +21,6 @@ fn write_session(filename: &str, lines: &[&str]) -> (TempDir, std::path::PathBuf
 }
 
 #[test]
-fn discovery_includes_archives_and_prefers_the_active_copy() {
-    let dir = TempDir::new().unwrap();
-    let active = dir.path().join("sessions/2026/01/01");
-    let archived = dir.path().join("archived_sessions/2026/01/01");
-    std::fs::create_dir_all(&active).unwrap();
-    std::fs::create_dir_all(&archived).unwrap();
-    std::fs::write(active.join("duplicate.jsonl"), "active\n").unwrap();
-    std::fs::write(archived.join("duplicate.jsonl"), "archived\n").unwrap();
-    std::fs::write(archived.join("archived-only.jsonl"), "archived-only\n").unwrap();
-
-    let files = codex_session_files_from_homes(&[dir.path().to_path_buf()]);
-
-    assert_eq!(
-        files,
-        vec![
-            archived.join("archived-only.jsonl"),
-            active.join("duplicate.jsonl"),
-        ]
-    );
-}
-
-#[test]
 fn token_line_classifies_known_usage_shapes_only() {
     for line in [
         br#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#.as_slice(),

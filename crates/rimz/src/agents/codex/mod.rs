@@ -781,10 +781,6 @@ impl AgentAdapter for CodexAdapter {
             })
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        spend::codex_session_files()
-    }
-
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         spend::codex_homes()
             .into_iter()

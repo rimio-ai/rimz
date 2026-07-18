@@ -1122,7 +1122,14 @@ pub trait AgentAdapter: Send + Sync {
     /// transcript UI and session-cost lookup. Historical fleet spending uses
     /// [`spending_sources`](Self::spending_sources) instead.
     fn transcript_files(&self) -> Vec<PathBuf> {
-        Vec::new()
+        let mut files = self
+            .spending_sources()
+            .into_iter()
+            .flat_map(|source| source.complete_files())
+            .collect::<Vec<_>>();
+        files.sort();
+        files.dedup();
+        files
     }
 
     /// Read the durable identity of one logical transcript or provider store.

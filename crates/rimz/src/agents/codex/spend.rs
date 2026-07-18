@@ -31,7 +31,7 @@
 //! (OpenAI), `input`/`output` (compact),
 //! `cached_tokens`/`cached_input_tokens` (cache).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::LocalSpendFold;
@@ -39,7 +39,7 @@ use crate::agents::pricing::{PriceBook, Pricing};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, record_unknown_model,
 };
-use crate::agents::transcript_fs::{collect_jsonl, home_dir};
+use crate::agents::transcript_fs::home_dir;
 
 mod parse;
 #[cfg(test)]
@@ -53,18 +53,6 @@ use parse::{CodexSpendState, parse_codex_session};
 use wire::CodexLogEntry;
 
 // ── Path discovery ────────────────────────────────────────────────────────────
-
-/// Collect all active and archived Codex session `*.jsonl` files.
-///
-/// Respects `CODEX_HOME` (comma-separated) when set. A Codex home may contain
-/// both `sessions/` and `archived_sessions/`; an active file wins when both
-/// trees contain the same relative rollout path.
-///
-/// **Note:** Codex files are not scoped to a project directory — all sessions
-/// are returned.  Computing USD cost from these files requires a pricing table.
-pub fn codex_session_files() -> Vec<PathBuf> {
-    codex_session_files_from_homes(&codex_homes())
-}
 
 pub(super) fn codex_homes() -> Vec<PathBuf> {
     if let Ok(env_val) = std::env::var("CODEX_HOME") {
@@ -86,37 +74,6 @@ pub(super) fn legacy_spend_relative(path: &Path) -> bool {
             Some("sessions" | "archived_sessions")
         )
     })
-}
-
-fn codex_session_files_from_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for home in homes {
-        let active = home.join("sessions");
-        let archived = home.join("archived_sessions");
-        let roots = if active.is_dir() || archived.is_dir() {
-            [active, archived]
-                .into_iter()
-                .filter(|root| root.is_dir())
-                .collect::<Vec<_>>()
-        } else if home.is_dir() {
-            vec![home.clone()]
-        } else {
-            Vec::new()
-        };
-        let mut relative_seen = HashSet::new();
-        for root in roots {
-            let mut discovered = Vec::new();
-            collect_jsonl(&root, &mut discovered);
-            discovered.sort();
-            files.extend(discovered.into_iter().filter(|file| {
-                let relative = file.strip_prefix(&root).unwrap_or(file);
-                relative_seen.insert(relative.to_path_buf())
-            }));
-        }
-    }
-    files.sort();
-    files.dedup();
-    files
 }
 
 /// Turn a Codex session's token events into priced [`CachedEntry`] values,

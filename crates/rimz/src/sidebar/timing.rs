@@ -229,21 +229,6 @@ pub const METRICS_BACKGROUND_SAMPLE_TTL: Duration = Duration::from_secs(3);
 /// underlying background samples.
 pub const UNWATCHED_METRICS_FOLD_CLAMP: Duration = METRICS_BACKGROUND_SAMPLE_TTL;
 
-/// How long the producer trusts a published fleet-spending walk before
-/// re-walking every provider's transcript tree. Spend is display-only (the
-/// eased odometer roll absorbs the step) and the walk — discovery readdirs,
-/// per-file stats, the cursor-map parse, the price-book load — is the
-/// producer's largest steady cost, so a coarse TTL pays for itself. One TTL,
-/// no retry split like [`ACCOUNTS_RETRY_TTL`]: the walk is per-file
-/// best-effort and an empty fleet prices to zero cheaply, so there is no
-/// infrastructure-failure state to re-probe fast — a partial read is a
-/// smaller-than-true figure that heals on the next due walk.
-pub const SPENDING_TTL: Duration = Duration::from_secs(15);
-
-/// How long a spending-lock loser may serve the last published provider cache
-/// before falling back to an incremental local walk.
-pub const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
-
 /// Minimum gap between out-of-band session context refreshes for one target.
 /// The producer checks every data tick, but budget windows move on the scale of
 /// minutes.

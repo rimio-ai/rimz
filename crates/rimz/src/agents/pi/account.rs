@@ -2,9 +2,10 @@
 
 use serde::Deserialize;
 
-use super::spend::{pi_config_dir, pi_session_files};
+use super::PiAdapter;
+use super::spend::pi_config_dir;
 use crate::agents::delegated_account::{Adapter, Config};
-use crate::agents::{AccountUsageProbe, read_transcript_tail};
+use crate::agents::{AccountUsageProbe, AgentAdapter, read_transcript_tail};
 
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/pi-oauth-account-key/v1";
 
@@ -28,7 +29,11 @@ pub(crate) fn probe_usage() -> AccountUsageProbe {
 
 /// Provider of the freshest Pi session, tail-scanned newest-first.
 fn used_provider() -> Option<String> {
-    let (_, newest) = pi_session_files()
+    used_provider_from(PiAdapter.transcript_files())
+}
+
+fn used_provider_from(files: impl IntoIterator<Item = std::path::PathBuf>) -> Option<String> {
+    let (_, newest) = files
         .into_iter()
         .filter_map(|path| {
             let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
@@ -69,5 +74,35 @@ mod tests {
         let line = r#"{"type":"message","message":{"role":"assistant","provider":"openai-codex"}}"#;
         assert_eq!(provider_of_line(line).as_deref(), Some("openai-codex"));
         assert_eq!(provider_of_line(r#"{"type":"session"}"#), None);
+    }
+
+    #[test]
+    fn newest_complete_session_selects_the_account_provider() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("history/old.jsonl");
+        let newest = dir.path().join("history/deep/new.jsonl");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(newest.parent().unwrap()).unwrap();
+        std::fs::write(
+            &old,
+            r#"{"type":"message","message":{"provider":"anthropic"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &newest,
+            r#"{"type":"message","message":{"provider":"openai-codex"}}"#,
+        )
+        .unwrap();
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+
+        assert_eq!(
+            used_provider_from([newest, old]).as_deref(),
+            Some("openai-codex")
+        );
     }
 }

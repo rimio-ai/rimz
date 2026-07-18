@@ -528,10 +528,6 @@ impl AgentAdapter for KimiAdapter {
         install::config_path().is_ok_and(|path| install::managed(&path))
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        spend::files()
-    }
-
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         crate::agents::spending::SpendingSourceTree::new(
             wire::kimi_home().join("sessions"),

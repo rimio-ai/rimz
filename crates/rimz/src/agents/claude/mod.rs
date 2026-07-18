@@ -657,10 +657,6 @@ impl AgentAdapter for ClaudeAdapter {
         }
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        spend::all_jsonl_files()
-    }
-
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         spend::claude_config_roots()
             .into_iter()

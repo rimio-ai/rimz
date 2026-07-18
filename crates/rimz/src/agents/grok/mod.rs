@@ -351,7 +351,7 @@ impl AgentAdapter for GrokAdapter {
                 .transcript_path
                 .as_deref()
                 .and_then(|path| paths::validate_transcript(Path::new(path), session_id))
-                .or_else(|| paths::transcript_for_session(session_id))
+                .or_else(|| paths::transcript_for_session(session_id, self.transcript_files()))
                 .map(|path| path.to_string_lossy().into_owned())
         });
         if canonical == "SessionStart" {
@@ -432,6 +432,7 @@ impl AgentAdapter for GrokAdapter {
             ctx.agent_id,
             ctx.current_transcript_path.map(Path::new),
             ctx.prior_transcript_path.map(Path::new),
+            self.transcript_files(),
         )?;
         let events = paths::events_companion(&path, ctx.agent_id);
         refresh_resolved_context(&path, events.as_deref(), ctx)
@@ -445,10 +446,6 @@ impl AgentAdapter for GrokAdapter {
         account::probe()
     }
 
-    fn transcript_files(&self) -> Vec<PathBuf> {
-        spend::files()
-    }
-
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         crate::agents::spending::SpendingSourceTree::new(paths::sessions_root(), "**/updates.jsonl")
             .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
@@ -457,7 +454,7 @@ impl AgentAdapter for GrokAdapter {
     }
 
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
-        paths::resolve_transcript(session_id, None, prior_path)
+        paths::resolve_transcript(session_id, None, prior_path, self.transcript_files())
     }
 
     fn parse_spend(

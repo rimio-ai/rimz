@@ -277,6 +277,139 @@ fn codex_old_date_partition_is_pruned_until_complete_scan() {
 }
 
 #[test]
+fn complete_enumeration_keeps_history_beyond_the_warm_horizon() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("sessions");
+    let old = root.join("2001/01/01/rollout.jsonl");
+    let recent = root.join("2099/01/01/rollout.jsonl");
+    for file in [&old, &recent] {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "{}\n").unwrap();
+    }
+    let source = SpendingSource::group(vec![
+        SpendingSourceTree::new(&root, "**/*.jsonl")
+            .unwrap()
+            .codex_dates(),
+    ]);
+
+    assert_eq!(source.complete_files(), [old, recent]);
+}
+
+#[test]
+fn complete_enumeration_preserves_selection_filters_and_symlink_policy() {
+    fn admitted(relative: &std::path::Path) -> bool {
+        relative
+            .file_name()
+            .is_some_and(|name| name == "keep.jsonl")
+    }
+    fn sessions_only(relative: &std::path::Path) -> bool {
+        relative
+            .components()
+            .next()
+            .is_none_or(|component| component.as_os_str() == "sessions")
+    }
+
+    let dir = tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    for root in [&first, &second] {
+        let keep = root.join("sessions/keep.jsonl");
+        std::fs::create_dir_all(keep.parent().unwrap()).unwrap();
+        std::fs::write(&keep, "{}\n").unwrap();
+        std::fs::write(root.join("sessions/drop.jsonl"), "{}\n").unwrap();
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        std::fs::write(root.join("other/keep.jsonl"), "{}\n").unwrap();
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        first.join("sessions/keep.jsonl"),
+        first.join("sessions/link.jsonl"),
+    )
+    .unwrap();
+
+    let all = SpendingSource::group(vec![
+        SpendingSourceTree::new(&first, "**/*.jsonl")
+            .unwrap()
+            .filtered("keep", admitted)
+            .descend_filtered("sessions", sessions_only),
+        SpendingSourceTree::new(&second, "**/*.jsonl")
+            .unwrap()
+            .filtered("keep", admitted)
+            .descend_filtered("sessions", sessions_only),
+    ]);
+    assert_eq!(all.complete_files(), [first.join("sessions/keep.jsonl")]);
+
+    #[cfg(unix)]
+    assert_eq!(
+        SpendingSource::group(vec![
+            SpendingSourceTree::new(first.join("sessions"), "*.jsonl").unwrap(),
+        ])
+        .complete_files(),
+        [
+            first.join("sessions/drop.jsonl"),
+            first.join("sessions/keep.jsonl"),
+        ]
+    );
+
+    let first_path = SpendingSource::first(vec![
+        SpendingSourceTree::new(dir.path().join("missing"), "**/*.jsonl").unwrap(),
+        SpendingSourceTree::new(&second, "**/*.jsonl")
+            .unwrap()
+            .descend_filtered("sessions", sessions_only),
+    ]);
+    assert_eq!(
+        first_path.complete_files(),
+        [second.join("sessions/drop.jsonl")]
+    );
+}
+
+#[test]
+fn source_fingerprint_is_binary_canonical_and_declaration_complete() {
+    fn filter(_: &std::path::Path) -> bool {
+        true
+    }
+
+    let plain = SpendingSource::group(vec![
+        SpendingSourceTree::new("/tmp/root/./sessions", "**/*.jsonl").unwrap(),
+    ]);
+    let normalized = SpendingSource::group(vec![
+        SpendingSourceTree::new("/tmp/root/sessions", "**/*.jsonl").unwrap(),
+    ]);
+    assert_eq!(plain.fingerprint(), normalized.fingerprint());
+
+    let filtered = SpendingSource::group(vec![
+        SpendingSourceTree::new("/tmp/root/sessions", "**/*.jsonl")
+            .unwrap()
+            .filtered("named-filter", filter),
+    ]);
+    assert_ne!(normalized.fingerprint(), filtered.fingerprint());
+    assert_ne!(
+        normalized.fingerprint(),
+        SpendingSource::first(vec![
+            SpendingSourceTree::new("/tmp/root/sessions", "**/*.jsonl").unwrap(),
+        ])
+        .fingerprint()
+    );
+
+    let empty_named_filter = SpendingSource::group(vec![
+        SpendingSourceTree::new("/tmp/root/sessions", "**/*.jsonl")
+            .unwrap()
+            .filtered("", filter),
+    ]);
+    assert_ne!(normalized.fingerprint(), empty_named_filter.fingerprint());
+
+    #[cfg(unix)]
+    {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let left = SpendingSource::exact(std::path::PathBuf::from(OsString::from_vec(vec![0x80])));
+        let right = SpendingSource::exact(std::path::PathBuf::from(OsString::from_vec(vec![0x81])));
+        assert_ne!(left.fingerprint(), right.fingerprint());
+    }
+}
+
+#[test]
 fn transcript_only_kiro_declares_no_historical_spend_source() {
     assert!(crate::agents::KiroAdapter.spending_sources().is_empty());
 }
