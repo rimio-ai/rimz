@@ -3,14 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 
-use crate::sidebar_pane::pets::{RgbaImage, encode_png};
 use ratatui::style::Color;
 use ratatui::text::Line;
 
-use super::{
-    BEGIN_SYNC, END_SYNC, IMAGE_ID_COLOR_MASK, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, delete,
-    transmit_png_chunks, virtual_place, wrap_pixel_payload, write_synchronized_pixel_output,
-};
+use super::{IMAGE_ID_COLOR_MASK, ImageRequest, ImageResidency, RgbaImage, encode_png};
 
 const CELL_W: u32 = 8;
 const CELL_H: u32 = 16;
@@ -261,19 +257,13 @@ fn clear_rect(image: &mut RgbaImage, x: u32, y: u32, width: u32, height: u32) {
 
 #[derive(Debug)]
 pub(crate) struct MeterPainter {
-    wrap: bool,
-    images: BTreeMap<u32, (MeterRaster, u64)>,
-    resident: BTreeSet<u32>,
-    last_resend_ms: Option<u64>,
+    residency: ImageResidency<u32, MeterRaster>,
 }
 
 impl MeterPainter {
     pub(crate) fn new(wrap: bool) -> Self {
         Self {
-            wrap,
-            images: BTreeMap::new(),
-            resident: BTreeSet::new(),
-            last_resend_ms: None,
+            residency: ImageResidency::new(wrap),
         }
     }
 
@@ -284,58 +274,36 @@ impl MeterPainter {
         raster: &MeterRaster,
         now_ms: u64,
     ) -> io::Result<()> {
-        let changed = self
-            .images
-            .get(&image_id)
-            .is_none_or(|(previous, _)| previous != raster);
-        let stale = self
-            .images
-            .get(&image_id)
-            .is_some_and(|(_, last)| now_ms.saturating_sub(*last) >= RESIDENT_REFRESH_MS);
-        let resend = stale
-            && self.last_resend_ms.is_none_or(|last| {
-                last == now_ms || now_ms.saturating_sub(last) >= MIN_RESEND_SPACING_MS
-            });
-        if !changed && !resend {
-            return Ok(());
-        }
-
-        let image = rasterize(raster);
-        let png = encode_png(image.width, image.height, &image.data);
-        writer.write_all(&wrap_pixel_payload(BEGIN_SYNC, self.wrap))?;
-        let transmit_result = (|| {
-            for chunk in transmit_png_chunks(image_id, &png) {
-                writer.write_all(&wrap_pixel_payload(&chunk, self.wrap))?;
-            }
-            writer.write_all(&wrap_pixel_payload(
-                &virtual_place(image_id, raster.width_cells, 1, 2),
-                self.wrap,
-            ))
-        })();
-        let end_result = writer.write_all(&wrap_pixel_payload(END_SYNC, self.wrap));
-        transmit_result.and(end_result)?;
-        self.images.insert(image_id, (raster.clone(), now_ms));
-        self.resident.insert(image_id);
-        if resend {
-            self.last_resend_ms = Some(now_ms);
-        }
+        self.residency.ensure(
+            writer,
+            ImageRequest {
+                key: image_id,
+                image_id,
+                content: raster.clone(),
+                now_ms,
+                cols: raster.width_cells,
+                rows: 1,
+                synchronized: true,
+            },
+            || {
+                let image = rasterize(raster);
+                std::sync::Arc::from(encode_png(image.width, image.height, &image.data))
+            },
+        )?;
         Ok(())
     }
 
     pub(crate) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        write_synchronized_pixel_output(writer, |writer| {
-            for image_id in std::mem::take(&mut self.resident) {
-                writer.write_all(&wrap_pixel_payload(&delete(image_id), self.wrap))?;
-            }
-            self.images.clear();
-            Ok(())
-        })?;
-        writer.flush()
+        self.residency.clear(writer)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        BEGIN_SYNC, END_SYNC, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, transmit_png_chunks,
+        wrap_pixel_payload,
+    };
     use super::*;
     use ratatui::style::Style;
     use ratatui::text::Span;

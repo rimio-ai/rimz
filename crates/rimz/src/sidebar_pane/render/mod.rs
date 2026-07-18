@@ -45,10 +45,6 @@ pub(crate) use self::ui_state::{
     cockpit_spend_target,
 };
 pub(crate) use crate::sidebar_pane::view::BodyFilter;
-pub use crate::sidebar_pane::view::{WORKTREE_ROW_CAP, capped_visible_rows};
-pub use crate::theme::{
-    nerd_font_probe_glyphs, nerd_font_probe_gradient, oklab::blend, theme_glyphs,
-};
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
 
@@ -417,10 +413,6 @@ pub(crate) fn dashboard_mode(snapshot: &SidebarSnapshot) -> DashboardMode {
 
 pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) -> bool {
     !alert_active && (!snapshot.providers.is_empty() || snapshot.theme.pets.enabled)
-}
-
-pub(crate) fn pet_body_enabled(_snapshot: &SidebarSnapshot) -> bool {
-    !crate::tui::no_color()
 }
 
 pub(crate) fn pet_motion_enabled(animations: &ResolvedAnimations, action: PetAction) -> bool {

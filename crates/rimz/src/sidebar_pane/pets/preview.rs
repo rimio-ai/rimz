@@ -11,10 +11,14 @@ use super::PetGridSize;
 use super::asset::{self, PetSource};
 use super::catalog::BUILTIN_PETS;
 use super::cellart::{self, PetCell};
-use super::frames::RgbaImage;
 use super::model;
+use crate::sidebar_pane::pixel::RgbaImage;
 
 const PREVIEW_FETCH_CONCURRENCY: usize = 2;
+
+fn load_frames(source: PetSource) -> Result<Vec<RgbaImage>, asset::AssetErr> {
+    asset::resolve_and_decode(&source, super::frames::decode_sheet)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreviewCell {
@@ -92,7 +96,7 @@ where
 
 pub fn load_cell_previews(size: PetGridSize, aspect: CellAspect) -> Vec<PetPreview> {
     load_preview_results(listable_sources(), move |source| {
-        super::load_pet(source)
+        load_frames(source)
             .map_err(|err| err.to_string())
             .map(|frames| render_sprite(&frames, size, aspect))
     })
@@ -108,7 +112,7 @@ pub fn load_cell_preview(
 ) -> Option<PetPreview> {
     let source = asset::resolve_pet_source(selector)?;
     let id = source.id().into_owned();
-    let grid = super::load_pet(source)
+    let grid = load_frames(source)
         .map_err(|err| err.to_string())
         .map(|frames| render_sprite(&frames, size, aspect));
     Some(PetPreview { id, grid })
@@ -116,7 +120,7 @@ pub fn load_cell_preview(
 
 pub fn load_pixel_previews() -> Vec<PetPixelPreview> {
     load_preview_results(listable_sources(), |source| {
-        super::load_pet(source)
+        load_frames(source)
             .map_err(|err| err.to_string())
             .and_then(|frames| {
                 idle_sprite(&frames)
@@ -133,7 +137,7 @@ pub fn load_pixel_previews() -> Vec<PetPixelPreview> {
 pub fn load_pixel_preview(selector: &str) -> Option<PetPixelPreview> {
     let source = asset::resolve_pet_source(selector)?;
     let id = source.id().into_owned();
-    let frame = super::load_pet(source)
+    let frame = load_frames(source)
         .map_err(|err| err.to_string())
         .and_then(|frames| {
             idle_sprite(&frames)
@@ -163,9 +167,8 @@ fn idle_sprite(frames: &[RgbaImage]) -> Option<&RgbaImage> {
         return None;
     }
     let sprite_index = model::animations()
-        .get(model::TRACK_IDLE)
-        .map(|animation| animation.first_sprite())
-        .unwrap_or(0)
+        .get(model::PetTrack::Idle)
+        .first_sprite()
         .min(frames.len().saturating_sub(1));
     frames.get(sprite_index)
 }

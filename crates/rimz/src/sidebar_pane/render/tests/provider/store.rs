@@ -324,9 +324,7 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
                     .collect(),
             )),
             caption: Some("ready".to_owned()),
-            loading: false,
-            action: crate::sidebar_pane::pets::PetAction::Idle,
-            active_track: "idle",
+            frame_interval: None,
         }),
         ..Default::default()
     };

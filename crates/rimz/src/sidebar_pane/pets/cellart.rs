@@ -5,7 +5,7 @@ use ratatui::style::Color;
 
 use crate::config::CellAspect;
 
-use super::frames::RgbaImage;
+use crate::sidebar_pane::pixel::RgbaImage;
 
 pub(crate) type PetCellRow = Vec<PetCell>;
 pub(crate) type PetCellGrid = Vec<PetCellRow>;

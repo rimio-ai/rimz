@@ -1,6 +1,5 @@
 //! Maps sidebar attention states to pet actions, tracks, and animation timing.
 
-use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -12,14 +11,17 @@ const FAILED_FPS: f64 = 3.5;
 const WAITING_FPS: f64 = 3.5;
 const REVIEW_FPS: f64 = 3.5;
 
-pub(crate) const TRACK_IDLE: &str = "idle";
-pub(crate) const TRACK_THINKING: &str = "thinking";
-pub(crate) const TRACK_RUNNING: &str = "running";
-pub(crate) const TRACK_WAITING: &str = "waiting";
-pub(crate) const TRACK_REVIEW: &str = "review";
-pub(crate) const TRACK_ASK: &str = "ask";
-pub(crate) const TRACK_JUMPING: &str = "jumping";
-pub(crate) const TRACK_FAILED: &str = "failed";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PetTrack {
+    Idle,
+    Thinking,
+    Running,
+    Waiting,
+    Review,
+    Ask,
+    Jumping,
+    Failed,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetAction {
@@ -66,7 +68,40 @@ impl Animation {
     }
 }
 
-pub(crate) type AnimationSet = BTreeMap<&'static str, Animation>;
+pub(crate) struct AnimationSet {
+    tracks: [Animation; 8],
+}
+
+impl AnimationSet {
+    pub(crate) fn get(&self, track: PetTrack) -> &Animation {
+        &self.tracks[track as usize]
+    }
+}
+
+impl std::ops::Index<PetTrack> for AnimationSet {
+    type Output = Animation;
+
+    fn index(&self, track: PetTrack) -> &Self::Output {
+        self.get(track)
+    }
+}
+
+#[cfg(test)]
+pub(super) const TRACK_IDLE: PetTrack = PetTrack::Idle;
+#[cfg(test)]
+pub(super) const TRACK_THINKING: PetTrack = PetTrack::Thinking;
+#[cfg(test)]
+pub(super) const TRACK_RUNNING: PetTrack = PetTrack::Running;
+#[cfg(test)]
+pub(super) const TRACK_WAITING: PetTrack = PetTrack::Waiting;
+#[cfg(test)]
+pub(super) const TRACK_REVIEW: PetTrack = PetTrack::Review;
+#[cfg(test)]
+pub(super) const TRACK_ASK: PetTrack = PetTrack::Ask;
+#[cfg(test)]
+pub(super) const TRACK_JUMPING: PetTrack = PetTrack::Jumping;
+#[cfg(test)]
+pub(super) const TRACK_FAILED: PetTrack = PetTrack::Failed;
 
 static ANIMATIONS: LazyLock<AnimationSet> = LazyLock::new(|| {
     let row = |row: usize, count: usize| (0..count).map(|col| row * 8 + col).collect::<Vec<_>>();
@@ -85,31 +120,33 @@ static ANIMATIONS: LazyLock<AnimationSet> = LazyLock::new(|| {
     ask.extend(row(3, 4));
     ask.extend(waiting.iter().copied());
 
-    BTreeMap::from([
-        (TRACK_IDLE, Animation::new(row(0, 6), IDLE_FPS)),
-        (TRACK_THINKING, Animation::new(thinking, MOVING_FPS)),
-        (TRACK_JUMPING, Animation::new(row(4, 5), JUMPING_FPS)),
-        (TRACK_FAILED, Animation::new(row(5, 8), FAILED_FPS)),
-        (TRACK_WAITING, Animation::new(waiting, WAITING_FPS)),
-        (TRACK_RUNNING, Animation::new(row(7, 6), MOVING_FPS)),
-        (TRACK_REVIEW, Animation::new(row(8, 6), REVIEW_FPS)),
-        (TRACK_ASK, Animation::new(ask, WAVING_FPS)),
-    ])
+    AnimationSet {
+        tracks: [
+            Animation::new(row(0, 6), IDLE_FPS),
+            Animation::new(thinking, MOVING_FPS),
+            Animation::new(row(7, 6), MOVING_FPS),
+            Animation::new(waiting, WAITING_FPS),
+            Animation::new(row(8, 6), REVIEW_FPS),
+            Animation::new(ask, WAVING_FPS),
+            Animation::new(row(4, 5), JUMPING_FPS),
+            Animation::new(row(5, 8), FAILED_FPS),
+        ],
+    }
 });
 
 pub(crate) fn animations() -> &'static AnimationSet {
     &ANIMATIONS
 }
 
-pub(crate) fn action_track(action: PetAction) -> &'static str {
+pub(crate) fn action_track(action: PetAction) -> PetTrack {
     match action {
-        PetAction::Idle => TRACK_IDLE,
-        PetAction::Thinking => TRACK_THINKING,
-        PetAction::Running => TRACK_RUNNING,
-        PetAction::Waiting => TRACK_WAITING,
-        PetAction::Review => TRACK_REVIEW,
-        PetAction::Ask => TRACK_ASK,
-        PetAction::Failed => TRACK_FAILED,
+        PetAction::Idle => PetTrack::Idle,
+        PetAction::Thinking => PetTrack::Thinking,
+        PetAction::Running => PetTrack::Running,
+        PetAction::Waiting => PetTrack::Waiting,
+        PetAction::Review => PetTrack::Review,
+        PetAction::Ask => PetTrack::Ask,
+        PetAction::Failed => PetTrack::Failed,
     }
 }
 
@@ -117,12 +154,8 @@ pub(crate) fn action_changed(previous: Option<PetAction>, current: PetAction) ->
     previous.is_some_and(|previous| previous != current)
 }
 
-pub(crate) fn track_frame_duration(track: &str, refresh_ms: u16) -> Duration {
-    animations()
-        .get(track)
-        .or_else(|| animations().get(TRACK_IDLE))
-        .map(|animation| animation.frame_duration(refresh_ms))
-        .unwrap_or_else(|| frame_duration_for_fps(IDLE_FPS, refresh_ms))
+pub(crate) fn track_frame_duration(track: PetTrack, refresh_ms: u16) -> Duration {
+    animations().get(track).frame_duration(refresh_ms)
 }
 
 fn frame_duration_for_fps(fps: f64, refresh_ms: u16) -> Duration {

@@ -9,10 +9,10 @@ use crate::MuxName;
 use crate::SidebarSnapshot;
 use crate::config::{CellAspect, PixelMode};
 use crate::sidebar_pane::pets::{
-    BEGIN_SYNC, END_SYNC, PetAssets, PetBody, PetViewFrame, PixelPainter, PixelRenderCaps,
-    detect_pixel_render_caps, effective_render_tier, probe_cell_aspect,
+    PetAssets, PetBody, PetViewFrame, PixelPainter, effective_render_tier, probe_cell_aspect,
 };
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, detect_pixel_render_caps};
 use crate::sidebar_pane::render::{self, UiState};
 
 pub(super) struct FramePainter {
@@ -89,16 +89,17 @@ impl FramePainter {
     ) {
         let action = render::selected_pet_action(snapshot, ui);
         let theme = ui.theme(&snapshot.theme);
+        let pet_body_enabled = theme.pet_body_enabled();
         let tier = effective_render_tier(
             snapshot.theme.pets.glyphs,
             snapshot.theme.display.pixel,
             self.caps,
-            !snapshot.providers.is_empty() && render::pet_body_enabled(snapshot),
+            !snapshot.providers.is_empty() && pet_body_enabled,
         );
         let body = (snapshot.theme.pets.enabled
             && render::dashboard_present(snapshot, alert_active)
-            && render::pet_body_enabled(snapshot))
-        .then_some(tier);
+            && pet_body_enabled)
+            .then_some(tier);
         let unread_triggered = if snapshot.theme.pets.enabled {
             self.assets
                 .observe_unread_rows(render::unread_pet_row_ids(snapshot))

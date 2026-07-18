@@ -1,6 +1,5 @@
-use crate::sidebar_pane::pets::{
-    PetBody, PetCellGrid, PetView, image_id_color, placeholder_cluster,
-};
+use crate::sidebar_pane::pets::{PetBody, PetCellGrid, PetView};
+use crate::sidebar_pane::pixel::{image_id_color, placeholder_cluster};
 use crate::sidebar_pane::render::layout::{clip, text_width};
 use crate::sidebar_pane::render::theme::Theme;
 use ratatui::style::Style;

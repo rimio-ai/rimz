@@ -3,9 +3,8 @@ use super::*;
 use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, snapshot, snapshot_with_panes, workspace,
 };
-use crate::sidebar_pane::pets::{
-    BEGIN_SYNC, END_SYNC, PetAssets, PetPixelView, PixelRenderCaps, placeholder_cluster,
-};
+use crate::sidebar_pane::pets::{PetAssets, PetPixelView};
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, placeholder_cluster};
 use jiff::Timestamp;
 
 #[test]
@@ -238,15 +237,13 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
                 },
             ]])),
             caption: Some("resting".to_owned()),
-            loading: false,
-            action: crate::sidebar_pane::pets::PetAction::Idle,
-            active_track: "idle",
+            frame_interval: Some(Duration::from_millis(625)),
         }),
         ..Default::default()
     };
     ui.theme(&snapshot.theme);
 
-    if render::pet_body_enabled(&snapshot) {
+    if ui.cached_theme(&snapshot.theme).unwrap().pet_body_enabled() {
         assert!(is_animating(&snapshot, &ui, 0, false));
         assert_eq!(
             frame_interval(&snapshot, &ui, false),
@@ -254,7 +251,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
         );
 
         let mut jumping_ui = ui.clone();
-        jumping_ui.pet.as_mut().expect("pet").active_track = "jumping";
+        jumping_ui.pet.as_mut().expect("pet").frame_interval = Some(Duration::from_millis(286));
         assert_eq!(
             frame_interval(&snapshot, &jumping_ui, false),
             Duration::from_millis(286)
@@ -267,7 +264,9 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
         let mut loading_ui = ui.clone();
         let pet = loading_ui.pet.as_mut().expect("pet");
         pet.body = None;
-        pet.loading = true;
+        pet.frame_interval = Some(crate::sidebar::timing::animation_frame(
+            crate::sidebar::timing::DEFAULT_REFRESH_MS,
+        ));
         assert!(is_animating(&snapshot, &loading_ui, 0, false));
         assert_eq!(
             frame_interval(&snapshot, &loading_ui, false),
@@ -278,11 +277,11 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     snapshot.theme.animations.idle =
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
     ui.theme(&snapshot.theme);
+    ui.pet.as_mut().expect("pet").frame_interval = None;
     assert!(!is_animating(&snapshot, &ui, 0, false));
 
     snapshot.theme.animations.thinking =
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
-    ui.pet.as_mut().expect("pet").action = crate::sidebar_pane::pets::PetAction::Thinking;
     ui.theme(&snapshot.theme);
     assert!(
         !is_animating(&snapshot, &ui, 0, false),
@@ -305,9 +304,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
                 },
             ]])),
             caption: Some("resting".to_owned()),
-            loading: false,
-            action: crate::sidebar_pane::pets::PetAction::Idle,
-            active_track: "idle",
+            frame_interval: Some(Duration::from_millis(625)),
         }),
         ..Default::default()
     };
@@ -322,7 +319,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
         crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
     );
 
-    if render::pet_body_enabled(&snapshot) {
+    if ui.cached_theme(&snapshot.theme).unwrap().pet_body_enabled() {
         assert!(is_animating(&snapshot, &ui, 0, false));
         assert_eq!(
             frame_interval(&snapshot, &ui, false),
@@ -343,10 +340,14 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
 
     let pet = ui.pet.expect("pet view");
     assert_eq!(pet.body, None);
-    if render::pet_body_enabled(&snapshot) {
-        assert!(pet.loading);
+    let body_enabled = !crate::tui::no_color();
+    if body_enabled {
+        assert!(pet.frame_interval.is_some());
     } else {
-        assert!(!pet.loading, "NO_COLOR suppresses pet body loading");
+        assert!(
+            pet.frame_interval.is_none(),
+            "NO_COLOR suppresses pet body loading"
+        );
     }
     assert_eq!(pet.caption.as_deref(), Some("resting"));
 }
@@ -415,9 +416,7 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Pixel(pixel.clone())),
             caption: Some("resting".to_owned()),
-            loading: false,
-            action: crate::sidebar_pane::pets::PetAction::Idle,
-            active_track: "idle",
+            frame_interval: None,
         }),
         ..Default::default()
     };
@@ -477,7 +476,7 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         !second.contains("\u{1b}[2J"),
         "layout shift must not full-clear the terminal"
     );
-    if render::pet_body_enabled(&snapshot) {
+    if !crate::tui::no_color() {
         assert!(
             second.contains(&placeholder_cluster(0, 0)),
             "ratatui owns and rewrites shifted placeholder cells: {}",

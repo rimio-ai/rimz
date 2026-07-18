@@ -19,22 +19,10 @@ use std::thread;
 
 use crate::config::{CellAspect, PetsConfig, PetsGlyphMode, PixelMode};
 
-pub(crate) use crate::sidebar_pane::pixel::probe::detect as detect_pixel_render_caps;
-pub use crate::sidebar_pane::pixel::probe::{
-    PixelRenderCaps, detect_env as detect_pixel_render_env,
-};
-pub(crate) use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC};
-pub(crate) use crate::sidebar_pane::pixel::{image_id_color, placeholder_cluster};
-pub use crate::sidebar_pane::pixel::{
-    inline_placeholder_row, transmit_png_chunks, virtual_place, wrap_pixel_payload,
-    write_synchronized_pixel_output,
-};
 #[cfg(test)]
 pub(crate) use cellart::PetCell;
 pub(crate) use cellart::PetCellGrid;
 pub use cellart::probe_cell_aspect;
-pub(crate) use frames::RgbaImage;
-pub use frames::encode_png;
 pub(crate) use model::PetAction;
 pub(crate) use painter::PixelPainter;
 pub use preview::{
@@ -42,15 +30,14 @@ pub use preview::{
     load_cell_previews, load_pixel_preview, load_pixel_previews,
 };
 
+use crate::sidebar_pane::pixel::{PixelRenderCaps, RgbaImage};
 use asset::PetSource;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PetView {
     pub(crate) body: Option<PetBody>,
     pub(crate) caption: Option<String>,
-    pub(crate) loading: bool,
-    pub(crate) action: PetAction,
-    pub(crate) active_track: &'static str,
+    pub(crate) frame_interval: Option<std::time::Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,12 +52,6 @@ pub(crate) struct PetPixelView {
     pub(crate) sprite_index: usize,
     pub(crate) image_id: u32,
     pub(crate) size: PetGridSize,
-}
-
-impl PetView {
-    pub(crate) fn has_body(&self) -> bool {
-        self.body.is_some()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -217,7 +198,7 @@ type LoadResult = Result<LoadedPetAsset, String>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SelectedTrack {
-    name: &'static str,
+    track: model::PetTrack,
     phase: u64,
 }
 
@@ -311,9 +292,7 @@ impl PetAssets {
             return Some(PetView {
                 body: None,
                 caption: self.caption.clone(),
-                loading: false,
-                action,
-                active_track,
+                frame_interval: None,
             });
         };
         let id = source.id();
@@ -363,14 +342,19 @@ impl PetAssets {
                 }),
             }
         });
+        let frame_interval = if loading {
+            Some(crate::sidebar::timing::animation_frame(refresh_ms))
+        } else if body.is_some() && frame.motion_enabled {
+            Some(model::track_frame_duration(active_track, refresh_ms))
+        } else {
+            None
+        };
         Some(PetView {
             body,
             caption: unavailable_caption
                 .or_else(|| self.caption.clone())
                 .or_else(|| loading.then(|| "fetching pet...".to_owned())),
-            loading,
-            action,
-            active_track,
+            frame_interval,
         })
     }
 
@@ -526,7 +510,10 @@ impl PetAssets {
         }
     }
 
-    fn loaded_sprite(&mut self, request: LoadedSpriteRequest<'_>) -> Option<(usize, &'static str)> {
+    fn loaded_sprite(
+        &mut self,
+        request: LoadedSpriteRequest<'_>,
+    ) -> Option<(usize, model::PetTrack)> {
         let LoadedSpriteRequest {
             pet_id,
             previous_action,
@@ -537,9 +524,11 @@ impl PetAssets {
             if loaded.id != pet_id {
                 return None;
             }
-            model::animations()
-                .get(model::TRACK_JUMPING)
-                .map(|animation| animation.loop_duration(frame.refresh_ms))
+            Some(
+                model::animations()
+                    .get(model::PetTrack::Jumping)
+                    .loop_duration(frame.refresh_ms),
+            )
         };
         let track = self.selected_track(TrackSelection {
             previous_action,
@@ -558,18 +547,14 @@ impl PetAssets {
             LoadedPetAsset::Cell(grids) => grids.len(),
             LoadedPetAsset::Pixel(frames) => frames.len(),
         };
-        let sprite_index = model::animations()
-            .get(track.name)
-            .map(|animation| {
-                if frame.motion_enabled {
-                    animation.sprite_index(track.phase, frame.refresh_ms)
-                } else {
-                    animation.first_sprite()
-                }
-            })
-            .unwrap_or(0)
-            .min(frame_count.saturating_sub(1));
-        Some((sprite_index, track.name))
+        let animation = model::animations().get(track.track);
+        let sprite_index = (if frame.motion_enabled {
+            animation.sprite_index(track.phase, frame.refresh_ms)
+        } else {
+            animation.first_sprite()
+        })
+        .min(frame_count.saturating_sub(1));
+        Some((sprite_index, track.track))
     }
 
     fn selected_track(&mut self, selection: TrackSelection) -> SelectedTrack {
@@ -586,7 +571,7 @@ impl PetAssets {
         if !motion_enabled {
             self.jump_started_phase = None;
             return SelectedTrack {
-                name: steady,
+                track: steady,
                 phase,
             };
         }
@@ -596,60 +581,34 @@ impl PetAssets {
         if let (Some(started), Some(duration)) = (self.jump_started_phase, jump_duration) {
             if phase_elapsed(started, phase, refresh_ms) < duration {
                 return SelectedTrack {
-                    name: model::TRACK_JUMPING,
+                    track: model::PetTrack::Jumping,
                     phase: phase.saturating_sub(started),
                 };
             }
             self.jump_started_phase = None;
         }
         SelectedTrack {
-            name: steady,
+            track: steady,
             phase,
         }
     }
-}
-
-pub(crate) fn animation_frame(track: &str, refresh_ms: u16) -> std::time::Duration {
-    model::track_frame_duration(track, refresh_ms)
 }
 
 fn load_prepared_pet(
     source: PetSource,
     key: PreparationKey,
 ) -> Result<LoadedPetAsset, asset::AssetErr> {
-    let resolved = asset::resolve_asset(&source)?;
-    let loaded = match key.tier {
-        PetRenderTier::Cell => frames::prepare_cell_sheet(&resolved.bytes, key.size, key.aspect)
-            .map(LoadedPetAsset::Cell),
-        PetRenderTier::Pixel => frames::decode_sheet(&resolved.bytes).map(LoadedPetAsset::Pixel),
-    };
-    match loaded {
-        Ok(asset) => Ok(asset),
-        Err(err) => {
-            // Evict only a cache entry on a decode miss; a user's local sheet
-            // is read-only to RimZ.
-            if let Some(path) = &resolved.evictable_cache {
-                let _ = asset::remove_cached_asset(path);
-            }
-            Err(asset::AssetErr::Decode(err))
-        }
-    }
-}
-
-/// Preview and pixel-only callers keep the decoded-frame path. Cell assets used
-/// by the live renderer go through [`load_prepared_pet`] and shed RGBA before
-/// crossing the loader channel.
-fn load_pet(source: PetSource) -> Result<Vec<RgbaImage>, asset::AssetErr> {
-    let resolved = asset::resolve_asset(&source)?;
-    match frames::decode_sheet(&resolved.bytes) {
-        Ok(frames) => Ok(frames),
-        Err(err) => {
-            if let Some(path) = &resolved.evictable_cache {
-                let _ = asset::remove_cached_asset(path);
-            }
-            Err(asset::AssetErr::Decode(err))
-        }
-    }
+    asset::resolve_and_decode(&source, |bytes| match key.tier {
+        PetRenderTier::Cell => Ok(LoadedPetAsset::Cell(
+            frames::decode_sheet(bytes)?
+                .into_iter()
+                .map(|frame| {
+                    cellart::render_frame(&frame, key.size.cols, key.size.rows, key.aspect)
+                })
+                .collect(),
+        )),
+        PetRenderTier::Pixel => frames::decode_sheet(bytes).map(LoadedPetAsset::Pixel),
+    })
 }
 
 #[cfg(test)]

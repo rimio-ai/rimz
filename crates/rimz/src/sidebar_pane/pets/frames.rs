@@ -5,27 +5,12 @@ use std::io::{BufReader, Cursor};
 use super::catalog::{
     FRAME_COUNT, FRAME_HEIGHT, FRAME_WIDTH, SHEET_COLS, SHEET_HEIGHT, SHEET_WIDTH,
 };
+use crate::sidebar_pane::pixel::RgbaImage;
+
+#[cfg(test)]
 use super::{PetCellGrid, PetGridSize};
+#[cfg(test)]
 use crate::config::CellAspect;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RgbaImage {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) data: Vec<u8>,
-}
-
-impl RgbaImage {
-    pub(crate) fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
-        let offset = ((y * self.width + x) * 4) as usize;
-        [
-            self.data[offset],
-            self.data[offset + 1],
-            self.data[offset + 2],
-            self.data[offset + 3],
-        ]
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum FrameErr {
@@ -55,10 +40,8 @@ pub(crate) fn decode_sheet(bytes: &[u8]) -> Result<Vec<RgbaImage>, FrameErr> {
         .collect())
 }
 
-/// Decode one sheet into terminal-ready cell grids. The decoded RGBA frames
-/// stay local to this background preparation call and drop before the grids
-/// cross back to the renderer.
-pub(crate) fn prepare_cell_sheet(
+#[cfg(test)]
+fn prepare_cell_sheet(
     bytes: &[u8],
     size: PetGridSize,
     aspect: CellAspect,
@@ -69,6 +52,9 @@ pub(crate) fn prepare_cell_sheet(
         .collect())
 }
 
+/// Decode one sheet into terminal-ready cell grids. The decoded RGBA frames
+/// stay local to this background preparation call and drop before the grids
+/// cross back to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SheetFormat {
     WebP,
@@ -179,24 +165,6 @@ fn decode_png_rgba(bytes: &[u8]) -> Result<RgbaImage, FrameErr> {
     })
 }
 
-pub fn encode_png(width: u32, height: u32, data: &[u8]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut bytes, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Fastest);
-        // Callers pass decoded RGBA frame data into an in-memory Vec sink.
-        let mut writer = encoder
-            .write_header()
-            .expect("encoding in-memory PNG header cannot fail");
-        writer
-            .write_image_data(data)
-            .expect("encoding valid RGBA frame data cannot fail");
-    }
-    bytes
-}
-
 fn png_to_rgba8(data: &[u8], color_type: png::ColorType) -> Result<Vec<u8>, FrameErr> {
     match color_type {
         png::ColorType::Rgba => Ok(data.to_vec()),
@@ -257,6 +225,7 @@ pub(crate) fn slice_frame(sheet: &RgbaImage, sprite_index: usize) -> RgbaImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sidebar_pane::pixel::encode_png;
 
     #[test]
     fn sniff_recognizes_webp_png_and_rejects_unknown() {

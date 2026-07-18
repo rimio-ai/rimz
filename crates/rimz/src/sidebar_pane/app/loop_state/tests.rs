@@ -41,6 +41,8 @@ fn loop_state_with_own_pane(
         dir,
         LoopState::new(
             ws.clone(),
+            own_pane.as_ref().map_or(MuxName::Tmux, PaneId::mux),
+            "rimz-test".to_owned(),
             own_pane,
             None,
             tx,
@@ -912,223 +914,13 @@ fn width_target_event_reloads_the_override_without_a_producer_fetch() {
     );
 
     assert_eq!(
-        state.width_control.decide(50, Instant::now()),
-        Some((50, 60))
+        state.width_control.override_target(),
+        std::num::NonZeroU16::new(60)
     );
     assert!(
         request_rx.try_recv().is_err(),
         "width propagation stays out of the producer path",
     );
-}
-
-#[test]
-fn tmux_width_key_persists_retargets_and_broadcasts_intent() {
-    let ws = workspace();
-    let own_pane = PaneId::from_parts(MuxName::Tmux, "%1");
-    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-    let mut config = serve_config(&ws);
-    config.mux = MuxName::Tmux;
-    config.own_pane = Some(own_pane);
-    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    let instance = SidebarInstanceId::new();
-    let socket_path = runtime.sock_dir.join("width-target-test.sock");
-    let socket = UnixDatagram::bind(&socket_path).expect("bind wakeup socket");
-    socket
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .expect("set socket timeout");
-    crate::sidebar::write_heartbeat(
-        &runtime,
-        ws.clone(),
-        &instance,
-        crate::MuxName::Tmux,
-        &config.session_name,
-        &socket_path,
-        None,
-    )
-    .expect("write heartbeat");
-    let mut terminal = fixed_terminal();
-    let (mut fetch, _request_rx) = fetch_dispatcher();
-
-    state
-        .on_input(
-            &config,
-            Wakeup::Key(KeyAction::WidthWider),
-            &mut terminal,
-            &mut fetch,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("apply width intent");
-
-    let recorded = std::num::NonZeroU16::new(82).expect("nonzero width");
-    assert_eq!(
-        crate::sidebar::width_override::load(&runtime),
-        Some(recorded)
-    );
-    assert_eq!(
-        state.width_control.override_target(),
-        Some(recorded),
-        "the initiating controller converges on the persisted intent",
-    );
-    let mut payload = [0_u8; 1024];
-    let received = socket.recv(&mut payload).expect("receive target broadcast");
-    let envelope: SidebarEventEnvelope =
-        serde_json::from_slice(&payload[..received]).expect("decode target broadcast");
-    assert_eq!(envelope.event, SidebarEvent::WidthTargetChanged);
-}
-
-#[test]
-fn repeated_width_keys_compound_on_the_pending_intent() {
-    let ws = workspace();
-    let own_pane = PaneId::from_parts(MuxName::Tmux, "%1");
-    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-    let mut config = serve_config(&ws);
-    config.mux = MuxName::Tmux;
-    config.own_pane = Some(own_pane);
-    let runtime = RuntimePaths::under(ws, dir.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    let mut terminal = fixed_terminal();
-    let (mut fetch, _request_rx) = fetch_dispatcher();
-
-    for _ in 0..2 {
-        state
-            .on_input(
-                &config,
-                Wakeup::Key(KeyAction::WidthWider),
-                &mut terminal,
-                &mut fetch,
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("apply width intent");
-    }
-
-    let target = std::num::NonZeroU16::new(84).expect("nonzero width");
-    assert_eq!(crate::sidebar::width_override::load(&runtime), Some(target));
-    assert_eq!(state.width_control.override_target(), Some(target));
-}
-
-fn write_width_topology(runtime: &RuntimePaths, session: &str) {
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-
-    let pane = |id, pane_x, pane_columns, title: &str| PaneTopologyPane {
-        id,
-        is_plugin: false,
-        is_held: false,
-        exited: false,
-        is_suppressed: false,
-        is_floating: false,
-        tab_position: 0,
-        tab_name: None,
-        pane_columns: Some(pane_columns),
-        pane_x: Some(pane_x),
-        title: Some(title.to_owned()),
-        pane_command: None,
-        pane_cwd: None,
-        pane_pid: None,
-        terminal_command: None,
-    };
-    crate::sidebar::cache::write_pane_topology_cache(
-        runtime,
-        &PaneTopologyCache {
-            session_name: session.to_owned(),
-            produced_at_ms: crate::sidebar::timing::unix_now_ms(),
-            writer: None,
-            focused_pane: None,
-            clients: None,
-            panes: vec![pane(1, 0, 80, "rimz-sidebar"), pane(2, 80, 120, "work")],
-        },
-    )
-    .expect("write pane topology");
-}
-
-#[test]
-fn zellij_width_key_uses_live_view_step_for_intent() {
-    let ws = workspace();
-    let own_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-    let mut config = serve_config(&ws);
-    config.own_pane = Some(own_pane);
-    let runtime = RuntimePaths::under(ws, dir.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_width_topology(&runtime, &config.session_name);
-    let mut terminal = fixed_terminal();
-    let (mut fetch, _request_rx) = fetch_dispatcher();
-
-    state
-        .on_input(
-            &config,
-            Wakeup::Key(KeyAction::WidthWider),
-            &mut terminal,
-            &mut fetch,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("apply width intent");
-
-    assert_eq!(
-        crate::sidebar::width_override::load(&runtime),
-        std::num::NonZeroU16::new(90),
-    );
-}
-
-#[test]
-fn zellij_narrower_key_rejects_a_step_below_the_floor() {
-    let ws = workspace();
-    let own_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-    let mut config = serve_config(&ws);
-    config.own_pane = Some(own_pane);
-    let runtime = RuntimePaths::under(ws, dir.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_width_topology(&runtime, &config.session_name);
-    let prior = std::num::NonZeroU16::new(30).expect("nonzero width");
-    crate::sidebar::width_override::write(&runtime, prior).expect("write prior override");
-    state.width_control.retarget(WidthTarget::Override(prior));
-    let mut terminal = fixed_terminal();
-    let (mut fetch, _request_rx) = fetch_dispatcher();
-
-    state
-        .on_input(
-            &config,
-            Wakeup::Key(KeyAction::WidthNarrower),
-            &mut terminal,
-            &mut fetch,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("reject floor-crossing width intent");
-
-    assert_eq!(crate::sidebar::width_override::load(&runtime), Some(prior));
-    assert_eq!(state.width_control.override_target(), Some(prior));
-}
-
-#[test]
-fn zellij_narrower_key_drops_without_fresh_topology() {
-    let ws = workspace();
-    let own_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-    let mut config = serve_config(&ws);
-    config.own_pane = Some(own_pane);
-    let runtime = RuntimePaths::under(ws, dir.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    let mut terminal = fixed_terminal();
-    let (mut fetch, _request_rx) = fetch_dispatcher();
-
-    state
-        .on_input(
-            &config,
-            Wakeup::Key(KeyAction::WidthNarrower),
-            &mut terminal,
-            &mut fetch,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("drop width intent without topology");
-
-    assert_eq!(crate::sidebar::width_override::load(&runtime), None);
-    assert_eq!(state.width_control.override_target(), None);
 }
 
 #[test]
@@ -1994,8 +1786,7 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
     .expect("terminal");
     state.prev_width = Some(10);
     state.self_close.seen_sibling = true;
-    state.width_cap = std::num::NonZeroU16::new(72).expect("nonzero cap");
-    state.width_control.retarget(WidthTarget::CapOnly(72));
+    state.width_control.set_override(None);
 
     state
         .on_resize(
@@ -2028,10 +1819,9 @@ fn room_override_raises_the_legitimate_grow_bound() {
     let (_dir, mut state) = loop_state(&ws);
     state.prev_width = Some(10);
     state.self_close.seen_sibling = true;
-    state.width_cap = std::num::NonZeroU16::new(72).expect("nonzero cap");
-    state.width_control.retarget(WidthTarget::Override(
-        std::num::NonZeroU16::new(90).expect("nonzero override"),
-    ));
+    state
+        .width_control
+        .set_override(std::num::NonZeroU16::new(90));
 
     assert!(
         !state.arm_paint_hold_on_grow(90, Instant::now()),
@@ -2164,6 +1954,8 @@ fn failed_anomaly_send_preserves_carried_drop_count() {
     let (_dir, store) = read_marks(&ws);
     let mut state = LoopState::new(
         ws.clone(),
+        MuxName::Tmux,
+        "rimz-test".to_owned(),
         None,
         None,
         tx,

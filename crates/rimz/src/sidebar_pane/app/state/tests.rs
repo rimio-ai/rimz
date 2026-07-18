@@ -7,7 +7,7 @@ use crate::sidebar_pane::app::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFr
 use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
-use crate::sidebar_pane::pets::PixelRenderCaps;
+use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::{
     AgentCard, PaneId, RowCard, RuntimePaths, SidebarInstanceId, SidebarStatusCount,
@@ -314,6 +314,8 @@ impl ApplyHarness {
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let mut state = LoopState::new(
             ws.clone(),
+            crate::MuxName::Tmux,
+            config.session_name.clone(),
             Some(PaneId::from_parts(crate::MuxName::Tmux, "%sidebar")),
             None,
             observe_tx,

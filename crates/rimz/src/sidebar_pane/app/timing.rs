@@ -12,14 +12,7 @@ pub(super) fn is_animating(
     render::animation_cadence(snapshot, &theme.animations) != render::AnimationCadence::None
         || render::selection_awaiting_first_prompt(snapshot, ui)
         || ui.help_visible
-        || pet_frame_interval(
-            snapshot,
-            ui,
-            alert_active,
-            snapshot.theme.display.resolved_refresh_ms(),
-            |action| render::pet_motion_enabled(&theme.animations, action),
-        )
-        .is_some()
+        || pet_frame_interval(snapshot, ui, alert_active).is_some()
         || ui.tally.any_rolling(phase)
         || ui.cost_rolls.any_rolling(phase)
         || ui.scrollbar.fading(phase)
@@ -29,23 +22,11 @@ fn pet_frame_interval(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
     alert_active: bool,
-    refresh_ms: u16,
-    motion_enabled: impl FnOnce(crate::sidebar_pane::pets::PetAction) -> bool,
 ) -> Option<Duration> {
     if !snapshot.theme.pets.enabled || !render::dashboard_present(snapshot, alert_active) {
         return None;
     }
-    let view = ui.pet.as_ref()?;
-    if view.loading {
-        return Some(crate::sidebar::timing::animation_frame(refresh_ms));
-    }
-    if view.has_body() && render::pet_body_enabled(snapshot) && motion_enabled(view.action) {
-        return Some(crate::sidebar_pane::pets::animation_frame(
-            view.active_track,
-            refresh_ms,
-        ));
-    }
-    None
+    ui.pet.as_ref()?.frame_interval
 }
 
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
@@ -111,11 +92,7 @@ pub(super) fn frame_interval(
     // The dashboard pet paints on its track cadence, but a money climb in the
     // still-visible cockpit must keep sampling on the money grid, so a rolling
     // room takes the faster of the two.
-    if let Some(pet_interval) =
-        pet_frame_interval(snapshot, ui, alert_active, refresh_ms, |action| {
-            render::pet_motion_enabled(&theme.animations, action)
-        })
-    {
+    if let Some(pet_interval) = pet_frame_interval(snapshot, ui, alert_active) {
         return if money_rolling {
             pet_interval.min(money_grid())
         } else {

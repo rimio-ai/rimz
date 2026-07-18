@@ -167,7 +167,11 @@ fn local_pet_path_begins_loading_under_its_own_id() {
         )
         .expect("enabled pets produce a view");
     assert_eq!(view.body, None);
-    assert!(view.loading, "a local-path selector spawns a loader");
+    assert_eq!(
+        view.frame_interval,
+        Some(crate::sidebar::timing::animation_frame(100)),
+        "a local-path selector uses loading cadence"
+    );
     assert!(
         assets
             .loading
@@ -193,7 +197,7 @@ fn missing_body_size_does_not_start_asset_loading() {
         .expect("enabled pets produce a view");
 
     assert_eq!(view.body, None);
-    assert!(!view.loading);
+    assert_eq!(view.frame_interval, None);
     assert_eq!(view.caption.as_deref(), Some("resting"));
     assert!(assets.loading.is_none());
 }
@@ -231,7 +235,7 @@ fn failed_loader_settles_without_immediate_retry() {
             ),
         )
         .expect("enabled pets produce a view");
-    assert!(!view.loading);
+    assert_eq!(view.frame_interval, None);
     assert_eq!(view.caption.as_deref(), Some("pet unavailable"));
     assert!(assets.loading.is_none());
     assert!(assets.failed.is_some());
@@ -249,7 +253,7 @@ fn failed_loader_settles_without_immediate_retry() {
             ),
         )
         .expect("enabled pets produce a view");
-    assert!(!view.loading);
+    assert_eq!(view.frame_interval, None);
     assert!(assets.loading.is_none());
 }
 
@@ -287,12 +291,16 @@ fn jump_plays_once_per_trigger_then_settles() {
                 frame(action, 10, refresh_ms, body, true, unread_triggered),
             )
             .expect("enabled pets produce a view");
-        assert_eq!(view.active_track, model::TRACK_JUMPING);
+        assert_eq!(
+            view.frame_interval,
+            Some(model::track_frame_duration(
+                model::PetTrack::Jumping,
+                refresh_ms
+            ))
+        );
         assert_eq!(assets.jump_started_phase, Some(10));
 
-        let jump = model::animations()
-            .get(model::TRACK_JUMPING)
-            .expect("jumping track");
+        let jump = model::animations().get(model::PetTrack::Jumping);
         let phases = jump
             .loop_duration(refresh_ms)
             .as_millis()
@@ -303,7 +311,10 @@ fn jump_plays_once_per_trigger_then_settles() {
                 frame(action, 10 + phases as u64, refresh_ms, body, true, false),
             )
             .expect("enabled pets produce a view");
-        assert_eq!(view.active_track, steady_track);
+        assert_eq!(
+            view.frame_interval,
+            Some(model::track_frame_duration(steady_track, refresh_ms))
+        );
         assert_eq!(assets.jump_started_phase, None);
     }
 }
@@ -325,7 +336,7 @@ fn static_mode_skips_transition_jump() {
         )
         .expect("enabled pets produce a view");
 
-    assert_eq!(view.active_track, model::TRACK_IDLE);
+    assert_eq!(view.frame_interval, None);
     assert_eq!(assets.jump_started_phase, None);
 }
 
@@ -356,7 +367,10 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
     assert_eq!(pixel.pet_id, "codex");
     assert_eq!(pixel.size, DASHBOARD_PIXEL_PET);
     assert_eq!(pixel.image_id, 0x120000 + pixel.sprite_index as u32);
-    assert_eq!(view.active_track, model::TRACK_JUMPING);
+    assert_eq!(
+        view.frame_interval,
+        Some(model::track_frame_duration(model::PetTrack::Jumping, 100))
+    );
     assert!(
         assets
             .pixel_frame(&pixel.pet_id, pixel.sprite_index)

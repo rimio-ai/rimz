@@ -29,8 +29,8 @@ use crate::sidebar::fuse::{focus_intent_confirmed, fuse};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};
-use crate::sidebar_pane::pets::{PixelRenderCaps, detect_pixel_render_caps};
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
+use crate::sidebar_pane::pixel::{PixelRenderCaps, detect_pixel_render_caps};
 use crate::store::paths::PathErr;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
@@ -187,6 +187,8 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     let read_marks = ReadMarkStore::new(runtime.clone(), config.instance_id.clone());
     let mut state = LoopState::new(
         config.workspace_id.clone(),
+        config.mux,
+        config.session_name.clone(),
         config.own_pane.clone(),
         initial_width,
         observe_tx,
@@ -200,7 +202,6 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     // sidebar's scrollback before the self-close paint hold is armed.
     if initial_width.is_some() && config.mux == MuxName::Zellij {
         state.run_width_control(
-            &config,
             &mut terminal,
             crate::diag::record::SidebarWidthControlTrigger::Retarget,
             &diag,
@@ -315,7 +316,7 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
                 tick,
             },
         );
-        state.run_width_control_backstop(&config, &mut terminal, &diag);
+        state.run_width_control_backstop(&mut terminal, &diag);
         state.maybe_remind(&config, &mut terminal, &diag);
         state.paint_frame_if_due(&mut terminal, anim_start, active)?;
     }
@@ -593,34 +594,6 @@ fn spawn_pane_focus(
         }
         if let Some(error) = outcome.2 {
             debug!(pane = %pane_id, error, "sidebar pane focus failed");
-        }
-    });
-}
-
-/// Move one pane toward its target on a detached thread so a mux client never
-/// stalls the render loop.
-fn spawn_width_nudge(pane_id: PaneId, session_name: &str, current_cols: u16, target_cols: u16) {
-    let session_name = session_name.to_owned();
-    std::thread::spawn(move || {
-        let backend = crate::mux::backend_for(pane_id.mux());
-        if let Err(err) =
-            backend.nudge_sidebar_width(&session_name, &pane_id, current_cols, target_cols)
-        {
-            debug!(pane = %pane_id, error = %err, "sidebar width nudge failed");
-        }
-    });
-}
-
-/// Refresh the backend's future-pane width seed off the render thread.
-fn spawn_width_default_record(mux: MuxName, session_name: &str, cols: u16) {
-    if mux == MuxName::Zellij {
-        return;
-    }
-    let session_name = session_name.to_owned();
-    std::thread::spawn(move || {
-        let backend = crate::mux::backend_for(mux);
-        if let Err(err) = backend.record_sidebar_width_default(&session_name, cols) {
-            debug!(error = %err, "sidebar width default record failed");
         }
     });
 }

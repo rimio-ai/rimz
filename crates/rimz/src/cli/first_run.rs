@@ -268,7 +268,7 @@ fn glyph_line() -> String {
 }
 
 fn build_pet_art(pets_config: PetsConfig) -> Option<String> {
-    let (caps, wrap_pixels) = pets::detect_pixel_render_env();
+    let (caps, wrap_pixels) = rimz::sidebar_pane::detect_pixel_render_env();
     let tier = pets::resolve_render_tier(pets_config.glyphs, caps);
     let mut buf = Vec::new();
     match tier {

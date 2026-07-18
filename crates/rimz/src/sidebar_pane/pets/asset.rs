@@ -104,7 +104,7 @@ pub(crate) struct ResolvedAsset {
     pub(crate) evictable_cache: Option<PathBuf>,
 }
 
-pub(crate) fn resolve_asset(source: &PetSource) -> Result<ResolvedAsset, AssetErr> {
+fn resolve_asset(source: &PetSource) -> Result<ResolvedAsset, AssetErr> {
     match source {
         PetSource::Builtin(pet) => {
             let pet = *pet;
@@ -131,6 +131,31 @@ pub(crate) fn resolve_asset(source: &PetSource) -> Result<ResolvedAsset, AssetEr
         // directory; the directory form reads its `pet.json` for the sheet.
         PetSource::Local(path) if path.is_dir() => resolve_petdex_dir(path),
         PetSource::Local(path) => resolve_local(path),
+    }
+}
+
+/// Resolve an asset and decode it under one eviction rule. Only fetched-cache
+/// bytes are removable; local and petdex sources stay untouched.
+pub(crate) fn resolve_and_decode<T>(
+    source: &PetSource,
+    decode: impl FnOnce(&[u8]) -> Result<T, frames::FrameErr>,
+) -> Result<T, AssetErr> {
+    let resolved = resolve_asset(source)?;
+    decode_resolved(resolved, decode)
+}
+
+fn decode_resolved<T>(
+    resolved: ResolvedAsset,
+    decode: impl FnOnce(&[u8]) -> Result<T, frames::FrameErr>,
+) -> Result<T, AssetErr> {
+    match decode(&resolved.bytes) {
+        Ok(decoded) => Ok(decoded),
+        Err(err) => {
+            if let Some(path) = resolved.evictable_cache {
+                let _ = remove_cached_asset(&path);
+            }
+            Err(AssetErr::Decode(err))
+        }
     }
 }
 
@@ -617,6 +642,45 @@ mod tests {
         // Geometry fails, but the user's file is read-only to RimZ — never deleted.
         assert!(matches!(resolve_local(&path), Err(AssetErr::Decode(_))));
         assert!(path.exists(), "a local sheet is never evicted");
+    }
+
+    #[test]
+    fn decode_failure_evicts_only_fetched_cache_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cached = dir.path().join("cached.webp");
+        let local = dir.path().join("local.webp");
+        let petdex = dir.path().join("petdex.webp");
+        for path in [&cached, &local, &petdex] {
+            std::fs::write(path, b"sheet").expect("seed sheet");
+        }
+        let fail = |_: &[u8]| Err::<(), _>(frames::FrameErr::BufferSize);
+
+        assert!(
+            decode_resolved(
+                ResolvedAsset {
+                    bytes: b"sheet".to_vec(),
+                    evictable_cache: Some(cached.clone()),
+                },
+                fail,
+            )
+            .is_err()
+        );
+        for path in [&local, &petdex] {
+            assert!(
+                decode_resolved(
+                    ResolvedAsset {
+                        bytes: b"sheet".to_vec(),
+                        evictable_cache: None,
+                    },
+                    fail,
+                )
+                .is_err()
+            );
+        }
+
+        assert!(!cached.exists());
+        assert!(local.exists());
+        assert!(petdex.exists());
     }
 
     #[test]

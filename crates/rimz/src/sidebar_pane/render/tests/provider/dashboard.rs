@@ -564,9 +564,7 @@ fn render_pets_dashboard_body_uses_pet_view() {
             },
         ]])),
         caption: Some("all caught up".to_owned()),
-        loading: false,
-        action: crate::sidebar_pane::pets::PetAction::Idle,
-        active_track: "idle",
+        frame_interval: None,
     };
 
     let (lines, hits) = provider_dashboard_parts(
@@ -601,9 +599,7 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
             },
         ]])),
         caption: Some("someone needs you".to_owned()),
-        loading: false,
-        action: crate::sidebar_pane::pets::PetAction::Ask,
-        active_track: "ask",
+        frame_interval: None,
     };
 
     let (lines, _) = provider_dashboard_parts(
@@ -638,9 +634,7 @@ fn render_provider_dashboard_pixel_pet_renders_placeholder_clusters() {
             },
         )),
         caption: Some("ready".to_owned()),
-        loading: false,
-        action: crate::sidebar_pane::pets::PetAction::Idle,
-        active_track: "idle",
+        frame_interval: None,
     };
     let active = "claude".to_owned();
 
@@ -660,15 +654,15 @@ fn render_provider_dashboard_pixel_pet_renders_placeholder_clusters() {
     let rendered = texts.join("\n");
 
     assert!(
-        rendered.contains(&crate::sidebar_pane::pets::placeholder_cluster(0, 0)),
+        rendered.contains(&crate::sidebar_pane::pixel::placeholder_cluster(0, 0)),
         "pixel placeholder cells render:\n{rendered}"
     );
     assert!(
-        rendered.contains(&crate::sidebar_pane::pets::placeholder_cluster(0, 1)),
+        rendered.contains(&crate::sidebar_pane::pixel::placeholder_cluster(0, 1)),
         "placeholder columns carry distinct diacritics:\n{rendered}"
     );
     assert!(
-        rendered.contains(&crate::sidebar_pane::pets::placeholder_cluster(1, 0)),
+        rendered.contains(&crate::sidebar_pane::pixel::placeholder_cluster(1, 0)),
         "placeholder rows carry distinct diacritics:\n{rendered}"
     );
     assert!(
@@ -703,9 +697,7 @@ fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
                 },
             )),
             caption: Some("ready".to_owned()),
-            loading: false,
-            action: crate::sidebar_pane::pets::PetAction::Idle,
-            active_track: "idle",
+            frame_interval: None,
         }),
         ..Default::default()
     };
@@ -715,7 +707,7 @@ fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
     let mut ui = fixed_theme_ui(&snapshot, &ui);
     draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
     let buffer = terminal.backend().buffer();
-    let first = crate::sidebar_pane::pets::placeholder_cluster(0, 0);
+    let first = crate::sidebar_pane::pixel::placeholder_cluster(0, 0);
     let (x, y) = (0..buffer.area.height)
         .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
         .find(|(x, y)| buffer[(*x, *y)].symbol() == first)
@@ -724,11 +716,11 @@ fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
     assert_eq!(buffer[(x, y)].fg, Color::Rgb(0x12, 0x34, 0x56));
     assert_eq!(
         buffer[(x + 1, y)].symbol(),
-        crate::sidebar_pane::pets::placeholder_cluster(0, 1)
+        crate::sidebar_pane::pixel::placeholder_cluster(0, 1)
     );
     assert_eq!(
         buffer[(x, y + 1)].symbol(),
-        crate::sidebar_pane::pets::placeholder_cluster(1, 0)
+        crate::sidebar_pane::pixel::placeholder_cluster(1, 0)
     );
     assert_eq!(buffer[(x + 1, y)].fg, Color::Rgb(0x12, 0x34, 0x56));
 }
@@ -747,9 +739,7 @@ fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
             },
         )),
         caption: Some("ready".to_owned()),
-        loading: false,
-        action: crate::sidebar_pane::pets::PetAction::Idle,
-        active_track: "idle",
+        frame_interval: None,
     };
     let active = "claude".to_owned();
 
@@ -798,9 +788,7 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
                 .collect(),
         )),
         caption: Some("all caught up".to_owned()),
-        loading: false,
-        action: crate::sidebar_pane::pets::PetAction::Idle,
-        active_track: "idle",
+        frame_interval: None,
     };
     let fleet = crate::SpendTally {
         week: crate::SpendWindow {
@@ -967,9 +955,7 @@ fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
             (0..3).map(|_| vec![cell.clone(); 12]).collect(),
         )),
         caption: Some("ready".to_owned()),
-        loading: false,
-        action: crate::sidebar_pane::pets::PetAction::Idle,
-        active_track: "idle",
+        frame_interval: None,
     };
     let active = "claude".to_owned();
 
@@ -1008,9 +994,7 @@ fn render_provider_dashboard_pet_caption_uses_full_width() {
             (0..3).map(|_| vec![cell.clone(); 12]).collect(),
         )),
         caption: Some("rough patch - take a look".to_owned()),
-        loading: false,
-        action: crate::sidebar_pane::pets::PetAction::Failed,
-        active_track: "failed",
+        frame_interval: None,
     };
     let active = "claude".to_owned();
 

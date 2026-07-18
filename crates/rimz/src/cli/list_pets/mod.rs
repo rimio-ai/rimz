@@ -5,6 +5,10 @@ use std::io::{IsTerminal, Write};
 use anyhow::Result;
 use clap::Args;
 use rimz::sidebar_pane::pets::{self, PetPixelPreview, PetPreview, PreviewCell};
+use rimz::sidebar_pane::{
+    detect_pixel_render_env, encode_png, inline_placeholder_row, transmit_png_chunks,
+    virtual_place, wrap_pixel_payload, write_synchronized_pixel_output,
+};
 
 use super::{GlobalFlags, machine_config};
 use crate::cli::render;
@@ -39,7 +43,7 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
     let config = machine_config();
     let pets_config = &config.theme.pets;
     let glyphs = pets_config.glyphs;
-    let (caps, wrap_pixels) = pets::detect_pixel_render_env();
+    let (caps, wrap_pixels) = detect_pixel_render_env();
     let width = rimz::mux::detect_terminal_size()
         .map(|(cols, _)| cols)
         .unwrap_or(80);
@@ -160,13 +164,13 @@ pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
         let Ok(frame) = &preview.frame else {
             continue;
         };
-        let png = pets::encode_png(frame.width, frame.height, &frame.data);
-        for packet in pets::transmit_png_chunks(*image_id, &png) {
-            out.write_all(&pets::wrap_pixel_payload(&packet, wrap))?;
+        let png = encode_png(frame.width, frame.height, &frame.data);
+        for packet in transmit_png_chunks(*image_id, &png) {
+            out.write_all(&wrap_pixel_payload(&packet, wrap))?;
         }
         let pacing = pacer.as_ref().is_some_and(|pacer| pacer.active());
-        out.write_all(&pets::wrap_pixel_payload(
-            &pets::virtual_place(
+        out.write_all(&wrap_pixel_payload(
+            &virtual_place(
                 *image_id,
                 pets::DASHBOARD_PIXEL_PET.cols,
                 pets::DASHBOARD_PIXEL_PET.rows,
@@ -181,14 +185,14 @@ pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
             }
         }
     }
-    pets::write_synchronized_pixel_output(out, |out| {
+    write_synchronized_pixel_output(out, |out| {
         for row in 0..pets::DASHBOARD_PIXEL_PET.rows {
             for (index, (image_id, preview)) in chunk.iter().enumerate() {
                 if index > 0 {
                     write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
                 }
                 if preview.frame.is_ok() {
-                    out.write_all(&pets::inline_placeholder_row(
+                    out.write_all(&inline_placeholder_row(
                         *image_id,
                         row,
                         pets::DASHBOARD_PIXEL_PET.cols,

@@ -10,6 +10,10 @@
 pub mod app;
 pub mod pets;
 pub(crate) mod pixel;
+pub use pixel::{
+    PixelRenderCaps, detect_pixel_render_env, encode_png, inline_placeholder_row,
+    transmit_png_chunks, virtual_place, wrap_pixel_payload, write_synchronized_pixel_output,
+};
 pub mod render;
 pub mod supervise;
 pub mod view;
