@@ -182,7 +182,7 @@ fn hooks_section_renders_glyph_status_and_fix() {
         "rimz hooks install codex",
         "not detected on this machine: grok, kiro",
         "hooks are offered automatically once an agent is installed",
-        "✗ 1 problem, ⚠ 0 warnings",
+        "✗ 1 problem, ! 0 warnings",
     ] {
         assert!(out.contains(expected), "missing {expected}:\n{out}");
     }
@@ -272,7 +272,7 @@ fn mux_section_tallies_poll_presence_by_expectedness() {
         out.contains("! polling — sidebar running but the live tmux watch is not attached"),
         "{out}"
     );
-    assert!(out.contains("⚠ 1 warning"), "{out}");
+    assert!(out.contains("! 1 warning"), "{out}");
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn messages_section_renders_stuck_and_failure_rows() {
         "{out}"
     );
     assert!(
-        out.contains("✗ 1 problem, ⚠ 1 warning"),
+        out.contains("✗ 1 problem, ! 1 warning"),
         "mixed verdict counts message rows:\n{out}"
     );
 }

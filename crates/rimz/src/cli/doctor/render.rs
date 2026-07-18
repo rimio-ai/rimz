@@ -1354,7 +1354,7 @@ fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
             paint(
                 palette::alarm(),
                 &format!(
-                    "✗ {}, ⚠ {}",
+                    "✗ {}, ! {}",
                     plural(tally.alarms, "problem"),
                     plural(tally.warns, "warning")
                 )
@@ -1366,7 +1366,7 @@ fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
             "{}",
             paint(
                 palette::warn(),
-                &format!("⚠ {}", plural(tally.warns, "warning"))
+                &format!("! {}", plural(tally.warns, "warning"))
             )
         )
     } else {
