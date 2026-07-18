@@ -158,7 +158,7 @@ impl RoomState {
         let mut next = policy::merged_room(&self.tabs, &projected);
         self.prune_runtime(&next);
         self.probe_missing_pids_in(&next, host);
-        self.apply_enrichment(&mut next);
+        Self::apply_enrichment(&self.runtime, &mut next);
         let opened = policy::opened_card_panes(&self.tabs, &next);
         self.tabs = next;
         opened
@@ -173,7 +173,7 @@ impl RoomState {
             .map(|pane| pane.id)
             .collect::<Vec<_>>();
         self.probe_ids(live, host);
-        self.apply_runtime_to_all();
+        Self::apply_enrichment(&self.runtime, &mut self.tabs);
     }
 
     fn probe_missing_pids_in(&mut self, tabs: &BTreeMap<usize, Vec<PaneFields>>, host: &impl Host) {
@@ -205,34 +205,17 @@ impl RoomState {
         self.runtime.retain(|id, _| pane_ids.contains(id));
     }
 
-    fn apply_enrichment(&self, tabs: &mut BTreeMap<usize, Vec<PaneFields>>) {
+    fn apply_enrichment(
+        runtime: &BTreeMap<u32, PaneRuntime>,
+        tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
+    ) {
         for pane in tabs.values_mut().flatten().filter(|pane| !pane.is_plugin) {
-            let runtime = self.runtime.get(&pane.id);
-            pane.pane_command = runtime
-                .and_then(|runtime| runtime.foreground.as_ref().or(runtime.shell.as_ref()))
-                .cloned();
-            pane.pane_cwd = runtime.and_then(|runtime| runtime.cwd.clone());
-            pane.pane_pid = runtime.and_then(|runtime| match runtime.pid {
-                PanePid::Known(pid) => Some(pid),
-                PanePid::Unprobed | PanePid::Missing => None,
-            });
-        }
-    }
-
-    fn apply_runtime_to_all(&mut self) {
-        let runtime = &self.runtime;
-        for pane in self
-            .tabs
-            .values_mut()
-            .flatten()
-            .filter(|pane| !pane.is_plugin)
-        {
-            let state = runtime.get(&pane.id);
-            pane.pane_command = state
+            let pane_runtime = runtime.get(&pane.id);
+            pane.pane_command = pane_runtime
                 .and_then(|state| state.foreground.as_ref().or(state.shell.as_ref()))
                 .cloned();
-            pane.pane_cwd = state.and_then(|state| state.cwd.clone());
-            pane.pane_pid = state.and_then(|state| match state.pid {
+            pane.pane_cwd = pane_runtime.and_then(|state| state.cwd.clone());
+            pane.pane_pid = pane_runtime.and_then(|state| match state.pid {
                 PanePid::Known(pid) => Some(pid),
                 PanePid::Unprobed | PanePid::Missing => None,
             });
