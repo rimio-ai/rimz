@@ -86,21 +86,44 @@ impl Store {
             .iter()
             .filter(|agent| agent.parent_agent_id.is_none())
             .filter(|agent| agent.ended_at.is_none())
-            .filter(|agent| !protected.contains(&(agent.kind.clone(), agent.agent_id.clone())))
             .filter_map(|agent| {
-                let event_name = if runtime::agent_liveness(agent) == AgentLiveness::Dead {
+                let superseded = projection.agents.iter().any(|newer| {
+                    newer.parent_agent_id.is_none()
+                        && newer.ended_at.is_none()
+                        && session_death::supersedes(agent, newer)
+                });
+                let interrupted = !superseded
+                    && projection.agents.iter().any(|newer| {
+                        newer.parent_agent_id.is_none()
+                            && newer.ended_at.is_none()
+                            && session_death::interrupted_conversation_candidate(agent, newer)
+                    })
+                    && crate::agents::find_adapter(agent.kind.as_str())
+                        .and_then(|adapter| adapter.probe_resting_interruption(&agent.agent_id))
+                        .is_some_and(|interrupted_at| {
+                            projection.agents.iter().any(|newer| {
+                                newer.parent_agent_id.is_none()
+                                    && newer.ended_at.is_none()
+                                    && session_death::interrupted_conversation_supersedes(
+                                        agent,
+                                        newer,
+                                        interrupted_at,
+                                    )
+                            })
+                        });
+                let event_name = if superseded {
+                    "ReapedSuperseded"
+                } else if interrupted {
+                    "ReapedInterrupted"
+                } else if protected.contains(&(agent.kind.clone(), agent.agent_id.clone())) {
+                    return None;
+                } else if runtime::agent_liveness(agent) == AgentLiveness::Dead {
                     "ReapedDead"
                 } else if session_death::agent_is_pidless(agent)
                     && session_death::session_age_secs(now, agent)
                         > session_death::GHOST_SESSION_TTL_SECS
                 {
                     "ReapedStale"
-                } else if projection.agents.iter().any(|newer| {
-                    newer.parent_agent_id.is_none()
-                        && newer.ended_at.is_none()
-                        && session_death::supersedes(agent, newer)
-                }) {
-                    "ReapedSuperseded"
                 } else {
                     return None;
                 };
@@ -236,6 +259,20 @@ mod tests {
             "rimz-test",
             "codex",
             "SessionStart",
+            &observation,
+        )
+    }
+
+    fn turn_started_lifecycle(workspace_id: &WorkspaceId, agent_id: &str) -> EventEnvelope {
+        let observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(agent_id)),
+            LifecycleSignal::TurnStarted,
+        );
+        EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            "rimz-test",
+            "codex",
+            "UserPromptSubmit",
             &observation,
         )
     }
@@ -427,6 +464,120 @@ mod tests {
                 .iter()
                 .any(|agent| { agent.agent_id == "T-b" && agent.ended_at.is_some() })
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_replacement_bypasses_roster_and_replays_durably() {
+        let (_dir, store, workspace_id) = store();
+        let rollouts = tempfile::tempdir().expect("rollout tempdir");
+        let now = Timestamp::now();
+        let mut older = fresh_pane_lifecycle(&workspace_id, "interrupted", "%1");
+        older.timestamp = now - Duration::from_secs(4);
+        let mut turn_started = turn_started_lifecycle(&workspace_id, "interrupted");
+        turn_started.timestamp = now - Duration::from_secs(3);
+        let interrupted_at = now - Duration::from_secs(2);
+        let mut replacement = fresh_pane_lifecycle(&workspace_id, "replacement", "%1");
+        replacement.timestamp = now - Duration::from_secs(1);
+        for event in [older, turn_started, replacement] {
+            event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+        }
+        live_roster::publish(
+            &store.paths().live_roster,
+            [(
+                AgentKind::new_unchecked("codex"),
+                AgentSessionId::from("interrupted"),
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("publish roster");
+
+        assert_eq!(
+            crate::agents::codex::with_codex_sessions_root(rollouts.path(), || {
+                store.reap_dead_sessions().expect("reap without evidence")
+            }),
+            0,
+            "structural conflict alone keeps the running owner"
+        );
+
+        let record = json!({
+            "timestamp": interrupted_at.to_string(),
+            "type": "event_msg",
+            "payload": { "type": "turn_aborted", "reason": "interrupted" }
+        });
+        std::fs::write(
+            rollouts.path().join("rollout-interrupted.jsonl"),
+            format!("{record}\n"),
+        )
+        .expect("write interrupted rollout");
+
+        assert_eq!(
+            crate::agents::codex::with_codex_sessions_root(rollouts.path(), || {
+                store.reap_dead_sessions().expect("reap interrupted owner")
+            }),
+            1
+        );
+        assert_eq!(store.reap_dead_sessions().expect("idempotent reap"), 0);
+
+        let audit = store
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("replay audit projection");
+        assert!(
+            audit
+                .agents
+                .iter()
+                .any(|agent| { agent.agent_id == "interrupted" && agent.ended_at.is_some() })
+        );
+        assert!(
+            audit
+                .agents
+                .iter()
+                .any(|agent| { agent.agent_id == "replacement" && agent.ended_at.is_none() })
+        );
+        assert!(
+            store
+                .read_events()
+                .expect("read events")
+                .iter()
+                .any(|event| {
+                    matches!(
+                        event.kind(),
+                        EventKind::AgentLifecycle(payload)
+                            if payload.event_name.as_deref() == Some("ReapedInterrupted")
+                                && payload.observation.agent_id.as_deref() == Some("interrupted")
+                    )
+                })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_roster_does_not_protect_superseded_owner() {
+        let (_dir, store, workspace_id) = store();
+        let now = Timestamp::now();
+        let mut older = fresh_pane_lifecycle(&workspace_id, "older", "%1");
+        older.timestamp = now - Duration::from_secs(2);
+        let mut replacement = fresh_pane_lifecycle(&workspace_id, "replacement", "%1");
+        replacement.timestamp = now - Duration::from_secs(1);
+        for event in [older, replacement] {
+            event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+        }
+        let older_key = (
+            AgentKind::new_unchecked("codex"),
+            AgentSessionId::from("older"),
+        );
+        live_roster::publish(
+            &store.paths().live_roster,
+            [older_key.clone()].into_iter().collect(),
+        )
+        .expect("publish roster");
+
+        assert_eq!(store.reap_dead_sessions().expect("reap superseded"), 1);
+        let audit = store
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("audit projection");
+        assert!(audit.ended.contains(&older_key));
     }
 
     #[cfg(unix)]

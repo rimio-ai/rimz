@@ -918,6 +918,17 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Probe a provider-owned transcript for a resting interruption marker on
+    /// one exact session. The store reaper calls this only after proving that
+    /// two active roots share one physical agent instance; adapters normalize
+    /// provider evidence and perform no writes.
+    fn probe_resting_interruption(
+        &self,
+        _agent_id: &crate::ids::AgentSessionId,
+    ) -> Option<Timestamp> {
+        None
+    }
+
     /// Parse main-thread transcript JSONL text into normalized conversation
     /// messages, newest last. Adapters own native event shapes and keep
     /// sidechain/subagent replay out of this stream. Defaults to no transcript

@@ -61,6 +61,8 @@ pub use self::process::{
     codex_daemon_pids, codex_resumed_session_id_from_cmdline, pid_is_codex_daemon,
 };
 pub(crate) use self::transcript::infer_turn_death_from_spent_window;
+#[cfg(test)]
+pub(crate) use self::transcript::with_codex_sessions_root;
 use self::transcript::{
     CodexRolloutHeader, RestingTurnOutcome, TranscriptScanNeed, TranscriptUsage, configured_model,
     configured_reasoning_effort, detect_turn_error, find_session_transcript,
@@ -71,7 +73,7 @@ use self::transcript::{
     configured_model_at, configured_reasoning_effort_at, death_warning_from_frame,
     detect_plan_proposed, detect_turn_complete, detect_turn_interrupted,
     find_session_transcript_under, transcript_enrichment, usage_from_transcript,
-    with_codex_config_path, with_codex_sessions_root,
+    with_codex_config_path,
 };
 pub use self::transcript::{
     refine_turn_death_from_frame, refresh_transcript_context, session_origin,
@@ -477,6 +479,13 @@ impl AgentAdapter for CodexAdapter {
 
     fn configured_identity(&self) -> (Option<String>, Option<String>) {
         (configured_model(), configured_reasoning_effort())
+    }
+
+    fn probe_resting_interruption(
+        &self,
+        agent_id: &crate::ids::AgentSessionId,
+    ) -> Option<Timestamp> {
+        transcript::resting_interruption(agent_id.as_str())
     }
 
     /// `codex resume <id>` resolves the UUID to its rollout file and restores

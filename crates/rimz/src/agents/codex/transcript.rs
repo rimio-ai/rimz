@@ -338,7 +338,7 @@ pub(super) fn with_codex_config_path<T>(path: &Path, f: impl FnOnce() -> T) -> T
 }
 
 #[cfg(test)]
-pub(super) fn with_codex_sessions_root<T>(path: &Path, f: impl FnOnce() -> T) -> T {
+pub(crate) fn with_codex_sessions_root<T>(path: &Path, f: impl FnOnce() -> T) -> T {
     struct Guard {
         prior: Option<PathBuf>,
     }
@@ -439,6 +439,14 @@ pub(super) fn find_session_transcript(session_id: &str) -> Option<PathBuf> {
         let archived = sessions.parent()?.join("archived_sessions");
         find_session_transcript_under(&archived, session_id)
     })
+}
+
+/// Return the abort time only when this exact rollout is resting on a
+/// `turn_aborted` outcome. Later live records clear the evidence.
+pub(super) fn resting_interruption(session_id: &str) -> Option<Timestamp> {
+    let path = find_session_transcript(session_id)?;
+    let tail = read_transcript_tail(&path)?;
+    detect_turn_interrupted(&tail)
 }
 
 /// Same active-tree or flat-directory walk as [`find_session_transcript`] but
@@ -547,7 +555,6 @@ pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
     scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_raw_error()
 }
 
-#[cfg(test)]
 fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
     scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_outcome()
 }
@@ -625,7 +632,6 @@ pub(super) fn detect_turn_complete(tail: &str) -> Option<Timestamp> {
 /// Codex writes `event_msg`/`turn_aborted` for Esc and `/clear` of a running
 /// turn. Any abort reason counts; a later live record makes the session no
 /// longer "at rest" and clears the marker.
-#[cfg(test)]
 pub(super) fn detect_turn_interrupted(tail: &str) -> Option<Timestamp> {
     match detect_resting_turn_outcome(tail) {
         Some(RestingTurnOutcome::Interrupted(at)) => Some(at),
@@ -963,7 +969,6 @@ impl TranscriptScan {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn into_outcome(self) -> Option<RestingTurnOutcome> {
         match self.outcome {
             OutcomeScan::Resolved(outcome) => outcome,

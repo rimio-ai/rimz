@@ -58,6 +58,11 @@ pub(crate) fn same_process_conversation_supersedes(older: &AgentState, newer: &A
     }) {
         return false;
     }
+    same_agent_instance(older, newer)
+}
+
+/// Whether two roots name the same pane and agent-process incarnation.
+fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
     let same_pane = matches!(
         (older.pane.as_ref(), newer.pane.as_ref()),
         (Some(older_pane), Some(newer_pane))
@@ -81,6 +86,32 @@ pub(crate) fn same_process_conversation_supersedes(older: &AgentState, newer: &A
                     newer_owner.process_start.as_ref(),
                 )
     )
+}
+
+/// Whether `newer` structurally qualifies as an in-place replacement of a
+/// still-raw-active `older`. Provider interruption evidence completes this
+/// proof in [`interrupted_conversation_supersedes`].
+pub(crate) fn interrupted_conversation_candidate(older: &AgentState, newer: &AgentState) -> bool {
+    matches!(older.status, AgentStatus::Running | AgentStatus::Waiting)
+        && older.origin == Some(SessionOrigin::Fresh)
+        && newer.origin == Some(SessionOrigin::Fresh)
+        && newer.kind == older.kind
+        && newer.agent_id != older.agent_id
+        && newer.last_activity > older.last_activity
+        && same_agent_instance(older, newer)
+}
+
+/// Whether `newer` is a proven in-place replacement of a still-raw-active
+/// `older`: both Fresh roots share one pane and process incarnation, and the
+/// provider reports that the older turn was aborted after its last activity.
+/// This is the only rule allowed past the running-owner guard and demands
+/// strictly more proof than [`cleared_conversation_supersedes`].
+pub(crate) fn interrupted_conversation_supersedes(
+    older: &AgentState,
+    newer: &AgentState,
+    interrupted_at: Timestamp,
+) -> bool {
+    interrupted_conversation_candidate(older, newer) && interrupted_at > older.last_activity
 }
 
 fn compatible_tokens<T: PartialEq>(older: Option<&T>, newer: Option<&T>) -> bool {
@@ -228,5 +259,83 @@ mod tests {
         ));
         assert!(older_yields_pane(&older, &newer));
         assert!(supersedes(&older, &newer));
+    }
+
+    #[test]
+    fn interrupted_replacement_requires_fresh_same_instance_evidence() {
+        let (older, newer) =
+            conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
+        let interrupted_at = older.last_activity + std::time::Duration::from_secs(2);
+        assert!(interrupted_conversation_supersedes(
+            &older,
+            &newer,
+            interrupted_at
+        ));
+        assert!(!interrupted_conversation_supersedes(
+            &older,
+            &newer,
+            older.last_activity
+        ));
+
+        let (_, mut forked) =
+            conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Forked));
+        assert!(!interrupted_conversation_supersedes(
+            &older,
+            &forked,
+            interrupted_at
+        ));
+
+        forked.origin = Some(SessionOrigin::Fresh);
+        forked.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "codex",
+            43,
+            Some("start".to_owned()),
+        ));
+        assert!(!interrupted_conversation_supersedes(
+            &older,
+            &forked,
+            interrupted_at
+        ));
+
+        let (mut daemon_older, mut daemon_newer) =
+            conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
+        daemon_older.runtime_owner.as_mut().unwrap().kind = RuntimeOwnerKind::Daemon;
+        daemon_newer.runtime_owner.as_mut().unwrap().kind = RuntimeOwnerKind::Daemon;
+        assert!(!interrupted_conversation_supersedes(
+            &daemon_older,
+            &daemon_newer,
+            interrupted_at
+        ));
+
+        let (paused, paused_newer) =
+            conversation_pair("codex", AgentStatus::Paused, Some(SessionOrigin::Fresh));
+        assert!(!interrupted_conversation_supersedes(
+            &paused,
+            &paused_newer,
+            interrupted_at
+        ));
+    }
+
+    #[test]
+    fn interrupted_replacement_rejects_process_incarnation_mismatches() {
+        let (mut older, mut newer) =
+            conversation_pair("codex", AgentStatus::Waiting, Some(SessionOrigin::Fresh));
+        let interrupted_at = older.last_activity + std::time::Duration::from_secs(2);
+        newer.runtime_owner.as_mut().unwrap().process_start = Some("replacement".to_owned());
+        assert!(!interrupted_conversation_supersedes(
+            &older,
+            &newer,
+            interrupted_at
+        ));
+
+        newer.runtime_owner = older.runtime_owner.clone();
+        newer.pane.as_mut().unwrap().pane_process_start = Some(interrupted_at);
+        older.pane.as_mut().unwrap().pane_process_start = Some(older.last_activity);
+        assert!(!interrupted_conversation_supersedes(
+            &older,
+            &newer,
+            interrupted_at
+        ));
     }
 }
