@@ -57,11 +57,14 @@ fn launch_resume_and_preset_commands_match_amp_cli() {
             "T-abc123".to_owned(),
         ])
     );
-    assert_eq!(AmpAdapter.fork_command("T-abc123", Path::new("/tmp")), None);
-    assert_eq!(AmpAdapter.compact_command(), None);
+    assert_eq!(
+        AmpAdapter.descriptor().launch.fork_command("T-abc123"),
+        None
+    );
+    assert_eq!(AmpAdapter.descriptor().launch.compact_command(), None);
 
     assert_eq!(
-        AmpAdapter.render_preset(&LaunchPreset {
+        AmpAdapter.descriptor().render_preset(&LaunchPreset {
             model: Some("ultra".to_owned()),
             effort: Some("high".to_owned()),
             ..Default::default()
@@ -74,7 +77,7 @@ fn launch_resume_and_preset_commands_match_amp_cli() {
         ])
     );
     assert!(matches!(
-        AmpAdapter.render_preset(&LaunchPreset {
+        AmpAdapter.descriptor().render_preset(&LaunchPreset {
             system_prompt_file: Some(PathBuf::from("/tmp/prompt")),
             ..Default::default()
         }),

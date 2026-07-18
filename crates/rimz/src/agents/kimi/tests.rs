@@ -155,11 +155,17 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         .unwrap();
     assert_eq!(observed.prompt.as_deref(), Some("fix\nparser"));
     assert_eq!(
-        KimiAdapter.permission_args(PermissionMode::Auto),
+        KimiAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Auto),
         ["--auto"]
     );
     assert_eq!(
-        KimiAdapter.permission_args(PermissionMode::Yolo),
+        KimiAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Yolo),
         ["--yolo"]
     );
     assert_eq!(
@@ -183,12 +189,17 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         Some(vec!["kimi".to_owned()])
     );
     assert_eq!(KimiAdapter.ping_args(), Some(Vec::new()));
-    assert_eq!(KimiAdapter.compact_command(), Some("/compact"));
     assert_eq!(
-        KimiAdapter.render_preset(&crate::agents::LaunchPreset {
-            effort: Some("high".to_owned()),
-            ..Default::default()
-        }),
+        KimiAdapter.descriptor().launch.compact_command(),
+        Some("/compact")
+    );
+    assert_eq!(
+        KimiAdapter
+            .descriptor()
+            .render_preset(&crate::agents::LaunchPreset {
+                effort: Some("high".to_owned()),
+                ..Default::default()
+            }),
         Err(crate::agents::PresetErr::UnsupportedField {
             agent: "kimi",
             field: "effort",

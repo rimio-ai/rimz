@@ -31,7 +31,7 @@ fn pi_activity_filter_excludes_the_blocking_gate_and_launch_commands_build() {
         ])
     );
     assert_eq!(
-        PiAdapter.fork_command("0199aaf2", Path::new("/tmp")),
+        PiAdapter.descriptor().launch.fork_command("0199aaf2"),
         Some(vec![
             "pi".to_owned(),
             "--fork".to_owned(),
@@ -428,7 +428,7 @@ fn pi_render_preset_maps_model_and_thinking() {
     use crate::agents::{LaunchPreset, PresetErr};
 
     assert_eq!(
-        PiAdapter.render_preset(&LaunchPreset {
+        PiAdapter.descriptor().render_preset(&LaunchPreset {
             model: Some("openai/gpt-4o".to_owned()),
             effort: Some("high".to_owned()),
             ..Default::default()
@@ -441,7 +441,7 @@ fn pi_render_preset_maps_model_and_thinking() {
         ])
     );
     assert_eq!(
-        PiAdapter.render_preset(&LaunchPreset {
+        PiAdapter.descriptor().render_preset(&LaunchPreset {
             system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
             ..Default::default()
         }),
@@ -451,7 +451,7 @@ fn pi_render_preset_maps_model_and_thinking() {
         })
     );
     assert_eq!(
-        PiAdapter.render_preset(&LaunchPreset {
+        PiAdapter.descriptor().render_preset(&LaunchPreset {
             append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
             ..Default::default()
         }),
@@ -462,6 +462,7 @@ fn pi_render_preset_maps_model_and_thinking() {
     );
     assert!(
         PiAdapter
+            .descriptor()
             .render_preset(&LaunchPreset::default())
             .expect("empty preset is valid")
             .is_empty()
@@ -1116,8 +1117,8 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
     );
 
     // Only a real shutdown ends the session.
-    assert!(PiAdapter.ends_session("session_shutdown"));
-    assert!(!PiAdapter.ends_session("agent_end"));
+    assert!(PiAdapter.descriptor().ends_session("session_shutdown"));
+    assert!(!PiAdapter.descriptor().ends_session("agent_end"));
 }
 
 #[test]

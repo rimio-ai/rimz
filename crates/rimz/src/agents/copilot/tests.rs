@@ -608,27 +608,39 @@ fn launch_resume_permissions_and_presets_are_pinned() {
         ])
     );
     assert_eq!(
-        CopilotAdapter.fork_command("sess-1", Path::new("/tmp")),
+        CopilotAdapter.descriptor().launch.fork_command("sess-1"),
         None
     );
     assert_eq!(
-        CopilotAdapter.permission_args(PermissionMode::Ask),
+        CopilotAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Ask),
         Vec::<String>::new()
     );
     assert_eq!(
-        CopilotAdapter.permission_args(PermissionMode::Plan),
+        CopilotAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Plan),
         vec!["--plan"]
     );
     assert_eq!(
-        CopilotAdapter.permission_args(PermissionMode::Auto),
+        CopilotAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Auto),
         vec!["--autopilot"]
     );
     assert_eq!(
-        CopilotAdapter.permission_args(PermissionMode::Yolo),
+        CopilotAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Yolo),
         vec!["--allow-all"]
     );
     assert_eq!(
-        CopilotAdapter.render_preset(&LaunchPreset {
+        CopilotAdapter.descriptor().render_preset(&LaunchPreset {
             model: Some("gpt-5".to_owned()),
             effort: Some("high".to_owned()),
             ..Default::default()
@@ -641,7 +653,7 @@ fn launch_resume_permissions_and_presets_are_pinned() {
         ])
     );
     assert_eq!(
-        CopilotAdapter.render_preset(&LaunchPreset {
+        CopilotAdapter.descriptor().render_preset(&LaunchPreset {
             system_prompt_file: Some(PathBuf::from("/tmp/system.md")),
             ..Default::default()
         }),

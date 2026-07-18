@@ -1088,6 +1088,7 @@ globs = ["history/**/*.jsonl"]
         );
         assert_eq!(
             adapter
+                .descriptor()
                 .render_preset(&LaunchPreset {
                     model: Some("m".into()),
                     effort: Some("high".into()),
@@ -1097,11 +1098,17 @@ globs = ["history/**/*.jsonl"]
             vec!["--model", "m", "--effort", "high"]
         );
         assert_eq!(
-            adapter.preset_arg_matcher(PresetField::Model),
+            adapter
+                .descriptor()
+                .launch
+                .preset_arg_matcher(PresetField::Model),
             Some(PresetArgMatcher::Flag(vec!["--model".into()]))
         );
         assert_eq!(
-            adapter.preset_arg_matcher(PresetField::Effort),
+            adapter
+                .descriptor()
+                .launch
+                .preset_arg_matcher(PresetField::Effort),
             Some(PresetArgMatcher::Flag(vec!["--effort".into()]))
         );
     }

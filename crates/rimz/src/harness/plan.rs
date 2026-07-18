@@ -222,7 +222,7 @@ pub fn finalize_launch_layout(
                     kind: cell.kind.to_string(),
                 }
             })?;
-            let Some(turn_args) = adapter.max_turns_args(limit) else {
+            let Some(turn_args) = adapter.descriptor().launch.max_turns_args(limit) else {
                 return Err(LaunchFinalizeError::UnsupportedMaxTurns {
                     agent: adapter.descriptor().kind,
                     warnings,
@@ -245,7 +245,8 @@ fn finalize_agent_cell(
         && cell.launch.mode.is_none()
         && let Some(adapter) = adapter
     {
-        cell.args.extend(adapter.permission_args(permission_mode));
+        cell.args
+            .extend(adapter.descriptor().launch.permission_args(permission_mode));
         cell.launch.mode = Some(permission_mode);
     }
     if !options.preset.is_empty() {
@@ -254,6 +255,7 @@ fn finalize_agent_cell(
         })?;
         cell.args.extend(
             adapter
+                .descriptor()
                 .render_preset(options.preset)
                 .map_err(unsupported_preset_error)?,
         );
@@ -285,6 +287,7 @@ fn finalize_agent_cell(
         {
             cell.args.extend(
                 adapter
+                    .descriptor()
                     .render_preset(&crate::agents::LaunchPreset {
                         model: Some(default.clone()),
                         ..Default::default()
@@ -328,7 +331,7 @@ fn reconcile_preset_args(
     ];
 
     for (field, value) in declared {
-        let Some(matcher) = adapter.preset_arg_matcher(field) else {
+        let Some(matcher) = adapter.descriptor().launch.preset_arg_matcher(field) else {
             continue;
         };
         let occurrences = matcher.occurrences(&cell.args);
@@ -364,6 +367,7 @@ fn reconcile_preset_args(
             }
         }
         let canonical = adapter
+            .descriptor()
             .render_preset(&field.launch_preset(declared_value))
             .map_err(unsupported_preset_error)?;
         remove_occurrences(&mut cell.args, &occurrences);

@@ -429,11 +429,13 @@ pub fn compile_provider_argv(
             session_id,
             extra_args,
         } => {
-            let mut argv = adapter.fork_command(session_id, cwd).ok_or_else(|| {
-                AgentProcessCompileErr::NoFork {
+            let mut argv = adapter
+                .descriptor()
+                .launch
+                .fork_command(session_id)
+                .ok_or_else(|| AgentProcessCompileErr::NoFork {
                     kind: kind.to_owned(),
-                }
-            })?;
+                })?;
             argv.extend(extra_args.iter().cloned());
             argv
         }

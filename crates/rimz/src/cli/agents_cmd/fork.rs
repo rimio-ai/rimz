@@ -117,7 +117,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let permission_args = launch
         .launch
         .mode
-        .map(|mode| adapter.permission_args(mode))
+        .map(|mode| adapter.descriptor().launch.permission_args(mode))
         .unwrap_or_default();
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),

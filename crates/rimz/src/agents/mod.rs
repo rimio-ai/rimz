@@ -66,7 +66,6 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::harness::run::PermissionMode;
 use crate::mux::NamedKey;
 use crate::pane::RuntimeOwnerKind;
 use crate::transcript::{AskOption, AskQuestion};
@@ -742,66 +741,6 @@ pub enum AnswerPlanErr {
     Invalid(String),
 }
 
-impl SessionCommand {
-    fn render(self, session_id: &str) -> Vec<String> {
-        self.before_id
-            .iter()
-            .copied()
-            .chain(std::iter::once(session_id))
-            .chain(self.after_id.iter().copied())
-            .map(ToOwned::to_owned)
-            .collect()
-    }
-}
-
-impl LaunchSpec {
-    fn permission_args(self, mode: PermissionMode) -> Vec<String> {
-        let args = match mode {
-            PermissionMode::Ask => self.permission.ask,
-            PermissionMode::Auto => self.permission.auto,
-            PermissionMode::Yolo => self.permission.yolo,
-            PermissionMode::Plan => self.permission.plan,
-        };
-        args.iter().map(|arg| (*arg).to_owned()).collect()
-    }
-
-    fn preset_arg_matcher(self, field: PresetField) -> Option<PresetArgMatcher> {
-        let matcher = match field {
-            PresetField::Model => self.presets.model,
-            PresetField::Effort => self.presets.effort,
-            PresetField::SystemPromptFile => self.presets.system_prompt_file,
-            PresetField::AppendSystemPromptFile => self.presets.append_system_prompt_file,
-        }?;
-        Some(match matcher {
-            StaticPresetMatcher::Flag(flags) => {
-                PresetArgMatcher::Flag(flags.iter().map(|flag| (*flag).to_owned()).collect())
-            }
-            StaticPresetMatcher::ConfigKey { flags, key } => PresetArgMatcher::ConfigKey {
-                flags: flags.iter().map(|flag| (*flag).to_owned()).collect(),
-                key: key.to_owned(),
-            },
-        })
-    }
-
-    fn launch_command(self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        let mut argv = vec![self.program?.to_owned()];
-        argv.extend(self.fixed_args.iter().map(|arg| (*arg).to_owned()));
-        argv.extend(extra_args.iter().cloned());
-        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
-            match self.prompt {
-                PromptStyle::None => {}
-                PromptStyle::PositionalAfterDoubleDash => {
-                    argv.extend(["--".to_owned(), prompt.to_owned()]);
-                }
-                PromptStyle::Flag(flag) => {
-                    argv.extend([flag.to_owned(), prompt.to_owned()]);
-                }
-            }
-        }
-        Some(argv)
-    }
-}
-
 pub trait AgentAdapter: Send + Sync {
     /// The adapter's static identity, branding, capabilities, and
     /// classification tables. Everything `const` about an agent lives here;
@@ -1054,14 +993,6 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
-    /// Whether this event is the descriptor's native session-end event.
-    fn ends_session(&self, event_name: &str) -> bool {
-        matches!(
-            self.descriptor().lifecycle_hooks.ended,
-            HookCoverage::Native { event } if event == event_name
-        )
-    }
-
     /// Canonical options for an ask whose native event does not carry a
     /// structured question list.
     fn ask_options(&self, _kind: AskKind) -> Option<Vec<AskOption>> {
@@ -1258,29 +1189,7 @@ pub trait AgentAdapter: Send + Sync {
     /// Default `None` keeps the contract "implement nothing else" for an agent
     /// that cannot resume yet.
     fn resume_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        self.descriptor()
-            .launch
-            .resume
-            .map(|command| command.render(_session_id))
-    }
-
-    /// The argv that forks a prior session of this agent by `session_id`:
-    /// resume the full conversation history under a provider-assigned new
-    /// session id, leaving the source session untouched. Launched fresh in
-    /// `cwd` (the source agent's worktree). `None` when the agent has no native
-    /// fork CLI, so `rimz agents fork` refuses with the reason.
-    fn fork_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        self.descriptor()
-            .launch
-            .fork
-            .map(|command| command.render(_session_id))
-    }
-
-    /// Extra launch argv for a supervised agent permission posture. The
-    /// adapter owns provider-specific CLI flags; the CLI only chooses
-    /// the posture.
-    fn permission_args(&self, _mode: PermissionMode) -> Vec<String> {
-        self.descriptor().launch.permission_args(_mode)
+        self.descriptor().launch.resume_command(_session_id)
     }
 
     /// Extra launch argv for the built-in `-ping` virtual profile: lowest
@@ -1291,89 +1200,6 @@ pub trait AgentAdapter: Send + Sync {
             .launch
             .ping_args
             .map(|args| args.iter().map(|arg| (*arg).to_owned()).collect())
-    }
-
-    /// Extra launch argv for a supervised print-mode agentic-turn cap. Returns
-    /// `None` when the agent exposes no native turn limit.
-    fn max_turns_args(&self, _limit: u32) -> Option<Vec<String>> {
-        self.descriptor()
-            .launch
-            .max_turn_flag
-            .map(|flag| vec![flag.to_owned(), _limit.to_string()])
-    }
-
-    /// The interactive slash command that triggers a manual context compaction
-    /// in the agent's own composer. Typed as keystrokes ahead of a steered or
-    /// queued message under `--smart-compact`, never a bracketed paste — agents
-    /// treat pasted text as literal content and would not run a pasted command.
-    /// `None` when the agent exposes no such command.
-    fn compact_command(&self) -> Option<&'static str> {
-        self.descriptor().launch.compact_command
-    }
-
-    /// Render typed launch profile presets into provider-native argv.
-    /// Unsupported fields fail at launch so config cannot silently drop intent.
-    fn render_preset(&self, preset: &LaunchPreset) -> std::result::Result<Vec<String>, PresetErr> {
-        let values: [(PresetField, &'static str, Option<String>); 4] = [
-            (
-                PresetField::Model,
-                "model",
-                preset.model.clone().filter(|value| !value.is_empty()),
-            ),
-            (
-                PresetField::Effort,
-                "effort",
-                preset.effort.clone().filter(|value| !value.is_empty()),
-            ),
-            (
-                PresetField::SystemPromptFile,
-                "system-prompt-file",
-                preset
-                    .system_prompt_file
-                    .as_deref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-            ),
-            (
-                PresetField::AppendSystemPromptFile,
-                "append-system-prompt-file",
-                preset
-                    .append_system_prompt_file
-                    .as_deref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-            ),
-        ];
-        let mut argv = Vec::new();
-        for (field, field_name, value) in values {
-            let Some(value) = value else { continue };
-            let matcher = self
-                .preset_arg_matcher(field)
-                .ok_or(PresetErr::UnsupportedField {
-                    agent: self.descriptor().kind,
-                    field: field_name,
-                })?;
-            match matcher {
-                PresetArgMatcher::Flag(flags) => {
-                    let flag = flags.first().ok_or(PresetErr::UnsupportedField {
-                        agent: self.descriptor().kind,
-                        field: field_name,
-                    })?;
-                    argv.extend([flag.clone(), value]);
-                }
-                PresetArgMatcher::ConfigKey { flags, key } => {
-                    let flag = flags.first().ok_or(PresetErr::UnsupportedField {
-                        agent: self.descriptor().kind,
-                        field: field_name,
-                    })?;
-                    argv.extend([flag.clone(), format!("{key}={value}")]);
-                }
-            }
-        }
-        Ok(argv)
-    }
-
-    /// Describe the provider-native argv spelling rendered for a preset field.
-    fn preset_arg_matcher(&self, field: PresetField) -> Option<PresetArgMatcher> {
-        self.descriptor().launch.preset_arg_matcher(field)
     }
 
     /// The argv that launches a fresh interactive session of this agent in the
@@ -1484,15 +1310,6 @@ pub trait AgentAdapter: Send + Sync {
     /// it — an un-wired agent is invisible, never silently broken.
     fn hooks_installed(&self) -> bool {
         self.managed_source().is_some_and(ManagedSource::installed)
-    }
-
-    /// Whether interactive setup can safely refresh an installed hook source
-    /// from this build. This is separate from [`Self::hooks_installed`]: a
-    /// working older integration remains installed until the user consents to
-    /// the upgrade.
-    fn hook_upgrade_available(&self) -> bool {
-        self.managed_source()
-            .is_some_and(ManagedSource::upgrade_available)
     }
 
     /// RimZ-installed hook events this agent will silently skip until the

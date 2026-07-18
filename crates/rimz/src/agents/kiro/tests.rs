@@ -585,12 +585,17 @@ fn launch_resume_and_presets_use_v3_surface() {
     );
     assert!(
         KiroAdapter
-            .fork_command("sess_redacted", Path::new("/work"))
+            .descriptor()
+            .launch
+            .fork_command("sess_redacted")
             .is_none()
     );
-    assert_eq!(KiroAdapter.compact_command(), Some("/compact"));
     assert_eq!(
-        KiroAdapter.render_preset(&LaunchPreset {
+        KiroAdapter.descriptor().launch.compact_command(),
+        Some("/compact")
+    );
+    assert_eq!(
+        KiroAdapter.descriptor().render_preset(&LaunchPreset {
             model: Some("auto".to_owned()),
             effort: Some("high".to_owned()),
             ..Default::default()

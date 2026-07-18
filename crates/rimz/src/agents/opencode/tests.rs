@@ -23,7 +23,7 @@ fn opencode_activity_filter_and_launch_commands_build() {
         ])
     );
     assert_eq!(
-        OpencodeAdapter.fork_command("ses_123", Path::new("/tmp")),
+        OpencodeAdapter.descriptor().launch.fork_command("ses_123"),
         Some(vec![
             "opencode".to_owned(),
             "--session".to_owned(),
@@ -45,19 +45,31 @@ fn opencode_activity_filter_and_launch_commands_build() {
         ])
     );
     assert_eq!(
-        OpencodeAdapter.permission_args(PermissionMode::Ask),
+        OpencodeAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Ask),
         Vec::<String>::new()
     );
     assert_eq!(
-        OpencodeAdapter.permission_args(PermissionMode::Auto),
+        OpencodeAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Auto),
         Vec::<String>::new()
     );
     assert_eq!(
-        OpencodeAdapter.permission_args(PermissionMode::Plan),
+        OpencodeAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Plan),
         vec!["--agent", "plan"]
     );
     assert_eq!(
-        OpencodeAdapter.permission_args(PermissionMode::Yolo),
+        OpencodeAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Yolo),
         vec!["--auto"]
     );
 }
@@ -67,14 +79,14 @@ fn opencode_render_preset_maps_model_and_rejects_unsupported_fields() {
     use crate::agents::{LaunchPreset, PresetErr};
 
     assert_eq!(
-        OpencodeAdapter.render_preset(&LaunchPreset {
+        OpencodeAdapter.descriptor().render_preset(&LaunchPreset {
             model: Some("openai/gpt-5".to_owned()),
             ..Default::default()
         }),
         Ok(vec!["--model".to_owned(), "openai/gpt-5".to_owned()])
     );
     assert_eq!(
-        OpencodeAdapter.render_preset(&LaunchPreset {
+        OpencodeAdapter.descriptor().render_preset(&LaunchPreset {
             effort: Some("high".to_owned()),
             ..Default::default()
         }),
@@ -84,7 +96,7 @@ fn opencode_render_preset_maps_model_and_rejects_unsupported_fields() {
         })
     );
     assert_eq!(
-        OpencodeAdapter.render_preset(&LaunchPreset {
+        OpencodeAdapter.descriptor().render_preset(&LaunchPreset {
             system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
             ..Default::default()
         }),
@@ -94,7 +106,7 @@ fn opencode_render_preset_maps_model_and_rejects_unsupported_fields() {
         })
     );
     assert_eq!(
-        OpencodeAdapter.render_preset(&LaunchPreset {
+        OpencodeAdapter.descriptor().render_preset(&LaunchPreset {
             append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
             ..Default::default()
         }),
@@ -105,6 +117,7 @@ fn opencode_render_preset_maps_model_and_rejects_unsupported_fields() {
     );
     assert!(
         OpencodeAdapter
+            .descriptor()
             .render_preset(&LaunchPreset::default())
             .expect("empty preset is valid")
             .is_empty()
@@ -243,7 +256,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         }
     );
 
-    assert!(!OpencodeAdapter.ends_session("session_error"));
+    assert!(!OpencodeAdapter.descriptor().ends_session("session_error"));
     let ended = OpencodeAdapter
         .decode_hook(
             "session_ended",
@@ -253,7 +266,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         .lifecycle
         .expect("end observation");
     assert_eq!(ended.signal, LifecycleSignal::Ended);
-    assert!(OpencodeAdapter.ends_session("session_ended"));
+    assert!(OpencodeAdapter.descriptor().ends_session("session_ended"));
 }
 
 #[test]

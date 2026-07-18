@@ -1135,10 +1135,14 @@ fn launch_resume_permissions_and_model_preset_match_agy() {
             &["--dangerously-skip-permissions"][..],
         ),
     ] {
-        assert_eq!(AntigravityAdapter.permission_args(mode), expected);
+        assert_eq!(
+            AntigravityAdapter.descriptor().launch.permission_args(mode),
+            expected
+        );
     }
     assert_eq!(
         AntigravityAdapter
+            .descriptor()
             .render_preset(&LaunchPreset {
                 model: Some("Gemini 3.5 Flash (Low)".to_owned()),
                 ..Default::default()
@@ -1148,6 +1152,7 @@ fn launch_resume_permissions_and_model_preset_match_agy() {
     );
     assert!(
         AntigravityAdapter
+            .descriptor()
             .render_preset(&LaunchPreset {
                 effort: Some("high".to_owned()),
                 ..Default::default()

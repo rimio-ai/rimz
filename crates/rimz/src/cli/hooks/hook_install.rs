@@ -23,7 +23,10 @@ pub(super) enum InstallDisposition {
 pub(super) fn install_disposition(agent: &dyn rimz::agents::AgentAdapter) -> InstallDisposition {
     if !agent.hooks_installed() {
         InstallDisposition::Installed
-    } else if agent.hook_upgrade_available() {
+    } else if agent
+        .managed_source()
+        .is_some_and(rimz::agents::ManagedSource::upgrade_available)
+    {
         InstallDisposition::Refreshed
     } else {
         InstallDisposition::Current
@@ -60,7 +63,11 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool
 
     for agent in detected_installable_adapters() {
         let descriptor = agent.descriptor();
-        if !agent.hooks_installed() || agent.hook_upgrade_available() {
+        if !agent.hooks_installed()
+            || agent
+                .managed_source()
+                .is_some_and(rimz::agents::ManagedSource::upgrade_available)
+        {
             actionable.push(agent.preview_hook_install()?);
             continue;
         }

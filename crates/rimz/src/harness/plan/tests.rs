@@ -376,6 +376,8 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
 fn launch_options_apply_without_overwriting_spec_identity() {
     let auto_args = crate::agents::find_adapter("codex")
         .expect("codex")
+        .descriptor()
+        .launch
         .permission_args(PermissionMode::Auto);
     let cell = |args, mode| {
         Cell::Agent(AgentCell {

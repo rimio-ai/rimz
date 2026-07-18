@@ -38,7 +38,7 @@ fn codex_commands_and_permission_args_match_run_posture() {
     assert_eq!(argv, vec!["codex", "resume", "sess-abc"]);
 
     assert_eq!(
-        CodexAdapter.fork_command("sess-abc", Path::new("/code/query-engine")),
+        CodexAdapter.descriptor().launch.fork_command("sess-abc"),
         Some(
             ["codex", "fork", "sess-abc"]
                 .map(ToOwned::to_owned)
@@ -84,7 +84,10 @@ fn codex_commands_and_permission_args_match_run_posture() {
     );
 
     assert_eq!(
-        CodexAdapter.permission_args(PermissionMode::Auto),
+        CodexAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Auto),
         vec![
             "--ask-for-approval",
             "never",
@@ -92,9 +95,18 @@ fn codex_commands_and_permission_args_match_run_posture() {
             "workspace-write"
         ]
     );
-    assert!(CodexAdapter.permission_args(PermissionMode::Ask).is_empty());
+    assert!(
+        CodexAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Ask)
+            .is_empty()
+    );
     assert_eq!(
-        CodexAdapter.permission_args(PermissionMode::Yolo),
+        CodexAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Yolo),
         vec!["--dangerously-bypass-approvals-and-sandbox"]
     );
     assert_eq!(
@@ -104,12 +116,16 @@ fn codex_commands_and_permission_args_match_run_posture() {
             "model_reasoning_effort=low".to_owned()
         ])
     );
-    assert_eq!(CodexAdapter.compact_command(), Some("/compact"));
+    assert_eq!(
+        CodexAdapter.descriptor().launch.compact_command(),
+        Some("/compact")
+    );
 }
 
 #[test]
 fn codex_render_preset_maps_effort_and_system_prompt_file_to_config_overrides() {
     let argv = CodexAdapter
+        .descriptor()
         .render_preset(&crate::agents::LaunchPreset {
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
@@ -130,6 +146,7 @@ fn codex_render_preset_maps_effort_and_system_prompt_file_to_config_overrides() 
     );
 
     let err = CodexAdapter
+        .descriptor()
         .render_preset(&crate::agents::LaunchPreset {
             append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
             ..Default::default()

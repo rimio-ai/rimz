@@ -147,7 +147,9 @@ impl SetupReport {
                     binary: rimz::agents::locate_binary(descriptor),
                     hook_install: descriptor.has_wired_hook_install(),
                     hooks_installed: agent.hooks_installed(),
-                    hook_upgrade_available: agent.hook_upgrade_available(),
+                    hook_upgrade_available: agent
+                        .managed_source()
+                        .is_some_and(rimz::agents::ManagedSource::upgrade_available),
                     local_session_discovery: descriptor.capabilities.local_session_discovery,
                 }
             })

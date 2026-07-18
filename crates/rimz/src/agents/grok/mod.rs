@@ -23,8 +23,7 @@ use super::{
     AgentAdapter, AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError,
     ClassifiedHook, DecodedHook, FieldPatch, LocalContextPatch, LocalContextRefresh,
     LocalContextRefreshCtx, LocalTokenPatch, ManagedSource, RefreshTrigger, Result, SessionOrigin,
-    TranscriptMessage, TranscriptPage, TranscriptPosition, TurnErrorClass, non_empty_trimmed,
-    sanitize_user_prompt,
+    TranscriptMessage, TurnErrorClass, non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -430,29 +429,6 @@ impl AgentAdapter for GrokAdapter {
 
     fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
         transcript::parse_assistant_suffix(new_lines)
-    }
-
-    fn transcript_position(
-        &self,
-        path: &Path,
-        _session_id: Option<&AgentSessionId>,
-    ) -> Option<TranscriptPosition> {
-        std::fs::metadata(path)
-            .ok()
-            .map(|metadata| TranscriptPosition::new(metadata.len()))
-    }
-
-    fn read_assistant_transcript_page(
-        &self,
-        path: &Path,
-        _session_id: Option<&AgentSessionId>,
-        position: TranscriptPosition,
-    ) -> Option<TranscriptPage> {
-        let (bytes, next) = super::read_transcript_lines(path, position.get())?;
-        Some(TranscriptPage {
-            next: TranscriptPosition::new(next),
-            messages: transcript::parse_assistant_suffix(&String::from_utf8_lossy(&bytes)),
-        })
     }
 
     fn local_context_refresh(

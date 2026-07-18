@@ -122,7 +122,7 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
             yolo: &["--approval-mode", "yolo"],
             plan: &["--approval-mode", "plan"],
         },
-        ping_args: None,
+        ping_args: Some(&[]),
         max_turn_flag: Some("--max-session-turns"),
         compact_command: Some("/compress"),
         presets: super::PresetMatchers {
@@ -595,10 +595,6 @@ impl AgentAdapter for QwenAdapter {
         prices: &PriceBook,
     ) -> super::spending::SpendParse {
         spend::parse_qwen_spend(path, resume, prices)
-    }
-
-    fn ping_args(&self) -> Option<Vec<String>> {
-        Some(Vec::new())
     }
 }
 

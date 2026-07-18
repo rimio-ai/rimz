@@ -184,7 +184,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
             .signal,
         LifecycleSignal::CompactionEnded { auto: None }
     );
-    assert!(DroidAdapter.ends_session("SessionEnd"));
+    assert!(DroidAdapter.descriptor().ends_session("SessionEnd"));
     assert_eq!(
         DroidAdapter
             .decode_hook("SessionEnd", &json!({"session_id": "sess-1"}))
@@ -531,7 +531,7 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
         ])
     );
     assert_eq!(
-        DroidAdapter.fork_command("sess-1", Path::new("/tmp")),
+        DroidAdapter.descriptor().launch.fork_command("sess-1"),
         Some(vec![
             "droid".to_owned(),
             "--fork".to_owned(),
@@ -539,22 +539,36 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
         ])
     );
     assert_eq!(
-        DroidAdapter.permission_args(PermissionMode::Auto),
+        DroidAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Auto),
         ["--auto", "medium"]
     );
-    assert!(DroidAdapter.permission_args(PermissionMode::Ask).is_empty());
     assert!(
         DroidAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Ask)
+            .is_empty()
+    );
+    assert!(
+        DroidAdapter
+            .descriptor()
+            .launch
             .permission_args(PermissionMode::Yolo)
             .is_empty()
     );
     assert_eq!(
-        DroidAdapter.permission_args(PermissionMode::Plan),
+        DroidAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Plan),
         ["--use-spec"]
     );
 
     assert_eq!(
-        DroidAdapter.render_preset(&LaunchPreset {
+        DroidAdapter.descriptor().render_preset(&LaunchPreset {
             append_system_prompt_file: Some(Path::new("/tmp/append.md").to_path_buf()),
             ..Default::default()
         }),
@@ -567,7 +581,7 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
     // exec-only, so a profile that sets either fails fast rather than launching
     // with a silently ignored (and prompt-corrupting) flag.
     assert_eq!(
-        DroidAdapter.render_preset(&LaunchPreset {
+        DroidAdapter.descriptor().render_preset(&LaunchPreset {
             model: Some("glm-5".to_owned()),
             ..Default::default()
         }),
@@ -577,7 +591,7 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
         })
     );
     assert_eq!(
-        DroidAdapter.render_preset(&LaunchPreset {
+        DroidAdapter.descriptor().render_preset(&LaunchPreset {
             effort: Some("high".to_owned()),
             ..Default::default()
         }),

@@ -26,29 +26,34 @@ fn rendered_preset_flags_have_matching_argv_declarations() {
         (PresetField::AppendSystemPromptFile, "/tmp/append-system.md"),
     ];
     for adapter in ADAPTERS {
+        let descriptor = adapter.descriptor();
         for (field, value) in fields {
             let preset = field.launch_preset(value.to_owned());
-            match adapter.render_preset(&preset) {
+            match descriptor.render_preset(&preset) {
                 Ok(argv) => {
-                    let matcher = adapter.preset_arg_matcher(field).unwrap_or_else(|| {
-                        panic!(
-                            "{} renders {field:?} without declaring its argv matcher",
-                            adapter.descriptor().kind
-                        )
-                    });
+                    let matcher =
+                        descriptor
+                            .launch
+                            .preset_arg_matcher(field)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "{} renders {field:?} without declaring its argv matcher",
+                                    descriptor.kind
+                                )
+                            });
                     assert!(
                         matcher
                             .occurrences(&argv)
                             .iter()
                             .any(|occurrence| occurrence.argv_range == (0..argv.len())),
                         "{} {field:?} matcher {matcher:?} does not consume {argv:?}",
-                        adapter.descriptor().kind
+                        descriptor.kind
                     );
                 }
                 Err(_) => assert!(
-                    adapter.preset_arg_matcher(field).is_none(),
+                    descriptor.launch.preset_arg_matcher(field).is_none(),
                     "{} declares a matcher for unsupported {field:?}",
-                    adapter.descriptor().kind
+                    descriptor.kind
                 ),
             }
         }
@@ -144,14 +149,18 @@ effort-flag = "--effort"
             cases.push(format!(
                 "{}.{field:?}={:?}",
                 adapter.descriptor().kind,
-                adapter.render_preset(&field.launch_preset(value.to_owned()))
+                adapter
+                    .descriptor()
+                    .render_preset(&field.launch_preset(value.to_owned()))
             ));
         }
         for field in [PresetField::Model, PresetField::Effort] {
             cases.push(format!(
                 "{}.empty-{field:?}={:?}",
                 adapter.descriptor().kind,
-                adapter.render_preset(&field.launch_preset(String::new()))
+                adapter
+                    .descriptor()
+                    .render_preset(&field.launch_preset(String::new()))
             ));
         }
     }
@@ -432,17 +441,18 @@ fn lifecycle_hooks_are_complete_and_honest() {
 #[test]
 fn ends_session_follows_native_descriptor_event() {
     for adapter in ADAPTERS {
-        assert!(!adapter.ends_session("__not_session_end__"));
-        match adapter.descriptor().lifecycle_hooks.ended {
+        let descriptor = adapter.descriptor();
+        assert!(!descriptor.ends_session("__not_session_end__"));
+        match descriptor.lifecycle_hooks.ended {
             HookCoverage::Native { event } => assert!(
-                adapter.ends_session(event),
+                descriptor.ends_session(event),
                 "{} must end on {event}",
-                adapter.descriptor().kind
+                descriptor.kind
             ),
             HookCoverage::Derived { .. } | HookCoverage::Absent { .. } => assert!(
-                !adapter.ends_session(adapter.descriptor().lifecycle_hooks.ended.detail()),
+                !descriptor.ends_session(descriptor.lifecycle_hooks.ended.detail()),
                 "{} derived/absent end must stay false",
-                adapter.descriptor().kind
+                descriptor.kind
             ),
         }
     }
@@ -672,7 +682,7 @@ fn assert_coverage_honest(
             wired,
             native_events
                 .iter()
-                .any(|event| adapter.ends_session(event)),
+                .any(|event| adapter.descriptor().ends_session(event)),
             "{kind} SessionEnd coverage must match a native session-ending event"
         ),
         IntegrationConcern::IdleNotification => {

@@ -30,7 +30,7 @@ fn claude_commands_and_permission_args_match_run_posture() {
     assert_eq!(argv, vec!["claude", "--resume", "sess-123"]);
 
     assert_eq!(
-        ClaudeAdapter.fork_command("sess-123", Path::new("/code/query-engine")),
+        ClaudeAdapter.descriptor().launch.fork_command("sess-123"),
         Some(
             ["claude", "--resume", "sess-123", "--fork-session"]
                 .map(ToOwned::to_owned)
@@ -69,16 +69,24 @@ fn claude_commands_and_permission_args_match_run_posture() {
     );
 
     assert_eq!(
-        ClaudeAdapter.permission_args(PermissionMode::Auto),
+        ClaudeAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Auto),
         vec!["--permission-mode", "auto"]
     );
     assert!(
         ClaudeAdapter
+            .descriptor()
+            .launch
             .permission_args(PermissionMode::Ask)
             .is_empty()
     );
     assert_eq!(
-        ClaudeAdapter.permission_args(PermissionMode::Yolo),
+        ClaudeAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Yolo),
         vec!["--dangerously-skip-permissions"]
     );
     assert_eq!(
@@ -89,12 +97,16 @@ fn claude_commands_and_permission_args_match_run_posture() {
                 .to_vec()
         )
     );
-    assert_eq!(ClaudeAdapter.compact_command(), Some("/compact"));
+    assert_eq!(
+        ClaudeAdapter.descriptor().launch.compact_command(),
+        Some("/compact")
+    );
 }
 
 #[test]
 fn claude_render_preset_maps_model_effort_and_system_prompt_file() {
     let argv = ClaudeAdapter
+        .descriptor()
         .render_preset(&crate::agents::LaunchPreset {
             model: Some("opus".to_owned()),
             effort: Some("high".to_owned()),
@@ -117,13 +129,14 @@ fn claude_render_preset_maps_model_effort_and_system_prompt_file() {
     );
 
     assert_eq!(
-        ClaudeAdapter.max_turns_args(3),
+        ClaudeAdapter.descriptor().launch.max_turns_args(3),
         Some(vec!["--max-turns".to_owned(), "3".to_owned()])
     );
 
     // Empty preset renders nothing.
     assert!(
         ClaudeAdapter
+            .descriptor()
             .render_preset(&crate::agents::LaunchPreset::default())
             .expect("empty preset is valid")
             .is_empty()

@@ -738,6 +738,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     let adapter = crate::agents::find_adapter(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
     adapter
+        .descriptor()
         .render_preset(&profile_preset(&resolved))
         .map_err(|err| LayoutErr::InvalidProfile {
             profile: name.to_owned(),
@@ -974,13 +975,14 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
     let adapter = crate::agents::find_adapter(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
     let mut argv = adapter
+        .descriptor()
         .render_preset(&profile_preset(resolved))
         .map_err(|err| LayoutErr::InvalidProfile {
             profile: name.to_owned(),
             reason: err.to_string(),
         })?;
     if let Some(mode) = resolved.launch.mode {
-        argv.extend(adapter.permission_args(mode));
+        argv.extend(adapter.descriptor().launch.permission_args(mode));
     }
     if let Some(raw) = resolved
         .args
@@ -1029,7 +1031,7 @@ fn virtual_agent_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cel
     };
     let adapter = crate::agents::find_adapter(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
-    let posture = adapter.permission_args(mode);
+    let posture = adapter.descriptor().launch.permission_args(mode);
     if mode != PermissionMode::Ask && mode != PermissionMode::Plan && posture.is_empty() {
         return Ok(None);
     }
@@ -1124,7 +1126,7 @@ pub fn ping_kind(raw: &str) -> Option<&str> {
 
 fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<String>> {
     let adapter = crate::agents::find_adapter(kind)?;
-    let args = adapter.permission_args(mode);
+    let args = adapter.descriptor().launch.permission_args(mode);
     if mode == PermissionMode::Ask || mode == PermissionMode::Plan || !args.is_empty() {
         Some(args)
     } else {

@@ -272,7 +272,7 @@ mod tests {
         // a new adapter that forgets to opt in fails
         // here rather than silently never compacting.
         for adapter in ADAPTERS {
-            if let Some(command) = adapter.compact_command() {
+            if let Some(command) = adapter.descriptor().launch.compact_command() {
                 assert!(!command.is_empty() && command.starts_with('/'));
                 continue;
             }

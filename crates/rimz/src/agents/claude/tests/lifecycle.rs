@@ -434,8 +434,8 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
         .lifecycle
         .expect("SessionEnd is a recorded lifecycle observation");
     assert_eq!(ended.agent_id.as_deref(), Some("sess-1"));
-    assert!(ClaudeAdapter.ends_session("SessionEnd"));
-    assert!(!ClaudeAdapter.ends_session("Stop"));
+    assert!(ClaudeAdapter.descriptor().ends_session("SessionEnd"));
+    assert!(!ClaudeAdapter.descriptor().ends_session("Stop"));
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn expiry_predicates_match_observed_root_signals() {
             .lifecycle
             .unwrap_or_else(|| panic!("{event} should be observed"));
         assert_eq!(
-            ClaudeAdapter.ends_session(event),
+            ClaudeAdapter.descriptor().ends_session(event),
             matches!(obs.signal, LifecycleSignal::Ended),
             "{event} session-end predicate"
         );

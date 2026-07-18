@@ -358,6 +358,8 @@ fn profile_cells_render_fields_in_contract_order() {
     expected.extend(
         crate::agents::find_adapter("codex")
             .expect("codex")
+            .descriptor()
+            .launch
             .permission_args(PermissionMode::Auto),
     );
     expected.extend(["--profile".to_owned(), "reviewer".to_owned()]);
@@ -485,6 +487,8 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
     expected_auto.extend(
         crate::agents::find_adapter("claude")
             .expect("claude")
+            .descriptor()
+            .launch
             .permission_args(PermissionMode::Auto),
     );
     assert_eq!(auto.kind.as_str(), "claude");

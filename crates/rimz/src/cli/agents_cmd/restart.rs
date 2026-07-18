@@ -233,7 +233,7 @@ fn restart_cell(
     }
     let permission_args = agent
         .mode
-        .map(|mode| adapter.permission_args(mode))
+        .map(|mode| adapter.descriptor().launch.permission_args(mode))
         .unwrap_or_default();
     let (replayed_args, replayed_mode) = replay_posture(
         std::mem::take(&mut agent_cell.args),

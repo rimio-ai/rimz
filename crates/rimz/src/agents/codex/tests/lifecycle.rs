@@ -617,7 +617,7 @@ fn expiry_predicates_match_observed_root_signals() {
             .lifecycle
             .unwrap_or_else(|| panic!("{event} should be observed"));
         assert_eq!(
-            CodexAdapter.ends_session(event),
+            CodexAdapter.descriptor().ends_session(event),
             matches!(obs.signal, LifecycleSignal::Ended),
             "{event} session-end predicate"
         );

@@ -10,6 +10,8 @@
 use serde_json::Value;
 
 use super::lifecycle::{AskKind, LifecycleSignalKind};
+use super::{LaunchPreset, PresetArgMatcher, PresetErr, PresetField};
+use crate::harness::run::PermissionMode;
 
 /// Static launch shapes shared by built-in and process-plugin adapters.
 #[derive(Clone, Copy, Debug)]
@@ -39,12 +41,158 @@ impl LaunchSpec {
         compact_command: None,
         presets: PresetMatchers::EMPTY,
     };
+
+    /// Render argv that forks a prior session under a provider-assigned new id.
+    pub fn fork_command(self, session_id: &str) -> Option<Vec<String>> {
+        self.fork.map(|command| command.render(session_id))
+    }
+
+    /// Render extra launch argv for one supervised permission posture.
+    pub fn permission_args(self, mode: PermissionMode) -> Vec<String> {
+        let args = match mode {
+            PermissionMode::Ask => self.permission.ask,
+            PermissionMode::Auto => self.permission.auto,
+            PermissionMode::Yolo => self.permission.yolo,
+            PermissionMode::Plan => self.permission.plan,
+        };
+        args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    /// Render the native supervised-turn cap, when supported.
+    pub fn max_turns_args(self, limit: u32) -> Option<Vec<String>> {
+        self.max_turn_flag
+            .map(|flag| vec![flag.to_owned(), limit.to_string()])
+    }
+
+    /// Return the interactive command for manual context compaction.
+    pub const fn compact_command(self) -> Option<&'static str> {
+        self.compact_command
+    }
+
+    /// Describe the provider-native argv spelling rendered for a preset field.
+    pub fn preset_arg_matcher(self, field: PresetField) -> Option<PresetArgMatcher> {
+        let matcher = match field {
+            PresetField::Model => self.presets.model,
+            PresetField::Effort => self.presets.effort,
+            PresetField::SystemPromptFile => self.presets.system_prompt_file,
+            PresetField::AppendSystemPromptFile => self.presets.append_system_prompt_file,
+        }?;
+        Some(match matcher {
+            StaticPresetMatcher::Flag(flags) => {
+                PresetArgMatcher::Flag(flags.iter().map(|flag| (*flag).to_owned()).collect())
+            }
+            StaticPresetMatcher::ConfigKey { flags, key } => PresetArgMatcher::ConfigKey {
+                flags: flags.iter().map(|flag| (*flag).to_owned()).collect(),
+                key: key.to_owned(),
+            },
+        })
+    }
+
+    fn render_preset(
+        self,
+        agent_kind: &'static str,
+        preset: &LaunchPreset,
+    ) -> Result<Vec<String>, PresetErr> {
+        let values: [(PresetField, &'static str, Option<String>); 4] = [
+            (
+                PresetField::Model,
+                "model",
+                preset.model.clone().filter(|value| !value.is_empty()),
+            ),
+            (
+                PresetField::Effort,
+                "effort",
+                preset.effort.clone().filter(|value| !value.is_empty()),
+            ),
+            (
+                PresetField::SystemPromptFile,
+                "system-prompt-file",
+                preset
+                    .system_prompt_file
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            ),
+            (
+                PresetField::AppendSystemPromptFile,
+                "append-system-prompt-file",
+                preset
+                    .append_system_prompt_file
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            ),
+        ];
+        let mut argv = Vec::new();
+        for (field, field_name, value) in values {
+            let Some(value) = value else { continue };
+            let matcher = self
+                .preset_arg_matcher(field)
+                .ok_or(PresetErr::UnsupportedField {
+                    agent: agent_kind,
+                    field: field_name,
+                })?;
+            match matcher {
+                PresetArgMatcher::Flag(flags) => {
+                    let flag = flags.first().ok_or(PresetErr::UnsupportedField {
+                        agent: agent_kind,
+                        field: field_name,
+                    })?;
+                    argv.extend([flag.clone(), value]);
+                }
+                PresetArgMatcher::ConfigKey { flags, key } => {
+                    let flag = flags.first().ok_or(PresetErr::UnsupportedField {
+                        agent: agent_kind,
+                        field: field_name,
+                    })?;
+                    argv.extend([flag.clone(), format!("{key}={value}")]);
+                }
+            }
+        }
+        Ok(argv)
+    }
+
+    pub(super) fn resume_command(self, session_id: &str) -> Option<Vec<String>> {
+        self.resume.map(|command| command.render(session_id))
+    }
+
+    pub(super) fn launch_command(
+        self,
+        extra_args: &[String],
+        prompt: Option<&str>,
+    ) -> Option<Vec<String>> {
+        let mut argv = vec![self.program?.to_owned()];
+        argv.extend(self.fixed_args.iter().map(|arg| (*arg).to_owned()));
+        argv.extend(extra_args.iter().cloned());
+        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
+            match self.prompt {
+                PromptStyle::None => {}
+                PromptStyle::PositionalAfterDoubleDash => {
+                    argv.extend(["--".to_owned(), prompt.to_owned()]);
+                }
+                PromptStyle::Flag(flag) => {
+                    argv.extend([flag.to_owned(), prompt.to_owned()]);
+                }
+            }
+        }
+        Some(argv)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SessionCommand {
     pub before_id: &'static [&'static str],
     pub after_id: &'static [&'static str],
+}
+
+impl SessionCommand {
+    fn render(self, session_id: &str) -> Vec<String> {
+        self.before_id
+            .iter()
+            .copied()
+            .chain(std::iter::once(session_id))
+            .chain(self.after_id.iter().copied())
+            .map(ToOwned::to_owned)
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -170,8 +318,23 @@ pub struct AgentDescriptor {
     /// How this agent's transcript files map to billing threads, for the
     /// spending session count.
     pub thread_key: ThreadKey,
-    /// Static process launch contract rendered by [`AgentAdapter`](super::AgentAdapter).
+    /// Static process launch contract and its argv renderers.
     pub launch: LaunchSpec,
+}
+
+impl AgentDescriptor {
+    /// Whether this event is the descriptor's native session-end event.
+    pub fn ends_session(&self, event_name: &str) -> bool {
+        matches!(
+            self.lifecycle_hooks.ended,
+            HookCoverage::Native { event } if event == event_name
+        )
+    }
+
+    /// Render typed launch profile presets into provider-native argv.
+    pub fn render_preset(&self, preset: &LaunchPreset) -> Result<Vec<String>, PresetErr> {
+        self.launch.render_preset(self.kind, preset)
+    }
 }
 
 /// Architecture tokens that open a Rust target triple, so a release binary

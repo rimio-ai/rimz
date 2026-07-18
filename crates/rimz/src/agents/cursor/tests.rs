@@ -509,7 +509,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         .lifecycle
         .expect("session end");
     assert_eq!(ended.signal, LifecycleSignal::Ended);
-    assert!(CursorAdapter.ends_session("sessionEnd"));
+    assert!(CursorAdapter.descriptor().ends_session("sessionEnd"));
 }
 
 #[test]
@@ -1667,22 +1667,37 @@ fn every_wired_event_returns_cursor_neutral_json() {
 #[test]
 fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
     assert_eq!(
-        CursorAdapter.permission_args(PermissionMode::Ask),
+        CursorAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Ask),
         Vec::<String>::new()
     );
     assert_eq!(
-        CursorAdapter.permission_args(PermissionMode::Plan),
+        CursorAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Plan),
         vec!["--mode=plan"]
     );
     assert_eq!(
-        CursorAdapter.permission_args(PermissionMode::Auto),
+        CursorAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Auto),
         vec!["--auto-review"]
     );
     assert_eq!(
-        CursorAdapter.permission_args(PermissionMode::Yolo),
+        CursorAdapter
+            .descriptor()
+            .launch
+            .permission_args(PermissionMode::Yolo),
         vec!["--force", "--sandbox", "disabled"]
     );
-    assert_eq!(CursorAdapter.compact_command(), Some("/summarize"));
+    assert_eq!(
+        CursorAdapter.descriptor().launch.compact_command(),
+        Some("/summarize")
+    );
 
     let launch = CursorAdapter
         .launch_command(&["--auto-review".to_owned()], Some("fix it"))
@@ -1697,6 +1712,7 @@ fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
     );
 
     let preset = CursorAdapter
+        .descriptor()
         .render_preset(&LaunchPreset {
             model: Some("cursor/model".to_owned()),
             ..Default::default()
@@ -1704,7 +1720,7 @@ fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
         .expect("model preset");
     assert_eq!(preset, vec!["--model", "cursor/model"]);
     assert_eq!(
-        CursorAdapter.render_preset(&LaunchPreset {
+        CursorAdapter.descriptor().render_preset(&LaunchPreset {
             effort: Some("high".to_owned()),
             ..Default::default()
         }),
@@ -1719,7 +1735,9 @@ fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
     assert_eq!(&resume[resume.len() - 2..], ["--resume", "conv-1"]);
     assert!(
         CursorAdapter
-            .fork_command("conv-1", Path::new("/tmp"))
+            .descriptor()
+            .launch
+            .fork_command("conv-1")
             .is_none()
     );
 }

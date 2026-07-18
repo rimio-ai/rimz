@@ -313,7 +313,9 @@ pub fn compact_message_for_target(
     if agent.compacting_since.is_some() {
         return None;
     }
-    let command = crate::agents::find_adapter(target.kind.as_str())?.compact_command()?;
+    let command = crate::agents::descriptor_by_kind(target.kind.as_str())?
+        .launch
+        .compact_command()?;
     let occupied = agent.occupied_context_tokens();
     if let Some(used) = occupied
         && already_compacted_at(store, agent, command, used)
