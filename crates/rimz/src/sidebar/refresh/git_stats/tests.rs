@@ -236,6 +236,232 @@ fn untracked_added_lines_spends_a_shared_read_budget() {
 }
 
 #[test]
+fn untracked_line_memo_skips_stable_content_reads_and_spends_logical_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("new.txt"), b"one\ntwo\n").unwrap();
+    let mut first = UntrackedLineMemo::new();
+    let mut budget = 8;
+    let mut reads = 0;
+    let added = memoized_untracked_added_lines_with(
+        dir.path(),
+        "new.txt",
+        &Default::default(),
+        &mut first,
+        &mut budget,
+        &mut |path| {
+            reads += 1;
+            std::fs::read(path)
+        },
+    );
+    assert_eq!(added, 2);
+    assert_eq!(reads, 1);
+    assert_eq!(budget, 0);
+
+    let mut second = UntrackedLineMemo::new();
+    let mut budget = 8;
+    let added = memoized_untracked_added_lines_with(
+        dir.path(),
+        "new.txt",
+        &first,
+        &mut second,
+        &mut budget,
+        &mut |_| {
+            reads += 1;
+            Err(std::io::Error::other("memo hit must not read"))
+        },
+    );
+    assert_eq!(added, 2);
+    assert_eq!(reads, 1);
+    assert_eq!(budget, 0, "hits consume the same logical bytes as misses");
+    assert_eq!(second, first);
+}
+
+#[test]
+fn untracked_line_memo_invalidates_on_length_and_caches_binary_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("new.bin");
+    std::fs::write(&path, b"a\0b").unwrap();
+    let mut first = UntrackedLineMemo::new();
+    let mut budget = 16;
+    let mut reads = 0;
+    assert_eq!(
+        memoized_untracked_added_lines_with(
+            dir.path(),
+            "new.bin",
+            &Default::default(),
+            &mut first,
+            &mut budget,
+            &mut |path| {
+                reads += 1;
+                std::fs::read(path)
+            },
+        ),
+        0
+    );
+    let mut hit = UntrackedLineMemo::new();
+    let mut budget = 16;
+    assert_eq!(
+        memoized_untracked_added_lines_with(
+            dir.path(),
+            "new.bin",
+            &first,
+            &mut hit,
+            &mut budget,
+            &mut |_| panic!("binary zero is a cacheable hit"),
+        ),
+        0
+    );
+
+    std::fs::write(&path, b"one\ntwo\n").unwrap();
+    let mut changed = UntrackedLineMemo::new();
+    let mut budget = 16;
+    assert_eq!(
+        memoized_untracked_added_lines_with(
+            dir.path(),
+            "new.bin",
+            &hit,
+            &mut changed,
+            &mut budget,
+            &mut |path| {
+                reads += 1;
+                std::fs::read(path)
+            },
+        ),
+        2
+    );
+    assert_eq!(reads, 2);
+}
+
+#[test]
+fn untracked_line_memo_invalidates_same_length_mtime_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("new.txt");
+    std::fs::write(&path, b"a\nb\n").unwrap();
+    let mut first = UntrackedLineMemo::new();
+    let mut budget = 16;
+    assert_eq!(
+        memoized_untracked_added_lines_with(
+            dir.path(),
+            "new.txt",
+            &Default::default(),
+            &mut first,
+            &mut budget,
+            &mut |path| std::fs::read(path),
+        ),
+        2
+    );
+
+    std::fs::write(&path, b"abc\n").unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(SystemTime::now() + Duration::from_secs(2))
+        .unwrap();
+    let mut changed = UntrackedLineMemo::new();
+    let mut budget = 16;
+    let mut reads = 0;
+    assert_eq!(
+        memoized_untracked_added_lines_with(
+            dir.path(),
+            "new.txt",
+            &first,
+            &mut changed,
+            &mut budget,
+            &mut |path| {
+                reads += 1;
+                std::fs::read(path)
+            },
+        ),
+        1
+    );
+    assert_eq!(reads, 1);
+    assert_ne!(changed, first);
+}
+
+#[test]
+fn untracked_line_memo_hits_preserve_the_ordered_budget_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("first.txt"), b"a\nb\n").unwrap();
+    std::fs::write(dir.path().join("second.txt"), b"c\nd\n").unwrap();
+    let mut prior = UntrackedLineMemo::new();
+    let mut budget = 8;
+    for path in ["first.txt", "second.txt"] {
+        assert_eq!(
+            memoized_untracked_added_lines_with(
+                dir.path(),
+                path,
+                &Default::default(),
+                &mut prior,
+                &mut budget,
+                &mut |path| std::fs::read(path),
+            ),
+            2
+        );
+    }
+
+    let mut next = UntrackedLineMemo::new();
+    let mut budget = 4;
+    assert_eq!(
+        memoized_untracked_added_lines_with(
+            dir.path(),
+            "first.txt",
+            &prior,
+            &mut next,
+            &mut budget,
+            &mut |_| panic!("memo hit must not read"),
+        ),
+        2
+    );
+    assert_eq!(
+        memoized_untracked_added_lines_with(
+            dir.path(),
+            "second.txt",
+            &prior,
+            &mut next,
+            &mut budget,
+            &mut |_| panic!("over-budget memo entry must not read"),
+        ),
+        0
+    );
+    assert_eq!(
+        next.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["first.txt"]
+    );
+}
+
+#[test]
+fn git_refresh_state_prunes_worktrees_and_retains_failed_status_memos() {
+    let entry = UntrackedLineMemoEntry {
+        modified: SystemTime::now(),
+        len: 4,
+        added: 1,
+    };
+    let mut state = GitRefreshState {
+        untracked: HashMap::from([
+            (
+                "/keep".to_owned(),
+                BTreeMap::from([("a".to_owned(), entry)]),
+            ),
+            (
+                "/drop".to_owned(),
+                BTreeMap::from([("b".to_owned(), entry)]),
+            ),
+        ]),
+    };
+    let needed = ["/keep".to_owned()];
+    state.retain_needed(&needed);
+    assert_eq!(state.untracked.len(), 1);
+
+    state.replace_if_successful("/keep".to_owned(), None);
+    assert_eq!(state.untracked["/keep"]["a"], entry);
+
+    state.replace_if_successful("/keep".to_owned(), Some(UntrackedLineMemo::new()));
+    assert!(
+        state.untracked["/keep"].is_empty(),
+        "a successful empty status prunes paths that disappeared or became tracked"
+    );
+}
+
+#[test]
 fn head_facts_reads_live_branch_and_detached_head() {
     let repo = GitFixture::init(&["init", "-q"]);
     if !repo.initialized {
@@ -404,6 +630,7 @@ fn focused_diff_stats_refreshes_local_facts_before_commit_facts() {
         &BTreeSet::new(),
         1_000 + DIFF_STATS_FOCUSED_LOCAL_TTL.as_millis() as u64 + 1,
         None,
+        &mut GitRefreshState::default(),
     );
     let entry = refreshed.entries.get(&path).unwrap();
 
@@ -469,6 +696,7 @@ fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
         &BTreeSet::from([path.clone()]),
         now_ms,
         None,
+        &mut GitRefreshState::default(),
     );
     let entry = refreshed.entries.get(&path).unwrap();
 

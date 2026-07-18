@@ -293,6 +293,24 @@ pub fn refresh_producer_caches(
     session: &str,
     exclude: Option<&PaneId>,
 ) -> Result<()> {
+    refresh_producer_caches_with_state(
+        cursor,
+        state,
+        runtime,
+        session,
+        exclude,
+        &mut Default::default(),
+    )
+}
+
+pub(crate) fn refresh_producer_caches_with_state(
+    cursor: &mut RollupCursor,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    session: &str,
+    exclude: Option<&PaneId>,
+    refresh_state: &mut crate::sidebar::refresh::ProducerRefreshState,
+) -> Result<()> {
     let base = read_published_snapshot(cursor, state, runtime, session, exclude)?;
     let config = crate::config::MachineConfig::load_lenient();
     let _ = refresh_heavy_lanes(
@@ -302,6 +320,7 @@ pub fn refresh_producer_caches(
         runtime,
         &config,
         crate::agents::spending::service::SpendingServiceStartup::HostEligible,
+        refresh_state,
     );
     Ok(())
 }
@@ -443,6 +462,7 @@ fn enrich_with_refresh(
         opts.runtime,
         &config,
         crate::agents::spending::service::SpendingServiceStartup::OneShot,
+        &mut Default::default(),
     );
     enrich_producing_with(
         snapshot,

@@ -44,6 +44,7 @@ fn refresh_loop(
         config.session_name.clone(),
     );
     let mut daemon_checked_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
+    let mut refresh_state = crate::sidebar::refresh::ProducerRefreshState::default();
     loop {
         std::thread::sleep(tick_for(config.tick_seconds));
         if election.elder_instance().is_some() {
@@ -60,12 +61,13 @@ fn refresh_loop(
         };
         let tick = meter.begin();
         let result = refresh_guarded(&mut cursor, |cursor| {
-            crate::sidebar::produce::refresh_producer_caches(
+            crate::sidebar::produce::refresh_producer_caches_with_state(
                 cursor,
                 &state,
                 &runtime,
                 &config.session_name,
                 config.own_pane.as_ref(),
+                &mut refresh_state,
             )
         });
         if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {

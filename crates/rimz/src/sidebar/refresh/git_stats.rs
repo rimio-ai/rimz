@@ -6,10 +6,10 @@
 //! makes the folded `rev-parse` fail, so head/branch/merge facts publish as
 //! absent until the first commit.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,35 @@ pub struct DiffStatsCache {
     /// of forking `git worktree list` every snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktrees: Option<WorktreeRootsCache>,
+}
+
+/// Long-lived producer state for content-derived Git facts that do not belong
+/// in the renderer-consumed cache.
+#[derive(Debug, Default)]
+pub struct GitRefreshState {
+    untracked: HashMap<String, UntrackedLineMemo>,
+}
+
+impl GitRefreshState {
+    fn retain_needed(&mut self, needed: &[String]) {
+        self.untracked
+            .retain(|path, _| needed.iter().any(|needed| needed == path));
+    }
+
+    fn replace_if_successful(&mut self, path: String, memo: Option<UntrackedLineMemo>) {
+        if let Some(memo) = memo {
+            self.untracked.insert(path, memo);
+        }
+    }
+}
+
+type UntrackedLineMemo = BTreeMap<String, UntrackedLineMemoEntry>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UntrackedLineMemoEntry {
+    modified: SystemTime,
+    len: u64,
+    added: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -165,6 +194,7 @@ pub(crate) fn refresh_diff_stats_for(
     snapshot: &SidebarSnapshot,
     runtime: &crate::RuntimePaths,
     configured_trunk: Option<&str>,
+    state: &mut GitRefreshState,
 ) {
     let cache_path = runtime.diff_stats_path();
     let now_ms = unix_now_ms();
@@ -181,6 +211,7 @@ pub(crate) fn refresh_diff_stats_for(
         &hot,
         now_ms,
         configured_trunk,
+        state,
     );
 }
 
@@ -297,6 +328,10 @@ pub(crate) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<Str
 /// and writes the shared cache once; the rest read its write back, or (if it
 /// wedges) refresh locally for their own frame without writing — never
 /// clobbering the producer's fresher map.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the refresh boundary carries its selected roots, cadence tiers, and process-local memo"
+)]
 fn refresh_diff_stats(
     cache_path: &Path,
     runtime: &crate::RuntimePaths,
@@ -305,7 +340,9 @@ fn refresh_diff_stats(
     hot: &BTreeSet<String>,
     now_ms: u64,
     configured_trunk: Option<&str>,
+    state: &mut GitRefreshState,
 ) -> DiffStatsCache {
+    state.retain_needed(needed);
     // One closure carries the focus/activity tiering, and every freshness verdict —
     // the no-lock fast path, the single-flight loser's probe, and both produce
     // arms — goes through it, so the tiers cannot disagree and a loser never
@@ -355,10 +392,12 @@ fn refresh_diff_stats(
         // run in parallel across worktrees — and write once.
         Coalesced::Produce(_guard) => {
             let mut cache = read_diff_stats_cache(cache_path);
-            let refreshed = refresh_entries(&stale(&cache), &cache, configured_trunk);
+            let refreshed =
+                refresh_entries(&stale(&cache), &cache, configured_trunk, &state.untracked);
             let changed = !refreshed.is_empty();
-            for (path, entry) in refreshed {
-                cache.entries.insert(path, entry);
+            for (path, entry, memo) in refreshed {
+                cache.entries.insert(path.clone(), entry);
+                state.replace_if_successful(path, memo);
             }
             if changed && let Err(err) = atomic::write_temp_then_rename_cache(cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar diff-stats cache write failed");
@@ -369,8 +408,11 @@ fn refresh_diff_stats(
         // write — the producer's map will be fresher.
         Coalesced::ProduceLocal => {
             let mut cache = cache;
-            for (path, entry) in refresh_entries(&stale(&cache), &cache, configured_trunk) {
-                cache.entries.insert(path, entry);
+            for (path, entry, memo) in
+                refresh_entries(&stale(&cache), &cache, configured_trunk, &state.untracked)
+            {
+                cache.entries.insert(path.clone(), entry);
+                state.replace_if_successful(path, memo);
             }
             cache
         }
@@ -419,6 +461,7 @@ struct LocalFacts {
     branch: Option<String>,
     clean: Option<bool>,
     merge_in_progress: Option<bool>,
+    untracked_memo: Option<UntrackedLineMemo>,
 }
 
 struct CommitFacts {
@@ -451,7 +494,8 @@ fn refresh_entries(
     paths: &[(String, DueFacts)],
     cache: &DiffStatsCache,
     configured_trunk: Option<&str>,
-) -> Vec<(String, DiffStatsCacheEntry)> {
+    prior_memos: &HashMap<String, UntrackedLineMemo>,
+) -> Vec<(String, DiffStatsCacheEntry, Option<UntrackedLineMemo>)> {
     if paths.is_empty() {
         return Vec::new();
     }
@@ -471,10 +515,16 @@ fn refresh_entries(
                             break;
                         };
                         let prior = cache.entries.get(path.as_str()).cloned();
-                        local.push((
-                            path.clone(),
-                            refresh_entry(path, prior.as_ref(), *due, configured_trunk),
-                        ));
+                        let prior_memo =
+                            prior_memos.get(path.as_str()).cloned().unwrap_or_default();
+                        let (entry, memo) = refresh_entry_with_memo(
+                            path,
+                            prior.as_ref(),
+                            *due,
+                            configured_trunk,
+                            &prior_memo,
+                        );
+                        local.push((path.clone(), entry, memo));
                     }
                     local
                 })
@@ -493,12 +543,23 @@ fn refresh_entries(
 /// merge-base are resolved once when either half is due; local and commit facts
 /// update only their own fields and completion stamps, so a focused worktree's
 /// edit tick does not pay for commit/landed facts.
+#[cfg(test)]
 fn refresh_entry(
     path: &str,
     prior: Option<&DiffStatsCacheEntry>,
     due: DueFacts,
     configured_trunk: Option<&str>,
 ) -> DiffStatsCacheEntry {
+    refresh_entry_with_memo(path, prior, due, configured_trunk, &Default::default()).0
+}
+
+fn refresh_entry_with_memo(
+    path: &str,
+    prior: Option<&DiffStatsCacheEntry>,
+    due: DueFacts,
+    configured_trunk: Option<&str>,
+    prior_memo: &UntrackedLineMemo,
+) -> (DiffStatsCacheEntry, Option<UntrackedLineMemo>) {
     let mut entry = prior.cloned().unwrap_or_default();
     let worktree = Path::new(path);
     let refs = super::git_refs::resolve(worktree, configured_trunk);
@@ -521,18 +582,21 @@ fn refresh_entry(
         })
         .unwrap_or_else(|| head_facts(worktree));
 
+    let mut replacement_memo = None;
     if due.local {
         let local = refresh_local_facts(
             worktree,
             base.as_deref(),
             head.branch.clone(),
             head.merge_in_progress,
+            prior_memo,
         );
         entry.added = local.stats.map(|stats| stats.added);
         entry.removed = local.stats.map(|stats| stats.removed);
         entry.branch = local.branch;
         entry.clean = local.clean;
         entry.merge_in_progress = local.merge_in_progress;
+        replacement_memo = local.untracked_memo;
     }
     if due.commit {
         // Read marker provenance even when git ancestry facts are reusable so
@@ -579,7 +643,7 @@ fn refresh_entry(
     if due.commit {
         entry.commit_refreshed_at_ms = Some(completed_at_ms);
     }
-    entry
+    (entry, replacement_memo)
 }
 
 fn cached_refs_match(prior: &DiffStatsCacheEntry, refs: &super::git_refs::GitRefs) -> bool {
@@ -616,9 +680,10 @@ fn refresh_local_facts(
     base: Option<&str>,
     branch: Option<String>,
     merge_in_progress: Option<bool>,
+    prior_memo: &UntrackedLineMemo,
 ) -> LocalFacts {
     let stats = base.and_then(|base| worktree_diff_stats(worktree, base));
-    let status = worktree_status(worktree);
+    let (status, untracked_memo) = worktree_status(worktree, prior_memo);
     let clean = status.as_ref().map(|status| status.clean);
     // Untracked content is change the diff is blind to: fold its line count
     // into the `+` churn so an untracked-only worktree reads as carrying work,
@@ -635,6 +700,7 @@ fn refresh_local_facts(
         branch,
         clean,
         merge_in_progress,
+        untracked_memo,
     }
 }
 
@@ -793,8 +859,11 @@ struct WorktreeStatus {
 /// but counts no lines); and `--no-optional-locks` keeps this background probe
 /// from taking `index.lock`, so it never races the user's own git commands in
 /// the worktree.
-fn worktree_status(worktree: &Path) -> Option<WorktreeStatus> {
-    let output = git_output(
+fn worktree_status(
+    worktree: &Path,
+    prior: &UntrackedLineMemo,
+) -> (Option<WorktreeStatus>, Option<UntrackedLineMemo>) {
+    let Some(output) = git_output(
         worktree,
         &[
             "--no-optional-locks",
@@ -803,15 +872,73 @@ fn worktree_status(worktree: &Path) -> Option<WorktreeStatus> {
             "-z",
             "--untracked-files=all",
         ],
-    )?;
+    ) else {
+        return (None, None);
+    };
     if !output.status.success() {
-        return None;
+        return (None, None);
     }
     let mut budget = UNTRACKED_READ_BUDGET;
-    Some(parse_status_entries(
-        &String::from_utf8_lossy(&output.stdout),
-        |path| untracked_added_lines(&worktree.join(path), &mut budget),
-    ))
+    let mut next = UntrackedLineMemo::new();
+    let status = parse_status_entries(&String::from_utf8_lossy(&output.stdout), |path| {
+        memoized_untracked_added_lines(worktree, path, prior, &mut next, &mut budget)
+    });
+    (Some(status), Some(next))
+}
+
+fn memoized_untracked_added_lines(
+    worktree: &Path,
+    relative: &str,
+    prior: &UntrackedLineMemo,
+    next: &mut UntrackedLineMemo,
+    budget: &mut u64,
+) -> u32 {
+    memoized_untracked_added_lines_with(worktree, relative, prior, next, budget, &mut |path| {
+        std::fs::read(path)
+    })
+}
+
+fn memoized_untracked_added_lines_with(
+    worktree: &Path,
+    relative: &str,
+    prior: &UntrackedLineMemo,
+    next: &mut UntrackedLineMemo,
+    budget: &mut u64,
+    read: &mut impl FnMut(&Path) -> std::io::Result<Vec<u8>>,
+) -> u32 {
+    let path = worktree.join(relative);
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return 0;
+    };
+    if !meta.is_file() || meta.len() > *budget {
+        return 0;
+    }
+    let Ok(modified) = meta.modified() else {
+        return 0;
+    };
+    if let Some(hit) = prior
+        .get(relative)
+        .filter(|hit| hit.modified == modified && hit.len == meta.len())
+        .copied()
+    {
+        *budget = budget.saturating_sub(hit.len);
+        next.insert(relative.to_owned(), hit);
+        return hit.added;
+    }
+    let Ok(bytes) = read(&path) else {
+        return 0;
+    };
+    *budget = budget.saturating_sub(meta.len());
+    let added = count_added_lines(&bytes);
+    next.insert(
+        relative.to_owned(),
+        UntrackedLineMemoEntry {
+            modified,
+            len: meta.len(),
+            added,
+        },
+    );
+    added
 }
 
 /// Fold a porcelain v1 `-z` status stream: any entry means a dirty tree, and
@@ -855,6 +982,7 @@ const UNTRACKED_READ_BUDGET: u64 = 8 * 1024 * 1024;
 /// read `budget`. Unreadable, over-budget, and non-file paths contribute
 /// nothing; the status entry already marks the tree dirty, so an uncounted
 /// file costs accuracy, never the markers.
+#[cfg(test)]
 fn untracked_added_lines(path: &Path, budget: &mut u64) -> u32 {
     let Ok(meta) = std::fs::metadata(path) else {
         return 0;

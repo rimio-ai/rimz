@@ -191,6 +191,7 @@ mod tests {
             &runtime,
             &crate::config::MachineConfig::default(),
             crate::agents::spending::service::SpendingServiceStartup::OneShot,
+            &mut Default::default(),
         );
 
         assert_ne!(

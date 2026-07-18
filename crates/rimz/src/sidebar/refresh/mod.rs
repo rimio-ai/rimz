@@ -64,6 +64,12 @@ pub struct RefreshedLanes {
     pub pr_states: BTreeMap<String, PrLink>,
 }
 
+/// Process-local memo state owned by one long-lived cache producer.
+#[derive(Debug, Default)]
+pub struct ProducerRefreshState {
+    git: git_stats::GitRefreshState,
+}
+
 pub fn refresh_heavy_lanes(
     base: &SidebarSnapshot,
     daemon_probe_agents: &[AgentState],
@@ -71,6 +77,7 @@ pub fn refresh_heavy_lanes(
     runtime: &RuntimePaths,
     config: &MachineConfig,
     spending_startup: crate::agents::spending::service::SpendingServiceStartup,
+    state: &mut ProducerRefreshState,
 ) -> RefreshedLanes {
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
@@ -120,7 +127,12 @@ pub fn refresh_heavy_lanes(
     let mut budget_snapshot = base.clone();
     apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
     crate::harness::budget::enforce(&budget_snapshot, runtime, state_messages_dir, config);
-    refresh_diff_stats_for(base, runtime, config.sidebar.trunk.as_deref());
+    refresh_diff_stats_for(
+        base,
+        runtime,
+        config.sidebar.trunk.as_deref(),
+        &mut state.git,
+    );
     let pr_states = produce_pr_states(base, runtime);
 
     RefreshedLanes {
