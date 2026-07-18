@@ -28,7 +28,6 @@ pub const DEFAULT_MAX_DELIVERY_ATTEMPTS: u32 = 3;
 pub const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS";
 /// Cap for pre-send delivery failures after a queued claim.
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
-pub const CLAIM_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "origin")]
@@ -650,17 +649,6 @@ impl MessageRecord {
             _ => None,
         }
     }
-
-    pub fn batch_key(&self) -> Option<&str> {
-        match &self.sender {
-            MessageSender::Agent { channel, .. } => channel.as_deref(),
-            MessageSender::Human | MessageSender::System => self.channel.as_deref(),
-        }
-    }
-
-    pub fn batchable(&self) -> bool {
-        self.body == MessageBody::Prompt && self.enter && !self.text.trim_start().starts_with('/')
-    }
 }
 
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
@@ -744,7 +732,7 @@ pub fn queue_head<'a>(
 /// The oldest queued message in the candidate's delivery lane. Resume nudges
 /// are control traffic for a parked turn, so they do not wait behind ordinary
 /// user messages that can only deliver after the turn resumes.
-pub fn queue_head_for_message<'a>(
+pub(crate) fn queue_head_for_message<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
     candidate: &'a MessageRecord,
     now: Timestamp,
@@ -759,7 +747,7 @@ pub fn queue_head_for_message<'a>(
 /// Oldest ready record ahead of `candidate` in the same logical-card lane.
 /// Callers choose what readiness means: Store claims use durable stamps, while
 /// diagnosis can use currently true dynamic conditions for the candidate.
-pub fn older_ready_blocker<'a>(
+pub(crate) fn older_ready_blocker<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
     candidate: &MessageRecord,
     ready: impl Fn(&MessageRecord) -> bool,
@@ -858,14 +846,6 @@ pub fn max_delivery_attempts_from_env() -> u32 {
         .and_then(|raw| raw.parse::<u32>().ok())
         .filter(|attempts| *attempts > 0)
         .unwrap_or(DEFAULT_MAX_DELIVERY_ATTEMPTS)
-}
-
-pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool {
-    let Some(last) = last_attempt_at else {
-        return true;
-    };
-    let age = now.duration_since(last);
-    age.is_negative() || (age.as_secs() as u64) >= CLAIM_TTL.as_secs()
 }
 
 #[cfg(test)]

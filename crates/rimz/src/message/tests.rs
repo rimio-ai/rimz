@@ -333,24 +333,6 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
 }
 
 #[test]
-fn claim_ttl_expires_at_boundary_and_on_clock_skew() {
-    let now = Timestamp::now();
-    assert!(claim_expired(None, now));
-    assert!(!claim_expired(
-        Some(now - jiff::SignedDuration::from_secs(1)),
-        now
-    ));
-    assert!(claim_expired(
-        Some(now - jiff::SignedDuration::from_secs(15)),
-        now
-    ));
-    assert!(claim_expired(
-        Some(now + jiff::SignedDuration::from_secs(60)),
-        now
-    ));
-}
-
-#[test]
 fn auto_compact_parses_percent_and_token_forms() {
     assert_eq!(AutoCompact::parse("70%").unwrap(), AutoCompact::Percent(70));
     assert_eq!(AutoCompact::parse(" 0% ").unwrap(), AutoCompact::Percent(0));

@@ -85,6 +85,24 @@ impl SingularQueueTestExt for Store {
 }
 
 #[test]
+fn claim_ttl_expires_at_boundary_and_on_clock_skew() {
+    let now = Timestamp::now();
+    assert!(claim_expired(None, now));
+    assert!(!claim_expired(
+        Some(now - jiff::SignedDuration::from_secs(1)),
+        now
+    ));
+    assert!(claim_expired(
+        Some(now - jiff::SignedDuration::from_secs(15)),
+        now
+    ));
+    assert!(claim_expired(
+        Some(now + jiff::SignedDuration::from_secs(60)),
+        now
+    ));
+}
+
+#[test]
 fn claim_moves_message_out_of_pending_until_send_failure_requeues() {
     let (_dir, store, workspace_id) = store();
     let message = message(&workspace_id);
@@ -174,6 +192,36 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     store
         .defer_message_wake(&MessageId::parse("msg_0000000000000000").unwrap(), until)
         .unwrap();
+}
+
+#[test]
+fn no_op_queue_transaction_changes_no_durable_surface() {
+    let (_dir, store, workspace_id) = store();
+    let queued = message(&workspace_id);
+    store.queue_message(&queued, "session").unwrap();
+    let queue_path = store.inner.paths.messages_dir.join("messages.jsonl");
+    let queue_before = std::fs::read(&queue_path).unwrap();
+    let events_before = std::fs::read(&store.inner.paths.events_log).unwrap();
+    let _ = std::fs::remove_file(&store.inner.paths.latest_snapshot);
+
+    let report = store
+        .reconcile_stale_sent_messages(
+            "session",
+            Timestamp::now(),
+            Duration::from_secs(30),
+            3,
+            |_| false,
+        )
+        .unwrap();
+
+    assert_eq!(report, ReconcileReport::default());
+    assert_eq!(std::fs::read(queue_path).unwrap(), queue_before);
+    assert!(store.list_message_history().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read(&store.inner.paths.events_log).unwrap(),
+        events_before
+    );
+    assert!(!store.inner.paths.latest_snapshot.exists());
 }
 
 #[test]
@@ -755,6 +803,30 @@ fn only_fifo_head_can_be_claimed() {
 }
 
 #[test]
+fn older_claim_blocks_boundary_head_even_after_ttl() {
+    let (_dir, store, workspace_id) = store();
+    let mut first = message(&workspace_id);
+    let mut second = message(&workspace_id);
+    first.message_id = message_id(1);
+    second.message_id = message_id(2);
+    store.queue_message(&first, "session").unwrap();
+    store.queue_message(&second, "session").unwrap();
+    let now = Timestamp::now();
+    store
+        .claim_message_for_steer(&first.message_id, now)
+        .unwrap()
+        .expect("first claimed");
+
+    assert!(
+        store
+            .claim_delivery_batch(&second.message_id, AgentStatus::Idle, now + CLAIM_TTL,)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(message_by_id(&store, &first.message_id).attempts, 1);
+}
+
+#[test]
 fn boundary_batch_claims_maximal_compatible_fifo_prefix() {
     let (_dir, store, workspace_id) = store();
     let mut first = message(&workspace_id).with_channel(Some("same".to_owned()));
@@ -826,6 +898,39 @@ fn boundary_batch_stops_at_unexpired_claimed_tail() {
         message_by_id(&store, &later.message_id).status,
         MessageStatus::Queued
     );
+}
+
+#[test]
+fn boundary_batch_reclaims_expired_compatible_tail() {
+    let (_dir, store, workspace_id) = store();
+    let mut first = message(&workspace_id);
+    let mut claimed_tail = message(&workspace_id);
+    let mut later = message(&workspace_id);
+    first.message_id = message_id(1);
+    claimed_tail.message_id = message_id(2);
+    later.message_id = message_id(3);
+    for message in [&first, &claimed_tail, &later] {
+        store.queue_message(message, "session").unwrap();
+    }
+    let now = Timestamp::now();
+    store
+        .claim_message_for_steer(&claimed_tail.message_id, now)
+        .unwrap()
+        .expect("tail claimed first");
+
+    let claimed = store
+        .claim_delivery_batch(&first.message_id, AgentStatus::Idle, now + CLAIM_TTL)
+        .unwrap()
+        .expect("batch claimed after TTL");
+
+    assert_eq!(
+        claimed
+            .iter()
+            .map(|message| message.message_id.clone())
+            .collect::<Vec<_>>(),
+        vec![first.message_id, claimed_tail.message_id, later.message_id]
+    );
+    assert_eq!(claimed[1].attempts, 2);
 }
 
 #[test]
