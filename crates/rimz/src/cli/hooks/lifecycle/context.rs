@@ -19,22 +19,22 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         transcript_path,
         turn_ended,
     } = context;
-    // Remove the session's statusline context sidecar so a retained ended row
-    // cannot rejoin stale enrichment.
-    if decoded.ends_session() {
-        if let Err(err) = rimz::store::agent_context::remove(
+    // Remove the session's statusline context sidecar before the normal
+    // activity, merge, and refresh fall-through. Refresh-capable adapters can
+    // then repopulate the ended row with their final local context reading.
+    if decoded.ends_session()
+        && let Err(err) = rimz::store::agent_context::remove(
             store.runtime_paths(),
             agent.descriptor().kind,
             agent_id,
-        ) {
-            warn!(
-                agent = agent.descriptor().kind,
-                event = %event_name,
-                error = %err,
-                "lifecycle: failed to remove the session's context sidecar",
-            );
-        }
-        return;
+        )
+    {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to remove the session's context sidecar",
+        );
     }
     // Refresh the activity heartbeat on progress-proving events so the
     // sidebar's `last_activity` advances per tool call, not just per turn.
@@ -317,4 +317,99 @@ pub(super) fn prior_total_cost(
     prior
         .and_then(|record| record.context.cost.as_ref())
         .and_then(|cost| cost.total_cost_usd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct SessionEndRefreshAdapter;
+
+    impl AgentAdapter for SessionEndRefreshAdapter {
+        fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
+            rimz::agents::GrokAdapter.descriptor()
+        }
+
+        fn decode_hook(
+            &self,
+            event_name: &str,
+            payload: &Value,
+        ) -> rimz::agents::Result<DecodedHook> {
+            rimz::agents::GrokAdapter.decode_hook(event_name, payload)
+        }
+
+        fn local_context_refresh(
+            &self,
+            _trigger: rimz::agents::RefreshTrigger<'_>,
+            _ctx: &rimz::agents::LocalContextRefreshCtx<'_>,
+        ) -> Option<rimz::agents::LocalContextRefresh> {
+            let mut refresh = rimz::agents::LocalContextRefresh::sparse();
+            refresh.context.session_preview =
+                rimz::agents::FieldPatch::Set("final local context".to_owned());
+            Some(refresh)
+        }
+    }
+
+    #[test]
+    fn native_session_end_repopulates_context_from_local_refresh() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let workspace_id =
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"));
+        let paths = rimz::store::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let runtime = rimz::store::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let store = Store::open(paths, runtime).unwrap();
+        let workspace = ResolvedWorkspace {
+            workspace_id,
+            project_root: "/tmp/hooks-test".into(),
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: "/tmp/hooks-test".into(),
+            worktree_branch: None,
+            session_name: "hooks-test".to_owned(),
+            mux_hint: None,
+        };
+        let adapter = SessionEndRefreshAdapter;
+        let payload = serde_json::json!({
+            "sessionId": "root-session",
+            "cwd": "/tmp/hooks-test"
+        });
+        let decoded = adapter
+            .decode_hook("SessionEnd", &payload)
+            .expect("session end decodes");
+        assert!(decoded.ends_session());
+
+        let mut context = rimz::store::agent_context::empty_context("grok", jiff::Timestamp::now());
+        context.model_id = Some("stale-model".to_owned());
+        rimz::store::agent_context::merge_observed(
+            store.runtime_paths(),
+            "grok",
+            "root-session",
+            context,
+        )
+        .expect("context sidecar writes");
+        manage_agent_context(AgentContextHook {
+            workspace: &workspace,
+            store: &store,
+            agent: &adapter,
+            context: LifecycleEventContext {
+                event_name: decoded.event_name(),
+                decoded: &decoded,
+                payload: &payload,
+                agent_id: decoded.routing().context_agent_id().unwrap(),
+                parent_agent_id: None,
+                model_hint: None,
+                transcript_path: None,
+                turn_ended: false,
+            },
+        });
+
+        let context =
+            rimz::store::agent_context::read_one(store.runtime_paths(), "grok", "root-session")
+                .expect("local refresh repopulates ended context")
+                .context;
+        assert_eq!(context.model_id, None);
+        assert_eq!(
+            context.session_preview.as_deref(),
+            Some("final local context")
+        );
+    }
 }
