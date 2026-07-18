@@ -1114,7 +1114,7 @@ mod render {
         };
         let text = render_agents_text_with_theme(&snapshot, now, 120, &theme);
         assert!(text.contains("\u{f126} auth-refresh"), "{text}");
-        assert!(text.contains("#91 \u{f42e}"), "{text}");
+        assert!(text.contains("#91 \u{f058}"), "{text}");
         assert!(text.contains("\u{f292} docs"), "{text}");
     }
 

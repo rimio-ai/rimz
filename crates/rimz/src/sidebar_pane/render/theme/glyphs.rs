@@ -248,9 +248,9 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         GlyphRole::WorktreeTrunkMerge => "\u{f419}", // nf-oct-git_merge
         GlyphRole::WorktreePrOpen => "\u{f407}", // nf-oct-git_pull_request
         GlyphRole::WorktreePrClosed => "\u{f4dc}", // nf-oct-git_pull_request_closed
-        GlyphRole::WorktreeCiPassing => "\u{f42e}", // nf-oct-check
-        GlyphRole::WorktreeCiFailing => "\u{f467}", // nf-oct-x
-        GlyphRole::WorktreeCiPending => "\u{f444}", // nf-oct-dot_fill
+        GlyphRole::WorktreeCiPassing => "\u{f058}", // nf-fa-ok_sign
+        GlyphRole::WorktreeCiFailing => "\u{f057}", // nf-fa-remove_sign
+        GlyphRole::WorktreeCiPending => "\u{f192}", // nf-fa-circle_dot
         GlyphRole::WorktreeReconciling => "\u{f4db}", // nf-oct-git_merge_queue
         GlyphRole::WorktreeAhead
         | GlyphRole::WorktreeBehind
@@ -435,6 +435,22 @@ mod tests {
         assert_eq!(unicode_glyph(GlyphRole::CockpitPrOpen), "⑃");
         assert_eq!(nerd_font_glyph(GlyphRole::CockpitPrOpen), Some("\u{efa0}"));
         assert_eq!(nerd_font_glyph(GlyphRole::WorktreePrOpen), Some("\u{f407}"));
+    }
+
+    #[test]
+    fn worktree_ci_uses_font_awesome_circle_glyphs() {
+        assert_eq!(
+            nerd_font_glyph(GlyphRole::WorktreeCiPassing),
+            Some("\u{f058}")
+        );
+        assert_eq!(
+            nerd_font_glyph(GlyphRole::WorktreeCiFailing),
+            Some("\u{f057}")
+        );
+        assert_eq!(
+            nerd_font_glyph(GlyphRole::WorktreeCiPending),
+            Some("\u{f192}")
+        );
     }
 
     #[test]

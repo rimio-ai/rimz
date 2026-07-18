@@ -345,8 +345,9 @@ fn group_header(
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's PR identity follows its name in a steady link tone. Its git
-    // story pins right: live local reconciling leads, then a PR verdict, then
+    // The worktree's CI marker leads its PR identity after the name, with the
+    // number in a steady link tone. Its git story pins right: live local
+    // reconciling leads, then a PR verdict, then
     // the local trunk verdict; diverged/reconciling keeps the `⇡/⇣` commit delta
     // and `+/-` churn before the marker.
     // A marker-backed channel leads with the same fork/merge glyph as a
@@ -451,16 +452,16 @@ fn group_header(
     };
     let mut spans = vec![Span::styled(left, label_style)];
     if let Some((badge, ci)) = badge {
-        spans.push(Span::styled(
-            badge,
-            theme.styled(Component::WorktreePrBadge, Modifier::empty()),
-        ));
         if let Some((glyph, component)) = ci {
             spans.push(Span::styled(
                 glyph,
                 theme.styled(component, Modifier::empty()),
             ));
         }
+        spans.push(Span::styled(
+            badge,
+            theme.styled(Component::WorktreePrBadge, Modifier::empty()),
+        ));
     }
     spans.push(Span::styled(fill, fill_style));
     spans.extend(right);

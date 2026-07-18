@@ -257,6 +257,24 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
 }
 
 #[test]
+fn render_pr_badge_leads_with_ci_glyph() {
+    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    snapshot.worktree_groups[0].pr_number = Some(888);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 14);
+
+    assert!(
+        rendered.contains("✓ #888"),
+        "CI leads the PR badge:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("#888 ✓"),
+        "PR number no longer leads CI:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Merged));

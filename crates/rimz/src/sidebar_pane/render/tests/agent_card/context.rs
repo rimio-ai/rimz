@@ -889,11 +889,11 @@ fn calm_context_bar_orders_segments_left_to_right() {
 #[test]
 fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
-    let age_style = |idle_secs: u64, clock: char| {
+    let age_style = |status, idle_secs: u64, clock: char| {
         let mut codex = agent(
             "codex-1",
             "codex",
-            AgentStatus::Idle,
+            status,
             Some("/repo/main"),
             Some("main"),
             Some("add tests"),
@@ -916,24 +916,29 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         )
     };
     assert_eq!(
-        age_style(7 * 60, '◔'),
+        age_style(AgentStatus::Idle, 7 * 60, '◔'),
         theme.muted(),
         "warm cache rests at the dim weight once the clock shows past five minutes"
     );
     assert_eq!(
-        age_style(25 * 60, '◑'),
+        age_style(AgentStatus::Idle, 25 * 60, '◑'),
         heat(25 * 60),
         "warm ramp tone with the half-full face"
     );
     assert_eq!(
-        age_style(40 * 60, '◕'),
+        age_style(AgentStatus::Idle, 40 * 60, '◕'),
         heat(40 * 60),
         "mid-ramp tone past the half hour"
     );
     assert_eq!(
-        age_style(2 * 60 * 60, '◉'),
+        age_style(AgentStatus::Idle, 10 * 60 * 60, '◉'),
         theme.alarm(Modifier::empty()),
         "red once a resume would pay for the context again"
+    );
+    assert_eq!(
+        age_style(AgentStatus::Success, 10 * 60 * 60, '◉'),
+        theme.muted(),
+        "a finished-success context stays at rest after the heat threshold"
     );
 }
 #[test]
