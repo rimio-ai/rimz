@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarWidth};
+use rimz::mux::{SidebarLiveness, SidebarPaneOptions, SidebarWidth};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::RuntimePaths;
 use tempfile::TempDir;
