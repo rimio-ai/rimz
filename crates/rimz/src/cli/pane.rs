@@ -7,7 +7,9 @@ use super::GlobalFlags;
 use crate::cli::render;
 use rimz::agents::{AgentState, TurnPhase};
 use rimz::ids::PaneId;
-use rimz::mux::{MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions};
+use rimz::mux::{
+    MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions, SplitPlacement, SplitTarget,
+};
 use rimz::pane::PaneRef;
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
@@ -521,15 +523,13 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_default();
     backend
         .split_pane(SplitPaneOptions {
-            session_name: None,
-            target_view_id: None,
-            target_pane_id: rimz::mux::own_pane_id(backend.name()),
+            target: rimz::mux::own_pane_id(backend.name())
+                .map_or(SplitTarget::Ambient, SplitTarget::Pane),
             cwd: Some(workspace.worktree_root.display().to_string()),
             command: None,
             title: None,
             env: rimz::room::pane_identity_env(&workspace, None, true),
-            stacked: false,
-            direction,
+            placement: SplitPlacement::Directional(direction),
             focus: true,
         })
         .map_err(Into::into)

@@ -327,17 +327,6 @@ fn enforce_one_tab_per_pane(
     room.retain(|_, panes| !panes.is_empty());
 }
 
-pub fn remove_pane_from_tabs(
-    tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
-    is_plugin: bool,
-    id: u32,
-) {
-    for panes in tabs.values_mut() {
-        panes.retain(|pane| pane.is_plugin != is_plugin || pane.id != id);
-    }
-    tabs.retain(|_, panes| !panes.is_empty());
-}
-
 pub fn joined_foreground_command(command: &[String]) -> Option<String> {
     let joined = command
         .iter()
@@ -368,40 +357,6 @@ pub fn foreground_command_update(
         (false, Some(command)) => ForegroundCommandUpdate::Shell(command),
         (_, None) => ForegroundCommandUpdate::Forget,
     }
-}
-
-pub fn apply_foreground_commands(
-    tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
-    foreground: &BTreeMap<u32, String>,
-    shell: &BTreeMap<u32, String>,
-    cwd: &BTreeMap<u32, String>,
-    pids: &BTreeMap<u32, u32>,
-) {
-    for pane in tabs.values_mut().flatten() {
-        if pane.is_plugin {
-            continue;
-        }
-        pane.pane_command = foreground
-            .get(&pane.id)
-            .or_else(|| shell.get(&pane.id))
-            .cloned();
-        pane.pane_cwd = cwd.get(&pane.id).cloned();
-        pane.pane_pid = pids.get(&pane.id).copied();
-    }
-}
-
-pub fn panes_needing_pid(
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    pids: &BTreeMap<u32, u32>,
-    probed: &BTreeSet<u32>,
-) -> Vec<u32> {
-    tabs.values()
-        .flatten()
-        .filter(|pane| {
-            pane.is_live_terminal() && !pids.contains_key(&pane.id) && !probed.contains(&pane.id)
-        })
-        .map(|pane| pane.id)
-        .collect()
 }
 
 pub fn is_card_pane_id(tabs: &BTreeMap<usize, Vec<PaneFields>>, pane_id: u32) -> bool {

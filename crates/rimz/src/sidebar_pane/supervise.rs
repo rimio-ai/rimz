@@ -576,8 +576,7 @@ impl PaneWatchdog {
             workspace_id: Some(self.workspace_id.clone()),
             // Presence proves routine liveness. An absent or unavailable hint
             // escalates here because orphan reaping requires mux truth.
-            authoritative: true,
-            require_authoritative: true,
+            consistency: crate::mux::PaneReadConsistency::RequireAuthoritative,
             command_timeout: Some(PANE_PROBE_TIMEOUT),
             ..Default::default()
         }
@@ -1468,8 +1467,10 @@ mod tests {
         };
 
         let options = watchdog.probe_options();
-        assert!(options.authoritative);
-        assert!(options.require_authoritative);
+        assert_eq!(
+            options.consistency,
+            crate::mux::PaneReadConsistency::RequireAuthoritative
+        );
         assert_eq!(options.command_timeout, Some(PANE_PROBE_TIMEOUT));
     }
 

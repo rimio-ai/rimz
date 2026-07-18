@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ids::{MuxName, PaneId};
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
-use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
-use crate::mux::{ClientPresence, ClientView, PaneListing, SidebarWidth, ViewSidebars};
+use crate::mux::zellij::pane_topology::PaneTopologyPane;
+use crate::mux::{SidebarWidth, ViewSidebars};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
 /// Cleanliness of a live room after a successful pane inspection.
@@ -369,77 +369,6 @@ pub(super) fn wrong_tab_mounted_sidebar_pane(
             .then(|| candidates.first().copied())
             .flatten()
     })
-}
-
-#[derive(Debug)]
-pub(super) struct RawPaneListing {
-    pub(super) panes: Vec<PaneTopologyPane>,
-    pub(super) observed_at_ms: u64,
-    pub(super) session_focus: Option<PaneId>,
-    pub(super) client_view: Option<ClientView>,
-}
-
-impl RawPaneListing {
-    pub(super) fn from_topology(cache: PaneTopologyCache) -> Self {
-        let PaneTopologyCache {
-            produced_at_ms,
-            focused_pane,
-            clients,
-            panes,
-            ..
-        } = cache;
-        Self {
-            panes,
-            observed_at_ms: produced_at_ms,
-            session_focus: focused_pane.map(zellij_pane_id),
-            client_view: clients.map(client_view_from_topology),
-        }
-    }
-
-    pub(super) fn into_pane_listing(
-        self,
-        session_name: String,
-        project: impl FnMut(PaneTopologyPane, &str) -> Option<crate::pane::PaneRef>,
-    ) -> PaneListing {
-        let mut project = project;
-        PaneListing {
-            panes: self
-                .panes
-                .into_iter()
-                .filter_map(|pane| project(pane, &session_name))
-                .collect(),
-            observed_at_ms: self.observed_at_ms,
-            session_focus: self.session_focus,
-            client_view: self.client_view,
-        }
-    }
-}
-
-fn client_view_from_topology(clients: TopologyClients) -> ClientView {
-    ClientView {
-        clients: clients
-            .views
-            .into_iter()
-            .map(|view| crate::mux::ClientPaneView {
-                client_id: crate::mux::MuxClientId::Zellij(view.client_id),
-                pane_id: match view.pane_id {
-                    super::pane_topology::TopologyClientPane::Terminal(id) => zellij_pane_id(id),
-                    super::pane_topology::TopologyClientPane::Plugin(id) => {
-                        PaneId::from_parts(MuxName::Zellij, format!("plugin_{id}"))
-                    }
-                },
-            })
-            .collect(),
-        viewed_panes: clients
-            .viewed_panes
-            .into_iter()
-            .map(zellij_pane_id)
-            .collect(),
-        presence: ClientPresence {
-            human_clients: clients.human_clients as usize,
-            last_input_ms: None,
-        },
-    }
 }
 
 #[cfg(test)]

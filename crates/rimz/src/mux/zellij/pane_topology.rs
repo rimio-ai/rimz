@@ -11,7 +11,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pane::SIDEBAR_CHROME_TITLE;
+use crate::ids::{MuxName, PaneId};
+use crate::mux::{ClientPaneView, ClientView, MuxClientId, PaneListing};
+use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneTopologyCache {
@@ -27,6 +29,52 @@ pub struct PaneTopologyCache {
     pub panes: Vec<PaneTopologyPane>,
 }
 
+impl PaneTopologyCache {
+    pub(super) fn into_pane_listing(self, session_name: String) -> PaneListing {
+        let Self {
+            produced_at_ms,
+            focused_pane,
+            clients,
+            panes,
+            ..
+        } = self;
+        PaneListing {
+            panes: panes
+                .into_iter()
+                .filter_map(|mut pane| {
+                    if !pane.is_listed_pane() {
+                        return None;
+                    }
+                    let command = pane.display_command();
+                    Some(PaneRef {
+                        pane_id: zellij_pane_id(pane.id),
+                        session_name: session_name.clone(),
+                        view_id: Some(format!("tab_{}", pane.view_position())),
+                        view_kind: Some(crate::mux::view_kind(MuxName::Zellij)),
+                        view_name: pane.tab_name.take(),
+                        title: pane.title.take(),
+                        is_floating: pane.is_floating,
+                        pane_pid: pane.pane_pid,
+                        pane_process_start: None,
+                        hosted_agent_kind: None,
+                        hosted_agent_process_start: None,
+                        command,
+                        foreground_cmdline: None,
+                        spawn_command: pane.spawn_command().map(str::to_owned),
+                        cwd: pane.pane_cwd.take(),
+                        resumed_session_id: None,
+                        elevated_agent: None,
+                        first_seen_at_ms: None,
+                    })
+                })
+                .collect(),
+            observed_at_ms: produced_at_ms,
+            session_focus: focused_pane.map(zellij_pane_id),
+            client_view: clients.map(TopologyClients::into_client_view),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopologyClients {
     pub human_clients: u32,
@@ -34,6 +82,35 @@ pub struct TopologyClients {
     pub viewed_panes: Vec<u64>,
     #[serde(default)]
     pub views: Vec<TopologyClientView>,
+}
+
+impl TopologyClients {
+    fn into_client_view(self) -> ClientView {
+        ClientView {
+            clients: self
+                .views
+                .into_iter()
+                .map(|view| ClientPaneView {
+                    client_id: MuxClientId::Zellij(view.client_id),
+                    pane_id: match view.pane_id {
+                        TopologyClientPane::Terminal(id) => zellij_pane_id(id),
+                        TopologyClientPane::Plugin(id) => {
+                            PaneId::from_parts(MuxName::Zellij, format!("plugin_{id}"))
+                        }
+                    },
+                })
+                .collect(),
+            presence: crate::mux::ClientPresence {
+                human_clients: self.human_clients as usize,
+                last_input_ms: None,
+            },
+            viewed_panes: self.viewed_panes.into_iter().map(zellij_pane_id).collect(),
+        }
+    }
+}
+
+fn zellij_pane_id(raw: u64) -> PaneId {
+    PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

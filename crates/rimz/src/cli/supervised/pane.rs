@@ -13,7 +13,9 @@ use super::output;
 use crate::cli::GlobalFlags;
 use rimz::harness::run::RunRecord;
 use rimz::ids::PaneId;
-use rimz::mux::{PaneCmd, PaneListOptions, SplitDirection, SplitPaneOptions};
+use rimz::mux::{
+    PaneCmd, PaneListOptions, PaneReadConsistency, SplitPaneOptions, SplitPlacement, SplitTarget,
+};
 use rimz::room::session::MissingSessionReport;
 
 pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
@@ -63,15 +65,15 @@ pub(crate) fn split_into_loop_zone(
         }
     };
     match backend.split_pane(SplitPaneOptions {
-        session_name: Some(workspace.session_name.clone()),
-        target_view_id: panel.view_id.clone(),
-        target_pane_id: Some(panel.pane_id.clone()),
+        target: SplitTarget::SessionPane {
+            session_name: workspace.session_name.clone(),
+            pane_id: panel.pane_id.clone(),
+        },
         cwd: Some(cwd.to_string_lossy().into_owned()),
         command: Some(pane.argv.clone()),
         title: None,
         env,
-        stacked: true,
-        direction: SplitDirection::Down,
+        placement: SplitPlacement::Stacked,
         focus: false,
     }) {
         Ok(()) => Ok(true),
@@ -95,7 +97,7 @@ fn list_loop_zone_panes(
         session_name: Some(workspace.session_name.clone()),
         workspace_id: Some(workspace.workspace_id.clone()),
         command_timeout: Some(Duration::from_millis(500)),
-        authoritative: true,
+        consistency: PaneReadConsistency::PreferAuthoritative,
         ..Default::default()
     }) {
         Ok(listing) => Some(listing),

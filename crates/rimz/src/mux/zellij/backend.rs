@@ -12,8 +12,8 @@ use super::parse::{
     is_transient_empty, live_session_name_from_line, parse_client_view, trim_capture,
 };
 use super::raw_pane::{
-    RawPaneListing, SessionCleanliness, floating_panes_in_anchor_view, is_sidebar_pane,
-    sidebar_geometry_off_spec, tab_view_cols, views_with_sidebars, zellij_pane_id,
+    SessionCleanliness, floating_panes_in_anchor_view, is_sidebar_pane, sidebar_geometry_off_spec,
+    tab_view_cols, views_with_sidebars, zellij_pane_id,
 };
 use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
@@ -22,10 +22,9 @@ use crate::mux::{
     CachedPaneRoster, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
     NamedKey, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, Result,
     SessionHealth, SessionLiveness, SessionOptions, SidebarLiveness, SidebarPaneOptions,
-    SidebarRecovery, SplitDirection, SplitPaneOptions, TabOptions, WidthStep, ensure_pane_backend,
-    execute_reconcile_plan, memoized_version,
+    SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
+    WidthStep, ensure_pane_backend, execute_reconcile_plan, memoized_version,
 };
-use crate::pane::PaneRef;
 use crate::store::RuntimePaths;
 use serde::Deserialize;
 
@@ -150,6 +149,36 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
 }
 
 impl ZellijBackend {
+    fn restore_background_split_focus(
+        &self,
+        placement: SplitPlacement,
+        focus: bool,
+        workspace_id: Option<WorkspaceId>,
+        target: &SplitTarget,
+    ) {
+        if placement == SplitPlacement::Stacked || focus {
+            return;
+        }
+        let Some(target_pane) = target.pane_id() else {
+            return;
+        };
+        let session_name = target.session_name().unwrap_or_default();
+        if let Some(workspace_id) = workspace_id
+            && let Ok(runtime) = self.runtime_paths_for_workspace(workspace_id)
+        {
+            let _ = crate::sidebar::focus_anchor::execute_action(
+                self,
+                &runtime,
+                session_name,
+                target_pane.clone(),
+                crate::sidebar::focus_anchor::FocusOrigin::User,
+                None,
+            );
+        } else {
+            let _ = self.focus_pane(target_pane, Some(session_name));
+        }
+    }
+
     pub(super) fn tab_id_for_pane(&self, session_name: &str, pane: &PaneId) -> Result<u64> {
         let pane_id = pane.creation_ordinal().ok_or_else(|| MuxErr::Output {
             program: "zellij".to_owned(),
@@ -187,7 +216,7 @@ impl ZellijBackend {
         runtime_paths: Option<&RuntimePaths>,
         workspace_id: Option<&WorkspaceId>,
         timeout: Duration,
-    ) -> Result<RawPaneListing> {
+    ) -> Result<PaneTopologyCache> {
         let observed_at_ms = crate::sidebar::timing::unix_now_ms();
         let listed = self.raw_listed_panes(session_name, timeout)?;
         let mut cache = PaneTopologyCache {
@@ -207,7 +236,7 @@ impl ZellijBackend {
         {
             merge_topology_enrichment(&mut cache, prior);
         }
-        Ok(RawPaneListing::from_topology(cache))
+        Ok(cache)
     }
 
     fn runtime_paths_for_authoritative(
@@ -443,13 +472,13 @@ impl MuxBackend for ZellijBackend {
         workspace_id: &WorkspaceId,
     ) -> Option<CachedPaneRoster> {
         let runtime = self.runtime_paths_for_authoritative(workspace_id)?;
-        let cache = crate::sidebar::cache::read_pane_topology_cache(&runtime, session)?;
-        crate::sidebar::cache::pane_topology_cache_is_fresh(
-            &cache,
+        let cache = Self::fresh_cached_topology(
+            &runtime,
+            session,
             crate::sidebar::timing::unix_now_ms(),
             None,
-        )
-        .then(|| CachedPaneRoster {
+        )?;
+        Some(CachedPaneRoster {
             pane_ids: cache
                 .panes
                 .into_iter()
@@ -465,66 +494,15 @@ impl MuxBackend for ZellijBackend {
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let session_name = opts.session_name.unwrap_or_default();
-        let raws = if (opts.authoritative || opts.require_authoritative) && !session_name.is_empty()
-        {
-            match self.authoritative_pane_listing(
-                &session_name,
-                opts.runtime_paths.as_ref(),
-                opts.workspace_id.as_ref(),
-                timeout,
-            ) {
-                Ok(listing) => listing,
-                Err(err) if opts.require_authoritative => return Err(err),
-                Err(err) => {
-                    tracing::debug!(session = %session_name, error = %err, "authoritative Zellij pane listing failed; falling back to topology cache");
-                    self.topology_listing(
-                        Some(&session_name),
-                        opts.runtime_paths.as_ref(),
-                        opts.workspace_id.as_ref(),
-                        opts.min_topology_produced_at_ms,
-                        timeout,
-                    )?
-                }
-            }
-        } else {
-            self.topology_listing(
-                (!session_name.is_empty()).then_some(session_name.as_str()),
-                opts.runtime_paths.as_ref(),
-                opts.workspace_id.as_ref(),
-                opts.min_topology_produced_at_ms,
-                timeout,
-            )?
-        };
-        Ok(raws.into_pane_listing(session_name, |mut p, session_name| {
-            if !p.is_listed_pane() {
-                return None;
-            }
-            let command = p.display_command();
-            Some(PaneRef {
-                pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
-                session_name: session_name.to_owned(),
-                view_id: Some(format!("tab_{}", p.view_position())),
-                view_kind: Some(crate::mux::view_kind(MuxName::Zellij)),
-                view_name: p.tab_name.take(),
-                title: p.title.take(),
-                is_floating: p.is_floating,
-                pane_pid: p.pane_pid,
-                pane_process_start: None,
-                hosted_agent_kind: None,
-                hosted_agent_process_start: None,
-                command,
-                foreground_cmdline: None,
-                spawn_command: p.spawn_command().map(str::to_owned),
-                cwd: p.pane_cwd.take(),
-                resumed_session_id: None,
-                elevated_agent: None,
-                first_seen_at_ms: None,
-                // Zellij topology exposes no per-pane "tab is active" or
-                // "session attached" signal, so pane visibility is unknown here.
-                // `None` makes the renderer's visibility gate fall back to
-                // always painting — the deliberate cross-backend floor.
-            })
-        }))
+        self.read_topology(
+            (!session_name.is_empty()).then_some(session_name.as_str()),
+            opts.runtime_paths.as_ref(),
+            opts.workspace_id.as_ref(),
+            opts.min_topology_produced_at_ms,
+            opts.consistency,
+            timeout,
+        )
+        .map(|cache| cache.into_pane_listing(session_name))
     }
 
     fn client_view(&self, opts: ClientFocusOptions) -> Result<ClientView> {
@@ -546,56 +524,53 @@ impl MuxBackend for ZellijBackend {
             .env
             .get(crate::workspace::ENV_WORKSPACE_ID)
             .and_then(|value| value.parse::<WorkspaceId>().ok());
-        let target = opts.target_pane_id;
-        if let Some(target) = &target {
-            ensure_pane_backend(target, MuxName::Zellij)?;
+        let target = opts.target;
+        let session_name = target.session_name();
+        let target_pane = target.pane_id();
+        if let Some(target_pane) = target_pane {
+            ensure_pane_backend(target_pane, MuxName::Zellij)?;
         }
-        let anchored_stack = opts.stacked && target.is_some();
+        let anchored_stack = opts.placement == SplitPlacement::Stacked && target_pane.is_some();
         // Zellij gives `--tab-id` precedence over the CLI pane context, so an
         // anchored stack must use `--near-current-pane` and let
         // `ZELLIJ_PANE_ID` imply the tab. Only stacked spawns honor that flag;
         // directional spawns silently no-op with it and keep resolving a stable
         // tab id. An anchored stack leaves client focus alone, while the
         // `focus-pane-id` restore below always switches the client's tab.
-        let target_tab_id = if anchored_stack {
-            None
-        } else {
-            // Pane listings carry positional `tab_N` view ids because the
-            // presence plugin cannot see Zellij's stable tab id. Resolve the
-            // target pane through Zellij before using `--tab-id`; positions
-            // diverge after a tab move or close.
-            match (
-                opts.session_name.as_deref(),
-                target.as_ref(),
-                opts.target_view_id.as_deref(),
-            ) {
-                (Some(session), Some(target), Some(_)) => {
-                    Some(self.tab_id_for_pane(session, target)?)
-                }
-                (_, _, view_id) => view_id.and_then(zellij_numeric_id),
-            }
+        let target_tab_id = match (&target, opts.placement) {
+            (
+                SplitTarget::SessionPane {
+                    session_name,
+                    pane_id,
+                },
+                SplitPlacement::Directional(_),
+            ) => Some(self.tab_id_for_pane(session_name, pane_id)?),
+            _ => None,
         };
-        let mut spec = match opts.session_name.as_deref() {
+        let mut spec = match session_name {
             Some(session) => self.zellij_action(session).arg("new-pane"),
             None => self.cmd().args(["action", "new-pane"]),
         };
-        if opts.stacked {
-            spec = spec.arg("--stacked");
-            if anchored_stack {
-                spec = spec.arg("--near-current-pane");
+        match opts.placement {
+            SplitPlacement::Stacked => {
+                spec = spec.arg("--stacked");
+                if anchored_stack {
+                    spec = spec.arg("--near-current-pane");
+                }
             }
-        } else {
-            let direction = match opts.direction {
-                SplitDirection::Right => "right",
-                SplitDirection::Down => "down",
-            };
-            spec = spec.args(["--direction", direction]);
+            SplitPlacement::Directional(direction) => {
+                let direction = match direction {
+                    SplitDirection::Right => "right",
+                    SplitDirection::Down => "down",
+                };
+                spec = spec.args(["--direction", direction]);
+            }
         }
-        if let Some(target) = &target {
-            let pane_id = target
+        if let Some(target_pane) = target_pane {
+            let pane_id = target_pane
                 .creation_ordinal()
                 .map(|id| id.to_string())
-                .unwrap_or_else(|| target.raw().to_owned());
+                .unwrap_or_else(|| target_pane.raw().to_owned());
             spec = spec.env("ZELLIJ_PANE_ID", pane_id);
         }
         if let Some(tab_id) = target_tab_id {
@@ -619,28 +594,7 @@ impl MuxBackend for ZellijBackend {
             }
         }
         spec.run()?;
-        // Directional `new-pane` can focus the pane it creates; for the `--bg`
-        // path return focus to the splitting pane (best-effort — it is open).
-        if !anchored_stack
-            && !opts.focus
-            && let Some(target) = &target
-        {
-            let session_name = opts.session_name.unwrap_or_default();
-            if let Some(workspace_id) = focus_workspace
-                && let Ok(runtime) = self.runtime_paths_for_workspace(workspace_id)
-            {
-                let _ = crate::sidebar::focus_anchor::execute_action(
-                    self,
-                    &runtime,
-                    &session_name,
-                    target.clone(),
-                    crate::sidebar::focus_anchor::FocusOrigin::User,
-                    None,
-                );
-            } else {
-                let _ = self.focus_pane(target, Some(&session_name));
-            }
-        }
+        self.restore_background_split_focus(opts.placement, opts.focus, focus_workspace, &target);
         Ok(())
     }
 
@@ -667,18 +621,16 @@ impl MuxBackend for ZellijBackend {
             program: "zellij".to_owned(),
             reason: format!("target pane `{pane}` has no numeric topology id"),
         })?;
-        let cache = crate::sidebar::cache::read_pane_topology_cache(runtime, session)
-            .filter(|cache| {
-                crate::sidebar::cache::pane_topology_cache_is_fresh(
-                    cache,
-                    crate::sidebar::timing::unix_now_ms(),
-                    None,
-                )
-            })
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("fresh pane topology is unavailable for session `{session}`"),
-            })?;
+        let cache = Self::fresh_cached_topology(
+            runtime,
+            session,
+            crate::sidebar::timing::unix_now_ms(),
+            None,
+        )
+        .ok_or_else(|| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("fresh pane topology is unavailable for session `{session}`"),
+        })?;
         let tab_position = cache
             .panes
             .iter()
@@ -1298,9 +1250,4 @@ fn focus_action_error(error: crate::sidebar::focus_anchor::FocusActionError) -> 
         program: "zellij".to_owned(),
         reason: error.to_string(),
     }
-}
-
-fn zellij_numeric_id(raw: &str) -> Option<u64> {
-    raw.rsplit_once('_')
-        .and_then(|(_, tail)| tail.parse::<u64>().ok())
 }

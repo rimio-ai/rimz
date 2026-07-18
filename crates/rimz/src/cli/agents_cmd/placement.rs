@@ -8,7 +8,8 @@ use anyhow::{Context, Result};
 use rimz::harness::plan::Placement;
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
-    LayoutPanes, MuxBackend, SidebarPaneOptions, SplitPaneOptions, TabOptions, own_pane_id,
+    LayoutPanes, MuxBackend, SidebarPaneOptions, SplitPaneOptions, SplitPlacement, SplitTarget,
+    TabOptions, own_pane_id,
 };
 use rimz::store::AgentLaunchBatch;
 
@@ -106,15 +107,12 @@ fn prepare_resolved(
             sidebar,
         }),
         Placement::NewPane => PreparedPlacement::NewPane(SplitPaneOptions {
-            session_name: None,
-            target_view_id: None,
-            target_pane_id,
+            target: target_pane_id.map_or(SplitTarget::Ambient, SplitTarget::Pane),
             cwd: Some(cwd.to_string_lossy().into_owned()),
             command: Some(single_pane_argv(&panes)?),
             title: None,
             env: identity_env,
-            stacked: false,
-            direction,
+            placement: SplitPlacement::Directional(direction),
             focus: !background,
         }),
         Placement::SamePane => PreparedPlacement::SamePane {
@@ -237,15 +235,14 @@ mod tests {
         .unwrap() else {
             panic!("new pane placement");
         };
-        assert_eq!(options.target_pane_id, Some(target));
+        assert_eq!(options.target, SplitTarget::Pane(target));
         assert_eq!(options.cwd.as_deref(), Some("/work"));
         assert_eq!(
             options.command.as_deref(),
             Some(&["rimz".to_owned(), "agents".to_owned()][..])
         );
         assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
-        assert!(!options.stacked);
-        assert_eq!(options.direction, rimz::mux::SplitDirection::Right);
+        assert_eq!(options.placement, SplitPlacement::default());
         assert!(!options.focus);
     }
 

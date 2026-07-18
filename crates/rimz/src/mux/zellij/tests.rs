@@ -8,8 +8,9 @@ use crate::ids::{PaneId, WorkspaceId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
 #[cfg(unix)]
 use crate::mux::{
-    LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SidebarPaneOptions,
-    SidebarWidth, SplitDirection, SplitPaneOptions, TabOptions, WidthPercent, WidthSyncOptions,
+    LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, PaneReadConsistency,
+    SidebarPaneOptions, SidebarWidth, SplitDirection, SplitPaneOptions, SplitPlacement,
+    SplitTarget, TabOptions, WidthPercent, WidthSyncOptions,
 };
 #[cfg(unix)]
 use crate::sidebar::cache::write_pane_topology_cache;
@@ -165,6 +166,10 @@ fn split_pane_routes_directional_and_anchored_requests() {
         r#"#!/bin/sh
 dir=$(dirname "$0")
 printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-panes --all --json "*)
+    printf '[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3}]\n' ;;
+esac
 exit 0
 "#,
     );
@@ -172,7 +177,7 @@ exit 0
     for direction in [SplitDirection::Right, SplitDirection::Down] {
         backend
             .split_pane(SplitPaneOptions {
-                direction,
+                placement: SplitPlacement::Directional(direction),
                 focus: true,
                 title: Some("rimz managed pane".to_owned()),
                 ..Default::default()
@@ -181,11 +186,22 @@ exit 0
     }
     backend
         .split_pane(SplitPaneOptions {
-            session_name: Some("rimz-test".to_owned()),
-            target_view_id: Some("tab_2".to_owned()),
-            target_pane_id: Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_7")),
-            stacked: true,
-            direction: SplitDirection::Down,
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            placement: SplitPlacement::Directional(SplitDirection::Right),
+            focus: true,
+            ..Default::default()
+        })
+        .expect("explicit session-pane split");
+    backend
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            placement: SplitPlacement::Stacked,
             focus: false,
             ..Default::default()
         })
@@ -198,6 +214,10 @@ exit 0
     ] {
         assert!(log.contains(command), "{log}");
     }
+    assert!(
+        log.contains("--session rimz-test action new-pane --direction right --tab-id 42 | pane=7"),
+        "{log}"
+    );
     let anchored = log.lines().last().expect("anchored command");
     assert!(
         anchored.contains("action new-pane --stacked --near-current-pane | pane=7"),
@@ -207,7 +227,11 @@ exit 0
         !anchored.contains("--tab-id") && !log.contains("focus-pane-id"),
         "{log}"
     );
-    assert_eq!(log.lines().count(), 3, "one command per split:\n{log}");
+    assert_eq!(
+        log.lines().count(),
+        5,
+        "expected split and lookup calls:\n{log}"
+    );
 }
 
 #[cfg(unix)]
@@ -397,11 +421,8 @@ exit 1
         (Some(40), Some(0))
     );
     assert_eq!(background.pane_command.as_deref(), Some("rimz-sidebar"));
-    assert_eq!(
-        listing.session_focus, None,
-        "pane roster is not focus truth"
-    );
-    assert!(listing.observed_at_ms >= unix_now_ms().saturating_sub(1_000));
+    assert_eq!(listing.focused_pane, None, "pane roster is not focus truth");
+    assert!(listing.produced_at_ms >= unix_now_ms().saturating_sub(1_000));
     assert!(shim_log(&temp).contains("action list-panes --all --json"));
 }
 
@@ -431,7 +452,7 @@ exit 1
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
             workspace_id: Some(room.workspace_id.clone()),
-            authoritative: true,
+            consistency: PaneReadConsistency::PreferAuthoritative,
             ..Default::default()
         })
         .expect("optional authoritative read falls back");
@@ -440,8 +461,7 @@ exit 1
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
             workspace_id: Some(room.workspace_id.clone()),
-            authoritative: true,
-            require_authoritative: true,
+            consistency: PaneReadConsistency::RequireAuthoritative,
             ..Default::default()
         })
         .expect_err("required authoritative read propagates failure");

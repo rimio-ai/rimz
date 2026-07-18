@@ -43,22 +43,13 @@ pub(crate) struct ViewSidebars {
     pub has_daemon_host: bool,
 }
 
-/// One serialized repair transaction. Replacement keeps `old` alive until a
-/// new pane mounts in the intended view and publishes a heartbeat.
+/// One serialized repair transaction. Replacement keeps existing panes alive
+/// until a new pane mounts in the intended view and publishes a heartbeat.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ViewVerdict {
-    CloseDuplicates {
-        view: String,
-        close: Vec<PaneId>,
-    },
-    Add {
-        view: String,
-    },
-    Replace {
-        view: String,
-        old: PaneId,
-        close: Vec<PaneId>,
-    },
+    CloseDuplicates { view: String, close: Vec<PaneId> },
+    Add { view: String },
+    Replace { view: String, close: Vec<PaneId> },
 }
 
 /// Result of a backend's native add and verification effect.
@@ -321,10 +312,8 @@ pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> 
                     });
                 }
                 None => {
-                    let old = view.sidebar_panes[0].clone();
                     plan.verdicts.push(ViewVerdict::Replace {
                         view: view.view.clone(),
-                        old,
                         close: view.sidebar_panes.clone(),
                     });
                 }
@@ -445,7 +434,6 @@ mod tests {
                 },
                 ViewVerdict::Replace {
                     view: "wedged".to_owned(),
-                    old: pane("terminal_1"),
                     close: vec![pane("terminal_1")],
                 },
                 ViewVerdict::CloseDuplicates {
@@ -501,7 +489,6 @@ mod tests {
             plan.verdicts,
             vec![ViewVerdict::Replace {
                 view: "view".to_owned(),
-                old: pane("terminal_1"),
                 close: vec![pane("terminal_1"), pane("terminal_2")],
             }]
         );
@@ -513,7 +500,6 @@ mod tests {
         let (report, failed) = execute(
             vec![ViewVerdict::Replace {
                 view: "view".to_owned(),
-                old: pane("terminal_1"),
                 close: vec![pane("terminal_1"), pane("terminal_2")],
             }],
             false,
@@ -546,7 +532,6 @@ mod tests {
         let (failed_report, failed) = execute(
             vec![ViewVerdict::Replace {
                 view: "failed".to_owned(),
-                old: pane("terminal_1"),
                 close: vec![pane("terminal_1")],
             }],
             false,
@@ -563,7 +548,6 @@ mod tests {
         let (deferred_report, failed) = execute(
             vec![ViewVerdict::Replace {
                 view: "deferred".to_owned(),
-                old: pane("terminal_2"),
                 close: vec![pane("terminal_2")],
             }],
             true,
@@ -651,7 +635,6 @@ mod tests {
                 },
                 ViewVerdict::Replace {
                     view: "deferred-after".to_owned(),
-                    old: pane("terminal_2"),
                     close: vec![pane("terminal_2")],
                 },
             ],

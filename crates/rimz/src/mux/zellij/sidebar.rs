@@ -4,13 +4,13 @@ use std::collections::{BTreeSet, HashSet};
 use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
-use super::pane_topology::PaneTopologyPane;
+use super::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use super::parse::{
     SessionState, classify_session_not_found, is_session_not_found,
     parse_focused_terminal_client_ids, strip_ansi,
 };
 use super::raw_pane::{
-    RawPaneListing, SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
+    SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
     nested_work_pane_ids, parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids,
     sidebar_dock_verdict, tab_view_cols, wrong_tab_mounted_sidebar_pane,
 };
@@ -22,8 +22,8 @@ use super::{
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::{
-    DaemonView, MuxBackend, MuxErr, PresencePluginOptions, Result, SidebarPaneOptions,
-    WidthSyncOptions, sidebar_serve_args,
+    DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
+    SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::timing::RECONCILE_LIST_TIMEOUT;
@@ -253,10 +253,12 @@ impl ZellijBackend {
         let mut fallback_misdocked: Option<u64> = None;
         for attempt in 0..ADD_DOCK_ATTEMPTS {
             let before_panes = self
-                .authoritative_pane_listing(
-                    &opts.session_name,
+                .read_topology(
+                    Some(&opts.session_name),
                     None,
                     Some(&opts.workspace_id),
+                    None,
+                    PaneReadConsistency::RequireAuthoritative,
                     RECONCILE_LIST_TIMEOUT,
                 )?
                 .panes;
@@ -419,17 +421,15 @@ impl ZellijBackend {
         session: &str,
         workspace_id: &WorkspaceId,
         min_topology_produced_at_ms: Option<u64>,
-    ) -> Result<RawPaneListing> {
-        self.authoritative_pane_listing(session, None, Some(workspace_id), RECONCILE_LIST_TIMEOUT)
-            .or_else(|_| {
-                self.topology_listing(
-                    Some(session),
-                    None,
-                    Some(workspace_id),
-                    min_topology_produced_at_ms,
-                    RECONCILE_LIST_TIMEOUT,
-                )
-            })
+    ) -> Result<PaneTopologyCache> {
+        self.read_topology(
+            Some(session),
+            None,
+            Some(workspace_id),
+            min_topology_produced_at_ms,
+            PaneReadConsistency::PreferAuthoritative,
+            RECONCILE_LIST_TIMEOUT,
+        )
     }
 
     /// Seed the attached client's initial tab with its deterministic work pane.
@@ -613,22 +613,14 @@ impl ZellijBackend {
         raw_id: u64,
         floor: Option<u64>,
     ) -> (Option<u64>, bool) {
-        let listing = self
-            .authoritative_pane_listing(
-                &opts.session_name,
-                None,
-                Some(&opts.workspace_id),
-                RECONCILE_LIST_TIMEOUT,
-            )
-            .or_else(|_| {
-                self.topology_listing(
-                    Some(&opts.session_name),
-                    None,
-                    Some(&opts.workspace_id),
-                    floor,
-                    RECONCILE_LIST_TIMEOUT,
-                )
-            });
+        let listing = self.read_topology(
+            Some(&opts.session_name),
+            None,
+            Some(&opts.workspace_id),
+            floor,
+            PaneReadConsistency::PreferAuthoritative,
+            RECONCILE_LIST_TIMEOUT,
+        );
         let Ok(listing) = listing else {
             return (floor, false);
         };
@@ -636,7 +628,7 @@ impl ZellijBackend {
             opts,
             tab_position,
             raw_id,
-            Some((&listing.panes, listing.observed_at_ms)),
+            Some((&listing.panes, listing.produced_at_ms)),
         );
         (width_floor.or(floor), resized)
     }
@@ -862,27 +854,20 @@ impl ZellijBackend {
             let panes = if let Some((panes, _)) = initial.take() {
                 panes
             } else {
-                let topology = || {
-                    self.topology_listing(
-                        Some(&opts.session_name),
-                        None,
-                        Some(&opts.workspace_id),
-                        floor,
-                        RECONCILE_LIST_TIMEOUT,
-                    )
-                };
-                let listing = if require_fresh_topology {
+                let consistency = if require_fresh_topology {
                     require_fresh_topology = false;
-                    topology()
+                    PaneReadConsistency::Cached
                 } else {
-                    self.authoritative_pane_listing(
-                        &opts.session_name,
-                        None,
-                        Some(&opts.workspace_id),
-                        RECONCILE_LIST_TIMEOUT,
-                    )
-                    .or_else(|_| topology())
+                    PaneReadConsistency::PreferAuthoritative
                 };
+                let listing = self.read_topology(
+                    Some(&opts.session_name),
+                    None,
+                    Some(&opts.workspace_id),
+                    floor,
+                    consistency,
+                    RECONCILE_LIST_TIMEOUT,
+                );
                 let Ok(listing) = listing else {
                     if listing_retries < TRANSIENT_MAX_RETRIES {
                         listing_retries += 1;

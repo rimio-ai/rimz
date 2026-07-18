@@ -260,7 +260,7 @@ fn repair_daemon_view_recreates_missing_runtime_panes_in_one_column() {
         .backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-bg-repair".to_owned()),
-            authoritative: true,
+            consistency: PaneReadConsistency::PreferAuthoritative,
             ..Default::default()
         })
         .expect("list panes");
@@ -295,7 +295,7 @@ fn repair_daemon_view_recreates_missing_runtime_panes_in_one_column() {
         .backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-bg-repair".to_owned()),
-            authoritative: true,
+            consistency: PaneReadConsistency::PreferAuthoritative,
             ..Default::default()
         })
         .expect("list repaired panes");

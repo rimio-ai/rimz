@@ -15,7 +15,7 @@ use rimz::harness::resume::{
     LaneSummary, LaneWorktree, ResumeSkip, materialize_lane_restore, plan_lane_resume,
     resume_session_present,
 };
-use rimz::mux::{ResumeTab, SplitPaneOptions, TabOptions};
+use rimz::mux::{ResumeTab, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions};
 
 use super::{GlobalFlags, RoomContext, RoomSizing};
 
@@ -135,15 +135,12 @@ pub(super) fn resume_lane(
             lane_workspace.worktree_root = cwd.clone();
             for command in commands {
                 backend.split_pane(SplitPaneOptions {
-                    session_name: None,
-                    target_view_id: None,
-                    target_pane_id: Some(target_pane_id.clone()),
+                    target: SplitTarget::Pane(target_pane_id.clone()),
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(command),
                     env: rimz::room::pane_identity_env(&lane_workspace, channel.as_deref(), false),
                     title: None,
-                    stacked: false,
-                    direction,
+                    placement: SplitPlacement::Directional(direction),
                     focus: !bg,
                 })?;
             }

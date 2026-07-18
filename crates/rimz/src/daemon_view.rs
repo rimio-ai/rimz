@@ -17,8 +17,8 @@ use std::time::Duration;
 use crate::config::DaemonConfig;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::mux::{
-    DaemonView, HostPane, MuxBackend, PaneListOptions, PaneListing, SplitDirection,
-    SplitPaneOptions,
+    DaemonView, HostPane, MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget,
 };
 use crate::pane::PaneRef;
 use crate::store::parse_cache::StampedPath;
@@ -317,8 +317,7 @@ fn list_daemon_panes(
         session_name: Some(session_name.to_owned()),
         workspace_id: Some(workspace_id.clone()),
         command_timeout: Some(REPAIR_LIST_TIMEOUT),
-        authoritative: true,
-        require_authoritative: true,
+        consistency: PaneReadConsistency::RequireAuthoritative,
         ..Default::default()
     }) {
         Ok(listing) => Some(listing),
@@ -366,15 +365,15 @@ fn split_managed_pane(
     };
     let title = pane.argv.join(" ");
     match backend.split_pane(SplitPaneOptions {
-        session_name: Some(session_name.to_owned()),
-        target_view_id: anchor.view_id.clone(),
-        target_pane_id: Some(anchor.pane_id.clone()),
+        target: SplitTarget::SessionPane {
+            session_name: session_name.to_owned(),
+            pane_id: anchor.pane_id.clone(),
+        },
         cwd: Some(pane.cwd.to_string_lossy().into_owned()),
         command: Some(pane.argv.clone()),
         title: Some(title),
         env: Default::default(),
-        stacked: false,
-        direction,
+        placement: SplitPlacement::Directional(direction),
         focus: false,
     }) {
         Ok(()) => true,

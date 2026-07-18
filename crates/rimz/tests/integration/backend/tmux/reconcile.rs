@@ -194,15 +194,12 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
     server
         .backend
         .split_pane(SplitPaneOptions {
-            session_name: None,
-            target_view_id: None,
-            target_pane_id: Some(work_pane.pane_id),
+            target: SplitTarget::Pane(work_pane.pane_id),
             cwd: None,
             command: Some(foreign_command),
             title: None,
             env: BTreeMap::new(),
-            stacked: false,
-            direction: Default::default(),
+            placement: SplitPlacement::default(),
             focus: false,
         })
         .expect("plant foreign sidebar");

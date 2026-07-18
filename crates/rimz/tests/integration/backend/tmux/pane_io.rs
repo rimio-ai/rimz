@@ -12,9 +12,7 @@ fn split_pane_injects_env_vars() {
     server
         .backend
         .split_pane(SplitPaneOptions {
-            session_name: None,
-            target_view_id: None,
-            target_pane_id: None,
+            target: SplitTarget::Ambient,
             cwd: None,
             command: Some(vec![
                 "sh".to_owned(),
@@ -23,8 +21,7 @@ fn split_pane_injects_env_vars() {
             ]),
             title: None,
             env,
-            stacked: false,
-            direction: Default::default(),
+            placement: SplitPlacement::default(),
             focus: false,
         })
         .expect("split_pane");

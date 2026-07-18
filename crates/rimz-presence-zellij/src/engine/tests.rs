@@ -390,7 +390,7 @@ fn dump_topology_on_fresh_state_probes_missing_pids() {
     host.pids.insert(1, 101);
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
-    engine.tabs = tabs(vec![pane(1)]);
+    engine.room.tabs = tabs(vec![pane(1)]);
 
     let effects = engine.on_dump_topology_pipe(20, &host);
 

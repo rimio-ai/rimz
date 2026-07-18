@@ -2,14 +2,15 @@
 
 use std::time::{Duration, Instant};
 
+use super::pane_topology::PaneTopologyCache;
 use super::pane_topology::PaneTopologyPane;
 use super::parse::{SessionState, is_no_active_sessions, session_state_from_line};
-use super::raw_pane::{RawPaneListing, SessionCleanliness, classify_session_panes};
+use super::raw_pane::{SessionCleanliness, classify_session_panes};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::WorkspaceId;
-use crate::mux::PresencePluginOptions;
 use crate::mux::{MuxErr, Result};
+use crate::mux::{PaneReadConsistency, PresencePluginOptions};
 use crate::sidebar::cache::{pane_topology_cache_is_fresh, read_pane_topology_cache};
 use crate::sidebar::timing::unix_now_ms;
 use crate::store::paths::{self, RuntimePaths, StatePaths};
@@ -56,8 +57,69 @@ impl ZellijBackend {
         workspace_id: Option<&WorkspaceId>,
         min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
-    ) -> Result<RawPaneListing> {
+    ) -> Result<PaneTopologyCache> {
+        self.read_topology(
+            session,
+            runtime_paths,
+            workspace_id,
+            min_topology_produced_at_ms,
+            PaneReadConsistency::Cached,
+            timeout,
+        )
+    }
+
+    pub(super) fn read_topology(
+        &self,
+        session: Option<&str>,
+        runtime_paths: Option<&RuntimePaths>,
+        workspace_id: Option<&WorkspaceId>,
+        min_topology_produced_at_ms: Option<u64>,
+        consistency: PaneReadConsistency,
+        timeout: Duration,
+    ) -> Result<PaneTopologyCache> {
         let session = self.resolve_topology_session(session)?;
+        match consistency {
+            PaneReadConsistency::Cached => self.cached_topology(
+                session,
+                runtime_paths,
+                workspace_id,
+                min_topology_produced_at_ms,
+                timeout,
+            ),
+            PaneReadConsistency::PreferAuthoritative => self
+                .authoritative_pane_listing(
+                    &session,
+                    runtime_paths,
+                    workspace_id,
+                    timeout,
+                )
+                .or_else(|err| {
+                    tracing::debug!(session = %session, error = %err, "authoritative Zellij pane listing failed; falling back to topology cache");
+                    self.cached_topology(
+                        session,
+                        runtime_paths,
+                        workspace_id,
+                        min_topology_produced_at_ms,
+                        timeout,
+                    )
+                }),
+            PaneReadConsistency::RequireAuthoritative => self.authoritative_pane_listing(
+                &session,
+                runtime_paths,
+                workspace_id,
+                timeout,
+            ),
+        }
+    }
+
+    fn cached_topology(
+        &self,
+        session: String,
+        runtime_paths: Option<&RuntimePaths>,
+        workspace_id: Option<&WorkspaceId>,
+        min_topology_produced_at_ms: Option<u64>,
+        timeout: Duration,
+    ) -> Result<PaneTopologyCache> {
         let known = self.resolve_topology_workspace(&session, workspace_id)?;
         let runtime_storage;
         let runtime = match runtime_paths {
@@ -68,10 +130,10 @@ impl ZellijBackend {
             }
         };
         let now_ms = unix_now_ms();
-        if let Some(cache) = read_pane_topology_cache(runtime, &session)
-            && pane_topology_cache_is_fresh(&cache, now_ms, min_topology_produced_at_ms)
+        if let Some(cache) =
+            Self::fresh_cached_topology(runtime, &session, now_ms, min_topology_produced_at_ms)
         {
-            return Ok(RawPaneListing::from_topology(cache));
+            return Ok(cache);
         }
         if self.session_state(&session) != SessionState::Live {
             return Err(MuxErr::SessionNotFound { session });
@@ -81,10 +143,10 @@ impl ZellijBackend {
         let deadline = Instant::now() + timeout;
         loop {
             let now_ms = unix_now_ms();
-            if let Some(cache) = read_pane_topology_cache(runtime, &session)
-                && pane_topology_cache_is_fresh(&cache, now_ms, Some(floor_ms))
+            if let Some(cache) =
+                Self::fresh_cached_topology(runtime, &session, now_ms, Some(floor_ms))
             {
-                return Ok(RawPaneListing::from_topology(cache));
+                return Ok(cache);
             }
             if Instant::now() >= deadline {
                 return Err(MuxErr::Output {
@@ -96,6 +158,17 @@ impl ZellijBackend {
             }
             std::thread::sleep(TOPOLOGY_CACHE_POLL_STEP);
         }
+    }
+
+    pub(super) fn fresh_cached_topology(
+        runtime: &RuntimePaths,
+        session: &str,
+        now_ms: u64,
+        min_topology_produced_at_ms: Option<u64>,
+    ) -> Option<PaneTopologyCache> {
+        read_pane_topology_cache(runtime, session).filter(|cache| {
+            pane_topology_cache_is_fresh(cache, now_ms, min_topology_produced_at_ms)
+        })
     }
 
     pub(super) fn resolve_topology_session(&self, session: Option<&str>) -> Result<String> {

@@ -153,15 +153,12 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     }
     if let Err(err) = backend
         .split_pane(SplitPaneOptions {
-            session_name: None,
-            target_view_id: None,
-            target_pane_id: Some(old_pane.clone()),
+            target: rimz::mux::SplitTarget::Pane(old_pane.clone()),
             cwd: Some(cwd.display().to_string()),
             command: Some(argv),
             title: None,
             env,
-            stacked: false,
-            direction,
+            placement: rimz::mux::SplitPlacement::Directional(direction),
             focus: true,
         })
         .context("opening the replacement agent pane")

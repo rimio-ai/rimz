@@ -58,14 +58,13 @@ fn topology_json_carries_focused_pane() {
 }
 #[test]
 fn topology_json_carries_present_pid_and_omits_absent_pid() {
-    let mut tabs = BTreeMap::from([(0, vec![pane(7), pane(8)])]);
-    policy::apply_foreground_commands(
-        &mut tabs,
-        &BTreeMap::new(),
-        &BTreeMap::from([(7, "zsh".to_owned())]),
-        &BTreeMap::from([(7, "/repo/main".to_owned())]),
-        &BTreeMap::from([(7, 707)]),
-    );
+    let enriched = PaneFields {
+        pane_command: Some("zsh".to_owned()),
+        pane_cwd: Some("/repo/main".to_owned()),
+        pane_pid: Some(707),
+        ..pane(7)
+    };
+    let tabs = BTreeMap::from([(0, vec![enriched, pane(8)])]);
     let json = topology_json(Some("session-1"), 42, None, Some(7), None, &tabs)
         .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");

@@ -19,8 +19,8 @@ use crate::mux::{
     ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey,
     PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, Result, SessionOptions,
     SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
-    TabOptions, WidthStep, WidthSyncOptions, ensure_pane_backend, execute_reconcile_plan,
-    memoized_version, wait_for_sidebar_heartbeat,
+    SplitPlacement, SplitTarget, TabOptions, WidthStep, WidthSyncOptions, ensure_pane_backend,
+    execute_reconcile_plan, memoized_version, wait_for_sidebar_heartbeat,
 };
 
 /// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
@@ -264,9 +264,9 @@ impl MuxBackend for TmuxBackend {
         // direction/target still place the pane in the requested zone.
         // `-d` keeps focus on the splitting pane; omit it to land in the new
         // pane (the focused launch path).
-        let flag = match opts.direction {
-            SplitDirection::Right => "-h",
-            SplitDirection::Down => "-v",
+        let flag = match opts.placement {
+            SplitPlacement::Directional(SplitDirection::Right) => "-h",
+            SplitPlacement::Directional(SplitDirection::Down) | SplitPlacement::Stacked => "-v",
         };
         let mut spec = self.cmd().args(["split-window", flag]);
         if !opts.focus {
@@ -275,11 +275,15 @@ impl MuxBackend for TmuxBackend {
         for (key, value) in &opts.env {
             spec = spec.args(["-e".to_owned(), format!("{key}={value}")]);
         }
-        if let Some(target) = opts.target_pane_id {
-            ensure_pane_backend(&target, MuxName::Tmux)?;
-            spec = spec.args(["-t".to_owned(), target.raw().to_owned()]);
-        } else if let Some(session) = opts.session_name {
-            spec = spec.args(["-t".to_owned(), session]);
+        match opts.target {
+            SplitTarget::Ambient => {}
+            SplitTarget::Pane(pane_id) | SplitTarget::SessionPane { pane_id, .. } => {
+                ensure_pane_backend(&pane_id, MuxName::Tmux)?;
+                spec = spec.args(["-t".to_owned(), pane_id.raw().to_owned()]);
+            }
+            SplitTarget::Session(session_name) => {
+                spec = spec.args(["-t".to_owned(), session_name]);
+            }
         }
         if let Some(cwd) = opts.cwd {
             spec = spec.args(["-c".to_owned(), cwd]);

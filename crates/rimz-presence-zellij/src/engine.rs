@@ -61,7 +61,20 @@ struct PendingSwitch {
     tab: usize,
     previous: Option<u32>,
     settle_at: u64,
-    confirmation_requested: bool,
+    phase: SwitchPhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchPhase {
+    Observing,
+    Confirming,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FocusMode {
+    #[default]
+    Stable,
+    Switching(PendingSwitch),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +92,519 @@ enum SwitchObservation {
     Abstain,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FocusOutcome {
+    Transition {
+        previous: Option<u32>,
+        current: Option<u32>,
+    },
+    Stranded {
+        pane_id: u32,
+        generation: u64,
+        clients: Vec<ProjectedClientFocus>,
+    },
+}
+
+struct FocusUpdate {
+    outcome: Option<FocusOutcome>,
+    sample_changed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusWork {
+    ListClients,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PanePid {
+    #[default]
+    Unprobed,
+    Missing,
+    Known(u32),
+}
+
+#[derive(Debug, Default)]
+struct PaneRuntime {
+    foreground: Option<String>,
+    shell: Option<String>,
+    cwd: Option<String>,
+    pid: PanePid,
+}
+
+#[derive(Debug, Default)]
+struct RoomState {
+    tabs: BTreeMap<usize, Vec<PaneFields>>,
+    runtime: BTreeMap<u32, PaneRuntime>,
+}
+
+impl RoomState {
+    fn tabs(&self) -> &BTreeMap<usize, Vec<PaneFields>> {
+        &self.tabs
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tabs.is_empty()
+    }
+
+    fn manifest_hash(&self) -> u64 {
+        policy::manifest_hash(&self.tabs)
+    }
+
+    fn merge_manifest(
+        &mut self,
+        projected: BTreeMap<usize, Vec<PaneFields>>,
+        host: &impl Host,
+    ) -> Vec<PaneFields> {
+        let mut next = policy::merged_room(&self.tabs, &projected);
+        self.prune_runtime(&next);
+        self.probe_missing_pids_in(&next, host);
+        self.apply_enrichment(&mut next);
+        let opened = policy::opened_card_panes(&self.tabs, &next);
+        self.tabs = next;
+        opened
+    }
+
+    fn probe_missing_pids(&mut self, host: &impl Host) {
+        let live = self
+            .tabs
+            .values()
+            .flatten()
+            .filter(|pane| pane.is_live_terminal())
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>();
+        self.probe_ids(live, host);
+        self.apply_runtime_to_all();
+    }
+
+    fn probe_missing_pids_in(&mut self, tabs: &BTreeMap<usize, Vec<PaneFields>>, host: &impl Host) {
+        let live = tabs
+            .values()
+            .flatten()
+            .filter(|pane| pane.is_live_terminal())
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>();
+        self.probe_ids(live, host);
+    }
+
+    fn probe_ids(&mut self, ids: Vec<u32>, host: &impl Host) {
+        for id in ids {
+            let runtime = self.runtime.entry(id).or_default();
+            if runtime.pid == PanePid::Unprobed {
+                runtime.pid = host.pane_pid(id).map_or(PanePid::Missing, PanePid::Known);
+            }
+        }
+    }
+
+    fn prune_runtime(&mut self, tabs: &BTreeMap<usize, Vec<PaneFields>>) {
+        let pane_ids = tabs
+            .values()
+            .flatten()
+            .filter(|pane| !pane.is_plugin)
+            .map(|pane| pane.id)
+            .collect::<BTreeSet<_>>();
+        self.runtime.retain(|id, _| pane_ids.contains(id));
+    }
+
+    fn apply_enrichment(&self, tabs: &mut BTreeMap<usize, Vec<PaneFields>>) {
+        for pane in tabs.values_mut().flatten().filter(|pane| !pane.is_plugin) {
+            let runtime = self.runtime.get(&pane.id);
+            pane.pane_command = runtime
+                .and_then(|runtime| runtime.foreground.as_ref().or(runtime.shell.as_ref()))
+                .cloned();
+            pane.pane_cwd = runtime.and_then(|runtime| runtime.cwd.clone());
+            pane.pane_pid = runtime.and_then(|runtime| match runtime.pid {
+                PanePid::Known(pid) => Some(pid),
+                PanePid::Unprobed | PanePid::Missing => None,
+            });
+        }
+    }
+
+    fn apply_runtime_to_all(&mut self) {
+        let runtime = &self.runtime;
+        for pane in self
+            .tabs
+            .values_mut()
+            .flatten()
+            .filter(|pane| !pane.is_plugin)
+        {
+            let state = runtime.get(&pane.id);
+            pane.pane_command = state
+                .and_then(|state| state.foreground.as_ref().or(state.shell.as_ref()))
+                .cloned();
+            pane.pane_cwd = state.and_then(|state| state.cwd.clone());
+            pane.pane_pid = state.and_then(|state| match state.pid {
+                PanePid::Known(pid) => Some(pid),
+                PanePid::Unprobed | PanePid::Missing => None,
+            });
+        }
+    }
+
+    fn update_foreground(&mut self, pane: ProjectedPaneId, command: Option<String>) {
+        let ProjectedPaneId::Terminal(id) = pane else {
+            return;
+        };
+        self.runtime.entry(id).or_default().foreground = command;
+        self.apply_runtime_to_pane(id);
+    }
+
+    fn update_shell(&mut self, pane: ProjectedPaneId, command: String) {
+        let ProjectedPaneId::Terminal(id) = pane else {
+            return;
+        };
+        let runtime = self.runtime.entry(id).or_default();
+        runtime.foreground = None;
+        runtime.shell = Some(command);
+        self.apply_runtime_to_pane(id);
+    }
+
+    fn update_cwd(&mut self, pane: ProjectedPaneId, cwd: Option<String>) -> bool {
+        let ProjectedPaneId::Terminal(id) = pane else {
+            return false;
+        };
+        let runtime = self.runtime.entry(id).or_default();
+        if runtime.cwd == cwd {
+            return false;
+        }
+        runtime.cwd = cwd;
+        self.apply_runtime_to_pane(id);
+        true
+    }
+
+    fn apply_runtime_to_pane(&mut self, id: u32) {
+        let Some(runtime) = self.runtime.get(&id) else {
+            return;
+        };
+        let pane_command = runtime
+            .foreground
+            .as_ref()
+            .or(runtime.shell.as_ref())
+            .cloned();
+        let pane_cwd = runtime.cwd.clone();
+        let pane_pid = match runtime.pid {
+            PanePid::Known(pid) => Some(pid),
+            PanePid::Unprobed | PanePid::Missing => None,
+        };
+        if let Some((_, pane)) = self.pane_location_mut(id) {
+            pane.pane_command = pane_command;
+            pane.pane_cwd = pane_cwd;
+            pane.pane_pid = pane_pid;
+        }
+    }
+
+    fn close_pane(&mut self, pane: ProjectedPaneId) {
+        let (is_plugin, id) = match pane {
+            ProjectedPaneId::Terminal(id) => (false, id),
+            ProjectedPaneId::Plugin(id) => (true, id),
+        };
+        for panes in self.tabs.values_mut() {
+            panes.retain(|pane| pane.is_plugin != is_plugin || pane.id != id);
+        }
+        self.tabs.retain(|_, panes| !panes.is_empty());
+        if !is_plugin {
+            self.runtime.remove(&id);
+        }
+    }
+
+    fn pane_location(&self, id: u32) -> Option<(usize, &PaneFields)> {
+        self.tabs.iter().find_map(|(tab, panes)| {
+            panes
+                .iter()
+                .find(|pane| !pane.is_plugin && pane.id == id)
+                .map(|pane| (*tab, pane))
+        })
+    }
+
+    fn pane_location_mut(&mut self, id: u32) -> Option<(usize, &mut PaneFields)> {
+        self.tabs.iter_mut().find_map(|(tab, panes)| {
+            panes
+                .iter_mut()
+                .find(|pane| !pane.is_plugin && pane.id == id)
+                .map(|pane| (*tab, pane))
+        })
+    }
+
+    fn live_terminal(&self, id: u32) -> Option<&PaneFields> {
+        self.pane_location(id)
+            .map(|(_, pane)| pane)
+            .filter(|pane| pane.is_live_terminal())
+    }
+
+    fn repair_owner(&self, tab: usize) -> Option<u32> {
+        let panes = self.tabs.get(&tab)?;
+        let sidebars = panes
+            .iter()
+            .filter(|pane| pane.is_sidebar())
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>();
+        let has_work = panes.iter().any(PaneFields::is_card_pane);
+        matches!(sidebars.as_slice(), [sidebar] if has_work).then(|| sidebars[0])
+    }
+}
+
+#[derive(Debug, Default)]
+struct FocusSync {
+    active_tab: Option<usize>,
+    session_focused_pane: Option<u32>,
+    generation: u64,
+    mode: FocusMode,
+    in_flight: Option<InFlightClientQuery>,
+    queued: Option<ClientQueryPurpose>,
+    stale_replies: u32,
+    connected_clients: Option<usize>,
+    client_sample: Option<policy::ClientSample>,
+}
+
+impl FocusSync {
+    fn request_general_observation(&mut self) {
+        self.queue(ClientQueryPurpose::General);
+    }
+
+    fn accept_tab_update(&mut self, active: Option<usize>, now: u64) {
+        let previous_active = self.active_tab;
+        self.active_tab = active;
+        match (previous_active, active) {
+            (Some(previous), Some(next)) if previous != next => {
+                self.generation = self.generation.wrapping_add(1);
+                let previous = match self.mode {
+                    FocusMode::Stable => self.session_focused_pane,
+                    FocusMode::Switching(pending) => pending.previous,
+                };
+                self.session_focused_pane = None;
+                let pending = PendingSwitch {
+                    generation: self.generation,
+                    tab: next,
+                    previous,
+                    settle_at: now.saturating_add(policy::FOCUS_SETTLE_MS),
+                    phase: SwitchPhase::Observing,
+                };
+                self.mode = FocusMode::Switching(pending);
+                self.queue(ClientQueryPurpose::SwitchObserve {
+                    generation: pending.generation,
+                    tab: next,
+                });
+            }
+            (_, None) => {
+                self.mode = FocusMode::Stable;
+                self.session_focused_pane = None;
+                self.request_general_observation();
+            }
+            (None, Some(_)) => self.request_general_observation(),
+            _ => {}
+        }
+    }
+
+    fn accept_connected_clients(&mut self, connected_clients: Option<usize>) {
+        if let Some(connected_clients) = connected_clients
+            && self.connected_clients != Some(connected_clients)
+        {
+            self.connected_clients = Some(connected_clients);
+            self.request_general_observation();
+        }
+    }
+
+    fn close_pane(&mut self, pane: ProjectedPaneId) {
+        if let ProjectedPaneId::Terminal(id) = pane
+            && self.session_focused_pane == Some(id)
+        {
+            self.session_focused_pane = None;
+        }
+    }
+
+    fn accept_client_sample(
+        &mut self,
+        room: &RoomState,
+        clients: Vec<ProjectedClientFocus>,
+        now: u64,
+    ) -> FocusUpdate {
+        let purpose = self.consume_reply(now);
+        let sample = client_sample(&clients);
+        let sample_changed = self.client_sample.as_ref() != Some(&sample);
+        self.client_sample = Some(sample);
+        let outcome = self.apply_observation(room, purpose, &clients);
+        FocusUpdate {
+            outcome,
+            sample_changed,
+        }
+    }
+
+    fn drive_due_query(&mut self, now: u64) -> Option<FocusWork> {
+        self.expire_query(now);
+        if let FocusMode::Switching(mut pending) = self.mode
+            && self.active_tab == Some(pending.tab)
+            && now >= pending.settle_at
+            && pending.phase == SwitchPhase::Observing
+        {
+            pending.phase = SwitchPhase::Confirming;
+            self.mode = FocusMode::Switching(pending);
+            self.queue(ClientQueryPurpose::SwitchConfirm {
+                generation: pending.generation,
+                tab: pending.tab,
+            });
+        }
+        if self.in_flight.is_some() {
+            return None;
+        }
+        let purpose = self.queued.take()?;
+        self.in_flight = Some(InFlightClientQuery {
+            purpose,
+            deadline: now.saturating_add(policy::KEEPALIVE_MS),
+        });
+        Some(FocusWork::ListClients)
+    }
+
+    fn next_deadline(&self) -> Option<u64> {
+        [
+            match self.mode {
+                FocusMode::Stable => None,
+                FocusMode::Switching(pending) => Some(pending.settle_at),
+            },
+            self.in_flight.map(|query| query.deadline),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    fn session_focus(&self) -> Option<u32> {
+        self.session_focused_pane
+    }
+
+    fn client_sample(&self) -> Option<&policy::ClientSample> {
+        self.client_sample.as_ref()
+    }
+
+    fn queue(&mut self, purpose: ClientQueryPurpose) {
+        self.queued = Some(match self.queued {
+            None => purpose,
+            Some(existing) => latest_client_query(existing, purpose),
+        });
+    }
+
+    fn expire_query(&mut self, now: u64) {
+        if let Some(expired) = self.in_flight.filter(|query| now >= query.deadline) {
+            self.in_flight = None;
+            self.stale_replies = self.stale_replies.saturating_add(1);
+            self.queue(expired.purpose);
+        }
+    }
+
+    fn consume_reply(&mut self, now: u64) -> ClientQueryPurpose {
+        self.expire_query(now);
+        if self.stale_replies > 0 {
+            self.stale_replies -= 1;
+            if let Some(query) = self.in_flight.take() {
+                // Untagged replies are general evidence; reissue the current
+                // query so either response ordering converges.
+                self.queue(query.purpose);
+            }
+            return ClientQueryPurpose::General;
+        }
+        self.in_flight
+            .take()
+            .map_or(ClientQueryPurpose::General, |query| query.purpose)
+    }
+
+    fn apply_observation(
+        &mut self,
+        room: &RoomState,
+        purpose: ClientQueryPurpose,
+        clients: &[ProjectedClientFocus],
+    ) -> Option<FocusOutcome> {
+        match purpose {
+            ClientQueryPurpose::General => {
+                if matches!(self.mode, FocusMode::Switching(_)) {
+                    return None;
+                }
+                let current = match unique_client_observation(clients) {
+                    ClientObservation::Unique(ProjectedPaneId::Terminal(id))
+                        if room.live_terminal(id).is_some() =>
+                    {
+                        Some(id)
+                    }
+                    ClientObservation::Detached
+                    | ClientObservation::Unique(_)
+                    | ClientObservation::Ambiguous => None,
+                };
+                self.transition(current)
+            }
+            ClientQueryPurpose::SwitchObserve { generation, tab }
+            | ClientQueryPurpose::SwitchConfirm { generation, tab } => {
+                let FocusMode::Switching(pending) = self.mode else {
+                    return None;
+                };
+                if pending.generation != generation
+                    || pending.tab != tab
+                    || self.active_tab != Some(tab)
+                {
+                    return None;
+                }
+                let observation = classify_switch_observation(room, tab, clients);
+                match (purpose, observation) {
+                    (_, SwitchObservation::Work(pane_id)) => {
+                        self.mode = FocusMode::Stable;
+                        self.session_focused_pane = Some(pane_id);
+                        transition_outcome(pending.previous, Some(pane_id))
+                    }
+                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Repairable)
+                    | (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Pending) => {
+                        None
+                    }
+                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Abstain)
+                    | (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Pending)
+                    | (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Abstain) => {
+                        self.mode = FocusMode::Stable;
+                        None
+                    }
+                    (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Repairable) => {
+                        self.mode = FocusMode::Stable;
+                        room.repair_owner(tab)
+                            .map(|pane_id| FocusOutcome::Stranded {
+                                pane_id,
+                                generation,
+                                clients: clients.to_vec(),
+                            })
+                    }
+                    (ClientQueryPurpose::General, _) => None,
+                }
+            }
+        }
+    }
+
+    fn transition(&mut self, current: Option<u32>) -> Option<FocusOutcome> {
+        let previous = self.session_focused_pane;
+        self.session_focused_pane = current;
+        transition_outcome(previous, current)
+    }
+}
+
+fn transition_outcome(previous: Option<u32>, current: Option<u32>) -> Option<FocusOutcome> {
+    (previous != current).then_some(FocusOutcome::Transition { previous, current })
+}
+
+fn classify_switch_observation(
+    room: &RoomState,
+    tab: usize,
+    clients: &[ProjectedClientFocus],
+) -> SwitchObservation {
+    match unique_client_observation(clients) {
+        ClientObservation::Detached => SwitchObservation::Pending,
+        ClientObservation::Ambiguous => SwitchObservation::Abstain,
+        ClientObservation::Unique(ProjectedPaneId::Plugin(_)) => SwitchObservation::Repairable,
+        ClientObservation::Unique(ProjectedPaneId::Terminal(id)) => match room.pane_location(id) {
+            Some((pane_tab, pane)) if pane_tab == tab && pane.is_card_pane() => {
+                SwitchObservation::Work(id)
+            }
+            Some((pane_tab, pane)) if pane_tab != tab && pane.is_live_terminal() => {
+                SwitchObservation::Repairable
+            }
+            Some((pane_tab, pane)) if pane_tab == tab && pane.is_sidebar() => {
+                SwitchObservation::Repairable
+            }
+            Some(_) | None => SwitchObservation::Pending,
+        },
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EngineConfig {
     pub workspace_id: Option<String>,
@@ -94,21 +620,10 @@ pub struct EngineConfig {
 
 pub struct Engine {
     policy: PokePolicy,
-    tabs: BTreeMap<usize, Vec<PaneFields>>,
+    room: RoomState,
     last_raw_stable_hash: Option<u64>,
     tab_names: BTreeMap<usize, String>,
-    foreground: BTreeMap<u32, String>,
-    shell: BTreeMap<u32, String>,
-    cwd: BTreeMap<u32, String>,
-    pids: BTreeMap<u32, u32>,
-    pid_probed: BTreeSet<u32>,
-    active_tab: Option<usize>,
-    session_focused_pane: Option<u32>,
-    switch_generation: u64,
-    pending_switch: Option<PendingSwitch>,
-    in_flight_clients: Option<InFlightClientQuery>,
-    queued_clients: Option<ClientQueryPurpose>,
-    stale_client_replies: u32,
+    focus: FocusSync,
     workspace_id: Option<String>,
     session_name: Option<String>,
     rimz_bin: Option<String>,
@@ -123,8 +638,6 @@ pub struct Engine {
     share_requested: bool,
     timer_gate: TimerGate,
     loaded_at_ms: u64,
-    connected_clients: Option<usize>,
-    client_sample: Option<policy::ClientSample>,
     retired: bool,
     wake_fork_failures: u32,
     stale_writer_rejections: u32,
@@ -136,21 +649,10 @@ impl Engine {
     pub fn new(now: u64, config: EngineConfig) -> Self {
         Self {
             policy: PokePolicy::new(now),
-            tabs: BTreeMap::new(),
+            room: RoomState::default(),
             last_raw_stable_hash: None,
             tab_names: BTreeMap::new(),
-            foreground: BTreeMap::new(),
-            shell: BTreeMap::new(),
-            cwd: BTreeMap::new(),
-            pids: BTreeMap::new(),
-            pid_probed: BTreeSet::new(),
-            active_tab: None,
-            session_focused_pane: None,
-            switch_generation: 0,
-            pending_switch: None,
-            in_flight_clients: None,
-            queued_clients: None,
-            stale_client_replies: 0,
+            focus: FocusSync::default(),
             workspace_id: config.workspace_id,
             session_name: config.session_name,
             rimz_bin: config.rimz_bin,
@@ -165,8 +667,6 @@ impl Engine {
             share_requested: false,
             timer_gate: TimerGate::default(),
             loaded_at_ms: now,
-            connected_clients: None,
-            client_sample: None,
             retired: false,
             wake_fork_failures: 0,
             stale_writer_rejections: 0,
@@ -227,18 +727,12 @@ impl Engine {
         // PaneUpdate is Zellij's only prompt signal for some view-local focus
         // changes. The raw focus bit is deliberately absent from the topology
         // hash; refresh attached-client truth even when the roster is stable.
-        self.queue_client_query(ClientQueryPurpose::General);
-        let stable_unchanged = self.last_raw_stable_hash == Some(raw_hash) && !self.tabs.is_empty();
+        self.focus.request_general_observation();
+        let stable_unchanged = self.last_raw_stable_hash == Some(raw_hash) && !self.room.is_empty();
         self.last_raw_stable_hash = Some(raw_hash);
         if !stable_unchanged {
             let projected = project(&self.tab_names);
-            // Zellij can deliver partial pane manifests; omitted tabs retain
-            // their previous state instead of collapsing the room.
-            let mut next_tabs = policy::merged_room(&self.tabs, &projected);
-            self.prune_pane_state(&next_tabs);
-            self.probe_missing_pids(&mut next_tabs, host);
-            let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
-            self.tabs = next_tabs;
+            let opened = self.room.merge_manifest(projected, host);
             // Poke every opened pane — `fold`, not `any`, so a manifest carrying
             // two new panes emits both card-create events.
             let emitted_open = opened.iter().fold(false, |emitted, pane| {
@@ -258,7 +752,7 @@ impl Engine {
                 ) || emitted
             });
             if emitted_open {
-                let hash = policy::manifest_hash(&self.tabs);
+                let hash = self.room.manifest_hash();
                 self.policy.accept_manifest(hash);
             } else {
                 self.fold(now);
@@ -279,37 +773,8 @@ impl Engine {
         }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
-        let previous_active = self.active_tab;
         self.tab_names = tab_names;
-        self.active_tab = active;
-        match (previous_active, active) {
-            (Some(previous), Some(next)) if previous != next => {
-                self.switch_generation = self.switch_generation.wrapping_add(1);
-                let generation = self.switch_generation;
-                let previous = self
-                    .pending_switch
-                    .map_or(self.session_focused_pane, |pending| pending.previous);
-                self.session_focused_pane = None;
-                self.pending_switch = Some(PendingSwitch {
-                    generation,
-                    tab: next,
-                    previous,
-                    settle_at: now.saturating_add(policy::FOCUS_SETTLE_MS),
-                    confirmation_requested: false,
-                });
-                self.queue_client_query(ClientQueryPurpose::SwitchObserve {
-                    generation,
-                    tab: next,
-                });
-            }
-            (_, None) => {
-                self.pending_switch = None;
-                self.session_focused_pane = None;
-                self.queue_client_query(ClientQueryPurpose::General);
-            }
-            (None, Some(_)) => self.queue_client_query(ClientQueryPurpose::General),
-            _ => {}
-        }
+        self.focus.accept_tab_update(active, now);
         self.finish_update(now, host, effects)
     }
 
@@ -327,7 +792,7 @@ impl Engine {
         let mut effects = Vec::new();
         match policy::foreground_command_update(&command, is_foreground) {
             ForegroundCommandUpdate::Remember(command_text) => {
-                self.set_foreground_command(pane, Some(command_text));
+                self.room.update_foreground(pane, Some(command_text));
                 if let Some(id) = self.optimistic_command_poke_pane(pane, now)
                     && self.run_wake(
                         wire::WakeRequest::CommandChanged {
@@ -338,7 +803,7 @@ impl Engine {
                         &mut effects,
                     )
                 {
-                    let hash = policy::manifest_hash(&self.tabs);
+                    let hash = self.room.manifest_hash();
                     self.policy.accept_manifest(hash);
                     self.policy.accept_optimistic_pane_poke(id, now);
                 } else {
@@ -346,16 +811,14 @@ impl Engine {
                 }
             }
             ForegroundCommandUpdate::Shell(command_text) => {
-                let ProjectedPaneId::Terminal(id) = pane else {
+                let ProjectedPaneId::Terminal(_) = pane else {
                     return self.finish_update(now, host, effects);
                 };
-                self.foreground.remove(&id);
-                self.shell.insert(id, command_text);
-                self.refresh_pane(id);
+                self.room.update_shell(pane, command_text);
                 self.signal_change(now);
             }
             ForegroundCommandUpdate::Forget => {
-                self.set_foreground_command(pane, None);
+                self.room.update_foreground(pane, None);
                 self.signal_change(now);
             }
         }
@@ -372,19 +835,11 @@ impl Engine {
         if self.retired {
             return Vec::new();
         }
-        let ProjectedPaneId::Terminal(id) = pane else {
+        let ProjectedPaneId::Terminal(_) = pane else {
             return self.finish_update(now, host, Vec::new());
         };
-        let changed = match cwd {
-            Some(cwd) if self.cwd.get(&id) != Some(&cwd) => {
-                self.cwd.insert(id, cwd);
-                true
-            }
-            Some(_) => false,
-            None => self.cwd.remove(&id).is_some(),
-        };
+        let changed = self.room.update_cwd(pane, cwd);
         if changed {
-            self.refresh_pane(id);
             self.signal_change(now);
         }
         self.finish_update(now, host, Vec::new())
@@ -405,18 +860,17 @@ impl Engine {
             ProjectedPaneId::Terminal(id) => Some(id),
             ProjectedPaneId::Plugin(_) => None,
         };
-        self.remove_pane(pane);
-        if let ProjectedPaneId::Terminal(id) = pane
-            && self.session_focused_pane == Some(id)
-        {
-            self.session_focused_pane = None;
+        self.room.close_pane(pane);
+        self.focus.close_pane(pane);
+        if let ProjectedPaneId::Terminal(id) = pane {
+            self.policy.forget_pane(id);
         }
         if !closed_terminal.is_some_and(|pane_id| {
             self.run_wake(wire::WakeRequest::PaneClosed { pane_id }, now, &mut effects)
         }) {
             self.signal_change(now);
         } else {
-            let hash = policy::manifest_hash(&self.tabs);
+            let hash = self.room.manifest_hash();
             self.policy.accept_manifest(hash);
         }
         self.finish_update(now, host, effects)
@@ -441,12 +895,7 @@ impl Engine {
         }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
-        if let Some(connected_clients) = connected_clients
-            && self.connected_clients != Some(connected_clients)
-        {
-            self.connected_clients = Some(connected_clients);
-            self.queue_client_query(ClientQueryPurpose::General);
-        }
+        self.focus.accept_connected_clients(connected_clients);
         self.finish_update(now, host, effects)
     }
 
@@ -460,12 +909,11 @@ impl Engine {
             return Vec::new();
         }
         let mut effects = Vec::new();
-        let purpose = self.consume_client_reply(now);
-        let sample = client_sample(&clients);
-        let changed = self.client_sample.as_ref() != Some(&sample);
-        self.client_sample = Some(sample);
-        let emitted_focus = self.apply_client_observation(purpose, &clients, now, &mut effects);
-        if changed && !emitted_focus {
+        let update = self.focus.accept_client_sample(&self.room, clients, now);
+        let emitted_focus = update
+            .outcome
+            .is_some_and(|outcome| self.emit_focus_outcome(outcome, now, &mut effects));
+        if update.sample_changed && !emitted_focus {
             self.run_wake(wire::WakeRequest::Changed, now, &mut effects);
         }
         self.finish_update(now, host, effects)
@@ -501,9 +949,7 @@ impl Engine {
             self.pending_pregrant_change = true;
             return effects;
         }
-        let mut tabs = std::mem::take(&mut self.tabs);
-        self.probe_missing_pids(&mut tabs, host);
-        self.tabs = tabs;
+        self.room.probe_missing_pids(host);
         self.poke(Poke::Alive, now, host, &mut effects);
         self.rearm(now, &mut effects);
         effects
@@ -578,7 +1024,9 @@ impl Engine {
         mut effects: Vec<Effect>,
     ) -> Vec<Effect> {
         self.dispatch_due(now, host, &mut effects);
-        self.drive_client_queries(now, &mut effects);
+        if self.focus.drive_due_query(now) == Some(FocusWork::ListClients) {
+            effects.push(Effect::ListClients);
+        }
         self.rearm(now, &mut effects);
         effects
     }
@@ -595,7 +1043,7 @@ impl Engine {
         }
         self.granted = true;
         effects.push(Effect::HideSelf);
-        self.queue_client_query(ClientQueryPurpose::General);
+        self.focus.request_general_observation();
         self.apply_runtime_reconfigure(effects);
         if self.pending_pregrant_change {
             self.flush_pregrant_change(now);
@@ -621,232 +1069,37 @@ impl Engine {
 
     /// Fold the current projected shape into the policy.
     fn fold(&mut self, now: u64) {
-        let hash = policy::manifest_hash(&self.tabs);
+        let hash = self.room.manifest_hash();
         self.policy.on_manifest(hash, now);
     }
 
-    fn queue_client_query(&mut self, purpose: ClientQueryPurpose) {
-        self.queued_clients = Some(match self.queued_clients {
-            None => purpose,
-            Some(existing) => latest_client_query(existing, purpose),
-        });
-    }
-
-    fn drive_client_queries(&mut self, now: u64, effects: &mut Vec<Effect>) {
-        if let Some(expired) = self.in_flight_clients.filter(|query| now >= query.deadline) {
-            self.in_flight_clients = None;
-            self.stale_client_replies = self.stale_client_replies.saturating_add(1);
-            self.queue_client_query(expired.purpose);
-        }
-
-        if let Some(mut pending) = self.pending_switch
-            && self.active_tab == Some(pending.tab)
-            && now >= pending.settle_at
-            && !pending.confirmation_requested
-        {
-            pending.confirmation_requested = true;
-            self.pending_switch = Some(pending);
-            self.queue_client_query(ClientQueryPurpose::SwitchConfirm {
-                generation: pending.generation,
-                tab: pending.tab,
-            });
-        }
-
-        if self.in_flight_clients.is_none()
-            && let Some(purpose) = self.queued_clients.take()
-        {
-            self.in_flight_clients = Some(InFlightClientQuery {
-                purpose,
-                deadline: now.saturating_add(policy::KEEPALIVE_MS),
-            });
-            effects.push(Effect::ListClients);
-        }
-    }
-
-    fn consume_client_reply(&mut self, now: u64) -> ClientQueryPurpose {
-        if let Some(expired) = self.in_flight_clients.filter(|query| now >= query.deadline) {
-            self.in_flight_clients = None;
-            self.stale_client_replies = self.stale_client_replies.saturating_add(1);
-            self.queue_client_query(expired.purpose);
-        }
-        if self.stale_client_replies > 0 {
-            self.stale_client_replies -= 1;
-            if let Some(query) = self.in_flight_clients.take() {
-                // The untagged reply may be the expired response or the first
-                // response to its replacement. Treat the sample as general,
-                // then re-issue the replacement so either ordering converges.
-                self.queue_client_query(query.purpose);
-            }
-            return ClientQueryPurpose::General;
-        }
-        self.in_flight_clients
-            .take()
-            .map_or(ClientQueryPurpose::General, |query| query.purpose)
-    }
-
-    fn apply_client_observation(
-        &mut self,
-        purpose: ClientQueryPurpose,
-        clients: &[ProjectedClientFocus],
-        now: u64,
-        effects: &mut Vec<Effect>,
-    ) -> bool {
-        match purpose {
-            ClientQueryPurpose::General => {
-                if self.pending_switch.is_some() {
-                    return false;
-                }
-                let current = match unique_client_observation(clients) {
-                    ClientObservation::Unique(ProjectedPaneId::Terminal(id))
-                        if self.live_terminal(id).is_some() =>
-                    {
-                        Some(id)
-                    }
-                    ClientObservation::Detached
-                    | ClientObservation::Unique(_)
-                    | ClientObservation::Ambiguous => None,
-                };
-                self.transition_session_focus(current, now, effects)
-            }
-            ClientQueryPurpose::SwitchObserve { generation, tab }
-            | ClientQueryPurpose::SwitchConfirm { generation, tab } => {
-                let Some(pending) = self.pending_switch else {
-                    return false;
-                };
-                if pending.generation != generation
-                    || pending.tab != tab
-                    || self.active_tab != Some(tab)
-                {
-                    return false;
-                }
-                let observation = self.classify_switch_observation(tab, clients);
-                match (purpose, observation) {
-                    (_, SwitchObservation::Work(pane_id)) => {
-                        self.pending_switch = None;
-                        self.session_focused_pane = Some(pane_id);
-                        self.publish_focus_transition(pending.previous, Some(pane_id), now, effects)
-                    }
-                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Repairable) => {
-                        false
-                    }
-                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Pending) => false,
-                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Abstain) => {
-                        self.pending_switch = None;
-                        false
-                    }
-                    (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Repairable) => {
-                        self.pending_switch = None;
-                        let Some(pane_id) = self.repair_owner(tab) else {
-                            return false;
-                        };
-                        self.run_wake(
-                            wire::WakeRequest::FocusStranded {
-                                pane_id,
-                                generation,
-                                clients: clients.to_vec(),
-                            },
-                            now,
-                            effects,
-                        )
-                    }
-                    (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Pending) => {
-                        self.pending_switch = None;
-                        false
-                    }
-                    (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Abstain) => {
-                        self.pending_switch = None;
-                        false
-                    }
-                    (ClientQueryPurpose::General, _) => false,
-                }
-            }
-        }
-    }
-
-    fn classify_switch_observation(
+    fn emit_focus_outcome(
         &self,
-        tab: usize,
-        clients: &[ProjectedClientFocus],
-    ) -> SwitchObservation {
-        match unique_client_observation(clients) {
-            ClientObservation::Detached => SwitchObservation::Pending,
-            ClientObservation::Ambiguous => SwitchObservation::Abstain,
-            ClientObservation::Unique(ProjectedPaneId::Plugin(_)) => SwitchObservation::Repairable,
-            ClientObservation::Unique(ProjectedPaneId::Terminal(id)) => {
-                match self.pane_location(id) {
-                    Some((pane_tab, pane)) if pane_tab == tab && pane.is_card_pane() => {
-                        SwitchObservation::Work(id)
-                    }
-                    Some((pane_tab, pane)) if pane_tab != tab && pane.is_live_terminal() => {
-                        SwitchObservation::Repairable
-                    }
-                    Some((pane_tab, pane)) if pane_tab == tab && pane.is_sidebar() => {
-                        SwitchObservation::Repairable
-                    }
-                    Some(_) | None => SwitchObservation::Pending,
-                }
+        outcome: FocusOutcome,
+        now: u64,
+        effects: &mut Vec<Effect>,
+    ) -> bool {
+        let request = match outcome {
+            FocusOutcome::Transition { previous, current } => {
+                wire::WakeRequest::FocusChanged { previous, current }
             }
-        }
-    }
-
-    fn pane_location(&self, id: u32) -> Option<(usize, &PaneFields)> {
-        self.tabs.iter().find_map(|(tab, panes)| {
-            panes
-                .iter()
-                .find(|pane| !pane.is_plugin && pane.id == id)
-                .map(|pane| (*tab, pane))
-        })
-    }
-
-    fn live_terminal(&self, id: u32) -> Option<&PaneFields> {
-        self.pane_location(id)
-            .map(|(_, pane)| pane)
-            .filter(|pane| pane.is_live_terminal())
-    }
-
-    fn repair_owner(&self, tab: usize) -> Option<u32> {
-        let panes = self.tabs.get(&tab)?;
-        let sidebars = panes
-            .iter()
-            .filter(|pane| pane.is_sidebar())
-            .map(|pane| pane.id)
-            .collect::<Vec<_>>();
-        let has_work = panes.iter().any(PaneFields::is_card_pane);
-        matches!(sidebars.as_slice(), [sidebar] if has_work).then(|| sidebars[0])
-    }
-
-    fn transition_session_focus(
-        &mut self,
-        current: Option<u32>,
-        now: u64,
-        effects: &mut Vec<Effect>,
-    ) -> bool {
-        let previous = self.session_focused_pane;
-        self.session_focused_pane = current;
-        self.publish_focus_transition(previous, current, now, effects)
-    }
-
-    fn publish_focus_transition(
-        &self,
-        previous: Option<u32>,
-        current: Option<u32>,
-        now: u64,
-        effects: &mut Vec<Effect>,
-    ) -> bool {
-        if previous == current {
-            return false;
-        }
-        self.run_wake(
-            wire::WakeRequest::FocusChanged { previous, current },
-            now,
-            effects,
-        )
+            FocusOutcome::Stranded {
+                pane_id,
+                generation,
+                clients,
+            } => wire::WakeRequest::FocusStranded {
+                pane_id,
+                generation,
+                clients,
+            },
+        };
+        self.run_wake(request, now, effects)
     }
 
     fn dispatch_due(&mut self, now: u64, host: &impl Host, effects: &mut Vec<Effect>) {
         for poke in self.policy.due(now) {
             if poke == Poke::Alive {
-                self.queue_client_query(ClientQueryPurpose::General);
+                self.focus.request_general_observation();
             }
             self.poke(poke, now, host, effects);
         }
@@ -857,9 +1110,11 @@ impl Engine {
     /// supersedes, and a superseded timer's fire is a harmless no-op.
     fn rearm(&mut self, now: u64, effects: &mut Vec<Effect>) {
         let policy_at = Some(self.policy.next_wake_at());
-        let switch_at = self.pending_switch.map(|pending| pending.settle_at);
-        let query_at = self.in_flight_clients.map(|query| query.deadline);
-        let Some(at) = [policy_at, switch_at, query_at].into_iter().flatten().min() else {
+        let Some(at) = [policy_at, self.focus.next_deadline()]
+            .into_iter()
+            .flatten()
+            .min()
+        else {
             return;
         };
         if self.timer_gate.should_arm(at) {
@@ -910,9 +1165,9 @@ impl Engine {
             self.session_name.as_deref(),
             now,
             writer,
-            self.session_focused_pane,
-            self.client_sample.as_ref(),
-            &self.tabs,
+            self.focus.session_focus(),
+            self.focus.client_sample(),
+            self.room.tabs(),
         );
         let Some(argv) = wire::wake_argv(&self.wake_context(), request, topology.as_deref()) else {
             return false;
@@ -953,73 +1208,6 @@ impl Engine {
         )));
     }
 
-    fn probe_missing_pids(
-        &mut self,
-        tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
-        host: &impl Host,
-    ) {
-        for id in policy::panes_needing_pid(tabs, &self.pids, &self.pid_probed) {
-            self.pid_probed.insert(id);
-            if let Some(pid) = host.pane_pid(id) {
-                self.pids.insert(id, pid);
-            }
-        }
-        policy::apply_foreground_commands(
-            tabs,
-            &self.foreground,
-            &self.shell,
-            &self.cwd,
-            &self.pids,
-        );
-    }
-
-    fn prune_pane_state(&mut self, tabs: &BTreeMap<usize, Vec<PaneFields>>) {
-        let pane_ids = tabs
-            .values()
-            .flatten()
-            .filter(|pane| !pane.is_plugin)
-            .map(|pane| pane.id)
-            .collect::<BTreeSet<_>>();
-        self.foreground.retain(|id, _| pane_ids.contains(id));
-        self.shell.retain(|id, _| pane_ids.contains(id));
-        self.cwd.retain(|id, _| pane_ids.contains(id));
-        self.pids.retain(|id, _| pane_ids.contains(id));
-        self.pid_probed.retain(|id| pane_ids.contains(id));
-    }
-
-    fn set_foreground_command(&mut self, pane_id: ProjectedPaneId, command: Option<String>) {
-        let ProjectedPaneId::Terminal(id) = pane_id else {
-            return;
-        };
-        match command.as_ref() {
-            Some(command) => {
-                self.foreground.insert(id, command.clone());
-            }
-            None => {
-                self.foreground.remove(&id);
-            }
-        }
-        self.refresh_pane(id);
-    }
-
-    fn refresh_pane(&mut self, id: u32) {
-        let pane_command = self
-            .foreground
-            .get(&id)
-            .or_else(|| self.shell.get(&id))
-            .cloned();
-        let pane_cwd = self.cwd.get(&id).cloned();
-        let pane_pid = self.pids.get(&id).copied();
-        for pane in self.tabs.values_mut().flatten() {
-            if !pane.is_plugin && pane.id == id {
-                pane.pane_command = pane_command.clone();
-                pane.pane_cwd = pane_cwd.clone();
-                pane.pane_pid = pane_pid;
-                return;
-            }
-        }
-    }
-
     fn optimistic_command_poke_pane(&self, pane_id: ProjectedPaneId, now: u64) -> Option<u32> {
         let ProjectedPaneId::Terminal(id) = pane_id else {
             return None;
@@ -1027,22 +1215,6 @@ impl Engine {
         self.policy
             .optimistic_pane_poke_allowed(id, now)
             .then_some(id)
-    }
-
-    fn remove_pane(&mut self, pane_id: ProjectedPaneId) {
-        let (is_plugin, id) = match pane_id {
-            ProjectedPaneId::Terminal(id) => (false, id),
-            ProjectedPaneId::Plugin(id) => (true, id),
-        };
-        policy::remove_pane_from_tabs(&mut self.tabs, is_plugin, id);
-        if !is_plugin {
-            self.foreground.remove(&id);
-            self.shell.remove(&id);
-            self.cwd.remove(&id);
-            self.pids.remove(&id);
-            self.pid_probed.remove(&id);
-            self.policy.forget_pane(id);
-        }
     }
 }
 

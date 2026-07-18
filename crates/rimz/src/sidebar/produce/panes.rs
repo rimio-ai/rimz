@@ -11,7 +11,7 @@ use crate::diag::record::{
     DiagEvent, FrameRejectReason, ManagedPaneEvidence, PaneDropEvidence, PaneDropViewEvidence,
 };
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
+use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing, PaneReadConsistency};
 use crate::sidebar::cache::{
     effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched,
     read_presence_probe_stamp, read_snapshot_cache, snapshot_cache_is_fresh,
@@ -174,15 +174,18 @@ fn list_session_panes(
     workspace_id: crate::WorkspaceId,
     min_topology_produced_at_ms: Option<u64>,
     command_timeout: Option<Duration>,
-    authoritative: bool,
+    prefer_authoritative: bool,
 ) -> Result<PaneListing> {
     Ok(crate::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
         runtime_paths,
         workspace_id: Some(workspace_id),
         min_topology_produced_at_ms,
-        authoritative,
-        require_authoritative: false,
+        consistency: if prefer_authoritative {
+            PaneReadConsistency::PreferAuthoritative
+        } else {
+            PaneReadConsistency::Cached
+        },
         command_timeout,
     })?)
 }

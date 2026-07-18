@@ -3,7 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use rimz::mux::{
-    MuxBackend, NamedKey, PaneListOptions, SplitDirection, SplitPaneOptions, ZellijBackend,
+    MuxBackend, NamedKey, PaneListOptions, PaneReadConsistency, SplitPaneOptions, SplitPlacement,
+    SplitTarget, ZellijBackend,
 };
 use tempfile::TempDir;
 
@@ -125,9 +126,10 @@ fn split_pane_injects_env_vars() {
     env.insert("RIMZ_TEST_VAR".to_owned(), "marker-rimz-env".to_owned());
     ZellijBackend::with_runtime_dir(xdg.path())
         .split_pane(SplitPaneOptions {
-            session_name: Some(name.clone()),
-            target_view_id: None,
-            target_pane_id: Some(target.clone()),
+            target: SplitTarget::SessionPane {
+                session_name: name.clone(),
+                pane_id: target.clone(),
+            },
             cwd: Some(cwd.path().to_string_lossy().into_owned()),
             command: Some(vec![
                 "sh".to_owned(),
@@ -139,8 +141,7 @@ fn split_pane_injects_env_vars() {
             ]),
             title: None,
             env,
-            stacked: false,
-            direction: Default::default(),
+            placement: SplitPlacement::default(),
             focus: false,
         })
         .expect("split_pane");
@@ -227,7 +228,7 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     let authoritative = backend
         .list_panes(PaneListOptions {
             session_name: Some(name.clone()),
-            authoritative: true,
+            consistency: PaneReadConsistency::PreferAuthoritative,
             ..Default::default()
         })
         .expect("authoritative pane listing after tab move");
@@ -247,15 +248,15 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
 
     backend
         .split_pane(SplitPaneOptions {
-            session_name: Some(name.clone()),
-            target_view_id: target.view_id.clone(),
-            target_pane_id: Some(target.pane_id.clone()),
+            target: SplitTarget::SessionPane {
+                session_name: name.clone(),
+                pane_id: target.pane_id.clone(),
+            },
             cwd: Some(cwd.path().to_string_lossy().into_owned()),
             command: Some(vec!["sleep".to_owned(), "5".to_owned()]),
             title: None,
             env: BTreeMap::new(),
-            stacked: true,
-            direction: SplitDirection::Down,
+            placement: SplitPlacement::Stacked,
             focus: false,
         })
         .expect("targeted split_pane");

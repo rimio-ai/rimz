@@ -1,9 +1,8 @@
 use super::*;
 use std::collections::HashSet;
 
-use crate::ids::{MuxName, PaneId, ViewKind};
+use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-use crate::pane::PaneRef;
 
 #[test]
 fn raw_pane_position_metadata_accepts_live_and_topology_shapes() {
@@ -212,38 +211,15 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
           }
         ]"#;
     let parsed: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
-    let listing = RawPaneListing {
+    let listing = PaneTopologyCache {
+        session_name: "rimz-test".to_owned(),
+        produced_at_ms: 1,
+        writer: None,
+        focused_pane: None,
+        clients: None,
         panes: parsed,
-        observed_at_ms: 1,
-        session_focus: None,
-        client_view: None,
     }
-    .into_pane_listing("rimz-test".to_owned(), |mut p, session_name| {
-        if !p.is_listed_pane() {
-            return None;
-        }
-        let command = p.display_command();
-        Some(PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
-            session_name: session_name.to_owned(),
-            view_id: Some(format!("tab_{}", p.view_position())),
-            view_kind: Some(ViewKind::Tab),
-            view_name: p.tab_name.take(),
-            title: p.title.take(),
-            is_floating: p.is_floating,
-            pane_pid: None,
-            pane_process_start: None,
-            hosted_agent_kind: None,
-            hosted_agent_process_start: None,
-            command,
-            foreground_cmdline: None,
-            spawn_command: p.spawn_command().map(str::to_owned),
-            cwd: p.pane_cwd.take(),
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
-        })
-    });
+    .into_pane_listing("rimz-test".to_owned());
 
     let pane_ids: Vec<&str> = listing
         .panes
@@ -375,7 +351,7 @@ fn topology_cache_focus_becomes_authoritative_listing_focus() {
     )
     .unwrap();
 
-    let listing = RawPaneListing::from_topology(cache);
+    let listing = cache.into_pane_listing("rimz-test".to_owned());
 
     assert!(listing.session_focus.is_some());
     assert_eq!(

@@ -179,6 +179,18 @@ pub struct PaneCapture {
     pub lines: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaneReadConsistency {
+    /// Use a valid pushed topology, requesting a newer push when needed.
+    #[default]
+    Cached,
+    /// Query mux truth first, then fall back to a valid pushed topology.
+    PreferAuthoritative,
+    /// Query mux truth and propagate failure. Only this state licenses
+    /// destructive decisions from pane absence.
+    RequireAuthoritative,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PaneListOptions {
     pub session_name: Option<String>,
@@ -192,13 +204,10 @@ pub struct PaneListOptions {
     /// Minimum acceptable `produced_at_ms` for backend-specific topology
     /// caches. Backends without such a cache ignore it.
     pub min_topology_produced_at_ms: Option<u64>,
-    /// Bypass backend topology caches and query the server directly. Backends
-    /// whose primary listing is already authoritative ignore it.
-    pub authoritative: bool,
-    /// Require server truth and return the authoritative query error instead of
-    /// falling back to a cache. Callers use this when stale topology could
-    /// trigger a destructive or duplicating mutation.
-    pub require_authoritative: bool,
+    /// Read safety policy. Only `RequireAuthoritative` licenses destructive
+    /// absence decisions. Backends whose primary listing is authoritative
+    /// ignore this distinction.
+    pub consistency: PaneReadConsistency,
     /// Override the backend's default subprocess timeout. `None` uses the
     /// backend's default (30s). Set to a shorter value for latency-sensitive
     /// probes (e.g. the self-close watchdog) where a hung Zellij should not
@@ -475,13 +484,7 @@ impl ResumeTab {
 
 #[derive(Clone, Debug, Default)]
 pub struct SplitPaneOptions {
-    /// Backend session to target from out-of-pane callers. In-pane callers may
-    /// leave this unset and let mux ambient state resolve the session.
-    pub session_name: Option<String>,
-    /// Backend view/tab/window id to target when the backend cannot split
-    /// relative to a pane from an out-of-pane caller.
-    pub target_view_id: Option<String>,
-    pub target_pane_id: Option<PaneId>,
+    pub target: SplitTarget,
     pub cwd: Option<String>,
     pub command: Option<Vec<String>>,
     /// Explicit pane name so a managed Zellij pane keeps its launch identity
@@ -489,14 +492,59 @@ pub struct SplitPaneOptions {
     /// `pane_start_command` already preserves launch identity.
     pub title: Option<String>,
     pub env: BTreeMap<String, String>,
-    /// Zellij renders this split into a native stack; tmux has no native pane
-    /// stack and degrades to its normal vertical/horizontal tiling.
-    pub stacked: bool,
-    /// Where the new pane lands relative to the pane it splits.
-    pub direction: SplitDirection,
+    pub placement: SplitPlacement,
     /// Move focus to the new pane. `false` leaves focus on the splitting pane
-    /// (`target_pane_id`, when set) — the `--bg` launch path.
+    /// (the target pane, when set) — the `--bg` launch path.
     pub focus: bool,
+}
+
+/// Mux context used to resolve a pane split.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SplitTarget {
+    /// Use the caller's current mux context.
+    #[default]
+    Ambient,
+    /// Split relative to a pane in the caller's current mux context.
+    Pane(PaneId),
+    /// Target an out-of-pane session without a pane anchor.
+    Session(String),
+    /// Split relative to a pane in an explicit out-of-pane session.
+    SessionPane {
+        session_name: String,
+        pane_id: PaneId,
+    },
+}
+
+impl SplitTarget {
+    pub fn session_name(&self) -> Option<&str> {
+        match self {
+            Self::Session(session_name) | Self::SessionPane { session_name, .. } => {
+                Some(session_name)
+            }
+            Self::Ambient | Self::Pane(_) => None,
+        }
+    }
+
+    pub fn pane_id(&self) -> Option<&PaneId> {
+        match self {
+            Self::Pane(pane_id) | Self::SessionPane { pane_id, .. } => Some(pane_id),
+            Self::Ambient | Self::Session(_) => None,
+        }
+    }
+}
+
+/// Placement of a new pane relative to its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitPlacement {
+    Directional(SplitDirection),
+    /// Zellij native stack; tmux uses its vertical split fallback.
+    Stacked,
+}
+
+impl Default for SplitPlacement {
+    fn default() -> Self {
+        Self::Directional(SplitDirection::default())
+    }
 }
 
 /// Where a new pane lands relative to the pane it splits.

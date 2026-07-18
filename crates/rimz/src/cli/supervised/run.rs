@@ -10,7 +10,10 @@ use rimz::harness::run::{
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::harness::spec::LayoutSpec;
 use rimz::ids::AgentKind;
-use rimz::mux::{LayoutColumn, LayoutPanes, SplitPaneOptions, TabOptions, own_pane_id};
+use rimz::mux::{
+    LayoutColumn, LayoutPanes, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
+    own_pane_id,
+};
 use rimz::store::{AgentLaunchBatch, AgentLaunchName, AgentLaunchScope};
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;
@@ -243,9 +246,7 @@ fn open_attempt_pane(
             RunPlacement::Split => room
                 .backend()
                 .split_pane(SplitPaneOptions {
-                    session_name: None,
-                    target_view_id: None,
-                    target_pane_id: target,
+                    target: target.map_or(SplitTarget::Ambient, SplitTarget::Pane),
                     cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
                     command: Some(pane.argv.clone()),
                     title: None,
@@ -254,8 +255,7 @@ fn open_attempt_pane(
                         prepared.room_channel.as_deref(),
                         request.worktree.is_none() && request.from_pr.is_none(),
                     ),
-                    stacked: false,
-                    direction,
+                    placement: SplitPlacement::Directional(direction),
                     focus: false,
                 })
                 .map_err(anyhow::Error::from),

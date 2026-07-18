@@ -196,60 +196,14 @@ fn published_topology_payload_carries_writer() {
 }
 
 #[test]
-fn panes_needing_pid_selects_unprobed_live_terminals() {
-    let implicit = pane(1);
-    let spawn_command = pane(2);
-    let with_pid = pane(3);
-    let probed = pane(4);
-    let plugin = plugin_pane(5);
-    let mut floating = pane(6);
-    floating.is_floating = true;
-    let mut held = pane(7);
-    held.is_held = true;
-    let room = tabs(vec![
-        implicit,
-        spawn_command,
-        with_pid,
-        probed,
-        plugin,
-        floating,
-        held,
-    ]);
-    let pids = BTreeMap::from([(3, 300)]);
-    let probed = BTreeSet::from([4]);
-
-    assert_eq!(panes_needing_pid(&room, &pids, &probed), vec![1, 2]);
-}
-
-#[test]
-fn apply_foreground_commands_uses_foreground_then_shell_and_enrichment() {
-    let mut room = tabs(vec![pane(1), pane(2)]);
-    let foreground = BTreeMap::from([(1, "vim README.md".to_owned())]);
-    let shell = BTreeMap::from([(1, "zsh".to_owned()), (2, "fish".to_owned())]);
-    let cwd = BTreeMap::from([(1, "/repo/main".to_owned()), (2, "/repo/side".to_owned())]);
-    let pids = BTreeMap::from([(1, 101), (2, 202)]);
-
-    apply_foreground_commands(&mut room, &foreground, &shell, &cwd, &pids);
-
-    let panes = room.get(&0).expect("tab exists");
-    assert_eq!(panes[0].pane_command.as_deref(), Some("vim README.md"));
-    assert_eq!(panes[0].pane_cwd.as_deref(), Some("/repo/main"));
-    assert_eq!(panes[0].pane_pid, Some(101));
-    assert_eq!(panes[1].pane_command.as_deref(), Some("fish"));
-    assert_eq!(panes[1].pane_cwd.as_deref(), Some("/repo/side"));
-    assert_eq!(panes[1].pane_pid, Some(202));
-}
-
-#[test]
 fn published_topology_payload_carries_event_enrichment() {
-    let mut manifest = tabs(vec![pane(1)]);
-    apply_foreground_commands(
-        &mut manifest,
-        &BTreeMap::new(),
-        &BTreeMap::from([(1, "zsh".to_owned())]),
-        &BTreeMap::from([(1, "/repo/main".to_owned())]),
-        &BTreeMap::from([(1, 101)]),
-    );
+    let enriched = PaneFields {
+        pane_command: Some("zsh".to_owned()),
+        pane_cwd: Some("/repo/main".to_owned()),
+        pane_pid: Some(101),
+        ..pane(1)
+    };
+    let manifest = tabs(vec![enriched]);
     let payload = published_topology_payload("rimz-test", 42, None, Some(1), None, &manifest)
         .expect("topology payload publishes");
     let encoded = serde_json::to_value(payload).expect("payload serializes");
@@ -273,33 +227,6 @@ fn command_updates_distinguish_foreground_shell_and_empty() {
         foreground_command_update(&[], false),
         ForegroundCommandUpdate::Forget,
     );
-
-    let mut room = tabs(vec![pane(1)]);
-    let mut foreground = BTreeMap::from([(1, "sleep 5".to_owned())]);
-    let shell = BTreeMap::from([(1, "zsh".to_owned())]);
-
-    apply_foreground_commands(
-        &mut room,
-        &foreground,
-        &shell,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-    );
-    assert_eq!(
-        room.get(&0).unwrap()[0].pane_command.as_deref(),
-        Some("sleep 5"),
-    );
-    foreground.remove(&1);
-    apply_foreground_commands(
-        &mut room,
-        &foreground,
-        &shell,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-    );
-
-    let pane = &room.get(&0).unwrap()[0];
-    assert_eq!(pane.pane_command.as_deref(), Some("zsh"));
 }
 
 #[test]

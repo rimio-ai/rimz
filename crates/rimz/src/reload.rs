@@ -23,8 +23,8 @@ use crate::diag::record::DiagEvent;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::recovery;
 use crate::mux::{
-    MuxBackend, PaneListOptions, PaneListing, SidebarLiveness, SidebarPaneOptions, SidebarWidth,
-    backend_for,
+    MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency, SidebarLiveness,
+    SidebarPaneOptions, SidebarWidth, backend_for,
 };
 use crate::proc::ProcInfo;
 use crate::room::session::LiveSessions;
@@ -970,8 +970,7 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         runtime_paths: None,
         workspace_id: Some(ws.workspace_id.clone()),
         min_topology_produced_at_ms: Some(floor_ms),
-        authoritative: false,
-        require_authoritative: false,
+        consistency: PaneReadConsistency::Cached,
         command_timeout: Some(RECONCILE_LIST_TIMEOUT),
     }) {
         Ok(listing) => (
@@ -1018,8 +1017,7 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
             backend.list_panes(PaneListOptions {
                 session_name: Some(ws.session_name.clone()),
                 workspace_id: Some(ws.workspace_id.clone()),
-                authoritative: true,
-                require_authoritative: true,
+                consistency: PaneReadConsistency::RequireAuthoritative,
                 command_timeout: Some(RECONCILE_LIST_TIMEOUT),
                 ..Default::default()
             })
