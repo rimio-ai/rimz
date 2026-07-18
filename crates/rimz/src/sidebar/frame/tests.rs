@@ -245,6 +245,54 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
 }
 
 #[test]
+fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
+    let first = PaneId::from_parts(MuxName::Tmux, "%1");
+    let second = PaneId::from_parts(MuxName::Tmux, "%2");
+    let tmux_pane = |pane_id: &PaneId, view: &str| PaneRef {
+        pane_id: pane_id.clone(),
+        view_kind: Some(ViewKind::Window),
+        ..pane(pane_id.raw(), view, Some("zsh"), false)
+    };
+    let panes = vec![tmux_pane(&first, "@1"), tmux_pane(&second, "@2")];
+    let first_view = crate::mux::ClientPaneView {
+        client_id: crate::mux::MuxClientId::Tmux("client-a".to_owned()),
+        pane_id: first.clone(),
+    };
+    let (single, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: panes.clone(),
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: std::slice::from_ref(&first),
+        client_views: std::slice::from_ref(&first_view),
+        client_view_fresh: true,
+        prior: None,
+    });
+    assert_eq!(single.focused_pane, Some(first.clone()));
+
+    let distinct_views = [
+        first_view,
+        crate::mux::ClientPaneView {
+            client_id: crate::mux::MuxClientId::Tmux("client-b".to_owned()),
+            pane_id: second.clone(),
+        },
+    ];
+    let (distinct, _) = assemble_frame_from_inputs(FrameInputs {
+        panes,
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: &[first, second],
+        client_views: &distinct_views,
+        client_view_fresh: true,
+        prior: None,
+    });
+    assert_eq!(distinct.focused_pane, None);
+}
+
+#[test]
 fn multiple_client_views_ignore_prior_missing_from_live_frame() {
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");

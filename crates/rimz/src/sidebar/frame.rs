@@ -484,7 +484,7 @@ pub(crate) fn resolve_session_focus(
             let live_viewed = client_views
                 .iter()
                 .map(|view| &view.pane_id)
-                .filter(|pane| pane.raw().starts_with("terminal_") && live.contains(*pane))
+                .filter(|pane| live.contains(*pane))
                 .cloned()
                 .collect::<HashSet<_>>();
             if live_viewed.len() != 1

@@ -486,11 +486,9 @@ fn focus_stranded_target(
     current.dedup();
     evidence.sort();
     evidence.dedup();
-    if stranded_pane_id.mux() == MuxName::Zellij {
-        if snapshot.presence.is_none() || evidence.is_empty() || current != evidence {
-            return None;
-        }
-    } else if snapshot.viewed_panes.len() > 1 {
+    if stranded_pane_id.mux() == MuxName::Zellij
+        && (snapshot.presence.is_none() || evidence.is_empty() || current != evidence)
+    {
         return None;
     }
     // `focus-pane-id` is session-global: with clients viewing distinct panes it
