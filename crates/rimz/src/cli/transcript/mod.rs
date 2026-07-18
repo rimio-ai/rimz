@@ -356,7 +356,7 @@ fn write_empty_chat(json: bool, message: &str) -> Result<()> {
         render::json_pretty(&serde_json::json!({ "entries": [] }))?;
     } else {
         let mut out = render::err();
-        writeln!(out, "{}", render::paint(render::palette::FAINT, message))?;
+        writeln!(out, "{}", render::paint(render::palette::faint(), message))?;
     }
     Ok(())
 }
@@ -406,7 +406,7 @@ fn write_archive_hint(
         out,
         "{}",
         render::paint(
-            render::palette::FAINT,
+            render::palette::faint(),
             &format!(
                 "⋯ {hidden} earlier {line} from a prior session{when} — rimz transcript --all"
             ),

@@ -56,15 +56,15 @@ fn human_table(entries: &[RemoteAlias]) -> render::Table {
             .map(|mux| mux.as_str().to_owned())
             .unwrap_or_else(|| "-".to_owned());
         let reconnect_style = if entry.reconnect {
-            render::palette::GOOD
+            render::palette::good()
         } else {
-            render::palette::MUTED
+            render::palette::muted()
         };
         table.row([
-            render::cell(entry.name.as_str()).fg(render::palette::ACCENT),
+            render::cell(entry.name.as_str()).fg(render::palette::accent()),
             render::cell(entry.target.as_str()),
             render::cell(reconnect).fg(reconnect_style),
-            render::cell(no_resume).fg(render::palette::BODY),
+            render::cell(no_resume).fg(render::palette::body()),
             render::cell(mux).dash(),
         ]);
     }

@@ -21,8 +21,6 @@ mod interaction;
 mod labels;
 mod layout;
 mod odometer;
-mod oklab;
-pub mod scheme;
 mod scrollbar;
 mod sections;
 mod theme;
@@ -48,8 +46,8 @@ pub(crate) use self::ui_state::{
 };
 pub(crate) use crate::sidebar_pane::view::BodyFilter;
 pub use crate::sidebar_pane::view::{WORKTREE_ROW_CAP, capped_visible_rows};
+pub use crate::theme::oklab::blend;
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
-pub use oklab::blend;
 pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};

@@ -420,7 +420,6 @@ fn test_row_ctx<'a>(
 ) -> RowCtx<'a> {
     RowCtx {
         theme,
-        providers: &snapshot.providers,
         now: snapshot.now,
         width,
         tier: Tier::for_width(content_width(width)),

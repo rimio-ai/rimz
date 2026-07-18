@@ -114,7 +114,7 @@ where
             out,
             "{}",
             render::paint(
-                render::palette::FAINT,
+                render::palette::faint(),
                 "(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)"
             )
         )?;
@@ -144,7 +144,7 @@ pub(crate) fn write_pet_row(
         write!(
             out,
             "{}",
-            render::paint(render::palette::ACCENT.bold(), &centered)
+            render::paint(render::palette::accent().bold(), &centered)
         )?;
     }
     writeln!(out)
@@ -212,7 +212,7 @@ pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
             write!(
                 out,
                 "{}",
-                render::paint(render::palette::ACCENT.bold(), &centered)
+                render::paint(render::palette::accent().bold(), &centered)
             )?;
         }
         writeln!(out)
@@ -256,16 +256,12 @@ fn paint_cell(cell: &PreviewCell) -> String {
     }
     let mut style = anstyle::Style::new();
     if let Some(rgb) = cell.fg {
-        style = style.fg_color(Some(rgb_color(rgb)));
+        style = style.fg_color(Some(render::palette::rgb_color(rgb)));
     }
     if let Some(rgb) = cell.bg {
-        style = style.bg_color(Some(rgb_color(rgb)));
+        style = style.bg_color(Some(render::palette::rgb_color(rgb)));
     }
     render::paint(style, &cell.ch.to_string())
-}
-
-fn rgb_color((red, green, blue): (u8, u8, u8)) -> anstyle::Color {
-    anstyle::Color::Rgb(anstyle::RgbColor(red, green, blue))
 }
 
 #[cfg(test)]

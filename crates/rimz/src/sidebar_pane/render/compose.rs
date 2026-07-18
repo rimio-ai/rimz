@@ -819,7 +819,6 @@ pub(super) fn scroll_lines(
         let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
         let ctx = RowCtx {
             theme,
-            providers: &snapshot.providers,
             now: snapshot.now,
             width,
             tier: Tier::for_width(content_width(width)),

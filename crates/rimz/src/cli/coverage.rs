@@ -158,7 +158,7 @@ fn hook_coverage(descriptor: &AgentDescriptor, signal_kind: LifecycleSignalKind)
 }
 
 fn render_human(report: &CoverageReport, w: &mut impl Write) -> io::Result<()> {
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), "RimZ coverage"))?;
+    writeln!(w, "{}", paint(palette::header(), "RimZ coverage"))?;
     render_matrix(
         w,
         "AGENT COVERAGE",
@@ -177,7 +177,7 @@ fn render_human(report: &CoverageReport, w: &mut impl Write) -> io::Result<()> {
 
 fn section(w: &mut impl Write, title: &str) -> io::Result<()> {
     writeln!(w)?;
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), title))
+    writeln!(w, "{}", paint(palette::header(), title))
 }
 
 fn render_matrix(
@@ -198,7 +198,7 @@ fn render_grid(w: &mut impl Write, matrix: &CoverageMatrix) -> io::Result<()> {
         std::iter::once("AGENT".to_owned()).chain(matrix.rows.iter().map(|row| row.label.clone()));
     let mut table = Table::new(headers);
     for (agent_idx, agent) in matrix.agents.iter().enumerate() {
-        let cells = std::iter::once(cell(agent.as_str()).fg(palette::ACCENT)).chain(
+        let cells = std::iter::once(cell(agent.as_str()).fg(palette::identity(agent))).chain(
             matrix
                 .rows
                 .iter()
@@ -215,7 +215,7 @@ fn render_detail(
     matrix: &CoverageMatrix,
 ) -> io::Result<()> {
     writeln!(w)?;
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), "DETAIL"))?;
+    writeln!(w, "{}", paint(palette::header(), "DETAIL"))?;
     let mut table = Table::new([label_header, "DETAIL"]);
     for (agent_idx, agent) in matrix.agents.iter().enumerate() {
         table.section(agent);
@@ -223,7 +223,7 @@ fn render_detail(
             let entry = &row.cells[agent_idx];
             let (glyph, style) = matrix_parts(entry.state);
             table.row([
-                cell(row.label.as_str()).fg(palette::ACCENT),
+                cell(row.label.as_str()).fg(palette::accent()),
                 cell(format!("{glyph} {}", entry.detail)).fg(style),
             ]);
         }
@@ -238,13 +238,13 @@ fn render_legend(w: &mut impl Write, legend: [&str; 3]) -> io::Result<()> {
     writeln!(
         w,
         "  {} {} {}   {} {}   {} {}",
-        paint(palette::FAINT, "legend"),
+        paint(palette::faint(), "legend"),
         paint(ok_style, ok_glyph),
-        paint(palette::FAINT, legend[0]),
+        paint(palette::faint(), legend[0]),
         paint(partial_style, partial_glyph),
-        paint(palette::FAINT, legend[1]),
+        paint(palette::faint(), legend[1]),
         paint(absent_style, absent_glyph),
-        paint(palette::FAINT, legend[2])
+        paint(palette::faint(), legend[2])
     )
 }
 
@@ -254,11 +254,12 @@ fn matrix_cell(value: MatrixCellState) -> Cell {
 }
 
 fn matrix_parts(value: MatrixCellState) -> (&'static str, anstyle::Style) {
-    match value {
-        MatrixCellState::Ok => ("✓", palette::GOOD),
-        MatrixCellState::Partial => ("◐", palette::WARN),
-        MatrixCellState::Absent => ("✗", palette::MUTED),
-    }
+    let role = match value {
+        MatrixCellState::Ok => crate::cli::render::status::StateRole::Success,
+        MatrixCellState::Partial => crate::cli::render::status::StateRole::Waiting,
+        MatrixCellState::Absent => crate::cli::render::status::StateRole::Unavailable,
+    };
+    crate::cli::render::verdict(role)
 }
 
 #[cfg(test)]
@@ -649,7 +650,7 @@ mod tests {
             "grid header and agent rows:\n{out}"
         );
         assert!(
-            out.contains("legend ✓ wired   ◐ partial   ✗ unsupported"),
+            out.contains("legend ✓ wired   ! partial   ✗ unsupported"),
             "legend renders:\n{out}"
         );
         assert!(out.contains("DETAIL"), "detail block title:\n{out}");
@@ -659,7 +660,7 @@ mod tests {
             "ok detail annotated:\n{out}"
         );
         assert!(
-            out.contains("◐ pane liveness + reaper — no SessionEnd hook"),
+            out.contains("! pane liveness + reaper — no SessionEnd hook"),
             "partial detail kept:\n{out}"
         );
         assert!(
@@ -696,7 +697,7 @@ mod tests {
         assert!(out.contains("HOOKS MATRIX"), "{out}");
         assert!(out.contains("SIGNAL"), "{out}");
         assert!(
-            out.contains("legend ✓ native   ◐ derived   ✗ absent"),
+            out.contains("legend ✓ native   ! derived   ✗ absent"),
             "hook legend renders:\n{out}"
         );
     }

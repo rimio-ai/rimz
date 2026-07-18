@@ -17,7 +17,6 @@ use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
-use crate::SidebarProviderPanel;
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 
 use super::CostRolls;
@@ -46,7 +45,6 @@ pub(super) use worktree::{WorktreeRenderContext, worktree_group_lines_projected}
 
 pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
-    pub(in crate::sidebar_pane::render) providers: &'a [SidebarProviderPanel],
     pub(in crate::sidebar_pane::render) now: Timestamp,
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) tier: Tier,

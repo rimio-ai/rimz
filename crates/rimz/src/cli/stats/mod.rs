@@ -41,7 +41,7 @@ use rimz::agents::spending::{
     read_provider_spending_cache, unix_secs_now, user_input, utc_date,
     write_provider_spending_cache_with_day,
 };
-use rimz::config::{GlyphRole, MachineConfig, Semantic, ThemeConfig};
+use rimz::config::{GlyphRole, MachineConfig, ThemeConfig};
 use rimz::store::paths::state_home;
 use rimz::store::single_flight::{Coalesced, coalesce};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};

@@ -134,6 +134,21 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
         crate::config::nearest_xterm_index(0xa3, 0xbe, 0x8c)
     );
     assert_eq!(panel.color_rgb, Some((0xa3, 0xbe, 0x8c)));
+
+    let mut snapshot = room(vec![agent("claude", "c1", AgentStatus::Idle, 10)]);
+    snapshot.theme.providers.insert(
+        "claude".to_owned(),
+        crate::config::ThemeProviderStyle {
+            color: Some(crate::config::ThemeColor::Role(
+                crate::config::PaletteRole::Green,
+            )),
+            ..Default::default()
+        },
+    );
+    let panel = panel_for(snapshot);
+    assert_eq!(panel.color, 173, "role overrides retain the brand fallback");
+    assert_eq!(panel.color_rgb, None);
+    assert_eq!(panel.color_role, Some(crate::config::PaletteRole::Green));
 }
 
 #[test]

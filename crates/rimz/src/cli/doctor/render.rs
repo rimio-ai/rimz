@@ -33,13 +33,14 @@ enum Health {
 }
 
 fn parts(health: Health) -> (&'static str, anstyle::Style) {
-    match health {
-        Health::Ok => ("✓", palette::GOOD),
-        Health::Warn => ("⚠", palette::WARN),
-        Health::Alarm => ("✗", palette::ALARM),
-        Health::Info => ("●", palette::COOL),
-        Health::Neutral => ("·", palette::FAINT),
-    }
+    let role = match health {
+        Health::Ok => status::StateRole::Success,
+        Health::Warn => status::StateRole::Waiting,
+        Health::Alarm => status::StateRole::Failed,
+        Health::Info => status::StateRole::Working,
+        Health::Neutral => status::StateRole::Neutral,
+    };
+    crate::cli::render::verdict(role)
 }
 
 #[derive(Default)]
@@ -100,7 +101,7 @@ fn style_of(health: Health) -> anstyle::Style {
 /// Open a titled section: a blank line then the heading in the accent tone.
 fn section(w: &mut impl Write, title: &str) -> io::Result<()> {
     writeln!(w)?;
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), title))
+    writeln!(w, "{}", paint(palette::header(), title))
 }
 
 /// A hanging note under a section: an indented `glyph text` line.
@@ -172,7 +173,7 @@ fn render_machine_config(
 }
 
 fn render_identity(w: &mut impl Write, version: &str, host: &Host) -> io::Result<()> {
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), "RimZ doctor"))?;
+    writeln!(w, "{}", paint(palette::header(), "RimZ doctor"))?;
     let mut kv = KeyVals::new().indent(2);
     kv.push("version", cell(version));
     let user = match &host.user {
@@ -182,7 +183,7 @@ fn render_identity(w: &mut impl Write, version: &str, host: &Host) -> io::Result
     kv.push("user", cell(user));
     kv.push(
         "binary",
-        cell(host.binary.as_deref().unwrap_or("unknown")).fg(palette::BODY),
+        cell(host.binary.as_deref().unwrap_or("unknown")).fg(palette::body()),
     );
     kv.render(w)
 }
@@ -216,7 +217,7 @@ fn render_terminal(w: &mut impl Write, terminal: &Terminal, tally: &mut Tally) -
             terminal.term.as_deref().unwrap_or("unset"),
             terminal.terminfo_truecolor,
         ))
-        .fg(palette::FAINT),
+        .fg(palette::faint()),
     );
     if let Some(fix) = &terminal.fix {
         kv.push("fix", verdict(tally, Health::Warn, fix));
@@ -248,15 +249,15 @@ fn render_workspace(
             kv.render(w)
         }
         Probe::Ready(ws) => {
-            kv.push("id", cell(ws.workspace_id.as_str()).fg(palette::ACCENT));
+            kv.push("id", cell(ws.workspace_id.as_str()).fg(palette::accent()));
             kv.push(
                 "project root",
-                cell(ws.project_root.as_str()).fg(palette::BODY),
+                cell(ws.project_root.as_str()).fg(palette::body()),
             );
             kv.push("root class", cell(ws.root_class.label()));
             kv.push(
                 "worktree root",
-                cell(ws.worktree_root.as_str()).fg(palette::BODY),
+                cell(ws.worktree_root.as_str()).fg(palette::body()),
             );
             kv.push(
                 "worktree branch",
@@ -294,16 +295,16 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     };
 
     let mut kv = KeyVals::new().indent(2);
-    kv.push("backend", cell(mux.name.to_string()).fg(palette::ACCENT));
+    kv.push("backend", cell(mux.name.to_string()).fg(palette::accent()));
     kv.push("version", mux_version_cell(tally, &mux.version));
     push_capabilities(&mut kv, tally, &mux.capabilities);
     match &mux.binaries.active {
-        Some(active) => kv.push("binary", cell(binary_label(active)).fg(palette::BODY)),
+        Some(active) => kv.push("binary", cell(binary_label(active)).fg(palette::body())),
         None => kv.push("binary", verdict(tally, Health::Warn, "not found on PATH")),
     }
     kv.push("log", mux_log_cell(tally, &mux.log));
     if let Some(socket) = &mux.socket {
-        kv.push("socket", cell(socket.as_str()).fg(palette::BODY));
+        kv.push("socket", cell(socket.as_str()).fg(palette::body()));
     }
     if let Some(socket) = &mux.zellij_socket {
         kv.push(
@@ -356,7 +357,7 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
 fn mux_version_cell(tally: &mut Tally, version: &Version) -> Cell {
     match version {
         Version::Reported { version } => cell(version.as_str()),
-        Version::Unknown => cell("unknown").fg(palette::FAINT),
+        Version::Unknown => cell("unknown").fg(palette::faint()),
         Version::Unavailable { error } => unavailable(tally, Health::Warn, error),
     }
 }
@@ -397,9 +398,9 @@ fn mux_log_cell(tally: &mut Tally, log: &MuxLog) -> Cell {
     match log {
         MuxLog::Ready {
             path, size_bytes, ..
-        } => cell(format!("{path} ({})", fmt_bytes(*size_bytes))).fg(palette::BODY),
-        MuxLog::Missing { path } => cell(format!("none yet ({path})")).fg(palette::FAINT),
-        MuxLog::Disabled { hint } => cell(hint.as_str()).fg(palette::FAINT),
+        } => cell(format!("{path} ({})", fmt_bytes(*size_bytes))).fg(palette::body()),
+        MuxLog::Missing { path } => cell(format!("none yet ({path})")).fg(palette::faint()),
+        MuxLog::Disabled { hint } => cell(hint.as_str()).fg(palette::faint()),
         MuxLog::Unavailable { error } => unavailable(tally, Health::Warn, error),
     }
 }
@@ -558,7 +559,7 @@ fn render_duplicate_session_notes(
                 };
                 detail(
                     w,
-                    palette::BODY,
+                    palette::body(),
                     &format!(
                         "{here}{}: {} sidebars ({panes})",
                         group.session_name, group.sidebar_count
@@ -603,10 +604,10 @@ fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> 
             ),
         )?;
         if let Some(active) = &mux.binaries.active {
-            detail(w, palette::BODY, &format!("* {}", binary_label(active)))?;
+            detail(w, palette::body(), &format!("* {}", binary_label(active)))?;
         }
         for install in &mux.binaries.duplicates {
-            detail(w, palette::BODY, &format!("  {}", binary_label(install)))?;
+            detail(w, palette::body(), &format!("  {}", binary_label(install)))?;
         }
     }
     if mux.binaries.active.is_none() {
@@ -677,13 +678,13 @@ fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> 
             detail(w, style_of(health), sample)?;
         }
         if issue.evidence_truncated {
-            detail(w, palette::MUTED, "evidence truncated at 8 KiB")?;
+            detail(w, palette::muted(), "evidence truncated at 8 KiB")?;
         }
     }
     if *omitted_issue_groups > 0 {
         detail(
             w,
-            palette::MUTED,
+            palette::muted(),
             &format!("{omitted_issue_groups} older issue groups omitted"),
         )?;
     }
@@ -732,7 +733,7 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         let fix = if fix.is_empty() { "-".to_owned() } else { fix };
         table.row([
             badge(tally, health),
-            cell(row.kind.as_str()).fg(palette::ACCENT),
+            cell(row.kind.as_str()).fg(palette::identity(&row.kind)),
             cell(row.status.label()).fg(style_of(health)),
             cell(fix).dash(),
         ]);
@@ -755,7 +756,7 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         )?;
         detail(
             w,
-            palette::FAINT,
+            palette::faint(),
             "hooks are offered automatically once an agent is installed",
         )?;
     }
@@ -772,9 +773,9 @@ fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) 
         let (health, status, detail) = plugin_verdict(plugin);
         table.row([
             badge(tally, health),
-            cell(plugin.kind.as_str()).fg(palette::ACCENT),
+            cell(plugin.kind.as_str()).fg(palette::identity(&plugin.kind)),
             cell(status).fg(style_of(health)),
-            cell(home_relative(&plugin.manifest)).fg(palette::BODY),
+            cell(home_relative(&plugin.manifest)).fg(palette::body()),
             cell(detail).dash(),
         ]);
         push_probe_rows(&mut table, tally, plugin);
@@ -831,10 +832,10 @@ fn push_probe_rows(table: &mut Table, tally: &mut Tally, plugin: &PluginRow) {
         };
         table.row([
             badge(tally, probe_health),
-            cell(format!("  {} probe", probe.name)).fg(palette::META),
+            cell(format!("  {} probe", probe.name)).fg(palette::meta()),
             cell(status).fg(style_of(probe_health)),
             cell("-"),
-            cell(probe.command.as_str()).fg(palette::BODY),
+            cell(probe.command.as_str()).fg(palette::body()),
         ]);
     }
 }
@@ -842,7 +843,7 @@ fn push_probe_rows(table: &mut Table, tally: &mut Tally, plugin: &PluginRow) {
 fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) -> io::Result<()> {
     section(w, "LOOP TASKS")?;
     if loop_tasks.tasks.is_empty() {
-        return writeln!(w, "  {}", paint(palette::FAINT, "none configured"));
+        return writeln!(w, "  {}", paint(palette::faint(), "none configured"));
     }
     let mut table = Table::new(["", "NAME", "TARGET", "WHEN", "ROOT"]);
     for row in &loop_tasks.tasks {
@@ -853,10 +854,10 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
         };
         table.row([
             badge(tally, health),
-            cell(row.name.as_str()).fg(palette::ACCENT),
+            cell(row.name.as_str()).fg(palette::accent()),
             cell(row.spec.as_str()),
             cell(row.when.as_str()).fg(style_of(health)),
-            cell(home_relative(&row.root)).fg(palette::BODY),
+            cell(home_relative(&row.root)).fg(palette::body()),
         ]);
     }
     table.render(w)?;
@@ -889,7 +890,7 @@ fn render_remote_control(
         }
         RemoteControl::Off => {
             let mut kv = KeyVals::new().indent(2);
-            kv.push("remote control", cell("off").fg(palette::FAINT));
+            kv.push("remote control", cell("off").fg(palette::faint()));
             kv.render(w)
         }
         RemoteControl::On {
@@ -922,7 +923,7 @@ fn render_remote_on(
     for refusal in refusals {
         note(tally, w, Health::Alarm, "`rimz start` refuses:")?;
         for line in refusal.lines() {
-            detail(w, palette::MUTED, line)?;
+            detail(w, palette::muted(), line)?;
         }
     }
     for skip in skipped {
@@ -933,7 +934,7 @@ fn render_remote_on(
             "enabled but not installed — skipped (the room still starts):",
         )?;
         for line in skip.lines() {
-            detail(w, palette::MUTED, line)?;
+            detail(w, palette::muted(), line)?;
         }
     }
     for advisory in advisories {
@@ -944,7 +945,7 @@ fn render_remote_on(
             "provider daemon advisory (no start impact):",
         )?;
         for line in advisory.lines() {
-            detail(w, palette::MUTED, line)?;
+            detail(w, palette::muted(), line)?;
         }
     }
     Ok(())
@@ -956,7 +957,7 @@ fn render_storage(w: &mut impl Write, disk_usage: &Storage, tally: &mut Tally) -
         w,
         "  {}",
         paint(
-            palette::MUTED,
+            palette::muted(),
             &format!("rimz on disk: {}", fmt_bytes(disk_usage.total_bytes))
         )
     )?;
@@ -972,9 +973,9 @@ fn render_storage(w: &mut impl Write, disk_usage: &Storage, tally: &mut Tally) -
             cell(root.label),
             cell(size).dash(),
             cell(home_relative(&root.path)).fg(if root.present {
-                palette::BODY
+                palette::body()
             } else {
-                palette::FAINT
+                palette::faint()
             }),
         ]);
     }
@@ -1023,7 +1024,7 @@ fn render_protocols(
             };
             detail(
                 w,
-                palette::BODY,
+                palette::body(),
                 &format!("{}{tag}: {location}", writer.build),
             )?;
         }
@@ -1071,9 +1072,13 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
         AgentRollup::Unavailable { error } => {
             note(tally, w, Health::Alarm, &unavailable_text(error))
         }
-        AgentRollup::None => writeln!(w, "  {}", paint(palette::FAINT, "none observed")),
+        AgentRollup::None => writeln!(w, "  {}", paint(palette::faint(), "none observed")),
         AgentRollup::Observed { counts, rows } => {
-            writeln!(w, "  {}", paint(palette::MUTED, &agent_counts_line(counts)))?;
+            writeln!(
+                w,
+                "  {}",
+                paint(palette::muted(), &agent_counts_line(counts))
+            )?;
             if rows.is_empty() {
                 return Ok(());
             }
@@ -1084,8 +1089,8 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                 let style = status::agent(agent.status, agent.phase);
                 table.row([
                     badge(tally, health),
-                    cell(agent.kind.as_str()),
-                    cell(agent.agent_id.as_str()).fg(palette::ACCENT),
+                    cell(agent.kind.as_str()).fg(palette::identity(&agent.kind)),
+                    cell(agent.agent_id.as_str()).fg(palette::accent()),
                     cell(agent.branch.as_deref().unwrap_or("-")).dash(),
                     cell(agent.status.as_str()).fg(style),
                     cell(age_short(now, agent.last_seen)),
@@ -1132,20 +1137,20 @@ fn render_messages(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally)
         && messages.stuck.is_empty()
         && messages.recent_failures.is_empty()
     {
-        return writeln!(w, "  {}", paint(palette::FAINT, "no open messages"));
+        return writeln!(w, "  {}", paint(palette::faint(), "no open messages"));
     }
     if messages.open.total() == 0 {
         writeln!(
             w,
             "  {}",
-            paint(palette::MUTED, "0 open — `rimz message list`")
+            paint(palette::muted(), "0 open — `rimz message list`")
         )?;
     } else {
         writeln!(
             w,
             "  {}",
             paint(
-                palette::MUTED,
+                palette::muted(),
                 &format!(
                     "{} open: {} — `rimz message list`",
                     messages.open.total(),
@@ -1193,11 +1198,11 @@ fn render_message_row(
 ) {
     table.row([
         badge(tally, health),
-        cell(row.message_id.as_str()).fg(palette::ACCENT),
+        cell(row.message_id.as_str()).fg(palette::accent()),
         cell(row.status.as_str()).fg(style_of(health)),
-        cell(row.target.as_str()).fg(palette::META),
+        cell(row.target.as_str()).fg(palette::meta()),
         cell(age_short(now, row.at)),
-        cell(row.problem.as_str()).fg(palette::BODY),
+        cell(row.problem.as_str()).fg(palette::body()),
     ]);
 }
 
@@ -1215,7 +1220,7 @@ fn render_diagnostics(
             w,
             "  {}",
             paint(
-                palette::MUTED,
+                palette::muted(),
                 &format!(
                     "history cleared {}",
                     age_short(Timestamp::now(), cleared_at)
@@ -1224,18 +1229,18 @@ fn render_diagnostics(
         )?;
     }
     match diagnostics {
-        Diagnostics::Unavailable => writeln!(w, "  {}", paint(palette::FAINT, "unavailable")),
+        Diagnostics::Unavailable => writeln!(w, "  {}", paint(palette::faint(), "unavailable")),
         Diagnostics::Ready { path, incidents } if incidents.is_empty() => writeln!(
             w,
             "  {}",
-            paint(palette::FAINT, &format!("no recent records ({path})"))
+            paint(palette::faint(), &format!("no recent records ({path})"))
         ),
         Diagnostics::Ready { path, incidents } => {
             writeln!(
                 w,
                 "  {}",
                 paint(
-                    palette::MUTED,
+                    palette::muted(),
                     &format!("{} recent incidents ({path})", incidents.len())
                 )
             )?;
@@ -1262,7 +1267,7 @@ fn render_diagnostics(
                 {
                     // ponytail: SUMMARY is the unpadded final column; add styled Cell spans
                     // before giving this table a max width.
-                    summary.push_str(&paint(palette::MUTED, &format!(" · old build {build}")));
+                    summary.push_str(&paint(palette::muted(), &format!(" · old build {build}")));
                 }
                 table.row([
                     badge(tally, health),
@@ -1271,7 +1276,7 @@ fn render_diagnostics(
                         .fg(style_of(health)),
                     cell(incident.kind.as_str()),
                     cell(seen),
-                    cell(summary).fg(palette::BODY),
+                    cell(summary).fg(palette::body()),
                 ]);
             }
             table.render(w)
@@ -1321,19 +1326,19 @@ fn render_last_incident(
             })
             .collect::<Vec<_>>()
             .join(", ");
-        detail(w, palette::BODY, &format!("lost: {names}"))?;
+        detail(w, palette::body(), &format!("lost: {names}"))?;
     }
     if let Some(recovered) = incident.recovered {
         detail(
             w,
-            palette::BODY,
+            palette::body(),
             &format!("recovered: {recovered} of {}", incident.lost_agents.len()),
         )?;
     }
     if let Some(forensics) = &incident.forensics {
         detail(
             w,
-            palette::MUTED,
+            palette::muted(),
             &format!("forensics: {}", home_relative(forensics)),
         )?;
     }
@@ -1347,7 +1352,7 @@ fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
             w,
             "{}",
             paint(
-                palette::ALARM,
+                palette::alarm(),
                 &format!(
                     "✗ {}, ⚠ {}",
                     plural(tally.alarms, "problem"),
@@ -1360,12 +1365,12 @@ fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
             w,
             "{}",
             paint(
-                palette::WARN,
+                palette::warn(),
                 &format!("⚠ {}", plural(tally.warns, "warning"))
             )
         )
     } else {
-        writeln!(w, "{}", paint(palette::GOOD, "✓ no problems found"))
+        writeln!(w, "{}", paint(palette::good(), "✓ no problems found"))
     }
 }
 

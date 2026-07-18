@@ -60,7 +60,7 @@ pub(super) fn run_one(
         writeln!(
             ui::out(),
             "{}",
-            ui::paint(ui::palette::MUTED, "  task is paused; firing anyway")
+            ui::paint(ui::palette::muted(), "  task is paused; firing anyway")
         )?;
     }
     let config = MachineConfig::load_lenient();
@@ -70,10 +70,10 @@ pub(super) fn run_one(
             announcement: entry.check.as_deref().map(|cmd| {
                 format!(
                     "{}\n",
-                    ui::paint(ui::palette::MUTED, &format!("  check: {cmd}"))
+                    ui::paint(ui::palette::muted(), &format!("  check: {cmd}"))
                 )
             }),
-            prefix: ui::paint(ui::palette::FAINT, "  │ "),
+            prefix: ui::paint(ui::palette::faint(), "  │ "),
         },
     };
     let mut fire = rimz::harness::schedule::runner::TaskFire::new(
@@ -368,9 +368,9 @@ fn write_manual_header(out: &mut impl Write, name: &str, entry: &TaskEntry) -> s
     writeln!(
         out,
         "{}{}",
-        ui::paint(ui::palette::ACCENT.bold(), name),
+        ui::paint(ui::palette::header(), name),
         ui::paint(
-            ui::palette::MUTED,
+            ui::palette::muted(),
             &format!(" — {}", render::task_run_rule(entry))
         )
     )
@@ -471,7 +471,7 @@ fn write_manual_run_summary(
             out,
             "{}",
             ui::paint(
-                ui::palette::MUTED,
+                ui::palette::muted(),
                 "  pane closed; rerun with --keep to watch"
             )
         )?;
@@ -616,9 +616,9 @@ fn write_check_trip_line(
     duration_ms: u64,
 ) -> std::io::Result<()> {
     let (glyph, style) = if check.timed_out || check.code != Some(0) {
-        ("✗", ui::palette::ALARM)
+        ("✗", ui::palette::alarm())
     } else {
-        ("✓", ui::palette::GOOD)
+        ("✓", ui::palette::good())
     };
     write!(
         out,
@@ -636,7 +636,7 @@ fn write_check_trip_line(
         out,
         " {}",
         ui::paint(
-            ui::palette::ACCENT,
+            ui::palette::accent(),
             &format!("→ {}", render::action_progressive_phrase(entry))
         )
     )
@@ -672,7 +672,7 @@ fn write_check_skipped_summary(
             out,
             "{}",
             ui::paint(
-                ui::palette::MUTED,
+                ui::palette::muted(),
                 &format!(" — {}", render::check_skip_decision(entry))
             )
         )
@@ -698,7 +698,10 @@ fn write_failure_forensics(
     writeln!(
         out,
         "{}",
-        ui::paint(ui::palette::MUTED, &format!("  see: rimz loop show {name}"))
+        ui::paint(
+            ui::palette::muted(),
+            &format!("  see: rimz loop show {name}")
+        )
     )
 }
 
@@ -707,14 +710,14 @@ fn write_run_links(out: &mut impl Write, record: &LoopRunRecord) -> std::io::Res
         writeln!(
             out,
             "{}",
-            ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
+            ui::paint(ui::palette::muted(), &format!("  run: {run_id}"))
         )?;
     }
     if let Some(transcript) = &record.transcript_path {
         writeln!(
             out,
             "{}",
-            ui::paint(ui::palette::MUTED, &format!("  transcript: {transcript}"))
+            ui::paint(ui::palette::muted(), &format!("  transcript: {transcript}"))
         )?;
     }
     Ok(())
@@ -738,7 +741,7 @@ fn write_completion_detail(
                 out,
                 "{}",
                 ui::paint(
-                    ui::palette::MUTED,
+                    ui::palette::muted(),
                     &format!("  no final message; see: rimz loop show {name}")
                 )
             )?;
@@ -786,7 +789,7 @@ fn outcome_failure_tail(summary: &RunSummary<'_>) -> Option<String> {
 }
 
 fn write_failure_tail(out: &mut impl Write, tail: &str) -> std::io::Result<()> {
-    render::write_gutter_block(out, Some(ui::palette::ALARM), tail)
+    render::write_gutter_block(out, Some(ui::palette::alarm()), tail)
 }
 
 #[cfg(test)]
@@ -1022,11 +1025,11 @@ mod tests {
             &spawn,
         );
         assert!(raw.contains(&ui::paint(
-            ui::palette::GOOD,
+            ui::palette::good(),
             "✓ check passed (exit 0) in 4.4s"
         )));
         assert!(raw.contains(&ui::paint(
-            ui::palette::MUTED,
+            ui::palette::muted(),
             " — codex not started; fires when the check fails"
         )));
 

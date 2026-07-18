@@ -6,7 +6,7 @@ use crate::config::{
 use ratatui::style::{Color, Modifier, Style};
 
 use super::compose::lead_unread;
-use super::theme::{GlyphSet, Palette, Theme};
+use super::theme::{GlyphSet, Palette, Theme, tone_color};
 use crate::SidebarSnapshot;
 
 const THINKING_FRAMES: &[&str] = &[
@@ -551,7 +551,7 @@ fn resolve_role(
             animation.frames_overridden = true;
         }
         if let Some(color) = spec.color {
-            animation.color = palette.animation_color(color);
+            animation.color = tone_color(palette.animation_color(color));
             animation.color_overridden = true;
         }
         if let Some(effect) = spec.effect {
@@ -583,61 +583,61 @@ fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animati
     let (frames, color, effect, speed) = match role {
         AnimationRole::Thinking => (
             seq(THINKING_FRAMES),
-            palette.animation_color(AnimationColor::Clay),
+            tone_color(palette.animation_color(AnimationColor::Clay)),
             AnimationEffect::Static,
             AnimationSpeed::Fast,
         ),
         AnimationRole::Working => (
             seq(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]),
-            palette.animation_color(AnimationColor::Clay),
+            tone_color(palette.animation_color(AnimationColor::Clay)),
             AnimationEffect::Static,
             AnimationSpeed::Fast,
         ),
         AnimationRole::Compacting => (
             seq(&["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"]),
-            palette.animation_color(AnimationColor::Meta),
+            tone_color(palette.animation_color(AnimationColor::Meta)),
             AnimationEffect::Static,
             AnimationSpeed::Fast,
         ),
         AnimationRole::Delegating => (
             seq(&["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"]),
-            palette.animation_color(AnimationColor::Clay),
+            tone_color(palette.animation_color(AnimationColor::Clay)),
             AnimationEffect::Static,
             AnimationSpeed::Fast,
         ),
         AnimationRole::Resolving => (
             seq(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-            palette.animation_color(AnimationColor::Meta),
+            tone_color(palette.animation_color(AnimationColor::Meta)),
             AnimationEffect::Static,
             AnimationSpeed::Fast,
         ),
         AnimationRole::Idle => (
             head(GlyphRole::StatusIdle),
-            palette.animation_color(AnimationColor::Good),
+            tone_color(palette.animation_color(AnimationColor::Good)),
             AnimationEffect::Static,
             AnimationSpeed::Normal,
         ),
         AnimationRole::Success => (
             head(GlyphRole::StatusDone),
-            palette.animation_color(AnimationColor::Good),
+            tone_color(palette.animation_color(AnimationColor::Good)),
             AnimationEffect::Static,
             AnimationSpeed::Normal,
         ),
         AnimationRole::Paused => (
             head(GlyphRole::StatusPaused),
-            palette.animation_color(AnimationColor::Cool),
+            tone_color(palette.animation_color(AnimationColor::Cool)),
             AnimationEffect::Static,
             AnimationSpeed::Normal,
         ),
         AnimationRole::Waiting => (
             head(GlyphRole::StatusWaiting),
-            palette.animation_color(AnimationColor::Warn),
+            tone_color(palette.animation_color(AnimationColor::Warn)),
             AnimationEffect::Static,
             AnimationSpeed::Normal,
         ),
         AnimationRole::Failed => (
             head(GlyphRole::StatusAttention),
-            palette.animation_color(AnimationColor::Alarm),
+            tone_color(palette.animation_color(AnimationColor::Alarm)),
             AnimationEffect::Static,
             AnimationSpeed::Normal,
         ),
@@ -694,7 +694,7 @@ mod tests {
         }
         assert_eq!(
             indexed.role(AnimationRole::Failed).color(),
-            indexed_palette.animation_color(AnimationColor::Alarm),
+            tone_color(indexed_palette.animation_color(AnimationColor::Alarm)),
             "the static failed marker remains alarm-red"
         );
 
@@ -705,7 +705,7 @@ mod tests {
         let truecolor = resolve_for_test(&ThemeAnimationsConfig::default(), &truecolor_palette);
         let clay = Color::Rgb(0xd9, 0x77, 0x57);
         assert_eq!(
-            truecolor_palette.animation_color(AnimationColor::Clay),
+            tone_color(truecolor_palette.animation_color(AnimationColor::Clay)),
             clay
         );
         assert_eq!(truecolor.role(AnimationRole::Thinking).color(), clay);

@@ -30,7 +30,7 @@ impl<W: Write> GutterWriter<W> {
         Self {
             inner,
             at_line_start: true,
-            prefix: format!("  {}", paint(palette::FAINT, "│ ")),
+            prefix: format!("  {}", paint(palette::faint(), "│ ")),
         }
     }
 }
@@ -89,8 +89,8 @@ fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()
     let message = message.trim();
     let mut lines = message.lines();
     match lines.next() {
-        Some(line) => writeln!(w, "{} {line}", paint(palette::ALARM.bold(), "error:"))?,
-        None => writeln!(w, "{}", paint(palette::ALARM.bold(), "error:"))?,
+        Some(line) => writeln!(w, "{} {line}", paint(palette::alarm().bold(), "error:"))?,
+        None => writeln!(w, "{}", paint(palette::alarm().bold(), "error:"))?,
     }
     for line in lines {
         writeln!(w, "  {line}")?;
@@ -163,6 +163,19 @@ pub(crate) fn paint(style: anstyle::Style, text: &str) -> String {
     format!("{}{text}{}", style.render(), style.render_reset())
 }
 
+/// A shape-readable verdict glyph paired with its typed state tone.
+pub(crate) fn verdict(role: status::StateRole) -> (&'static str, anstyle::Style) {
+    let glyph = match role {
+        status::StateRole::Success => "✓",
+        status::StateRole::Working => "▸",
+        status::StateRole::Waiting => "!",
+        status::StateRole::Paused => "⏸",
+        status::StateRole::Failed | status::StateRole::Unavailable => "✗",
+        status::StateRole::Neutral => "·",
+    };
+    (glyph, status::role(role))
+}
+
 /// Frame captured pane text in quiet terminal chrome, with `title` embedded in
 /// the top border. ANSI inside the capture remains intact and does not affect
 /// the frame or its padding.
@@ -179,26 +192,26 @@ pub(crate) fn pane_frame(w: &mut impl Write, title: &str, text: &str) -> std::io
     let top_fill = inner_width - title_width - 1;
     let border_fill = inner_width + 2;
 
-    write!(w, "{}", paint(palette::FAINT, "╭─ "))?;
-    write!(w, "{}", paint(palette::MUTED, title))?;
+    write!(w, "{}", paint(palette::faint(), "╭─ "))?;
+    write!(w, "{}", paint(palette::muted(), title))?;
     writeln!(
         w,
         "{}",
-        paint(palette::FAINT, &format!(" {}╮", "─".repeat(top_fill)))
+        paint(palette::faint(), &format!(" {}╮", "─".repeat(top_fill)))
     )?;
 
     for line in text.split_terminator('\n') {
         let line_width = anstream::adapter::strip_str(line).to_string().width();
-        write!(w, "{}", paint(palette::FAINT, "│ "))?;
+        write!(w, "{}", paint(palette::faint(), "│ "))?;
         write!(w, "{line}{}", anstyle::Reset.render())?;
         write!(w, "{:width$}", "", width = inner_width - line_width)?;
-        writeln!(w, "{}", paint(palette::FAINT, " │"))?;
+        writeln!(w, "{}", paint(palette::faint(), " │"))?;
     }
 
     writeln!(
         w,
         "{}",
-        paint(palette::FAINT, &format!("╰{}╯", "─".repeat(border_fill)))
+        paint(palette::faint(), &format!("╰{}╯", "─".repeat(border_fill)))
     )
 }
 
@@ -253,13 +266,7 @@ pub(crate) fn fmt_bytes(bytes: u64) -> String {
 
 /// Format large counts compactly for token-oriented CLI surfaces.
 pub(crate) fn compact_count(value: u64) -> String {
-    if value < 1_000 {
-        value.to_string()
-    } else if value < 1_000_000 {
-        format!("{}k", value / 1_000)
-    } else {
-        format!("{}m", value / 1_000_000)
-    }
+    rimz::theme::fmt::compact_count(value)
 }
 
 pub(crate) fn rel_age(ts: Timestamp, now: Timestamp) -> String {
@@ -368,7 +375,7 @@ impl Cell {
     /// optional columns recede their empty `-` without a branch at each call.
     pub(crate) fn dash(self) -> Self {
         if self.text == "-" {
-            self.fg(palette::FAINT)
+            self.fg(palette::faint())
         } else {
             self
         }
@@ -418,7 +425,7 @@ enum Body {
 const SUB_MAX_LINES: usize = 3;
 
 /// A borderless table whose columns auto-fit their widest cell. Headers render
-/// in the [`palette::HEADER`] tone; every body cell keeps its own style. Cells
+/// in the [`palette::header()`] tone; every body cell keeps its own style. Cells
 /// are joined with a two-space gap and the trailing column is never padded, so
 /// lines carry no trailing whitespace. [`Table::section`] groups rows under a
 /// spanning label while every row shares one width computation, so groups stay
@@ -490,10 +497,10 @@ impl Table {
         self
     }
 
-    /// Open a group: a blank line then `label` in the accent tone, heading every
+    /// Open a group: a blank line then `label` in the shared heading treatment,
     /// row pushed until the next section.
     pub(crate) fn section(&mut self, label: impl Into<String>) {
-        self.section_cells(vec![cell(label).fg(palette::ACCENT.bold())]);
+        self.section_cells(vec![cell(label).fg(palette::header())]);
     }
 
     /// Open a group with styled spans joined by one space.
@@ -525,7 +532,7 @@ impl Table {
         let header_cells: Vec<Cell> = self
             .headers
             .iter()
-            .map(|h| cell(h.clone()).fg(palette::HEADER))
+            .map(|h| cell(h.clone()).fg(palette::header()))
             .collect();
         self.write_row(w, &header_cells, &widths)?;
         let mut previous: Option<&Body> = None;
@@ -696,7 +703,7 @@ pub(crate) fn clip_to_width(text: &str, max_width: usize) -> String {
     }
 }
 
-/// A block of aligned `key: value` lines. Keys render in [`palette::MUTED`]; the
+/// A block of aligned `key: value` lines. Keys render in [`palette::muted()`]; the
 /// value column aligns to the widest key, and each value keeps its own style.
 /// Reports that nest pairs under a heading set an [`KeyVals::indent`].
 pub(crate) struct KeyVals {
@@ -734,7 +741,7 @@ impl KeyVals {
             let label = format!("{key}:");
             let pad = label_w.saturating_sub(label.width());
             write!(w, "{:indent$}", "", indent = self.indent)?;
-            cell(label).fg(palette::MUTED).write_styled(w)?;
+            cell(label).fg(palette::muted()).write_styled(w)?;
             write!(w, "{:pad$} ", "", pad = pad)?;
             value.write_styled(w)?;
             writeln!(w)?;
@@ -843,7 +850,7 @@ mod tests {
         }
 
         let raw = String::from_utf8(out).unwrap();
-        assert!(raw.contains(&paint(palette::FAINT, "│ ")));
+        assert!(raw.contains(&paint(palette::faint(), "│ ")));
         assert_eq!(
             anstream::adapter::strip_str(&raw).to_string(),
             "  │ first\n  │ second\n  │ third"
@@ -912,8 +919,8 @@ mod tests {
     fn pane_frame_measures_ansi_styled_content_without_sgr_bytes() {
         let styled = format!(
             "{}ready{}\nlonger",
-            palette::GOOD.render(),
-            palette::GOOD.render_reset()
+            palette::good().render(),
+            palette::good().render_reset()
         );
 
         assert_eq!(
@@ -1068,8 +1075,8 @@ mod tests {
     fn table_section_cells_join_styled_spans() {
         let mut table = Table::new(["NAME"]);
         table.section_cells(vec![
-            cell("⑂ auth-refresh").fg(palette::ACCENT.bold()),
-            cell("· forge team").fg(palette::META),
+            cell("⑂ auth-refresh").fg(palette::accent().bold()),
+            cell("· forge team").fg(palette::meta()),
         ]);
         table.row([cell("@coder")]);
 
@@ -1203,7 +1210,7 @@ mod tests {
     #[test]
     fn styled_cells_emit_ansi_and_strip_cleanly() {
         let mut table = Table::new(["S"]);
-        table.row([cell("running").fg(palette::GOOD)]);
+        table.row([cell("running").fg(palette::good())]);
         let mut raw: Vec<u8> = Vec::new();
         table.render(&mut raw).expect("render to buffer");
         let raw = String::from_utf8(raw).expect("utf-8");

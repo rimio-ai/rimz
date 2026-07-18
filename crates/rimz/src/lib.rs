@@ -38,6 +38,7 @@ pub mod store;
 #[cfg(feature = "testkit")]
 #[doc(hidden)]
 pub mod testkit;
+pub mod theme;
 pub mod transcript;
 pub mod trust;
 pub mod tui;

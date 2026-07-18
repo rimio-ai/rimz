@@ -4,14 +4,10 @@
 //! and the Theme facade read these slots; this is the one place depth
 //! quantization and slot overrides are applied.
 
-use crate::config::{
-    AnimationColor, ColorDepth, PaletteRole, ThemeColor, ThemeConfig, nearest_xterm_index,
-    xterm_rgb,
-};
-use ratatui::style::Color;
+use crate::config::{AnimationColor, ColorDepth, PaletteRole, ThemeColor, ThemeConfig, xterm_rgb};
 
-use super::super::{oklab, scheme};
-use super::{Identity, RawPalette};
+use super::raw::RawPalette;
+use super::{Identity, Tone, oklab, scheme};
 
 /// Stops on the context **health** ramp, ordered calm → alarm:
 /// `[good, warn, caution, alarm]` — green → gold → orange → rose-red. Prepending
@@ -27,7 +23,7 @@ const HEAT_RAMP_STOPS: usize = 4;
 /// map their amount into `[HEAT_RAMP_WARM_START, 1.0]` via
 /// [`Theme::warm_heat_tone`], reproducing the legacy warn → caution → alarm
 /// sweep.
-pub(super) const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0);
+pub(crate) const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0);
 
 /// The fresh-input "expense" tone is the reddest marker in the sidebar: it sits
 /// past the ramp's `alarm` stop, so the input read always reads redder than the
@@ -44,33 +40,33 @@ const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 
 /// The active palette, one named slot per semantic tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Palette {
-    depth: ColorDepth,
+pub struct Palette {
+    pub(crate) depth: ColorDepth,
     raw: RawPalette,
-    pub(super) heat_ramp: [(u8, u8, u8); HEAT_RAMP_STOPS],
-    pub(super) calm_ramp: [(u8, u8, u8); 2],
-    pub(super) good: Color,
-    pub(super) warn: Color,
-    pub(super) caution: Color,
-    pub(super) alarm: Color,
+    pub(crate) heat_ramp: [(u8, u8, u8); HEAT_RAMP_STOPS],
+    pub(crate) calm_ramp: [(u8, u8, u8); 2],
+    pub(crate) good: Tone,
+    pub(crate) warn: Tone,
+    pub(crate) caution: Tone,
+    pub(crate) alarm: Tone,
     /// The fresh-input cost tone — `alarm` deepened a step past the ramp's red
     /// stop into the reddest marker on screen, so the costliest read always reads
     /// hotter than the bar's scaled-to-red health run. Derived like `heat_ramp`,
     /// not a tunable slot.
-    pub(super) expense: Color,
-    pub(super) accent: Color,
-    pub(super) cool: Color,
-    pub(super) meta: Color,
-    pub(super) body: Color,
-    pub(super) muted: Color,
-    pub(super) faint: Color,
-    pub(super) rule: Color,
-    pub(super) selection: Color,
-    pub(super) selection_bg: Color,
+    pub(crate) expense: Tone,
+    pub(crate) accent: Tone,
+    pub(crate) cool: Tone,
+    pub(crate) meta: Tone,
+    pub(crate) body: Tone,
+    pub(crate) muted: Tone,
+    pub(crate) faint: Tone,
+    pub(crate) rule: Tone,
+    pub(crate) selection: Tone,
+    pub(crate) selection_bg: Tone,
 }
 
 impl Palette {
-    pub(crate) fn resolve(theme: &ThemeConfig, depth: ColorDepth) -> Palette {
+    pub fn resolve(theme: &ThemeConfig, depth: ColorDepth) -> Palette {
         Self::resolve_with_raw(theme, depth, raw_palette_for_theme(theme))
     }
 
@@ -126,17 +122,17 @@ impl Palette {
 
     /// Resolve an external-identity tone at the palette's depth. The base hue is
     /// fixed; only the truecolor-vs-indexed emission differs.
-    pub(crate) fn identity(&self, id: Identity) -> Color {
+    pub fn identity(&self, id: Identity) -> Tone {
         rgb_color(id.base_rgb(), self.depth)
     }
 
     /// A palette-role tone at the palette's depth — a provider brand pinned to a
     /// scheme role tracks the active palette.
-    pub(super) fn role_tone(&self, role: PaletteRole) -> Color {
+    pub fn role_tone(&self, role: PaletteRole) -> Tone {
         rgb_color(self.raw.role_rgb(role), self.depth)
     }
 
-    pub(crate) fn animation_color(&self, color: AnimationColor) -> Color {
+    pub(crate) fn animation_color(&self, color: AnimationColor) -> Tone {
         match color {
             AnimationColor::Good => self.good,
             AnimationColor::Warn => self.warn,
@@ -149,10 +145,57 @@ impl Palette {
             AnimationColor::Muted => self.muted,
             AnimationColor::Faint => self.faint,
             AnimationColor::Clay => self.identity(Identity::Claude),
-            AnimationColor::Indexed(index) => Color::Indexed(index),
+            AnimationColor::Indexed(index) => Tone::Indexed(index),
             AnimationColor::Rgb(red, green, blue) => rgb_color((red, green, blue), self.depth),
             AnimationColor::Role(role) => self.role_tone(role),
         }
+    }
+
+    pub fn rgb_tone(&self, rgb: (u8, u8, u8)) -> Tone {
+        Tone::from_rgb(rgb, self.depth)
+    }
+
+    pub fn good(&self) -> Tone {
+        self.good
+    }
+    pub fn warn(&self) -> Tone {
+        self.warn
+    }
+    pub fn caution(&self) -> Tone {
+        self.caution
+    }
+    pub fn alarm(&self) -> Tone {
+        self.alarm
+    }
+    pub fn accent(&self) -> Tone {
+        self.accent
+    }
+    pub fn cool(&self) -> Tone {
+        self.cool
+    }
+    pub fn meta(&self) -> Tone {
+        self.meta
+    }
+    pub fn body(&self) -> Tone {
+        self.body
+    }
+    pub fn muted(&self) -> Tone {
+        self.muted
+    }
+    pub fn faint(&self) -> Tone {
+        self.faint
+    }
+    pub fn rule(&self) -> Tone {
+        self.rule
+    }
+    pub fn selection(&self) -> Tone {
+        self.selection
+    }
+    pub fn selection_bg(&self) -> Tone {
+        self.selection_bg
+    }
+    pub fn expense(&self) -> Tone {
+        self.expense
     }
 }
 
@@ -170,10 +213,10 @@ fn raw_palette_for_theme(theme: &ThemeConfig) -> RawPalette {
         .unwrap_or_else(scheme::default_raw_palette)
 }
 
-fn theme_color(color: ThemeColor, depth: ColorDepth, raw: &RawPalette) -> Color {
+fn theme_color(color: ThemeColor, depth: ColorDepth, raw: &RawPalette) -> Tone {
     match color {
         ThemeColor::Role(role) => rgb_color(raw.role_rgb(role), depth),
-        ThemeColor::Indexed(index) => Color::Indexed(index),
+        ThemeColor::Indexed(index) => Tone::Indexed(index),
         ThemeColor::Rgb(red, green, blue) => rgb_color((red, green, blue), depth),
     }
 }
@@ -191,18 +234,15 @@ fn derived_rgb_slot(
     }
 }
 
-pub(super) fn rgb_color((red, green, blue): (u8, u8, u8), depth: ColorDepth) -> Color {
-    match depth {
-        ColorDepth::Truecolor => Color::Rgb(red, green, blue),
-        ColorDepth::Indexed => Color::Indexed(nearest_xterm_index(red, green, blue)),
-    }
+fn rgb_color(rgb: (u8, u8, u8), depth: ColorDepth) -> Tone {
+    Tone::from_rgb(rgb, depth)
 }
 
 /// Piecewise OKLab interpolation across an N-stop ramp: `amount` ∈ `[0, 1]` maps
 /// across the `N - 1` segments, blending within the active one. Endpoints clamp,
 /// so `0.0` is the first stop and `1.0` the last. One blend regardless of stop
 /// count — the ramp can grow or shrink without touching the math.
-pub(super) fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
+pub fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
     match ramp {
         [] => (0, 0, 0),
         [only] => *only,
@@ -213,51 +253,4 @@ pub(super) fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
             oklab::blend(ramp[lower], ramp[lower + 1], scaled - lower as f32)
         }
     }
-}
-
-pub(in crate::sidebar_pane::render) fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
-    match color {
-        Color::Reset => None,
-        Color::Black => Some((0x00, 0x00, 0x00)),
-        Color::Red => Some((0x80, 0x00, 0x00)),
-        Color::Green => Some((0x00, 0x80, 0x00)),
-        Color::Yellow => Some((0x80, 0x80, 0x00)),
-        Color::Blue => Some((0x00, 0x00, 0x80)),
-        Color::Magenta => Some((0x80, 0x00, 0x80)),
-        Color::Cyan => Some((0x00, 0x80, 0x80)),
-        Color::Gray => Some((0xc0, 0xc0, 0xc0)),
-        Color::DarkGray => Some((0x80, 0x80, 0x80)),
-        Color::LightRed => Some((0xff, 0x00, 0x00)),
-        Color::LightGreen => Some((0x00, 0xff, 0x00)),
-        Color::LightYellow => Some((0xff, 0xff, 0x00)),
-        Color::LightBlue => Some((0x00, 0x00, 0xff)),
-        Color::LightMagenta => Some((0xff, 0x00, 0xff)),
-        Color::LightCyan => Some((0x00, 0xff, 0xff)),
-        Color::White => Some((0xff, 0xff, 0xff)),
-        Color::Indexed(index) if index < 16 => Some(ansi_index_rgb(index)),
-        Color::Indexed(index) => Some(xterm_rgb(index)),
-        Color::Rgb(red, green, blue) => Some((red, green, blue)),
-    }
-}
-
-fn ansi_index_rgb(index: u8) -> (u8, u8, u8) {
-    const ANSI: [(u8, u8, u8); 16] = [
-        (0x00, 0x00, 0x00),
-        (0x80, 0x00, 0x00),
-        (0x00, 0x80, 0x00),
-        (0x80, 0x80, 0x00),
-        (0x00, 0x00, 0x80),
-        (0x80, 0x00, 0x80),
-        (0x00, 0x80, 0x80),
-        (0xc0, 0xc0, 0xc0),
-        (0x80, 0x80, 0x80),
-        (0xff, 0x00, 0x00),
-        (0x00, 0xff, 0x00),
-        (0xff, 0xff, 0x00),
-        (0x00, 0x00, 0xff),
-        (0xff, 0x00, 0xff),
-        (0x00, 0xff, 0xff),
-        (0xff, 0xff, 0xff),
-    ];
-    ANSI[index as usize]
 }

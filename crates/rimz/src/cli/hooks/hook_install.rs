@@ -160,7 +160,7 @@ pub(super) fn write_untrusted_hooks_notice(
         out,
         "{}",
         render::paint(
-            render::palette::WARN,
+            render::palette::warn(),
             &format!(
                 "{kind} hooks are installed but untrusted ({}) — {kind} silently skips them; {}",
                 untrusted.join(", "),
@@ -189,7 +189,7 @@ fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> 
         out,
         "RimZ found {} coding {agent_word}: {}.",
         previews.len(),
-        render::paint(render::palette::ACCENT, &agent_names)
+        render::paint(render::palette::accent(), &agent_names)
     )?;
     writeln!(
         out,
@@ -222,11 +222,11 @@ fn write_agent_table_entry(
         writeln!(
             out,
             "  {}{:name_pad$}  {}{:cell_pad$}  {}",
-            render::paint(render::palette::ACCENT.bold(), name),
+            render::paint(render::palette::accent().bold(), name),
             "",
             cell,
             "",
-            render::paint(render::palette::MUTED, annotation),
+            render::paint(render::palette::muted(), annotation),
             name_pad = layout.name_width.saturating_sub(name.width()),
             cell_pad = layout.cell_width.saturating_sub(cell.width())
         )?;
@@ -237,7 +237,7 @@ fn write_agent_table_entry(
             out,
             "{}{}",
             " ".repeat(layout.continuation_indent()),
-            render::paint(render::palette::MUTED, &format!("+ {summary}"))
+            render::paint(render::palette::muted(), &format!("+ {summary}"))
         )?;
     }
     Ok(())
@@ -247,7 +247,7 @@ fn write_prompt(out: &mut dyn Write) -> Result<()> {
     write!(
         out,
         "Install or refresh reporting hooks? {} ",
-        render::paint(render::palette::ACCENT.bold(), "[Y/n]")
+        render::paint(render::palette::accent().bold(), "[Y/n]")
     )?;
     out.flush()?;
     Ok(())
@@ -274,15 +274,15 @@ pub(super) fn render_dry_run(
 
 fn color_diff_line(line: &str) -> String {
     if line.starts_with("+++") || line.starts_with("---") {
-        render::paint(render::palette::ACCENT.bold(), line)
+        render::paint(render::palette::accent().bold(), line)
     } else if line.starts_with('+') {
-        render::paint(render::palette::GOOD, line)
+        render::paint(render::palette::good(), line)
     } else if line.starts_with('-') {
-        render::paint(render::palette::ALARM, line)
+        render::paint(render::palette::alarm(), line)
     } else if line.starts_with("@@") {
-        render::paint(render::palette::WARN.bold(), line)
+        render::paint(render::palette::warn().bold(), line)
     } else {
-        render::paint(render::palette::FAINT, line)
+        render::paint(render::palette::faint(), line)
     }
 }
 
@@ -311,13 +311,13 @@ pub(super) fn write_install_result(
         let annotation = if disposition == InstallDisposition::Current {
             String::new()
         } else {
-            format!("  {}", render::paint(render::palette::MUTED, annotation))
+            format!("  {}", render::paint(render::palette::muted(), annotation))
         };
         if index == 0 {
             writeln!(
                 out,
                 "{} {}  {} → {}{}",
-                render::paint(render::palette::GOOD.bold(), "✓"),
+                render::paint(render::palette::good().bold(), "✓"),
                 report.agent,
                 summary,
                 home_relative_path(&file.path),
@@ -349,7 +349,7 @@ pub(super) fn write_uninstall_result(
             writeln!(
                 out,
                 "{} {}  removed {} hooks → {}",
-                render::paint(render::palette::GOOD.bold(), "✓"),
+                render::paint(render::palette::good().bold(), "✓"),
                 report.agent,
                 report.removed_events.len(),
                 home_relative_path(&file.path),
@@ -429,12 +429,12 @@ fn write_undo_preview_hints(out: &mut dyn Write) -> std::io::Result<()> {
     writeln!(
         out,
         "  {}     rimz hooks uninstall",
-        render::paint(render::palette::MUTED, "undo")
+        render::paint(render::palette::muted(), "undo")
     )?;
     writeln!(
         out,
         "  {}  rimz hooks install --dry-run",
-        render::paint(render::palette::MUTED, "preview")
+        render::paint(render::palette::muted(), "preview")
     )?;
     Ok(())
 }

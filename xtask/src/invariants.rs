@@ -53,6 +53,8 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_config_template_sections(root)?;
     ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
     ensure_no_hardcoded_ui_colors(root, &files)?;
+    ensure_cli_color_provenance(root, &files)?;
+    ensure_brand_resolution_single_home(root, &files)?;
     ensure_no_hardcoded_glyphs(root, &files)?;
     ensure_presence_plugin_vendored(root)?;
     ensure_store_durability(root, &files)?;
@@ -481,6 +483,91 @@ fn ui_color_violation_lines(text: &str) -> Vec<(usize, &str)> {
         }
     }
     hits
+}
+
+fn ensure_cli_color_provenance(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let cli_root = root.join("crates/rimz/src/cli");
+    let palette = cli_root.join("render/palette.rs");
+    let mut violations = Vec::new();
+    for path in files {
+        if path.extension().and_then(OsStr::to_str) != Some("rs")
+            || !path.starts_with(&cli_root)
+            || path == &palette
+            || is_test_source_path(root, path)
+        {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in cli_color_violation_lines(&text) {
+            violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "CLI colors resolve through cli::render::palette accessors; construct no anstyle colors elsewhere\n{}",
+        violations.join("\n")
+    )
+}
+
+fn cli_color_violation_lines(text: &str) -> Vec<(usize, &str)> {
+    const BANNED: [&str; 4] = [
+        concat!("anstyle", "::", "Color"),
+        concat!("Rgb", "Color("),
+        concat!("Ansi256", "Color("),
+        concat!("AnsiColor", "::"),
+    ];
+    lines_outside_inline_tests(text)
+        .filter(|(_, line)| BANNED.iter().any(|needle| line.contains(needle)))
+        .collect()
+}
+
+fn ensure_brand_resolution_single_home(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let descriptor = root.join("crates/rimz/src/agents/descriptor.rs");
+    let provider = root.join("crates/rimz/src/theme/provider.rs");
+    let plugin_descriptor = root.join("crates/rimz/src/agents/plugin/mod.rs");
+    let sidebar_fixture = root.join("crates/rimz/src/cli/sidebar/fixture.rs");
+    let needle = concat!(".brand", ".color");
+    let mut violations = Vec::new();
+    for path in files {
+        if path.extension().and_then(OsStr::to_str) != Some("rs")
+            || path == &descriptor
+            || path == &provider
+            || path == &plugin_descriptor
+            || path == &sidebar_fixture
+            || is_test_source_path(root, path)
+        {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in lines_outside_inline_tests(&text) {
+            if line.contains(needle) {
+                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            }
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "provider brand identity resolves through theme::resolve_provider_identity\n{}",
+        violations.join("\n")
+    )
+}
+
+fn lines_outside_inline_tests(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut in_tests = false;
+    text.lines().enumerate().filter(move |(_, line)| {
+        if line.trim_start().starts_with("mod tests") {
+            in_tests = true;
+        }
+        !in_tests
+    })
 }
 
 /// True when `line` writes `needle` (a `Color::<Variant>` path) as its own

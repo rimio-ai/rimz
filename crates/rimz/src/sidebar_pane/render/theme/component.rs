@@ -22,6 +22,7 @@
 use ratatui::style::Color;
 
 use super::Palette;
+use super::tone_color;
 
 /// A specific UI use of color. Resolves through [`Component::resolve`] to a
 /// semantic tone; never to a raw terminal color.
@@ -87,10 +88,11 @@ pub(crate) enum Component {
     RemoteControl,
     /// The `⇅ rc` remote-control flag when its managed server is down.
     RemoteControlDown,
+    /// The unknown-provider fallback retained for neutral renderer fixtures.
+    #[allow(dead_code)]
+    UnknownBrand,
     /// Which-key chord text inside the help overlay.
     HelpKey,
-    /// The unknown-provider fallback for an agent card's name.
-    UnknownBrand,
     /// The capability-line window token, by size class: a neutral→cool→accent
     /// salience ramp so a bigger window reads louder without borrowing any
     /// provider identity. Small (`<128k`).
@@ -136,8 +138,8 @@ impl Component {
         Component::SubagentHeader,
         Component::RemoteControl,
         Component::RemoteControlDown,
-        Component::HelpKey,
         Component::UnknownBrand,
+        Component::HelpKey,
         Component::WindowSmall,
         Component::WindowMedium,
         Component::WindowLarge,
@@ -149,7 +151,7 @@ impl Component {
     /// The one mapping from UI role to a resolved palette tone.
     pub(crate) fn resolve(self, palette: &Palette) -> Color {
         use Component::*;
-        match self {
+        tone_color(match self {
             Sessions | Output | HelpKey | WindowHuge => palette.accent,
             LaneSpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
@@ -163,6 +165,6 @@ impl Component {
             RemoteControlDown | WorktreePrClosed | PrCiFailing => palette.alarm,
             Input => palette.expense,
             WorktreeMerged | WindowMedium | UnknownBrand => palette.muted,
-        }
+        })
     }
 }

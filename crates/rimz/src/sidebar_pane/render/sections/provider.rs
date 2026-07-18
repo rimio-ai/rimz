@@ -682,9 +682,9 @@ fn zip_provider_pet_lines(
 /// its name, and the pick moves as fill and weight alone — so a click changes
 /// color without a single cell of glyph motion. Under `NO_COLOR` the chip
 /// fill drops, and `┤ ├` caps paint into the active tab's reserved rail cells
-/// as the pick's shape instead. Labels are the kind slugs
-/// first-char-capitalized — the rail carries the product-name role the tabbed
-/// header drops. Holds to one screen row: a tab that would overflow `width` is
+/// as the pick's shape instead. Labels are resolved product names — the rail
+/// carries the product-name role the tabbed header drops. Holds to one screen
+/// row: a tab that would overflow `width` is
 /// dropped whole (label and hit together), except that the active tab reserves
 /// its footprint first so the selected block always has a visible chip. The
 /// hit map stays in lockstep with the frame however many kinds register or
@@ -716,9 +716,7 @@ fn provider_tab_rail(
         }
         let gap = if rendered > 0 { RAIL_STUB } else { 0 };
         let active = panel.kind == active_kind;
-        // Kind labels are registry-fixed ASCII slugs, so chars == cells; the
-        // footprint adds the two pad spaces and the two reserved rail cells.
-        let label = tab_label(&panel.kind);
+        let label = tab_label(&panel.product_name);
         let cells = label.chars().count() + 4;
         if gap > 0 {
             spans.push(fill(gap));
@@ -746,7 +744,8 @@ fn selected_provider_tabs(
     width: usize,
     stub: usize,
 ) -> Vec<bool> {
-    let tab_cells = |panel: &SidebarProviderPanel| tab_label(&panel.kind).chars().count() + 4;
+    let tab_cells =
+        |panel: &SidebarProviderPanel| tab_label(&panel.product_name).chars().count() + 4;
     let active_index = providers.iter().position(|panel| panel.kind == active_kind);
     let mut selected = vec![false; providers.len()];
     let mut used = stub;
@@ -812,12 +811,8 @@ const RAIL_STUB: usize = 2;
 /// registry-fixed ASCII — the rail's cell math counts on it — so a non-ASCII
 /// first char (a mid-codepoint `get_mut` range) is left uncapitalized rather
 /// than split.
-fn tab_label(kind: &str) -> String {
-    let mut label = kind.to_owned();
-    if let Some(first) = label.get_mut(..1) {
-        first.make_ascii_uppercase();
-    }
-    label
+fn tab_label(product_name: &str) -> String {
+    product_name.to_owned()
 }
 
 /// The block's header line, with the health-colored `⇅ rc` flag pinned to the

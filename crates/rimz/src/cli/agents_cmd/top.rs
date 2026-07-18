@@ -112,6 +112,7 @@ fn sample(
         rows.insert(
             agent.agent_id.to_string(),
             AgentSample {
+                kind: agent.kind.to_string(),
                 handle,
                 status: agent.status,
                 context_pct: agent.context_fill_pct(),
@@ -139,6 +140,7 @@ struct TopSample {
 
 #[derive(Clone, Debug)]
 struct AgentSample {
+    kind: String,
     handle: String,
     status: AgentStatus,
     context_pct: Option<f64>,
@@ -149,6 +151,7 @@ struct AgentSample {
 
 #[derive(Clone, Debug, PartialEq)]
 struct TopRow {
+    kind: String,
     handle: String,
     status: String,
     cpu_pct: Option<f64>,
@@ -190,6 +193,7 @@ fn top_rows(previous: &TopSample, current: &TopSample, elapsed_hint: Duration) -
                 _ => None,
             };
             TopRow {
+                kind: current.kind.clone(),
                 handle: current.handle.clone(),
                 status: current.status.as_str().to_owned(),
                 cpu_pct,
@@ -244,7 +248,7 @@ fn render_top(w: &mut impl Write, sample: &TopSample, rows: &[TopRow]) -> std::i
     .right(&[2, 3, 4, 5, 6, 7]);
     for row in rows {
         table.row([
-            render::cell(row.handle.as_str()).fg(render::palette::ACCENT),
+            render::cell(row.handle.as_str()).fg(render::palette::identity(&row.kind)),
             render::cell(row.status.as_str()),
             render::cell(fmt_cpu(row.cpu_pct)).dash(),
             render::cell(
@@ -363,6 +367,7 @@ mod tests {
 
     fn row(handle: &str, tokens: u64, metrics: Option<TreeTotals>) -> AgentSample {
         AgentSample {
+            kind: "claude".to_owned(),
             handle: handle.to_owned(),
             status: AgentStatus::Running,
             context_pct: Some(25.0),

@@ -38,7 +38,7 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
     let mut out = render::out();
     // Each tally reads at a glance: the count carries the accent, the verb stays plain.
     let n = |count: usize, noun: &str| {
-        render::paint(render::palette::ACCENT, &self::count(count, noun))
+        render::paint(render::palette::accent(), &self::count(count, noun))
     };
     if outcome.sessions == 0 && outcome.dead_swept == 0 && outcome.stats_reloaded == 0 {
         writeln!(out, "No running sidebars to reload.")?;

@@ -53,7 +53,10 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     writeln!(
         out,
         "{} — {}",
-        render::paint(render::palette::ACCENT.bold(), message.message_id.as_str()),
+        render::paint(
+            render::palette::accent().bold(),
+            message.message_id.as_str()
+        ),
         render::paint(
             render::status::message(message.status),
             message.status.as_str()
@@ -62,7 +65,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     let kv = render_message_kv(&message, &target, &sender, now);
     kv.render(&mut out)?;
     writeln!(out)?;
-    writeln!(out, "{}", render::paint(render::palette::HEADER, "TEXT"))?;
+    writeln!(out, "{}", render::paint(render::palette::header(), "TEXT"))?;
     if let Some(text) = message.text.as_deref() {
         write_indented_block(&mut out, text)?;
     } else {
@@ -119,8 +122,8 @@ fn render_message_kv(
     now: Timestamp,
 ) -> render::KeyVals {
     let mut kv = render::KeyVals::new().indent(2);
-    kv.push("from", render::cell(sender).fg(render::palette::META));
-    kv.push("to", render::cell(target).fg(render::palette::META));
+    kv.push("from", render::cell(sender).fg(render::palette::meta()));
+    kv.push("to", render::cell(target).fg(render::palette::meta()));
     kv.push(
         "channel",
         render::cell(message.channel.clone().unwrap_or_else(|| "-".to_owned())).dash(),
@@ -218,7 +221,7 @@ fn render_timeline(
     writeln!(
         out,
         "{}",
-        render::paint(render::palette::HEADER, "TIMELINE")
+        render::paint(render::palette::header(), "TIMELINE")
     )?;
     if timeline.is_empty() {
         writeln!(out, "  -")?;
@@ -363,7 +366,7 @@ pub(super) fn render_delivery_check(
     writeln!(
         out,
         "{}",
-        render::paint(render::palette::HEADER, "DELIVERY CHECK")
+        render::paint(render::palette::header(), "DELIVERY CHECK")
     )?;
     let mut kv = render::KeyVals::new().indent(2);
     let (ok, detail) = schedule_detail(check, now);
@@ -398,7 +401,7 @@ pub(super) fn render_delivery_check(
     kv.render(out)?;
     writeln!(out, "  {verdict}")?;
     if let Some(hint) = delivery_action_hint(&check.verdict(), message_id) {
-        writeln!(out, "  {}", render::paint(render::palette::FAINT, &hint))?;
+        writeln!(out, "  {}", render::paint(render::palette::faint(), &hint))?;
     }
     Ok(())
 }
@@ -539,9 +542,9 @@ fn pane_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
 
 pub(super) fn condition_cell(ok: bool, text: String) -> render::Cell {
     let style = if ok {
-        render::palette::GOOD
+        render::palette::good()
     } else {
-        render::palette::WARN
+        render::palette::warn()
     };
     render::cell(text).fg(style)
 }

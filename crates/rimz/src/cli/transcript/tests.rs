@@ -784,7 +784,7 @@ fn mention_painting_highlights_agents_and_channels() {
     assert!(raw.contains("\u{1b}["), "{raw:?}");
     assert!(raw.contains("@codex"), "{raw}");
     assert!(raw.contains("#feat-auth"), "{raw}");
-    assert!(raw.contains(&render::paint(render::palette::COOL.bold(), "#feat-auth")));
+    assert!(raw.contains(&render::paint(render::palette::cool().bold(), "#feat-auth")));
     assert!(raw.contains("email@host"), "{raw}");
 }
 
@@ -843,9 +843,9 @@ fn structured_ask_card_folds_selected_answer_with_note() {
         note: None,
     }];
     let raw = render_raw(&[raw_ask, raw_answer], jiff::civil::date(2026, 6, 28));
-    assert!(raw.contains(&render::paint(render::palette::GOOD.bold(), "safe")));
-    assert!(raw.contains(&render::paint(render::palette::FAINT, "@ops")));
-    assert!(!raw.contains(&render::paint(render::palette::COOL.bold(), "@ops")));
+    assert!(raw.contains(&render::paint(render::palette::good().bold(), "safe")));
+    assert!(raw.contains(&render::paint(render::palette::faint(), "@ops")));
+    assert!(!raw.contains(&render::paint(render::palette::cool().bold(), "@ops")));
 }
 
 #[test]
@@ -931,8 +931,8 @@ fn question_lines_paint_mentions() {
 
     let raw = render_raw(&[ask], jiff::civil::date(2026, 6, 28));
 
-    assert!(raw.contains(&render::paint(render::palette::COOL.bold(), "@codex")));
-    assert!(raw.contains(&render::paint(render::palette::COOL.bold(), "#cli-docs")));
+    assert!(raw.contains(&render::paint(render::palette::cool().bold(), "@codex")));
+    assert!(raw.contains(&render::paint(render::palette::cool().bold(), "#cli-docs")));
 }
 
 #[test]
@@ -1048,15 +1048,13 @@ fn chat_uses_human_chips_and_agent_brand_colors() {
         &[entry("2026-06-28T04:30:00Z", "hello")],
         jiff::civil::date(2026, 6, 28),
     );
-    let claude = rimz::agents::registry::descriptor_by_kind("claude").expect("claude descriptor");
-
     assert!(
-        raw.contains(&render::paint(render::palette::HUMAN_CHIP, " user ")),
+        raw.contains(&render::paint(render::palette::human_chip(), " user ")),
         "{raw:?}"
     );
     assert!(
         raw.contains(&render::paint(
-            render::palette::rgb(claude.brand.color_rgb).bold(),
+            render::palette::identity("claude").bold(),
             "@claude"
         )),
         "{raw:?}"

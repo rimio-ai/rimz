@@ -128,13 +128,13 @@ pub(super) fn write_free_answer(
     let mut suffix_written = false;
     for choice in answer.chosen.iter().filter_map(|choice| non_empty(choice)) {
         let mut fragments = vec![
-            StyledFragment::styled("●", render::palette::GOOD.bold()),
-            StyledFragment::prose(choice, Some(render::palette::GOOD.bold())),
+            StyledFragment::styled("●", render::palette::good().bold()),
+            StyledFragment::prose(choice, Some(render::palette::good().bold())),
         ];
         if let Some(suffix) =
             answer_suffix_text(source, answer.note.as_deref(), &mut suffix_written)
         {
-            fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
+            fragments.push(StyledFragment::styled(suffix, render::palette::muted()));
         }
         write_wrapped_spine_fragments(out, true, fragments, "  ")?;
     }
@@ -156,13 +156,13 @@ pub(super) fn write_option_answers(
     for option in options {
         if chosen.contains(&option.label.as_str()) {
             let mut fragments = vec![
-                StyledFragment::styled("●", render::palette::GOOD.bold()),
-                StyledFragment::styled(option.label.clone(), render::palette::GOOD.bold()),
+                StyledFragment::styled("●", render::palette::good().bold()),
+                StyledFragment::styled(option.label.clone(), render::palette::good().bold()),
             ];
             if let Some(suffix) =
                 answer_suffix_text(source, answer.note.as_deref(), &mut suffix_written)
             {
-                fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
+                fragments.push(StyledFragment::styled(suffix, render::palette::muted()));
             }
             write_wrapped_spine_fragments(out, true, fragments, "  ")?;
             write_option_description(out, true, option)?;
@@ -172,7 +172,7 @@ pub(super) fn write_option_answers(
                 true,
                 vec![StyledFragment::styled(
                     format!("○ {}", option.label),
-                    render::palette::MUTED,
+                    render::palette::muted(),
                 )],
                 "  ",
             )?;
@@ -189,14 +189,14 @@ pub(super) fn write_option_answers(
         .collect::<Vec<_>>();
     if !other.is_empty() {
         let mut fragments = vec![
-            StyledFragment::styled("●", render::palette::GOOD.bold()),
-            StyledFragment::styled("other:", render::palette::MUTED),
-            StyledFragment::prose(other.join(", "), Some(render::palette::GOOD.bold())),
+            StyledFragment::styled("●", render::palette::good().bold()),
+            StyledFragment::styled("other:", render::palette::muted()),
+            StyledFragment::prose(other.join(", "), Some(render::palette::good().bold())),
         ];
         if let Some(suffix) =
             answer_suffix_text(source, answer.note.as_deref(), &mut suffix_written)
         {
-            fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
+            fragments.push(StyledFragment::styled(suffix, render::palette::muted()));
         }
         write_wrapped_spine_fragments(out, true, fragments, "  ")?;
     }
@@ -215,7 +215,7 @@ pub(super) fn write_option_description(
         write_wrapped_spine_fragments_with_first_indent(
             out,
             answered,
-            vec![StyledFragment::styled(line, render::palette::FAINT)],
+            vec![StyledFragment::styled(line, render::palette::faint())],
             "    ",
             "    ",
         )?;
@@ -246,12 +246,12 @@ pub(super) fn write_text_card(
     let mut suffix_written = false;
     for line in text.lines() {
         let mut fragments = vec![
-            StyledFragment::styled("●", render::palette::GOOD.bold()),
-            StyledFragment::prose(line, Some(render::palette::GOOD.bold())),
+            StyledFragment::styled("●", render::palette::good().bold()),
+            StyledFragment::prose(line, Some(render::palette::good().bold())),
         ];
         if let Some(suffix) = answer_suffix_text(Some(&answer.chat.from), None, &mut suffix_written)
         {
-            fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
+            fragments.push(StyledFragment::styled(suffix, render::palette::muted()));
         }
         write_wrapped_spine_fragments(out, true, fragments, "  ")?;
     }
@@ -264,7 +264,7 @@ pub(super) fn write_unanswered(out: &mut impl Write) -> Result<()> {
         false,
         vec![StyledFragment::styled(
             "◌ unanswered",
-            render::palette::WARN,
+            render::palette::warn(),
         )],
         "",
     )

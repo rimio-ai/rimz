@@ -6,9 +6,9 @@ fn dashboard_row(name: &str, state: RowState, failed: bool) -> WatchRow {
         name: name.to_owned(),
         glyph: if failed { "✗" } else { "✓" },
         glyph_style: if failed {
-            ui::palette::ALARM
+            ui::palette::alarm()
         } else {
-            ui::palette::GOOD
+            ui::palette::good()
         },
         state,
         failed,
@@ -416,14 +416,14 @@ fn verdict_uses_the_latest_conclusive_streak() {
     )
     .unwrap();
     assert_eq!(healthy, "✓ healthy · completed ×2 since 30s ago");
-    assert_eq!(style, ui::palette::GOOD);
+    assert_eq!(style, ui::palette::good());
 
     let errored = record(40, LoopRunResult::Errored);
     let failed = record(20, LoopRunResult::Failed);
     let (failing, style) =
         verdict_line(&[completed, failed, neutral.clone(), errored], now).unwrap();
     assert_eq!(failing, "✗ failing · error ×2 since 30s ago");
-    assert_eq!(style, ui::palette::ALARM);
+    assert_eq!(style, ui::palette::alarm());
     assert!(verdict_line(&[neutral], now).is_none());
 }
 
@@ -544,7 +544,7 @@ fn run_status_names_check_skipped_outcomes() {
     let status = run_status(&skipped);
     assert_eq!(status.glyph, "✓");
     assert_eq!(status.label, "check passed");
-    assert_eq!(status.style, ui::palette::GOOD);
+    assert_eq!(status.style, ui::palette::good());
 
     skipped.check = Some(CheckRecord {
         code: Some(1),
@@ -554,7 +554,7 @@ fn run_status_names_check_skipped_outcomes() {
     let status = run_status(&skipped);
     assert_eq!(status.glyph, "○");
     assert_eq!(status.label, "check failed");
-    assert_eq!(status.style, ui::palette::MUTED);
+    assert_eq!(status.style, ui::palette::muted());
 
     skipped.check = Some(CheckRecord {
         code: None,
@@ -564,15 +564,15 @@ fn run_status_names_check_skipped_outcomes() {
     let status = run_status(&skipped);
     assert_eq!(status.glyph, "○");
     assert_eq!(status.label, "check timed out");
-    assert_eq!(status.style, ui::palette::WARN);
+    assert_eq!(status.style, ui::palette::warn());
 
     assert_eq!(
         loop_result_mark(LoopRunResult::SkippedWindow).style,
-        ui::palette::MUTED
+        ui::palette::muted()
     );
     assert_eq!(
         loop_result_mark(LoopRunResult::SurplusSkipped).style,
-        ui::palette::MUTED
+        ui::palette::muted()
     );
 }
 
@@ -582,71 +582,76 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
         (
             LoopRunResult::Completed,
             "✓",
-            ui::palette::GOOD,
+            ui::palette::good(),
             "completed",
         ),
         (
             LoopRunResult::Delivered,
             "✓",
-            ui::palette::GOOD,
+            ui::palette::good(),
             "delivered",
         ),
-        (LoopRunResult::Failed, "✗", ui::palette::ALARM, "failed"),
+        (LoopRunResult::Failed, "✗", ui::palette::alarm(), "failed"),
         (
             LoopRunResult::VerifyFailed,
             "✗",
-            ui::palette::ALARM,
+            ui::palette::alarm(),
             "verify failed",
         ),
         (
             LoopRunResult::TimedOut,
             "✗",
-            ui::palette::ALARM,
+            ui::palette::alarm(),
             "timed out",
         ),
         (
             LoopRunResult::BudgetExceeded,
             "✗",
-            ui::palette::ALARM,
+            ui::palette::alarm(),
             "budget exceeded",
         ),
-        (LoopRunResult::Errored, "✗", ui::palette::ALARM, "error"),
-        (LoopRunResult::Expired, "○", ui::palette::WARN, "expired"),
-        (LoopRunResult::Canceled, "○", ui::palette::WARN, "canceled"),
+        (LoopRunResult::Errored, "✗", ui::palette::alarm(), "error"),
+        (LoopRunResult::Expired, "○", ui::palette::warn(), "expired"),
+        (
+            LoopRunResult::Canceled,
+            "○",
+            ui::palette::warn(),
+            "canceled",
+        ),
         (
             LoopRunResult::TargetGone,
             "○",
-            ui::palette::WARN,
+            ui::palette::warn(),
             "target gone",
         ),
         (
             LoopRunResult::Overlapped,
             "○",
-            ui::palette::WARN,
+            ui::palette::warn(),
             "overlapped",
         ),
         (
             LoopRunResult::BudgetSkipped,
             "○",
-            ui::palette::WARN,
+            ui::palette::warn(),
             "budget skipped",
         ),
         (
             LoopRunResult::SkippedWindow,
             "○",
-            ui::palette::MUTED,
+            ui::palette::muted(),
             "skipped",
         ),
         (
             LoopRunResult::SurplusSkipped,
             "○",
-            ui::palette::MUTED,
+            ui::palette::muted(),
             "surplus skipped",
         ),
         (
             LoopRunResult::CheckSkipped,
             "○",
-            ui::palette::MUTED,
+            ui::palette::muted(),
             "skipped",
         ),
     ];
@@ -969,7 +974,7 @@ fn render_record_detail_titles_status_age_and_mode() {
     .unwrap();
 
     let raw = String::from_utf8(out).unwrap();
-    assert!(raw.contains(&ui::paint(ui::palette::MUTED, "  error:")));
+    assert!(raw.contains(&ui::paint(ui::palette::muted(), "  error:")));
     let out = anstream::adapter::strip_str(&raw).to_string();
     assert!(out.contains("LAST FAILURE — ✗ error · "));
     assert!(out.contains(" · manual"));
@@ -1001,7 +1006,7 @@ fn render_record_detail_marks_failed_check_output() {
     .unwrap();
 
     let raw = String::from_utf8(out).unwrap();
-    assert!(raw.contains(&ui::paint(ui::palette::ALARM, "first line")));
+    assert!(raw.contains(&ui::paint(ui::palette::alarm(), "first line")));
     let out = anstream::adapter::strip_str(&raw).to_string();
     assert!(out.contains("LAST FAILURE — ✗ failed (exit 2)"));
     assert!(out.contains("  │ first line\n  │ second line"));

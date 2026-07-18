@@ -151,9 +151,9 @@ pub(super) fn write_spine_fragments(
     fragments: &[StyledFragment],
 ) -> Result<()> {
     let style = if answered {
-        render::palette::FAINT
+        render::palette::faint()
     } else {
-        render::palette::WARN
+        render::palette::warn()
     };
     write!(out, "{}", render::paint(style, "│ "))?;
     for fragment in fragments {
@@ -175,9 +175,9 @@ pub(super) fn write_spine_fragments(
 
 pub(super) fn write_spine_blank(out: &mut impl Write, answered: bool) -> Result<()> {
     let style = if answered {
-        render::palette::FAINT
+        render::palette::faint()
     } else {
-        render::palette::WARN
+        render::palette::warn()
     };
     writeln!(out, "{}", render::paint(style, "│"))?;
     Ok(())

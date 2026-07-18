@@ -13,7 +13,7 @@ use clap::Args;
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::config;
-use rimz::sidebar_pane::render::scheme;
+use rimz::theme::scheme;
 
 const GROUP_GAP: usize = 3;
 
@@ -44,7 +44,7 @@ pub fn run(args: ListThemesArgs, _globals: &GlobalFlags) -> Result<()> {
         .max()
         .unwrap_or(0);
     write_legend(&mut out, name_w)?;
-    let accent = render::palette::ACCENT;
+    let accent = render::palette::accent();
     for name in &names {
         write!(out, "{}{name}{}", accent.render(), accent.render_reset())?;
         let pad = name_w.saturating_sub(name.chars().count());
@@ -73,7 +73,7 @@ fn write_legend_group(out: &mut impl Write, tokens: &[&str]) -> std::io::Result<
         write!(
             out,
             "{}",
-            render::paint(render::palette::FAINT, &format!("{token:<2}"))
+            render::paint(render::palette::faint(), &format!("{token:<2}"))
         )?;
     }
     Ok(())
@@ -105,10 +105,8 @@ fn write_chips(out: &mut impl Write, rgbs: &[(u8, u8, u8)]) -> std::io::Result<(
     Ok(())
 }
 
-fn bg_style((red, green, blue): (u8, u8, u8)) -> anstyle::Style {
-    anstyle::Style::new().bg_color(Some(anstyle::Color::Rgb(anstyle::RgbColor(
-        red, green, blue,
-    ))))
+fn bg_style(rgb: (u8, u8, u8)) -> anstyle::Style {
+    render::palette::rgb_bg(rgb)
 }
 
 #[cfg(test)]

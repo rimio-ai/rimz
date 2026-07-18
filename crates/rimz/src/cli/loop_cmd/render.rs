@@ -137,7 +137,7 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
     .map(ui::cell)
     .unwrap_or_else(|| ui::cell("-").dash());
     vec![
-        ui::cell(task.name).fg(ui::palette::ACCENT),
+        ui::cell(task.name).fg(ui::palette::body()),
         ui::cell(task_subject(task.entry)),
         source_cell(task.source),
         ui::cell(when),
@@ -154,14 +154,14 @@ fn next_cell(timing: &schedule::TaskTiming, now: Timestamp) -> ui::Cell {
         schedule::TaskTimingState::Paused(PauseEntry {
             until: None,
             strikes: Some(strikes),
-        }) => ui::cell(format!("paused · {strikes} strikes")).fg(ui::palette::MUTED),
+        }) => ui::cell(format!("paused · {strikes} strikes")).fg(ui::palette::muted()),
         schedule::TaskTimingState::Paused(PauseEntry {
             until: None,
             strikes: None,
-        }) => ui::cell("paused").fg(ui::palette::MUTED),
+        }) => ui::cell("paused").fg(ui::palette::muted()),
         schedule::TaskTimingState::Paused(PauseEntry {
             until: Some(until), ..
-        }) => ui::cell(format!("paused · {}", ui::rel_until(until, now))).fg(ui::palette::MUTED),
+        }) => ui::cell(format!("paused · {}", ui::rel_until(until, now))).fg(ui::palette::muted()),
         schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
             ui::cell(ui::rel_until(next, now))
         }
@@ -188,7 +188,7 @@ fn write_blocked_footer(out: &mut impl Write, count: usize) -> std::io::Result<(
         out,
         "{}",
         ui::paint(
-            ui::palette::WARN,
+            ui::palette::warn(),
             &format!(
                 "{count} task(s) blocked by project trust — review with `rimz trust`, approve with `rimz trust grant`"
             )
@@ -402,7 +402,7 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
     let (glyph, glyph_style, failed, last_text, status_text) = context.stats.get(task.name).map_or(
         (
             "○",
-            ui::palette::FAINT,
+            ui::palette::faint(),
             false,
             "—".to_owned(),
             "never run".to_owned(),
@@ -412,7 +412,7 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
             (
                 status.glyph,
                 status.style,
-                status.style == ui::palette::ALARM,
+                status.style == ui::palette::alarm(),
                 ui::rel_age(stats.last.at, context.now),
                 status.label,
             )
@@ -546,17 +546,17 @@ fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> s
     let mut table = ui::Table::new(headers).indent(2).max_width(cols);
     for row in rows {
         let next_style = match row.state {
-            RowState::Running => ui::palette::ACCENT,
-            RowState::Paused | RowState::Blocked => ui::palette::MUTED,
-            RowState::NeverRun => ui::palette::FAINT,
-            RowState::Due => ui::palette::WARN,
+            RowState::Running => ui::palette::cool(),
+            RowState::Paused | RowState::Blocked => ui::palette::muted(),
+            RowState::NeverRun => ui::palette::faint(),
+            RowState::Due => ui::palette::warn(),
             RowState::Upcoming(_) => anstyle::Style::new(),
         };
         let name = ui::clip_to_width(&row.name, (cols / 4).max(1));
         let next = ui::clip_to_width(&row.next_text, (cols / 4).max(1));
         let mut cells = vec![
             ui::cell(row.glyph).fg(row.glyph_style),
-            ui::cell(name).fg(ui::palette::ACCENT),
+            ui::cell(name).fg(ui::palette::body()),
             ui::cell(next).fg(next_style),
         ];
         if cols >= WATCH_NARROW {
@@ -584,20 +584,17 @@ fn write_watch_band(
         writeln!(
             out,
             "{}",
-            ui::paint(
-                ui::palette::ACCENT.bold(),
-                &ui::clip_to_width(&prefix, cols),
-            )
+            ui::paint(ui::palette::header(), &ui::clip_to_width(&prefix, cols),)
         )?;
         return Ok(());
     }
-    let mut segments = vec![(prefix, ui::palette::ACCENT.bold())];
+    let mut segments = vec![(prefix, ui::palette::header())];
     let mut candidates = Vec::new();
     for (count, glyph, noun, style) in [
-        (summary.running, "▸", "running", ui::palette::ACCENT),
-        (summary.failed, "✗", "failed", ui::palette::ALARM),
-        (summary.paused, "○", "paused", ui::palette::MUTED),
-        (summary.ok, "●", "ok", ui::palette::GOOD),
+        (summary.running, "▸", "running", ui::palette::cool()),
+        (summary.failed, "✗", "failed", ui::palette::alarm()),
+        (summary.paused, "○", "paused", ui::palette::muted()),
+        (summary.ok, "●", "ok", ui::palette::good()),
     ] {
         if count > 0 {
             candidates.push((format!("{glyph} {count} {noun}"), style));
@@ -606,11 +603,11 @@ fn write_watch_band(
     if let Some((row, next)) = summary.next {
         candidates.push((
             format!("next: {} {}", row.name, ui::rel_until(next, now)),
-            ui::palette::MUTED,
+            ui::palette::muted(),
         ));
     }
     if !hold {
-        candidates.push(("q quit".to_owned(), ui::palette::FAINT));
+        candidates.push(("q quit".to_owned(), ui::palette::faint()));
     }
     for (text, style) in candidates {
         if !push_band_segment(&mut segments, text, style, cols) {
@@ -620,7 +617,7 @@ fn write_watch_band(
 
     for (index, (text, style)) in segments.iter().enumerate() {
         if index > 0 {
-            write!(out, "{}", ui::paint(ui::palette::FAINT, " · "))?;
+            write!(out, "{}", ui::paint(ui::palette::faint(), " · "))?;
         }
         write!(out, "{}", ui::paint(*style, text))?;
     }
@@ -658,7 +655,7 @@ fn write_dashboard_heading(
         out,
         "{}",
         ui::paint(
-            ui::palette::ACCENT.bold(),
+            ui::palette::header(),
             &ui::clip_to_width(&root, root_budget)
         )
     )?;
@@ -670,7 +667,7 @@ fn write_dashboard_heading(
 
 fn write_more(out: &mut impl Write, count: usize, cols: usize) -> std::io::Result<()> {
     let text = ui::clip_to_width(&format!("+{count} more"), cols);
-    writeln!(out, "{}", ui::paint(ui::palette::FAINT, &text))
+    writeln!(out, "{}", ui::paint(ui::palette::faint(), &text))
 }
 
 fn write_root_heading(
@@ -682,7 +679,7 @@ fn write_root_heading(
         out,
         "{} · {}",
         ui::paint(
-            ui::palette::ACCENT.bold(),
+            ui::palette::header(),
             &ui::home_relative(root.to_string_lossy().as_ref())
         ),
         ui::paint(room_style(room_is_open), room_label(room_is_open))
@@ -703,9 +700,9 @@ fn room_label(room_is_open: bool) -> &'static str {
 
 fn room_style(room_is_open: bool) -> anstyle::Style {
     if room_is_open {
-        ui::palette::GOOD
+        ui::palette::good()
     } else {
-        ui::palette::MUTED
+        ui::palette::muted()
     }
 }
 
@@ -713,7 +710,7 @@ fn schedule_style<T, E>(parsed: std::result::Result<&T, &E>) -> anstyle::Style {
     if parsed.is_ok() {
         anstyle::Style::new()
     } else {
-        ui::palette::ALARM
+        ui::palette::alarm()
     }
 }
 
@@ -1049,7 +1046,7 @@ fn write_show_headline(
     write!(
         out,
         "{} — {}",
-        ui::paint(ui::palette::ACCENT.bold(), name),
+        ui::paint(ui::palette::header(), name),
         ui::paint(schedule_style(timing.parsed()), &schedule_text)
     )?;
     match timing.state() {
@@ -1183,7 +1180,7 @@ fn write_show_facts(
     {
         kv.push(
             "strikes",
-            ui::cell(format!("{strike_count}/{max}")).fg(ui::palette::MUTED),
+            ui::cell(format!("{strike_count}/{max}")).fg(ui::palette::muted()),
         );
     }
     kv.render(out)?;
@@ -1225,7 +1222,7 @@ fn write_agent_runs(
         }
         heading
     };
-    writeln!(out, "{}", ui::paint(ui::palette::HEADER, &heading))?;
+    writeln!(out, "{}", ui::paint(ui::palette::header(), &heading))?;
     if agent_runs.is_empty() {
         return Ok(());
     }
@@ -1270,7 +1267,7 @@ fn write_runs_table(
         out,
         "{}",
         ui::paint(
-            ui::palette::HEADER,
+            ui::palette::header(),
             &format!("RECENT RUNS ({} recorded)", records.len())
         )
     )?;
@@ -1486,18 +1483,18 @@ fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, an
             ui::rel_age(oldest.at, now)
         ),
         if healthy {
-            ui::palette::GOOD
+            ui::palette::good()
         } else {
-            ui::palette::ALARM
+            ui::palette::alarm()
         },
     ))
 }
 
 pub(super) fn check_skip_display(check: Option<&CheckRecord>) -> (&'static str, anstyle::Style) {
     match check {
-        Some(check) if check.timed_out => ("○", ui::palette::WARN),
-        Some(check) if check.code == Some(0) => ("✓", ui::palette::GOOD),
-        _ => ("○", ui::palette::MUTED),
+        Some(check) if check.timed_out => ("○", ui::palette::warn()),
+        Some(check) if check.code == Some(0) => ("✓", ui::palette::good()),
+        _ => ("○", ui::palette::muted()),
     }
 }
 
@@ -1538,20 +1535,20 @@ pub(super) struct ResultMark {
 
 pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
     let (glyph, style) = match result {
-        LoopRunResult::Completed | LoopRunResult::Delivered => ("✓", ui::palette::GOOD),
+        LoopRunResult::Completed | LoopRunResult::Delivered => ("✓", ui::palette::good()),
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut
         | LoopRunResult::BudgetExceeded
-        | LoopRunResult::Errored => ("✗", ui::palette::ALARM),
+        | LoopRunResult::Errored => ("✗", ui::palette::alarm()),
         LoopRunResult::Expired
         | LoopRunResult::Canceled
         | LoopRunResult::TargetGone
         | LoopRunResult::Overlapped
-        | LoopRunResult::BudgetSkipped => ("○", ui::palette::WARN),
+        | LoopRunResult::BudgetSkipped => ("○", ui::palette::warn()),
         LoopRunResult::SkippedWindow
         | LoopRunResult::CheckSkipped
-        | LoopRunResult::SurplusSkipped => ("○", ui::palette::MUTED),
+        | LoopRunResult::SurplusSkipped => ("○", ui::palette::muted()),
     };
     ResultMark { glyph, style }
 }
@@ -1778,7 +1775,7 @@ fn write_failure_pointer(
     write!(
         out,
         "{}",
-        ui::paint(ui::palette::MUTED, "  last failure — ")
+        ui::paint(ui::palette::muted(), "  last failure — ")
     )?;
     let status = run_status(record);
     write!(
@@ -1790,7 +1787,7 @@ fn write_failure_pointer(
         out,
         "{}",
         ui::paint(
-            ui::palette::MUTED,
+            ui::palette::muted(),
             &format!(
                 " · {} · {} · dig in: rimz loop logs {name} --failed",
                 ui::rel_age(record.at, now),
@@ -1815,14 +1812,14 @@ fn write_record_forensics(
         writeln!(
             out,
             "{}",
-            ui::paint(ui::palette::MUTED, &format!("  cost: {spend}"))
+            ui::paint(ui::palette::muted(), &format!("  cost: {spend}"))
         )?;
     }
     if let Some(window) = record_window_label(record) {
         writeln!(
             out,
             "{}",
-            ui::paint(ui::palette::MUTED, &format!("  window: {window}"))
+            ui::paint(ui::palette::muted(), &format!("  window: {window}"))
         )?;
     }
     write_run_links(out, record, run_record.as_ref())
@@ -1835,7 +1832,7 @@ fn write_check_section(
 ) -> std::io::Result<()> {
     if let Some(check) = &record.check {
         let first_style = if check.timed_out || check.code != Some(0) {
-            Some(ui::palette::ALARM)
+            Some(ui::palette::alarm())
         } else {
             None
         };
@@ -1876,14 +1873,14 @@ fn write_verify_section(
             out,
             "{}",
             ui::paint(
-                ui::palette::MUTED,
+                ui::palette::muted(),
                 &format!(
                     "  verify `{}` exited {status} (attempt {})",
                     verify.cmd, verify.attempts
                 )
             )
         )?;
-        write_gutter_block(out, Some(ui::palette::ALARM), &verify.output)?;
+        write_gutter_block(out, Some(ui::palette::alarm()), &verify.output)?;
     }
     Ok(())
 }
@@ -1897,7 +1894,7 @@ fn write_run_links(
         writeln!(
             out,
             "{}",
-            ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
+            ui::paint(ui::palette::muted(), &format!("  run: {run_id}"))
         )?;
         if let Some(tail) = run_record
             .and_then(|record| record.failure_tail.as_deref())
@@ -1910,7 +1907,7 @@ fn write_run_links(
             writeln!(
                 out,
                 "{}",
-                ui::paint(ui::palette::MUTED, &format!("  transcript: {transcript}"))
+                ui::paint(ui::palette::muted(), &format!("  transcript: {transcript}"))
             )?;
         }
     }
@@ -1980,7 +1977,7 @@ fn write_detail_label(out: &mut impl Write, label: &str) -> std::io::Result<()> 
     writeln!(
         out,
         "{}",
-        ui::paint(ui::palette::MUTED, &format!("  {label}:"))
+        ui::paint(ui::palette::muted(), &format!("  {label}:"))
     )
 }
 
@@ -1991,7 +1988,7 @@ pub(super) fn write_gutter_block(
 ) -> std::io::Result<()> {
     let body = body.trim_end();
     if body.trim().is_empty() {
-        return write_gutter_line(out, Some(ui::palette::FAINT), "-");
+        return write_gutter_line(out, Some(ui::palette::faint()), "-");
     }
     for (idx, line) in body.lines().enumerate() {
         let style = if idx == 0 { first_style } else { None };
@@ -2005,7 +2002,7 @@ fn write_gutter_line(
     style: Option<anstyle::Style>,
     line: &str,
 ) -> std::io::Result<()> {
-    write!(out, "  {}", ui::paint(ui::palette::FAINT, "│ "))?;
+    write!(out, "  {}", ui::paint(ui::palette::faint(), "│ "))?;
     if let Some(style) = style {
         write!(out, "{}", ui::paint(style, line))?;
     } else {

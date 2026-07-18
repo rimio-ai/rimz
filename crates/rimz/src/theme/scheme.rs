@@ -4,7 +4,7 @@ use crate::config::{InlinePalette, ParsedScheme, explicit_scheme, parsed_inline_
 #[cfg(test)]
 use crate::config::{Semantic, parse_scheme_text};
 
-use super::theme::RawPalette;
+use super::raw::RawPalette;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SchemeSwatch {

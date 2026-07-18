@@ -488,13 +488,13 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     } else {
         "gc — all clean, nothing to reclaim".to_owned()
     };
-    write!(w, "{}", paint(palette::ACCENT.bold(), &header))?;
+    write!(w, "{}", paint(palette::header(), &header))?;
     if problems > 0 {
         write!(
             w,
             "{}",
             paint(
-                palette::WARN,
+                palette::warn(),
                 &format!(" · {}", plural(problems, "problem", "problems"))
             )
         )?;
@@ -514,7 +514,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             fmt_duration_compact(out.older_than)
         )
     };
-    writeln!(w, "  {}", paint(palette::MUTED, &checked_text))?;
+    writeln!(w, "  {}", paint(palette::muted(), &checked_text))?;
     writeln!(w)?;
 
     render_worktrees(out, w)?;
@@ -552,13 +552,13 @@ impl RowVerdict {
     }
 
     fn style(self) -> anstyle::Style {
-        match self {
-            Self::Healthy => palette::GOOD,
-            Self::Acted => palette::ACCENT,
-            Self::Warn => palette::WARN,
-            Self::Alarm => palette::ALARM,
-            Self::Skipped => palette::FAINT,
-        }
+        let role = match self {
+            Self::Healthy | Self::Acted => crate::cli::render::status::StateRole::Success,
+            Self::Warn => crate::cli::render::status::StateRole::Waiting,
+            Self::Alarm => crate::cli::render::status::StateRole::Failed,
+            Self::Skipped => crate::cli::render::status::StateRole::Neutral,
+        };
+        crate::cli::render::status::role(role)
     }
 }
 
@@ -627,7 +627,7 @@ fn render_worktrees(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             if removed > 0 && kept > 0 {
                 render_subline(
                     w,
-                    palette::MUTED,
+                    palette::muted(),
                     &format!("kept: {}", kept_summary(&sweep.kept)),
                 )?;
             }
@@ -645,16 +645,16 @@ fn render_worktrees(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
                 );
                 let style = if let Some(err) = &removed.archive_error {
                     line.push_str(&format!(" — message archive failed: {err}"));
-                    palette::WARN
+                    palette::warn()
                 } else {
-                    palette::MUTED
+                    palette::muted()
                 };
                 render_subline(w, style, &line)?;
             }
             for failed in &sweep.failed {
                 render_subline(
                     w,
-                    palette::ALARM,
+                    palette::alarm(),
                     &format!("✗ failed: {} — {}", failed.path.display(), failed.error),
                 )?;
             }
@@ -701,14 +701,14 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     for removed in &out.prune.removed {
         render_subline(
             w,
-            palette::MUTED,
+            palette::muted(),
             &format!("{action}: {}", removed_workspace_detail(removed)),
         )?;
     }
     if removed > 0 && unreadable > 0 {
         render_subline(
             w,
-            palette::WARN,
+            palette::warn(),
             &format!("{unreadable} kept with unreadable record — history preserved"),
         )?;
     }
@@ -748,7 +748,7 @@ fn render_runtime(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         };
         render_subline(
             w,
-            palette::MUTED,
+            palette::muted(),
             &format!("{action}: {}", runtime_breakdown(&out.runtime)),
         )
     } else {

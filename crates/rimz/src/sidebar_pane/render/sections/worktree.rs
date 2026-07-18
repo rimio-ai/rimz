@@ -223,8 +223,7 @@ fn finished_roster_line(
         spans.push(Span::styled(glyph, status_rest_style(ctx.theme, *status)));
         spans.push(Span::styled(
             format!(" {}", row.display_name()),
-            ctx.theme
-                .body_brand(brand_tone(ctx.theme, ctx.providers, &row.name)),
+            ctx.theme.body_brand(brand_tone(ctx.theme, &row.name)),
         ));
         roster_width += separator_width + chip_width;
         placed += 1;

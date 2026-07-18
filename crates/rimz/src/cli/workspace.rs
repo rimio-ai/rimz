@@ -126,7 +126,8 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
     );
     kv.push(
         "new root",
-        render::cell(new_workspace.project_root.display().to_string()).fg(render::palette::ACCENT),
+        render::cell(new_workspace.project_root.display().to_string())
+            .fg(render::palette::accent()),
     );
     kv.push(
         "messages",
@@ -157,7 +158,7 @@ fn rotate_events(args: RotateEventsArgs, globals: &GlobalFlags) -> Result<()> {
             writeln!(out, "event-log rotation skipped")?;
             kv.push(
                 "workspace",
-                render::cell(workspace.workspace_id.to_string()).fg(render::palette::ACCENT),
+                render::cell(workspace.workspace_id.to_string()).fg(render::palette::accent()),
             );
             kv.push("current bytes", render::cell(current_bytes.to_string()));
             kv.push("threshold", render::cell(args.max_bytes.to_string()));
@@ -169,7 +170,7 @@ fn rotate_events(args: RotateEventsArgs, globals: &GlobalFlags) -> Result<()> {
             writeln!(out, "event-log rotated")?;
             kv.push(
                 "workspace",
-                render::cell(workspace.workspace_id.to_string()).fg(render::palette::ACCENT),
+                render::cell(workspace.workspace_id.to_string()).fg(render::palette::accent()),
             );
             kv.push("bytes rotated", render::cell(bytes_rotated.to_string()));
             kv.push("archive", render::cell(archive_path.display().to_string()));

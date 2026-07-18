@@ -244,7 +244,7 @@ pub(super) fn render_message_digest(
             out,
             "{}",
             render::paint(
-                render::palette::FAINT,
+                render::palette::faint(),
                 &empty_message_digest(lane_scope, status)
             )
         )?;
@@ -260,7 +260,7 @@ pub(super) fn render_message_digest(
             writeln!(
                 out,
                 "{}",
-                render::paint(render::palette::HEADER, &lane_header(channel.as_deref()))
+                render::paint(render::palette::header(), &lane_header(channel.as_deref()))
             )?;
             render_message_rows(out, rows, agents, now, 2, 4)?;
         }
@@ -294,14 +294,14 @@ pub(super) fn render_message_rows(
             out,
             "{row_pad}{}{}{}  {}  {}  {}",
             rendered_sender(&message.sender, &sender),
-            render::paint(render::palette::FAINT, " → "),
-            render::paint(render::palette::META.bold(), &target),
+            render::paint(render::palette::faint(), " → "),
+            render::paint(render::palette::meta().bold(), &target),
             render::paint(
                 render::status::message(message.status),
                 message.status.as_str()
             ),
             render::rel_age(message.enqueued_at, now),
-            render::paint(render::palette::FAINT, message.message_id.as_str())
+            render::paint(render::palette::faint(), message.message_id.as_str())
         )?;
         writeln!(
             out,
@@ -352,9 +352,9 @@ pub(super) fn message_digest_groups(
 
 pub(super) fn rendered_sender(sender: &MessageSender, rendered: &str) -> String {
     match sender {
-        MessageSender::Human => render::paint(render::palette::COOL, rendered),
+        MessageSender::Human => render::paint(render::palette::cool(), rendered),
         MessageSender::Agent { .. } | MessageSender::System => {
-            render::paint(render::palette::META.bold(), rendered)
+            render::paint(render::palette::meta().bold(), rendered)
         }
     }
 }
@@ -432,10 +432,10 @@ pub(super) fn message_snippet(message: &MessageListRow, width: usize) -> String 
     {
         let reason = collapse_home_in_snippet(reason);
         let detail = marker.map_or(reason.clone(), |marker| format!("{reason} · {marker}"));
-        return render::paint(render::palette::FAINT, &preview(&detail, width));
+        return render::paint(render::palette::faint(), &preview(&detail, width));
     }
     render::paint(
-        render::palette::FAINT,
+        render::palette::faint(),
         &marker.unwrap_or_else(|| "-".to_owned()),
     )
 }

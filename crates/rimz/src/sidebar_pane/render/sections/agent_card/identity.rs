@@ -1,23 +1,9 @@
 use super::*;
 
-/// The tone resolves from a matched provider panel, then the registered kind's
-/// descriptor brand, then mid-gray chrome for a kind with no registered
-/// descriptor.
-pub(in crate::sidebar_pane::render) fn brand_tone(
-    theme: &Theme,
-    providers: &[SidebarProviderPanel],
-    kind: &str,
-) -> Color {
-    providers
-        .iter()
-        .find(|panel| panel.kind == kind)
-        .map(|panel| theme.brand_tone(panel))
-        .or_else(|| {
-            crate::agents::descriptor_by_kind(kind).map(|descriptor| {
-                theme.brand_rgb_tone(descriptor.brand.color, Some(descriptor.brand.color_rgb))
-            })
-        })
-        .unwrap_or_else(|| theme.component(Component::UnknownBrand))
+/// The tone resolves from the shared provider identity independently of whether
+/// the dashboard currently displays a panel for this kind.
+pub(in crate::sidebar_pane::render) fn brand_tone(theme: &Theme, kind: &str) -> Color {
+    theme.provider_brand_tone(kind)
 }
 
 /// The agent handle's spans under the row's card emphasis, sharing the unread
@@ -28,12 +14,11 @@ pub(in crate::sidebar_pane::render) fn brand_tone(
 /// flowing shimmer.
 pub(super) fn attention_name_spans(
     theme: &Theme,
-    providers: &[SidebarProviderPanel],
     display: &str,
     kind: &str,
     attention: CardAttention,
 ) -> Vec<Span<'static>> {
-    let brand = brand_tone(theme, providers, kind);
+    let brand = brand_tone(theme, kind);
     let text = ellipsize(display, NAME_MAX);
     match attention.emphasis {
         CardEmphasis::Blink => unread_run_spans(theme, Some(brand), attention.anim, &text),
@@ -158,7 +143,6 @@ pub(super) fn agent_identity_line(
     ];
     left.extend(attention_name_spans(
         theme,
-        row_ctx.providers,
         row.display_name(),
         &row.name,
         attention,
@@ -241,8 +225,7 @@ mod tests {
     fn attention_name_keeps_kind_role_handle_in_full() {
         let theme = truecolor_theme();
 
-        let spans =
-            attention_name_spans(&theme, &[], "claude-docsmith", "claude", normal_attention());
+        let spans = attention_name_spans(&theme, "claude-docsmith", "claude", normal_attention());
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content.as_ref(), "claude-docsmith");
@@ -254,7 +237,6 @@ mod tests {
 
         let spans = attention_name_spans(
             &theme,
-            &[],
             "opencode-docsmithery",
             "opencode",
             normal_attention(),
@@ -269,26 +251,38 @@ mod tests {
     fn attention_name_registered_kind_uses_descriptor_brand_without_provider_panel() {
         let theme = truecolor_theme();
 
-        let spans = attention_name_spans(&theme, &[], "claude", "claude", normal_attention());
+        let spans = attention_name_spans(&theme, "claude", "claude", normal_attention());
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, Some(theme.clay()));
-        assert_ne!(
-            spans[0].style.fg,
-            Some(theme.component(Component::UnknownBrand))
-        );
+        assert_ne!(spans[0].style.fg, Some(Color::Indexed(244)));
     }
 
     #[test]
     fn attention_name_unregistered_kind_without_provider_panel_uses_unknown_brand() {
         let theme = truecolor_theme();
 
-        let spans = attention_name_spans(&theme, &[], "nope", "nope", normal_attention());
+        let spans = attention_name_spans(&theme, "nope", "nope", normal_attention());
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(
-            spans[0].style.fg,
-            Some(theme.component(Component::UnknownBrand))
+        assert_eq!(spans[0].style.fg, Some(Color::Indexed(244)));
+    }
+
+    #[test]
+    fn attention_name_uses_override_without_provider_panel() {
+        let mut theme_config = ThemeConfig {
+            mode: ThemeMode::Truecolor,
+            ..ThemeConfig::default()
+        };
+        theme_config.providers.insert(
+            "claude".to_owned(),
+            crate::config::ThemeProviderStyle {
+                color: Some(crate::config::ThemeColor::Rgb(1, 2, 3)),
+                ..Default::default()
+            },
         );
+        let theme = Theme::fixed_for_theme(false, &theme_config);
+        let spans = attention_name_spans(&theme, "claude", "claude", normal_attention());
+        assert_eq!(spans[0].style.fg, Some(Color::Rgb(1, 2, 3)));
     }
 }

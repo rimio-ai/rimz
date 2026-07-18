@@ -153,9 +153,9 @@ fn list_channels(
             entry.agents.join(" ")
         };
         table.row([
-            render::cell(format!("#{}", entry.channel)).fg(render::palette::ACCENT),
+            render::cell(format!("#{}", entry.channel)).fg(render::palette::accent()),
             render::cell(entry.backing).dash(),
-            render::cell(agents).fg(render::palette::ACCENT).dash(),
+            render::cell(agents).fg(render::palette::accent()).dash(),
         ]);
     }
     table.render(&mut render::out())?;

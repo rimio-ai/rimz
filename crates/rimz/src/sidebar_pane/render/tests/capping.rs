@@ -1,6 +1,5 @@
 use super::*;
 use crate::sidebar_pane::render::fmt::dollars2;
-use crate::sidebar_pane::render::theme::Component;
 use std::collections::HashSet;
 
 #[test]
@@ -310,10 +309,8 @@ fn finished_roster_names_keep_soft_provider_brand_tones() {
     );
     assert_eq!(
         name_fg(" mystery"),
-        theme
-            .body_brand(theme.component(Component::UnknownBrand))
-            .fg,
-        "unregistered kinds keep the softened unknown-brand fallback"
+        theme.body_brand(Color::Indexed(244)).fg,
+        "unregistered kinds use the shared neutral provider fallback"
     );
 }
 

@@ -13,9 +13,7 @@ use super::GlobalFlags;
 use super::render::{self, KeyVals, cell};
 use super::spinner::Spinner;
 use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
-use rimz::agents::{
-    ExtraCredits, PlanLabel, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally,
-};
+use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally};
 use rimz::config::MachineConfig;
 use rimz::sidebar::enrich::provider_panels_from_caches;
 use rimz::sidebar::refresh::{
@@ -112,7 +110,7 @@ fn validate_kind(kind: Option<&str>) -> Result<()> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ProviderStatus {
+pub(crate) enum ProviderStatus {
     LoggedIn,
     LoggedOut,
     Unavailable,
@@ -236,7 +234,7 @@ fn build_report(
         plan_label: panel.and_then(|panel| panel.plan.clone()).or_else(|| {
             raw_plan
                 .as_deref()
-                .map(|plan| format_plan(&descriptor.plan_label, plan))
+                .map(|plan| descriptor.plan_label.format(plan))
         }),
         plan: raw_plan,
         account_id: account.and_then(|account| account.account_id.clone()),
@@ -267,28 +265,6 @@ fn timestamp_from_millis(millis: u64) -> Option<Timestamp> {
         .and_then(|millis| Timestamp::from_millisecond(millis).ok())
 }
 
-fn format_plan(label: &PlanLabel, raw: &str) -> String {
-    let tier = title_case(raw);
-    match label {
-        PlanLabel::Prefixed { prefix } => format!("{prefix} {tier}"),
-        PlanLabel::TitleCaseOnly => tier,
-    }
-}
-
-fn title_case(value: &str) -> String {
-    value
-        .split(['-', '_', ' '])
-        .filter(|word| !word.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            chars.next().map_or_else(String::new, |first| {
-                first.to_uppercase().collect::<String>() + chars.as_str()
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 fn write_pretty(
     out: &mut impl Write,
     reports: &[ProviderReport],
@@ -301,12 +277,22 @@ fn write_pretty(
         write!(
             out,
             "{} — ",
-            render::paint(render::palette::HEADER.bold(), &report.product_name)
+            render::paint(
+                render::palette::identity(&report.kind).bold(),
+                &render::palette::identity_name(&report.kind),
+            )
         )?;
         write_optional(out, report.plan_label.as_deref(), "")?;
         write!(out, " · ")?;
         write_optional(out, report.version.as_deref(), "v")?;
-        writeln!(out, " · {}", report.status.human())?;
+        writeln!(
+            out,
+            " · {}",
+            render::paint(
+                render::status::provider(report.status),
+                report.status.human()
+            )
+        )?;
 
         let mut rows = KeyVals::new().indent(2);
         if let Some(account_id) = &report.account_id {
@@ -321,7 +307,10 @@ fn write_pretty(
             rows.push("scope", cell(scope_label(scope)));
         }
         for window in &report.windows {
-            rows.push(window_label(window), value_cell(window_value(window, now)));
+            rows.push(
+                rimz::theme::fmt::window_label(window),
+                value_cell(window_value(window, now)),
+            );
         }
         if report.metered == Some(true) && report.windows.is_empty() {
             rows.push("usage", unknown_cell());
@@ -329,7 +318,15 @@ fn write_pretty(
             rows.push("usage", cell("∞"));
         }
         if let Some(extra) = &report.extra_credits {
-            rows.push("extra", value_cell(extra_credits_label(extra)));
+            let value = value_cell(extra_credits_label(extra));
+            rows.push(
+                "extra",
+                if matches!(extra, ExtraCredits::Known { .. }) {
+                    value.fg(render::palette::money())
+                } else {
+                    value
+                },
+            );
         }
         if let Some(reset) = &report.reset_credits {
             rows.push("resets", cell(reset_credits_label(reset, now)));
@@ -341,9 +338,11 @@ fn write_pretty(
                 .as_ref()
                 .map_or_else(unknown_cell, |spending| {
                     cell(format!(
-                        "7d ${:.2} · 30d ${:.2}",
-                        spending.week.usd, spending.month.usd
+                        "7d {} · 30d {}",
+                        rimz::theme::fmt::dollars2(spending.week.usd),
+                        rimz::theme::fmt::dollars2(spending.month.usd)
                     ))
+                    .fg(render::palette::money())
                 }),
         );
         if let Some(budget) = report.day_budget {
@@ -351,9 +350,11 @@ fn write_pretty(
             rows.push(
                 "budget",
                 cell(format!(
-                    "${:.2} of ${:.2}/day{parked}",
-                    budget.spend_usd, budget.cap_usd
-                )),
+                    "{} of {}/day{parked}",
+                    rimz::theme::fmt::dollars2(budget.spend_usd),
+                    rimz::theme::fmt::dollars2(budget.cap_usd)
+                ))
+                .fg(render::palette::money()),
             );
         }
         if report.active_sessions > 0 {
@@ -367,7 +368,7 @@ fn write_pretty(
 fn write_optional(out: &mut impl Write, value: Option<&str>, prefix: &str) -> std::io::Result<()> {
     match value {
         Some(value) => write!(out, "{prefix}{}", render::one_line(value)),
-        None => write!(out, "{}", render::paint(render::palette::FAINT, "–")),
+        None => write!(out, "{}", render::paint(render::palette::faint(), "–")),
     }
 }
 
@@ -376,7 +377,7 @@ fn value_cell(value: Option<String>) -> render::Cell {
 }
 
 fn unknown_cell() -> render::Cell {
-    cell("–").fg(render::palette::FAINT)
+    cell("–").fg(render::palette::faint())
 }
 
 fn scope_label(scope: &ProviderAccountScope) -> String {
@@ -385,18 +386,6 @@ fn scope_label(scope: &ProviderAccountScope) -> String {
         ProviderAccountScope::SubProvider { provider, variant } => {
             render::one_line(&format!("{provider}/{variant}"))
         }
-    }
-}
-
-fn window_label(window: &RateLimitWindow) -> String {
-    if let Some(scope) = &window.scope {
-        return render::one_line(&scope.label);
-    }
-    match window.duration_mins {
-        Some(mins) if mins % (24 * 60) == 0 => format!("{}d", mins / (24 * 60)),
-        Some(mins) if mins % 60 == 0 => format!("{}h", mins / 60),
-        Some(mins) => format!("{mins}m"),
-        None => "usage".to_owned(),
     }
 }
 
@@ -410,18 +399,14 @@ fn window_value(window: &RateLimitWindow, now: Timestamp) -> Option<String> {
     }
     let reset = window
         .resets_at
-        .map(|deadline| format!("resets in {}", countdown(deadline, now)))
+        .map(|deadline| {
+            format!(
+                "resets in {}",
+                rimz::theme::fmt::reset_countdown(deadline, now)
+            )
+        })
         .unwrap_or_else(|| "resets –".to_owned());
     Some(format!("{used}% used · {reset}"))
-}
-
-fn countdown(deadline: Timestamp, now: Timestamp) -> String {
-    let seconds = deadline.duration_since(now).as_secs().max(0);
-    if seconds >= 86_400 {
-        format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
-    } else {
-        format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60)
-    }
 }
 
 fn extra_credits_label(extra: &ExtraCredits) -> Option<String> {
@@ -434,13 +419,16 @@ fn extra_credits_label(extra: &ExtraCredits) -> Option<String> {
         } => {
             let mut fields = Vec::new();
             if let Some(used) = used_usd {
-                fields.push(format!("${used:.2} used"));
+                fields.push(format!("{} used", rimz::theme::fmt::dollars2(*used)));
             }
             if let Some(remaining) = remaining_usd {
-                fields.push(format!("${remaining:.2} remaining"));
+                fields.push(format!(
+                    "{} remaining",
+                    rimz::theme::fmt::dollars2(*remaining)
+                ));
             }
             if let Some(limit) = limit_usd {
-                fields.push(format!("${limit:.2} limit"));
+                fields.push(format!("{} limit", rimz::theme::fmt::dollars2(*limit)));
             }
             (!fields.is_empty()).then(|| fields.join(" · "))
         }
@@ -455,7 +443,12 @@ fn reset_credits_label(reset: &ResetCredits, now: Timestamp) -> String {
     };
     let expiry = reset
         .soonest_expiry
-        .map(|deadline| format!(" · soonest expires in {}", countdown(deadline, now)))
+        .map(|deadline| {
+            format!(
+                " · soonest expires in {}",
+                rimz::theme::fmt::reset_countdown(deadline, now)
+            )
+        })
         .unwrap_or_default();
     format!("{} {noun}{expiry}", reset.count)
 }

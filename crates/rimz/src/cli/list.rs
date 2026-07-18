@@ -186,14 +186,14 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
         let running = row.running_on.as_deref().unwrap_or("-");
         let seen = last_seen(row);
         let running_style = if row.running_on.is_some() {
-            render::palette::GOOD
+            render::palette::good()
         } else {
-            render::palette::FAINT
+            render::palette::faint()
         };
         table.row([
-            render::cell(row.workspace_id.as_str()).fg(render::palette::ACCENT),
+            render::cell(row.workspace_id.as_str()).fg(render::palette::accent()),
             render::cell(row.session_name.as_str()),
-            render::cell(row.project_root.as_str()).fg(render::palette::BODY),
+            render::cell(row.project_root.as_str()).fg(render::palette::body()),
             render::cell(running).fg(running_style),
             render::cell(seen).dash(),
         ]);

@@ -1,11 +1,11 @@
 //! Unit tests for [`super`]: palette resolution, the gray/brand tone
 //! ladder, depth-aware brand emission, and capability gating.
 
-use super::super::scheme;
 use super::*;
 use crate::config::{Semantic, ThemeColor, ThemeMode, nearest_xterm_index};
+use crate::theme::scheme;
 
-fn indices(palette: Palette) -> [Color; 13] {
+fn indices(palette: Palette) -> [Tone; 13] {
     [
         palette.good,
         palette.warn,
@@ -38,19 +38,19 @@ fn default_indexed_palette_matches_expected_indices() {
     assert_eq!(
         indices(palette),
         [
-            Color::Indexed(149),
-            Color::Indexed(179),
-            Color::Indexed(215),
-            Color::Indexed(210),
-            Color::Indexed(117),
-            Color::Indexed(111),
-            Color::Indexed(141),
-            Color::Indexed(146),
-            Color::Indexed(102),
-            Color::Indexed(59),
-            Color::Indexed(239),
-            Color::Indexed(153),
-            Color::Indexed(235),
+            Tone::Indexed(149),
+            Tone::Indexed(179),
+            Tone::Indexed(215),
+            Tone::Indexed(210),
+            Tone::Indexed(117),
+            Tone::Indexed(111),
+            Tone::Indexed(141),
+            Tone::Indexed(146),
+            Tone::Indexed(102),
+            Tone::Indexed(59),
+            Tone::Indexed(239),
+            Tone::Indexed(153),
+            Tone::Indexed(235),
         ]
     );
 }
@@ -498,7 +498,11 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 WorktreeMerged | WindowMedium | UnknownBrand => p.muted,
             };
             let got = theme.component(component);
-            assert_eq!(got, expected, "{component:?} resolves to its named slot");
+            assert_eq!(
+                got,
+                tone_color(expected),
+                "{component:?} resolves to its named slot"
+            );
             assert!(
                 matches!(got, Color::Indexed(_) | Color::Rgb(..)),
                 "{component:?} resolves to a concrete tone, got {got:?}"
@@ -515,8 +519,8 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
 #[test]
 fn expense_reads_redder_than_alarm() {
     let p = truecolor_default().palette;
-    let expense = color_to_rgb(p.expense).expect("expense is a concrete tone");
-    let alarm = color_to_rgb(p.alarm).expect("alarm is a concrete tone");
+    let expense = color_to_rgb(tone_color(p.expense)).expect("expense is a concrete tone");
+    let alarm = color_to_rgb(tone_color(p.alarm)).expect("alarm is a concrete tone");
 
     assert_ne!(expense, alarm, "expense is not the danger rose alarm");
 
@@ -536,7 +540,7 @@ fn expense_reads_redder_than_alarm() {
 
     // Held on alarm's hue family — a hotter step rather than a rotation into
     // orange or magenta, so the marker reads as red, not as a warmer cost tier.
-    use crate::sidebar_pane::render::oklab::hue_angle;
+    use crate::theme::oklab::hue_angle;
     use std::f32::consts::{PI, TAU};
     let mut arc = hue_angle(expense) - hue_angle(alarm);
     while arc > PI {
@@ -580,10 +584,10 @@ fn selection_band_recesses_flat_below_selection_bg_at_truecolor() {
     // One flat tone, no gradient: the band recesses below the raw `selection_bg`, so
     // the selected card sinks into a well rather than rising as a bright panel.
     assert!(
-        luminance(band) < luminance(theme.palette.selection_bg),
+        luminance(band) < luminance(tone_color(theme.palette.selection_bg)),
         "the band recesses below the raw selection_bg: {} !< {}",
         luminance(band),
-        luminance(theme.palette.selection_bg),
+        luminance(tone_color(theme.palette.selection_bg)),
     );
 }
 
@@ -607,7 +611,7 @@ fn highlight_steps_config_recesses_selection_band_deeper_at_truecolor() {
 #[test]
 fn indexed_band_and_wash_step_one_cell_either_side_of_the_panel() {
     let theme = Theme::fixed(false);
-    let panel = theme.palette.selection_bg;
+    let panel = tone_color(theme.palette.selection_bg);
     let band = theme.selection_band().expect("a band at indexed depth");
     let wash = theme.unread_wash().expect("a wash at indexed depth");
 
@@ -670,7 +674,7 @@ fn unread_wash_is_a_lighter_tint_of_the_selection_blue() {
         "the unread wash is a lighter tint than the selection band"
     );
     assert!(
-        luminance(wash) > luminance(theme.palette.selection_bg),
+        luminance(wash) > luminance(tone_color(theme.palette.selection_bg)),
         "the truecolor wash lifts above the panel"
     );
 

@@ -269,7 +269,7 @@ fn mux_section_tallies_poll_presence_by_expectedness() {
         render_tally(w, &tally)
     });
     assert!(
-        out.contains("⚠ polling — sidebar running but the live tmux watch is not attached"),
+        out.contains("! polling — sidebar running but the live tmux watch is not attached"),
         "{out}"
     );
     assert!(out.contains("⚠ 1 warning"), "{out}");

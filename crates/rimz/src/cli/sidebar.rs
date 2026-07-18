@@ -429,7 +429,7 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
         } else {
             format!("{count} {noun}s")
         };
-        render::paint(render::palette::ACCENT, &value)
+        render::paint(render::palette::accent(), &value)
     };
     if outcome.sessions == 0 {
         writeln!(out, "No running sidebars to repair.")?;
@@ -645,19 +645,19 @@ fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
         let waiting = status_tally(snapshot, rimz::agents::AgentStatus::Waiting);
         let failed = status_tally(snapshot, rimz::agents::AgentStatus::Failed);
         let waiting_style = if waiting > 0 {
-            render::palette::WARN
+            render::palette::warn()
         } else {
-            render::palette::MUTED
+            render::palette::muted()
         };
         let failed_style = if failed > 0 {
-            render::palette::ALARM
+            render::palette::alarm()
         } else {
-            render::palette::MUTED
+            render::palette::muted()
         };
         let mut kv = render::KeyVals::new();
         kv.push(
             "Workspace",
-            render::cell(snapshot.display_name.to_string()).fg(render::palette::ACCENT),
+            render::cell(snapshot.display_name.to_string()).fg(render::palette::accent()),
         );
         kv.push(
             "Worktree groups",
@@ -1260,7 +1260,7 @@ fn emit_hidden_count(label: &str, count: usize) -> Result<()> {
     let mut kv = render::KeyVals::new();
     kv.push(
         label,
-        render::cell(count.to_string()).fg(render::palette::ACCENT),
+        render::cell(count.to_string()).fg(render::palette::accent()),
     );
     kv.render(&mut render::out())?;
     Ok(())

@@ -4,6 +4,9 @@ use jiff::Timestamp;
 
 use crate::agents::RateLimitWindow;
 use crate::sidebar_pane::render::layout::clip;
+#[cfg(test)]
+use crate::theme::fmt::reset_secs;
+pub(super) use crate::theme::fmt::{dollars_cap, dollars2, reset_countdown};
 
 /// Seconds since `at`, clamped at zero — the shared input for [`age_short`] and
 /// the staleness color ramp, so a row reads the frame clock once and styles and
@@ -76,19 +79,6 @@ pub(super) fn elapsed_label(seconds: i64) -> String {
 /// edge. A passed reset reads `0h00m`; the enrich layer's reset-to-max
 /// projection rolls every displayed window forward the moment its reset passes,
 /// so a rendered countdown is live.
-pub(super) fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
-    reset_secs(deadline.duration_since(now).as_secs())
-}
-
-fn reset_secs(seconds: i64) -> String {
-    let seconds = seconds.max(0);
-    if seconds >= 86_400 {
-        format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
-    } else {
-        format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60)
-    }
-}
-
 /// A budget window's compact bar label. Provider-defined named quotas use their
 /// explicit label, clipped on cell boundaries to the fixed three-cell slot;
 /// temporal windows retain the existing rounded hour/day label.
@@ -112,37 +102,6 @@ pub(super) fn window_label(window: &RateLimitWindow) -> String {
 /// dashboard, and the fleet store all share this one shape, so a price never
 /// jitters between a cents and a whole-dollar form. Grouping keeps a large
 /// accumulating pile (`$12,480.13`) legible without changing that shape.
-pub(super) fn dollars2(usd: f64) -> String {
-    // Work in integer cents so rounding matches `{:.2}` and grouping is exact.
-    let cents = (usd.max(0.0) * 100.0).round() as u64;
-    format!("${}.{:02}", group_thousands(cents / 100), cents % 100)
-}
-
-/// A daily cap keeps whole-dollar amounts compact and cents exact otherwise.
-pub(super) fn dollars_cap(usd: f64) -> String {
-    let cents = (usd.max(0.0) * 100.0).round() as u64;
-    if cents.is_multiple_of(100) {
-        format!("${}", group_thousands(cents / 100))
-    } else {
-        format!("${}.{:02}", group_thousands(cents / 100), cents % 100)
-    }
-}
-
-/// Insert `,` every three digits from the right — `1240` → `1,240`,
-/// `47200000` → `47,200,000`. The shared grouping behind [`dollars2`].
-fn group_thousands(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    let len = digits.len();
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
 /// Shorten a model's display name for the capability line. First drops a
 /// trailing context-window parenthetical (`Opus 4.8 (1M context)` / `Opus 4.8
 /// (1M)` → `Opus 4.8`) — the identity line's dedicated window token carries

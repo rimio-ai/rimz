@@ -12,26 +12,24 @@
 //! `TokyoNight Night`; per-slot overrides then win over the selected scheme. The
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
-use crate::config::{ColorDepth, GlyphRole, HighlightStepsConfig, ThemeConfig};
+use std::collections::BTreeMap;
+
+use crate::config::{
+    ColorDepth, GlyphRole, HighlightStepsConfig, ThemeConfig, ThemeProviderStyle, xterm_rgb,
+};
+pub(crate) use crate::theme::Palette;
+use crate::theme::{
+    HEAT_RAMP_WARM_START, Identity, Tone, oklab, ramp_tone, resolve_provider_identity,
+};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::animation::{BreathSample, ResolvedAnimations};
-use super::oklab;
 
 mod component;
 mod glyphs;
-mod identity;
-mod palette;
-mod raw;
 
 pub(crate) use component::Component;
 pub(crate) use glyphs::{GlyphSet, GlyphSetKind};
-pub(crate) use identity::Identity;
-pub(crate) use palette::Palette;
-pub(super) use palette::color_to_rgb;
-pub(crate) use raw::RawPalette;
-
-use palette::{HEAT_RAMP_WARM_START, ramp_tone, rgb_color};
 
 /// How far a calm card name's brand lightness dims below full brand, in OKLab L
 /// (`0.0` = full brand). Hue and saturation hold; only the lightness drops, so
@@ -118,6 +116,7 @@ pub(crate) struct Theme {
     no_color: bool,
     depth: ColorDepth,
     palette: Palette,
+    provider_styles: BTreeMap<String, ThemeProviderStyle>,
     glyphs: GlyphSet,
     highlight_steps: HighlightStepsConfig,
     pub(crate) animations: ResolvedAnimations,
@@ -140,6 +139,7 @@ impl Theme {
             animations,
             glyphs,
             palette,
+            provider_styles: theme.providers.clone(),
             highlight_steps: theme.display.highlight_steps,
         }
     }
@@ -300,7 +300,7 @@ impl Theme {
     /// and dim instead of riding the terminal default the lightness shift cannot
     /// move.
     pub(super) fn body_tone(&self) -> Color {
-        self.palette.body
+        tone_color(self.palette.body)
     }
 
     /// A chip: a fixed near-black ink ([`CHIP_INK`]) on a colored fill. Under
@@ -341,11 +341,11 @@ impl Theme {
     }
 
     pub(crate) fn muted(&self) -> Style {
-        self.chrome(self.palette.muted)
+        self.chrome(tone_color(self.palette.muted))
     }
 
     pub(crate) fn body(&self) -> Style {
-        self.chrome(self.palette.body)
+        self.chrome(tone_color(self.palette.body))
     }
 
     /// A provider brand tone for a calm card. At truecolor the brand keeps its
@@ -372,15 +372,15 @@ impl Theme {
     }
 
     pub(crate) fn faint(&self) -> Style {
-        self.chrome(self.palette.faint)
+        self.chrome(tone_color(self.palette.faint))
     }
 
     pub(crate) fn rule(&self) -> Style {
-        self.style(self.palette.rule, Modifier::DIM)
+        self.style(tone_color(self.palette.rule), Modifier::DIM)
     }
 
     pub(crate) fn selection(&self) -> Style {
-        self.style(self.palette.selection, Modifier::BOLD)
+        self.style(tone_color(self.palette.selection), Modifier::BOLD)
     }
 
     fn step(&self, units: u8) -> f32 {
@@ -401,7 +401,7 @@ impl Theme {
         }
         // `selection_bg` always resolves to a concrete Indexed/Rgb tone, so this is
         // total in practice; `None` only guards a `Reset` that never reaches here.
-        let rgb = color_to_rgb(self.palette.selection_bg)?;
+        let rgb = color_to_rgb(tone_color(self.palette.selection_bg))?;
         let delta = match self.depth {
             ColorDepth::Truecolor => truecolor_delta,
             ColorDepth::Indexed => indexed_delta,
@@ -453,20 +453,20 @@ impl Theme {
     /// so `caution` is reached only through the ramp and needs no flat accessor —
     /// as `accent`/`cool`/`meta` always name a [`Component`] rather than a tier.
     pub(crate) fn good(&self, modifier: Modifier) -> Style {
-        self.style(self.palette.good, modifier)
+        self.style(tone_color(self.palette.good), modifier)
     }
 
     pub(crate) fn warn(&self, modifier: Modifier) -> Style {
-        self.style(self.palette.warn, modifier)
+        self.style(tone_color(self.palette.warn), modifier)
     }
 
     pub(crate) fn alarm(&self, modifier: Modifier) -> Style {
-        self.style(self.palette.alarm, modifier)
+        self.style(tone_color(self.palette.alarm), modifier)
     }
 
     /// An external-identity tone (brand clay, dollar green) at the active depth.
     pub(crate) fn identity(&self, id: Identity) -> Color {
-        self.palette.identity(id)
+        tone_color(self.palette.identity(id))
     }
 
     pub(crate) fn clay(&self) -> Color {
@@ -524,10 +524,77 @@ impl Theme {
 
     pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
         if let Some(role) = panel.color_role {
-            return self.palette.role_tone(role);
+            return tone_color(self.palette.role_tone(role));
         }
         self.brand_rgb_tone(panel.color, panel.color_rgb)
     }
+
+    /// Resolve provider identity independently of dashboard panel visibility.
+    pub(crate) fn provider_brand_tone(&self, kind: &str) -> Color {
+        tone_color(
+            resolve_provider_identity(kind, &self.provider_styles)
+                .brand
+                .tone(&self.palette),
+        )
+    }
+}
+
+pub(super) fn tone_color(tone: Tone) -> Color {
+    match tone {
+        Tone::Indexed(index) => Color::Indexed(index),
+        Tone::Rgb(red, green, blue) => Color::Rgb(red, green, blue),
+    }
+}
+
+fn rgb_color(rgb: (u8, u8, u8), depth: ColorDepth) -> Color {
+    tone_color(Tone::from_rgb(rgb, depth))
+}
+
+pub(super) fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Reset => None,
+        Color::Black => Some((0x00, 0x00, 0x00)),
+        Color::Red => Some((0x80, 0x00, 0x00)),
+        Color::Green => Some((0x00, 0x80, 0x00)),
+        Color::Yellow => Some((0x80, 0x80, 0x00)),
+        Color::Blue => Some((0x00, 0x00, 0x80)),
+        Color::Magenta => Some((0x80, 0x00, 0x80)),
+        Color::Cyan => Some((0x00, 0x80, 0x80)),
+        Color::Gray => Some((0xc0, 0xc0, 0xc0)),
+        Color::DarkGray => Some((0x80, 0x80, 0x80)),
+        Color::LightRed => Some((0xff, 0x00, 0x00)),
+        Color::LightGreen => Some((0x00, 0xff, 0x00)),
+        Color::LightYellow => Some((0xff, 0xff, 0x00)),
+        Color::LightBlue => Some((0x00, 0x00, 0xff)),
+        Color::LightMagenta => Some((0xff, 0x00, 0xff)),
+        Color::LightCyan => Some((0x00, 0xff, 0xff)),
+        Color::White => Some((0xff, 0xff, 0xff)),
+        Color::Indexed(index) if index < 16 => Some(ansi_index_rgb(index)),
+        Color::Indexed(index) => Some(xterm_rgb(index)),
+        Color::Rgb(red, green, blue) => Some((red, green, blue)),
+    }
+}
+
+fn ansi_index_rgb(index: u8) -> (u8, u8, u8) {
+    const ANSI: [(u8, u8, u8); 16] = [
+        (0x00, 0x00, 0x00),
+        (0x80, 0x00, 0x00),
+        (0x00, 0x80, 0x00),
+        (0x80, 0x80, 0x00),
+        (0x00, 0x00, 0x80),
+        (0x80, 0x00, 0x80),
+        (0x00, 0x80, 0x80),
+        (0xc0, 0xc0, 0xc0),
+        (0x80, 0x80, 0x80),
+        (0xff, 0x00, 0x00),
+        (0x00, 0xff, 0x00),
+        (0xff, 0xff, 0x00),
+        (0x00, 0x00, 0xff),
+        (0xff, 0x00, 0xff),
+        (0x00, 0xff, 0xff),
+        (0xff, 0xff, 0xff),
+    ];
+    ANSI[index as usize]
 }
 
 #[cfg(test)]

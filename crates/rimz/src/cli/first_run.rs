@@ -74,7 +74,7 @@ pub(crate) fn ask(
         out,
         "{}",
         render::paint(
-            render::palette::MUTED,
+            render::palette::muted(),
             "  Y if the bar above is one smooth sweep; N if it breaks into flat"
         )
     )?;
@@ -82,7 +82,7 @@ pub(crate) fn ask(
         out,
         "{}",
         render::paint(
-            render::palette::MUTED,
+            render::palette::muted(),
             "  bands — RimZ then falls back to 256 colors."
         )
     )?;
@@ -104,7 +104,7 @@ pub(crate) fn ask(
         out,
         "{}",
         render::paint(
-            render::palette::MUTED,
+            render::palette::muted(),
             "  Y if you see eight distinct icons; N for boxes or ? marks — RimZ"
         )
     )?;
@@ -112,7 +112,7 @@ pub(crate) fn ask(
         out,
         "{}",
         render::paint(
-            render::palette::MUTED,
+            render::palette::muted(),
             "  then falls back to plain text glyphs. (Needs a Nerd Font.)"
         )
     )?;
@@ -217,11 +217,15 @@ pub(crate) fn write_next_steps(out: &mut dyn Write) -> Result<()> {
         out,
         "{}",
         render::paint(
-            render::palette::MUTED,
+            render::palette::muted(),
             "Next → docs/guide/setup.md · rimz config for preferences"
         )
     )?;
-    writeln!(out, "{}", render::paint(render::palette::MUTED, &loop_hint))?;
+    writeln!(
+        out,
+        "{}",
+        render::paint(render::palette::muted(), &loop_hint)
+    )?;
     Ok(())
 }
 
@@ -229,13 +233,13 @@ pub(crate) fn write_header(out: &mut dyn Write) -> Result<()> {
     writeln!(
         out,
         "{}",
-        render::paint(render::palette::ACCENT.bold(), "rimz · first-run setup")
+        render::paint(render::palette::header(), "rimz · first-run setup")
     )?;
     writeln!(
         out,
         "{}",
         render::paint(
-            render::palette::FAINT,
+            render::palette::faint(),
             &header_rule(render::terminal_columns(80))
         )
     )?;
@@ -303,7 +307,7 @@ fn prompt_bool(
         write!(
             out,
             "{prompt} {} ",
-            render::paint(render::palette::ACCENT.bold(), suffix)
+            render::paint(render::palette::accent().bold(), suffix)
         )?;
         out.flush()?;
         let mut answer = String::new();

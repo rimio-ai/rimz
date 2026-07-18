@@ -173,7 +173,7 @@ pub(super) fn render_panel(
     if stats.by_day.is_empty() {
         let message = "No token usage recorded yet - run an agent and check back.";
         lines.push(center(
-            &render::paint(render::palette::MUTED, message),
+            &render::paint(render::palette::muted(), message),
             message.chars().count(),
             geometry.panel_width,
         ));
@@ -233,11 +233,11 @@ pub(super) fn header_lines(panel_width: usize) -> Vec<String> {
     for line in WORDMARK.lines() {
         lines.push(format!(
             "{wm_indent}{}",
-            render::paint(render::palette::ACCENT.bold(), line)
+            render::paint(render::palette::accent().bold(), line)
         ));
     }
     lines.push(center(
-        &render::paint(render::palette::MUTED, TAGLINE),
+        &render::paint(render::palette::muted(), TAGLINE),
         TAGLINE.chars().count(),
         panel_width,
     ));
@@ -275,10 +275,10 @@ pub(super) fn heatmap_lines(
     };
     lines.push(format!(
         "  {}",
-        render::paint(render::palette::META, header)
+        render::paint(render::palette::meta(), header)
     ));
     lines.push(String::new());
-    lines.push(render::paint(render::palette::MUTED, &month_row(&grid)));
+    lines.push(render::paint(render::palette::muted(), &month_row(&grid)));
 
     let styles = ramp_styles();
     for row in 0..7 {
@@ -288,14 +288,14 @@ pub(super) fn heatmap_lines(
             4 => "Fri",
             _ => "",
         };
-        let mut line = render::paint(render::palette::MUTED, &format!("  {label:<4}"));
+        let mut line = render::paint(render::palette::muted(), &format!("  {label:<4}"));
         for week in &grid.cells {
             match week[row] {
                 Some(value) => {
                     let t = shade(value, grid.ceiling);
                     let lvl = level(t);
                     let style = if lvl == 0 {
-                        render::palette::FAINT
+                        render::palette::faint()
                     } else {
                         heat_color(t)
                     };
@@ -312,12 +312,12 @@ pub(super) fn heatmap_lines(
 
 /// The compact `Less · ░ ▒ ▓ █ More` key in the cool ramp.
 pub(super) fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
-    let mut s = format!("{} ", render::paint(render::palette::MUTED, "Less"));
+    let mut s = format!("{} ", render::paint(render::palette::muted(), "Less"));
     for (lvl, glyph) in RAMP.iter().enumerate() {
         s.push_str(&render::paint(styles[lvl], &glyph.to_string()));
         s.push(' ');
     }
-    s.push_str(&render::paint(render::palette::MUTED, "More"));
+    s.push_str(&render::paint(render::palette::muted(), "More"));
     s
 }
 
@@ -327,15 +327,15 @@ pub(super) fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Opti
         let tokens = stats_tokens(&window.select(&stats.total));
         (window, window.label(), fmt_tokens(tokens))
     });
-    let sep = render::paint(render::palette::MUTED, "  ·  ");
+    let sep = render::paint(render::palette::muted(), "  ·  ");
     let Some(active) = active else {
         let row = cells
             .into_iter()
             .map(|(_, label, tokens)| {
                 format!(
                     "{} {}",
-                    render::paint(render::palette::MUTED, label),
-                    render::paint(render::palette::COOL, &tokens)
+                    render::paint(render::palette::muted(), label),
+                    render::paint(render::palette::cool(), &tokens)
                 )
             })
             .collect::<Vec<_>>()
@@ -359,8 +359,8 @@ pub(super) fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Opti
             } else {
                 format!(
                     " {} {}{pad} ",
-                    render::paint(render::palette::MUTED, label),
-                    render::paint(render::palette::COOL, &tokens)
+                    render::paint(render::palette::muted(), label),
+                    render::paint(render::palette::cool(), &tokens)
                 )
             }
         })
@@ -448,26 +448,26 @@ pub(super) fn model_cells(
         .map(|row| display_width(&row.cache_read))
         .max()
         .unwrap_or(0);
-    let sep = render::paint(render::palette::MUTED, "·");
+    let sep = render::paint(render::palette::muted(), "·");
 
     rows.iter()
         .map(|row| {
-            let name = pad_to(&render::paint(render::palette::COOL, &row.name), name_w);
+            let name = pad_to(&render::paint(render::palette::muted(), &row.name), name_w);
             let left_full = format!(
                 "{} {name} {} {sep} {} {} {sep} {} {} {sep} {} {}",
-                render::paint(render::palette::COOL, "●"),
-                pad_left(&row.usd, usd_w),
-                render::paint(render::palette::MUTED, &glyphs.input),
+                render::paint(render::palette::cool(), "●"),
+                render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
+                render::paint(render::palette::muted(), &glyphs.input),
                 pad_left(&row.input, input_w),
-                render::paint(render::palette::MUTED, &glyphs.output),
+                render::paint(render::palette::muted(), &glyphs.output),
                 pad_left(&row.output, output_w),
-                render::paint(render::palette::MUTED, &glyphs.cache_read),
+                render::paint(render::palette::muted(), &glyphs.cache_read),
                 pad_left(&row.cache_read, cache_w),
             );
             let left_compact = format!(
                 "{} {name} {}",
-                render::paint(render::palette::COOL, "●"),
-                pad_left(&row.usd, usd_w),
+                render::paint(render::palette::cool(), "●"),
+                render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
             );
             StatCell {
                 left_full,
@@ -582,6 +582,7 @@ pub(super) fn agent_cells(
     }
 
     struct AgentRow {
+        kind: String,
         name: String,
         sessions: String,
         tokens: String,
@@ -592,6 +593,7 @@ pub(super) fn agent_cells(
     let rows = agents
         .iter()
         .map(|agent| AgentRow {
+            kind: agent.kind.to_owned(),
             name: agent.name.clone(),
             sessions: agent.window.sessions.to_string(),
             tokens: fmt_tokens(stats_tokens(&agent.window)),
@@ -614,19 +616,20 @@ pub(super) fn agent_cells(
         .map(|row| display_width(&row.usd))
         .max()
         .unwrap_or(0);
-    let sep = render::paint(render::palette::MUTED, "·");
+    let sep = render::paint(render::palette::muted(), "·");
 
     rows.iter()
         .map(|row| {
-            let name = pad_to(&render::paint(render::palette::COOL, &row.name), name_w);
+            let identity = render::palette::identity(&row.kind);
+            let name = pad_to(&render::paint(identity, &row.name), name_w);
             let left = format!(
                 "{} {name} {} {} {sep} {} {} {sep} {}",
-                render::paint(render::palette::COOL, "●"),
-                render::paint(render::palette::MUTED, &glyphs.sessions),
+                render::paint(identity, "●"),
+                render::paint(render::palette::muted(), &glyphs.sessions),
                 pad_left(&row.sessions, sess_w),
-                render::paint(render::palette::MUTED, &glyphs.total),
+                render::paint(render::palette::muted(), &glyphs.total),
                 pad_left(&row.tokens, tok_w),
-                pad_left(&row.usd, usd_w),
+                render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
             );
             StatCell {
                 left_full: left.clone(),
@@ -703,10 +706,10 @@ pub(super) fn share_bar(share_pct: f64, width: usize, glyphs: &PanelGlyphs) -> S
         .clamp(0.0, width as f64) as usize;
     format!(
         "{}{}",
-        render::paint(render::palette::COOL, &glyphs.bar_filled.repeat(filled)),
+        render::paint(render::palette::cool(), &glyphs.bar_filled.repeat(filled)),
         render::paint(
-            render::palette::rgb(Semantic::DEFAULT.faint),
-            &glyphs.bar_track.repeat(width - filled),
+            render::palette::faint(),
+            &glyphs.bar_track.repeat(width - filled)
         ),
     )
 }
@@ -724,7 +727,7 @@ pub(super) fn emit_stat_section(
 
     lines.push(format!(
         "  {}",
-        render::paint(render::palette::META, header)
+        render::paint(render::palette::header(), header)
     ));
     let gutter = " ".repeat(STAT_GUTTER);
     for cell in cells {
@@ -765,7 +768,11 @@ pub(super) fn insights_lines(
         kv("Most active day:", &most),
     ];
     let right = [
-        kv("Spend:", &fmt_usd(selected.usd)),
+        format!(
+            "{} {}",
+            render::paint(render::palette::muted(), "Spend:"),
+            render::paint(render::palette::money(), &fmt_usd(selected.usd))
+        ),
         kv("Longest streak:", &plural_days(activity.longest_streak)),
         kv("Current streak:", &plural_days(activity.current_streak)),
     ];
@@ -799,7 +806,7 @@ pub(super) fn insights_lines(
 
 /// A muted `label` followed by its value — the insight line shape.
 pub(super) fn kv(label: &str, value: &str) -> String {
-    format!("{} {value}", render::paint(render::palette::MUTED, label))
+    format!("{} {value}", render::paint(render::palette::muted(), label))
 }
 
 /// A day count with a pluralized unit: `1 day`, `27 days`.
@@ -971,27 +978,26 @@ pub(super) fn streaks(active: &BTreeSet<i64>, today_day: i64) -> (u32, u32) {
 // ── Styling ────────────────────────────────────────────────────────────────────
 
 pub(super) fn active_tab() -> anstyle::Style {
-    anstyle::Style::new()
-        .fg_color(Some(render::palette::rgb_color(
-            Semantic::DEFAULT.selection_bg,
-        )))
-        .bg_color(Some(render::palette::rgb_color(Semantic::DEFAULT.cool)))
-        .bold()
+    render::palette::human_chip().bold()
 }
 
 /// A continuous cool ramp, held distinct from the status reds and greens so a
 /// busy day reads as volume, not as good or wrong. Density carries the reading
 /// under `NO_COLOR`; this only reinforces it.
 pub(super) fn heat_color(t: f64) -> anstyle::Style {
-    let cool = Semantic::DEFAULT.cool;
-    let low = rimz::sidebar_pane::render::blend(Semantic::DEFAULT.faint, cool, 0.35);
-    render::palette::rgb(rimz::sidebar_pane::render::blend(low, cool, t as f32))
+    if t < 0.34 {
+        render::palette::faint()
+    } else if t < 0.67 {
+        render::palette::muted()
+    } else {
+        render::palette::cool()
+    }
 }
 
 /// The compact key samples the continuous ramp at four even stops.
 pub(super) fn ramp_styles() -> [anstyle::Style; 5] {
     [
-        render::palette::rgb(Semantic::DEFAULT.faint),
+        render::palette::faint(),
         heat_color(0.25),
         heat_color(0.5),
         heat_color(0.75),

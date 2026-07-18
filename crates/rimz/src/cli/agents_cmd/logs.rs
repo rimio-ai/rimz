@@ -27,7 +27,7 @@ pub(super) fn logs_agent(
             out,
             "{}",
             render::paint(
-                render::palette::FAINT,
+                render::palette::faint(),
                 view.empty_message
                     .as_deref()
                     .unwrap_or("No conversation recorded yet.")

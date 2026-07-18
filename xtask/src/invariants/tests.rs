@@ -367,3 +367,46 @@ fn ui_color_violations_flag_color_variants_but_allow_the_reset_sentinel() {
     );
     assert!(ui_color_violation_lines(in_tests).is_empty());
 }
+
+#[test]
+fn cli_color_provenance_flags_carriers_but_exempts_palette_and_inline_tests() {
+    let root = temp_repo_root("cli-color-provenance");
+    let bad = root.join("crates/rimz/src/cli/list.rs");
+    let palette = root.join("crates/rimz/src/cli/render/palette.rs");
+    for path in [&bad, &palette] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    let carrier = concat!("let c = anstyle", "::", "Color::Ansi256(v);\n");
+    std::fs::write(&bad, carrier).expect("write bad source");
+    std::fs::write(&palette, carrier).expect("write palette source");
+
+    let err = ensure_cli_color_provenance(&root, &[bad.clone(), palette.clone()]).unwrap_err();
+    assert!(err.to_string().contains("render::palette accessors"));
+    assert!(err.to_string().contains(&bad.display().to_string()));
+    assert!(!err.to_string().contains(&palette.display().to_string()));
+    assert!(
+        cli_color_violation_lines(&format!("mod tests {{\n{carrier}}}\n")).is_empty(),
+        "inline tests may assert carrier shapes"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn brand_resolution_invariant_keeps_descriptor_reads_in_theme_core() {
+    let root = temp_repo_root("brand-resolution-home");
+    let bad = root.join("crates/rimz/src/cli/agents_cmd/list.rs");
+    let provider = root.join("crates/rimz/src/theme/provider.rs");
+    for path in [&bad, &provider] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    let read = concat!("let c = descriptor.brand", ".color_rgb;\n");
+    std::fs::write(&bad, read).expect("write bad source");
+    std::fs::write(&provider, read).expect("write provider source");
+
+    let err =
+        ensure_brand_resolution_single_home(&root, &[bad.clone(), provider.clone()]).unwrap_err();
+    assert!(err.to_string().contains("resolve_provider_identity"));
+    assert!(err.to_string().contains(&bad.display().to_string()));
+    assert!(!err.to_string().contains(&provider.display().to_string()));
+    let _ = std::fs::remove_dir_all(root);
+}

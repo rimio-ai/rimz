@@ -42,7 +42,7 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
             .as_deref()
             .filter(|tail| !tail.trim().is_empty())
         {
-            writeln!(err, "{}", render::paint(render::palette::FAINT, tail))?;
+            writeln!(err, "{}", render::paint(render::palette::faint(), tail))?;
         }
         if let Some(verify) = record.verify.as_ref().filter(|verify| !verify.passed) {
             let status = verify_status_label(verify);
@@ -55,7 +55,7 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
                 writeln!(
                     err,
                     "{}",
-                    render::paint(render::palette::FAINT, &verify.output)
+                    render::paint(render::palette::faint(), &verify.output)
                 )?;
             }
         }
@@ -63,7 +63,10 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
             writeln!(
                 err,
                 "{}",
-                render::paint(render::palette::MUTED, &format!("transcript: {transcript}"))
+                render::paint(
+                    render::palette::muted(),
+                    &format!("transcript: {transcript}")
+                )
             )?;
         }
     }

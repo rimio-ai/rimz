@@ -217,11 +217,7 @@ struct ShowMessage {
 }
 
 fn section(w: &mut impl Write, title: &str) -> std::io::Result<()> {
-    writeln!(
-        w,
-        "{}",
-        render::paint(render::palette::ACCENT.bold(), title)
-    )
+    writeln!(w, "{}", render::paint(render::palette::header(), title))
 }
 
 fn render_capture_section(
@@ -242,20 +238,20 @@ fn render_agent_section(
     kv.push(
         "handle",
         render::cell(rimz::harness::target::agent_handle(agent, peers, true))
-            .fg(render::palette::ACCENT),
+            .fg(render::palette::identity(agent.kind.as_str())),
     );
     kv.push(
         "kind",
-        render::cell(agent.kind.to_string()).fg(render::palette::META),
+        render::cell(agent.kind.to_string()).fg(render::palette::meta()),
     );
     if let Some(profile) = agent.profile.as_deref() {
-        kv.push("profile", render::cell(profile).fg(render::palette::META));
+        kv.push("profile", render::cell(profile).fg(render::palette::meta()));
     }
     if let Some(role) = agent.role.as_deref() {
-        kv.push("role", render::cell(role).fg(render::palette::META));
+        kv.push("role", render::cell(role).fg(render::palette::meta()));
     }
     if let Some(team) = agent.team.as_deref() {
-        kv.push("team", render::cell(team).fg(render::palette::META));
+        kv.push("team", render::cell(team).fg(render::palette::meta()));
     }
     if let Some(name) = agent.name.as_deref() {
         kv.push("name", render::cell(name));
@@ -300,17 +296,17 @@ pub(super) fn render_activity_section(
     if let Some((_, label)) = agent.displayed_turn_error() {
         kv.push(
             "turn_error",
-            render::cell(label.unwrap_or("provider API error")).fg(render::palette::ALARM),
+            render::cell(label.unwrap_or("provider API error")).fg(render::palette::alarm()),
         );
     }
     if let Some(ask) = ask {
         kv.push(
             "ask",
-            render::cell(crate::cli::transcript::ask_summary(ask)).fg(render::palette::WARN),
+            render::cell(crate::cli::transcript::ask_summary(ask)).fg(render::palette::warn()),
         );
     }
     if stale {
-        kv.push("stale", render::cell("yes").fg(render::palette::FAINT));
+        kv.push("stale", render::cell("yes").fg(render::palette::faint()));
     }
     kv.render(w)?;
     writeln!(w)
@@ -324,7 +320,12 @@ fn render_context_section(
 ) -> std::io::Result<()> {
     section(w, "Context")?;
     let mut kv = render::KeyVals::new().indent(2);
-    kv.push("model", render::cell(model_label(agent)).dash());
+    kv.push(
+        "model",
+        render::cell(model_label(agent))
+            .dash()
+            .fg(render::palette::muted()),
+    );
     kv.push("fill", context_cell(agent));
     kv.push(
         "window",
@@ -367,7 +368,8 @@ fn render_context_section(
                 .map(fmt_cost)
                 .unwrap_or_else(|| "-".to_owned()),
         )
-        .dash(),
+        .dash()
+        .fg(render::palette::money()),
     );
     let budget = rimz::harness::budget::spend_summary(
         runtime,
@@ -376,7 +378,9 @@ fn render_context_section(
     );
     kv.push(
         "budget",
-        render::cell(budget.unwrap_or_else(|| "-".to_owned())).dash(),
+        render::cell(budget.unwrap_or_else(|| "-".to_owned()))
+            .dash()
+            .fg(render::palette::money()),
     );
     kv.render(w)?;
     writeln!(w)
@@ -452,7 +456,7 @@ fn render_run_section(
     if let Some(tail) = run.failure_tail.as_deref() {
         kv.push(
             "failure",
-            render::cell(preview(tail)).fg(render::palette::ALARM),
+            render::cell(preview(tail)).fg(render::palette::alarm()),
         );
     }
     kv.render(w)?;
@@ -466,7 +470,7 @@ fn render_messages_section(w: &mut impl Write, messages: &[ShowMessage]) -> std:
         table.row([
             render::cell(message.id.as_str()),
             render::cell(message.status.as_str()).fg(render::status::message(message.status)),
-            render::cell(message.from.as_str()).fg(render::palette::META),
+            render::cell(message.from.as_str()).fg(render::palette::meta()),
             render::cell(message.age.as_str()),
             render::cell(message.text.as_str()).dash(),
         ]);
@@ -483,7 +487,7 @@ fn opt_count(value: Option<u64>) -> String {
 
 fn fmt_cost(value: f64) -> String {
     if value >= 1.0 {
-        format!("${value:.2}")
+        rimz::theme::fmt::dollars2(value)
     } else {
         format!("${value:.4}")
     }

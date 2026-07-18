@@ -2,7 +2,7 @@
 //! semantic meaning is assigned. This is the sole entry point for
 //! scheme-supplied color; every downstream tone derives from these.
 
-use super::super::oklab::{self, Rgb};
+use super::oklab::{self, Rgb};
 use crate::config::{PaletteRole, Semantic};
 
 /// The imported terminal colors, verbatim: background, foreground, the six

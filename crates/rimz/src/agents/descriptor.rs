@@ -250,6 +250,17 @@ pub enum PlanLabel {
     TitleCaseOnly,
 }
 
+impl PlanLabel {
+    /// Format a raw provider tier in the provider's declared plan vocabulary.
+    pub fn format(&self, raw: &str) -> String {
+        let tier = crate::theme::provider_title_case(raw);
+        match self {
+            Self::Prefixed { prefix } => format!("{prefix} {tier}"),
+            Self::TitleCaseOnly => tier,
+        }
+    }
+}
+
 /// The agent's tool vocabulary, classified for lifecycle and native blocking prompts.
 #[derive(Debug)]
 pub struct ToolClassification {

@@ -81,7 +81,7 @@ fn print_report(report: &TrustReport, as_json: bool) -> Result<()> {
     writeln!(
         out,
         "{} {}",
-        render::paint(render::palette::MUTED, "trust:"),
+        render::paint(render::palette::muted(), "trust:"),
         render::paint(
             render::status::trust(report.state),
             trust_banner(report.state)
@@ -90,7 +90,7 @@ fn print_report(report: &TrustReport, as_json: bool) -> Result<()> {
     let mut kv = render::KeyVals::new().indent(2);
     kv.push(
         "workspace id",
-        render::cell(report.workspace_id.as_str()).fg(render::palette::ACCENT),
+        render::cell(report.workspace_id.as_str()).fg(render::palette::accent()),
     );
     kv.push(
         "project root",
@@ -107,13 +107,13 @@ fn print_report(report: &TrustReport, as_json: bool) -> Result<()> {
     if let Some(hash) = &report.current_hash {
         kv.push(
             "current hash",
-            render::cell(hash.as_str()).fg(render::palette::BODY),
+            render::cell(hash.as_str()).fg(render::palette::body()),
         );
     }
     if let Some(hash) = &report.granted_hash {
         kv.push(
             "granted hash",
-            render::cell(hash.as_str()).fg(render::palette::BODY),
+            render::cell(hash.as_str()).fg(render::palette::body()),
         );
     }
     if let Some(at) = report.granted_at {
@@ -145,7 +145,7 @@ pub(crate) fn offer_inline_grant(project_root: &Path, question: &str) -> Result<
     writeln!(
         out,
         "{} {}",
-        render::paint(render::palette::MUTED, "trust:"),
+        render::paint(render::palette::muted(), "trust:"),
         render::paint(
             render::status::trust(report.state),
             trust_banner(report.state)
@@ -177,7 +177,7 @@ pub(crate) fn offer_inline_grant(project_root: &Path, question: &str) -> Result<
     writeln!(
         render::err(),
         "{} {}",
-        render::paint(render::palette::MUTED, "trust:"),
+        render::paint(render::palette::muted(), "trust:"),
         render::paint(render::status::trust(granted.state), "granted"),
     )?;
     Ok(true)
@@ -194,7 +194,7 @@ fn render_surface_diff(
     writeln!(
         out,
         "  {}",
-        render::paint(render::palette::MUTED, "surface diff:")
+        render::paint(render::palette::muted(), "surface diff:")
     )?;
     if entries.is_empty() {
         writeln!(out, "    no field changes")
@@ -206,12 +206,12 @@ fn render_surface_diff(
                     writeln!(
                         out,
                         "    {}",
-                        render::paint(render::palette::GOOD, &format!("+ {path}"))
+                        render::paint(render::palette::good(), &format!("+ {path}"))
                     )?;
                     write_block(
                         out,
                         '+',
-                        render::palette::GOOD,
+                        render::palette::good(),
                         &[Span::plain(format_diff_value(entry.current.as_ref()))],
                         width,
                     )?;
@@ -220,12 +220,12 @@ fn render_surface_diff(
                     writeln!(
                         out,
                         "    {}",
-                        render::paint(render::palette::ALARM, &format!("- {path}"))
+                        render::paint(render::palette::alarm(), &format!("- {path}"))
                     )?;
                     write_block(
                         out,
                         '-',
-                        render::palette::ALARM,
+                        render::palette::alarm(),
                         &[Span::plain(format_diff_value(entry.granted.as_ref()))],
                         width,
                     )?;
@@ -234,8 +234,8 @@ fn render_surface_diff(
                     writeln!(
                         out,
                         "    {} {}",
-                        render::paint(render::palette::WARN, "~"),
-                        render::paint(render::palette::BODY.bold(), &path)
+                        render::paint(render::palette::warn(), "~"),
+                        render::paint(render::palette::body().bold(), &path)
                     )?;
                     if let (
                         Some(serde_json::Value::String(granted)),
@@ -243,20 +243,20 @@ fn render_surface_diff(
                     ) = (entry.granted.as_ref(), entry.current.as_ref())
                     {
                         let (granted, current) = word_diff_spans(granted, current);
-                        write_block(out, '-', render::palette::ALARM, &granted, width)?;
-                        write_block(out, '+', render::palette::GOOD, &current, width)?;
+                        write_block(out, '-', render::palette::alarm(), &granted, width)?;
+                        write_block(out, '+', render::palette::good(), &current, width)?;
                     } else {
                         write_block(
                             out,
                             '-',
-                            render::palette::ALARM,
+                            render::palette::alarm(),
                             &[Span::plain(format_diff_value(entry.granted.as_ref()))],
                             width,
                         )?;
                         write_block(
                             out,
                             '+',
-                            render::palette::GOOD,
+                            render::palette::good(),
                             &[Span::plain(format_diff_value(entry.current.as_ref()))],
                             width,
                         )?;
@@ -517,7 +517,7 @@ mod tests {
         write_block(
             &mut out,
             '-',
-            render::palette::ALARM,
+            render::palette::alarm(),
             &[Span::plain("first line\nsecond line".to_owned())],
             32,
         )
@@ -533,10 +533,10 @@ mod tests {
         render_surface_diff(&mut out, Some(&[entry]), 100).expect("render styled diff");
         let rendered = String::from_utf8(out).expect("utf-8");
 
-        assert!(rendered.contains(&render::paint(render::palette::ALARM, "shared ")));
-        assert!(rendered.contains(&render::paint(render::palette::ALARM.bold(), "old")));
-        assert!(rendered.contains(&render::paint(render::palette::GOOD.bold(), "new")));
-        assert!(!rendered.contains(&render::paint(render::palette::ALARM.bold(), "shared ")));
+        assert!(rendered.contains(&render::paint(render::palette::alarm(), "shared ")));
+        assert!(rendered.contains(&render::paint(render::palette::alarm().bold(), "old")));
+        assert!(rendered.contains(&render::paint(render::palette::good().bold(), "new")));
+        assert!(!rendered.contains(&render::paint(render::palette::alarm().bold(), "shared ")));
     }
 
     #[test]

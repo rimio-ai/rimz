@@ -36,7 +36,7 @@ pub(super) fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
     writeln!(
         render::out(),
         "{} {} {} {}",
-        render::paint(render::palette::MUTED, "run:"),
+        render::paint(render::palette::muted(), "run:"),
         run.run_id,
         render::paint(render::status::run(run.status), status),
         run.prompt,

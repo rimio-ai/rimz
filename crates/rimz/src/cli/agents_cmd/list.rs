@@ -153,7 +153,7 @@ pub(crate) fn render_agents_table(
         for &agent in &group.agents {
             table.row(agent_row(agent, &ordered_agents, now));
             if let Some(line) = agent.activity_line() {
-                table.sub(render::cell(line).fg(render::palette::MUTED));
+                table.sub(render::cell(line).fg(render::palette::muted()));
             }
         }
     }
@@ -166,7 +166,7 @@ fn group_header_cells(
     glyph: &impl Fn(GlyphRole) -> String,
 ) -> Vec<render::Cell> {
     if group.kind == rimz::SidebarWorktreeKind::External {
-        return vec![render::cell("external").fg(render::palette::FAINT)];
+        return vec![render::cell("external").fg(render::palette::faint())];
     }
 
     let label = match group.kind {
@@ -182,28 +182,28 @@ fn group_header_cells(
         rimz::SidebarWorktreeKind::Root => group.label.clone(),
         rimz::SidebarWorktreeKind::External => unreachable!("external returned above"),
     };
-    let mut cells = vec![render::cell(label).fg(render::palette::ACCENT.bold())];
+    let mut cells = vec![render::cell(label).fg(render::palette::header())];
     if let Some(team) = shared_group_team(group)
         && !group.label.ends_with(&format!("/{team}"))
     {
-        cells.push(render::cell(format!("· {team} team")).fg(render::palette::META));
+        cells.push(render::cell(format!("· {team} team")).fg(render::palette::meta()));
     }
     if let Some(pr) = group_pr(snapshot, &group.key)
         && let Some(number) = pr.pr_number
     {
-        cells.push(render::cell(format!("#{number}")).fg(render::palette::ACCENT));
+        cells.push(render::cell(format!("#{number}")).fg(render::palette::accent()));
         if pr.pr_state == Some(rimz::WorktreePrState::Open)
             && let Some(ci) = pr.pr_ci
         {
             let (role, style) = match ci {
                 rimz::WorktreePrCi::Passing => {
-                    (GlyphRole::WorktreeCiPassing, render::palette::GOOD)
+                    (GlyphRole::WorktreeCiPassing, render::palette::good())
                 }
                 rimz::WorktreePrCi::Pending => {
-                    (GlyphRole::WorktreeCiPending, render::palette::WARN)
+                    (GlyphRole::WorktreeCiPending, render::palette::warn())
                 }
                 rimz::WorktreePrCi::Failing => {
-                    (GlyphRole::WorktreeCiFailing, render::palette::ALARM)
+                    (GlyphRole::WorktreeCiFailing, render::palette::alarm())
                 }
             };
             cells.push(render::cell(glyph(role)).fg(style));
@@ -272,7 +272,7 @@ fn list_channel_filter_for_current(
 fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) -> Vec<render::Cell> {
     vec![
         render::cell(rimz::harness::target::agent_handle(agent, peers, false))
-            .fg(render::palette::ACCENT),
+            .fg(render::palette::identity(agent.kind.as_str())),
         render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
         model_cell(agent),
         context_cell(agent),
@@ -289,8 +289,8 @@ pub(super) fn context_cell(agent: &AgentState) -> render::Cell {
         .unwrap_or_else(|| "-".to_owned());
     let c = render::cell(text);
     match pct {
-        Some(pct) if pct >= 90.0 => c.fg(render::palette::ALARM),
-        Some(pct) if pct >= 75.0 => c.fg(render::palette::WARN),
+        Some(pct) if pct >= 90.0 => c.fg(render::palette::alarm()),
+        Some(pct) if pct >= 75.0 => c.fg(render::palette::warn()),
         Some(_) => c,
         None => c.dash(),
     }
@@ -354,16 +354,7 @@ fn model_cell(agent: &AgentState) -> render::Cell {
     if label == "-" {
         return render::cell(label).dash();
     }
-    match brand_style(agent.kind.as_str()) {
-        Some(style) => render::cell(label).fg(style),
-        None => render::cell(label),
-    }
-}
-
-/// The agent kind's brand tone for truecolor output, or `None` for an unknown kind.
-fn brand_style(kind: &str) -> Option<anstyle::Style> {
-    let (r, g, b) = rimz::agents::descriptor_by_kind(kind)?.brand.color_rgb;
-    Some(render::palette::rgb((r, g, b)))
+    render::cell(label).fg(render::palette::muted())
 }
 
 fn tokens_label(agent: &AgentState) -> String {
@@ -448,19 +439,6 @@ mod tests {
             .collect();
 
         assert_eq!(kept, ["sess-one", "sess-two"]);
-    }
-
-    #[test]
-    fn brand_style_uses_registered_agent_brand_rgb() {
-        for kind in ["claude", "codex"] {
-            let expected = rimz::agents::descriptor_by_kind(kind)
-                .expect("registered descriptor")
-                .brand
-                .color_rgb;
-            assert_eq!(brand_style(kind), Some(render::palette::rgb(expected)));
-        }
-
-        assert_eq!(brand_style("unknown"), None);
     }
 
     #[test]

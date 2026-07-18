@@ -123,9 +123,8 @@ impl BrandColors {
     fn style_for(&self, handle: &str) -> anstyle::Style {
         self.by_handle
             .get(base_handle(handle))
-            .and_then(|kind| rimz::agents::registry::descriptor_by_kind(kind.as_str()))
-            .map(|descriptor| render::palette::rgb(descriptor.brand.color_rgb).bold())
-            .unwrap_or(render::palette::META.bold())
+            .map(|kind| render::palette::identity(kind.as_str()).bold())
+            .unwrap_or(render::palette::meta().bold())
     }
 }
 
@@ -139,7 +138,7 @@ pub(super) fn write_header(out: &mut impl Write, channel: Option<&str>) -> Resul
         writeln!(
             out,
             "{}",
-            render::paint(render::palette::COOL.bold(), &format!("#{channel}"))
+            render::paint(render::palette::cool().bold(), &format!("#{channel}"))
         )?;
         writeln!(out)?;
     }
@@ -235,7 +234,7 @@ pub(super) fn render_display_chat_to(
                 .is_some_and(|group| group.matches(display, grouped, entry_date));
         if !continuation && !first_entry && !follows_day_delimiter {
             if previous_block == Some(display.block) && !display.lane.is_margin() {
-                writeln!(out, "{}", render::paint(render::palette::FAINT, "│"))?;
+                writeln!(out, "{}", render::paint(render::palette::faint(), "│"))?;
             } else {
                 writeln!(out)?;
             }
@@ -305,7 +304,7 @@ fn write_entry_content(
     if entry.kind == TranscriptKind::Ask {
         write_ask_card(out, entry, answer)
     } else if entry.chat.error {
-        write_body_lines_with(out, &entry.chat.text, Some(render::palette::ALARM))
+        write_body_lines_with(out, &entry.chat.text, Some(render::palette::alarm()))
     } else {
         write_body_lines(out, &entry.chat.text)
     }
@@ -314,7 +313,7 @@ fn write_entry_content(
 fn write_thread_lines(out: &mut impl Write, rendered: &[u8]) -> Result<()> {
     let rendered = std::str::from_utf8(rendered).expect("transcript rendering is utf-8");
     for line in rendered.split_terminator('\n') {
-        let spine = render::paint(render::palette::FAINT, "│");
+        let spine = render::paint(render::palette::faint(), "│");
         if line.is_empty() {
             writeln!(out, "{spine}")?;
         } else {
@@ -422,7 +421,7 @@ pub(super) fn write_entry_header(
 ) -> Result<()> {
     let mut header = paint_handle(&entry.chat.from, grouped, brands);
     if let Some(to) = entry.chat.to.as_deref() {
-        header.push_str(&render::paint(render::palette::FAINT, " → "));
+        header.push_str(&render::paint(render::palette::faint(), " → "));
         header.push_str(&paint_handle(to, grouped, brands));
     }
     if let Some(at) = entry.chat.at {
@@ -433,7 +432,7 @@ pub(super) fn write_entry_header(
             "%H:%M"
         };
         header.push_str(&render::paint(
-            render::palette::FAINT,
+            render::palette::faint(),
             &at.to_zoned(tz.clone()).strftime(format).to_string(),
         ));
     }
@@ -443,8 +442,8 @@ pub(super) fn write_entry_header(
 
 pub(super) fn paint_handle(handle: &str, grouped: bool, brands: &BrandColors) -> String {
     match base_handle(handle) {
-        label @ ("user" | "you" | "answered") => chip(render::palette::HUMAN_CHIP, label),
-        "rimz" => chip(render::palette::SYSTEM_CHIP, "rimz"),
+        label @ ("user" | "you" | "answered") => chip(render::palette::human_chip(), label),
+        "rimz" => chip(render::palette::system_chip(), "rimz"),
         _ => render::paint(brands.style_for(handle), display_handle(handle, grouped)),
     }
 }
@@ -505,7 +504,7 @@ pub(super) fn paint_mentions_with(line: &str, base_style: Option<anstyle::Style>
             if paint_end > token_start {
                 push_painted(&mut rendered, base_style, &line[..index]);
                 rendered.push_str(&render::paint(
-                    render::palette::COOL.bold(),
+                    render::palette::cool().bold(),
                     &line[index..paint_end],
                 ));
                 push_painted(&mut rendered, base_style, &line[paint_end..token_end]);
@@ -583,7 +582,7 @@ fn write_faint_rule(out: &mut impl Write, label: &str) -> Result<()> {
     let (left, right) = (dashes / 2, dashes - dashes / 2);
     let rule = format!("{}{label}{}", "─".repeat(left), "─".repeat(right));
     writeln!(out)?;
-    writeln!(out, "{}", render::paint(render::palette::RULE, &rule))?;
+    writeln!(out, "{}", render::paint(render::palette::rule(), &rule))?;
     writeln!(out)?;
     Ok(())
 }

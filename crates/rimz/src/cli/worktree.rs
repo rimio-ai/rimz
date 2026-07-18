@@ -277,18 +277,20 @@ fn append_worktree_row(
     };
     let merged = match entry.status.landed {
         rimz::worktree::LandedVerdict::Landed => render::cell("yes"),
-        rimz::worktree::LandedVerdict::Pending => render::cell("pending").fg(render::palette::WARN),
+        rimz::worktree::LandedVerdict::Pending => {
+            render::cell("pending").fg(render::palette::warn())
+        }
         rimz::worktree::LandedVerdict::Unknown => render::cell("?"),
     };
     let dirty = if entry.status.dirty {
-        render::cell("dirty").fg(render::palette::WARN)
+        render::cell("dirty").fg(render::palette::warn())
     } else {
         render::cell("-").dash()
     };
     table.row([
-        render::cell(&entry.managed.marker.name).fg(render::palette::ACCENT),
+        render::cell(&entry.managed.marker.name).fg(render::palette::accent()),
         render::cell(entry.managed.branch.as_deref().unwrap_or("-")).dash(),
-        render::cell(chips).fg(render::palette::ACCENT).dash(),
+        render::cell(chips).fg(render::palette::accent()).dash(),
         dirty,
         merged,
         render::cell(render::home_relative(&path)).dash(),

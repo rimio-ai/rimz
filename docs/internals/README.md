@@ -43,6 +43,7 @@ Each of these subsystems is one file at the top level.
 
 | Page | What it owns |
 | --- | --- |
+| [theme.md](./theme.md) | The shared semantic palette, provider identity, state vocabulary, and human value formats. |
 | [store.md](./store.md) | The durable state engine: the on-disk shape, the write classes, the event log, and wakeups. |
 | [multiplexers.md](./multiplexers.md) | The Zellij and tmux contracts behind the backend seam. |
 | [remote.md](./remote.md) | SSH attach, the reconnect policy, and link health. |

@@ -496,7 +496,7 @@ fn print_wait_status(out: &mut impl Write, outcome: &TargetOutcome) -> std::io::
     writeln!(
         out,
         "{} {}",
-        render::paint(render::palette::ACCENT, &outcome.name),
+        render::paint(render::palette::body(), &outcome.name),
         render::paint(
             render::status::run(entry.status),
             supervised::output::status_label(entry.status)

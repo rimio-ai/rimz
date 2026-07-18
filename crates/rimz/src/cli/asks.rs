@@ -153,7 +153,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     for view in views {
         let question = first_line(&view).to_owned();
         table.row([
-            render::cell(view.detail.open.id.as_str()).fg(render::palette::ACCENT),
+            render::cell(view.detail.open.id.as_str()).fg(render::palette::accent()),
             render::cell(view.agent.handle.as_str()),
             render::cell(view.detail.open.kind.short_label()),
             render::cell(render::age_short(view.detail.open.since, now)),

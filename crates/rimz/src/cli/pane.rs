@@ -357,8 +357,8 @@ fn pane_row(
     let focus = if pane.is_focused { "●" } else { "" };
     let occupant_cell = match agent {
         Some(agent) => render::cell(rimz::harness::target::agent_handle(agent, peers, true))
-            .fg(render::palette::ACCENT),
-        None => render::cell("process").fg(render::palette::MUTED),
+            .fg(render::palette::accent()),
+        None => render::cell("process").fg(render::palette::muted()),
     };
     let status_cell = match agent {
         Some(agent) => {
@@ -377,11 +377,11 @@ fn pane_row(
         .as_deref()
         .map_or_else(|| "-".to_owned(), render::home_relative);
     vec![
-        render::cell(focus).fg(render::palette::ACCENT),
+        render::cell(focus).fg(render::palette::accent()),
         occupant_cell,
         status_cell,
         render::cell(cwd).dash(),
-        render::cell(pane.pane_id.to_string()).fg(render::palette::META),
+        render::cell(pane.pane_id.to_string()).fg(render::palette::meta()),
     ]
 }
 

@@ -234,7 +234,7 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
         }
         Err(err) => kv.push(
             "multiplexer",
-            render::cell(format!("unavailable ({err})")).fg(render::palette::ALARM),
+            render::cell(format!("unavailable ({err})")).fg(render::palette::alarm()),
         ),
     }
     match &report.workspace {
@@ -242,7 +242,7 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
             kv.push(
                 "project root",
                 render::cell(workspace.project_root.display().to_string())
-                    .fg(render::palette::ACCENT),
+                    .fg(render::palette::accent()),
             );
             kv.push("root class", render::cell(workspace.root_class.to_string()));
             if let Some(trust) = workspace.trust {
@@ -254,13 +254,13 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
         }
         Err(err) => kv.push(
             "workspace",
-            render::cell(format!("could not resolve ({err})")).fg(render::palette::ALARM),
+            render::cell(format!("could not resolve ({err})")).fg(render::palette::alarm()),
         ),
     }
     let (config_state, config_style) = if report.config_exists {
-        ("present", render::palette::GOOD)
+        ("present", render::palette::good())
     } else {
-        ("missing", render::palette::WARN)
+        ("missing", render::palette::warn())
     };
     kv.push(
         "config",
@@ -279,11 +279,11 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
             agent.local_session_discovery,
         );
         let style = if agent.binary.is_none() {
-            render::palette::ALARM
+            render::palette::alarm()
         } else if agent.hook_install && (!agent.hooks_installed || agent.hook_upgrade_available) {
-            render::palette::WARN
+            render::palette::warn()
         } else {
-            render::palette::GOOD
+            render::palette::good()
         };
         kv.push(
             format!("agent {}", agent.name),
