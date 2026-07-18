@@ -578,9 +578,11 @@ fn push_presence_plugins(kv: &mut KeyVals, tally: &mut Tally, plugins: &Presence
                 .filter(|delta| *delta > 0)
                 .map(|delta| format!(" · stale rejects +{delta}"))
                 .unwrap_or_default();
-            let failures = (topology_failures > 0 || other_failures > 0)
-                .then(|| format!(" · failures {topology_failures}/{other_failures}"))
-                .unwrap_or_default();
+            let failures = if topology_failures > 0 || other_failures > 0 {
+                format!(" · failures {topology_failures}/{other_failures}")
+            } else {
+                String::new()
+            };
             format!(
                 "{} samples · seen {}s ago · pages {:+} · bytes {:+} · commands +{}{}{rejects}{failures}",
                 row.sample_count,
