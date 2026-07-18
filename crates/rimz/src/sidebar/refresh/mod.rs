@@ -5,12 +5,15 @@
 //! renderer. The returned lane values feed a final fold when a caller needs the
 //! freshest view in the same process.
 
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 use crate::agents::AgentAccount;
 use crate::agents::AgentState;
-use crate::agents::spending::SpendingCaches;
+use crate::agents::spending::{
+    ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
+    read_provider_spending_cache, read_workspace_spending_cache,
+};
 use crate::config::MachineConfig;
 use crate::{RuntimePaths, SidebarSnapshot};
 
@@ -23,7 +26,6 @@ pub mod live_spend;
 pub mod pr;
 pub mod rate_limits;
 pub mod sessions;
-pub mod spending;
 mod trace;
 pub mod usage;
 
@@ -70,6 +72,102 @@ pub struct ProducerRefreshState {
     git: git_stats::GitRefreshState,
 }
 
+/// Supply sidebar workspace scope to the account-global spending service. A
+/// failure serves only compatible durable publications and retries next tick.
+fn compute_fleet_spending_via_service(
+    runtime: &RuntimePaths,
+    snapshot: &SidebarSnapshot,
+    spec: &crate::agents::spending::HeadlineSpec,
+    startup: crate::agents::spending::service::SpendingServiceStartup,
+) -> SpendingCaches {
+    let request = crate::agents::spending::service::SpendingServiceRequest::workspace(
+        runtime,
+        runtime.workspace_id.clone(),
+        snapshot.project_root.clone(),
+        snapshot.worktree_roots.clone(),
+        snapshot.worktree_home.clone(),
+        codex_origin_overrides(snapshot),
+        spec.clone(),
+    );
+    match crate::agents::spending::service::request(runtime, request, startup) {
+        Ok(caches) => caches,
+        Err(error) => {
+            tracing::debug!(error = %error, "spending service unavailable; serving publication");
+            consumer_spending_caches(runtime, snapshot)
+        }
+    }
+}
+
+/// Read producer-published spending without opening transcript or cursor data.
+pub(crate) fn consumer_spending_caches(
+    runtime: &RuntimePaths,
+    snapshot: &SidebarSnapshot,
+) -> SpendingCaches {
+    let provider = current_provider_spending_cache(runtime);
+    let scope = SpendScope::for_workspace(
+        snapshot.project_root.as_deref(),
+        &snapshot.worktree_roots,
+        snapshot.worktree_home.as_deref(),
+    );
+    let workspace = if scope.is_empty() {
+        WorkspaceSpendingCache::default()
+    } else {
+        matching_workspace_cache(runtime, &scope.hash())
+    };
+    SpendingCaches {
+        provider,
+        workspace,
+    }
+}
+
+fn current_provider_spending_cache(runtime: &RuntimePaths) -> ProviderSpendingCache {
+    let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    if cache.is_current_version() {
+        cache
+    } else {
+        ProviderSpendingCache::default()
+    }
+}
+
+fn matching_workspace_cache(runtime: &RuntimePaths, scope_hash: &str) -> WorkspaceSpendingCache {
+    let cache = read_workspace_spending_cache(&runtime.workspace_spending_path(scope_hash));
+    if cache.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
+        && cache.scope_hash == scope_hash
+    {
+        cache
+    } else {
+        WorkspaceSpendingCache::default()
+    }
+}
+
+fn codex_origin_overrides(snapshot: &SidebarSnapshot) -> HashMap<PathBuf, PathBuf> {
+    let row_worktrees: HashMap<&str, &str> = snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+        .filter(|row| row.name == "codex")
+        .filter_map(|row| Some((row.id.as_str(), row.worktree_path.as_deref()?)))
+        .collect();
+    snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.kind.as_str() == "codex")
+        .filter_map(|agent| {
+            let transcript = PathBuf::from(agent.transcript_path.as_deref()?);
+            if !transcript.is_absolute() {
+                return None;
+            }
+            let worktree = agent
+                .worktree_path
+                .as_deref()
+                .or_else(|| row_worktrees.get(agent.agent_id.as_str()).copied());
+            let origin = worktree
+                .and_then(|worktree| crate::agents::spending::origin_path(Some(worktree)))?;
+            Some((transcript, origin))
+        })
+        .collect()
+}
+
 pub fn refresh_heavy_lanes(
     base: &SidebarSnapshot,
     daemon_probe_agents: &[AgentState],
@@ -87,7 +185,7 @@ pub fn refresh_heavy_lanes(
     );
 
     let accounts = produce_accounts(base, runtime);
-    let spending = spending::compute_fleet_spending_via_service(
+    let spending = compute_fleet_spending_via_service(
         runtime,
         base,
         &config.headline_spec(),

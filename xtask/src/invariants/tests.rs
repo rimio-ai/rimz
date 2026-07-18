@@ -206,8 +206,8 @@ fn sidebar_enrich_stays_projection_only() {
 #[test]
 fn long_lived_renderers_cannot_construct_spending_walkers() {
     let root = temp_repo_root("spending-walker-ownership");
-    let data_plane = root.join("crates/rimz/src/sidebar/refresh/spending.rs");
-    let data_plane_test = root.join("crates/rimz/src/sidebar/refresh/spending/tests.rs");
+    let data_plane = root.join("crates/rimz/src/sidebar/refresh/mod.rs");
+    let data_plane_test = root.join("crates/rimz/src/sidebar/enrich/tests.rs");
     let sidebar = root.join("crates/rimz/src/sidebar_pane/app/cache_refresh.rs");
     let held = root.join("crates/rimz/src/cli/stats/hold.rs");
     let direct = root.join("crates/rimz/src/cli/stats/mod.rs");

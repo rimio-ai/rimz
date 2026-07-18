@@ -784,7 +784,7 @@ fn fold_machine_config(
         );
         // Consumers read producer publications only. A missing workspace
         // sidecar stays absent until the elected producer supplies it.
-        let spending = super::refresh::spending::consumer_spending_caches(runtime, &snapshot);
+        let spending = super::refresh::consumer_spending_caches(runtime, &snapshot);
         (accounts, spending)
     };
     let mut snapshot = fold_machine_config_with(
