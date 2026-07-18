@@ -1,7 +1,7 @@
 //! Codex's active and archived rollout stores mapped into local observations.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -10,8 +10,11 @@ use jiff::{Timestamp, civil::Date};
 use uuid::Uuid;
 
 use super::transcript::{CodexRolloutHeader, read_rollout_header};
+#[cfg(test)]
+use crate::agents::local_session_cache::ValueRefreshKind;
 use crate::agents::local_session_cache::{
-    ProviderPathStamp, full_scan_due, normalized_workspace_inputs, stamp_paths, stamps_unchanged,
+    IncrementalCatalog, ProviderPathStamp, StableValueCache, StampedPaths,
+    normalized_workspace_inputs,
 };
 use crate::agents::{LocalSessionObservation, LocalSessionProjection};
 use crate::ids::{AgentKind, AgentSessionId};
@@ -19,7 +22,7 @@ use crate::ids::{AgentKind, AgentSessionId};
 const MAX_EXAMINED_FILES: usize = 512;
 const MAX_SESSION_AGE_DAYS: usize = 14;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RolloutCandidate {
     path: PathBuf,
     active: bool,
@@ -32,19 +35,10 @@ struct DiscoveryKey {
     today: Date,
 }
 
-#[derive(Clone)]
-struct CachedHeader {
-    stamp: ProviderPathStamp,
-    header: Option<CodexRolloutHeader>,
-}
-
 #[derive(Default)]
 struct CodexDiscoverySnapshot {
-    key: Option<DiscoveryKey>,
-    last_full_scan: Option<Instant>,
-    topology: Vec<(PathBuf, ProviderPathStamp)>,
-    catalog: Vec<RolloutCandidate>,
-    headers: HashMap<PathBuf, CachedHeader>,
+    catalog: IncrementalCatalog<DiscoveryKey, RolloutCandidate>,
+    headers: StableValueCache<RolloutCandidate, Option<CodexRolloutHeader>>,
     #[cfg(test)]
     work: DiscoveryWork,
 }
@@ -87,20 +81,69 @@ fn discover_cached(
 
 impl CodexDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let key_changed = self.key.as_ref() != Some(&key);
-        let topology_changed = !key_changed && !stamps_unchanged(&self.topology);
-        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
+        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+            let sessions = key.home.join("sessions");
+            let archive = key.home.join("archived_sessions");
+            let dates = recent_dates(key.today);
+            let cutoff = *dates.last().unwrap_or(&key.today);
+            let day_paths = dates
+                .into_iter()
+                .map(|date| {
+                    sessions
+                        .join(format!("{:04}", date.year()))
+                        .join(format!("{:02}", date.month()))
+                        .join(format!("{:02}", date.day()))
+                })
+                .collect::<Vec<_>>();
+            topology.record_exact_many([sessions.clone(), archive.clone()]);
+            topology.record_exact_many(day_paths.iter().cloned());
+            let mut catalog = Vec::new();
+            for day in day_paths {
+                let Ok(entries) = fs::read_dir(day) else {
+                    continue;
+                };
+                catalog.extend(
+                    entries
+                        .filter_map(Result::ok)
+                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+                        .map(|entry| entry.path())
+                        .filter(|path| rollout_filename(path).is_some())
+                        .map(|path| RolloutCandidate { path, active: true }),
+                );
+            }
+            if let Ok(entries) = fs::read_dir(&archive) {
+                catalog.extend(
+                    entries
+                        .filter_map(Result::ok)
+                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+                        .map(|entry| entry.path())
+                        .filter(|path| {
+                            rollout_filename(path)
+                                .and_then(rollout_filename_date)
+                                .is_some_and(|date| date >= cutoff)
+                        })
+                        .map(|path| RolloutCandidate {
+                            path,
+                            active: false,
+                        }),
+                );
+            }
+            catalog
+        });
+        let forced = scan.attempted();
+        #[cfg(test)]
         if forced {
-            self.rebuild_catalog(&key, now);
+            self.work.full_scans += 1;
         }
 
         let active_session_ids = self
             .catalog
+            .entries()
             .iter()
             .filter(|candidate| candidate.active)
             .filter_map(|candidate| session_id_from_filename(&candidate.path))
             .collect::<HashSet<_>>();
-        let mut candidates = self.catalog.clone();
+        let mut candidates = self.catalog.entries().to_vec();
         candidates.sort_by(|left, right| {
             rollout_filename(&right.path)
                 .cmp(&rollout_filename(&left.path))
@@ -133,8 +176,7 @@ impl CodexDiscoverySnapshot {
             {
                 continue;
             }
-            let stamp = ProviderPathStamp::read(&candidate.path);
-            let header = self.refresh_header(&candidate.path, stamp.clone(), forced);
+            let (header, stamp) = self.refresh_header(candidate.clone(), forced);
             if let Some(observation) = header.and_then(|header| {
                 observation_from_header(candidate.path, header, stamp, &workspace_lookup)
             }) {
@@ -147,10 +189,12 @@ impl CodexDiscoverySnapshot {
         }
         let catalog_paths = self
             .catalog
+            .entries()
             .iter()
-            .map(|candidate| candidate.path.clone())
+            .cloned()
             .collect::<HashSet<_>>();
-        self.headers.retain(|path, _| catalog_paths.contains(path));
+        self.headers
+            .retain(|candidate| catalog_paths.contains(candidate));
         observations.sort_by(|left, right| {
             right
                 .last_activity
@@ -160,99 +204,30 @@ impl CodexDiscoverySnapshot {
         observations
     }
 
-    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
-        #[cfg(test)]
-        {
-            self.work.full_scans += 1;
-        }
-        let sessions = key.home.join("sessions");
-        let archive = key.home.join("archived_sessions");
-        let dates = recent_dates(key.today);
-        let cutoff = *dates.last().unwrap_or(&key.today);
-        let day_paths = dates
-            .into_iter()
-            .map(|date| {
-                sessions
-                    .join(format!("{:04}", date.year()))
-                    .join(format!("{:02}", date.month()))
-                    .join(format!("{:02}", date.day()))
-            })
-            .collect::<Vec<_>>();
-        let mut topology_paths = vec![sessions.clone(), archive.clone()];
-        topology_paths.extend(day_paths.iter().cloned());
-        let topology_before = stamp_paths(topology_paths.clone());
-        let mut catalog = Vec::new();
-        for day in day_paths {
-            let Ok(entries) = fs::read_dir(day) else {
-                continue;
-            };
-            catalog.extend(
-                entries
-                    .filter_map(Result::ok)
-                    .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-                    .map(|entry| entry.path())
-                    .filter(|path| rollout_filename(path).is_some())
-                    .map(|path| RolloutCandidate { path, active: true }),
-            );
-        }
-        if let Ok(entries) = fs::read_dir(&archive) {
-            catalog.extend(
-                entries
-                    .filter_map(Result::ok)
-                    .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-                    .map(|entry| entry.path())
-                    .filter(|path| {
-                        rollout_filename(path)
-                            .and_then(rollout_filename_date)
-                            .is_some_and(|date| date >= cutoff)
-                    })
-                    .map(|path| RolloutCandidate {
-                        path,
-                        active: false,
-                    }),
-            );
-        }
-        let stable = stamps_unchanged(&topology_before);
-        self.key = Some(key.clone());
-        self.last_full_scan = stable.then_some(now);
-        self.topology = stamp_paths(topology_paths);
-        self.catalog = if stable { catalog } else { Vec::new() };
-    }
-
     fn refresh_header(
         &mut self,
-        path: &Path,
-        before: ProviderPathStamp,
+        candidate: RolloutCandidate,
         forced: bool,
-    ) -> Option<CodexRolloutHeader> {
-        if !forced
-            && let Some(cached) = self.headers.get(path)
-            && cached.stamp == before
-            && before.is_stable()
-        {
-            return cached.header.clone();
-        }
+    ) -> (Option<CodexRolloutHeader>, ProviderPathStamp) {
+        let dependencies = StampedPaths::exact([candidate.path.clone()]);
+        let stamp = dependencies
+            .iter()
+            .next()
+            .map(|(_, stamp)| stamp.clone())
+            .unwrap_or_else(|| ProviderPathStamp::read(&candidate.path));
+        let result = self
+            .headers
+            .refresh(candidate.clone(), dependencies, forced, |_| {
+                stamp
+                    .is_file()
+                    .then(|| read_rollout_header(&candidate.path))
+                    .flatten()
+            });
         #[cfg(test)]
-        {
+        if result.kind() != ValueRefreshKind::Cached {
             self.work.header_reads += 1;
         }
-        let header = before
-            .is_file()
-            .then(|| read_rollout_header(path))
-            .flatten();
-        let after = ProviderPathStamp::read(path);
-        if before != after || !after.is_stable() {
-            self.headers.remove(path);
-            return None;
-        }
-        self.headers.insert(
-            path.to_path_buf(),
-            CachedHeader {
-                stamp: after,
-                header: header.clone(),
-            },
-        );
-        header
+        (result.into_current().flatten(), stamp)
     }
 }
 

@@ -1,7 +1,7 @@
 //! Validated Antigravity CLI local-session discovery and transcript projection.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,8 +13,10 @@ use serde_json::Value;
 use url::Url;
 
 use crate::agents::lifecycle::TurnPhase;
+#[cfg(test)]
+use crate::agents::local_session_cache::ValueRefreshKind;
 use crate::agents::local_session_cache::{
-    ProviderPathStamp, full_scan_due, normalized_workspace_inputs, stamp_paths, stamps_unchanged,
+    IncrementalCatalog, StableValueCache, StampedPaths, normalized_workspace_inputs,
 };
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
@@ -155,16 +157,16 @@ impl ConversationCandidate {
         ]
     }
 
-    fn selected_path(&self, stamps: &[(PathBuf, ProviderPathStamp)]) -> Option<PathBuf> {
+    fn selected_path(&self, stamps: &StampedPaths) -> Option<PathBuf> {
         stamps
             .iter()
-            .find(|(path, stamp)| path == &self.preferred && stamp.is_file())
+            .find(|(path, stamp)| *path == self.preferred && stamp.is_file())
             .or_else(|| {
                 stamps
                     .iter()
-                    .find(|(path, stamp)| path == &self.fallback && stamp.is_file())
+                    .find(|(path, stamp)| *path == self.fallback && stamp.is_file())
             })
-            .map(|(path, _)| path.clone())
+            .map(|(path, _)| path.to_path_buf())
     }
 }
 
@@ -178,26 +180,11 @@ struct DiscoveredConversation {
     projection: LocalSessionProjection,
 }
 
-#[derive(Clone)]
-struct CachedConversation {
-    dependencies: Vec<(PathBuf, ProviderPathStamp)>,
-    conversation: Option<DiscoveredConversation>,
-}
-
-#[derive(Clone)]
-struct CachedIndex {
-    stamp: ProviderPathStamp,
-    values: BTreeMap<PathBuf, String>,
-}
-
 #[derive(Default)]
 struct AntigravityDiscoverySnapshot {
-    key: Option<DiscoveryKey>,
-    last_full_scan: Option<Instant>,
-    topology: Vec<(PathBuf, ProviderPathStamp)>,
-    catalog: Vec<ConversationCandidate>,
-    conversations: HashMap<String, CachedConversation>,
-    index: Option<CachedIndex>,
+    catalog: IncrementalCatalog<DiscoveryKey, ConversationCandidate>,
+    conversations: StableValueCache<String, Option<DiscoveredConversation>>,
+    index: StableValueCache<(), BTreeMap<PathBuf, String>>,
     #[cfg(test)]
     work: DiscoveryWork,
 }
@@ -263,23 +250,58 @@ pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
 
 impl AntigravityDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let key_changed = self.key.as_ref() != Some(&key);
-        let topology_changed = !key_changed && !stamps_unchanged(&self.topology);
-        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
+        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+            let brain = key.home.join("brain");
+            topology.record_exact(brain.clone());
+            let mut catalog = Vec::new();
+            if topology
+                .iter()
+                .find(|(path, _)| *path == brain)
+                .is_some_and(|(_, stamp)| stamp.is_dir())
+                && let Ok(entries) = fs::read_dir(&brain)
+            {
+                for entry in entries.filter_map(Result::ok) {
+                    if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                        continue;
+                    }
+                    let Ok(id) = entry.file_name().into_string() else {
+                        continue;
+                    };
+                    if !valid_conversation_id(&id) {
+                        continue;
+                    }
+                    let session_dir = entry.path();
+                    let generated_dir = session_dir.join(".system_generated");
+                    let logs_dir = generated_dir.join("logs");
+                    catalog.push(ConversationCandidate {
+                        id,
+                        session_dir,
+                        generated_dir,
+                        preferred: logs_dir.join(TRANSCRIPT_BASENAMES[0]),
+                        fallback: logs_dir.join(TRANSCRIPT_BASENAMES[1]),
+                        logs_dir,
+                    });
+                }
+            }
+            catalog
+        });
+        let forced = scan.attempted();
+        #[cfg(test)]
         if forced {
-            self.rebuild_catalog(&key, now);
+            self.work.full_scans += 1;
         }
 
         let mut selected = self
             .catalog
+            .entries()
             .iter()
             .cloned()
             .filter_map(|candidate| {
-                let dependencies = stamp_paths(candidate.dependencies());
+                let dependencies = StampedPaths::exact(candidate.dependencies());
                 let path = candidate.selected_path(&dependencies)?;
                 let modified = dependencies
                     .iter()
-                    .find(|(candidate, _)| candidate == &path)
+                    .find(|(candidate, _)| *candidate == path)
                     .and_then(|(_, stamp)| stamp.modified);
                 Some((candidate, dependencies, modified))
             })
@@ -301,10 +323,11 @@ impl AntigravityDiscoverySnapshot {
 
         let catalog_ids = self
             .catalog
+            .entries()
             .iter()
             .map(|candidate| candidate.id.clone())
             .collect::<std::collections::HashSet<_>>();
-        self.conversations.retain(|id, _| catalog_ids.contains(id));
+        self.conversations.retain(|id| catalog_ids.contains(id));
 
         let mut observations = Vec::new();
         for workspace in &key.workspaces {
@@ -326,116 +349,57 @@ impl AntigravityDiscoverySnapshot {
         observations
     }
 
-    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
-        #[cfg(test)]
-        {
-            self.work.full_scans += 1;
-        }
-        let brain = key.home.join("brain");
-        let topology_before = stamp_paths([brain.clone()]);
-        let mut catalog = Vec::new();
-        if ProviderPathStamp::read(&brain).is_dir()
-            && let Ok(entries) = fs::read_dir(&brain)
-        {
-            for entry in entries.filter_map(Result::ok) {
-                if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
-                    continue;
-                }
-                let Ok(id) = entry.file_name().into_string() else {
-                    continue;
-                };
-                if !valid_conversation_id(&id) {
-                    continue;
-                }
-                let session_dir = entry.path();
-                let generated_dir = session_dir.join(".system_generated");
-                let logs_dir = generated_dir.join("logs");
-                catalog.push(ConversationCandidate {
-                    id,
-                    session_dir,
-                    generated_dir,
-                    preferred: logs_dir.join(TRANSCRIPT_BASENAMES[0]),
-                    fallback: logs_dir.join(TRANSCRIPT_BASENAMES[1]),
-                    logs_dir,
-                });
-            }
-        }
-        let stable = stamps_unchanged(&topology_before);
-        self.key = Some(key.clone());
-        self.last_full_scan = stable.then_some(now);
-        self.topology = stamp_paths([brain]);
-        self.catalog = if stable { catalog } else { Vec::new() };
-    }
-
     fn refresh_conversation(
         &mut self,
         home: &Path,
         candidate: ConversationCandidate,
-        before: Vec<(PathBuf, ProviderPathStamp)>,
+        dependencies: StampedPaths,
         forced: bool,
     ) -> Option<DiscoveredConversation> {
-        if !forced
-            && let Some(cached) = self.conversations.get(&candidate.id)
-            && cached.dependencies == before
-            && before.iter().all(|(_, stamp)| stamp.is_stable())
-        {
-            return cached.conversation.clone();
-        }
+        let id = candidate.id.clone();
+        let result = self
+            .conversations
+            .refresh(id, dependencies, forced, |dependencies| {
+                candidate
+                    .selected_path(dependencies)
+                    .as_deref()
+                    .and_then(|path| discover_conversation(home, path, &candidate.id))
+            });
         #[cfg(test)]
-        {
+        if result.kind() != ValueRefreshKind::Cached {
             self.work.tail_folds += 1;
         }
-        let selected = candidate.selected_path(&before);
-        let conversation = selected
-            .as_deref()
-            .and_then(|path| discover_conversation(home, path, &candidate.id));
-        let after = stamp_paths(candidate.dependencies());
-        if before != after || after.iter().any(|(_, stamp)| !stamp.is_stable()) {
-            self.conversations.remove(&candidate.id);
-            return None;
-        }
-        self.conversations.insert(
-            candidate.id,
-            CachedConversation {
-                dependencies: after,
-                conversation: conversation.clone(),
-            },
-        );
-        conversation
+        result.into_current().flatten()
     }
 
     fn refresh_index(&mut self, home: &Path, forced: bool) -> BTreeMap<PathBuf, String> {
         let path = home.join("cache/last_conversations.json");
-        let before = ProviderPathStamp::read(&path);
-        if !forced
-            && let Some(cached) = &self.index
-            && cached.stamp == before
-            && before.is_stable()
-        {
-            return cached.values.clone();
-        }
+        let result = self.index.refresh(
+            (),
+            StampedPaths::exact([path.clone()]),
+            forced,
+            |dependencies| {
+                if dependencies
+                    .iter()
+                    .next()
+                    .is_some_and(|(_, stamp)| stamp.is_file())
+                {
+                    fs::read(&path)
+                        .ok()
+                        .and_then(|body| {
+                            serde_json::from_slice::<BTreeMap<PathBuf, String>>(&body).ok()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    BTreeMap::new()
+                }
+            },
+        );
         #[cfg(test)]
-        {
+        if result.kind() != ValueRefreshKind::Cached {
             self.work.index_parses += 1;
         }
-        let values = if before.is_file() {
-            fs::read(&path)
-                .ok()
-                .and_then(|body| serde_json::from_slice::<BTreeMap<PathBuf, String>>(&body).ok())
-                .unwrap_or_default()
-        } else {
-            BTreeMap::new()
-        };
-        let after = ProviderPathStamp::read(&path);
-        if before != after || !after.is_stable() {
-            self.index = None;
-            return BTreeMap::new();
-        }
-        self.index = Some(CachedIndex {
-            stamp: after,
-            values: values.clone(),
-        });
-        values
+        result.into_current().unwrap_or_default()
     }
 }
 

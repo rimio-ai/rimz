@@ -1,7 +1,7 @@
 //! Claude's machine-local session store mapped into provider-neutral observations.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::io::BufRead as _;
 use std::io::Read as _;
@@ -13,8 +13,11 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::spend::claude_config_dirs;
+#[cfg(test)]
+use crate::agents::local_session_cache::ValueRefreshKind;
 use crate::agents::local_session_cache::{
-    ProviderPathStamp, full_scan_due, normalized_workspace_inputs, stamp_paths, stamps_unchanged,
+    IncrementalCatalog, ProviderPathStamp, StableValueCache, StampedPaths,
+    normalized_workspace_inputs,
 };
 use crate::agents::{LocalSessionObservation, LocalSessionProjection, read_transcript_tail};
 use crate::ids::{AgentKind, AgentSessionId};
@@ -45,19 +48,10 @@ struct CatalogEntry {
     path: PathBuf,
 }
 
-#[derive(Clone)]
-struct CachedCandidate {
-    stamp: ProviderPathStamp,
-    observation: Option<LocalSessionObservation>,
-}
-
 #[derive(Default)]
 struct ClaudeDiscoverySnapshot {
-    key: Option<DiscoveryKey>,
-    last_full_scan: Option<Instant>,
-    topology: Vec<(PathBuf, ProviderPathStamp)>,
-    catalog: Vec<CatalogEntry>,
-    candidates: HashMap<CatalogEntry, CachedCandidate>,
+    catalog: IncrementalCatalog<DiscoveryKey, CatalogEntry>,
+    candidates: StableValueCache<CatalogEntry, Option<LocalSessionObservation>>,
     #[cfg(test)]
     work: DiscoveryWork,
 }
@@ -86,11 +80,22 @@ pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
 
 impl ClaudeDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let key_changed = self.key.as_ref() != Some(&key);
-        let topology_changed = !key_changed && !stamps_unchanged(&self.topology);
-        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
+        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+            let mut catalog = Vec::new();
+            for config_dir in &key.config_dirs {
+                for workspace in &key.workspaces {
+                    let project_dir = config_dir
+                        .join("projects")
+                        .join(project_directory_name(workspace));
+                    collect_catalog(config_dir, workspace, &project_dir, topology, &mut catalog);
+                }
+            }
+            catalog
+        });
+        let forced = scan.attempted();
+        #[cfg(test)]
         if forced {
-            self.rebuild_catalog(&key, now);
+            self.work.full_scans += 1;
         }
 
         let mut observations = Vec::new();
@@ -99,6 +104,7 @@ impl ClaudeDiscoverySnapshot {
             for config_dir in &key.config_dirs {
                 let mut bucket = self
                     .catalog
+                    .entries()
                     .iter()
                     .filter(|entry| {
                         &entry.config_dir == config_dir && &entry.workspace == workspace
@@ -119,7 +125,7 @@ impl ClaudeDiscoverySnapshot {
                     bucket
                         .into_iter()
                         .take(MAX_DISCOVERED_SESSIONS)
-                        .filter_map(|(entry, stamp)| self.refresh_candidate(entry, stamp, forced)),
+                        .filter_map(|(entry, _)| self.refresh_candidate(entry, forced)),
                 );
             }
             workspace_observations.sort_by(observation_cmp);
@@ -131,78 +137,31 @@ impl ClaudeDiscoverySnapshot {
         }
 
         self.candidates
-            .retain(|entry, _| self.catalog.contains(entry));
+            .retain(|entry| self.catalog.entries().contains(entry));
         observations
-    }
-
-    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
-        #[cfg(test)]
-        {
-            self.work.full_scans += 1;
-        }
-        let mut topology_before = Vec::new();
-        let mut catalog = Vec::new();
-        for config_dir in &key.config_dirs {
-            for workspace in &key.workspaces {
-                let project_dir = config_dir
-                    .join("projects")
-                    .join(project_directory_name(workspace));
-                collect_catalog(
-                    config_dir,
-                    workspace,
-                    &project_dir,
-                    &mut topology_before,
-                    &mut catalog,
-                );
-            }
-        }
-        let stable = stamps_unchanged(&topology_before);
-        let mut topology_paths = topology_before
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect::<Vec<_>>();
-        topology_paths.sort();
-        topology_paths.dedup();
-        self.key = Some(key.clone());
-        self.last_full_scan = stable.then_some(now);
-        self.topology = stamp_paths(topology_paths);
-        self.catalog = if stable { catalog } else { Vec::new() };
     }
 
     fn refresh_candidate(
         &mut self,
         entry: CatalogEntry,
-        before: ProviderPathStamp,
         forced: bool,
     ) -> Option<LocalSessionObservation> {
-        if !forced
-            && let Some(cached) = self.candidates.get(&entry)
-            && cached.stamp == before
-            && before.is_stable()
-        {
-            return cached.observation.clone();
-        }
+        let dependencies = StampedPaths::exact([entry.path.clone()]);
+        let result = self
+            .candidates
+            .refresh(entry.clone(), dependencies, forced, |dependencies| {
+                dependencies
+                    .iter()
+                    .next()
+                    .is_some_and(|(_, stamp)| stamp.is_file())
+                    .then(|| observation(entry.path.clone(), &entry.workspace))
+                    .flatten()
+            });
         #[cfg(test)]
-        {
+        if result.kind() != ValueRefreshKind::Cached {
             self.work.candidate_parses += 1;
         }
-        let parsed = before
-            .is_file()
-            .then(|| observation(entry.path.clone(), &entry.workspace))
-            .flatten();
-        let after = ProviderPathStamp::read(&entry.path);
-        if before != after || !after.is_stable() {
-            self.candidates.remove(&entry);
-            return None;
-        }
-        self.candidates.insert(
-            entry,
-            CachedCandidate {
-                stamp: after,
-                observation: parsed.clone(),
-            },
-        );
-        parsed
+        result.into_current().flatten()
     }
 }
 
@@ -210,11 +169,11 @@ fn collect_catalog(
     config_dir: &Path,
     workspace: &Path,
     dir: &Path,
-    topology: &mut Vec<(PathBuf, ProviderPathStamp)>,
+    topology: &mut StampedPaths,
     catalog: &mut Vec<CatalogEntry>,
 ) {
     let stamp = ProviderPathStamp::read(dir);
-    topology.push((dir.to_path_buf(), stamp.clone()));
+    topology.record_exact(dir.to_path_buf());
     if !stamp.is_dir() {
         return;
     }
@@ -507,11 +466,8 @@ mod tests {
             workspaces: vec![first.clone(), second.clone()],
         };
         let start = Instant::now();
-        let mut snapshot = ClaudeDiscoverySnapshot {
-            key: Some(key.clone()),
-            last_full_scan: Some(start),
-            ..ClaudeDiscoverySnapshot::default()
-        };
+        let mut snapshot = ClaudeDiscoverySnapshot::default();
+        let mut fixtures = Vec::new();
 
         for (workspace, count, timestamp) in [(&first, MAX_DISCOVERED_SESSIONS, 2), (&second, 2, 1)]
         {
@@ -535,16 +491,19 @@ mod tests {
                     last_activity: at,
                     projection: LocalSessionProjection::IdentityOnly,
                 };
-                let stamp = ProviderPathStamp::read(&entry.path);
-                snapshot.catalog.push(entry.clone());
-                snapshot.candidates.insert(
-                    entry,
-                    CachedCandidate {
-                        stamp,
-                        observation: Some(observation),
-                    },
-                );
+                fixtures.push((entry, observation));
             }
+        }
+        snapshot.catalog.refresh(key.clone(), start, |_| {
+            fixtures.iter().map(|(entry, _)| entry.clone()).collect()
+        });
+        for (entry, observation) in fixtures {
+            snapshot.candidates.refresh(
+                entry.clone(),
+                StampedPaths::exact([entry.path.clone()]),
+                false,
+                |_| Some(observation),
+            );
         }
 
         let observations = snapshot.refresh(key, start);

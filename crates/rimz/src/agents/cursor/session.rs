@@ -1,7 +1,6 @@
 //! Version-pinned, read-only Cursor CLI local wait and subagent discovery.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read as _;
@@ -17,8 +16,8 @@ use sha2::Sha256;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::local_session_cache::{
-    ProviderPathStamp, ProviderPathState, full_scan_due, normalized_workspace_inputs, stamp_paths,
-    stamps_unchanged,
+    IncrementalCatalog, ProviderPathStamp, ProviderPathState, StableValueCache, StampedPaths,
+    normalized_workspace_inputs,
 };
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
@@ -196,30 +195,20 @@ struct DiscoveryKey {
     workspaces: Vec<PathBuf>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ChatCandidate {
     workspace: PathBuf,
     bucket: PathBuf,
     session: PathBuf,
 }
 
-#[derive(Clone)]
-struct CachedCandidate {
-    dependencies: Vec<(PathBuf, ProviderPathStamp)>,
-    observation: Option<LocalSessionObservation>,
-}
-
 #[derive(Default)]
 struct CursorDiscoverySnapshot {
-    key: Option<DiscoveryKey>,
-    last_full_scan: Option<Instant>,
-    base_topology: Vec<PathBuf>,
-    workspace_stamps: Vec<(PathBuf, ProviderPathStamp)>,
-    topology: Vec<(PathBuf, ProviderPathStamp)>,
-    catalog: Vec<ChatCandidate>,
+    catalog: IncrementalCatalog<DiscoveryKey, ChatCandidate>,
     selected_ids: Vec<String>,
+    transcript_topology: StampedPaths,
     transcripts: Option<super::transcript::DiscoveryCatalog>,
-    candidates: HashMap<PathBuf, CachedCandidate>,
+    candidates: StableValueCache<ChatCandidate, Option<LocalSessionObservation>>,
     #[cfg(test)]
     work: DiscoveryWork,
 }
@@ -280,16 +269,37 @@ pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
 
 impl CursorDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let key_changed = self.key.as_ref() != Some(&key);
-        let topology_changed = !key_changed
-            && (!stamps_unchanged(&self.topology)
-                || !kind_stamps_unchanged(&self.workspace_stamps));
-        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
+        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+            topology.record_kind_only_many(key.workspaces.iter().cloned());
+            let mut catalog = Vec::new();
+            for workspace in &key.workspaces {
+                let Some((bucket, workspace)) = chats_bucket(&key.home, workspace) else {
+                    continue;
+                };
+                topology.record_exact(bucket.clone());
+                let Ok(entries) = fs::read_dir(&bucket) else {
+                    continue;
+                };
+                catalog.extend(
+                    entries
+                        .filter_map(Result::ok)
+                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                        .map(|entry| ChatCandidate {
+                            workspace: workspace.clone(),
+                            bucket: bucket.clone(),
+                            session: entry.path(),
+                        }),
+                );
+            }
+            catalog
+        });
+        let forced = scan.attempted();
+        #[cfg(test)]
         if forced {
-            self.rebuild_catalog(&key, now);
+            self.work.full_scans += 1;
         }
 
-        let selected = self.selected_candidates();
+        let selected = self.selected_candidates(&key);
         let mut selected_ids = selected
             .iter()
             .filter_map(|candidate| candidate.session.file_name()?.to_str())
@@ -298,8 +308,12 @@ impl CursorDiscoverySnapshot {
             .collect::<Vec<_>>();
         selected_ids.sort();
         selected_ids.dedup();
-        if self.transcripts.is_none() || self.selected_ids != selected_ids {
-            self.rebuild_transcripts(&key.home, selected_ids);
+        let transcript_topology_changed = !self.transcript_topology.unchanged();
+        if self.transcripts.is_none()
+            || self.selected_ids != selected_ids
+            || transcript_topology_changed
+        {
+            self.rebuild_transcripts(&key.home, selected_ids, transcript_topology_changed);
         }
 
         let mut observations = Vec::new();
@@ -329,20 +343,22 @@ impl CursorDiscoverySnapshot {
             }
             dependency_paths.sort();
             dependency_paths.dedup();
-            let dependencies = stamp_candidate_paths(&candidate.session, dependency_paths);
+            let mut dependencies = StampedPaths::default();
+            dependencies.record_kind_only(candidate.session.clone());
+            dependencies.record_exact_many(
+                dependency_paths
+                    .into_iter()
+                    .filter(|path| path != &candidate.session),
+            );
             if let Some(observation) =
                 self.refresh_candidate(candidate, transcript.as_deref(), dependencies, forced)
             {
                 observations.push(observation);
             }
         }
-        let catalog_paths = self
-            .catalog
-            .iter()
-            .map(|candidate| candidate.session.clone())
-            .collect::<HashSet<_>>();
+        let catalog = self.catalog.entries();
         self.candidates
-            .retain(|path, _| catalog_paths.contains(path));
+            .retain(|candidate| catalog.contains(candidate));
         observations.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)
@@ -351,88 +367,47 @@ impl CursorDiscoverySnapshot {
         observations
     }
 
-    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
-        #[cfg(test)]
-        {
-            self.work.full_scans += 1;
-        }
-        let mut topology = Vec::new();
-        let workspace_before = stamp_kind_paths(key.workspaces.iter().cloned());
-        let mut topology_before = Vec::new();
-        let mut catalog = Vec::new();
-        for workspace in &key.workspaces {
-            let Some((bucket, workspace)) = chats_bucket(&key.home, workspace) else {
-                continue;
-            };
-            topology.push(bucket.clone());
-            topology_before.push((bucket.clone(), ProviderPathStamp::read(&bucket)));
-            let Ok(entries) = fs::read_dir(&bucket) else {
-                continue;
-            };
-            catalog.extend(
-                entries
-                    .filter_map(Result::ok)
-                    .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-                    .map(|entry| ChatCandidate {
-                        workspace: workspace.clone(),
-                        bucket: bucket.clone(),
-                        session: entry.path(),
-                    }),
-            );
-        }
-        topology.sort();
-        topology.dedup();
-        let stable = kind_stamps_unchanged(&workspace_before) && stamps_unchanged(&topology_before);
-        self.key = Some(key.clone());
-        self.last_full_scan = stable.then_some(now);
-        self.base_topology = topology;
-        self.workspace_stamps = stamp_kind_paths(key.workspaces.iter().cloned());
-        self.catalog = if stable { catalog } else { Vec::new() };
-        self.transcripts = None;
-        self.selected_ids.clear();
-    }
-
-    fn selected_candidates(&self) -> Vec<ChatCandidate> {
+    fn selected_candidates(&self, key: &DiscoveryKey) -> Vec<ChatCandidate> {
         let mut selected = Vec::new();
-        if let Some(key) = &self.key {
-            for workspace in &key.workspaces {
-                let mut bucket = self
-                    .catalog
-                    .iter()
-                    .filter(|candidate| &candidate.workspace == workspace)
-                    .filter_map(|candidate| {
-                        let stamp = ProviderPathStamp::read(&candidate.session);
-                        stamp.is_dir().then(|| (candidate.clone(), stamp.modified))
-                    })
-                    .collect::<Vec<_>>();
-                bucket.sort_by(|left, right| {
-                    right
-                        .1
-                        .cmp(&left.1)
-                        .then_with(|| left.0.session.cmp(&right.0.session))
-                });
-                selected.extend(
-                    bucket
-                        .into_iter()
-                        .take(MAX_SESSIONS_PER_WORKSPACE)
-                        .map(|(candidate, _)| candidate),
-                );
-            }
+        for workspace in &key.workspaces {
+            let mut bucket = self
+                .catalog
+                .entries()
+                .iter()
+                .filter(|candidate| &candidate.workspace == workspace)
+                .filter_map(|candidate| {
+                    let stamp = ProviderPathStamp::read(&candidate.session);
+                    stamp.is_dir().then(|| (candidate.clone(), stamp.modified))
+                })
+                .collect::<Vec<_>>();
+            bucket.sort_by(|left, right| {
+                right
+                    .1
+                    .cmp(&left.1)
+                    .then_with(|| left.0.session.cmp(&right.0.session))
+            });
+            selected.extend(
+                bucket
+                    .into_iter()
+                    .take(MAX_SESSIONS_PER_WORKSPACE)
+                    .map(|(candidate, _)| candidate),
+            );
         }
         selected
     }
 
-    fn rebuild_transcripts(&mut self, home: &Path, selected_ids: Vec<String>) {
+    fn rebuild_transcripts(
+        &mut self,
+        home: &Path,
+        selected_ids: Vec<String>,
+        topology_changed: bool,
+    ) {
         let catalog =
             super::transcript::DiscoveryCatalog::build(&home.join("projects"), &selected_ids);
-        if !catalog.stable {
-            self.last_full_scan = None;
+        if topology_changed || !catalog.stable {
+            self.catalog.invalidate();
         }
-        let mut topology = self.base_topology.clone();
-        topology.extend(catalog.topology_paths.iter().cloned());
-        topology.sort();
-        topology.dedup();
-        self.topology = stamp_paths(topology);
+        self.transcript_topology = catalog.topology.recapture();
         self.selected_ids = selected_ids;
         self.transcripts = Some(catalog);
     }
@@ -441,17 +416,10 @@ impl CursorDiscoverySnapshot {
         &mut self,
         candidate: ChatCandidate,
         transcript: Option<&Path>,
-        before: Vec<(PathBuf, ProviderPathStamp)>,
+        dependencies: StampedPaths,
         forced: bool,
     ) -> Option<LocalSessionObservation> {
-        if !forced
-            && let Some(cached) = self.candidates.get(&candidate.session)
-            && cached.dependencies == before
-            && before.iter().all(|(_, stamp)| stamp.is_stable())
-        {
-            return cached.observation.clone();
-        }
-        let optional_paths_are_safe = before.iter().all(|(path, stamp)| {
+        let optional_paths_are_safe = dependencies.iter().all(|(path, stamp)| {
             if path == &candidate.session.join("store.db-wal")
                 || path == &candidate.session.join("store.db-journal")
             {
@@ -463,71 +431,29 @@ impl CursorDiscoverySnapshot {
                 true
             }
         });
-        let parsed = if optional_paths_are_safe {
-            transcript.and_then(|transcript| {
-                #[cfg(test)]
-                {
-                    self.work.sqlite_reads += 1;
+        #[cfg(test)]
+        let sqlite_reads = &mut self.work.sqlite_reads;
+        let result = self
+            .candidates
+            .refresh(candidate.clone(), dependencies, forced, |_| {
+                if !optional_paths_are_safe {
+                    return None;
                 }
-                observation_with_transcript(
-                    &candidate.bucket,
-                    &candidate.session,
-                    &candidate.workspace,
-                    transcript,
-                )
-            })
-        } else {
-            None
-        };
-        let dependency_paths = before.iter().map(|(path, _)| path.clone());
-        let after = stamp_candidate_paths(&candidate.session, dependency_paths);
-        if before != after || after.iter().any(|(_, stamp)| !stamp.is_stable()) {
-            self.candidates.remove(&candidate.session);
-            return None;
-        }
-        self.candidates.insert(
-            candidate.session,
-            CachedCandidate {
-                dependencies: after,
-                observation: parsed.clone(),
-            },
-        );
-        parsed
+                transcript.and_then(|transcript| {
+                    #[cfg(test)]
+                    {
+                        *sqlite_reads += 1;
+                    }
+                    observation_with_transcript(
+                        &candidate.bucket,
+                        &candidate.session,
+                        &candidate.workspace,
+                        transcript,
+                    )
+                })
+            });
+        result.into_current().flatten()
     }
-}
-
-fn stamp_kind_paths(paths: impl IntoIterator<Item = PathBuf>) -> Vec<(PathBuf, ProviderPathStamp)> {
-    paths
-        .into_iter()
-        .map(|path| {
-            let stamp = ProviderPathStamp::read(&path).kind_only();
-            (path, stamp)
-        })
-        .collect()
-}
-
-fn kind_stamps_unchanged(stamps: &[(PathBuf, ProviderPathStamp)]) -> bool {
-    stamps.iter().all(|(path, prior)| {
-        prior.is_stable() && ProviderPathStamp::read(path).kind_only() == *prior
-    })
-}
-
-fn stamp_candidate_paths(
-    session: &Path,
-    paths: impl IntoIterator<Item = PathBuf>,
-) -> Vec<(PathBuf, ProviderPathStamp)> {
-    paths
-        .into_iter()
-        .map(|path| {
-            let stamp = ProviderPathStamp::read(&path);
-            let stamp = if path == session {
-                stamp.kind_only()
-            } else {
-                stamp
-            };
-            (path, stamp)
-        })
-        .collect()
 }
 
 pub(super) fn cursor_home(home: Option<&OsStr>) -> Option<PathBuf> {

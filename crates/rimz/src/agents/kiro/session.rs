@@ -2,7 +2,6 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -14,7 +13,8 @@ use uuid::Uuid;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::local_session_cache::{
-    ProviderPathStamp, full_scan_due, normalized_workspace_inputs, stamp_paths, stamps_unchanged,
+    IncrementalCatalog, StableValueCache, StampedPaths, ValueRefreshKind,
+    normalized_workspace_inputs,
 };
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
@@ -130,7 +130,7 @@ struct DiscoveryKey {
     workspaces: Vec<PathBuf>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct SessionCandidate {
     workspace: PathBuf,
     bucket: PathBuf,
@@ -148,18 +148,15 @@ impl SessionCandidate {
 }
 
 #[derive(Clone)]
-struct CachedCandidate {
-    dependencies: Vec<(PathBuf, ProviderPathStamp)>,
-    observation: Option<LocalSessionObservation>,
+enum ParsedCandidate {
+    Invalid,
+    Valid(Option<LocalSessionObservation>),
 }
 
 #[derive(Default)]
 struct KiroDiscoverySnapshot {
-    key: Option<DiscoveryKey>,
-    last_full_scan: Option<Instant>,
-    topology: Vec<(PathBuf, ProviderPathStamp)>,
-    catalog: Vec<SessionCandidate>,
-    candidates: HashMap<PathBuf, CachedCandidate>,
+    catalog: IncrementalCatalog<DiscoveryKey, SessionCandidate>,
+    candidates: StableValueCache<SessionCandidate, ParsedCandidate>,
     #[cfg(test)]
     work: DiscoveryWork,
 }
@@ -444,24 +441,16 @@ pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
 
 impl KiroDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let key_changed = self.key.as_ref() != Some(&key);
-        let topology_changed = !key_changed && !stamps_unchanged(&self.topology);
-        let forced = key_changed || topology_changed || full_scan_due(self.last_full_scan, now);
-        if forced {
-            self.rebuild_catalog(&key, now);
-        }
+        let forced = self.refresh_catalog(&key, now);
         let (mut observations, invalidated) = self.fold_candidates(false);
         if invalidated && !forced {
-            self.rebuild_catalog(&key, now);
+            self.catalog.invalidate();
+            self.refresh_catalog(&key, now);
             (observations, _) = self.fold_candidates(true);
         }
-        let catalog_paths = self
-            .catalog
-            .iter()
-            .map(|candidate| candidate.session.clone())
-            .collect::<HashSet<_>>();
+        let catalog = self.catalog.entries();
         self.candidates
-            .retain(|path, _| catalog_paths.contains(path));
+            .retain(|candidate| catalog.contains(candidate));
         observations.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)
@@ -470,122 +459,99 @@ impl KiroDiscoverySnapshot {
         observations
     }
 
-    fn rebuild_catalog(&mut self, key: &DiscoveryKey, now: Instant) {
+    fn refresh_catalog(&mut self, key: &DiscoveryKey, now: Instant) -> bool {
+        let candidates = &mut self.candidates;
         #[cfg(test)]
-        {
-            self.work.full_scans += 1;
-        }
-        let sessions_root = key.home.join("sessions");
-        let mut topology = vec![sessions_root.clone()];
-        let mut topology_before = stamp_paths([sessions_root.clone()]);
-        let mut catalog = Vec::new();
-        for workspace in &key.workspaces {
-            let Some(bucket_name) = workspace_bucket(workspace) else {
-                continue;
-            };
-            let bucket = sessions_root.join(bucket_name);
-            topology.push(bucket.clone());
-            topology_before.push((bucket.clone(), ProviderPathStamp::read(&bucket)));
-            if !regular_dir(&sessions_root)
-                || !regular_dir(&bucket)
-                || fs::canonicalize(&bucket)
-                    .ok()
-                    .and_then(|bucket| bucket.parent().map(Path::to_path_buf))
-                    != fs::canonicalize(&sessions_root).ok()
-            {
-                continue;
-            }
-            let Ok(entries) = fs::read_dir(&bucket) else {
-                continue;
-            };
-            let mut admitted = 0;
-            for entry in entries.filter_map(Result::ok) {
-                if admitted >= MAX_SESSIONS_PER_WORKSPACE {
-                    break;
-                }
-                let candidate = SessionCandidate {
-                    workspace: workspace.clone(),
-                    bucket: bucket.clone(),
-                    session: entry.path(),
-                };
-                let before = stamp_paths(candidate.dependencies());
-                #[cfg(test)]
-                {
-                    self.work.candidate_parses += 1;
-                }
-                let Some(session) =
-                    validate_session(&candidate.bucket, &candidate.session, &candidate.workspace)
-                else {
+        let work = &mut self.work;
+        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+            let sessions_root = key.home.join("sessions");
+            topology.record_exact(sessions_root.clone());
+            let mut catalog = Vec::new();
+            for workspace in &key.workspaces {
+                let Some(bucket_name) = workspace_bucket(workspace) else {
                     continue;
                 };
-                admitted += 1;
-                let parsed = observation(session, &candidate.workspace);
-                let after = stamp_paths(candidate.dependencies());
-                if before == after && after.iter().all(|(_, stamp)| stamp.is_stable()) {
-                    self.candidates.insert(
-                        candidate.session.clone(),
-                        CachedCandidate {
-                            dependencies: after,
-                            observation: parsed,
-                        },
-                    );
-                } else {
-                    self.candidates.remove(&candidate.session);
+                let bucket = sessions_root.join(bucket_name);
+                topology.record_exact(bucket.clone());
+                if !regular_dir(&sessions_root)
+                    || !regular_dir(&bucket)
+                    || fs::canonicalize(&bucket)
+                        .ok()
+                        .and_then(|bucket| bucket.parent().map(Path::to_path_buf))
+                        != fs::canonicalize(&sessions_root).ok()
+                {
+                    continue;
                 }
-                catalog.push(candidate);
+                let Ok(entries) = fs::read_dir(&bucket) else {
+                    continue;
+                };
+                let mut admitted = 0;
+                for entry in entries.filter_map(Result::ok) {
+                    if admitted >= MAX_SESSIONS_PER_WORKSPACE {
+                        break;
+                    }
+                    let candidate = SessionCandidate {
+                        workspace: workspace.clone(),
+                        bucket: bucket.clone(),
+                        session: entry.path(),
+                    };
+                    let parsed = candidates.refresh(
+                        candidate.clone(),
+                        StampedPaths::exact(candidate.dependencies()),
+                        true,
+                        |_| parse_candidate(&candidate),
+                    );
+                    #[cfg(test)]
+                    if parsed.kind() != ValueRefreshKind::Cached {
+                        work.candidate_parses += 1;
+                    }
+                    if matches!(parsed.current(), Some(ParsedCandidate::Valid(_))) {
+                        admitted += 1;
+                        catalog.push(candidate);
+                    }
+                }
             }
+            catalog
+        });
+        #[cfg(test)]
+        if scan.attempted() {
+            self.work.full_scans += 1;
         }
-        let stable = stamps_unchanged(&topology_before);
-        topology.sort();
-        topology.dedup();
-        self.key = Some(key.clone());
-        self.last_full_scan = stable.then_some(now);
-        self.topology = stamp_paths(topology);
-        self.catalog = if stable { catalog } else { Vec::new() };
+        scan.attempted()
     }
 
     fn fold_candidates(&mut self, forced: bool) -> (Vec<LocalSessionObservation>, bool) {
-        let catalog = self.catalog.clone();
+        let catalog = self.catalog.entries().to_vec();
         let mut observations = Vec::new();
         let mut invalidated = false;
         for candidate in catalog {
-            let before = stamp_paths(candidate.dependencies());
-            if !forced
-                && let Some(cached) = self.candidates.get(&candidate.session)
-                && cached.dependencies == before
-                && before.iter().all(|(_, stamp)| stamp.is_stable())
-            {
-                observations.extend(cached.observation.clone());
-                continue;
-            }
+            let result = self.candidates.refresh(
+                candidate.clone(),
+                StampedPaths::exact(candidate.dependencies()),
+                forced,
+                |_| parse_candidate(&candidate),
+            );
             #[cfg(test)]
-            {
+            if result.kind() != ValueRefreshKind::Cached {
                 self.work.candidate_parses += 1;
             }
-            let had_observation = self
-                .candidates
-                .get(&candidate.session)
-                .is_some_and(|cached| cached.observation.is_some());
-            let parsed =
-                validate_session(&candidate.bucket, &candidate.session, &candidate.workspace)
-                    .and_then(|session| observation(session, &candidate.workspace));
-            let after = stamp_paths(candidate.dependencies());
-            if before != after || after.iter().any(|(_, stamp)| !stamp.is_stable()) {
-                self.candidates.remove(&candidate.session);
-                invalidated = true;
-                continue;
+            let prior_observation = matches!(result.prior(), Some(ParsedCandidate::Valid(Some(_))));
+            let current_observation =
+                matches!(result.current(), Some(ParsedCandidate::Valid(Some(_))));
+            invalidated |= result.kind() == ValueRefreshKind::Invalidated
+                || (prior_observation && !current_observation);
+            if let Some(ParsedCandidate::Valid(Some(observation))) = result.into_current() {
+                observations.push(observation);
             }
-            invalidated |= had_observation && parsed.is_none();
-            self.candidates.insert(
-                candidate.session,
-                CachedCandidate {
-                    dependencies: after,
-                    observation: parsed.clone(),
-                },
-            );
-            observations.extend(parsed);
         }
         (observations, invalidated)
+    }
+}
+
+fn parse_candidate(candidate: &SessionCandidate) -> ParsedCandidate {
+    match validate_session(&candidate.bucket, &candidate.session, &candidate.workspace) {
+        Some(session) => ParsedCandidate::Valid(observation(session, &candidate.workspace)),
+        None => ParsedCandidate::Invalid,
     }
 }
 
