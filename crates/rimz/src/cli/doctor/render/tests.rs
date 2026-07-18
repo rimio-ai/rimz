@@ -1,8 +1,8 @@
 use super::*;
 use crate::cli::doctor::model::{
     HookRow, Host, IncidentAgent, LastIncident, LoopTaskRow, MessageProblemRow, MuxBinaries,
-    OpenCounts, PresencePluginRow, PresencePluginStatus, PresencePlugins, RemoteAgent,
-    StorageRootView, TmuxCaps,
+    OpenCounts, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry, PresencePlugins,
+    RemoteAgent, StorageRootView, TmuxCaps,
 };
 use rimz::ids::MuxName;
 
@@ -249,26 +249,28 @@ fn mux_section_shows_backend_socket() {
 fn mux_section_renders_multiple_presence_plugin_generations() {
     let row = |plugin_id, loaded_at_ms, build: &str, status, rejected_count| PresencePluginRow {
         plugin_id,
-        loaded_at_ms,
+        loaded_at_ms: Some(loaded_at_ms),
         build: Some(build.to_owned()),
-        sample_count: 2,
-        first_at_ms: loaded_at_ms,
-        last_at_ms: loaded_at_ms,
-        last_seen_age_secs: 3,
         status,
         rejected_count,
         outdated: build != "desired-build",
-        zellij_version: Some("0.44.3".to_owned()),
-        page_growth: 1,
-        byte_growth: 65_536,
-        commands_completed_delta: 2,
-        commands_succeeded_delta: Some(2),
-        stale_writer_rejections_delta: Some(0),
-        topology_failures_delta: Some(0),
-        other_failures_delta: Some(0),
+        telemetry: Some(PresencePluginTelemetry {
+            sample_count: 2,
+            first_at_ms: loaded_at_ms,
+            last_at_ms: loaded_at_ms,
+            last_seen_age_secs: 3,
+            zellij_version: Some("0.44.3".to_owned()),
+            page_growth: 1,
+            byte_growth: 65_536,
+            commands_completed_delta: 2,
+            commands_succeeded_delta: Some(2),
+            stale_writer_rejections_delta: Some(0),
+            topology_failures_delta: Some(0),
+            other_failures_delta: Some(0),
+        }),
     };
     let mut mux = mux_fixture();
-    mux.presence_plugins = Some(PresencePlugins {
+    mux.presence_plugins = Some(Probe::Ready(PresencePlugins {
         desired_build: Some("desired-build".to_owned()),
         rows: vec![
             row(
@@ -286,7 +288,11 @@ fn mux_section_renders_multiple_presence_plugin_generations() {
                 Some(3),
             ),
         ],
-    });
+        history: vec![
+            "/tmp/plugin-presence.log.jsonl".to_owned(),
+            "/tmp/plugin-presence.log.1.jsonl".to_owned(),
+        ],
+    }));
 
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -297,7 +303,8 @@ fn mux_section_renders_multiple_presence_plugin_generations() {
     for expected in [
         "presence plugins",
         "desired desired-",
-        "2 active/rejected",
+        "2 loaded",
+        "multiple presence plugins",
         "plugin 49",
         "loaded 00:00:01",
         "build desired-",
@@ -307,6 +314,8 @@ fn mux_section_renders_multiple_presence_plugin_generations() {
         "rejected ×3",
         "rimz reload",
         "outdated",
+        "history",
+        "/tmp/plugin-presence.log.jsonl (+ rotated .1)",
         "! 1 warning",
     ] {
         assert!(out.contains(expected), "missing {expected}:\n{out}");
@@ -316,29 +325,32 @@ fn mux_section_renders_multiple_presence_plugin_generations() {
 #[test]
 fn mux_section_warns_on_recent_presence_plugin_failures() {
     let mut mux = mux_fixture();
-    mux.presence_plugins = Some(PresencePlugins {
+    mux.presence_plugins = Some(Probe::Ready(PresencePlugins {
         desired_build: Some("desired-build".to_owned()),
         rows: vec![PresencePluginRow {
             plugin_id: 49,
-            loaded_at_ms: 1_000,
+            loaded_at_ms: Some(1_000),
             build: Some("desired-build".to_owned()),
-            sample_count: 2,
-            first_at_ms: 1_000,
-            last_at_ms: 2_000,
-            last_seen_age_secs: 3,
             status: PresencePluginStatus::Active,
             rejected_count: None,
             outdated: false,
-            zellij_version: Some("0.44.3".to_owned()),
-            page_growth: 0,
-            byte_growth: 0,
-            commands_completed_delta: 1,
-            commands_succeeded_delta: Some(0),
-            stale_writer_rejections_delta: Some(0),
-            topology_failures_delta: Some(1),
-            other_failures_delta: Some(0),
+            telemetry: Some(PresencePluginTelemetry {
+                sample_count: 2,
+                first_at_ms: 1_000,
+                last_at_ms: 2_000,
+                last_seen_age_secs: 3,
+                zellij_version: Some("0.44.3".to_owned()),
+                page_growth: 0,
+                byte_growth: 0,
+                commands_completed_delta: 1,
+                commands_succeeded_delta: Some(0),
+                stale_writer_rejections_delta: Some(0),
+                topology_failures_delta: Some(1),
+                other_failures_delta: Some(0),
+            }),
         }],
-    });
+        history: Vec::new(),
+    }));
 
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -348,6 +360,52 @@ fn mux_section_warns_on_recent_presence_plugin_failures() {
 
     assert!(out.contains("failures 1/0"), "{out}");
     assert!(out.contains("! 1 warning"), "{out}");
+}
+
+#[test]
+fn mux_section_renders_presence_plugin_listing_unavailable() {
+    let mut mux = mux_fixture();
+    mux.presence_plugins = Some(Probe::Unavailable {
+        error: "list-panes failed".to_owned(),
+    });
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+
+    assert!(
+        out.contains("presence plugins") && out.contains("unavailable (list-panes failed)"),
+        "{out}"
+    );
+    assert!(out.contains("! 1 warning"), "{out}");
+}
+
+#[test]
+fn mux_section_warns_when_no_presence_plugin_is_loaded() {
+    let mut mux = mux_fixture();
+    mux.presence_plugins = Some(Probe::Ready(PresencePlugins {
+        desired_build: Some("desired-build".to_owned()),
+        rows: Vec::new(),
+        history: vec!["/tmp/plugin-presence.log.jsonl".to_owned()],
+    }));
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+
+    for expected in [
+        "0 loaded",
+        "none loaded",
+        "rimz reload",
+        "history",
+        "! 1 warning",
+    ] {
+        assert!(out.contains(expected), "missing {expected}:\n{out}");
+    }
 }
 
 #[test]

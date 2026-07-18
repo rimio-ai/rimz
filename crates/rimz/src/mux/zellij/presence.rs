@@ -11,6 +11,7 @@ use std::{env, fs};
 
 use kdl::{KdlDocument, KdlNode};
 
+use super::backend::RawListedPane;
 use super::{
     PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_RETIRE_PROOF_TIMEOUT,
     PRESENCE_SHARE_PIPE, PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
@@ -208,6 +209,18 @@ pub(crate) fn presence_plugin_config_hash(configuration: &str) -> Option<&str> {
 }
 
 impl ZellijBackend {
+    pub(crate) fn live_presence_plugin_ids(&self, session_name: &str) -> Result<Vec<u32>> {
+        let mut ids = self
+            .raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?
+            .into_iter()
+            .filter(is_presence_plugin_pane)
+            .filter_map(|pane| u32::try_from(pane.id).ok())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        Ok(ids)
+    }
+
     pub(super) fn converge_presence_plugin_for(
         &self,
         opts: &super::super::PresencePluginOptions,
@@ -418,11 +431,7 @@ impl ZellijBackend {
     ) -> Result<()> {
         let listed = self.raw_listed_panes(session_name, timeout)?;
         for pane in listed.into_iter().filter(|pane| {
-            pane.is_plugin
-                && pane.id != u64::from(accepted_plugin_id)
-                && pane.title.as_deref().is_some_and(|title| {
-                    title.contains(PRESENCE_PLUGIN_FILE.trim_end_matches(".wasm"))
-                })
+            pane.id != u64::from(accepted_plugin_id) && is_presence_plugin_pane(pane)
         }) {
             let pane_id = PaneId::from_parts(MuxName::Zellij, format!("plugin_{}", pane.id));
             if let Err(err) = self.close_pane(session_name, &pane_id) {
@@ -491,6 +500,14 @@ impl ZellijBackend {
             .run_with_timeout(PRESENCE_PIPE_TIMEOUT)
             .map(|_| ())
     }
+}
+
+fn is_presence_plugin_pane(pane: &RawListedPane) -> bool {
+    pane.is_plugin
+        && pane
+            .title
+            .as_deref()
+            .is_some_and(|title| title.contains(PRESENCE_PLUGIN_FILE.trim_end_matches(".wasm")))
 }
 
 fn wait_for_presence_replacement(

@@ -152,6 +152,11 @@ pub fn log_file() -> PathBuf {
         .join("zellij.log")
 }
 
+/// List the RimZ presence-plugin pane ids loaded in a live Zellij session.
+pub fn live_presence_plugin_ids(session_name: &str) -> Result<Vec<u32>> {
+    ZellijBackend::new().live_presence_plugin_ids(session_name)
+}
+
 pub fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
     match parse_log_line(line) {
         super::logtail::RecordLine::Start(start) => start.severity,

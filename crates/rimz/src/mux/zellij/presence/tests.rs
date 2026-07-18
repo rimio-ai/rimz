@@ -199,6 +199,29 @@ fn embedded_presence_plugin_is_present() {
 
 #[cfg(unix)]
 #[test]
+fn live_presence_plugin_ids_list_only_matching_plugin_panes() {
+    let (_temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+case " $* " in
+  *" action list-panes --all --json "*)
+    printf '[{"id":9,"is_plugin":true,"title":"foreign-plugin"},{"id":3,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":2,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":false,"title":"rimz-presence-zellij"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij"}]\n'
+    exit 0 ;;
+esac
+exit 1
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+
+    assert_eq!(
+        backend
+            .live_presence_plugin_ids("rimz-test")
+            .expect("list live presence plugins"),
+        vec![2, 3]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn share_web_session_pipes_share_payload_to_presence_plugin() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh

@@ -91,6 +91,15 @@ fn plugin_span(
     }
 }
 
+fn ready_presence_plugins(
+    value: Option<model::Probe<model::PresencePlugins>>,
+) -> model::PresencePlugins {
+    match value {
+        Some(model::Probe::Ready(plugins)) => plugins,
+        other => panic!("expected ready presence plugins, got {other:?}"),
+    }
+}
+
 fn tick_breach(since_ms: u64, recovered_after_ms: Option<u64>, over_ticks: u32) -> DiagEvent {
     DiagEvent::TickBudgetBreach {
         tick_loop: TickLoop::Fetch,
@@ -187,7 +196,8 @@ fn presence_plugins_classify_active_rejected_and_inactive_generations() {
         recorded_at_ms: now_ms,
     };
 
-    let plugins = presence_plugins_view(
+    let plugins = ready_presence_plugins(presence_plugins_view(
+        Ok(vec![49, 41]),
         vec![
             plugin_span(49, 300, None, now_ms.saturating_sub(2_000)),
             plugin_span(31, 100, Some("old-build"), now_ms.saturating_sub(3_000)),
@@ -195,29 +205,146 @@ fn presence_plugins_classify_active_rejected_and_inactive_generations() {
         Some(&cache),
         Some(&conflict),
         Some(&desired),
+        vec!["/tmp/plugin-presence.log.jsonl".to_owned()],
         now_ms,
-    )
-    .expect("presence plugins");
+    ));
 
     assert_eq!(plugins.desired_build.as_deref(), Some("desired-build"));
-    assert_eq!(plugins.rows.len(), 3);
+    assert_eq!(plugins.rows.len(), 2);
     assert_eq!(plugins.rows[0].plugin_id, 49);
+    assert_eq!(plugins.rows[0].loaded_at_ms, Some(300));
     assert_eq!(plugins.rows[0].status, model::PresencePluginStatus::Active);
     assert_eq!(plugins.rows[0].build.as_deref(), Some("desired-build"));
+    assert!(plugins.rows[0].telemetry.is_some());
     assert!(!plugins.rows[0].outdated);
     assert_eq!(plugins.rows[1].plugin_id, 41);
+    assert_eq!(plugins.rows[1].loaded_at_ms, Some(200));
     assert_eq!(
         plugins.rows[1].status,
         model::PresencePluginStatus::Rejected
     );
     assert_eq!(plugins.rows[1].rejected_count, Some(4));
     assert!(plugins.rows[1].outdated);
-    assert_eq!(plugins.rows[2].plugin_id, 31);
+    assert!(plugins.rows[1].telemetry.is_none());
+    assert_eq!(plugins.history, vec!["/tmp/plugin-presence.log.jsonl"]);
+    assert!(plugins.rows.iter().all(|row| row.plugin_id != 31));
+}
+
+#[test]
+fn presence_plugins_pick_newest_generation_unless_fresh_writer_names_one() {
+    let now_ms = 1_000_000;
+    let spans = vec![
+        plugin_span(7, 100, Some("old"), now_ms - 2_000),
+        plugin_span(7, 200, Some("new"), now_ms - 1_000),
+    ];
+    let newest = ready_presence_plugins(presence_plugins_view(
+        Ok(vec![7]),
+        spans.clone(),
+        None,
+        None,
+        None,
+        Vec::new(),
+        now_ms,
+    ));
+    assert_eq!(newest.rows.len(), 1);
+    assert_eq!(newest.rows[0].loaded_at_ms, Some(200));
+    assert_eq!(newest.rows[0].build.as_deref(), Some("new"));
+
+    let cache = rimz::mux::zellij::pane_topology::PaneTopologyCache {
+        session_name: "rimz-test".to_owned(),
+        produced_at_ms: now_ms,
+        writer: Some(identified_topology_writer(7, 100, "old")),
+        focused_pane: None,
+        clients: None,
+        panes: Vec::new(),
+    };
+    let writer = ready_presence_plugins(presence_plugins_view(
+        Ok(vec![7]),
+        spans,
+        Some(&cache),
+        None,
+        None,
+        Vec::new(),
+        now_ms,
+    ));
+    assert_eq!(writer.rows.len(), 1);
+    assert_eq!(writer.rows[0].loaded_at_ms, Some(100));
+    assert_eq!(writer.rows[0].build.as_deref(), Some("old"));
+    assert_eq!(writer.rows[0].status, model::PresencePluginStatus::Active);
+}
+
+#[test]
+fn presence_plugins_omit_dead_ids_and_keep_bare_live_ids() {
+    let now_ms = 1_000_000;
+    let plugins = ready_presence_plugins(presence_plugins_view(
+        Ok(vec![88]),
+        vec![plugin_span(31, 100, Some("dead"), now_ms - 1_000)],
+        None,
+        None,
+        None,
+        Vec::new(),
+        now_ms,
+    ));
+
+    assert_eq!(plugins.rows.len(), 1);
+    assert_eq!(plugins.rows[0].plugin_id, 88);
+    assert_eq!(plugins.rows[0].loaded_at_ms, None);
+    assert_eq!(plugins.rows[0].build, None);
     assert_eq!(
-        plugins.rows[2].status,
+        plugins.rows[0].status,
         model::PresencePluginStatus::Inactive
     );
-    assert!(plugins.rows[2].outdated);
+    assert!(plugins.rows[0].telemetry.is_none());
+}
+
+#[test]
+fn presence_plugins_report_live_listing_unavailable_without_history_fallback() {
+    let value = presence_plugins_view(
+        Err("list-panes failed".to_owned()),
+        vec![plugin_span(31, 100, Some("dead"), 900_000)],
+        None,
+        None,
+        None,
+        vec!["/tmp/plugin-presence.log.jsonl".to_owned()],
+        1_000_000,
+    );
+
+    match value {
+        Some(model::Probe::Unavailable { error }) => assert_eq!(error, "list-panes failed"),
+        other => panic!("expected unavailable presence plugins, got {other:?}"),
+    }
+}
+
+#[test]
+fn presence_plugins_suppress_empty_live_view_without_desired_build() {
+    assert!(
+        presence_plugins_view(
+            Ok(Vec::new()),
+            Vec::new(),
+            None,
+            None,
+            None,
+            Vec::new(),
+            1_000_000,
+        )
+        .is_none()
+    );
+
+    let desired = rimz::sidebar::cache::PresenceDesired {
+        build: "desired-build".to_owned(),
+        config: "desired-config".to_owned(),
+        recorded_at_ms: 1_000_000,
+    };
+    let plugins = ready_presence_plugins(presence_plugins_view(
+        Ok(Vec::new()),
+        Vec::new(),
+        None,
+        None,
+        Some(&desired),
+        Vec::new(),
+        1_000_000,
+    ));
+    assert!(plugins.rows.is_empty());
 }
 
 #[test]

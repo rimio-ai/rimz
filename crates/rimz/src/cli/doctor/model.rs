@@ -139,7 +139,7 @@ pub(super) struct Mux {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) room: Option<Room>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) presence_plugins: Option<PresencePlugins>,
+    pub(super) presence_plugins: Option<Probe<PresencePlugins>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) zellij_socket: Option<ZellijSocket>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -252,22 +252,30 @@ pub(super) struct PresencePlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) desired_build: Option<String>,
     pub(super) rows: Vec<PresencePluginRow>,
+    pub(super) history: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct PresencePluginRow {
     pub(super) plugin_id: u32,
-    pub(super) loaded_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) loaded_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) build: Option<String>,
-    pub(super) sample_count: usize,
-    pub(super) first_at_ms: u64,
-    pub(super) last_at_ms: u64,
-    pub(super) last_seen_age_secs: u64,
     pub(super) status: PresencePluginStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) rejected_count: Option<u64>,
     pub(super) outdated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) telemetry: Option<PresencePluginTelemetry>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PresencePluginTelemetry {
+    pub(super) sample_count: usize,
+    pub(super) first_at_ms: u64,
+    pub(super) last_at_ms: u64,
+    pub(super) last_seen_age_secs: u64,
     pub(super) zellij_version: Option<String>,
     pub(super) page_growth: i64,
     pub(super) byte_growth: i64,

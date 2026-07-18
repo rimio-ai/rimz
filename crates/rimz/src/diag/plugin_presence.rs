@@ -6,7 +6,7 @@
 //! size cap, never read by correctness code.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +50,16 @@ pub fn log(state_root: &Path) -> JsonlLog {
         state_root.join(PLUGIN_PRESENCE_LOG_NAME),
         PLUGIN_PRESENCE_LOG_MAX_BYTES,
     )
+}
+
+/// Existing current and rotated telemetry logs, in display order.
+pub fn history_paths(state_root: &Path) -> Vec<PathBuf> {
+    let current = log(state_root).path().to_owned();
+    let rotated = current.with_file_name("plugin-presence.log.1.jsonl");
+    [current, rotated]
+        .into_iter()
+        .filter(|path| path.is_file())
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,10 +113,9 @@ pub fn recent_generations(state_root: &Path, session_name: &str) -> Vec<PluginPr
 }
 
 fn recent_samples(state_root: &Path, session_name: &str) -> Vec<PluginPresenceSample> {
-    let current = log(state_root).path().to_owned();
-    let rotated = current.with_file_name("plugin-presence.log.1.jsonl");
-    [rotated, current]
+    history_paths(state_root)
         .into_iter()
+        .rev()
         .flat_map(read_samples)
         .filter(|sample| sample.session_name.as_deref() == Some(session_name))
         .collect()
@@ -192,6 +201,11 @@ mod tests {
         };
         std::fs::write(&rotated, format!("{}\n", sample(100, 2, 0))).unwrap();
         std::fs::write(&current, format!("{}\nmalformed", sample(200, 5, 2))).unwrap();
+
+        assert_eq!(
+            history_paths(dir.path()),
+            vec![current.clone(), rotated.clone()]
+        );
 
         let span = generation_span(dir.path(), "room", 7, 100).unwrap();
         assert_eq!(span.sample_count, 2);

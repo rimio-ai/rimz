@@ -134,7 +134,7 @@ If a directly-launched Copilot card has lifecycle but no resolved model or token
 
 On Zellij, RimZ loads a small presence plugin so the sidebar learns which panes exist and where. Its permission grant is seeded for you on the first attach. Revoking that grant in Zellij's plugin manager stops pane discovery until you restore it, and `rimz doctor` names the fix in the `presence` row. Re-grant the plugin's permissions in Zellij, then run `rimz reload`. The grant lives in Zellij's own permission store, and the plugin ships no pane content anywhere; the full picture is in [security and trust](./security.md#the-zellij-presence-plugin).
 
-Doctor lists every recently observed presence-plugin generation with its load time, build, Zellij version, and active, rejected, or inactive status; multiple live generations and rejected rows point to `rimz reload`, while a recent increase in topology or other command failures remains a real warning.
+Doctor lists only the presence plugins currently loaded in the Zellij session, with each plugin's load time, build, Zellij version, and active, rejected, or inactive status. More than one loaded plugin and every rejected row point to `rimz reload`, while a recent increase in topology or other command failures remains a real warning. Full generation history stays in the `plugin-presence.log.jsonl` path doctor prints; when the live Zellij pane listing cannot be read, the section reports that it is unavailable instead of substituting history.
 
 ## The sidebar looks wrong
 

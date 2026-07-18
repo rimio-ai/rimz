@@ -328,7 +328,12 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
         push_topology_writer(&mut kv, tally, writer);
     }
     if let Some(plugins) = &mux.presence_plugins {
-        push_presence_plugins(&mut kv, tally, plugins);
+        match plugins {
+            Probe::Ready(plugins) => push_presence_plugins(&mut kv, tally, plugins),
+            Probe::Unavailable { error } => {
+                kv.push("presence plugins", unavailable(tally, Health::Warn, error))
+            }
+        }
     }
     if let Some(ttyd) = &mux.ttyd {
         match ttyd {
@@ -514,39 +519,27 @@ fn push_topology_writer(kv: &mut KeyVals, tally: &mut Tally, writer: &TopologyWr
 }
 
 fn push_presence_plugins(kv: &mut KeyVals, tally: &mut Tally, plugins: &PresencePlugins) {
-    let non_inactive = plugins
-        .rows
-        .iter()
-        .filter(|row| row.status != PresencePluginStatus::Inactive)
-        .count();
     let desired = plugins
         .desired_build
         .as_deref()
         .map(short_build)
         .unwrap_or_else(|| "unknown".to_owned());
-    let header = format!(
-        "desired {desired} · {} recent generations",
-        plugins.rows.len()
-    );
-    kv.push(
-        "presence plugins",
-        verdict(
-            tally,
-            if non_inactive > 1 {
-                Health::Warn
-            } else {
-                Health::Info
-            },
-            if non_inactive > 1 {
-                format!("{header} · {non_inactive} active/rejected — run `rimz reload`")
-            } else {
-                header
-            },
+    let loaded = plugins.rows.len();
+    let header = format!("desired {desired} · {loaded} loaded");
+    let (health, header) = match loaded {
+        0 => (
+            Health::Warn,
+            format!("{header} — none loaded; run `rimz reload`"),
         ),
-    );
+        1 => (Health::Info, header),
+        _ => (
+            Health::Warn,
+            format!("{header} — multiple presence plugins; run `rimz reload`"),
+        ),
+    };
+    kv.push("presence plugins", verdict(tally, health, header));
 
     for row in &plugins.rows {
-        let version = row.zellij_version.as_deref().unwrap_or("unknown");
         let build = row
             .build
             .as_deref()
@@ -561,19 +554,17 @@ fn push_presence_plugins(kv: &mut KeyVals, tally: &mut Tally, plugins: &Presence
             PresencePluginStatus::Inactive => "inactive".to_owned(),
         };
         let outdated = if row.outdated { " · outdated" } else { "" };
-        let topology_failures = row.topology_failures_delta.unwrap_or_default();
-        let other_failures = row.other_failures_delta.unwrap_or_default();
-        let recent_failures = row.last_seen_age_secs
-            <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs()
-            && (topology_failures > 0 || other_failures > 0);
-        let telemetry = if row.sample_count == 0 {
-            format!("no telemetry · seen {}s ago", row.last_seen_age_secs)
-        } else {
-            let succeeded = row
+        let (version, telemetry, recent_failures) = if let Some(telemetry) = &row.telemetry {
+            let topology_failures = telemetry.topology_failures_delta.unwrap_or_default();
+            let other_failures = telemetry.other_failures_delta.unwrap_or_default();
+            let recent_failures = telemetry.last_seen_age_secs
+                <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs()
+                && (topology_failures > 0 || other_failures > 0);
+            let succeeded = telemetry
                 .commands_succeeded_delta
                 .map(|delta| format!("/{delta} succeeded"))
                 .unwrap_or_default();
-            let rejects = row
+            let rejects = telemetry
                 .stale_writer_rejections_delta
                 .filter(|delta| *delta > 0)
                 .map(|delta| format!(" · stale rejects +{delta}"))
@@ -583,15 +574,21 @@ fn push_presence_plugins(kv: &mut KeyVals, tally: &mut Tally, plugins: &Presence
             } else {
                 String::new()
             };
-            format!(
-                "{} samples · seen {}s ago · pages {:+} · bytes {:+} · commands +{}{}{rejects}{failures}",
-                row.sample_count,
-                row.last_seen_age_secs,
-                row.page_growth,
-                row.byte_growth,
-                row.commands_completed_delta,
-                succeeded,
+            (
+                telemetry.zellij_version.as_deref().unwrap_or("unknown"),
+                format!(
+                    "{} samples · seen {}s ago · pages {:+} · bytes {:+} · commands +{}{}{rejects}{failures}",
+                    telemetry.sample_count,
+                    telemetry.last_seen_age_secs,
+                    telemetry.page_growth,
+                    telemetry.byte_growth,
+                    telemetry.commands_completed_delta,
+                    succeeded,
+                ),
+                recent_failures,
             )
+        } else {
+            ("unknown", "no telemetry".to_owned(), false)
         };
         kv.push(
             format!("plugin {}", row.plugin_id),
@@ -606,9 +603,22 @@ fn push_presence_plugins(kv: &mut KeyVals, tally: &mut Tally, plugins: &Presence
                 },
                 format!(
                     "loaded {} · build {build} · zellij {version} · {status}{outdated} · {telemetry}",
-                    plugin_loaded_time(row.loaded_at_ms),
+                    row.loaded_at_ms
+                        .map(plugin_loaded_time)
+                        .unwrap_or_else(|| "unknown".to_owned()),
                 ),
             ),
+        );
+    }
+    if let Some(path) = plugins.history.first() {
+        let rotated = if plugins.history.len() > 1 {
+            " (+ rotated .1)"
+        } else {
+            ""
+        };
+        kv.push(
+            "history",
+            cell(format!("{path}{rotated}")).fg(palette::faint()),
         );
     }
 }
