@@ -21,7 +21,10 @@ use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::{
+    collections::HashMap,
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AtomicErr {
@@ -100,6 +103,20 @@ pub fn link_executable_atomically(src: &Path, dst: &Path) -> Result<()> {
                 path: dst.to_path_buf(),
                 source,
             })?;
+            // POSIX rename is a successful no-op when `tmp` and `dst` are
+            // hardlinks to the same inode. Remove the still-named temp in
+            // that idempotent publish case; after a replacement rename it is
+            // already absent.
+            match std::fs::remove_file(&tmp) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(AtomicErr::Io {
+                        path: tmp.clone(),
+                        source,
+                    });
+                }
+            }
             temp_guard.disarm();
             sync_parent_dir(dst)
         }
@@ -416,12 +433,12 @@ fn is_orphan_temp_name(name: &str) -> bool {
 ///
 /// These are same-directory siblings created by [`temp_sibling`] before a
 /// rename. A hard kill can leave them behind. Only files older than `min_age`
-/// are removed, so an in-flight write stays intact.
+/// are removed, so an in-flight write stays intact. Reclaimed bytes count a
+/// hardlinked payload only when the sweep removes its final name.
 pub fn sweep_orphan_temps_under(root: &Path, min_age: Duration, dry_run: bool) -> (usize, u64) {
     let mut stack = vec![root.to_path_buf()];
     let now = SystemTime::now();
-    let mut files_removed = 0usize;
-    let mut bytes_removed = 0u64;
+    let mut candidates = Vec::new();
 
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -454,14 +471,58 @@ pub fn sweep_orphan_temps_under(root: &Path, min_age: Duration, dry_run: bool) -
                 .ok()
                 .and_then(|modified| now.duration_since(modified).ok())
                 .is_some_and(|age| age >= min_age);
-            if old_enough && (dry_run || std::fs::remove_file(&path).is_ok()) {
-                files_removed += 1;
-                bytes_removed = bytes_removed.saturating_add(metadata.len());
+            if old_enough {
+                candidates.push((path, metadata));
             }
         }
     }
 
-    (files_removed, bytes_removed)
+    let removed: Vec<_> = if dry_run {
+        candidates
+    } else {
+        candidates
+            .into_iter()
+            .filter(|(path, _)| std::fs::remove_file(path).is_ok())
+            .collect()
+    };
+    (removed.len(), removed_payload_bytes(&removed))
+}
+
+#[cfg(unix)]
+fn removed_payload_bytes(files: &[(PathBuf, std::fs::Metadata)]) -> u64 {
+    #[derive(Clone, Copy)]
+    struct Links {
+        removed: u64,
+        total: u64,
+        len: u64,
+    }
+
+    let mut links_by_file = HashMap::new();
+    for (_, metadata) in files {
+        let links = links_by_file
+            .entry((metadata.dev(), metadata.ino()))
+            .or_insert(Links {
+                removed: 0,
+                total: metadata.nlink(),
+                len: metadata.len(),
+            });
+        links.removed = links.removed.saturating_add(1);
+        links.total = links.total.max(metadata.nlink());
+    }
+    links_by_file.values().fold(0_u64, |bytes, links| {
+        if links.removed >= links.total {
+            bytes.saturating_add(links.len)
+        } else {
+            bytes
+        }
+    })
+}
+
+#[cfg(not(unix))]
+fn removed_payload_bytes(files: &[(PathBuf, std::fs::Metadata)]) -> u64 {
+    files.iter().fold(0_u64, |bytes, (_, metadata)| {
+        bytes.saturating_add(metadata.len())
+    })
 }
 
 /// Remove old files under `dir` when `keep` selects them for this sweep.
@@ -637,6 +698,30 @@ mod tests {
     }
 
     #[test]
+    fn executable_link_idempotency_leaves_no_temp_sibling() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("builds/current/rimz");
+        let destination = dir.path().join("workspaces/ws_test/rimz");
+        write_executable_bytes_atomically(&source, b"stable build").unwrap();
+
+        link_executable_atomically(&source, &destination).unwrap();
+        link_executable_atomically(&source, &destination).unwrap();
+
+        let temp_count = std::fs::read_dir(destination.parent().unwrap())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("rimz.tmp."))
+            })
+            .count();
+        assert_eq!(temp_count, 0);
+        assert_eq!(std::fs::read(destination).unwrap(), b"stable build");
+    }
+
+    #[test]
     fn durable_and_cache_replacements_keep_fsync_classes() {
         let dir = tempdir().unwrap();
         let before = testkit::fsync_count();
@@ -759,6 +844,54 @@ mod tests {
 
         assert_eq!((files, bytes), (1, 4));
         assert!(stale.exists(), "dry-run leaves temp file in place");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_orphan_temps_counts_hardlinked_payload_once() {
+        let dir = tempdir().unwrap();
+        let first = dir
+            .path()
+            .join("rimz.tmp.1.00000000000000000000000000000000");
+        let second = dir
+            .path()
+            .join("rimz.tmp.2.11111111111111111111111111111111");
+        std::fs::write(&first, b"stable build").unwrap();
+        std::fs::hard_link(&first, &second).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(7200);
+        std::fs::File::open(&first)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        let preview = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
+        let removed = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
+
+        assert_eq!(preview, (2, 12));
+        assert_eq!(removed, preview);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_orphan_temps_does_not_charge_retained_hardlink() {
+        let dir = tempdir().unwrap();
+        let stable = dir.path().join("rimz");
+        let temp = dir
+            .path()
+            .join("rimz.tmp.1.00000000000000000000000000000000");
+        std::fs::write(&stable, b"stable build").unwrap();
+        std::fs::hard_link(&stable, &temp).unwrap();
+        std::fs::File::open(&temp)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+
+        let preview = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
+        let removed = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
+
+        assert_eq!(preview, (1, 0));
+        assert_eq!(removed, preview);
+        assert_eq!(std::fs::read(stable).unwrap(), b"stable build");
     }
 
     #[test]

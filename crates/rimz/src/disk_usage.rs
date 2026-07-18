@@ -1,8 +1,12 @@
-//! RimZ-owned disk usage measurement: symlink-safe byte walks plus the account
-//! roots `doctor` and `gc` surface.
+//! RimZ-owned disk usage measurement: symlink-safe, hardlink-aware byte walks
+//! plus the account roots `doctor` and `gc` surface.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 use crate::store::paths;
 
@@ -10,11 +14,18 @@ const RIMZ_SUBDIR: &str = "rimz";
 
 /// Best-effort recursive size for a path without following symlinks.
 pub fn dir_size(path: &Path) -> u64 {
+    dir_size_inner(path, &mut HashSet::new())
+}
+
+fn dir_size_inner(path: &Path, seen_files: &mut HashSet<FileIdentity>) -> u64 {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return 0,
         Err(_) => return 0,
     };
+    if file_identity(&meta).is_some_and(|identity| !seen_files.insert(identity)) {
+        return 0;
+    }
     let mut bytes = meta.len();
     if !meta.is_dir() || meta.file_type().is_symlink() {
         return bytes;
@@ -23,9 +34,28 @@ pub fn dir_size(path: &Path) -> u64 {
         return bytes;
     };
     for entry in entries.flatten() {
-        bytes = bytes.saturating_add(dir_size(&entry.path()));
+        bytes = bytes.saturating_add(dir_size_inner(&entry.path(), seen_files));
     }
     bytes
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(unix)]
+fn file_identity(meta: &fs::Metadata) -> Option<FileIdentity> {
+    meta.is_file().then(|| FileIdentity {
+        device: meta.dev(),
+        inode: meta.ino(),
+    })
+}
+
+#[cfg(not(unix))]
+fn file_identity(_meta: &fs::Metadata) -> Option<FileIdentity> {
+    None
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +165,21 @@ mod tests {
             dir_size(&root) < 16 * 1024,
             "symlink target contents are not charged to the root"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dir_size_counts_hardlinked_payload_once() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.bin");
+        fs::write(&source, vec![0_u8; 16 * 1024]).unwrap();
+        fs::hard_link(&source, root.join("alias.bin")).unwrap();
+
+        let expected = fs::symlink_metadata(&root).unwrap().len()
+            + fs::symlink_metadata(&source).unwrap().len();
+        assert_eq!(dir_size(&root), expected);
     }
 
     #[test]
