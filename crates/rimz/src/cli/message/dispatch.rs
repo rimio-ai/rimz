@@ -8,8 +8,8 @@ use jiff::Timestamp;
 use super::*;
 use rimz::TargetErr;
 use rimz::message::dispatch::{
-    AfterRequest, ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchRequest,
-    ReplyRequest, WhenRequest,
+    ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchRequest, ReplyRequest,
+    WhenRequest,
 };
 use rimz::message::reply::{ReplyJoin, ReplyPrepareErr};
 
@@ -103,10 +103,7 @@ pub(super) fn send_message(
                     .as_deref()
                     .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
                     .transpose()?,
-                after: after
-                    .into_iter()
-                    .map(|address| AfterRequest { address })
-                    .collect(),
+                after,
                 when,
             }
         }

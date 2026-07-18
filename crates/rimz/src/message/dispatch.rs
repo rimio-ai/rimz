@@ -22,11 +22,6 @@ use super::reply::{PreparationTarget, ReplyJoin, ReplyPreparation, ReplyPrepareE
 use super::{deliver, send};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AfterRequest {
-    pub address: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WhenRequest {
     pub address: String,
     pub status: AgentStatus,
@@ -53,7 +48,7 @@ pub enum DispatchMode {
         force: bool,
         auto_compact: Option<AutoCompact>,
         not_before: Option<Timestamp>,
-        after: Vec<AfterRequest>,
+        after: Vec<String>,
         when: Vec<WhenRequest>,
     },
 }
@@ -556,20 +551,16 @@ fn prepare_mode(
 fn resolve_after(
     resolution: ResolutionView<'_>,
     recipients: &[ResolvedTarget],
-    requests: &[AfterRequest],
+    addresses: &[String],
     gate: DeliveryGate,
     pending: &[MessageRecord],
 ) -> Result<Vec<AfterCondition>> {
     let now = Timestamp::now();
-    requests
+    addresses
         .iter()
-        .map(|request| {
-            let target = resolve_condition_target(
-                resolution,
-                ConditionKind::After,
-                &request.address,
-                &request.address,
-            )?;
+        .map(|address| {
+            let target =
+                resolve_condition_target(resolution, ConditionKind::After, address, address)?;
             // Condition target resolution rejects pane-only targets.
             let agent = target.agent.as_ref().expect("condition target validated");
             if recipients.iter().any(|recipient| {
@@ -579,7 +570,7 @@ fn resolve_after(
                     .is_some_and(|recipient| agent.card_ref().matches(recipient.card_ref()))
             }) {
                 return Err(ConditionErr::RecipientSelfReference {
-                    address: request.address.clone(),
+                    address: address.clone(),
                 }
                 .into());
             }
