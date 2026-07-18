@@ -1,3 +1,4 @@
+use super::panel::{kv, two_column};
 use super::*;
 
 use rimz::harness::assist_log::{
@@ -280,26 +281,17 @@ impl Window {
     }
 }
 
-pub(super) fn panel_lines(
-    lines: &mut Vec<String>,
-    stats: &AssistStats,
-    panel_width: usize,
-    limit: usize,
-) {
-    if stats.is_empty() {
+pub(super) fn panel_lines(lines: &mut Vec<String>, stats: &AssistStats, panel_width: usize) {
+    let rows = category_rows(&stats.rollup);
+    if rows.is_empty() {
         return;
     }
-    let title = format!("── assists ({}) ", stats.window);
-    let rule = "─".repeat(panel_width.saturating_sub(title.chars().count() + 2));
-    lines.push(format!("  {title}{rule}"));
-    lines.push(format!("  {}", summary(&stats.rollup)));
-    let zone = MachineConfig::load_lenient().time_zone();
-    for event in stats.events.iter().take(limit) {
-        lines.push(format!(
-            "  {}",
-            clip(&benefit_line(event, &zone), panel_width.saturating_sub(2))
-        ));
-    }
+    lines.push(format!(
+        "  {}",
+        render::paint(render::palette::header(), "Assists")
+    ));
+    let split = rows.len().div_ceil(2);
+    two_column(lines, &rows[..split], &rows[split..], panel_width);
 }
 
 pub(super) fn render_full(stats: &AssistStats) -> Result<()> {
@@ -308,12 +300,16 @@ pub(super) fn render_full(stats: &AssistStats) -> Result<()> {
         writeln!(out, "no assists recorded")?;
         return Ok(());
     }
-    writeln!(
-        out,
-        "assists ({}) — {}",
-        stats.window,
-        summary(&stats.rollup)
-    )?;
+    let categories = category_entries(&stats.rollup)
+        .into_iter()
+        .map(|(label, value)| format!("{label} {value}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    write!(out, "assists ({})", stats.window)?;
+    if !categories.is_empty() {
+        write!(out, " — {categories}")?;
+    }
+    writeln!(out)?;
     let zone = MachineConfig::load_lenient().time_zone();
     for event in &stats.events {
         writeln!(out, "{}", forensic_line(event, &zone))?;
@@ -321,34 +317,48 @@ pub(super) fn render_full(stats: &AssistStats) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn summary(rollup: &AssistRollup) -> String {
-    let mut redeem = format!("{} redeem{}", rollup.redeems, plural(rollup.redeems));
-    if rollup.resets > 0 {
-        redeem.push_str(&format!(
-            " ({} reset{})",
-            rollup.resets,
-            plural(rollup.resets)
-        ));
+pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
+    category_entries(rollup)
+        .into_iter()
+        .map(|(label, value)| kv(label, &value))
+        .collect()
+}
+
+fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
+    let mut rows = Vec::with_capacity(4);
+    if rollup.pings > 0 {
+        let mut value = rollup.pings.to_string();
+        if rollup.ping_cost_usd > 0.0 {
+            value.push_str(&format!(" (${:.2})", rollup.ping_cost_usd));
+        }
+        rows.push(("Auto-ping:", value));
     }
-    let recovered = format_hours(rollup.recovered_secs);
-    let mut summary = format!(
-        "{} ping{} ${:.2} · {redeem} · {} resume{} +{recovered}",
-        rollup.pings,
-        plural(rollup.pings),
-        rollup.ping_cost_usd,
-        rollup.resumes,
-        plural(rollup.resumes),
-    );
-    if rollup.focus_repairs + rollup.focus_confirmed + rollup.focus_failed > 0 {
-        summary.push_str(&format!(
-            " · {} focus repair{} ({} confirmed, {} failed)",
-            rollup.focus_repairs,
-            plural(rollup.focus_repairs),
-            rollup.focus_confirmed,
-            rollup.focus_failed,
-        ));
+    if rollup.redeems > 0 {
+        let mut value = rollup.redeems.to_string();
+        if rollup.resets > 0 {
+            value.push_str(&format!(
+                " ({} reset{})",
+                rollup.resets,
+                plural(rollup.resets)
+            ));
+        }
+        rows.push(("Auto-redeem:", value));
     }
-    summary
+    if rollup.resumes > 0 {
+        let mut value = rollup.resumes.to_string();
+        if rollup.recovered_secs > 0 {
+            value.push_str(&format!(" (+{})", format_hours(rollup.recovered_secs)));
+        }
+        rows.push(("Auto-continue:", value));
+    }
+    if rollup.focus_repairs > 0 {
+        let mut value = rollup.focus_repairs.to_string();
+        if rollup.focus_failed > 0 {
+            value.push_str(&format!(" ({} failed)", rollup.focus_failed));
+        }
+        rows.push(("Focus repair:", value));
+    }
+    rows
 }
 
 pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> String {
@@ -613,14 +623,4 @@ fn plural(count: usize) -> &'static str {
 
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or_default()
-}
-
-fn clip(text: &str, width: usize) -> String {
-    let mut chars = text.chars();
-    let clipped = chars.by_ref().take(width).collect::<String>();
-    if chars.next().is_some() && width >= 3 {
-        format!("{}...", clipped.chars().take(width - 3).collect::<String>())
-    } else {
-        clipped
-    }
 }

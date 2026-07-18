@@ -130,6 +130,7 @@ pub(super) struct PanelGeometry {
     pub(super) weeks: usize,
     pub(super) panel_width: usize,
     pub(super) outer: usize,
+    pub(super) rows: Option<usize>,
 }
 
 impl PanelGeometry {
@@ -138,12 +139,128 @@ impl PanelGeometry {
         let weeks = weeks_for_terminal(cols);
         let panel_width = GUTTER + weeks * 2;
         let outer = cols.saturating_sub(panel_width) / 2;
+        let rows = std::io::stdout()
+            .is_terminal()
+            .then(|| render::terminal_rows(24));
         PanelGeometry {
             weeks,
             panel_width,
             outer,
+            rows,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PanelPlan {
+    pub(super) header: bool,
+    pub(super) model_rows: usize,
+    pub(super) agent_rows: usize,
+}
+
+pub(super) const PANEL_FIXED_ROWS: usize = 17;
+pub(super) const PANEL_HEADER_ROWS: usize = 9;
+pub(super) const SECTION_CHROME_ROWS: usize = 2;
+const SECTION_FLOOR_ROWS: usize = 3;
+
+pub(super) fn fit(
+    rows: Option<usize>,
+    want_header: bool,
+    models: usize,
+    agents: usize,
+    assist_rows: usize,
+) -> PanelPlan {
+    let model_cap = models.min(MAX_MODELS);
+    let agent_cap = agents.min(MAX_AGENTS);
+    if !want_header {
+        return PanelPlan {
+            header: false,
+            model_rows: model_cap,
+            agent_rows: agent_cap,
+        };
+    }
+    let Some(rows) = rows else {
+        return PanelPlan {
+            header: true,
+            model_rows: model_cap,
+            agent_rows: agent_cap,
+        };
+    };
+
+    let budget = rows.saturating_sub(1);
+    let assists = usize::from(assist_rows > 0) * (2 + assist_rows);
+    let section_chrome = SECTION_CHROME_ROWS * (usize::from(models > 0) + usize::from(agents > 0));
+    let fixed = PANEL_FIXED_ROWS + assists + section_chrome;
+    let model_floor = model_cap.min(SECTION_FLOOR_ROWS);
+    let agent_floor = agent_cap.min(SECTION_FLOOR_ROWS);
+    let floor_rows = model_floor + agent_floor;
+    let with_header = budget.saturating_sub(fixed + PANEL_HEADER_ROWS);
+
+    if budget >= fixed + PANEL_HEADER_ROWS && with_header >= floor_rows {
+        let (model_rows, agent_rows) = allocate_breakdown_rows(
+            with_header,
+            [models, agents],
+            [model_cap, agent_cap],
+            [model_floor, agent_floor],
+        );
+        return PanelPlan {
+            header: true,
+            model_rows,
+            agent_rows,
+        };
+    }
+
+    let without_header = budget.saturating_sub(fixed);
+    let (model_rows, agent_rows) = allocate_breakdown_rows(
+        without_header,
+        [models, agents],
+        [model_floor, agent_floor],
+        [usize::from(models > 0), usize::from(agents > 0)],
+    );
+    PanelPlan {
+        header: false,
+        model_rows,
+        agent_rows,
+    }
+}
+
+fn allocate_breakdown_rows(
+    available: usize,
+    weights: [usize; 2],
+    caps: [usize; 2],
+    floors: [usize; 2],
+) -> (usize, usize) {
+    let [model_weight, agent_weight] = weights;
+    let [model_cap, agent_cap] = caps;
+    let [model_floor, agent_floor] = floors;
+    let floor = model_floor + agent_floor;
+    let usable = available.min(model_cap + agent_cap).max(floor);
+    let weight = model_weight + agent_weight;
+    if weight == 0 {
+        return (0, 0);
+    }
+
+    let mut model_rows = (usable * model_weight / weight).clamp(model_floor, model_cap);
+    let mut agent_rows = (usable * agent_weight / weight).clamp(agent_floor, agent_cap);
+    while model_rows + agent_rows > usable {
+        if model_rows > model_floor {
+            model_rows -= 1;
+        } else if agent_rows > agent_floor {
+            agent_rows -= 1;
+        }
+    }
+    while model_rows + agent_rows < usable {
+        let model_open = model_rows < model_cap;
+        let agent_open = agent_rows < agent_cap;
+        if model_open && (!agent_open || model_weight >= agent_weight) {
+            model_rows += 1;
+        } else if agent_open {
+            agent_rows += 1;
+        } else {
+            break;
+        }
+    }
+    (model_rows, agent_rows)
 }
 
 pub(super) struct PanelStats<'a> {
@@ -167,29 +284,43 @@ pub(super) fn render_panel(
         active,
     } = stats;
     let geometry = PanelGeometry::current();
+    let assist_categories = assists::category_rows(&assists.rollup);
     let mut lines: Vec<String> = Vec::new();
-    if include_header {
-        lines.extend(header_lines(geometry.panel_width));
-    }
 
     if stats.by_day.is_empty() {
+        if include_header {
+            lines.extend(header_lines(geometry.panel_width));
+        }
         let message = "No token usage recorded yet - run an agent and check back.";
         lines.push(center(
             &render::paint(render::palette::muted(), message),
             message.chars().count(),
             geometry.panel_width,
         ));
-        if !assists.is_empty() {
+        if !assist_categories.is_empty() {
             lines.push(String::new());
-            assists::panel_lines(&mut lines, assists, geometry.panel_width, 5);
+            assists::panel_lines(&mut lines, assists, geometry.panel_width);
         }
         return emit(w, &lines, geometry.outer, nl);
     }
 
-    heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
     let selected = active.unwrap_or(Window::AllTime);
-    let models = model_breakdown(stats, selected);
-    let agents = agent_breakdown(stats, selected);
+    let natural_models = model_breakdown_size(stats, selected);
+    let natural_agents = agent_breakdown_size(stats, selected);
+    let plan = fit(
+        geometry.rows,
+        include_header,
+        natural_models,
+        natural_agents,
+        assist_categories.len().div_ceil(2),
+    );
+    if plan.header && include_header {
+        lines.extend(header_lines(geometry.panel_width));
+    }
+
+    heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
+    let models = model_breakdown(stats, selected, plan.model_rows);
+    let agents = agent_breakdown(stats, selected, Some(plan.agent_rows));
     let name_w = models
         .iter()
         .map(|(name, _)| display_width(name))
@@ -213,9 +344,9 @@ pub(super) fn render_panel(
     }
     lines.push(String::new());
     insights_lines(&mut lines, stats, today_day, geometry.panel_width, selected);
-    if !assists.is_empty() {
+    if !assist_categories.is_empty() {
         lines.push(String::new());
-        assists::panel_lines(&mut lines, assists, geometry.panel_width, 5);
+        assists::panel_lines(&mut lines, assists, geometry.panel_width);
     }
 
     emit(w, &lines, geometry.outer, nl)
@@ -479,7 +610,27 @@ pub(super) fn model_cells(
         .collect()
 }
 
-pub(super) fn model_breakdown(stats: &Stats, active: Window) -> Vec<(String, SpendWindow)> {
+fn model_breakdown_size(stats: &Stats, active: Window) -> usize {
+    let mut named = 0;
+    let mut other = false;
+    for (id, tally) in &stats.by_model {
+        if active.select(tally).tokens == 0 {
+            continue;
+        }
+        if id.is_empty() {
+            other = true;
+        } else {
+            named += 1;
+        }
+    }
+    named + usize::from(other)
+}
+
+pub(super) fn model_breakdown(
+    stats: &Stats,
+    active: Window,
+    cap: usize,
+) -> Vec<(String, SpendWindow)> {
     let total: u64 = stats
         .by_model
         .values()
@@ -508,8 +659,13 @@ pub(super) fn model_breakdown(stats: &Stats, active: Window) -> Vec<(String, Spe
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.1.tokens.cmp(&a.1.tokens))
     });
-    if named.len() > MAX_MODELS {
-        for (_, spend) in named.split_off(MAX_MODELS) {
+    let cap = cap.min(MAX_MODELS);
+    if cap == 0 {
+        return Vec::new();
+    }
+    let natural_rows = named.len() + usize::from(other.tokens > 0);
+    if natural_rows > cap {
+        for (_, spend) in named.split_off(cap - 1) {
             fold_window(&mut other, &spend);
         }
     }
@@ -538,9 +694,22 @@ pub(super) struct AgentBreakdown<'a> {
     pub(super) name: String,
     pub(super) window: SpendWindow,
     pub(super) share: f64,
+    pub(super) folded: bool,
 }
 
-pub(super) fn agent_breakdown(stats: &Stats, active: Window) -> Vec<AgentBreakdown<'_>> {
+fn agent_breakdown_size(stats: &Stats, active: Window) -> usize {
+    stats
+        .by_agent
+        .values()
+        .filter(|tally| active.select(tally).tokens > 0)
+        .count()
+}
+
+pub(super) fn agent_breakdown(
+    stats: &Stats,
+    active: Window,
+    cap: Option<usize>,
+) -> Vec<AgentBreakdown<'_>> {
     let total_sessions: u32 = stats
         .by_agent
         .values()
@@ -561,6 +730,7 @@ pub(super) fn agent_breakdown(stats: &Stats, active: Window) -> Vec<AgentBreakdo
                 } else {
                     0.0
                 },
+                folded: false,
             })
         })
         .collect();
@@ -570,6 +740,28 @@ pub(super) fn agent_breakdown(stats: &Stats, active: Window) -> Vec<AgentBreakdo
             .cmp(&a.window.sessions)
             .then_with(|| b.window.tokens.cmp(&a.window.tokens))
     });
+    let Some(cap) = cap.map(|cap| cap.min(MAX_AGENTS)) else {
+        return agents;
+    };
+    if cap == 0 {
+        return Vec::new();
+    }
+    if agents.len() > cap {
+        let folded = agents.split_off(cap - 1);
+        let mut window = SpendWindow::default();
+        let mut share = 0.0;
+        for agent in folded {
+            fold_window(&mut window, &agent.window);
+            share += agent.share;
+        }
+        agents.push(AgentBreakdown {
+            kind: "",
+            name: "Other".to_owned(),
+            window,
+            share,
+            folded: true,
+        });
+    }
     agents
 }
 
@@ -589,6 +781,7 @@ pub(super) fn agent_cells(
         tokens: String,
         usd: String,
         share_pct: f64,
+        folded: bool,
     }
 
     let rows = agents
@@ -600,6 +793,7 @@ pub(super) fn agent_cells(
             tokens: fmt_tokens(stats_tokens(&agent.window)),
             usd: fmt_usd(agent.window.usd),
             share_pct: agent.share * 100.0,
+            folded: agent.folded,
         })
         .collect::<Vec<_>>();
     let sess_w = rows
@@ -621,7 +815,11 @@ pub(super) fn agent_cells(
 
     rows.iter()
         .map(|row| {
-            let identity = render::palette::identity(&row.kind);
+            let identity = if row.folded {
+                render::palette::muted()
+            } else {
+                render::palette::identity(&row.kind)
+            };
             let name = pad_to(&render::paint(identity, &row.name), name_w);
             let left = format!(
                 "{} {name} {} {} {sep} {} {} {sep} {}",
@@ -778,28 +976,38 @@ pub(super) fn insights_lines(
         kv("Current streak:", &plural_days(activity.current_streak)),
     ];
 
-    let insight_gutter = 6;
+    two_column(lines, &left, &right, panel_width);
+}
+
+pub(super) fn two_column(
+    lines: &mut Vec<String>,
+    left: &[String],
+    right: &[String],
+    panel_width: usize,
+) {
     let split = left
         .iter()
         .map(|line| display_width(line))
         .max()
         .unwrap_or(0)
-        + insight_gutter;
+        + 6;
     let right_w = right
         .iter()
         .map(|line| display_width(line))
         .max()
         .unwrap_or(0);
     if split + right_w <= panel_width {
-        for (l, r) in left.iter().zip(right.iter()) {
+        for index in 0..left.len().max(right.len()) {
+            let left = left.get(index).map(String::as_str).unwrap_or_default();
+            let right = right.get(index).map(String::as_str).unwrap_or_default();
             lines.push(
-                format!("  {}{}", pad_to(l, split), r)
+                format!("  {}{}", pad_to(left, split), right)
                     .trim_end()
                     .to_string(),
             );
         }
     } else {
-        for line in left.into_iter().chain(right) {
+        for line in left.iter().chain(right) {
             lines.push(format!("  {line}"));
         }
     }

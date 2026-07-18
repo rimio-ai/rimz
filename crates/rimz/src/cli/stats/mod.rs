@@ -56,8 +56,9 @@ const MAX_WEEKS: usize = 52;
 const MIN_WEEKS: usize = 4;
 /// Left weekday-label column width (`"  Wed "`).
 const GUTTER: usize = 6;
-/// Named models shown before the rest fold into one "Other" row.
+/// Breakdown rows shown before the tail folds into the final "Other" row.
 const MAX_MODELS: usize = 6;
+const MAX_AGENTS: usize = 6;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
 const MIN_SHARE_BAR_WIDTH: usize = 10;

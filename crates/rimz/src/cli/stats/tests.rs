@@ -621,6 +621,84 @@ fn windows_lines_paint_only_the_active_tab_as_a_chip() {
 }
 
 #[test]
+fn panel_fit_preserves_data_before_header_chrome() {
+    let used = |plan: PanelPlan, assist_rows: usize| {
+        PANEL_FIXED_ROWS
+            + usize::from(plan.header) * PANEL_HEADER_ROWS
+            + usize::from(plan.model_rows > 0) * SECTION_CHROME_ROWS
+            + usize::from(plan.agent_rows > 0) * SECTION_CHROME_ROWS
+            + plan.model_rows
+            + plan.agent_rows
+            + usize::from(assist_rows > 0) * (2 + assist_rows)
+    };
+
+    let tall = fit(Some(80), true, 4, 5, 2);
+    assert_eq!(
+        tall,
+        PanelPlan {
+            header: true,
+            model_rows: 4,
+            agent_rows: 5,
+        }
+    );
+    assert!(used(tall, 2) <= 79);
+
+    let floor = fit(Some(37), true, 8, 10, 0);
+    assert_eq!(
+        floor,
+        PanelPlan {
+            header: true,
+            model_rows: 3,
+            agent_rows: 3,
+        }
+    );
+    assert!(used(floor, 0) <= 36);
+
+    let without_header = fit(Some(30), true, 8, 10, 0);
+    assert_eq!(
+        without_header,
+        PanelPlan {
+            header: false,
+            model_rows: 3,
+            agent_rows: 3,
+        }
+    );
+    assert!(used(without_header, 0) <= 29);
+
+    let very_short = fit(Some(24), true, 8, 10, 0);
+    assert_eq!(
+        very_short,
+        PanelPlan {
+            header: false,
+            model_rows: 1,
+            agent_rows: 1,
+        }
+    );
+    assert!(used(very_short, 0) <= 23);
+
+    let no_breakdowns = fit(Some(24), true, 0, 0, 0);
+    assert!(!no_breakdowns.header);
+    assert!(used(no_breakdowns, 0) <= 23);
+
+    assert_eq!(
+        fit(None, true, 8, 10, 2),
+        PanelPlan {
+            header: true,
+            model_rows: MAX_MODELS,
+            agent_rows: MAX_AGENTS,
+        }
+    );
+    assert_eq!(
+        fit(Some(24), false, 8, 10, 0),
+        PanelPlan {
+            header: false,
+            model_rows: MAX_MODELS,
+            agent_rows: MAX_AGENTS,
+        }
+    );
+}
+
+#[test]
 fn model_cells_show_usd_and_cache_read_detail() {
     let glyphs = panel_glyphs();
     let spend = model_tally(1_700_000, 12.4, 1_200_000, 500_000, 2_500_000);
@@ -633,7 +711,7 @@ fn model_cells_show_usd_and_cache_read_detail() {
         by_agent: BTreeMap::new(),
         total: SpendTally::default(),
     };
-    let models = model_breakdown(&stats, Window::AllTime);
+    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
     let name_w = models
         .iter()
         .map(|(name, _)| display_width(name))
@@ -675,7 +753,7 @@ fn model_breakdown_ranks_by_usd_before_tokens() {
         total: SpendTally::default(),
     };
 
-    let models = model_breakdown(&stats, Window::AllTime);
+    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
 
     assert_eq!(models[0].0, "Opus 4.8");
     assert_eq!(models[1].0, "GPT 5");
@@ -696,12 +774,36 @@ fn model_breakdown_drops_models_without_selected_window_activity() {
         total: SpendTally::default(),
     };
 
-    let models = model_breakdown(&stats, Window::Week);
+    let models = model_breakdown(&stats, Window::Week, MAX_MODELS);
 
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].0, "Opus 4.8");
     assert_eq!(models[0].1.tokens, 100);
     assert_eq!(models[0].1.cache_read, 9);
+}
+
+#[test]
+fn model_breakdown_reserves_the_last_capped_row_for_other() {
+    let stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::from([
+            ("model-a".to_owned(), model_tally(500, 5.0, 500, 0, 0)),
+            ("model-b".to_owned(), model_tally(400, 4.0, 400, 0, 0)),
+            ("model-c".to_owned(), model_tally(300, 3.0, 300, 0, 0)),
+            ("model-d".to_owned(), model_tally(200, 2.0, 200, 0, 0)),
+        ]),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+
+    let models = model_breakdown(&stats, Window::AllTime, 3);
+
+    assert_eq!(models.len(), 3);
+    assert_eq!(models[0].0, "Model A");
+    assert_eq!(models[1].0, "Model B");
+    assert_eq!(models[2].0, "Other");
+    assert_eq!(models[2].1.tokens, 500);
+    assert_eq!(models[2].1.usd, 5.0);
 }
 
 #[test]
@@ -736,7 +838,7 @@ fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
     };
     let mut lines = Vec::new();
     let glyphs = panel_glyphs();
-    let agents = agent_breakdown(&stats, Window::AllTime);
+    let agents = agent_breakdown(&stats, Window::AllTime, Some(MAX_AGENTS));
     let name_w = agents
         .iter()
         .map(|agent| display_width(&agent.name))
@@ -788,6 +890,50 @@ fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
 }
 
 #[test]
+fn agent_breakdown_folds_tail_totals_into_other() {
+    let stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::new(),
+        by_agent: BTreeMap::from([
+            ("agent-a".to_owned(), tally(500, 5.0, 5)),
+            ("agent-b".to_owned(), tally(400, 4.0, 4)),
+            ("agent-c".to_owned(), tally(300, 3.0, 3)),
+            ("agent-d".to_owned(), tally(200, 2.0, 2)),
+            ("agent-e".to_owned(), tally(100, 1.0, 1)),
+        ]),
+        total: SpendTally::default(),
+    };
+
+    let agents = agent_breakdown(&stats, Window::AllTime, Some(3));
+
+    assert_eq!(agents.len(), 3);
+    assert_eq!(agents[0].window.sessions, 5);
+    assert_eq!(agents[1].window.sessions, 4);
+    let other = &agents[2];
+    assert_eq!(other.name, "Other");
+    assert!(other.folded);
+    assert_eq!(other.window.sessions, 6);
+    assert_eq!(other.window.tokens, 600);
+    assert_eq!(other.window.usd, 6.0);
+    assert!((other.share - 0.4).abs() < f64::EPSILON);
+
+    let glyphs = panel_glyphs();
+    let cells = agent_cells(&agents, "Agent A".len(), &glyphs);
+    let layout = stat_section_layout(&[], &cells, stat_pct_width(&[], &cells), 120);
+    let mut lines = Vec::new();
+    emit_stat_section(&mut lines, "Agents", &cells, layout, &glyphs);
+    let other = lines
+        .iter()
+        .find(|line| line.contains("Other"))
+        .expect("folded row");
+    assert!(other.contains(&render::paint(render::palette::muted(), "●")));
+    assert!(other.contains(&render::paint(render::palette::muted(), "Other")));
+
+    let all = agent_breakdown(&stats, Window::AllTime, None);
+    assert_eq!(all.len(), 5, "uncapped JSON data stays complete");
+}
+
+#[test]
 fn share_bar_fills_proportionally() {
     let glyphs = panel_glyphs();
     let counts = |share| {
@@ -818,7 +964,7 @@ fn stat_share_bar_stretches_to_panel_width() {
         by_agent: BTreeMap::new(),
         total: SpendTally::default(),
     };
-    let models = model_breakdown(&stats, Window::AllTime);
+    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
     let name_w = models
         .iter()
         .map(|(name, _)| display_width(name))
@@ -854,8 +1000,8 @@ fn stat_sections_share_a_percent_column() {
         by_agent: BTreeMap::from([("claude".to_owned(), tally(1_000, 12.0, 4))]),
         total: SpendTally::default(),
     };
-    let models = model_breakdown(&stats, Window::AllTime);
-    let agents = agent_breakdown(&stats, Window::AllTime);
+    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+    let agents = agent_breakdown(&stats, Window::AllTime, Some(MAX_AGENTS));
     let name_w = models
         .iter()
         .map(|(name, _)| display_width(name))
@@ -1079,6 +1225,12 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         }
     );
     assert_eq!(stats.events.len(), 6, "every assist outcome stays forensic");
+    let categories = category_rows(&stats.rollup)
+        .into_iter()
+        .map(|row| strip_ansi(&row))
+        .collect::<Vec<_>>();
+    assert_eq!(categories.last().unwrap(), "Focus repair: 1");
+    assert!(categories.iter().all(|row| !row.contains("confirmed")));
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
@@ -1124,7 +1276,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
 #[test]
 fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     let mut lines = Vec::new();
-    panel_lines(&mut lines, &AssistStats::default(), 80, 5);
+    panel_lines(&mut lines, &AssistStats::default(), 80);
     assert!(lines.is_empty());
 
     let stats = AssistStats {
@@ -1136,17 +1288,68 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             resets: 1,
             resumes: 5,
             recovered_secs: 22_320,
-            focus_repairs: 0,
+            focus_repairs: 3,
             focus_confirmed: 0,
-            focus_failed: 0,
+            focus_failed: 2,
         },
         events: Vec::new(),
     };
-    let summary = summary(&stats.rollup);
+    let rows = category_rows(&stats.rollup)
+        .into_iter()
+        .map(|row| strip_ansi(&row))
+        .collect::<Vec<_>>();
     assert_eq!(
-        summary,
-        "9 pings $0.09 · 2 redeems (1 reset) · 5 resumes +6.2h"
+        rows,
+        [
+            "Auto-ping: 9 ($0.09)",
+            "Auto-redeem: 2 (1 reset)",
+            "Auto-continue: 5 (+6.2h)",
+            "Focus repair: 3 (2 failed)",
+        ]
     );
+    panel_lines(&mut lines, &stats, 80);
+    assert_eq!(lines.len(), 3, "header plus two paired count rows");
+    let panel = strip_ansi(&lines.join("\n"));
+    assert!(panel.contains("Assists"));
+    assert!(panel.contains("Auto-ping: 9 ($0.09)"));
+    assert!(panel.contains("Focus repair: 3 (2 failed)"));
+
+    let bare_counts = AssistRollup {
+        pings: 1,
+        redeems: 1,
+        resumes: 1,
+        focus_repairs: 1,
+        ..Default::default()
+    };
+    let bare = category_rows(&bare_counts)
+        .into_iter()
+        .map(|row| strip_ansi(&row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!bare.contains('$'));
+    assert!(!bare.contains("reset"));
+    assert!(!bare.contains('h'));
+    assert!(!bare.contains("failed"));
+
+    use rimz::harness::assist_log::FocusRepairOutcome;
+    let superseded_only = AssistStats {
+        window: "7d".to_owned(),
+        rollup: AssistRollup::default(),
+        events: vec![AssistEvent::FocusRepair {
+            at: jiff::Timestamp::from_second(1).unwrap(),
+            nonce: None,
+            workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            session_name: "rimz-test".to_owned(),
+            generation: 1,
+            evidence: Vec::new(),
+            target: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_2"),
+            outcome: FocusRepairOutcome::Superseded,
+            error: None,
+        }],
+    };
+    lines.clear();
+    panel_lines(&mut lines, &superseded_only, 80);
+    assert!(lines.is_empty());
 }
 
 #[test]

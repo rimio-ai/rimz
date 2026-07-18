@@ -105,7 +105,7 @@ pub(super) fn emit_json(
             .then_with(|| b.tokens.cmp(&a.tokens))
     });
 
-    let agents = agent_breakdown(stats, active)
+    let agents = agent_breakdown(stats, active, None)
         .into_iter()
         .map(|agent| AgentJson {
             kind: agent.kind.to_owned(),

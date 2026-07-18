@@ -301,6 +301,12 @@ pub(crate) fn terminal_columns(fallback: usize) -> usize {
         .unwrap_or(fallback)
 }
 
+pub(crate) fn terminal_rows(fallback: usize) -> usize {
+    terminal_size::terminal_size()
+        .map(|(_, terminal_size::Height(height))| usize::from(height))
+        .unwrap_or(fallback)
+}
+
 pub(crate) fn rel_until(ts: Timestamp, now: Timestamp) -> String {
     let until = ts.duration_since(now);
     if until.is_negative() || until.is_zero() {
