@@ -19,7 +19,7 @@ fn open_tab_unfocused_restores_attached_client_focus() {
         xdg: xdg.path().to_path_buf(),
     };
     let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = SidebarPaneOptions {
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus")),
@@ -38,6 +38,7 @@ fn open_tab_unfocused_restores_attached_client_focus() {
         refresh_ms: None,
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    publish_room_bin(xdg.path(), &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
@@ -135,6 +136,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
         refresh_ms: None,
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    publish_room_bin(xdg.path(), &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
     let _client = AttachedClient::attach(xdg.path(), &name, 220, 40);
@@ -207,6 +209,7 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
         refresh_ms: None,
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    publish_room_bin(xdg.path(), &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 

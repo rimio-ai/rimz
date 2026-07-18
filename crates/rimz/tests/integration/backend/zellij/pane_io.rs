@@ -25,6 +25,7 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
     let (_stub_dir, stub) = sidebar_command_stub();
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
     let opts = sidebar_opts(&name, cwd.path(), stub, 200);
+    publish_room_bin(xdg.path(), &opts);
     backend.open_sidebar(&opts, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 

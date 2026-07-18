@@ -222,11 +222,8 @@ impl ZellijBackend {
             session_name: opts.session_name.clone(),
             workspace_id: opts.workspace_id.clone(),
             wasm,
-            rimz_bin: crate::StatePaths::for_workspace(opts.workspace_id.clone())
-                .map_err(|err| MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!("resolving stable room binary pointer: {err}"),
-                })?
+            rimz_bin: self
+                .state_paths_for_workspace(opts.workspace_id.clone())?
                 .room_bin,
             converge: false,
             seed_permissions: machine_config.web.enabled,

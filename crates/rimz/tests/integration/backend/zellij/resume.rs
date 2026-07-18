@@ -49,6 +49,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
+    publish_room_bin(xdg.path(), &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &workspace.session_name, 2);
 

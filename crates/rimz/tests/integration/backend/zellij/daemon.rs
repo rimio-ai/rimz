@@ -113,27 +113,26 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         },
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let sidebar = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
+        project_root: cwd.path().to_path_buf(),
+        extra_env: Default::default(),
+        cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(120)),
+        detected_view_size: None,
+        width_override: None,
+        rimz_bin: stub,
+        replace_existing: false,
+        pristine_birth: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    publish_room_bin(xdg.path(), &sidebar);
     backend
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
-                project_root: cwd.path().to_path_buf(),
-                extra_env: Default::default(),
-                cwd: cwd.path().to_path_buf(),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(120)),
-                detected_view_size: None,
-                width_override: None,
-                rimz_bin: stub,
-                replace_existing: false,
-                pristine_birth: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            Some(&daemon),
-        )
+        .open_sidebar(&sidebar, Some(&daemon))
         .expect("open_sidebar with daemon");
 
     assert!(

@@ -18,6 +18,7 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = sidebar_opts(&name, cwd.path(), stub, 120);
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    publish_room_bin(xdg.path(), &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
     let _client = AttachedClient::attach(xdg.path(), &name, 120, 40);
@@ -111,6 +112,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = sidebar_opts(&name, cwd.path(), stub, 340);
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    publish_room_bin(xdg.path(), &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 

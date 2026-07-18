@@ -161,12 +161,22 @@ impl ZellijBackend {
         })
     }
 
-    fn recorded_rimz_bin(&self, workspace_id: &WorkspaceId) -> Option<std::path::PathBuf> {
-        let paths = match &self.runtime_dir {
-            Some(dir) => StatePaths::under(workspace_id.clone(), dir),
-            None => StatePaths::for_workspace(workspace_id.clone()),
+    pub(super) fn state_paths_for_workspace(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> Result<StatePaths> {
+        match &self.runtime_dir {
+            Some(dir) => StatePaths::under(workspace_id, dir),
+            None => StatePaths::for_workspace(workspace_id),
         }
-        .ok()?;
+        .map_err(|err| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("resolving RimZ state paths: {err}"),
+        })
+    }
+
+    fn recorded_rimz_bin(&self, workspace_id: &WorkspaceId) -> Option<std::path::PathBuf> {
+        let paths = self.state_paths_for_workspace(workspace_id.clone()).ok()?;
         crate::store::workspace_record::read(&paths.workspace_record)
             .ok()
             .and_then(|record| record.rimz_bin)

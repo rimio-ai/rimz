@@ -58,6 +58,16 @@ pub(in crate::backend::zellij) fn sidebar_opts(
     }
 }
 
+/// Publish the build-stable room executable that production records before a
+/// Zellij birth. Presence topology must use this pointer rather than falling
+/// back to an unrelated `rimz` installed on the test runner's PATH.
+pub(in crate::backend::zellij) fn publish_room_bin(state_root: &Path, opts: &SidebarPaneOptions) {
+    let state = rimz::StatePaths::under(opts.workspace_id.clone(), state_root)
+        .expect("test room state paths");
+    state.ensure_dirs().expect("test room state dirs");
+    std::fs::copy(&opts.rimz_bin, &state.room_bin).expect("publish test room binary");
+}
+
 pub(in crate::backend::zellij) fn create_plain_background_session(
     xdg: &Path,
     name: &str,

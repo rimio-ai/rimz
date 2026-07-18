@@ -59,7 +59,7 @@ fn open_sidebar_births_native_layout_and_template() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
 
-    let (_stub_dir, stub) = sidebar_command_stub();
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
     let mut opts = sidebar_opts(&name, cwd.path(), stub, 120);
     let runtime =
@@ -92,6 +92,7 @@ fn open_sidebar_births_native_layout_and_template() {
             "false".to_owned(),
         ),
     ]);
+    publish_room_bin(xdg.path(), &opts);
     backend.open_sidebar(&opts, None).expect("open_sidebar");
 
     let panes = wait_for_pane_count(xdg.path(), &name, 2);
@@ -207,6 +208,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         refresh_ms: None,
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    publish_room_bin(xdg.path(), &opts);
 
     // Absent → born clean and running.
     assert_eq!(
@@ -278,6 +280,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     // rebirth one that carries the sidebar.
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = sidebar_opts(&name, cwd.path(), stub, 120);
+    publish_room_bin(xdg.path(), &opts);
     write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
     ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(&opts, None)
