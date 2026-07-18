@@ -675,7 +675,7 @@ impl<'de> Deserialize<'de> for CodexRawUsage {
                     || fields.completion_tokens.is_some()
                     || fields.output.is_some(),
             ) * OUTPUT_REPORTED)
-            | u8::from(fields.total_tokens.is_some()) * TOTAL_REPORTED;
+            | (u8::from(fields.total_tokens.is_some()) * TOTAL_REPORTED);
         Ok(Self {
             input_tokens: input,
             cached_input_tokens: cached,
