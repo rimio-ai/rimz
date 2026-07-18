@@ -1030,6 +1030,9 @@ fn classify_diagnostic(
         DiagEvent::RendererExit {
             cause: RendererExitCause::SelfCloseEmptyTab,
         }
+        | DiagEvent::SidebarWidthIntent { .. }
+        | DiagEvent::SidebarWidthNudge { .. }
+        | DiagEvent::SidebarWidthSettle { .. }
         | DiagEvent::ProducerElected { .. }
         | DiagEvent::ProducerDemoted { .. }
         | DiagEvent::GroupMigration { .. } => model::DoctorState::Expected,
@@ -1242,6 +1245,35 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             } else {
                 format!("; {}", errors.join("; "))
             }
+        ),
+        DiagEvent::SidebarWidthIntent {
+            trigger,
+            own_cols,
+            base_cols,
+            step_cols,
+            step_exact,
+            target_cols,
+            verdict,
+        } => format!(
+            "sidebar width {}: own {own_cols}, base {base_cols}, step {step_cols:?} (exact={step_exact}), target {target_cols:?}; {}",
+            trigger.as_str(),
+            verdict.as_str(),
+        ),
+        DiagEvent::SidebarWidthNudge {
+            trigger,
+            from_cols,
+            target_cols,
+        } => format!(
+            "sidebar width nudge ({}) {from_cols}->{target_cols}",
+            trigger.as_str()
+        ),
+        DiagEvent::SidebarWidthSettle {
+            settled_cols,
+            learned_step,
+            outcome,
+        } => format!(
+            "sidebar width settled at {settled_cols}; learned step {learned_step:?}; {}",
+            outcome.as_str()
         ),
         DiagEvent::TickBudgetBreach {
             tick_loop,

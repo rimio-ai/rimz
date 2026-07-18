@@ -160,6 +160,25 @@ fn tick_budget_breach_deserializes_legacy_records_without_last_sample() {
 #[test]
 fn severity_table_pins_conditional_and_regression_categories() {
     let info = [
+        DiagEvent::SidebarWidthIntent {
+            trigger: SidebarWidthIntentTrigger::Narrower,
+            own_cols: 40,
+            base_cols: 40,
+            step_cols: Some(10),
+            step_exact: false,
+            target_cols: Some(30),
+            verdict: SidebarWidthIntentVerdict::Accepted,
+        },
+        DiagEvent::SidebarWidthNudge {
+            trigger: SidebarWidthControlTrigger::Retarget,
+            from_cols: 40,
+            target_cols: 30,
+        },
+        DiagEvent::SidebarWidthSettle {
+            settled_cols: 30,
+            learned_step: Some(10),
+            outcome: SidebarWidthSettleOutcome::FeedbackLearned,
+        },
         health_alert(10, Some(20)),
         link_alert(LinkTier::Good, Some(42), 0, 10, Some(40_000)),
         tick_budget_breach(TickLoop::CacheRefresh, 20, Some(8_000)),
@@ -216,6 +235,27 @@ fn severity_table_pins_conditional_and_regression_categories() {
             assert_eq!(event.severity(), severity, "{event:?}");
         }
     }
+}
+
+#[test]
+fn sidebar_width_trace_round_trips() {
+    let event = DiagEvent::SidebarWidthIntent {
+        trigger: SidebarWidthIntentTrigger::Wider,
+        own_cols: 30,
+        base_cols: 40,
+        step_cols: Some(10),
+        step_exact: false,
+        target_cols: Some(50),
+        verdict: SidebarWidthIntentVerdict::Accepted,
+    };
+
+    let encoded = serde_json::to_value(&event).expect("encode width intent");
+    assert_eq!(encoded["kind"], "sidebar_width_intent");
+    assert_eq!(encoded["target_cols"], 50);
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(encoded).expect("decode width intent"),
+        event
+    );
 }
 
 #[test]

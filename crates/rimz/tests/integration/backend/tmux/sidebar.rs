@@ -158,7 +158,7 @@ fn wait_for_heartbeat_after(path: &Path, prior: jiff::Timestamp) -> jiff::Timest
 }
 
 #[test]
-fn sidebar_width_steps_move_the_left_dock_border() {
+fn sidebar_width_step_is_exact_two_columns() {
     require_tmux!();
     let session = "width-step";
     let server = TmuxServer::new();
@@ -169,25 +169,14 @@ fn sidebar_width_steps_move_the_left_dock_border() {
         .open_sidebar(&sidebar_opts(session, stub, Some(120)), None)
         .expect("open sidebar");
     let pane = wait_for_sidebar_pane(&server, session, None);
-    let width = || {
-        server
-            .display(pane.raw(), "#{pane_width}")
-            .parse::<u16>()
-            .expect("pane width")
-    };
-    let initial = width();
-
-    server
+    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-width-step"));
+    let runtime = RuntimePaths::under(workspace_id, server._tempdir.path()).expect("runtime");
+    let step = server
         .backend
-        .resize_sidebar_width(session, &pane, WidthAdjust::Wider)
-        .expect("widen sidebar");
-    assert_eq!(width(), initial + 2);
-
-    server
-        .backend
-        .resize_sidebar_width(session, &pane, WidthAdjust::Narrower)
-        .expect("narrow sidebar");
-    assert_eq!(width(), initial);
+        .sidebar_width_step(&runtime, session, &pane)
+        .expect("read sidebar step");
+    assert_eq!(step.cols, 2);
+    assert!(step.exact);
 }
 
 #[test]

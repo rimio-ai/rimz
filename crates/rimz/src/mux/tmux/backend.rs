@@ -19,7 +19,7 @@ use crate::mux::{
     ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey,
     PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, Result, SessionOptions,
     SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
-    TabOptions, WidthAdjust, WidthSyncOptions, ensure_pane_backend, execute_reconcile_plan,
+    TabOptions, WidthStep, WidthSyncOptions, ensure_pane_backend, execute_reconcile_plan,
     memoized_version, wait_for_sidebar_heartbeat,
 };
 
@@ -312,22 +312,17 @@ impl MuxBackend for TmuxBackend {
         ])
     }
 
-    fn resize_sidebar_width(&self, _session: &str, pane: &PaneId, dir: WidthAdjust) -> Result<()> {
+    fn sidebar_width_step(
+        &self,
+        _runtime: &crate::store::RuntimePaths,
+        _session: &str,
+        pane: &PaneId,
+    ) -> Result<WidthStep> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
-        let flag = match dir {
-            WidthAdjust::Narrower => "-L",
-            WidthAdjust::Wider => "-R",
-        };
-        self.cmd()
-            .args([
-                "resize-pane",
-                "-t",
-                pane.raw(),
-                flag,
-                &SIDEBAR_RESIZE_STEP_COLS.to_string(),
-            ])
-            .run()
-            .map(|_| ())
+        Ok(WidthStep {
+            cols: SIDEBAR_RESIZE_STEP_COLS,
+            exact: true,
+        })
     }
 
     fn nudge_sidebar_width(

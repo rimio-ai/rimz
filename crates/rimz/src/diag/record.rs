@@ -89,6 +89,80 @@ pub enum RendererExitCause {
     DegradedGaveUp,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidebarWidthIntentTrigger {
+    Narrower,
+    Wider,
+}
+
+impl SidebarWidthIntentTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Narrower => "narrower",
+            Self::Wider => "wider",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidebarWidthIntentVerdict {
+    Accepted,
+    RejectedFloor,
+    RejectedNoStep,
+}
+
+impl SidebarWidthIntentVerdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::RejectedFloor => "rejected-floor",
+            Self::RejectedNoStep => "rejected-no-step",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidebarWidthControlTrigger {
+    Retarget,
+    ResizeFeedback,
+    Backstop,
+}
+
+impl SidebarWidthControlTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Retarget => "retarget",
+            Self::ResizeFeedback => "resize-feedback",
+            Self::Backstop => "backstop",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidebarWidthSettleOutcome {
+    FeedbackLearned,
+    ReachedTolerance,
+    CrossedNearest,
+    NoProgress,
+    StepBudget,
+}
+
+impl SidebarWidthSettleOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FeedbackLearned => "feedback-learned",
+            Self::ReachedTolerance => "reached-tolerance",
+            Self::CrossedNearest => "crossed-nearest",
+            Self::NoProgress => "no-progress",
+            Self::StepBudget => "step-budget",
+        }
+    }
+}
+
 impl RendererExitCause {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -214,6 +288,28 @@ pub enum DiagEvent {
         timed_out: bool,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         errors: Vec<String>,
+    },
+    SidebarWidthIntent {
+        trigger: SidebarWidthIntentTrigger,
+        own_cols: u16,
+        base_cols: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step_cols: Option<u16>,
+        step_exact: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_cols: Option<u16>,
+        verdict: SidebarWidthIntentVerdict,
+    },
+    SidebarWidthNudge {
+        trigger: SidebarWidthControlTrigger,
+        from_cols: u16,
+        target_cols: u16,
+    },
+    SidebarWidthSettle {
+        settled_cols: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        learned_step: Option<u16>,
+        outcome: SidebarWidthSettleOutcome,
     },
     TickBudgetBreach {
         tick_loop: TickLoop,
@@ -380,6 +476,9 @@ impl DiagEvent {
             } => DiagSeverity::Warn,
             Self::FrameShrinkVerified { .. }
             | Self::ResolutionFallback { .. }
+            | Self::SidebarWidthIntent { .. }
+            | Self::SidebarWidthNudge { .. }
+            | Self::SidebarWidthSettle { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
             | Self::ProducerElected { .. }
@@ -429,6 +528,9 @@ impl DiagEvent {
             Self::HealthAlert { .. } => "health_alert",
             Self::LinkAlert { .. } => "link_alert",
             Self::ClientReaped { .. } => "client_reaped",
+            Self::SidebarWidthIntent { .. } => "sidebar_width_intent",
+            Self::SidebarWidthNudge { .. } => "sidebar_width_nudge",
+            Self::SidebarWidthSettle { .. } => "sidebar_width_settle",
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
             Self::ProducerElected { .. } => "producer_elected",
             Self::ProducerDemoted { .. } => "producer_demoted",
@@ -512,6 +614,36 @@ impl DiagEvent {
                 settled,
                 ..
             } => format!("{}:{killed_pids:?}:{settled}", self.kind_name()),
+            Self::SidebarWidthIntent {
+                trigger,
+                base_cols,
+                target_cols,
+                verdict,
+                ..
+            } => format!(
+                "{}:{}:{base_cols}:{target_cols:?}:{}",
+                self.kind_name(),
+                trigger.as_str(),
+                verdict.as_str()
+            ),
+            Self::SidebarWidthNudge {
+                trigger,
+                from_cols,
+                target_cols,
+            } => format!(
+                "{}:{}:{from_cols}:{target_cols}",
+                self.kind_name(),
+                trigger.as_str()
+            ),
+            Self::SidebarWidthSettle {
+                settled_cols,
+                learned_step,
+                outcome,
+            } => format!(
+                "{}:{settled_cols}:{learned_step:?}:{}",
+                self.kind_name(),
+                outcome.as_str()
+            ),
             Self::TickBudgetBreach {
                 tick_loop,
                 since_ms,

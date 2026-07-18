@@ -16,15 +16,16 @@ use super::state::{
     read_receipts_for_all, read_receipts_for_tab, row_id_of_pane, session_focus_baseline,
     set_rows_unread,
 };
-use super::width_control::{WidthControl, WidthTarget};
+use super::width_control::{WidthControl, WidthTarget, WidthTransition};
 use super::*;
-use crate::diag::record::RendererExitCause;
+use crate::diag::record::{
+    RendererExitCause, SidebarWidthControlTrigger as WidthControlTrigger,
+    SidebarWidthIntentTrigger, SidebarWidthIntentVerdict, SidebarWidthSettleOutcome,
+};
 use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pets::PixelRenderCaps;
-
-const WIDTH_ADJUST_PENDING_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) struct MaintenanceContext<'a> {
     pub(super) config: &'a ServeConfig,
@@ -99,13 +100,6 @@ fn row_status_key(row: &crate::SidebarRow) -> BackgroundRowStatusKey {
     }
 }
 
-const MIN_ADJUSTABLE_WIDTH: u16 = 24;
-
-fn width_adjust_allowed(dir: crate::mux::WidthAdjust, current_width: Option<u16>) -> bool {
-    dir != crate::mux::WidthAdjust::Narrower
-        || current_width.is_some_and(|width| width > MIN_ADJUSTABLE_WIDTH)
-}
-
 fn own_tab_viewed(
     snapshot: &SidebarSnapshot,
     own_view: &crate::SidebarOwnView,
@@ -148,7 +142,6 @@ pub(super) struct LoopState {
     last_self_close_check: Instant,
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
-    width_adjust_pending: Option<Instant>,
     width_cap: std::num::NonZeroU16,
     width_control: WidthControl,
     pub(super) should_exit: bool,
@@ -236,7 +229,6 @@ impl LoopState {
             last_self_close_check: now,
             last_heartbeat: None,
             prev_width: initial_width,
-            width_adjust_pending: None,
             width_cap,
             width_control: WidthControl::new(WidthTarget::from_override(width_override, width_cap)),
             should_exit: false,
@@ -285,13 +277,6 @@ impl LoopState {
             timeout = timeout.min(
                 deadline
                     .saturating_duration_since(Instant::now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
-        }
-        if let Some(pending) = self.width_adjust_pending {
-            timeout = timeout.min(
-                WIDTH_ADJUST_PENDING_TIMEOUT
-                    .saturating_sub(pending.elapsed())
                     .max(FRAME_MIN_TIMEOUT),
             );
         }
@@ -375,7 +360,6 @@ impl LoopState {
     pub(super) fn on_wakeup(
         &mut self,
         config: &ServeConfig,
-        runtime: &RuntimePaths,
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         result_rx: &Receiver<FetchUpdate>,
@@ -398,7 +382,7 @@ impl LoopState {
             Wakeup::Tick => Ok(LoopFlow::Continue),
             Wakeup::Resize => {
                 let settled_width = terminal.size().map(|s| s.width).ok();
-                self.on_resize(config, runtime, fetch, terminal, settled_width, anim_start)?;
+                self.on_resize(config, fetch, terminal, settled_width, anim_start, diag)?;
                 Ok(LoopFlow::Continue)
             }
             Wakeup::Reload => Ok(self.handle_reload(config, fetch)),
@@ -551,11 +535,7 @@ impl LoopState {
                     crate::sidebar::width_override::load(self.read_marks.runtime()),
                     self.width_cap,
                 ));
-                if self.width_adjust_pending.is_some() {
-                    self.width_control.set_suspended(true);
-                } else {
-                    self.run_width_control(config, terminal);
-                }
+                self.run_width_control(config, terminal, WidthControlTrigger::Retarget, diag);
             }
             // A watched renderer and the producer fold every publication now.
             // Hidden consumers coalesce topology and metrics to the cadence of
@@ -710,49 +690,22 @@ impl LoopState {
         }
     }
 
-    /// `settled_width` is the pane width the resize settled at, probed once at
-    /// the dispatch site; taking it as data keeps this path independent of the
-    /// ambient terminal and lets tests drive it deterministically.
+    /// `settled_width` is the pane width observed after the resize wakeup,
+    /// probed once at the dispatch site so tests can drive the feedback path.
     pub(super) fn on_resize(
         &mut self,
         config: &ServeConfig,
-        runtime: &RuntimePaths,
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         settled_width: Option<u16>,
         anim_start: Instant,
+        diag: &crate::diag::DiagSink,
     ) -> Result<()> {
         self.paint.refresh_caps(config.mux, &config.session_name);
         // Once a sibling has been seen, hold only a grow beyond the configured
         // cap or room override: that is the shape of space freed by a closing
         // sibling. Startup and attach relayouts land at the legitimate width
         // and paint immediately.
-        let mut target_recorded = false;
-        if let Some(pending) = self.width_adjust_pending {
-            if pending.elapsed() <= WIDTH_ADJUST_PENDING_TIMEOUT
-                && let Some(cols) = settled_width.and_then(std::num::NonZeroU16::new)
-            {
-                match crate::sidebar::width_override::write(runtime, cols) {
-                    Ok(()) => {
-                        target_recorded = true;
-                        self.width_control.retarget(WidthTarget::Override(cols));
-                        spawn_width_default_record(config.mux, &config.session_name, cols.get());
-                        if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
-                            runtime,
-                            Some(&config.session_name),
-                            SidebarEvent::WidthTargetChanged,
-                        ) {
-                            debug!(error = %err, "sidebar width target broadcast failed");
-                        }
-                    }
-                    Err(err) => warn!(error = %err, "sidebar width override write failed"),
-                }
-            }
-            self.width_adjust_pending = None;
-            if !target_recorded {
-                self.width_control.set_suspended(false);
-            }
-        }
         let held_grow = match settled_width {
             Some(width) => {
                 let grew = resize_grew(self.prev_width, width);
@@ -761,7 +714,7 @@ impl LoopState {
             }
             None => false,
         };
-        self.run_width_control(config, terminal);
+        self.run_width_control(config, terminal, WidthControlTrigger::ResizeFeedback, diag);
         if held_grow && self.self_close.seen_sibling {
             self.dirty = true;
             self.paint_hold
@@ -789,6 +742,8 @@ impl LoopState {
         &mut self,
         config: &ServeConfig,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        trigger: WidthControlTrigger,
+        diag: &crate::diag::DiagSink,
     ) {
         let Some(pane) = config.own_pane.clone() else {
             return;
@@ -796,9 +751,50 @@ impl LoopState {
         let Ok(size) = terminal.size() else {
             return;
         };
-        if let Some((current_cols, target_cols)) =
-            self.width_control.decide(size.width, Instant::now())
-        {
+        let nudge = self.width_control.decide(size.width, Instant::now());
+        while let Some(transition) = self.width_control.take_trace() {
+            match transition {
+                WidthTransition::StepIssued { from, target } => {
+                    diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthNudge {
+                        trigger,
+                        from_cols: from,
+                        target_cols: target,
+                    });
+                }
+                WidthTransition::FeedbackLearned {
+                    settled,
+                    learned_step,
+                } => {
+                    diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthSettle {
+                        settled_cols: settled,
+                        learned_step: Some(learned_step),
+                        outcome: SidebarWidthSettleOutcome::FeedbackLearned,
+                    });
+                }
+                WidthTransition::Idle { at, reason } => {
+                    let outcome = match reason {
+                        super::width_control::WidthIdleReason::ReachedTolerance => {
+                            SidebarWidthSettleOutcome::ReachedTolerance
+                        }
+                        super::width_control::WidthIdleReason::CrossedNearest => {
+                            SidebarWidthSettleOutcome::CrossedNearest
+                        }
+                        super::width_control::WidthIdleReason::NoProgress => {
+                            SidebarWidthSettleOutcome::NoProgress
+                        }
+                        super::width_control::WidthIdleReason::StepBudget => {
+                            SidebarWidthSettleOutcome::StepBudget
+                        }
+                    };
+                    diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthSettle {
+                        settled_cols: at,
+                        learned_step: None,
+                        outcome,
+                    });
+                }
+            }
+        }
+        if let Some((current_cols, target_cols)) = nudge {
             spawn_width_nudge(pane, &config.session_name, current_cols, target_cols);
         }
     }
@@ -807,22 +803,14 @@ impl LoopState {
         &mut self,
         config: &ServeConfig,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        diag: &crate::diag::DiagSink,
     ) {
-        if self
-            .width_adjust_pending
-            .is_some_and(|pending| pending.elapsed() >= WIDTH_ADJUST_PENDING_TIMEOUT)
-        {
-            self.width_adjust_pending = None;
-            self.width_control.set_suspended(false);
-            self.run_width_control(config, terminal);
-            return;
-        }
         if self
             .width_control
             .feedback_deadline()
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
-            self.run_width_control(config, terminal);
+            self.run_width_control(config, terminal, WidthControlTrigger::Backstop, diag);
         }
     }
 
@@ -865,12 +853,115 @@ impl LoopState {
             }
             Some(InputEffect::Width(dir)) => {
                 if let Some(pane) = config.own_pane.clone() {
-                    let current_width = terminal.size().map(|size| size.width).ok();
-                    if width_adjust_allowed(dir, current_width) {
-                        self.width_adjust_pending = Some(Instant::now());
-                        self.width_control.set_suspended(true);
-                        spawn_width_adjust(pane, &config.session_name, dir);
+                    let Ok(size) = terminal.size() else {
+                        return Ok(());
+                    };
+                    let own_cols = size.width;
+                    let pending_cols = self.width_control.override_target().map(|cols| cols.get());
+                    let base_cols = match dir {
+                        crate::mux::WidthAdjust::Narrower => {
+                            pending_cols.map_or(own_cols, |target| target.min(own_cols))
+                        }
+                        crate::mux::WidthAdjust::Wider => {
+                            pending_cols.map_or(own_cols, |target| target.max(own_cols))
+                        }
+                    };
+                    let trigger = match dir {
+                        crate::mux::WidthAdjust::Narrower => SidebarWidthIntentTrigger::Narrower,
+                        crate::mux::WidthAdjust::Wider => SidebarWidthIntentTrigger::Wider,
+                    };
+                    let runtime = self.read_marks.runtime().clone();
+                    let step = match crate::mux::backend_for(config.mux).sidebar_width_step(
+                        &runtime,
+                        &config.session_name,
+                        &pane,
+                    ) {
+                        Ok(step) => step,
+                        Err(err)
+                            if dir == crate::mux::WidthAdjust::Wider
+                                && config.mux == MuxName::Zellij =>
+                        {
+                            let estimated = u16::try_from(
+                                crate::mux::width::zellij_resize_step_cols(u64::from(own_cols) * 4),
+                            )
+                            .unwrap_or(u16::MAX);
+                            debug!(
+                                error = %err,
+                                own_cols,
+                                step_cols = estimated,
+                                "sidebar wider intent using conservative topology fallback",
+                            );
+                            crate::mux::WidthStep {
+                                cols: estimated,
+                                exact: false,
+                            }
+                        }
+                        Err(err) => {
+                            diag.emit_unlimited(
+                                crate::diag::record::DiagEvent::SidebarWidthIntent {
+                                    trigger,
+                                    own_cols,
+                                    base_cols,
+                                    step_cols: None,
+                                    step_exact: false,
+                                    target_cols: None,
+                                    verdict: SidebarWidthIntentVerdict::RejectedNoStep,
+                                },
+                            );
+                            debug!(
+                                pane = %pane,
+                                error = %err,
+                                "sidebar width intent dropped without backend step",
+                            );
+                            return Ok(());
+                        }
+                    };
+                    let Some(target) = crate::mux::width::adjust_target_cols(
+                        base_cols,
+                        dir,
+                        step,
+                        crate::mux::width::MIN_ADJUSTABLE_WIDTH,
+                    ) else {
+                        diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
+                            trigger,
+                            own_cols,
+                            base_cols,
+                            step_cols: Some(step.cols),
+                            step_exact: step.exact,
+                            target_cols: None,
+                            verdict: SidebarWidthIntentVerdict::RejectedFloor,
+                        });
+                        debug!(
+                            pane = %pane,
+                            base_cols,
+                            step_cols = step.cols,
+                            "sidebar width intent rejected at minimum width",
+                        );
+                        return Ok(());
+                    };
+                    diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
+                        trigger,
+                        own_cols,
+                        base_cols,
+                        step_cols: Some(step.cols),
+                        step_exact: step.exact,
+                        target_cols: Some(target.get()),
+                        verdict: SidebarWidthIntentVerdict::Accepted,
+                    });
+                    if let Err(err) = crate::sidebar::width_override::write(&runtime, target) {
+                        warn!(error = %err, "sidebar width override write failed");
+                        return Ok(());
                     }
+                    spawn_width_default_record(config.mux, &config.session_name, target.get());
+                    if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
+                        &runtime,
+                        Some(&config.session_name),
+                        SidebarEvent::WidthTargetChanged,
+                    ) {
+                        debug!(error = %err, "sidebar width target broadcast failed");
+                    }
+                    self.width_control.retarget(WidthTarget::Override(target));
+                    self.run_width_control(config, terminal, WidthControlTrigger::Retarget, diag);
                 }
             }
             Some(InputEffect::MarkRead(row_id)) => self.mark_row_read(fetch, &row_id, diag),

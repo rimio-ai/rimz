@@ -1,5 +1,6 @@
 //! Pure renderer-local sidebar width controller.
 
+use std::collections::VecDeque;
 use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
@@ -38,6 +39,21 @@ enum Direction {
     Wider,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WidthIdleReason {
+    ReachedTolerance,
+    CrossedNearest,
+    NoProgress,
+    StepBudget,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WidthTransition {
+    StepIssued { from: u16, target: u16 },
+    FeedbackLearned { settled: u16, learned_step: u16 },
+    Idle { at: u16, reason: WidthIdleReason },
+}
+
 #[derive(Clone, Copy, Debug)]
 struct IssuedStep {
     direction: Direction,
@@ -53,7 +69,7 @@ pub(super) struct WidthControl {
     learned_step: Option<u16>,
     retried_no_progress: bool,
     idle_at: Option<u16>,
-    suspended: bool,
+    traces: VecDeque<WidthTransition>,
 }
 
 impl WidthControl {
@@ -65,41 +81,45 @@ impl WidthControl {
             learned_step: None,
             retried_no_progress: false,
             idle_at: None,
-            suspended: false,
+            traces: VecDeque::new(),
         }
     }
 
     pub(super) fn retarget(&mut self, target: WidthTarget) {
+        if self.target == target {
+            return;
+        }
         self.target = target;
         self.steps_issued = 0;
         self.learned_step = None;
         self.retried_no_progress = false;
         self.idle_at = None;
-        self.suspended = false;
+        self.traces.clear();
     }
 
     pub(super) fn target(&self) -> WidthTarget {
         self.target
     }
 
-    pub(super) fn set_suspended(&mut self, suspended: bool) {
-        self.suspended = suspended;
-        if suspended {
-            self.in_flight = None;
+    pub(super) fn override_target(&self) -> Option<NonZeroU16> {
+        match self.target {
+            WidthTarget::Override(cols) => Some(cols),
+            WidthTarget::CapOnly(_) => None,
         }
     }
 
     pub(super) fn feedback_deadline(&self) -> Option<Instant> {
-        (!self.suspended)
-            .then_some(self.in_flight)
-            .flatten()
-            .map(|step| step.at + FEEDBACK_TIMEOUT)
+        self.in_flight.map(|step| step.at + FEEDBACK_TIMEOUT)
+    }
+
+    pub(super) fn take_trace(&mut self) -> Option<WidthTransition> {
+        self.traces.pop_front()
     }
 
     /// Return one `(current, target)` actuator request, recording it as the
     /// sole in-flight step until a changed measurement or timeout arrives.
     pub(super) fn decide(&mut self, own_cols: u16, now: Instant) -> Option<(u16, u16)> {
-        if self.suspended || own_cols == 0 {
+        if own_cols == 0 {
             return None;
         }
 
@@ -115,11 +135,20 @@ impl WidthControl {
 
         if let Some(step) = self.in_flight {
             if own_cols != step.width_before {
-                self.learned_step = Some(own_cols.abs_diff(step.width_before));
+                let learned_step = own_cols.abs_diff(step.width_before);
+                self.learned_step = Some(learned_step);
+                self.traces.push_back(WidthTransition::FeedbackLearned {
+                    settled: own_cols,
+                    learned_step,
+                });
                 self.in_flight = None;
                 self.retried_no_progress = false;
                 if crossed_target(step, own_cols, self.target.cols()) {
                     self.idle_at = Some(own_cols);
+                    self.traces.push_back(WidthTransition::Idle {
+                        at: own_cols,
+                        reason: WidthIdleReason::CrossedNearest,
+                    });
                     return None;
                 }
             } else if now.saturating_duration_since(step.at) < FEEDBACK_TIMEOUT {
@@ -127,6 +156,10 @@ impl WidthControl {
             } else if self.retried_no_progress {
                 self.in_flight = None;
                 self.idle_at = Some(own_cols);
+                self.traces.push_back(WidthTransition::Idle {
+                    at: own_cols,
+                    reason: WidthIdleReason::NoProgress,
+                });
                 return None;
             } else {
                 self.in_flight = None;
@@ -135,8 +168,20 @@ impl WidthControl {
         }
 
         let tolerance = self.learned_step.map_or(1, |step| (step / 2).max(1));
-        if !self.target.needs_adjustment(own_cols, tolerance) || self.steps_issued >= MAX_STEPS {
+        if !self.target.needs_adjustment(own_cols, tolerance) {
             self.idle_at = Some(own_cols);
+            self.traces.push_back(WidthTransition::Idle {
+                at: own_cols,
+                reason: WidthIdleReason::ReachedTolerance,
+            });
+            return None;
+        }
+        if self.steps_issued >= MAX_STEPS {
+            self.idle_at = Some(own_cols);
+            self.traces.push_back(WidthTransition::Idle {
+                at: own_cols,
+                reason: WidthIdleReason::StepBudget,
+            });
             return None;
         }
 
@@ -151,6 +196,10 @@ impl WidthControl {
             direction,
             width_before: own_cols,
             at: now,
+        });
+        self.traces.push_back(WidthTransition::StepIssued {
+            from: own_cols,
+            target: target_cols,
         });
         Some((own_cols, target_cols))
     }
@@ -223,22 +272,16 @@ mod tests {
     }
 
     #[test]
-    fn pending_native_adjustment_suspends_control() {
-        let now = Instant::now();
-        let mut control = WidthControl::new(override_target(72));
-        control.set_suspended(true);
-        assert_eq!(control.decide(50, now), None);
-        assert_eq!(control.feedback_deadline(), None);
-    }
-
-    #[test]
-    fn retarget_resets_suspension_and_progress_guards() {
+    fn retarget_resets_progress_guards() {
         let now = Instant::now();
         let mut control = WidthControl::new(override_target(72));
         assert_eq!(control.decide(50, now), Some((50, 72)));
-        control.set_suspended(true);
+        assert_eq!(control.decide(80, now + Duration::from_millis(10)), None);
         control.retarget(override_target(60));
-        assert_eq!(control.decide(50, now), Some((50, 60)));
+        assert_eq!(
+            control.decide(50, now + Duration::from_millis(20)),
+            Some((50, 60))
+        );
     }
 
     #[test]
@@ -248,6 +291,65 @@ mod tests {
         assert_eq!(control.decide(50, now), Some((50, 72)));
         control.retarget(override_target(60));
         assert_eq!(control.decide(50, now + Duration::from_millis(10)), None);
+    }
+
+    #[test]
+    fn unchanged_retarget_preserves_progress() {
+        let now = Instant::now();
+        let mut control = WidthControl::new(override_target(72));
+        assert_eq!(control.decide(50, now), Some((50, 72)));
+        control.retarget(override_target(72));
+        assert_eq!(control.decide(50, now + Duration::from_millis(10)), None);
+        assert_eq!(control.steps_issued, 1);
+    }
+
+    #[test]
+    fn transitions_cover_issue_feedback_and_idle_outcomes() {
+        let now = Instant::now();
+        let mut control = WidthControl::new(override_target(72));
+        assert_eq!(control.decide(50, now), Some((50, 72)));
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::StepIssued {
+                from: 50,
+                target: 72,
+            })
+        );
+
+        assert_eq!(
+            control.decide(60, now + Duration::from_millis(10)),
+            Some((60, 72))
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::FeedbackLearned {
+                settled: 60,
+                learned_step: 10,
+            })
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::StepIssued {
+                from: 60,
+                target: 72,
+            })
+        );
+
+        assert_eq!(control.decide(68, now + Duration::from_millis(20)), None);
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::FeedbackLearned {
+                settled: 68,
+                learned_step: 8,
+            })
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::Idle {
+                at: 68,
+                reason: WidthIdleReason::ReachedTolerance,
+            })
+        );
     }
 
     #[test]

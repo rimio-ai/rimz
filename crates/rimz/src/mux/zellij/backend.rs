@@ -23,7 +23,7 @@ use crate::mux::{
     ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
     NamedKey, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, Result,
     SessionHealth, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
-    SplitDirection, SplitPaneOptions, TabOptions, WidthAdjust, ensure_pane_backend,
+    SplitDirection, SplitPaneOptions, TabOptions, WidthStep, ensure_pane_backend,
     execute_reconcile_plan, memoized_version,
 };
 use crate::pane::PaneRef;
@@ -639,13 +639,46 @@ impl MuxBackend for ZellijBackend {
         spec.arg(pane.raw()).run().map(|_| ())
     }
 
-    fn resize_sidebar_width(&self, session: &str, pane: &PaneId, dir: WidthAdjust) -> Result<()> {
+    fn sidebar_width_step(
+        &self,
+        runtime: &RuntimePaths,
+        session: &str,
+        pane: &PaneId,
+    ) -> Result<WidthStep> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
-        let direction = match dir {
-            WidthAdjust::Narrower => "decrease",
-            WidthAdjust::Wider => "increase",
-        };
-        self.resize_sidebar_step(session, pane.raw(), direction)
+        let pane_id = pane.creation_ordinal().ok_or_else(|| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("target pane `{pane}` has no numeric topology id"),
+        })?;
+        let cache = crate::sidebar::cache::read_pane_topology_cache(runtime, session)
+            .filter(|cache| {
+                crate::sidebar::cache::pane_topology_cache_is_fresh(
+                    cache,
+                    crate::sidebar::timing::unix_now_ms(),
+                    None,
+                )
+            })
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("fresh pane topology is unavailable for session `{session}`"),
+            })?;
+        let tab_position = cache
+            .panes
+            .iter()
+            .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
+            .map(|candidate| candidate.tab_position)
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("target pane `{pane}` is absent from the topology cache"),
+            })?;
+        let view_cols =
+            tab_view_cols(&cache.panes, tab_position).ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("tab {tab_position} has no tiled topology width"),
+            })?;
+        let cols = u16::try_from(crate::mux::width::zellij_resize_step_cols(view_cols))
+            .unwrap_or(u16::MAX);
+        Ok(WidthStep { cols, exact: false })
     }
 
     fn nudge_sidebar_width(

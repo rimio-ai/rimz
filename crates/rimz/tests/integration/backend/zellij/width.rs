@@ -1,5 +1,5 @@
 use rimz::ids::{MuxName, PaneId};
-use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, WidthAdjust, ZellijBackend};
+use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, ZellijBackend};
 use tempfile::TempDir;
 
 use super::support::*;
@@ -26,9 +26,10 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     let listed = raw_sidebar_pane(xdg.path(), &name);
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", listed.id));
     let initial = listed.pane_columns;
+    let initial_cols = u16::try_from(initial).expect("sidebar width fits u16");
 
     backend
-        .resize_sidebar_width(&name, &pane, WidthAdjust::Wider)
+        .nudge_sidebar_width(&name, &pane, initial_cols, u16::MAX)
         .expect("widen sidebar");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while raw_sidebar_pane(xdg.path(), &name).pane_columns <= initial
@@ -42,8 +43,9 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
         "native wider step did not grow {initial}: {wider}"
     );
 
+    let wider_cols = u16::try_from(wider).expect("sidebar width fits u16");
     backend
-        .resize_sidebar_width(&name, &pane, WidthAdjust::Narrower)
+        .nudge_sidebar_width(&name, &pane, wider_cols, 1)
         .expect("narrow sidebar");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while raw_sidebar_pane(xdg.path(), &name).pane_columns >= wider
@@ -78,8 +80,9 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     let explicit = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
         .expect("explicit tab carries sidebar");
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", explicit.id));
+    let explicit_cols = u16::try_from(explicit.columns).expect("sidebar width fits u16");
     backend
-        .resize_sidebar_width(&name, &pane, WidthAdjust::Wider)
+        .nudge_sidebar_width(&name, &pane, explicit_cols, u16::MAX)
         .expect("widen explicit-layout sidebar");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let resized = loop {

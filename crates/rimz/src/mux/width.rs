@@ -11,11 +11,46 @@ const AUTO_WIDTH_BREAKPOINT_COLS: u64 = 240;
 const AUTO_WIDTH_NARROW_PERCENT: u16 = 25;
 const AUTO_WIDTH_WIDE_PERCENT: u16 = 30;
 
+pub(crate) const MIN_ADJUSTABLE_WIDTH: u16 = 24;
+
 /// One user-requested sidebar width step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WidthAdjust {
     Narrower,
     Wider,
+}
+
+/// One backend-native sidebar width step and whether it can land on an exact
+/// column target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WidthStep {
+    pub cols: u16,
+    pub exact: bool,
+}
+
+/// Resolve the validated absolute target requested by one width keypress.
+/// Inexact backends reject a narrower step that would cross the minimum;
+/// exact backends clamp that step to the minimum instead.
+pub(crate) fn adjust_target_cols(
+    base: u16,
+    dir: WidthAdjust,
+    step: WidthStep,
+    min_cols: u16,
+) -> Option<NonZeroU16> {
+    match dir {
+        WidthAdjust::Wider => NonZeroU16::new(base.saturating_add(step.cols)),
+        WidthAdjust::Narrower if base <= min_cols => None,
+        WidthAdjust::Narrower => {
+            let target = base.saturating_sub(step.cols);
+            if target >= min_cols {
+                NonZeroU16::new(target)
+            } else if step.exact {
+                NonZeroU16::new(min_cols)
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// Sidebar width policy from `theme.display.width_percent`.
@@ -236,6 +271,39 @@ pub fn split_along_longer_edge(cols: u16, rows: u16) -> SplitDirection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn width_adjustment_resolves_absolute_targets_and_floor() {
+        let inexact = WidthStep {
+            cols: 10,
+            exact: false,
+        };
+        let exact = WidthStep {
+            cols: 2,
+            exact: true,
+        };
+
+        assert_eq!(
+            adjust_target_cols(30, WidthAdjust::Wider, inexact, 24),
+            NonZeroU16::new(40)
+        );
+        assert_eq!(
+            adjust_target_cols(40, WidthAdjust::Narrower, inexact, 24),
+            NonZeroU16::new(30)
+        );
+        assert_eq!(
+            adjust_target_cols(30, WidthAdjust::Narrower, inexact, 24),
+            None
+        );
+        assert_eq!(
+            adjust_target_cols(25, WidthAdjust::Narrower, exact, 24),
+            NonZeroU16::new(24)
+        );
+        assert_eq!(
+            adjust_target_cols(24, WidthAdjust::Narrower, exact, 24),
+            None
+        );
+    }
 
     #[test]
     fn sidebar_width_uses_configured_percent_and_cap() {

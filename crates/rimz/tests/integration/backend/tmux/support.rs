@@ -12,7 +12,6 @@ pub(super) use rimz::ids::{AgentKind, MuxName, PaneId, SidebarInstanceId, Worksp
 pub(super) use rimz::mux::{
     ClientFocusOptions, LayoutColumn, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
     SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
-    WidthAdjust,
 };
 pub(super) use rimz::pane::PaneRef;
 pub(super) use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, write_heartbeat};

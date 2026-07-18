@@ -258,13 +258,16 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn resize_sidebar_width(
+    fn sidebar_width_step(
         &self,
+        _runtime: &RuntimePaths,
         _session: &str,
         _pane: &PaneId,
-        _dir: rimz::mux::WidthAdjust,
-    ) -> rimz::mux::Result<()> {
-        Ok(())
+    ) -> rimz::mux::Result<rimz::mux::WidthStep> {
+        Ok(rimz::mux::WidthStep {
+            cols: 2,
+            exact: true,
+        })
     }
 
     fn nudge_sidebar_width(

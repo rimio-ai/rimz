@@ -15,7 +15,7 @@ mod reconcile;
 pub mod recovery;
 mod selection;
 pub mod tmux;
-mod width;
+pub(crate) mod width;
 pub mod zellij;
 
 pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_osc_passthrough};
@@ -31,8 +31,8 @@ pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
 pub use width::{
-    BirthSize, CLIENT_SIZE_ENV, SidebarWidth, WidthAdjust, WidthPercent, client_size_from_env,
-    detect_terminal_size, split_along_longer_edge,
+    BirthSize, CLIENT_SIZE_ENV, SidebarWidth, WidthAdjust, WidthPercent, WidthStep,
+    client_size_from_env, detect_terminal_size, split_along_longer_edge,
 };
 pub use zellij::ZellijBackend;
 
@@ -641,8 +641,13 @@ pub trait MuxBackend: Send + Sync {
     /// `ZELLIJ_SESSION_NAME` resolve it. tmux ignores the session because pane
     /// ids are server-global.
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
-    /// Step the sidebar pane width without blocking the renderer loop.
-    fn resize_sidebar_width(&self, session: &str, pane: &PaneId, dir: WidthAdjust) -> Result<()>;
+    /// Report the backend-native step one sidebar width keypress represents.
+    fn sidebar_width_step(
+        &self,
+        runtime: &crate::store::RuntimePaths,
+        session: &str,
+        pane: &PaneId,
+    ) -> Result<WidthStep>;
     /// Move one sidebar pane toward an absolute target. Zellij performs one
     /// native relative step; tmux can apply the target exactly.
     fn nudge_sidebar_width(

@@ -1,14 +1,4 @@
 use super::*;
-
-#[test]
-fn narrower_stops_before_the_minimum_frame_width() {
-    use crate::mux::WidthAdjust;
-
-    assert!(!width_adjust_allowed(WidthAdjust::Narrower, None));
-    assert!(!width_adjust_allowed(WidthAdjust::Narrower, Some(24)));
-    assert!(width_adjust_allowed(WidthAdjust::Narrower, Some(25)));
-    assert!(width_adjust_allowed(WidthAdjust::Wider, None));
-}
 use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot_with_panes, workspace};
 use crate::sidebar_pane::app::input::KeyAction;
 use std::collections::HashSet;
@@ -205,7 +195,11 @@ fn tripped_budget_ratchet_observes_the_day_spend_epoch_it_displays() {
 }
 
 fn fixed_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24));
+    fixed_terminal_with_width(80)
+}
+
+fn fixed_terminal_with_width(width: u16) -> Terminal<CrosstermBackend<io::Stdout>> {
+    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, width, 24));
     Terminal::with_options(
         CrosstermBackend::new(io::stdout()),
         ratatui::TerminalOptions { viewport },
@@ -890,10 +884,13 @@ fn width_target_event_reloads_the_override_without_a_producer_fetch() {
 }
 
 #[test]
-fn settled_native_width_adjustment_records_retargets_and_broadcasts() {
+fn tmux_width_key_persists_retargets_and_broadcasts_intent() {
     let ws = workspace();
-    let (dir, mut state) = loop_state(&ws);
-    let config = serve_config(&ws);
+    let own_pane = PaneId::from_parts(MuxName::Tmux, "%1");
+    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+    let mut config = serve_config(&ws);
+    config.mux = MuxName::Tmux;
+    config.own_pane = Some(own_pane);
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     runtime.ensure_dirs().expect("runtime dirs");
     let instance = SidebarInstanceId::new();
@@ -906,7 +903,7 @@ fn settled_native_width_adjustment_records_retargets_and_broadcasts() {
         &runtime,
         ws.clone(),
         &instance,
-        crate::MuxName::Zellij,
+        crate::MuxName::Tmux,
         &config.session_name,
         &socket_path,
         None,
@@ -914,35 +911,186 @@ fn settled_native_width_adjustment_records_retargets_and_broadcasts() {
     .expect("write heartbeat");
     let mut terminal = fixed_terminal();
     let (mut fetch, _request_rx) = fetch_dispatcher();
-    state.width_adjust_pending = Some(Instant::now());
-    state.width_control.set_suspended(true);
 
     state
-        .on_resize(
+        .on_input(
             &config,
-            &runtime,
-            &mut fetch,
+            Wakeup::Key(KeyAction::WidthWider),
             &mut terminal,
-            Some(80),
+            &mut fetch,
             Instant::now(),
+            &crate::diag::DiagSink::disabled(),
         )
-        .expect("settle native width adjustment");
+        .expect("apply width intent");
 
-    let recorded = std::num::NonZeroU16::new(80).expect("nonzero width");
+    let recorded = std::num::NonZeroU16::new(82).expect("nonzero width");
     assert_eq!(
         crate::sidebar::width_override::load(&runtime),
         Some(recorded)
     );
     assert_eq!(
-        state.width_control.decide(70, Instant::now()),
-        Some((70, 80)),
-        "recording the target also resumes and retargets local control",
+        state.width_control.override_target(),
+        Some(recorded),
+        "the initiating controller converges on the persisted intent",
     );
     let mut payload = [0_u8; 1024];
     let received = socket.recv(&mut payload).expect("receive target broadcast");
     let envelope: SidebarEventEnvelope =
         serde_json::from_slice(&payload[..received]).expect("decode target broadcast");
     assert_eq!(envelope.event, SidebarEvent::WidthTargetChanged);
+}
+
+#[test]
+fn repeated_width_keys_compound_on_the_pending_intent() {
+    let ws = workspace();
+    let own_pane = PaneId::from_parts(MuxName::Tmux, "%1");
+    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+    let mut config = serve_config(&ws);
+    config.mux = MuxName::Tmux;
+    config.own_pane = Some(own_pane);
+    let runtime = RuntimePaths::under(ws, dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let mut terminal = fixed_terminal();
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    for _ in 0..2 {
+        state
+            .on_input(
+                &config,
+                Wakeup::Key(KeyAction::WidthWider),
+                &mut terminal,
+                &mut fetch,
+                Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
+            .expect("apply width intent");
+    }
+
+    let target = std::num::NonZeroU16::new(84).expect("nonzero width");
+    assert_eq!(crate::sidebar::width_override::load(&runtime), Some(target));
+    assert_eq!(state.width_control.override_target(), Some(target));
+}
+
+fn write_width_topology(runtime: &RuntimePaths, session: &str) {
+    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+
+    let pane = |id, pane_x, pane_columns, title: &str| PaneTopologyPane {
+        id,
+        is_plugin: false,
+        is_held: false,
+        exited: false,
+        is_suppressed: false,
+        is_floating: false,
+        is_focused: false,
+        tab_position: 0,
+        tab_name: None,
+        pane_columns: Some(pane_columns),
+        pane_x: Some(pane_x),
+        title: Some(title.to_owned()),
+        pane_command: None,
+        pane_cwd: None,
+        terminal_command: None,
+    };
+    crate::sidebar::cache::write_pane_topology_cache(
+        runtime,
+        &PaneTopologyCache {
+            session_name: session.to_owned(),
+            produced_at_ms: crate::sidebar::timing::unix_now_ms(),
+            writer: None,
+            focused_pane: None,
+            clients: None,
+            panes: vec![pane(1, 0, 80, "rimz-sidebar"), pane(2, 80, 120, "work")],
+        },
+    )
+    .expect("write pane topology");
+}
+
+#[test]
+fn zellij_width_key_uses_live_view_step_for_intent() {
+    let ws = workspace();
+    let own_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+    let mut config = serve_config(&ws);
+    config.own_pane = Some(own_pane);
+    let runtime = RuntimePaths::under(ws, dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    write_width_topology(&runtime, &config.session_name);
+    let mut terminal = fixed_terminal();
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    state
+        .on_input(
+            &config,
+            Wakeup::Key(KeyAction::WidthWider),
+            &mut terminal,
+            &mut fetch,
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("apply width intent");
+
+    assert_eq!(
+        crate::sidebar::width_override::load(&runtime),
+        std::num::NonZeroU16::new(90),
+    );
+}
+
+#[test]
+fn zellij_narrower_key_rejects_a_step_below_the_floor() {
+    let ws = workspace();
+    let own_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+    let mut config = serve_config(&ws);
+    config.own_pane = Some(own_pane);
+    let runtime = RuntimePaths::under(ws, dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    write_width_topology(&runtime, &config.session_name);
+    let prior = std::num::NonZeroU16::new(30).expect("nonzero width");
+    crate::sidebar::width_override::write(&runtime, prior).expect("write prior override");
+    state.width_control.retarget(WidthTarget::Override(prior));
+    let mut terminal = fixed_terminal();
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    state
+        .on_input(
+            &config,
+            Wakeup::Key(KeyAction::WidthNarrower),
+            &mut terminal,
+            &mut fetch,
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("reject floor-crossing width intent");
+
+    assert_eq!(crate::sidebar::width_override::load(&runtime), Some(prior));
+    assert_eq!(state.width_control.override_target(), Some(prior));
+}
+
+#[test]
+fn zellij_narrower_key_drops_without_fresh_topology() {
+    let ws = workspace();
+    let own_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let (dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+    let mut config = serve_config(&ws);
+    config.own_pane = Some(own_pane);
+    let runtime = RuntimePaths::under(ws, dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let mut terminal = fixed_terminal();
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    state
+        .on_input(
+            &config,
+            Wakeup::Key(KeyAction::WidthNarrower),
+            &mut terminal,
+            &mut fetch,
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("drop width intent without topology");
+
+    assert_eq!(crate::sidebar::width_override::load(&runtime), None);
+    assert_eq!(state.width_control.override_target(), None);
 }
 
 #[test]
@@ -1895,9 +2043,8 @@ fn paint_path_arms_resize_hold_on_grow_without_advancing_prev_width() {
 #[test]
 fn attach_sized_grow_repaints_with_a_seen_sibling() {
     let ws = workspace();
-    let (dir, mut state) = loop_state(&ws);
+    let (_dir, mut state) = loop_state(&ws);
     let config = serve_config(&ws);
-    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let (mut fetch, request_rx) = fetch_dispatcher();
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(io::stdout()),
@@ -1914,11 +2061,11 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
     state
         .on_resize(
             &config,
-            &runtime,
             &mut fetch,
             &mut terminal,
             Some(57),
             Instant::now(),
+            &crate::diag::DiagSink::disabled(),
         )
         .expect("handle attach resize");
 
