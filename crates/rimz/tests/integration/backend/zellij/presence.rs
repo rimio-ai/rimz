@@ -158,6 +158,7 @@ fn wait_for_focus_action(
     renderer_log: &Path,
     pane: &PaneId,
     prior_count: usize,
+    phase: &str,
 ) -> String {
     let raw = pane.raw();
     let numeric = raw.strip_prefix("terminal_").unwrap_or(raw);
@@ -179,11 +180,51 @@ fn wait_for_focus_action(
         }
         if Instant::now() >= deadline {
             panic!(
-                "timed out waiting for renderer focus action on {pane}; trace: {contents}; renderer: {}",
+                "timed out waiting for {phase} focus action on {pane} (ignoring {prior_count} earlier action(s)); trace: {contents}; renderer: {}",
                 std::fs::read_to_string(renderer_log).unwrap_or_default(),
             );
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Leave the tab with its sidebar focused — the strand the next switch back has
+/// to repair. Presses the focus-left chord until the attached client's view is
+/// the sidebar alone and holds there, so the tab is provably stranded before the
+/// test switches away; a bare keypress plus a sleep leaves the precondition to
+/// chance and turns any miss into an unexplained repair timeout later.
+fn strand_sidebar_focus(
+    backend: &ZellijBackend,
+    client: &mut AttachedClient,
+    session: &str,
+    sidebar: &PaneId,
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut holds = 0;
+    let mut last = String::new();
+    loop {
+        match client_viewed_panes(backend, session) {
+            Ok(viewed) if viewed == [sidebar.clone()] => {
+                holds += 1;
+                if holds == 3 {
+                    return;
+                }
+            }
+            Ok(viewed) => {
+                last = format!("{viewed:?}");
+                holds = 0;
+                client.press_alt('h');
+            }
+            Err(err) => {
+                last = err;
+                holds = 0;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "client focus never settled on the sidebar {sidebar} in {session}; last view: {last}",
+        );
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -536,8 +577,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     client.go_to_tab(2);
     wait_for_focused_client_pane(&backend, &name, &target_work);
 
-    client.press_alt('h');
-    wait_for_focused_client_pane(&backend, &name, &target_sidebar);
+    strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
 
     client.go_to_tab(1);
     wait_for_focused_client_pane(&backend, &name, &birth_work);
@@ -554,7 +594,13 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         }),
         "settled wake lacks tab/generation/client evidence: {settled:?}",
     );
-    wait_for_focus_action(&trace_log, &focus_exec_log, &target_work, actions_before);
+    wait_for_focus_action(
+        &trace_log,
+        &focus_exec_log,
+        &target_work,
+        actions_before,
+        "first switch-settled repair",
+    );
     let assists = wait_for_accepted_focus_repair(xdg.path(), &target_work, assists_before);
 
     client.send_line("rimz-routed-first");
@@ -576,8 +622,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         )
     }));
 
-    client.press_alt('h');
-    std::thread::sleep(Duration::from_millis(100));
+    strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
     client.go_to_tab(1);
     wait_for_focused_client_pane(&backend, &name, &birth_work);
     let pokes_before_reload = poke_lines(&poke_log).len();
@@ -603,7 +648,13 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let assists_before = accepted_focus_repairs(xdg.path(), &target_work);
     client.go_to_tab(2);
     wait_for_switch_settled(&poke_log, pokes_before);
-    wait_for_focus_action(&trace_log, &focus_exec_log, &target_work, actions_before);
+    wait_for_focus_action(
+        &trace_log,
+        &focus_exec_log,
+        &target_work,
+        actions_before,
+        "post-reload repair",
+    );
     wait_for_accepted_focus_repair(xdg.path(), &target_work, assists_before);
     client.send_line("rimz-routed-after-reload");
     poll_until(
@@ -613,8 +664,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         "terminal input routed after plugin reload",
     );
 
-    client.press_alt('h');
-    std::thread::sleep(Duration::from_millis(100));
+    strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
     client.go_to_tab(1);
     wait_for_focused_client_pane(&backend, &name, &birth_work);
     let actions_before = focus_action_count(&trace_log);
