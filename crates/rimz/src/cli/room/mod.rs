@@ -233,7 +233,7 @@ pub(crate) fn ensure_workspace_room_for_web(
 }
 
 fn validate_agent_plugins() -> Result<()> {
-    let loaded = rimz::agents::plugin::loaded();
+    let loaded = rimz::agents::plugins::loaded();
     if loaded.errors.is_empty() {
         return Ok(());
     }

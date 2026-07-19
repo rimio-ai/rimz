@@ -39,9 +39,10 @@ pub(crate) fn split_into_loop_zone(
         None => {
             let machine = rimz::config::MachineConfig::load_lenient();
             let rimz_bin = rimz::proc::rimz_exe();
-            let claude_host_argv = (machine.remote_control.claude
+            let claude_host_argv = (machine.remote_control.enabled_for("claude")
                 && which::which("claude").is_ok())
-            .then(rimz::agents::claude::remote_control::host_argv);
+            .then(|| rimz::agents::runtime_control::host_argv("claude"))
+            .flatten();
             let view =
                 rimz::daemon_view::daemon_view_spec(rimz::daemon_view::DaemonViewSpecParams {
                     claude_host_argv: claude_host_argv.as_deref(),

@@ -401,7 +401,7 @@ pub enum ExecWireErr {
 
 /// Compile the selected adapter action and preserve provider trailing argv.
 pub fn compile_provider_argv(
-    adapter: &dyn crate::agents::AgentAdapter,
+    adapter: &crate::agents::AgentDefinition,
     kind: &str,
     action: &ExecAction,
     cwd: &Path,
@@ -429,7 +429,7 @@ pub fn compile_provider_argv(
             extra_args,
         } => {
             let mut argv = adapter
-                .descriptor()
+                .spec()
                 .launch
                 .fork_command(session_id)
                 .ok_or_else(|| AgentProcessCompileErr::NoFork {
@@ -455,10 +455,11 @@ pub fn compile_agent_process(
     cwd: &Path,
 ) -> AgentProcessResult<CompiledAgentProcess> {
     let kind = request.kind.as_str();
-    let adapter =
-        crate::agents::find_adapter(kind).ok_or_else(|| AgentProcessCompileErr::UnknownAgent {
+    let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
+        AgentProcessCompileErr::UnknownAgent {
             kind: kind.to_owned(),
-        })?;
+        }
+    })?;
     let provider_argv = compile_provider_argv(adapter, kind, &request.action, cwd)?;
     let provider_program =
         provider_argv
@@ -495,7 +496,7 @@ pub fn compile_managed_agent_process(
         requested,
         crate::agents::ManagedLaunchState::PendingResolution
     ) {
-        let adapter = crate::agents::find_adapter(request.kind.as_str())
+        let adapter = crate::agents::find_definition(request.kind.as_str())
             .expect("process compilation already resolved the adapter");
         adapter.resolve_managed_launch(
             cwd,
@@ -526,7 +527,7 @@ pub fn compile_agent_process_stage(
 
     let process = compile_agent_process(project_root, rtk, request, cwd)?;
     let managed_launch = if bound {
-        let adapter = crate::agents::find_adapter(request.kind.as_str()).ok_or_else(|| {
+        let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
             AgentProcessCompileErr::UnknownAgent {
                 kind: request.kind.to_string(),
             }
@@ -581,7 +582,7 @@ fn finalize_agent_process_stage(
 
 fn compose_agent_env(
     mut env: BTreeMap<String, String>,
-    adapter: &dyn crate::agents::AgentAdapter,
+    adapter: &crate::agents::AgentDefinition,
     rtk: crate::config::RtkMode,
     request: &ExecRequest,
 ) -> AgentProcessResult<BTreeMap<String, String>> {

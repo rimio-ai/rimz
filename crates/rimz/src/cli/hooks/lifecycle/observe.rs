@@ -8,8 +8,8 @@ const MAX_SUBAGENT_PARENT_CANDIDATES: usize = 64;
 pub(super) fn record_lifecycle_observation(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    agent: &dyn AgentAdapter,
-    decoded: &mut DecodedHook,
+    agent: &AgentDefinition,
+    decoded: &mut HookOutput,
     ingress_owner: HookIngressOwner,
     globals: &GlobalFlags,
 ) -> Option<RecordedLifecycle> {
@@ -36,7 +36,7 @@ pub(super) fn record_lifecycle_observation(
 pub(super) fn record_derived_lifecycle_observation(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     event_name: &str,
     mut observation: AgentLifecycleObservation,
     ingress_owner: HookIngressOwner,
@@ -50,7 +50,7 @@ pub(super) fn record_derived_lifecycle_observation(
 fn record_mapped_lifecycle_observation(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     event_name: &str,
     mut observation: AgentLifecycleObservation,
     globals: &GlobalFlags,
@@ -90,8 +90,8 @@ fn record_mapped_lifecycle_observation(
     }
     enrich_pane_stamp_from_cache(workspace, store, &mut observation);
     recover_focused_pane_binding(
-        agent.descriptor().kind,
-        agent.descriptor().capabilities.registers_lazily,
+        agent.spec().kind,
+        agent.spec().capabilities.registers_lazily,
         globals.mux,
         workspace,
         store,
@@ -118,7 +118,7 @@ fn record_mapped_lifecycle_observation(
     };
     let receipt = match store.append_agent_lifecycle(AgentLifecycleIntent {
         session_name: &workspace.session_name,
-        agent_kind: agent.descriptor().kind_id(),
+        agent_kind: agent.spec().kind_id(),
         event_name,
         observation: &observation,
         spawned_subagents: &spawned_subagents,
@@ -126,7 +126,7 @@ fn record_mapped_lifecycle_observation(
         Ok(receipt) => receipt,
         Err(err) => {
             warn!(
-                agent = agent.descriptor().kind,
+                agent = agent.spec().kind,
                 event = %event_name,
                 error = %err,
                 "lifecycle: failed to record the agent.lifecycle event",
@@ -139,7 +139,7 @@ fn record_mapped_lifecycle_observation(
             };
         }
     };
-    log_lifecycle_receipt(agent.descriptor().kind, &observation, &receipt);
+    log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
     RecordedLifecycle {
         model_hint,
         observation,
@@ -151,7 +151,7 @@ fn record_mapped_lifecycle_observation(
 fn correlate_subagent_observation(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     observation: &mut AgentLifecycleObservation,
 ) {
     if observation.parent_agent_id.is_some() {
@@ -172,7 +172,7 @@ fn correlate_subagent_observation(
         Ok(snapshot) => snapshot,
         Err(err) => {
             debug!(
-                kind = agent.descriptor().kind,
+                kind = agent.spec().kind,
                 child_id = child_id.as_str(),
                 error = %err,
                 "lifecycle: skipped subagent correlation because the prior rollup was unreadable",
@@ -183,7 +183,7 @@ fn correlate_subagent_observation(
     if let Some(parent_id) = snapshot
         .agents
         .iter()
-        .find(|state| state.kind.as_str() == agent.descriptor().kind && state.agent_id == *child_id)
+        .find(|state| state.kind.as_str() == agent.spec().kind && state.agent_id == *child_id)
         .and_then(|state| state.parent_agent_id.clone())
         .filter(|parent_id| parent_id != child_id)
     {
@@ -211,7 +211,7 @@ fn correlate_subagent_observation(
         .agents
         .iter()
         .filter(|state| {
-            state.kind.as_str() == agent.descriptor().kind
+            state.kind.as_str() == agent.spec().kind
                 && state.agent_id != *child_id
                 && state
                     .pane
@@ -222,7 +222,7 @@ fn correlate_subagent_observation(
     candidates.sort_by_key(|state| std::cmp::Reverse(state.last_activity));
     if candidates.len() > MAX_SUBAGENT_PARENT_CANDIDATES {
         debug!(
-            kind = agent.descriptor().kind,
+            kind = agent.spec().kind,
             child_id = child_id.as_str(),
             candidates = candidates.len(),
             "lifecycle: skipped subagent correlation because the pane-local parent set exceeded its bound",
@@ -256,7 +256,7 @@ fn correlate_subagent_observation(
     };
     if matched.next().is_some() {
         debug!(
-            kind = agent.descriptor().kind,
+            kind = agent.spec().kind,
             child_id = child_id.as_str(),
             "lifecycle: ambiguous pane-local subagent parents — correlation quarantined",
         );

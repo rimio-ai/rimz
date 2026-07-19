@@ -210,7 +210,7 @@ fn produce_local_serves_published_within_grace() {
     )
     .expect("transcript");
     let _discovered = override_discovered_spending_files_for_test(vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript.clone(),
     )]);
     std::fs::remove_file(&transcript).expect("delete transcript");
@@ -245,7 +245,7 @@ fn produce_local_walk_seeds_from_cursor_cache() {
     let now_secs = unix_secs_now();
     std::fs::write(&transcript, claude_cost_line(now_secs, 9.0, "live")).expect("transcript");
     let _discovered = override_discovered_spending_files_for_test(vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript.clone(),
     )]);
 
@@ -292,7 +292,7 @@ fn walk_local_stays_memory_only_while_publishing_walk_writes_provider_cache() {
     let now_secs = unix_secs_now();
     std::fs::write(&transcript, claude_cost_line(now_secs, 2.5, "publish")).expect("transcript");
     let _discovered = override_discovered_spending_files_for_test(vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript,
     )]);
     let spec = HeadlineSpec {
@@ -334,7 +334,7 @@ fn walk_local_builds_workspace_cache_without_publishing() {
     )
     .expect("transcript");
     let _discovered = override_discovered_spending_files_for_test(vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript,
     )]);
     let scope = SpendScope::for_workspace(Some(&project), &[], None);
@@ -410,7 +410,7 @@ fn publishing_walk_observer_checkpoints_workspace_live_baselines() {
         cache
     };
     let files = vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript,
     )];
     let spec = HeadlineSpec {
@@ -503,7 +503,7 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
         _ => panic!("test must hold the global spending lock"),
     };
     let files = vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript,
     )];
     let stale_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -585,7 +585,7 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
     );
     write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
     let files = vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript,
     )];
     let spec = HeadlineSpec {
@@ -668,7 +668,7 @@ fn producer_missing_scope_applies_live_origin_before_reusing_warm_memo() {
     );
     write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
     let files = vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript.clone(),
     )];
     let spec = HeadlineSpec {
@@ -756,7 +756,7 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
     );
     write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
     let files = vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript,
     )];
     let mut spending = Spending::default();
@@ -939,7 +939,7 @@ fn producer_publishes_compacted_shared_spending_cache() {
         .expect("seed spending cache")
         .len();
     let _discovered = override_discovered_spending_files_for_test(vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        crate::agents::definition_by_kind("claude").unwrap(),
         transcript,
     )]);
     let caches = compute_fleet_spending(&runtime, None, &HeadlineSpec::default());

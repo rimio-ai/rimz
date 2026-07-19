@@ -3,7 +3,7 @@
 //! Spawned detached by the sidebar producer for one metered, logged-in provider.
 //! Every adapter with a supported usage surface runs the same API-query channel
 //! through
-//! [`AgentAdapter::probe_account_usage`](rimz::agents::AgentAdapter::probe_account_usage),
+//! [`AgentDefinition::probe_account_usage`](rimz::agents::AgentDefinition::probe_account_usage),
 //! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
 //! caches. An adapter may expose a pollable realtime account channel; the helper
 //! reads it first, then runs the direct channel on its own shared cadence. When

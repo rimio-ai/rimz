@@ -22,8 +22,8 @@ pub(super) use identity::fill_root_launch_identity;
 pub(crate) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    agent: &dyn AgentAdapter,
-    decoded: &mut DecodedHook,
+    agent: &AgentDefinition,
+    decoded: &mut HookOutput,
     payload: &Value,
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
@@ -44,13 +44,13 @@ pub(crate) fn handle_lifecycle_hook(
         && let Err(err) = rimz::harness::run::record_assistant_message(
             store.paths(),
             &run_id,
-            agent.descriptor().kind,
+            agent.spec().kind,
             &agent_id,
             message,
         )
     {
         warn!(
-            agent = agent.descriptor().kind,
+            agent = agent.spec().kind,
             event = %event_name,
             run_id = %run_id,
             error = %err,
@@ -131,7 +131,7 @@ pub(crate) fn handle_lifecycle_hook(
             &delivered,
         ) {
             warn!(
-                agent = agent.descriptor().kind,
+                agent = agent.spec().kind,
                 event = %event_name,
                 error = %err,
                 "lifecycle: failed to record transcript entry",
@@ -140,7 +140,7 @@ pub(crate) fn handle_lifecycle_hook(
         if recorded.observation.signal == LifecycleSignal::Ended
             && let Some(agent_id) = agent_id
         {
-            let kind = agent.descriptor().kind_id();
+            let kind = agent.spec().kind_id();
             if let Err(err) = store.archive_messages_watching_card(
                 &kind,
                 &agent_id,
@@ -149,7 +149,7 @@ pub(crate) fn handle_lifecycle_hook(
             ) {
                 warn!(
                     error = %err,
-                    kind = agent.descriptor().kind,
+                    kind = agent.spec().kind,
                     agent_id = %agent_id,
                     "lifecycle: failed to archive messages watching ended agent",
                 );
@@ -163,7 +163,7 @@ pub(crate) fn handle_lifecycle_hook(
             ) {
                 warn!(
                     error = %err,
-                    kind = agent.descriptor().kind,
+                    kind = agent.spec().kind,
                     agent_id = %agent_id,
                     "lifecycle: failed to archive receiver messages",
                 );
@@ -197,7 +197,7 @@ fn assistant_message_for_lifecycle(
 fn derive_subagent_lifecycle(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
 ) -> bool {
@@ -209,14 +209,14 @@ fn derive_subagent_lifecycle(
         Ok(snapshot) => snapshot,
         Err(err) => {
             debug!(
-                kind = agent.descriptor().kind,
+                kind = agent.spec().kind,
                 error = %err,
                 "lifecycle: skipped derived subagents because the prior rollup was unreadable",
             );
             return false;
         }
     };
-    let kind = agent.descriptor().kind;
+    let kind = agent.spec().kind;
     let mut rotation_due = false;
     for observation in observations {
         let (Some(child_id), Some(parent_id)) = (
@@ -294,13 +294,13 @@ fn spawn_auto_rotation(workspace: &ResolvedWorkspace) {
 struct AgentContextHook<'a> {
     workspace: &'a ResolvedWorkspace,
     store: &'a Store,
-    agent: &'a dyn AgentAdapter,
+    agent: &'a AgentDefinition,
     context: LifecycleEventContext<'a>,
 }
 
 struct LifecycleEventContext<'a> {
     event_name: &'a str,
-    decoded: &'a mut DecodedHook,
+    decoded: &'a mut HookOutput,
     payload: &'a Value,
     agent_id: &'a str,
     parent_agent_id: Option<&'a str>,
@@ -312,9 +312,9 @@ struct LifecycleEventContext<'a> {
 struct ContextSidecarInput<'a> {
     workspace: &'a ResolvedWorkspace,
     store: &'a Store,
-    agent: &'a dyn AgentAdapter,
+    agent: &'a AgentDefinition,
     event_name: &'a str,
-    decoded: &'a mut DecodedHook,
+    decoded: &'a mut HookOutput,
     payload: &'a Value,
     context_agent_id: &'a str,
     model_hint: Option<&'a str>,
@@ -324,7 +324,7 @@ struct ContextSidecarInput<'a> {
 
 fn record_run_lifecycle(
     store: &Store,
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     event_name: &str,
     recorded: &RecordedLifecycle,
     assistant_message: Option<&str>,
@@ -335,7 +335,7 @@ fn record_run_lifecycle(
     match rimz::harness::run::record_lifecycle(
         store.paths(),
         &run_id,
-        agent.descriptor().kind,
+        agent.spec().kind,
         &recorded.observation,
         assistant_message.map(ToOwned::to_owned),
     ) {
@@ -347,7 +347,7 @@ fn record_run_lifecycle(
                 .and_then(|agent_id| {
                     rimz::store::agent_context::read_one(
                         store.runtime_paths(),
-                        agent.descriptor().kind,
+                        agent.spec().kind,
                         agent_id.as_str(),
                     )
                 })
@@ -378,7 +378,7 @@ fn record_run_lifecycle(
             .unwrap_or(record);
             if let Err(err) = rimz::store::wakeup::wake_run(store.runtime_paths(), &record) {
                 warn!(
-                    agent = agent.descriptor().kind,
+                    agent = agent.spec().kind,
                     event = %event_name,
                     run_id = %run_id,
                     error = %err,
@@ -389,7 +389,7 @@ fn record_run_lifecycle(
         Ok(None) => {}
         Err(err) => {
             warn!(
-                agent = agent.descriptor().kind,
+                agent = agent.spec().kind,
                 event = %event_name,
                 run_id = %run_id,
                 error = %err,
@@ -417,7 +417,8 @@ mod tests {
     #[test]
     fn native_session_end_removes_context_without_lifecycle_identity() {
         let (_dir, store) = test_store();
-        let mut decoded = rimz::agents::ClaudeAdapter
+        let mut decoded = rimz::agents::definition_by_kind("claude")
+            .unwrap()
             .decode_hook(
                 "SessionEnd",
                 &serde_json::json!({
@@ -449,7 +450,7 @@ mod tests {
         manage_agent_context(AgentContextHook {
             workspace: &test_workspace(),
             store: &store,
-            agent: &rimz::agents::ClaudeAdapter,
+            agent: rimz::agents::definition_by_kind("claude").unwrap(),
             context: LifecycleEventContext {
                 event_name: &event_name,
                 decoded: &mut decoded,
@@ -594,7 +595,7 @@ mod tests {
         );
         confirm_sent_message_for_lifecycle(
             &store,
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             &RecordedLifecycle {
                 model_hint: None,
                 observation: compact_observation,
@@ -627,7 +628,7 @@ mod tests {
         real_observation.prompt = Some("real prompt".to_owned());
         confirm_sent_message_for_lifecycle(
             &store,
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             &RecordedLifecycle {
                 model_hint: None,
                 observation: real_observation,
@@ -677,7 +678,7 @@ mod tests {
 
         record_user_input_for_lifecycle(
             &workspace,
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             &turn_started_recorded(),
             &[],
             false,
@@ -685,7 +686,7 @@ mod tests {
         );
         record_user_input_for_lifecycle(
             &workspace,
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             &turn_started_recorded(),
             std::slice::from_ref(&human),
             false,
@@ -693,7 +694,7 @@ mod tests {
         );
         record_user_input_for_lifecycle(
             &workspace,
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             &turn_started_recorded(),
             &[agent_message],
             false,
@@ -701,7 +702,7 @@ mod tests {
         );
         record_user_input_for_lifecycle(
             &workspace,
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             &turn_started_recorded(),
             &[human],
             true,
@@ -746,7 +747,7 @@ mod tests {
 
         let mut skipped = None;
         supplement_realtime_cost(
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             "sess-1",
             &pricing_cache_path,
             false,
@@ -757,7 +758,7 @@ mod tests {
 
         let mut refresh = None;
         supplement_realtime_cost(
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             "sess-1",
             &pricing_cache_path,
             true,
@@ -785,7 +786,7 @@ mod tests {
         });
         let mut no_downgrade = None;
         supplement_realtime_cost(
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").unwrap(),
             "sess-1",
             &pricing_cache_path,
             true,
@@ -818,7 +819,7 @@ mod tests {
             )
             .unwrap();
 
-        let adapter = &rimz::agents::OpencodeAdapter;
+        let adapter = rimz::agents::definition_by_kind("opencode").unwrap();
         let initial_stat = adapter.transcript_stat(&transcript).unwrap();
         assert!(initial_stat.companion.is_some());
         let main_before = rimz::agents::TranscriptStat::from_path(&transcript).unwrap();

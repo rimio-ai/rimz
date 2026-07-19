@@ -4,10 +4,12 @@
 //! daemon protocol. This module probes each provider once per operation, maps
 //! their native readiness through explicit matches, and coordinates effects.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::agents::claude::remote_control as claude;
-use crate::agents::codex::app_server::daemon as codex;
+use crate::agents::runtime_control::{
+    self, RuntimeControlError, RuntimeControlIssue, RuntimeControlReadiness,
+};
 use crate::config::RemoteControlConfig;
 use crate::room::session::LiveSessions;
 use crate::store::{paths::StatePaths, workspace_record};
@@ -29,49 +31,56 @@ pub enum HostState {
 /// One batch probe of both configured provider hosts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadinessSnapshot {
-    claude: HostState,
-    codex: HostState,
-    claude_host_argv: Option<Vec<String>>,
+    states: BTreeMap<crate::ids::AgentKind, HostState>,
+    host_argv: BTreeMap<crate::ids::AgentKind, Vec<String>>,
 }
 
 impl ReadinessSnapshot {
     pub fn probe(config: &RemoteControlConfig) -> Self {
-        let (claude, claude_host_argv) = probe_claude(config.claude);
-        let codex = probe_codex(config.codex);
-        Self {
-            claude,
-            codex,
-            claude_host_argv,
-        }
+        let (claude, claude_host_argv) = probe_claude(config.enabled_for("claude"));
+        let codex = probe_codex(config.enabled_for("codex"));
+        Self::from_probes(
+            [("claude", claude), ("codex", codex)],
+            claude_host_argv.map(|argv| ("claude", argv)),
+        )
     }
 
     pub fn probe_transition(host: RemoteControlHost) -> Self {
         match host {
             RemoteControlHost::Claude => {
                 let (claude, claude_host_argv) = probe_claude(true);
-                Self {
-                    claude,
-                    codex: HostState::Disabled,
-                    claude_host_argv,
-                }
+                Self::from_probes(
+                    [("claude", claude), ("codex", HostState::Disabled)],
+                    claude_host_argv.map(|argv| ("claude", argv)),
+                )
             }
-            RemoteControlHost::Codex => Self {
-                claude: HostState::Disabled,
-                codex: probe_codex(true),
-                claude_host_argv: None,
-            },
+            RemoteControlHost::Codex => Self::from_probes(
+                [
+                    ("claude", HostState::Disabled),
+                    ("codex", probe_codex(true)),
+                ],
+                None,
+            ),
         }
     }
 
     pub fn for_host(&self, host: RemoteControlHost) -> &HostState {
-        match host {
-            RemoteControlHost::Claude => &self.claude,
-            RemoteControlHost::Codex => &self.codex,
-        }
+        self.for_kind(match host {
+            RemoteControlHost::Claude => "claude",
+            RemoteControlHost::Codex => "codex",
+        })
+    }
+
+    pub fn for_kind(&self, kind: &str) -> &HostState {
+        self.states
+            .get(&crate::ids::AgentKind::new_unchecked(kind))
+            .unwrap_or(&HostState::Disabled)
     }
 
     pub fn claude_host_argv(&self) -> Option<&[String]> {
-        self.claude_host_argv.as_deref()
+        self.host_argv
+            .get(&crate::ids::AgentKind::new_unchecked("claude"))
+            .map(Vec::as_slice)
     }
 
     /// Skip uninstalled providers and refuse the first installed-provider block.
@@ -86,90 +95,71 @@ impl ReadinessSnapshot {
 
     #[cfg(test)]
     pub(crate) fn from_states(claude: HostState, codex: HostState) -> Self {
-        let claude_host_argv = matches!(claude, HostState::Ready).then(claude::host_argv);
+        let claude_host_argv = matches!(claude, HostState::Ready)
+            .then(|| runtime_control::host_argv("claude"))
+            .flatten();
+        Self::from_probes(
+            [("claude", claude), ("codex", codex)],
+            claude_host_argv.map(|argv| ("claude", argv)),
+        )
+    }
+
+    fn from_probes(
+        states: impl IntoIterator<Item = (&'static str, HostState)>,
+        host_argv: Option<(&'static str, Vec<String>)>,
+    ) -> Self {
         Self {
-            claude,
-            codex,
-            claude_host_argv,
+            states: states
+                .into_iter()
+                .map(|(kind, state)| (crate::ids::AgentKind::new_unchecked(kind), state))
+                .collect(),
+            host_argv: host_argv
+                .into_iter()
+                .map(|(kind, argv)| (crate::ids::AgentKind::new_unchecked(kind), argv))
+                .collect(),
         }
     }
 }
 
 fn probe_claude(enabled: bool) -> (HostState, Option<Vec<String>>) {
-    match claude::readiness(enabled) {
-        claude::Readiness::Disabled => (HostState::Disabled, None),
-        claude::Readiness::Ready { host_argv } => (HostState::Ready, Some(host_argv)),
-        claude::Readiness::Uninstalled(issue) => {
-            (HostState::Uninstalled(PreflightError::Claude(issue)), None)
-        }
-        claude::Readiness::Blocked(issue) => {
-            (HostState::Blocked(PreflightError::Claude(issue)), None)
-        }
+    match runtime_control::readiness("claude", enabled) {
+        RuntimeControlReadiness::Disabled => (HostState::Disabled, None),
+        RuntimeControlReadiness::Ready { host_argv } => (HostState::Ready, host_argv),
+        RuntimeControlReadiness::Uninstalled(issue) => (HostState::Uninstalled(issue), None),
+        RuntimeControlReadiness::Blocked(issue) => (HostState::Blocked(issue), None),
     }
 }
 
 fn probe_codex(enabled: bool) -> HostState {
-    match codex::readiness(enabled) {
-        codex::Readiness::Disabled => HostState::Disabled,
-        codex::Readiness::Ready => HostState::Ready,
-        codex::Readiness::Uninstalled(issue) => {
-            HostState::Uninstalled(PreflightError::Codex(issue))
-        }
+    match runtime_control::readiness("codex", enabled) {
+        RuntimeControlReadiness::Disabled => HostState::Disabled,
+        RuntimeControlReadiness::Ready { .. } => HostState::Ready,
+        RuntimeControlReadiness::Uninstalled(issue) => HostState::Uninstalled(issue),
+        RuntimeControlReadiness::Blocked(issue) => HostState::Blocked(issue),
     }
 }
 
 /// Advisory-only provider daemon findings. These never gate `rimz start`.
 pub fn advisories(config: &RemoteControlConfig) -> Vec<String> {
     let mut out = Vec::new();
-    if config.codex
-        && let Some(skew) = codex::updater_skew()
+    if config.enabled_for("codex")
+        && let Some(skew) = runtime_control::updater_advisory("codex")
     {
-        out.push(skew.to_string());
+        out.push(skew);
     }
     out
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PreflightError {
-    Claude(claude::Issue),
-    Codex(codex::Issue),
-}
-
-impl PreflightError {
-    pub fn is_uninstalled_host(&self) -> bool {
-        matches!(
-            self,
-            Self::Claude(claude::Issue::Uninstalled) | Self::Codex(codex::Issue::StandaloneMissing)
-        )
-    }
-}
-
-impl std::fmt::Display for PreflightError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Claude(issue) => issue.fmt(f),
-            Self::Codex(issue) => issue.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for PreflightError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Claude(issue) => Some(issue),
-            Self::Codex(issue) => Some(issue),
-        }
-    }
-}
+pub type PreflightError = RuntimeControlIssue;
 
 /// Apply one persisted runtime toggle across provider lifecycle, live Claude
 /// room panes, and every known workspace's sidebar.
 pub fn apply_runtime_toggle(
     host: RemoteControlHost,
     machine: &crate::config::MachineConfig,
-) -> Result<(), codex::ControlError> {
+) -> Result<(), RuntimeControlError> {
     if host == RemoteControlHost::Codex {
-        codex::reconcile(machine.remote_control.codex)?;
+        runtime_control::reconcile("codex", machine.remote_control.enabled_for("codex"))?;
     }
 
     let workspaces = match crate::workspace::known_workspaces() {
@@ -239,7 +229,8 @@ pub fn apply_runtime_toggle(
 /// Claude settings input used by readiness and daemon repair invalidation.
 /// Resolving the path performs no parsing or CLI probe.
 pub(crate) fn claude_settings_path() -> PathBuf {
-    claude::settings_path()
+    runtime_control::wiring_input_path("claude")
+        .unwrap_or_else(|| PathBuf::from("~/.claude/settings.json"))
 }
 
 #[cfg(test)]

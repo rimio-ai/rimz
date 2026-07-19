@@ -278,33 +278,6 @@ fn spawn_failure_cancels_only_its_matching_reservation() {
 }
 
 #[test]
-fn credit_selection_prefers_the_soonest_known_expiry() {
-    let details = vec![
-        ResetCreditDetail {
-            id: Some("undated".to_owned()),
-            expires_at: None,
-        },
-        ResetCreditDetail {
-            id: Some("later".to_owned()),
-            expires_at: Some(ts(300)),
-        },
-        ResetCreditDetail {
-            id: Some("earlier".to_owned()),
-            expires_at: Some(ts(200)),
-        },
-    ];
-
-    assert_eq!(soonest_credit_id(&details), Some("earlier"));
-    assert_eq!(
-        soonest_credit_id(&[ResetCreditDetail {
-            id: None,
-            expires_at: None,
-        }]),
-        None
-    );
-}
-
-#[test]
 fn attempted_errors_retain_the_redeem_decision_report() {
     let report = RedeemReport {
         reason: RedeemReason::BlockedGain,

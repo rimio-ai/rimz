@@ -2183,11 +2183,11 @@ fn provider_panel(
         .collect();
     let emblem = rimz::agents::emblem_for(kind);
     let (product_name, color, color_rgb) =
-        if let Some(descriptor) = rimz::agents::descriptor_by_kind(kind) {
+        if let Some(definition) = rimz::agents::spec_by_kind(kind) {
             (
-                descriptor.display_name.to_owned(),
-                descriptor.brand.color,
-                Some(descriptor.brand.color_rgb),
+                definition.display_name.to_owned(),
+                definition.brand.color,
+                Some(definition.brand.color_rgb),
             )
         } else {
             (provider_title_case(kind), 244, None)

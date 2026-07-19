@@ -74,7 +74,8 @@ fn refresh_context(
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
     let prior = rimz::store::agent_context::read_one(&runtime, "opencode", session_id);
-    let Some(observed) = rimz::agents::opencode::server::refresh_rich_context(
+    let Some(observed) = rimz::agents::context_runtime::refresh_embedded_context(
+        "opencode",
         server_url,
         session_id,
         model,
@@ -103,7 +104,11 @@ fn merge_observation(
         session_id,
         observed_at,
         |record, _| {
-            if !rimz::agents::opencode::server::merge_rich_context(&mut record.context, &observed) {
+            if !rimz::agents::context_runtime::merge_embedded_context(
+                "opencode",
+                &mut record.context,
+                &observed,
+            ) {
                 return false;
             }
             record.rich_observed_at = Some(observed_at);
@@ -137,7 +142,7 @@ mod tests {
         let local_at = Timestamp::from_second(1_700_000_100).unwrap();
         rimz::store::agent_context::merge_local_context(
             &runtime,
-            rimz::agents::descriptor_by_kind("opencode").unwrap(),
+            rimz::agents::spec_by_kind("opencode").unwrap(),
             "sess-1",
             LocalContextRefresh {
                 context: LocalContextPatch {

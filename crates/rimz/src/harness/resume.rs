@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 
 use crate::Store;
-use crate::agents::find_adapter;
+use crate::agents::find_definition;
 use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
@@ -186,7 +186,7 @@ struct ResolvedLane {
 /// skipped agent stays visible rather than silently lost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResumeSkipReason {
-    /// The agent's kind has no resume CLI ([`crate::agents::AgentAdapter::resume_command`]).
+    /// The agent's kind has no resume CLI ([`crate::agents::AgentDefinition::resume_command`]).
     NoResumeSupport,
     /// The session id names a conversation the provider never persisted, so
     /// there is nothing to resume.
@@ -1907,7 +1907,7 @@ fn supports_agent_resume(agent: &AgentState) -> bool {
     let Some(cwd) = agent_worktree(agent) else {
         return false;
     };
-    find_adapter(&agent.kind)
+    find_definition(&agent.kind)
         .is_some_and(|adapter| adapter.resume_command(&agent.agent_id, &cwd).is_some())
 }
 
@@ -1915,7 +1915,7 @@ fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
     if candidate.session_id.is_provisional() {
         return false;
     }
-    find_adapter(&candidate.kind).is_some_and(|adapter| {
+    find_definition(&candidate.kind).is_some_and(|adapter| {
         adapter
             .resume_command(&candidate.session_id, &candidate.cwd)
             .is_some()

@@ -8,8 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
+use super::registry::BUILTINS;
 use super::{
-    ADAPTERS, AdapterConformance, AgentAdapter, AgentHookClass, AskReply, ClassificationSample,
+    AdapterConformance, AgentDefinition, AgentHookClass, AskReply, ClassificationSample,
     ClassifiedHook, ConcernCoverage, DerivedAskFixture, HookCoverage, IntegrationConcern,
     PresetArgMatcher, PresetField, PriceBook, SpendFixture, SpendFixtureBody,
 };
@@ -25,20 +26,20 @@ fn rendered_preset_flags_have_matching_argv_declarations() {
         (PresetField::SystemPromptFile, "/tmp/system.md"),
         (PresetField::AppendSystemPromptFile, "/tmp/append-system.md"),
     ];
-    for adapter in ADAPTERS {
-        let descriptor = adapter.descriptor();
+    for adapter in BUILTINS {
+        let definition = adapter.spec();
         for (field, value) in fields {
             let preset = field.launch_preset(value.to_owned());
-            match descriptor.render_preset(&preset) {
+            match definition.render_preset(&preset) {
                 Ok(argv) => {
                     let matcher =
-                        descriptor
+                        definition
                             .launch
                             .preset_arg_matcher(field)
                             .unwrap_or_else(|| {
                                 panic!(
                                     "{} renders {field:?} without declaring its argv matcher",
-                                    descriptor.kind
+                                    definition.kind
                                 )
                             });
                     assert!(
@@ -47,13 +48,13 @@ fn rendered_preset_flags_have_matching_argv_declarations() {
                             .iter()
                             .any(|occurrence| occurrence.argv_range == (0..argv.len())),
                         "{} {field:?} matcher {matcher:?} does not consume {argv:?}",
-                        descriptor.kind
+                        definition.kind
                     );
                 }
                 Err(_) => assert!(
-                    descriptor.launch.preset_arg_matcher(field).is_none(),
+                    definition.launch.preset_arg_matcher(field).is_none(),
                     "{} declares a matcher for unsupported {field:?}",
-                    descriptor.kind
+                    definition.kind
                 ),
             }
         }
@@ -131,14 +132,14 @@ effort-flag = "--effort"
 "#,
     )
     .expect("manifest");
-    let loaded = super::plugin::load_from_root(root.path());
+    let loaded = super::plugins::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
 
     let mut cases = Vec::new();
-    for adapter in ADAPTERS
+    for adapter in BUILTINS
         .iter()
         .copied()
-        .chain(loaded.adapters.iter().copied())
+        .chain(loaded.definitions.iter().copied())
     {
         for (field, value) in [
             (PresetField::Model, "model-x"),
@@ -148,18 +149,18 @@ effort-flag = "--effort"
         ] {
             cases.push(format!(
                 "{}.{field:?}={:?}",
-                adapter.descriptor().kind,
+                adapter.spec().kind,
                 adapter
-                    .descriptor()
+                    .spec()
                     .render_preset(&field.launch_preset(value.to_owned()))
             ));
         }
         for field in [PresetField::Model, PresetField::Effort] {
             cases.push(format!(
                 "{}.empty-{field:?}={:?}",
-                adapter.descriptor().kind,
+                adapter.spec().kind,
                 adapter
-                    .descriptor()
+                    .spec()
                     .render_preset(&field.launch_preset(String::new()))
             ));
         }
@@ -258,8 +259,8 @@ fn strings(values: &[&str]) -> Vec<String> {
 
 #[test]
 fn classify_matches_corpus() {
-    for adapter in ADAPTERS {
-        let kind = adapter.descriptor().kind;
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
         let conformance = adapter.conformance();
         for sample in conformance.classification {
             let decoded = adapter
@@ -281,8 +282,8 @@ fn classify_matches_corpus() {
 
 #[test]
 fn classification_corpus_samples_decode_to_declared_channels() {
-    for adapter in ADAPTERS {
-        let kind = adapter.descriptor().kind;
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
         let conformance = adapter.conformance();
         for sample in conformance.classification {
             assert_ne!(
@@ -306,9 +307,9 @@ fn classification_corpus_samples_decode_to_declared_channels() {
 
 #[test]
 fn capability_honesty() {
-    for adapter in ADAPTERS {
-        let kind = adapter.descriptor().kind;
-        let capabilities = adapter.descriptor().capabilities;
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
+        let capabilities = adapter.spec().capabilities;
         let conformance = adapter.conformance();
         let samples = &conformance.classification;
         let ask_kinds = producible_ask_kinds(samples);
@@ -324,7 +325,7 @@ fn capability_honesty() {
                 IntegrationConcern::UserQuestion,
             ]
             .into_iter()
-            .any(|concern| adapter.descriptor().concern_coverage(concern).is_wired()),
+            .any(|concern| adapter.spec().concern_coverage(concern).is_wired()),
             "{kind} blocking classification must match ask coverage"
         );
 
@@ -343,7 +344,7 @@ fn capability_honesty() {
         if capabilities.realtime_usage.windows_defer_to_fresh_realtime {
             assert!(
                 adapter
-                    .descriptor()
+                    .spec()
                     .concern_coverage(IntegrationConcern::RichContext)
                     .is_wired(),
                 "{kind} realtime account-usage channel requires wired RichContext coverage"
@@ -367,14 +368,14 @@ fn capability_honesty() {
 
 #[test]
 fn coverage_is_complete_and_honest() {
-    for adapter in ADAPTERS {
-        let descriptor = adapter.descriptor();
-        let kind = descriptor.kind;
+    for adapter in BUILTINS {
+        let definition = adapter.spec();
+        let kind = definition.kind;
         let conformance = adapter.conformance();
         let native_events = conformance.native_event_names();
 
         for concern in IntegrationConcern::ALL {
-            let coverage = descriptor.concern_coverage(concern);
+            let coverage = definition.concern_coverage(concern);
             assert!(
                 !coverage.detail().trim().is_empty(),
                 "{kind} {concern:?} coverage must explain its wire, derivation gap, or unsupported reason"
@@ -385,21 +386,21 @@ fn coverage_is_complete_and_honest() {
                     "{kind} {concern:?} partial coverage must name the derivation that reconstructs it"
                 );
             }
-            assert_coverage_honest(*adapter, &conformance, &native_events, concern, coverage);
+            assert_coverage_honest(adapter, &conformance, &native_events, concern, coverage);
         }
     }
 }
 
 #[test]
 fn lifecycle_hooks_are_complete_and_honest() {
-    for adapter in ADAPTERS {
-        let descriptor = adapter.descriptor();
-        let kind = descriptor.kind;
+    for adapter in BUILTINS {
+        let definition = adapter.spec();
+        let kind = definition.kind;
         let conformance = adapter.conformance();
         let native_events = conformance.native_event_names();
 
         for signal_kind in LifecycleSignalKind::ALL {
-            let coverage = descriptor.lifecycle_hooks.get(signal_kind);
+            let coverage = definition.lifecycle_hooks.get(signal_kind);
             assert!(
                 !coverage.detail().trim().is_empty(),
                 "{kind} {signal_kind:?} hook coverage must name its native event, derivation gap, or absent reason"
@@ -411,7 +412,7 @@ fn lifecycle_hooks_are_complete_and_honest() {
                 );
             }
             assert_lifecycle_hook_honest(
-                *adapter,
+                adapter,
                 &conformance.classification,
                 &native_events,
                 signal_kind,
@@ -420,28 +421,28 @@ fn lifecycle_hooks_are_complete_and_honest() {
         }
 
         assert_hook_matches_concern(
-            *adapter,
+            adapter,
             LifecycleSignalKind::Ended,
             IntegrationConcern::SessionEnd,
         );
         assert_hook_matches_concern(
-            *adapter,
+            adapter,
             LifecycleSignalKind::SubagentStarted,
             IntegrationConcern::Subagents,
         );
         assert_hook_matches_concern(
-            *adapter,
+            adapter,
             LifecycleSignalKind::SubagentStopped,
             IntegrationConcern::Subagents,
         );
-        assert_compaction_hooks_match_concern(*adapter);
+        assert_compaction_hooks_match_concern(adapter);
     }
 }
 
 #[test]
 fn session_end_policy_follows_native_catalog_event() {
-    for adapter in ADAPTERS {
-        let descriptor = adapter.descriptor();
+    for adapter in BUILTINS {
+        let definition = adapter.spec();
         let conformance = adapter.conformance();
         let samples = &conformance.classification;
         let decoded_ends = |event: &str| {
@@ -455,16 +456,16 @@ fn session_end_policy_follows_native_catalog_event() {
                         .ends_session()
                 })
         };
-        match descriptor.lifecycle_hooks.ended {
+        match definition.lifecycle_hooks.ended {
             HookCoverage::Native { event } => assert!(
                 decoded_ends(event),
                 "{} must end on {event}",
-                descriptor.kind
+                definition.kind
             ),
             HookCoverage::Derived { .. } | HookCoverage::Absent { .. } => assert!(
                 !samples.iter().any(|sample| decoded_ends(sample.event_name)),
                 "{} derived/absent end must stay false",
-                descriptor.kind
+                definition.kind
             ),
         }
     }
@@ -472,13 +473,13 @@ fn session_end_policy_follows_native_catalog_event() {
 
 #[test]
 fn realtime_cost_matches_coverage() {
-    for adapter in ADAPTERS {
-        let kind = adapter.descriptor().kind;
-        let coverage = coverage_for(*adapter, IntegrationConcern::RealtimeCost);
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
+        let coverage = coverage_for(adapter, IntegrationConcern::RealtimeCost);
         let conformance = adapter.conformance();
         assert_eq!(
             !matches!(coverage, ConcernCoverage::Unsupported { .. }),
-            realtime_cost_from_fixture(*adapter, &conformance),
+            realtime_cost_from_fixture(adapter, &conformance),
             "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
         );
     }
@@ -486,8 +487,8 @@ fn realtime_cost_matches_coverage() {
 
 #[test]
 fn wiring_inputs_cover_every_provider_file_used_for_admission() {
-    for adapter in ADAPTERS {
-        let kind = adapter.descriptor().kind;
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
         let paths = adapter.wiring_input_paths();
         match kind {
             "claude" | "antigravity" | "cursor" | "kiro" => assert!(
@@ -496,8 +497,8 @@ fn wiring_inputs_cover_every_provider_file_used_for_admission() {
             ),
             "codex" => assert_eq!(paths.len(), 1, "Codex model config input"),
             "copilot" => assert_eq!(paths.len(), 2, "Copilot hook and settings inputs"),
-            _ if !adapter.descriptor().capabilities.local_session_discovery
-                && adapter.descriptor().has_wired_hook_install() =>
+            _ if !adapter.spec().capabilities.local_session_discovery
+                && adapter.spec().has_wired_hook_install() =>
             {
                 assert!(!paths.is_empty(), "{kind} hook admission input")
             }
@@ -508,8 +509,8 @@ fn wiring_inputs_cover_every_provider_file_used_for_admission() {
 
 #[test]
 fn awaiting_input_projects_to_waiting() {
-    for adapter in ADAPTERS {
-        let kind = adapter.descriptor().kind;
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
         let conformance = adapter.conformance();
         for ask_kind in producible_ask_kinds(&conformance.classification) {
             let prior = LifecycleState {
@@ -559,9 +560,9 @@ setup-doc = "README.md"
 "#,
     )
     .expect("manifest");
-    let loaded = super::plugin::load_from_root(root.path());
+    let loaded = super::plugins::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let adapter = loaded.adapters[0];
+    let adapter = loaded.definitions[0];
     let conformance = adapter.conformance();
     let native_events = conformance.native_event_names();
 
@@ -611,14 +612,14 @@ fn producible_ask_kinds(samples: &[ClassificationSample]) -> Vec<AskKind> {
 }
 
 fn assert_coverage_honest(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     conformance: &AdapterConformance,
     native_events: &[&str],
     concern: IntegrationConcern,
     coverage: ConcernCoverage,
 ) {
-    let descriptor = adapter.descriptor();
-    let kind = descriptor.kind;
+    let definition = adapter.spec();
+    let kind = definition.kind;
     let samples = &conformance.classification;
     // `Partial` and `Unsupported` generally assert no native signal carries
     // the concern. Compaction and subagents are the exceptions: a partial can
@@ -638,7 +639,7 @@ fn assert_coverage_honest(
         IntegrationConcern::PlanApproval => assert_eq!(
             wired,
             has_ask_kind(samples, AskKind::PlanApproval)
-                || has_blocking_tool_kind(descriptor, AskKind::PlanApproval)
+                || has_blocking_tool_kind(definition, AskKind::PlanApproval)
                 || derived_ask_kind(adapter, conformance.derived_ask.as_ref())
                     == Some(AskKind::PlanApproval),
             "{kind} PlanApproval coverage must match blocking plan ask/tool classification"
@@ -646,7 +647,7 @@ fn assert_coverage_honest(
         IntegrationConcern::UserQuestion => assert_eq!(
             wired,
             has_ask_kind(samples, AskKind::Question)
-                || has_blocking_tool_kind(descriptor, AskKind::Question),
+                || has_blocking_tool_kind(definition, AskKind::Question),
             "{kind} UserQuestion coverage must match blocking question ask/tool classification"
         ),
         IntegrationConcern::Answer => assert_eq!(
@@ -720,8 +721,8 @@ fn assert_coverage_honest(
         IntegrationConcern::RichContext | IntegrationConcern::HookInstall => {}
         IntegrationConcern::RemoteControl => assert_eq!(
             wired,
-            descriptor.capabilities.remote_control.pane_sessions
-                || descriptor.capabilities.remote_control.background_sessions,
+            definition.capabilities.remote_control.pane_sessions
+                || definition.capabilities.remote_control.background_sessions,
             "{kind} RemoteControl coverage must match remote-control capabilities"
         ),
         IntegrationConcern::ContextUsage => {}
@@ -734,7 +735,7 @@ fn assert_coverage_honest(
     }
 }
 
-fn has_answer_plan(adapter: &dyn AgentAdapter) -> bool {
+fn has_answer_plan(adapter: &AgentDefinition) -> bool {
     let reply = AskReply {
         picks: vec![0],
         text: None,
@@ -756,22 +757,22 @@ fn has_answer_plan(adapter: &dyn AgentAdapter) -> bool {
             .is_ok()
 }
 
-fn coverage_for(adapter: &dyn AgentAdapter, concern: IntegrationConcern) -> ConcernCoverage {
-    adapter.descriptor().concern_coverage(concern)
+fn coverage_for(adapter: &AgentDefinition, concern: IntegrationConcern) -> ConcernCoverage {
+    adapter.spec().concern_coverage(concern)
 }
 
-fn hook_coverage_for(adapter: &dyn AgentAdapter, signal_kind: LifecycleSignalKind) -> HookCoverage {
-    adapter.descriptor().lifecycle_hooks.get(signal_kind)
+fn hook_coverage_for(adapter: &AgentDefinition, signal_kind: LifecycleSignalKind) -> HookCoverage {
+    adapter.spec().lifecycle_hooks.get(signal_kind)
 }
 
 fn assert_lifecycle_hook_honest(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     samples: &[ClassificationSample],
     native_events: &[&str],
     signal_kind: LifecycleSignalKind,
     coverage: HookCoverage,
 ) {
-    let kind = adapter.descriptor().kind;
+    let kind = adapter.spec().kind;
     match coverage {
         HookCoverage::Native { event } => {
             assert!(
@@ -798,12 +799,12 @@ fn assert_lifecycle_hook_honest(
 }
 
 fn sample_produces_signal(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     sample: &ClassificationSample,
     signal_kind: LifecycleSignalKind,
 ) -> bool {
     if signal_kind == LifecycleSignalKind::AwaitingInput {
-        return adapter.descriptor().capabilities.native_ask_ui
+        return adapter.spec().capabilities.native_ask_ui
             && adapter
                 .decode_hook(sample.event_name, &sample.payload)
                 .expect("corpus payload decodes")
@@ -818,11 +819,11 @@ fn sample_produces_signal(
 }
 
 fn assert_hook_matches_concern(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     signal_kind: LifecycleSignalKind,
     concern: IntegrationConcern,
 ) {
-    let kind = adapter.descriptor().kind;
+    let kind = adapter.spec().kind;
     let hook = hook_coverage_for(adapter, signal_kind);
     let concern_coverage = coverage_for(adapter, concern);
     let matches = if matches!(
@@ -862,7 +863,7 @@ fn assert_hook_matches_concern(
     );
 }
 
-fn assert_compaction_hooks_match_concern(adapter: &dyn AgentAdapter) {
+fn assert_compaction_hooks_match_concern(adapter: &AgentDefinition) {
     let opening = hook_coverage_for(adapter, LifecycleSignalKind::Compacting);
     let closing = hook_coverage_for(adapter, LifecycleSignalKind::CompactionEnded);
     let concern = coverage_for(adapter, IntegrationConcern::Compaction);
@@ -878,14 +879,11 @@ fn assert_compaction_hooks_match_concern(adapter: &dyn AgentAdapter) {
     assert!(
         matches,
         "{} compaction hook pair must agree with Compaction concern coverage",
-        adapter.descriptor().kind
+        adapter.spec().kind
     );
 }
 
-fn realtime_cost_from_fixture(
-    adapter: &dyn AgentAdapter,
-    conformance: &AdapterConformance,
-) -> bool {
+fn realtime_cost_from_fixture(adapter: &AgentDefinition, conformance: &AdapterConformance) -> bool {
     let prices = PriceBook::embedded();
     if let Some(fixture) = conformance.context_cost.as_ref() {
         return adapter
@@ -934,7 +932,7 @@ fn materialize_spend_fixture(dir: &Path, fixture: &SpendFixture) -> PathBuf {
 }
 
 fn derived_ask_kind(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     fixture: Option<&DerivedAskFixture>,
 ) -> Option<AskKind> {
     let fixture = fixture?;
@@ -957,7 +955,7 @@ fn derived_ask_kind(
         observed,
         Some(fixture.expected_kind),
         "{} derived ask fixture must produce its declared kind",
-        adapter.descriptor().kind
+        adapter.spec().kind
     );
     observed
 }
@@ -975,15 +973,15 @@ fn has_ask_kind(samples: &[ClassificationSample], ask_kind: AskKind) -> bool {
         .any(|sample| sample.expected.ask_kind == Some(ask_kind))
 }
 
-fn has_blocking_tool_kind(descriptor: &super::AgentDescriptor, ask_kind: AskKind) -> bool {
-    descriptor
+fn has_blocking_tool_kind(definition: &super::AgentSpec, ask_kind: AskKind) -> bool {
+    definition
         .tools
         .blocking
         .iter()
         .any(|(_, kind)| *kind == ask_kind)
 }
 
-fn observes_turn_lifecycle(adapter: &dyn AgentAdapter, samples: &[ClassificationSample]) -> bool {
+fn observes_turn_lifecycle(adapter: &AgentDefinition, samples: &[ClassificationSample]) -> bool {
     samples.iter().any(|sample| {
         sample.expected.class == AgentHookClass::Lifecycle
             && adapter
@@ -1001,7 +999,7 @@ fn observes_turn_lifecycle(adapter: &dyn AgentAdapter, samples: &[Classification
     })
 }
 
-fn observes_compaction(adapter: &dyn AgentAdapter, samples: &[ClassificationSample]) -> bool {
+fn observes_compaction(adapter: &AgentDefinition, samples: &[ClassificationSample]) -> bool {
     samples.iter().any(|sample| {
         sample.expected.class == AgentHookClass::Lifecycle
             && adapter
@@ -1018,7 +1016,7 @@ fn observes_compaction(adapter: &dyn AgentAdapter, samples: &[ClassificationSamp
 }
 
 fn observes_subagent_lifecycle(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     samples: &[ClassificationSample],
 ) -> bool {
     samples.iter().any(|sample| {
@@ -1040,7 +1038,7 @@ fn observes_subagent_lifecycle(
 }
 
 fn native_event_classifies(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     samples: &[ClassificationSample],
     native_events: &[&str],
     event_name: &str,

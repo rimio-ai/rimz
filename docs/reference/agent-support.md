@@ -77,7 +77,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 
 ## Per-agent mappings
 
-The detail for each agent — its full coverage rationale, permission-mode mapping, effort levels, install target, resume/fork surface, and account probing — lives in that agent's mapping doc, with its upstream protocol in the matching external reference. Adding an agent is implementing one trait plus a descriptor and a single registry line ([adding an agent](../internals/agents/model.md#adding-an-agent)).
+The detail for each agent — its full coverage rationale, permission-mode mapping, effort levels, install target, resume/fork surface, and account probing — lives in that agent's mapping doc, with its upstream protocol in the matching external reference. Adding an agent means implementing only its supported workflow capabilities, declaring an `AgentSpec`, and composing one registry definition ([adding an agent](../internals/agents/model.md#adding-an-agent)).
 
 | Agent | Mapping | Upstream protocol |
 | --- | --- | --- |

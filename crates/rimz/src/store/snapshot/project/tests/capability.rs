@@ -269,7 +269,7 @@ fn context_gauge_tracks_the_carried_window_across_a_marker_drop() {
 #[test]
 fn context_gauge_derives_from_the_descriptor_default_when_no_window_reported() {
     // A bare-model Claude session that never sees the `[1m]` marker reports no
-    // window; the gauge derives against the 200k descriptor default (100k of
+    // window; the gauge derives against the 200k definition default (100k of
     // 200k = 50%) so the bar still reads a percentage.
     let stop = raw_lifecycle(
         "claude",

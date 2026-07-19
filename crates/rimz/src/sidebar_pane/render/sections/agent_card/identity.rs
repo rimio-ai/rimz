@@ -130,7 +130,7 @@ pub(super) fn agent_identity_line(
     // same weight. The glyph holds its fixed status tone; the unread attention
     // effect supplies any motion. The display handle reads at normal weight in
     // the provider's brand color (or mid-gray chrome for kinds with no
-    // registered descriptor); the bright slot is saved for the task below.
+    // registered definition); the bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
         agent_lead_cell(theme, row, status, attention, row_ctx.animation_phase),
         Span::raw(" "),
@@ -186,8 +186,8 @@ pub(super) fn display_context_window(row: &SidebarRow) -> Option<u64> {
                 .and_then(|tokens| tokens.context_window_size)
                 .or(agent.usage.context_window)
                 .or_else(|| {
-                    crate::agents::descriptor_by_kind(row.name.as_str())
-                        .and_then(|descriptor| descriptor.default_context_window)
+                    crate::agents::spec_by_kind(row.name.as_str())
+                        .and_then(|definition| definition.default_context_window)
                 })
         })
         .filter(|window| *window > 0)

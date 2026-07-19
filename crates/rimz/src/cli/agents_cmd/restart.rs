@@ -39,7 +39,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.worktree_root.clone());
-    let adapter = rimz::agents::find_adapter(agent.kind.as_str())
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let machine_config = crate::cli::machine_config();
     let mut cell = restart_cell(&agent, &workspace, &machine_config, adapter)?;
@@ -198,7 +198,7 @@ fn restart_cell(
     agent: &AgentState,
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
 ) -> Result<Cell> {
     let launch = rimz::config::effective::load(
         &machine_config.agents,
@@ -237,7 +237,7 @@ fn restart_cell(
     }
     let permission_args = agent
         .mode
-        .map(|mode| adapter.descriptor().launch.permission_args(mode))
+        .map(|mode| adapter.spec().launch.permission_args(mode))
         .unwrap_or_default();
     let (replayed_args, replayed_mode) = replay_posture(
         std::mem::take(&mut agent_cell.args),

@@ -925,7 +925,7 @@ impl AgentState {
     }
 
     /// The window denominator: the folded statusline's `context_window_size`,
-    /// else the adapter-resolved `context_window`, else the model descriptor's
+    /// else the adapter-resolved `context_window`, else the model definition's
     /// default.
     pub fn resolved_context_window(&self) -> Option<u64> {
         self.context
@@ -934,8 +934,8 @@ impl AgentState {
             .and_then(|tokens| tokens.context_window_size)
             .or(self.usage.context_window)
             .or_else(|| {
-                crate::agents::descriptor_by_kind(self.kind.as_str())
-                    .and_then(|descriptor| descriptor.default_context_window)
+                crate::agents::spec_by_kind(self.kind.as_str())
+                    .and_then(|definition| definition.default_context_window)
             })
     }
 

@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn confirm_sent_message_for_lifecycle(
     store: &Store,
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
     session_name: &str,
 ) -> Vec<rimz::message::MessageRecord> {
@@ -16,7 +16,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
         return Vec::new();
     };
-    let kind = agent.descriptor().kind_id();
+    let kind = agent.spec().kind_id();
     match store.confirm_delivered_for_card(
         &kind,
         agent_id,
@@ -27,7 +27,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
         Ok(delivered) => delivered,
         Err(err) => {
             warn!(
-                agent = agent.descriptor().kind,
+                agent = agent.spec().kind,
                 agent_id = %agent_id,
                 error = %err,
                 "lifecycle: failed to confirm sent message delivery",
@@ -39,7 +39,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
 
 pub(super) fn record_user_input_for_lifecycle(
     workspace: &ResolvedWorkspace,
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
     delivered: &[rimz::message::MessageRecord],
     supervised: bool,
@@ -53,7 +53,7 @@ pub(super) fn record_user_input_for_lifecycle(
     }
     let record = rimz::agents::spending::user_input::UserInputRecord {
         at: jiff::Timestamp::now(),
-        kind: agent.descriptor().kind_id(),
+        kind: agent.spec().kind_id(),
         origin: Some(
             recorded
                 .observation
@@ -73,7 +73,7 @@ pub(super) fn record_user_input_for_lifecycle(
 pub(super) fn spawn_queue_delivery_if_checkpoint(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
 ) {
     let delivery_checkpoint = rimz::message::delivery_checkpoint(&recorded.observation.signal);
@@ -98,7 +98,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
         Ok(messages) => messages,
         Err(err) => {
             debug!(
-                agent = agent.descriptor().kind,
+                agent = agent.spec().kind,
                 agent_id = %agent_id,
                 error = %err,
                 "message delivery skipped; queued messages unreadable",
@@ -106,7 +106,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
             return;
         }
     };
-    let kind = agent.descriptor().kind_id();
+    let kind = agent.spec().kind_id();
     let agent_name = recorded.observation.agent_name.as_deref();
     let card = rimz::agents::AgentCardRef::new(&kind, agent_id, agent_name);
     if pending.iter().any(|message| {

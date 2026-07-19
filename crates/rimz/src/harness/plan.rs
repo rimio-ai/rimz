@@ -217,14 +217,14 @@ pub fn finalize_launch_layout(
 
     if let Some(limit) = options.max_turns {
         for cell in layout.agent_cells_mut() {
-            let adapter = crate::agents::find_adapter(&cell.kind).ok_or_else(|| {
+            let adapter = crate::agents::find_definition(&cell.kind).ok_or_else(|| {
                 LaunchFinalizeError::UnknownAdapter {
                     kind: cell.kind.to_string(),
                 }
             })?;
-            let Some(turn_args) = adapter.descriptor().launch.max_turns_args(limit) else {
+            let Some(turn_args) = adapter.spec().launch.max_turns_args(limit) else {
                 return Err(LaunchFinalizeError::UnsupportedMaxTurns {
-                    agent: adapter.descriptor().kind,
+                    agent: adapter.spec().kind,
                     warnings,
                 });
             };
@@ -240,13 +240,13 @@ fn finalize_agent_cell(
     options: LaunchFinalizeOptions<'_>,
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
-    let adapter = crate::agents::find_adapter(&cell.kind);
+    let adapter = crate::agents::find_definition(&cell.kind);
     if let Some(permission_mode) = options.permission_mode
         && cell.launch.mode.is_none()
         && let Some(adapter) = adapter
     {
         cell.args
-            .extend(adapter.descriptor().launch.permission_args(permission_mode));
+            .extend(adapter.spec().launch.permission_args(permission_mode));
         cell.launch.mode = Some(permission_mode);
     }
     if !options.preset.is_empty() {
@@ -255,7 +255,7 @@ fn finalize_agent_cell(
         })?;
         cell.args.extend(
             adapter
-                .descriptor()
+                .spec()
                 .render_preset(options.preset)
                 .map_err(unsupported_preset_error)?,
         );
@@ -287,7 +287,7 @@ fn finalize_agent_cell(
         {
             cell.args.extend(
                 adapter
-                    .descriptor()
+                    .spec()
                     .render_preset(&crate::agents::LaunchPreset {
                         model: Some(default.clone()),
                         ..Default::default()
@@ -302,7 +302,7 @@ fn finalize_agent_cell(
 
 fn reconcile_preset_args(
     cell: &mut AgentCell,
-    adapter: &dyn crate::agents::AgentAdapter,
+    adapter: &crate::agents::AgentDefinition,
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
     use crate::agents::PresetField;
@@ -331,7 +331,7 @@ fn reconcile_preset_args(
     ];
 
     for (field, value) in declared {
-        let Some(matcher) = adapter.descriptor().launch.preset_arg_matcher(field) else {
+        let Some(matcher) = adapter.spec().launch.preset_arg_matcher(field) else {
             continue;
         };
         let occurrences = matcher.occurrences(&cell.args);
@@ -367,7 +367,7 @@ fn reconcile_preset_args(
             }
         }
         let canonical = adapter
-            .descriptor()
+            .spec()
             .render_preset(&field.launch_preset(declared_value))
             .map_err(unsupported_preset_error)?;
         remove_occurrences(&mut cell.args, &occurrences);

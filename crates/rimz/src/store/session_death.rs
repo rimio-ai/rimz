@@ -53,8 +53,8 @@ pub(crate) fn same_process_conversation_supersedes(older: &AgentState, newer: &A
     ) {
         return false;
     }
-    if crate::agents::descriptor_by_kind(older.kind.as_str()).is_none_or(|descriptor| {
-        descriptor.capabilities.same_pane_session != SamePaneSessionPolicy::FollowLatest
+    if crate::agents::spec_by_kind(older.kind.as_str()).is_none_or(|definition| {
+        definition.capabilities.same_pane_session != SamePaneSessionPolicy::FollowLatest
     }) {
         return false;
     }

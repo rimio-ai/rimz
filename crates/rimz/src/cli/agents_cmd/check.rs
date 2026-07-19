@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Args;
-use rimz::agents::plugin::{
+use rimz::agents::plugins::{
     PluginCheckReport, ProbeCheckStatus, ReplayCheckReport, check_from_root,
 };
 
@@ -25,7 +25,7 @@ pub(super) struct CheckArgs {
 
 pub(super) fn run_check(args: CheckArgs) -> Result<()> {
     let report = check_from_root(
-        &rimz::agents::plugin::plugins_root(),
+        &rimz::agents::plugins::plugins_root(),
         &args.kind,
         args.spend_file.as_deref(),
         args.replay.as_deref(),

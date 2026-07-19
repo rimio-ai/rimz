@@ -66,14 +66,14 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
 /// distinguishes installed, present-but-unwired, absent, and
 /// known-but-not-installable adapters.
 pub(super) fn collect_hooks() -> Vec<HookRow> {
-    rimz::agents::all_adapters()
+    rimz::agents::all_definitions()
         .map(|agent| {
-            let descriptor = agent.descriptor();
-            let name = descriptor.kind;
-            let detected = rimz::agents::locate_binary(descriptor).is_some();
-            let status = if !descriptor.has_wired_hook_install() {
+            let definition = agent.spec();
+            let name = definition.kind;
+            let detected = rimz::agents::locate_binary(definition).is_some();
+            let status = if !definition.has_wired_hook_install() {
                 HookStatus::Unsupported {
-                    reason: descriptor
+                    reason: definition
                         .hook_install_failure_detail()
                         .unwrap_or("hook install is not supported for this adapter")
                         .to_owned(),
@@ -105,7 +105,7 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
 }
 
 pub(super) fn collect_plugins() -> Vec<PluginRow> {
-    rimz::agents::plugin::loaded()
+    rimz::agents::plugins::loaded()
         .diagnostics
         .iter()
         .map(|plugin| PluginRow {

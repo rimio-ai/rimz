@@ -204,10 +204,8 @@ fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LaneWorktr
 }
 
 fn discover_lane_sessions(path: &Path) -> Vec<LocalSessionObservation> {
-    rimz::agents::ADAPTERS
-        .iter()
-        .copied()
-        .filter(|adapter| adapter.descriptor().capabilities.local_session_discovery)
+    rimz::agents::all_definitions()
+        .filter(|adapter| adapter.spec().capabilities.local_session_discovery)
         .flat_map(|adapter| adapter.discover_local_sessions(&[path]))
         .filter(|observation| {
             std::fs::metadata(&observation.transcript_path)

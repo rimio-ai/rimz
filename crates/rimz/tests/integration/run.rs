@@ -42,7 +42,7 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
     env.install_agent_hooks("qwen");
 
     let launch_env = BTreeMap::from([("HOME".to_owned(), env.home_root.display().to_string())]);
-    let adapter = rimz::agents::find_adapter("qwen").expect("Qwen adapter");
+    let adapter = rimz::agents::find_definition("qwen").expect("Qwen definition");
     let argv = adapter
         .launch_command(&[], Some("work"))
         .expect("Qwen launch argv");

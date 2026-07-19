@@ -109,8 +109,8 @@ fn assert_zellij_web_config(config: &MachineConfig) {
 }
 
 fn assert_remote_control_config(config: &MachineConfig) {
-    assert!(config.remote_control.claude);
-    assert!(config.remote_control.codex);
+    assert!(config.remote_control.enabled_for("claude"));
+    assert!(config.remote_control.enabled_for("codex"));
 }
 
 #[test]
@@ -119,8 +119,8 @@ fn missing_or_empty_file_is_default_off() {
     for path in [dir.path().join("absent.toml"), write(&dir, "")] {
         let config = load_no_fragments(&path).expect("load");
         assert_eq!(config, MachineConfig::default());
-        assert!(!config.remote_control.claude);
-        assert!(!config.remote_control.codex);
+        assert!(!config.remote_control.enabled_for("claude"));
+        assert!(!config.remote_control.enabled_for("codex"));
         assert_eq!(
             config
                 .agents
@@ -244,7 +244,7 @@ fn lenient_load_resets_invalid_agents_but_keeps_core_config() {
     );
 
     let config = load_lenient_no_fragments(&config_path);
-    assert!(config.remote_control.claude);
+    assert!(config.remote_control.enabled_for("claude"));
     assert_eq!(config.agents, AgentsConfig::default());
 }
 
@@ -711,8 +711,8 @@ fn forward_compat_keys_and_retired_sections_are_ignored() {
     ))
     .expect("forward-compatible keys ignored");
 
-    assert!(config.remote_control.codex);
-    assert!(!config.remote_control.claude);
+    assert!(config.remote_control.enabled_for("codex"));
+    assert!(!config.remote_control.enabled_for("claude"));
     assert_eq!(config.sidebar.focus_key, "Alt+x");
     assert_eq!(config.zellij, ZellijConfig::default());
     assert_eq!(config.agents.worktree, WorktreeConfig::default());

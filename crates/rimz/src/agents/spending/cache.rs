@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::agents::{AgentAdapter, TranscriptStat};
+use crate::agents::{AgentDefinition, TranscriptStat};
 
 use super::aggregate::{
     DedupPayload, SidechainDedup, cold_parse_out_of_window, within_raw_retain_window,
@@ -235,7 +235,7 @@ pub(crate) struct CacheStamp {
 
 pub(crate) fn compact_spending_cache(
     cache: &mut SpendingDiskCache,
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     now_secs: u64,
 ) -> bool {
     let retained_message_ids = retained_raw_message_ids(cache, files, now_secs);
@@ -295,7 +295,7 @@ pub(crate) fn compact_spending_cache(
 
 fn retained_raw_message_ids(
     cache: &SpendingDiskCache,
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     now_secs: u64,
 ) -> BTreeSet<String> {
     let mut message_ids = BTreeSet::new();
@@ -359,7 +359,7 @@ impl DedupPayload for CompactionSourceEntry {
 
 fn old_counted_entries_for_compaction(
     cache: &SpendingDiskCache,
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     now_secs: u64,
     retained_message_ids: &BTreeSet<String>,
 ) -> Vec<CompactionSourceEntry> {

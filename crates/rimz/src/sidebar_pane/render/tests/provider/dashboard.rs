@@ -17,12 +17,12 @@ fn dashboard_mode_is_selected_once_from_display_and_pet_settings() {
 }
 
 fn copilot_panel() -> crate::SidebarProviderPanel {
-    let descriptor = crate::agents::descriptor_by_kind("copilot").expect("copilot descriptor");
+    let definition = crate::agents::spec_by_kind("copilot").expect("copilot definition");
     let emblem = crate::agents::emblem_for("copilot");
     let mut panel = provider_panel(
         "copilot",
-        descriptor.display_name,
-        descriptor.brand.color,
+        definition.display_name,
+        definition.brand.color,
         false,
         false,
         None,

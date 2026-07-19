@@ -60,14 +60,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     };
     write_record(&runtime, &prior).unwrap();
 
-    merge_local_context(
-        &runtime,
-        descriptor("droid"),
-        "sess-1",
-        refresh,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, spec("droid"), "sess-1", refresh, observed_at).unwrap();
     let merged = read_one(&runtime, "droid", "sess-1").unwrap();
     let tokens = merged.context.tokens.as_ref().unwrap();
     assert_eq!(tokens.context_window_size, Some(200_000));
@@ -102,7 +95,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     };
     merge_local_context(
         &runtime,
-        descriptor("droid"),
+        spec("droid"),
         "sess-1",
         unresolved_model,
         observed_at,
@@ -171,7 +164,7 @@ fn merge_local_context_preserves_prior_fields_by_case() {
 
         merge_local_context(
             &runtime,
-            descriptor("codex"),
+            spec("codex"),
             "sess-1",
             (case.refresh)(),
             local_at,
@@ -213,7 +206,7 @@ fn stale_provider_observation_updates_latest_locked_record() {
         },
         total_usd: 0.12,
     });
-    merge_local_context(&runtime, descriptor("codex"), "sess-1", refresh, local_at).unwrap();
+    merge_local_context(&runtime, spec("codex"), "sess-1", refresh, local_at).unwrap();
     let opener = crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
     merge_turn_opened_by(&runtime, "codex", "sess-1", vec![opener.clone()]).unwrap();
 
@@ -268,7 +261,7 @@ fn foldless_local_refresh_preserves_prior_spend_fold() {
 
     merge_local_context(
         &runtime,
-        descriptor("codex"),
+        spec("codex"),
         "sess-1",
         unpriced_refresh(),
         observed_at,
@@ -291,14 +284,7 @@ fn local_session_preview_updates_only_when_the_refresh_has_one() {
 
     let mut refresh = unpriced_refresh();
     refresh.context.session_preview = FieldPatch::Set("New title".to_owned());
-    merge_local_context(
-        &runtime,
-        descriptor("codex"),
-        "sess-1",
-        refresh,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, spec("codex"), "sess-1", refresh, observed_at).unwrap();
     assert_eq!(
         read_one(&runtime, "codex", "sess-1")
             .unwrap()
@@ -310,7 +296,7 @@ fn local_session_preview_updates_only_when_the_refresh_has_one() {
 
     merge_local_context(
         &runtime,
-        descriptor("codex"),
+        spec("codex"),
         "sess-1",
         unpriced_refresh(),
         observed_at,
@@ -342,20 +328,13 @@ fn codex_local_refresh_overwrites_turn_error_marker() {
 
     let mut refresh = unpriced_refresh();
     refresh.context.turn_error = FieldPatch::Set(next_marker.clone());
-    merge_local_context(
-        &runtime,
-        descriptor("codex"),
-        "sess-1",
-        refresh,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, spec("codex"), "sess-1", refresh, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.turn_error, Some(next_marker));
 
     let mut clear = unpriced_refresh();
     clear.context.turn_error = FieldPatch::Clear;
-    merge_local_context(&runtime, descriptor("codex"), "sess-1", clear, observed_at).unwrap();
+    merge_local_context(&runtime, spec("codex"), "sess-1", clear, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(
         merged.context.turn_error, None,
@@ -377,21 +356,14 @@ fn local_refresh_overwrites_turn_settle_markers() {
     let mut refresh = unpriced_refresh();
     refresh.context.plan_proposed = FieldPatch::Set(new);
     refresh.context.turn_interrupted = FieldPatch::Set(new);
-    merge_local_context(
-        &runtime,
-        descriptor("codex"),
-        "sess-1",
-        refresh,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, spec("codex"), "sess-1", refresh, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.plan_proposed, Some(new));
     assert_eq!(merged.context.turn_interrupted, Some(new));
 
     merge_local_context(
         &runtime,
-        descriptor("codex"),
+        spec("codex"),
         "sess-1",
         unpriced_refresh(),
         observed_at,
@@ -421,7 +393,7 @@ fn non_codex_local_refresh_preserves_turn_error_marker() {
 
     let mut refresh = unpriced_refresh();
     refresh.context.turn_error = FieldPatch::Keep;
-    merge_local_context(&runtime, descriptor("pi"), "sess-1", refresh, observed_at).unwrap();
+    merge_local_context(&runtime, spec("pi"), "sess-1", refresh, observed_at).unwrap();
 
     let merged = read_one(&runtime, "pi", "sess-1").unwrap();
     assert_eq!(merged.context.turn_error, Some(marker));
@@ -729,18 +701,18 @@ fn fallback_window_refresh() -> LocalContextRefresh {
     }
 }
 
-fn descriptor(kind: &str) -> &'static crate::agents::AgentDescriptor {
-    crate::agents::descriptor_by_kind(kind).expect("fixture adapter is registered")
+fn spec(kind: &str) -> &'static crate::agents::AgentSpec {
+    crate::agents::spec_by_kind(kind).expect("fixture adapter is registered")
 }
 
-/// Codex's descriptor-default fallback window — what a refresh carries before a
-/// rollout's exact `model_context_window` appears. Sourced from the descriptor
+/// Codex's definition-default fallback window — what a refresh carries before a
+/// rollout's exact `model_context_window` appears. Sourced from the definition
 /// so these fixtures track the adapter instead of rotting as a literal when the
 /// fallback moves (it went `258_000` → `272_000` and left this test stale).
 fn codex_default_window() -> u64 {
-    crate::agents::descriptor_by_kind("codex")
-        .and_then(|descriptor| descriptor.default_context_window)
-        .expect("codex descriptor declares a default context window")
+    crate::agents::spec_by_kind("codex")
+        .and_then(|definition| definition.default_context_window)
+        .expect("codex definition declares a default context window")
 }
 
 fn assert_app_server_fields(merged: &AgentContextRecord, prior_at: Timestamp, local_at: Timestamp) {

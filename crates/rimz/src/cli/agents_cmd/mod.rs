@@ -37,7 +37,7 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use super::GlobalFlags;
 use crate::cli::supervised;
-use rimz::agents::AgentAdapter;
+use rimz::agents::AgentDefinition;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
     LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, agent_pane_plans,
@@ -769,7 +769,7 @@ pub(crate) fn create_on_miss(
 /// staff a channel — so `--create` refuses it, the same as a pet name or
 /// ordinal that must already exist.
 fn is_launchable_type(selector: &str, profiles: &rimz::config::ProfilesConfig) -> bool {
-    rimz::agents::find_adapter(selector).is_some() || profiles.0.contains_key(selector)
+    rimz::agents::find_definition(selector).is_some() || profiles.0.contains_key(selector)
 }
 
 #[cfg(test)]

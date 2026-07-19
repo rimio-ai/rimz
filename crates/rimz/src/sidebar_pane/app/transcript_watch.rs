@@ -173,8 +173,8 @@ fn reconcile_roster(
 fn transcript_targets(records: &[AgentContextRecord]) -> BTreeMap<PathBuf, BTreeSet<WatchTarget>> {
     let mut targets = BTreeMap::<PathBuf, BTreeSet<WatchTarget>>::new();
     for record in records.iter().filter(|record| {
-        crate::agents::descriptor_by_kind(record.kind.as_str())
-            .is_some_and(|descriptor| descriptor.capabilities.transcript_tail_context)
+        crate::agents::spec_by_kind(record.kind.as_str())
+            .is_some_and(|definition| definition.capabilities.transcript_tail_context)
     }) {
         let Some(path) = record.transcript_path.as_deref().map(PathBuf::from) else {
             continue;

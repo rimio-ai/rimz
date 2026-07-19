@@ -19,8 +19,8 @@ use super::{GlobalFlags, open_store};
 use rimz::Store;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
 use rimz::agents::{
-    AgentAdapter, AgentHookClass, AgentLifecycleObservation, DecodedHook, HookIngressAcceptance,
-    HookIngressDecision, adapter_by_kind,
+    AgentDefinition, AgentHookClass, AgentLifecycleObservation, HookIngressAcceptance,
+    HookIngressDecision, HookOutput, definition_by_kind,
 };
 use rimz::ids::{MuxName, PaneId};
 use rimz::store::AgentLifecycleIntent;
@@ -106,7 +106,7 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
     let raw_agent_pid = hook_agent_pid(&source);
-    let adapter = adapter_by_kind(&source);
+    let adapter = definition_by_kind(&source);
     let ingress = adapter
         .as_ref()
         .ok()
@@ -132,7 +132,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     let agent = match adapter {
         Ok(agent) => agent,
         Err(err)
-            if rimz::agents::plugin::loaded()
+            if rimz::agents::plugins::loaded()
                 .errors
                 .iter()
                 .any(|load_error| load_error.kind_hint.as_deref() == Some(source.as_str())) =>
@@ -191,10 +191,10 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             ingress_owner,
             globals,
         )?;
-        return emit_neutral(&decoded);
+        return emit_reply(&decoded);
     }
 
-    if agent.descriptor().capabilities.native_ask_ui {
+    if agent.spec().capabilities.native_ask_ui {
         handle_lifecycle_hook(
             &workspace,
             &store,
@@ -205,11 +205,11 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             globals,
         )?;
     }
-    emit_neutral(&decoded)
+    emit_reply(&decoded)
 }
 
-fn emit_neutral(decoded: &DecodedHook) -> Result<()> {
-    if let Some(payload) = decoded.neutral() {
+fn emit_reply(decoded: &HookOutput) -> Result<()> {
+    if let rimz::agents::HookReply::Json(payload) = decoded.reply() {
         let rendered = serde_json::to_string(payload)?;
         #[expect(clippy::print_stdout, reason = "hook stdout is the decision channel")]
         {

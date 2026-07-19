@@ -4,7 +4,7 @@
 //! and summary. Structured questions join from RimZ transcript state only by
 //! exact ask ID; adapter-owned safe options supply the fallback shape.
 
-use crate::agents::{AgentErr, AgentState, AskKind, OpenAsk, adapter_by_kind};
+use crate::agents::{AgentErr, AgentState, AskKind, OpenAsk, definition_by_kind};
 use crate::store::StatePaths;
 use crate::transcript::{AskQuestion, TranscriptLogErr, latest_open_ask};
 
@@ -33,7 +33,7 @@ pub fn read_open_ask(
     else {
         return Ok(None);
     };
-    let adapter = adapter_by_kind(agent.kind.as_str())?;
+    let adapter = definition_by_kind(agent.kind.as_str())?;
     let questions = match open.kind {
         AskKind::Question | AskKind::PlanApproval => {
             latest_open_ask(paths, &agent.kind, &agent.agent_id)?
@@ -51,7 +51,7 @@ pub fn read_open_ask(
 
 fn synthetic_questions(
     open: &OpenAsk,
-    adapter: &dyn crate::agents::AgentAdapter,
+    adapter: &crate::agents::AgentDefinition,
 ) -> Vec<AskQuestion> {
     vec![AskQuestion {
         question: open

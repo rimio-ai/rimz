@@ -1199,7 +1199,7 @@ fn provider_token_detail(
 /// The provider's budget bars within `region`: a metered account drains one
 /// "mana" bar per reported window (`5h`, `7d`, `30d`, …, ordered short→long);
 /// a metered account whose windows have not arrived yet shows one unknown-track
-/// row per descriptor-declared placeholder, or one anonymous fallback row when
+/// row per definition-declared placeholder, or one anonymous fallback row when
 /// the shape is unknown; an unmetered account shows one `api` budget row, full
 /// with `∞` when uncapped.
 /// Each reset reads a two-unit countdown scaled to its magnitude. Each row
@@ -1410,7 +1410,7 @@ fn metered_bar_row(
 }
 
 /// Unknown metered budget row: the same bar geometry as a reported window with
-/// no usage, with either a reported or descriptor-declared window label, or a
+/// no usage, with either a reported or definition-declared window label, or a
 /// blank label when the provider's window shape is unknown.
 fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);

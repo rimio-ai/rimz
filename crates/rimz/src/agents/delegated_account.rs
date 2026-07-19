@@ -86,13 +86,13 @@ pub(crate) enum Error {
     Claude {
         adapter: &'static str,
         #[source]
-        source: super::claude::oauth_usage::ClaudeOauthUsageErr,
+        source: super::adapters::claude::oauth_usage::ClaudeOauthUsageErr,
     },
     #[error("{adapter}: {source}")]
     Codex {
         adapter: &'static str,
         #[source]
-        source: super::codex::oauth_usage::CodexOauthUsageErr,
+        source: super::adapters::codex::oauth_usage::CodexOauthUsageErr,
     },
 }
 
@@ -173,14 +173,15 @@ pub(crate) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
         credentials_stamp: stamp,
     };
     let result = match selected.provider.as_str() {
-        "anthropic" => {
-            super::claude::oauth_usage::fetch_usage_with_token(&selected.access_token, None)
-                .map_err(|source| Error::Claude {
-                    adapter: config.adapter.name(),
-                    source,
-                })
-        }
-        "openai" | "openai-codex" => super::codex::oauth_usage::fetch_usage_with_token(
+        "anthropic" => super::adapters::claude::oauth_usage::fetch_usage_with_token(
+            &selected.access_token,
+            None,
+        )
+        .map_err(|source| Error::Claude {
+            adapter: config.adapter.name(),
+            source,
+        }),
+        "openai" | "openai-codex" => super::adapters::codex::oauth_usage::fetch_usage_with_token(
             &selected.access_token,
             selected.account_id.as_deref(),
         )

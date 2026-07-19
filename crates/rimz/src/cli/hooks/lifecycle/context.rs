@@ -23,14 +23,11 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     // activity, merge, and refresh fall-through. Refresh-capable adapters can
     // then repopulate the ended row with their final local context reading.
     if decoded.ends_session()
-        && let Err(err) = rimz::store::agent_context::remove(
-            store.runtime_paths(),
-            agent.descriptor().kind,
-            agent_id,
-        )
+        && let Err(err) =
+            rimz::store::agent_context::remove(store.runtime_paths(), agent.spec().kind, agent_id)
     {
         warn!(
-            agent = agent.descriptor().kind,
+            agent = agent.spec().kind,
             event = %event_name,
             error = %err,
             "lifecycle: failed to remove the session's context sidecar",
@@ -40,10 +37,10 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     // sidebar's `last_activity` advances per tool call, not just per turn.
     if (decoded.records_progress() || parent_agent_id.is_some())
         && let Err(err) =
-            rimz::agent_activity::touch(store.runtime_paths(), agent.descriptor().kind, agent_id)
+            rimz::agent_activity::touch(store.runtime_paths(), agent.spec().kind, agent_id)
     {
         warn!(
-            agent = agent.descriptor().kind,
+            agent = agent.spec().kind,
             event = %event_name,
             error = %err,
             "lifecycle: failed to touch the agent activity heartbeat",
@@ -114,7 +111,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     }
 
     if let Some(context) = decoded.take_observed_context() {
-        let kind = agent.descriptor().kind;
+        let kind = agent.spec().kind;
         match rimz::store::agent_context::merge_observed(
             store.runtime_paths(),
             kind,
@@ -145,14 +142,14 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             .is_some_and(|priced| {
                 match rimz::store::agent_context::merge_locally_priced_cost(
                     store.runtime_paths(),
-                    agent.descriptor().kind,
+                    agent.spec().kind,
                     context_agent_id,
                     &priced,
                 ) {
                     Ok(changed) => changed,
                     Err(err) => {
                         warn!(
-                            agent = agent.descriptor().kind,
+                            agent = agent.spec().kind,
                             event = %event_name,
                             error = %err,
                             "lifecycle: failed to merge locally priced turn cost",
@@ -165,7 +162,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
 
     let prior = rimz::store::agent_context::read_one(
         store.runtime_paths(),
-        agent.descriptor().kind,
+        agent.spec().kind,
         context_agent_id,
     );
     let local_model_hint = model_hint.or_else(|| {
@@ -214,13 +211,13 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     };
     if let Err(err) = rimz::store::agent_context::merge_local_context(
         store.runtime_paths(),
-        agent.descriptor(),
+        agent.spec(),
         context_agent_id,
         refresh,
         jiff::Timestamp::now(),
     ) {
         warn!(
-            agent = agent.descriptor().kind,
+            agent = agent.spec().kind,
             event = %event_name,
             error = %err,
             "lifecycle: failed to merge local context sidecar",
@@ -231,7 +228,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
 }
 
 pub(super) fn supplement_realtime_cost(
-    agent: &dyn AgentAdapter,
+    agent: &AgentDefinition,
     context_agent_id: &str,
     pricing_cache_path: &Path,
     turn_ended: bool,
@@ -294,9 +291,9 @@ pub(super) fn supplement_realtime_cost(
     refresh.transcript_stat = Some(stat);
 }
 
-pub(super) fn realtime_cost_coverage(agent: &dyn AgentAdapter) -> rimz::agents::ConcernCoverage {
+pub(super) fn realtime_cost_coverage(agent: &AgentDefinition) -> rimz::agents::ConcernCoverage {
     agent
-        .descriptor()
+        .spec()
         .concern_coverage(rimz::agents::IntegrationConcern::RealtimeCost)
 }
 
@@ -325,19 +322,25 @@ mod tests {
 
     struct SessionEndRefreshAdapter;
 
-    impl AgentAdapter for SessionEndRefreshAdapter {
-        fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
-            rimz::agents::GrokAdapter.descriptor()
+    impl rimz::agents::capabilities::CoreCapability for SessionEndRefreshAdapter {
+        fn spec(&self) -> &'static rimz::agents::AgentSpec {
+            rimz::agents::definition_by_kind("grok").unwrap().spec()
         }
+    }
 
+    impl rimz::agents::capabilities::HookCapability for SessionEndRefreshAdapter {
         fn decode_hook(
             &self,
             event_name: &str,
             payload: &Value,
-        ) -> rimz::agents::Result<DecodedHook> {
-            rimz::agents::GrokAdapter.decode_hook(event_name, payload)
+        ) -> rimz::agents::Result<rimz::agents::HookOutput> {
+            rimz::agents::definition_by_kind("grok")
+                .unwrap()
+                .decode_hook(event_name, payload)
         }
+    }
 
+    impl rimz::agents::capabilities::ContextCapability for SessionEndRefreshAdapter {
         fn local_context_refresh(
             &self,
             _trigger: rimz::agents::RefreshTrigger<'_>,
@@ -367,12 +370,20 @@ mod tests {
             session_name: "hooks-test".to_owned(),
             mux_hint: None,
         };
-        let adapter = SessionEndRefreshAdapter;
+        let adapter = Box::leak(Box::new(SessionEndRefreshAdapter));
+        let definition = rimz::agents::AgentDefinition::from_capabilities(
+            adapter,
+            rimz::agents::AgentCapabilities {
+                hooks: Some(adapter),
+                context: Some(adapter),
+                ..rimz::agents::AgentCapabilities::NONE
+            },
+        );
         let payload = serde_json::json!({
             "sessionId": "root-session",
             "cwd": "/tmp/hooks-test"
         });
-        let mut decoded = adapter
+        let mut decoded = definition
             .decode_hook("SessionEnd", &payload)
             .expect("session end decodes");
         assert!(decoded.ends_session());
@@ -391,7 +402,7 @@ mod tests {
         manage_agent_context(AgentContextHook {
             workspace: &workspace,
             store: &store,
-            agent: &adapter,
+            agent: &definition,
             context: LifecycleEventContext {
                 event_name: &event_name,
                 decoded: &mut decoded,

@@ -28,8 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{AgentContext, AgentTurnError};
 use crate::agents::{
-    AgentCost, AgentDescriptor, AgentTokenUsage, LocalContextRefresh, LocalSpendFold,
-    TranscriptStat,
+    AgentCost, AgentSpec, AgentTokenUsage, LocalContextRefresh, LocalSpendFold, TranscriptStat,
 };
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::atomic;
@@ -244,16 +243,16 @@ pub fn new_record(kind: &str, agent_id: &str, context: AgentContext) -> AgentCon
 /// the transcript stat gate; a tail that misses effort preserves the prior value.
 pub fn merge_local_context(
     runtime: &RuntimePaths,
-    descriptor: &AgentDescriptor,
+    definition: &AgentSpec,
     agent_id: &str,
     refresh: LocalContextRefresh,
     observed_at: Timestamp,
 ) -> Result<(), atomic::AtomicErr> {
-    let kind = descriptor.kind;
+    let kind = definition.kind;
     update_record(runtime, kind, agent_id, observed_at, |record, _| {
         record.context.source = kind.to_owned();
         let cost_replaced = !refresh.context.cost.is_keep();
-        refresh.context.apply(&mut record.context, descriptor);
+        refresh.context.apply(&mut record.context, definition);
         if cost_replaced {
             record.locally_priced_cost.owns_context_cost = false;
         }

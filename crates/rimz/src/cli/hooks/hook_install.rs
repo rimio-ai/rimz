@@ -20,7 +20,7 @@ pub(super) enum InstallDisposition {
     Current,
 }
 
-pub(super) fn install_disposition(agent: &dyn rimz::agents::AgentAdapter) -> InstallDisposition {
+pub(super) fn install_disposition(agent: &rimz::agents::AgentDefinition) -> InstallDisposition {
     if !agent.hooks_installed() {
         InstallDisposition::Installed
     } else if agent
@@ -33,27 +33,27 @@ pub(super) fn install_disposition(agent: &dyn rimz::agents::AgentAdapter) -> Ins
     }
 }
 
-pub(super) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::AgentAdapter> {
+pub(super) fn detected_installable_adapters() -> Vec<&'static rimz::agents::AgentDefinition> {
     let mut detected = Vec::new();
-    for agent in rimz::agents::ADAPTERS {
-        let descriptor = agent.descriptor();
-        if rimz::agents::locate_binary(descriptor).is_none() {
+    for agent in rimz::agents::all_definitions() {
+        let definition = agent.spec();
+        if rimz::agents::locate_binary(definition).is_none() {
             continue;
         }
 
-        if !descriptor.has_wired_hook_install() {
-            let reason = descriptor
+        if !definition.has_wired_hook_install() {
+            let reason = definition
                 .hook_install_failure_detail()
                 .unwrap_or("hook install is not supported for this adapter");
             tracing::debug!(
-                agent = descriptor.kind,
+                agent = definition.kind,
                 reason,
                 "agent integrates without rimz-managed hooks; skipping hook install",
             );
             continue;
         }
 
-        detected.push(*agent);
+        detected.push(agent);
     }
     detected
 }
@@ -62,7 +62,7 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool
     let mut actionable = Vec::new();
 
     for agent in detected_installable_adapters() {
-        let descriptor = agent.descriptor();
+        let definition = agent.spec();
         if !agent.hooks_installed()
             || agent
                 .managed_integration()
@@ -72,7 +72,7 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool
             continue;
         }
 
-        warn_untrusted_hooks(descriptor.kind, &agent.untrusted_installed_hooks())?;
+        warn_untrusted_hooks(definition.kind, &agent.untrusted_installed_hooks())?;
     }
 
     if actionable.is_empty() {
@@ -135,7 +135,7 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
     }
 
     for name in selected {
-        let agent = rimz::agents::adapter_by_kind(name)?;
+        let agent = rimz::agents::definition_by_kind(name)?;
         let disposition = install_disposition(agent);
         let report = agent.install_hooks()?;
         write_install_result(out, &report, disposition)?;

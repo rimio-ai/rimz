@@ -26,16 +26,13 @@ pub(super) fn run_register(args: RegisterArgs) -> Result<()> {
     let Some(kind) = args.kind.as_deref() else {
         bail!("plugin kind is required unless --check is set");
     };
-    if !rimz::agents::plugin::valid_kind(kind) {
+    if !rimz::agents::plugins::valid_kind(kind) {
         bail!("plugin kind must match [a-z0-9-]+ and start and end with a letter or digit");
     }
-    if rimz::agents::ADAPTERS
-        .iter()
-        .any(|adapter| adapter.descriptor().kind == kind)
-    {
+    if rimz::agents::all_definitions().any(|adapter| adapter.spec().kind == kind) {
         bail!("agent kind `{kind}` is built in and cannot be registered as a plugin");
     }
-    let target = rimz::agents::plugin::plugins_root().join(kind);
+    let target = rimz::agents::plugins::plugins_root().join(kind);
     if target.exists() {
         bail!(
             "agent plugin directory already exists at {}",
@@ -58,7 +55,7 @@ pub(super) fn run_register(args: RegisterArgs) -> Result<()> {
 }
 
 fn check_plugins() -> Result<()> {
-    let loaded = rimz::agents::plugin::load_from_root(&rimz::agents::plugin::plugins_root());
+    let loaded = rimz::agents::plugins::load_from_root(&rimz::agents::plugins::plugins_root());
     if !loaded.errors.is_empty() {
         let details = loaded
             .errors
@@ -71,7 +68,7 @@ fn check_plugins() -> Result<()> {
     writeln!(
         render::out(),
         "{} agent plugin(s) valid",
-        loaded.adapters.len()
+        loaded.definitions.len()
     )?;
     Ok(())
 }

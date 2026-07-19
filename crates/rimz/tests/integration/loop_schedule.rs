@@ -645,7 +645,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
         "RIMZ_QWEN_SETTINGS".to_owned(),
         settings.display().to_string(),
     )]);
-    let adapter = rimz::agents::find_adapter("qwen").expect("Qwen adapter");
+    let adapter = rimz::agents::find_definition("qwen").expect("Qwen definition");
     let argv = adapter
         .launch_command(&[], Some("work"))
         .expect("Qwen launch argv");

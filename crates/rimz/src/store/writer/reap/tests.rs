@@ -1,7 +1,7 @@
 use std::time::SystemTime;
 
 use super::*;
-use crate::agents::{AgentAdapter, AmpAdapter, LaunchParams, SessionOrigin};
+use crate::agents::{LaunchParams, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::EventKind;
@@ -112,7 +112,8 @@ fn turn_started_lifecycle(workspace_id: &WorkspaceId, agent_id: &str) -> EventEn
 }
 
 fn amp_focus_lifecycle(workspace_id: &WorkspaceId, agent_id: &str, pane_id: &str) -> EventEnvelope {
-    let mut observation = AmpAdapter
+    let mut observation = crate::agents::definition_by_kind("amp")
+        .expect("Amp definition")
         .decode_hook(
             "session_start",
             &json!({ "session_id": agent_id, "cwd": "/repo" }),
@@ -325,7 +326,7 @@ fn interrupted_replacement_bypasses_roster_and_replays_durably() {
     .expect("publish roster");
 
     assert_eq!(
-        crate::agents::codex::with_codex_sessions_root(rollouts.path(), || {
+        crate::agents::session::with_sessions_root("codex", rollouts.path(), || {
             store.reap_dead_sessions().expect("reap without evidence")
         }),
         0,
@@ -344,7 +345,7 @@ fn interrupted_replacement_bypasses_roster_and_replays_durably() {
     .expect("write interrupted rollout");
 
     assert_eq!(
-        crate::agents::codex::with_codex_sessions_root(rollouts.path(), || {
+        crate::agents::session::with_sessions_root("codex", rollouts.path(), || {
             store.reap_dead_sessions().expect("reap interrupted owner")
         }),
         1

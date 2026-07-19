@@ -12,14 +12,14 @@ A third-party agent normally ships as a [process plugin](../reference/agent-plug
 
 The integration starts as a document, not code. `docs/externals/agent-adapter/<kind>-reference.md` maps the agent's upstream protocol surface, pinned to source URLs: hooks and their payloads, session identity and resume, transcripts, auth and account, headless modes. The recent references are the template — [kiro-reference.md](../externals/agent-adapter/kiro-reference.md) records a validated provider-owned store, excluded session classes, negative hook evidence, and the boundary for new claims. The reference is the artifact every later step reads, and it outlives the integration as the drift-check target.
 
-Read alongside it, in order: [model.md](../internals/agents/model.md) end to end (the boundary, the state machine, displayed status, enrichment), [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) (the authoring contract), then one small worked adapter ([`pi/`](../../crates/rimz/src/agents/pi/mod.rs) with its internals doc [pi.md](../internals/agents/pi.md)) and one large ([`claude/`](../../crates/rimz/src/agents/claude/mod.rs) with [claude.md](../internals/agents/claude.md)).
+Read alongside it, in order: [model.md](../internals/agents/model.md) end to end (the boundary, the state machine, displayed status, enrichment), [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) (the authoring contract), then one small worked adapter ([`pi/`](../../crates/rimz/src/agents/adapters/pi/mod.rs) with its internals doc [pi.md](../internals/agents/pi.md)) and one large ([`claude/`](../../crates/rimz/src/agents/adapters/claude/mod.rs) with [claude.md](../internals/agents/claude.md)).
 
 ## Step 2 — Map the protocol onto the model
 
 Produce the mapping worksheet from the reference before writing Rust; every later step consumes one of its rows.
 
 - **Lifecycle signals.** Each of the eleven [`LifecycleSignalKind`](../../crates/rimz/src/agents/lifecycle.rs)s gets a verdict: which native event carries it (*Native*), which derivation reconstructs it with what gap (*Derived*), or why it has no signal (*Absent*). Which native event means what is the lifecycle part of `decode_hook`; [model.md → The state machine](../internals/agents/model.md#the-state-machine) defines what each signal does.
-- **Integration concerns.** Each of the sixteen [`IntegrationConcern`](../../crates/rimz/src/agents/descriptor.rs)s gets *Wired*, *Partial* (with the gap named), or *Unsupported* (with the reason). Conformance later cross-checks every claim, so honesty here is cheaper than honesty under test failure.
+- **Integration concerns.** Each of the sixteen [`IntegrationConcern`](../../crates/rimz/src/agents/definition.rs)s gets *Wired*, *Partial* (with the gap named), or *Unsupported* (with the reason). Conformance later cross-checks every claim, so honesty here is cheaper than honesty under test failure.
 - **Blocking asks.** Which native events block, each one's [`AskKind`](../../crates/rimz/src/agents/lifecycle.rs), whether the agent draws its own ask UI, and — verified, never assumed — what an empty hook response means for *this* agent: neutral semantics diverge per agent ([model.md → Adding an agent](../internals/agents/model.md#adding-an-agent)).
 - **Tool vocabularies.** The mutating tool set and its file-editing subset; the editing set drives the `reasoning → acting` phase edge.
 - **Session identity.** Where the session id comes from, standalone vs daemon-routed hooks, lazy registration, the resume command shape, and what `/clear` or `/new` does to identity ([model.md → The instance lifecycle](../internals/agents/model.md#the-instance-lifecycle)).
@@ -29,26 +29,26 @@ Produce the mapping worksheet from the reference before writing Rust; every late
 
 ## Step 3 — Scaffold and register
 
-Create `crates/rimz/src/agents/<kind>/` on the established anatomy:
+Create `crates/rimz/src/agents/adapters/<kind>/` on the established anatomy:
 
-- `mod.rs` — the unit-struct adapter, its `const` [`AgentDescriptor`](../../crates/rimz/src/agents/descriptor.rs), and the two matrices.
+- `mod.rs` — the private unit-struct adapter, its `const` [`AgentSpec`](../../crates/rimz/src/agents/definition.rs), and its selected capability implementations.
 - `payloads.rs` — typed structs for the native wire; structured parsers, never ad-hoc `Value` digging past the classify step.
 - `spend.rs` — the read-only cost parser (step 8).
 - `account.rs`, plus `oauth_usage.rs` when the provider has a usage API (step 8).
 - The install surface: return one [`ManagedIntegration`](../../crates/rimz/src/agents/managed_source.rs) from the adapter. Use `ManagedSource` for a JSON hook merge like Claude/Droid/Qwen or a RimZ-authored whole file like Pi/OpenCode; implement the same Interface in the provider's `install.rs` for TOML or multi-file transactions such as Codex and Cursor (step 5).
 - The `tests` module (step 9); past the size gate it becomes a sibling `tests.rs` or `tests/` dir.
 
-Register it: `pub mod <kind>;` plus the adapter re-export in [`agents/mod.rs`](../../crates/rimz/src/agents/mod.rs), and one `&<Kind>Adapter` line in [`registry::ADAPTERS`](../../crates/rimz/src/agents/registry.rs). That line is the whole hookup — kind resolution, the `<kind>-auto`/`-ask`/`-yolo`/`-plan` permission variants, and `<kind>-ping` all derive from the registry plus adapter methods, so no shared `match` grows an arm. The one optional extra is the `BUILTIN_PEER` default-layout string in [`harness/spec.rs`](../../crates/rimz/src/harness/spec.rs) when the kind belongs in the zero-config room.
+Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agents/adapters/mod.rs), then compose `CoreCapability` and the supported workflow capabilities in one [`registry::BUILTINS`](../../crates/rimz/src/agents/registry.rs) entry. That entry is the whole hookup — kind resolution, the `<kind>-auto`/`-ask`/`-yolo`/`-plan` permission variants, and `<kind>-ping` all derive from the definition, so no consumer grows a provider match. The one optional extra is the `BUILTIN_PEER` default-layout string in [`harness/spec.rs`](../../crates/rimz/src/harness/spec.rs) when the kind belongs in the zero-config room.
 
-## Step 4 — Declare the descriptor
+## Step 4 — Declare the definition
 
-The descriptor is the adapter's contract with the rest of RimZ. Fill every field of [`AgentDescriptor`](../../crates/rimz/src/agents/descriptor.rs): kind, display name, brand color (`color` and `color_rgb`; built-ins leave the plugin-only `emblem` override as `None`), plan label, tool tables (the editing set is a subset of the mutating set — a descriptor test pins it), operational `Capabilities`, named `IntegrationCoverage` and `LifecycleCoverage` records straight from the step-2 worksheet, default context window and model, `process_names` (the bare comm plus launchers like `node`; release-binary triple suffixes are handled automatically), and `thread_key` for transcript-to-session mapping. Both coverage records are compile-time complete: add one named field for every concern or signal, so a new enum variant makes every descriptor fail to compile until classified. Add an optional curated art entry to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); an entry is a plain string, or a table with an art block and tint mask. Without one the agent renders the shared fallback.
+`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, coverage annotations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness and capability/policy consistency. Add optional curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); kinds without an entry render the shared fallback.
 
-[`pi/mod.rs`](../../crates/rimz/src/agents/pi/mod.rs) is the canonical filled-in example. [Conformance](../../crates/rimz/src/agents/conformance.rs) auto-enrolls every registered adapter: both matrices are compile-time complete, and every behavior-backed *Wired*/*Native* claim is cross-checked against native events, the classification corpus, behavioral fixtures, and decoded lifecycle output.
+[`pi/mod.rs`](../../crates/rimz/src/agents/adapters/pi/mod.rs) is the canonical filled-in example. [Conformance](../../crates/rimz/src/agents/conformance.rs) auto-enrolls every registered definition and cross-checks coverage, native events, classification samples, behavioral fixtures, and decoded lifecycle output.
 
 ## Step 5 — Implement the hook wire and install
 
-The trait requires `descriptor` and `decode_hook`; the decoder parses one native payload and returns routing, optional [`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs), ask/transcript values, sidecar evidence, and neutral stdout together. The channels and the mapping jobs are [model.md → The adapter boundary](../internals/agents/model.md#the-adapter-boundary). One `conformance` record ships the classification corpus and optional spend, hook-cost, context-cost, derived-ask, and local-session fixtures. The corpus covers the full native event surface and retains every payload variant needed to exercise broad events; conformance derives the deduplicated event set from it. Claude and Codex use one provider-local hook catalog to drive install, detection, decoded routing, and ordinary corpus rows because their native config models repeat that knowledge; use the catalog as a template only when a new adapter has equivalent duplication, not as a requirement for experimental adapters or different installer shapes.
+Implement `CoreCapability`, then add `HookCapability` only when the provider has a real decoder. The decoder parses one native payload and returns typed canonical facts plus an explicit `HookReply`; the CLI binds runtime workspace, pane, launch, role, team, and channel identity. The channels and mapping jobs are [model.md → The adapter boundary](../internals/agents/model.md#the-adapter-boundary). Keep conformance samples in the provider test home and cover the full native event surface, retaining every payload variant needed to exercise broad events. Use one provider-local hook catalog to drive install, detection, decoded routing, and ordinary sample rows when the native config otherwise repeats that knowledge.
 
 The contract rules, each owned by [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) and [model.md → Hook stdout is the decision channel](../internals/agents/model.md#hook-stdout-is-the-decision-channel): blocking ask hooks install sync, neutral is the agent-native no-op on stdout with diagnostics on stderr, helper children get fresh piped stdio, install is idempotent by command-substring reclaim, and installed hook timeouts leave margin under the upstream deadline.
 
@@ -68,7 +68,7 @@ Implement the context source(s) the worksheet found; either alone is valid, and 
 
 ## Step 8 — Wire account, spend, and pricing
 
-The provider half of the integration is [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider): `probe_account` (login state, plan, rate-limit windows), the OAuth-usage probe where one exists, and full-history cost through `spending_sources` plus `parse_spend`. Keep `transcript_files` for live transcript/session lookup. Put a positive-cost spend, hook-turn-cost, or context-cost fixture in `conformance` unless the descriptor declares `RealtimeCost` unsupported.
+The provider half of the integration is [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider): `probe_account` (login state, plan, rate-limit windows), the OAuth-usage probe where one exists, and full-history cost through `spending_sources` plus `parse_spend`. Keep `transcript_files` for live transcript/session lookup. Put a positive-cost spend, hook-turn-cost, or context-cost fixture in `conformance` unless the spec declares `RealtimeCost` unsupported.
 
 `spend.rs` is sidebar-safe by construction: read-only, and the `ensure_spend_parser_boundaries` invariant grep ([`xtask/src/invariants.rs`](../../xtask/src/invariants.rs)) rejects store-write, run-wake, and broker imports in any spend path.
 
@@ -84,7 +84,7 @@ The required set, consolidated from [model.md → Adding an agent](../internals/
 - context mapping from a fixture transcript tail and a fixture transport payload, including the fresh-session zero and unreadable-unknown cases
 - the spend fixture parsing to real entries
 
-Conformance, the descriptor subset test, and the registry uniqueness tests enroll the adapter automatically — no opt-in. Unit tests follow the one-home rule: inline `#[cfg(test)] mod tests` until the size gate moves them to a sibling ([rust-conventions.md → Tests](./rust-conventions.md#tests)).
+Conformance, definition validation, and registry uniqueness tests enroll the adapter automatically — no opt-in. Unit tests follow the one-home rule: inline `#[cfg(test)] mod tests` until the size gate moves them to a sibling ([rust-conventions.md → Tests](./rust-conventions.md#tests)).
 
 ## Step 10 — Ship the documentation
 
@@ -101,10 +101,10 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 
 - [ ] `docs/externals/agent-adapter/<kind>-reference.md` — upstream protocol reference, pinned to sources
 - [ ] Mapping worksheet: 11 lifecycle signals, 16 concerns, asks, tools, identity, context sources, spend, launch argv
-- [ ] `crates/rimz/src/agents/<kind>/mod.rs` — adapter, descriptor, both matrices
+- [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, selected capabilities
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
-- [ ] `pub mod` + re-export in `agents/mod.rs`, one line in `registry::ADAPTERS`
-- [ ] `decode_hook` · one `conformance` record with a complete classification corpus
+- [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
+- [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed`
 - [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` · `ping_args`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge

@@ -1,8 +1,8 @@
 use super::*;
 
 pub(super) fn agent_display_name(kind: &str) -> String {
-    rimz::agents::descriptor_by_kind(kind)
-        .map(|descriptor| descriptor.display_name.to_owned())
+    rimz::agents::spec_by_kind(kind)
+        .map(|definition| definition.display_name.to_owned())
         .unwrap_or_else(|| agent_kind_label(kind))
 }
 

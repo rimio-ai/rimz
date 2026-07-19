@@ -87,7 +87,7 @@ RimZ ships as one Rust binary: the `rimz` crate is CLI, domain library, and nati
 
 **Subsystems — `crates/rimz/src/`**, each carrying its own `AGENTS.md` contract:
 - `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output.
-- `agents/` — the `AgentAdapter` trait, `state.rs` rollup, per-kind adapters (Claude, Codex, Amp, Copilot, Kimi, Pi, OpenCode, Antigravity, Cursor, Droid, Kiro, Qwen, Grok), provider-owned remote-control readiness and lifecycle, the shared `plugin/` process adapter, spend/pricing/account.
+- `agents/` — the provider-neutral `AgentDefinition` catalog, caller-aligned capability contracts and services, `state.rs` rollup, private `adapters/` implementations for every built-in and process plugin, and shared spend/pricing/account machinery.
 - `room/` — private managed-room context, birth/reset lifecycle, sidebar/presence options, and health gating.
 - `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, loop scheduling, resume planning, and rebirth recovery inspection/materialization.
 - `message/` — durable per-agent message queue: park-vs-live dispatch, live-pane send, scheduled wakeups.

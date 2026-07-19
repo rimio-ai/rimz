@@ -304,7 +304,7 @@ fn finished_roster_names_keep_soft_provider_brand_tones() {
     assert_eq!(
         name_fg(" planner"),
         theme.body_brand(theme.clay()).fg,
-        "registered kinds keep their softened descriptor brand"
+        "registered kinds keep their softened definition brand"
     );
     assert_eq!(
         name_fg(" mystery"),

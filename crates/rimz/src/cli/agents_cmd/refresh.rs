@@ -99,7 +99,7 @@ pub(super) fn refresh_targets<'a>(
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
-        .filter(|agent| rimz::agents::find_adapter(agent.kind.as_str()).is_some())
+        .filter(|agent| rimz::agents::find_definition(agent.kind.as_str()).is_some())
         .filter(|agent| {
             channel.is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
         })

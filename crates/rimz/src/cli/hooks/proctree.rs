@@ -27,10 +27,10 @@ pub(super) fn walk_to_agent_ancestor(_source: &str) -> Option<u32> {
 /// Whether the kernel-reported `comm` is one of the agent's declared process
 /// names — its own binary plus any launcher (Codex ships as a JS bundle, so
 /// its `comm` is `node`) or a target-triple release-binary name. The set lives
-/// on the descriptor; an unregistered kind falls back to the exact-name match.
+/// on the definition; an unregistered kind falls back to the exact-name match.
 pub(super) fn matches_agent_kind(comm: &str, source: &str) -> bool {
-    match rimz::agents::descriptor_by_kind(source) {
-        Some(descriptor) => descriptor.runs_as(comm),
+    match rimz::agents::spec_by_kind(source) {
+        Some(definition) => definition.runs_as(comm),
         None => comm == source,
     }
 }

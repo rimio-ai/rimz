@@ -88,7 +88,7 @@ struct FoldFixture {
 struct SpendingFixture {
     _tempdir: TempDir,
     cache_path: PathBuf,
-    files: Vec<(&'static dyn rimz::agents::AgentAdapter, PathBuf)>,
+    files: Vec<(&'static rimz::agents::AgentDefinition, PathBuf)>,
     prices: rimz::agents::PriceBook,
     walker: rimz::agents::spending::SpendingWalker,
     sources: Vec<rimz::agents::spending::SpendingSource>,
@@ -333,7 +333,7 @@ fn spending_fixture_scaled(
             },
         );
         files.push((
-            &rimz::agents::ClaudeAdapter as &'static dyn rimz::agents::AgentAdapter,
+            rimz::agents::definition_by_kind("claude").expect("Claude definition"),
             transcript,
         ));
     }
@@ -373,7 +373,7 @@ fn spending_discovery_fixture(warm: bool) -> SpendingFixture {
     let mut fixture = spending_fixture_scaled(6_000, 17, true, true);
     if warm {
         let _ = fixture.walker.discover_declared_spending_files(
-            &rimz::agents::ClaudeAdapter,
+            rimz::agents::definition_by_kind("claude").expect("Claude definition"),
             fixture.sources.clone(),
             SPENDING_NOW_SECS,
         );
@@ -524,7 +524,7 @@ fn spending_live_scale_cold_discovery_inclusive(bencher: Bencher) {
         .with_inputs(|| spending_discovery_fixture(false))
         .bench_local_values(|mut fixture| {
             let files = fixture.walker.discover_declared_spending_files(
-                &rimz::agents::ClaudeAdapter,
+                rimz::agents::definition_by_kind("claude").expect("Claude definition"),
                 fixture.sources.clone(),
                 SPENDING_NOW_SECS,
             );
@@ -554,7 +554,7 @@ fn spending_live_scale_warm_discovery_inclusive(bencher: Bencher) {
         .with_inputs(|| spending_discovery_fixture(true))
         .bench_local_values(|mut fixture| {
             let files = fixture.walker.discover_declared_spending_files(
-                &rimz::agents::ClaudeAdapter,
+                rimz::agents::definition_by_kind("claude").expect("Claude definition"),
                 fixture.sources.clone(),
                 SPENDING_NOW_SECS,
             );
@@ -584,7 +584,7 @@ fn spending_live_scale_warm_discovery_only(bencher: Bencher) {
         .with_inputs(|| spending_discovery_fixture(true))
         .bench_local_values(|mut fixture| {
             divan::black_box(fixture.walker.discover_declared_spending_files(
-                &rimz::agents::ClaudeAdapter,
+                rimz::agents::definition_by_kind("claude").expect("Claude definition"),
                 fixture.sources,
                 SPENDING_NOW_SECS,
             ));

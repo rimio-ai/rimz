@@ -215,7 +215,7 @@ impl DailyBudgetScope {
         match self {
             Self::Fleet => config.harness.budget.map(|cap| cap.as_usd()),
             Self::Account(kind) => {
-                crate::agents::descriptor_by_kind(kind.as_str())?
+                crate::agents::spec_by_kind(kind.as_str())?
                     .has_authoritative_account_spend()
                     .then_some(())?;
                 config

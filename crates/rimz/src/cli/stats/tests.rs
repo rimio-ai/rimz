@@ -234,7 +234,7 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
         &[&claude_line_today(1.25, "msg-1", "req-1")],
     );
     let files = vec![(
-        &rimz::agents::ClaudeAdapter as &'static dyn rimz::agents::AgentAdapter,
+        rimz::agents::definition_by_kind("claude").unwrap(),
         transcript.clone(),
     )];
 

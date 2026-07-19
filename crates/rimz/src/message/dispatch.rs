@@ -473,8 +473,8 @@ fn agent_needs_live_resolution(
     now: Timestamp,
 ) -> bool {
     agent.agent_id.is_provisional()
-        || crate::agents::descriptor_by_kind(agent.kind.as_str())
-            .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
+        || crate::agents::spec_by_kind(agent.kind.as_str())
+            .is_some_and(|definition| definition.capabilities.registers_lazily)
         || (deliver::receiver_readiness(agent, gate, force, now).accepts_prompt()
             && queue_head(
                 pending.iter(),
@@ -942,7 +942,7 @@ fn push_pending(state: &mut DispatchState<'_>, message: MessageRecord) {
 }
 
 fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
-    let Some(adapter) = crate::agents::find_adapter(agent.kind.as_str()) else {
+    let Some(adapter) = crate::agents::find_definition(agent.kind.as_str()) else {
         return Err(DispatchErr::UnknownAgentKind(agent.kind.clone()));
     };
     match crate::agents::preflight_hooks(adapter, crate::agents::TurnLifecycleNeed::None) {

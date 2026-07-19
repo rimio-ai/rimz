@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 
 use crate::store::atomic;
 
-use super::hook_types::HookRecord;
+use super::hook_types::HookEventSpec;
 use super::managed_json_hooks::ManagedJsonHookSpec;
 use super::{
-    AgentDescriptor, AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview,
+    AgentErr, AgentSpec, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview,
     HookInstallReport, HookUninstallReport, Result, read_optional_file,
 };
 
@@ -30,7 +30,7 @@ pub trait ManagedIntegration: Sync {
         false
     }
 
-    fn wiring_input_paths(&self, _descriptor: &AgentDescriptor) -> Vec<PathBuf> {
+    fn wiring_input_paths(&self, _descriptor: &AgentSpec) -> Vec<PathBuf> {
         Vec::new()
     }
 
@@ -50,7 +50,7 @@ pub trait ManagedIntegration: Sync {
 enum ManagedSourceBackend {
     WholeFile {
         source: &'static str,
-        catalog: &'static [HookRecord],
+        catalog: &'static [HookEventSpec],
         artifact_noun: &'static str,
         upgradeable: bool,
     },
@@ -68,7 +68,7 @@ impl ManagedSource {
     pub(crate) const fn new(
         agent: &'static str,
         source: &'static str,
-        catalog: &'static [HookRecord],
+        catalog: &'static [HookEventSpec],
         artifact_noun: &'static str,
         path: fn() -> Result<PathBuf>,
         upgradeable: bool,
@@ -303,8 +303,8 @@ impl ManagedIntegration for ManagedSource {
         ManagedSource::upgrade_available(self)
     }
 
-    fn wiring_input_paths(&self, descriptor: &AgentDescriptor) -> Vec<PathBuf> {
-        if descriptor.capabilities.local_session_discovery || !descriptor.has_wired_hook_install() {
+    fn wiring_input_paths(&self, definition: &AgentSpec) -> Vec<PathBuf> {
+        if definition.capabilities.local_session_discovery || !definition.has_wired_hook_install() {
             return Vec::new();
         }
         self.resolved_path().into_iter().collect()

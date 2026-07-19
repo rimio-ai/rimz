@@ -2,7 +2,7 @@
 //!
 //! [`AgentLifecycleObservation`] is the single event shape every downstream
 //! reducer reads (see [model.md](../../../../docs/internals/agents/model.md)); each
-//! adapter's [`AgentAdapter::decode_hook`](super::AgentAdapter::decode_hook) may produce one. This module also owns the wiring
+//! definition's hook capability may produce one. This module also owns the wiring
 //! that is identical across adapters — worktree fields and the
 //! payload-overrides-transcript pattern for the context gauge — so the
 //! per-adapter code carries only its provider-specific mapping.
@@ -203,8 +203,7 @@ impl AgentUsageSummary {
 }
 
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
-/// event carries plus the enrichment it reports. An adapter's
-/// [`AgentAdapter::decode_hook`](super::AgentAdapter::decode_hook) attaches it
+/// event carries plus the enrichment it reports. A definition's hook capability attaches it
 /// to the decoded hook so the Store can record an `agent.lifecycle` event
 /// without each adapter touching durable state. The status is *derived* from
 /// the signal through [`step`](super::lifecycle::step), never decided by the
@@ -245,7 +244,7 @@ pub struct AgentLifecycleObservation {
     /// the sidebar's worktree grouping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_branch: Option<String>,
-    /// Display-only task descriptor. It never drives routing or decisions.
+    /// Display-only task definition. It never drives routing or decisions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     /// The user's latest prompt for this session, carried only by the

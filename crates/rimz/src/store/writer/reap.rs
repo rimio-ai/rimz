@@ -98,7 +98,7 @@ impl Store {
                             && newer.ended_at.is_none()
                             && session_death::interrupted_conversation_candidate(agent, newer)
                     })
-                    && crate::agents::find_adapter(agent.kind.as_str())
+                    && crate::agents::find_definition(agent.kind.as_str())
                         .and_then(|adapter| adapter.probe_resting_interruption(&agent.agent_id))
                         .is_some_and(|interrupted_at| {
                             projection.agents.iter().any(|newer| {

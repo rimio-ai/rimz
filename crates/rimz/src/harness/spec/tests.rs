@@ -404,9 +404,9 @@ fn profile_cells_render_fields_in_contract_order() {
         "model_reasoning_effort=high".to_owned(),
     ];
     expected.extend(
-        crate::agents::find_adapter("codex")
+        crate::agents::find_definition("codex")
             .expect("codex")
-            .descriptor()
+            .spec()
             .launch
             .permission_args(PermissionMode::Auto),
     );
@@ -533,9 +533,9 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
     let auto = agent_cell("claude-auto", &profiles, &no_commands());
     let mut expected_auto = vec!["--append".to_owned()];
     expected_auto.extend(
-        crate::agents::find_adapter("claude")
+        crate::agents::find_definition("claude")
             .expect("claude")
-            .descriptor()
+            .spec()
             .launch
             .permission_args(PermissionMode::Auto),
     );
@@ -552,7 +552,7 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
     let ping = agent_cell("claude-ping", &profiles, &no_commands());
     let mut expected_ping = vec!["--append".to_owned()];
     expected_ping.extend(
-        crate::agents::find_adapter("claude")
+        crate::agents::find_definition("claude")
             .expect("claude")
             .ping_args()
             .expect("claude ping"),

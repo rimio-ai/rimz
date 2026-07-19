@@ -7,8 +7,6 @@ use tempfile::tempdir;
 use super::super::cache::{FileCacheEntry, SpendingDiskCache};
 use super::super::discovery::{SpendingDiscoveryIndex, SpendingSource, SpendingSourceTree};
 use super::super::{SKIP_PARSE_MARGIN_SECS, WIDEST_SPEND_WINDOW_SECS};
-use crate::agents::AgentAdapter;
-
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -421,5 +419,10 @@ fn source_fingerprint_is_binary_canonical_and_declaration_complete() {
 
 #[test]
 fn transcript_only_kiro_declares_no_historical_spend_source() {
-    assert!(crate::agents::KiroAdapter.spending_sources().is_empty());
+    assert!(
+        crate::agents::definition_by_kind("kiro")
+            .expect("Kiro definition")
+            .spending_sources()
+            .is_empty()
+    );
 }

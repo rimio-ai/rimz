@@ -67,11 +67,11 @@ fn spend_parser_path_predicate_covers_nested_modules() {
     let agents_root = Path::new("/repo/crates/rimz/src/agents");
 
     assert!(is_agent_spend_parser_path(
-        &agents_root.join("codex/spend.rs"),
+        &agents_root.join("adapters/codex/spend.rs"),
         agents_root,
     ));
     assert!(is_agent_spend_parser_path(
-        &agents_root.join("codex/spend/wire.rs"),
+        &agents_root.join("adapters/codex/spend/wire.rs"),
         agents_root,
     ));
     assert!(is_agent_spend_parser_path(
@@ -79,11 +79,11 @@ fn spend_parser_path_predicate_covers_nested_modules() {
         agents_root,
     ));
     assert!(is_agent_spend_parser_path(
-        &agents_root.join("plugin/probes.rs"),
+        &agents_root.join("adapters/plugin/probes.rs"),
         agents_root,
     ));
     assert!(!is_agent_spend_parser_path(
-        &agents_root.join("codex/mod.rs"),
+        &agents_root.join("adapters/codex/mod.rs"),
         agents_root,
     ));
     assert!(!is_agent_spend_parser_path(
@@ -108,7 +108,7 @@ fn generic_process_consumers_require_normalized_adapter_decisions() {
     .expect("write forbidden hook decision");
     std::fs::write(
         &owner,
-        "fn f(adapter: &dyn AgentAdapter) { adapter.hook_ingress(None); }\n",
+        "fn f(definition: &AgentDefinition) { definition.hook_ingress(None); }\n",
     )
     .expect("write normalized hook decision");
     std::fs::write(
@@ -129,10 +129,39 @@ fn generic_process_consumers_require_normalized_adapter_decisions() {
 
     std::fs::write(
         &hooks,
-        "fn f(adapter: &dyn AgentAdapter) { adapter.hook_ingress(None); }\n",
+        "fn f(definition: &AgentDefinition) { definition.hook_ingress(None); }\n",
     )
     .expect("write normalized hook decision");
     ensure_normalized_agent_process_decisions(&root, &[hooks, owner, pane_probe]).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn provider_implementations_stay_behind_the_agents_boundary() {
+    let root = temp_repo_root("private-agent-adapters");
+    let consumer = root.join("crates/rimz/src/cli/bad.rs");
+    let provider = root.join("crates/rimz/src/agents/adapters/codex/mod.rs");
+    for path in [&consumer, &provider] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    std::fs::write(
+        &consumer,
+        "fn f() { crate::agents::adapters::codex::probe(); }\n",
+    )
+    .expect("write forbidden provider import");
+    std::fs::write(&provider, "pub struct CodexAdapter;\n").expect("write private adapter");
+
+    let err = ensure_private_agent_adapter_boundary(&root, &[consumer.clone(), provider.clone()])
+        .expect_err("consumer provider import is rejected");
+    assert!(err.to_string().contains(&consumer.display().to_string()));
+    assert!(!err.to_string().contains(&provider.display().to_string()));
+
+    std::fs::write(
+        &consumer,
+        "fn f() { crate::agents::definition_by_kind(\"codex\"); }\n",
+    )
+    .expect("write neutral lookup");
+    ensure_private_agent_adapter_boundary(&root, &[consumer, provider]).unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -143,7 +172,7 @@ fn adapter_derived_kinds_use_the_typed_descriptor_accessor() {
     std::fs::create_dir_all(supervised.parent().expect("test path has parent")).expect("mkdir");
     std::fs::write(
         &supervised,
-        "fn f(adapter: &dyn AgentAdapter) { AgentKind::new_unchecked(\n adapter.descriptor().kind\n); }\n",
+        "fn f(definition: &AgentDefinition) { AgentKind::new_unchecked(\n definition.spec().kind\n); }\n",
     )
     .expect("write unchecked adapter kind");
 
@@ -153,7 +182,7 @@ fn adapter_derived_kinds_use_the_typed_descriptor_accessor() {
 
     std::fs::write(
         &supervised,
-        "fn f(adapter: &dyn AgentAdapter) { let _ = adapter.descriptor().kind_id(); }\n",
+        "fn f(definition: &AgentDefinition) { let _ = definition.spec().kind_id(); }\n",
     )
     .expect("write typed adapter kind");
     ensure_adapter_kinds_stay_typed(&root, &[supervised]).unwrap();

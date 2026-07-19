@@ -17,136 +17,241 @@ use super::{
 
 /// Provider-neutral result of decoding one native hook payload.
 #[derive(Debug, PartialEq)]
-pub struct DecodedHook {
-    event_name: String,
-    class: AgentHookClass,
-    ask_kind: Option<AskKind>,
+pub struct HookOutput {
+    event: CanonicalHookEvent,
     routing: HookRouting,
-    progress: bool,
-    session_ended: bool,
-    lifecycle: Option<AgentLifecycleObservation>,
-    questions: Vec<AskQuestion>,
-    ask_detail: Option<String>,
-    native_answers: Option<Vec<AskAnswer>>,
-    assistant_message: Option<String>,
-    final_message: Option<String>,
-    turn_error: Option<AgentTurnError>,
-    observed_context: Option<ContextObservation>,
-    neutral: Option<Value>,
+    reply: HookReply,
 }
 
-impl DecodedHook {
+#[derive(Debug, PartialEq)]
+pub struct CanonicalHookEvent {
+    native_name: String,
+    meaning: CanonicalHookMeaning,
+    facts: Vec<CanonicalHookFact>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CanonicalHookFact {
+    Lifecycle(AgentLifecycleObservation),
+    Ask {
+        questions: Vec<AskQuestion>,
+        detail: Option<String>,
+    },
+    NativeAnswers(Vec<AskAnswer>),
+    AssistantOutput(String),
+    FinalOutput(String),
+    Error(AgentTurnError),
+    Context(ContextObservation),
+    Progress,
+    SessionEnded,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanonicalHookMeaning {
+    Lifecycle,
+    Ask(AskKind),
+    Unknown,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum HookReply {
+    #[default]
+    Silent,
+    Json(Value),
+}
+
+impl CanonicalHookEvent {
+    pub fn native_name(&self) -> &str {
+        &self.native_name
+    }
+
+    pub const fn meaning(&self) -> CanonicalHookMeaning {
+        self.meaning
+    }
+
+    pub fn records_progress(&self) -> bool {
+        self.facts
+            .iter()
+            .any(|fact| matches!(fact, CanonicalHookFact::Progress))
+    }
+
+    pub fn ends_session(&self) -> bool {
+        self.facts
+            .iter()
+            .any(|fact| matches!(fact, CanonicalHookFact::SessionEnded))
+    }
+}
+
+impl HookOutput {
     pub fn new(classified: ClassifiedHook) -> Self {
+        let meaning = match (classified.class, classified.ask_kind) {
+            (AgentHookClass::AwaitingUser, Some(kind)) => CanonicalHookMeaning::Ask(kind),
+            (AgentHookClass::Lifecycle, None) => CanonicalHookMeaning::Lifecycle,
+            _ => CanonicalHookMeaning::Unknown,
+        };
         Self {
-            event_name: classified.event_name,
-            class: classified.class,
-            ask_kind: classified.ask_kind,
+            event: CanonicalHookEvent {
+                native_name: classified.event_name,
+                meaning,
+                facts: Vec::new(),
+            },
             routing: HookRouting::default(),
-            progress: false,
-            session_ended: false,
-            lifecycle: None,
-            questions: Vec::new(),
-            ask_detail: None,
-            native_answers: None,
-            assistant_message: None,
-            final_message: None,
-            turn_error: None,
-            observed_context: None,
-            neutral: None,
+            reply: HookReply::Silent,
         }
     }
 
-    fn with_policy(mut self, hook: Option<&HookRecord>) -> Self {
-        self.progress = hook.is_some_and(|hook| hook.progress);
-        self.session_ended = hook.is_some_and(|hook| hook.session_ended);
+    fn with_policy(mut self, hook: Option<&HookEventSpec>) -> Self {
+        self.set_policy(
+            hook.is_some_and(|hook| hook.progress),
+            hook.is_some_and(|hook| hook.session_ended),
+        );
         self
     }
 
     pub fn event_name(&self) -> &str {
-        &self.event_name
+        &self.event.native_name
     }
 
     pub const fn class(&self) -> AgentHookClass {
-        self.class
+        match self.event.meaning {
+            CanonicalHookMeaning::Lifecycle => AgentHookClass::Lifecycle,
+            CanonicalHookMeaning::Ask(_) => AgentHookClass::AwaitingUser,
+            CanonicalHookMeaning::Unknown => AgentHookClass::Unknown,
+        }
     }
 
     pub const fn ask_kind(&self) -> Option<AskKind> {
-        self.ask_kind
+        match self.event.meaning {
+            CanonicalHookMeaning::Ask(kind) => Some(kind),
+            CanonicalHookMeaning::Lifecycle | CanonicalHookMeaning::Unknown => None,
+        }
+    }
+
+    pub const fn event(&self) -> &CanonicalHookEvent {
+        &self.event
     }
 
     pub const fn routing(&self) -> &HookRouting {
         &self.routing
     }
 
-    pub const fn records_progress(&self) -> bool {
-        self.progress
+    pub fn records_progress(&self) -> bool {
+        self.event.records_progress()
     }
 
-    pub const fn ends_session(&self) -> bool {
-        self.session_ended
+    pub fn ends_session(&self) -> bool {
+        self.event.ends_session()
     }
 
     pub fn lifecycle(&self) -> Option<&AgentLifecycleObservation> {
-        self.lifecycle.as_ref()
+        self.event.facts.iter().find_map(|fact| match fact {
+            CanonicalHookFact::Lifecycle(observation) => Some(observation),
+            _ => None,
+        })
     }
 
     pub fn take_lifecycle(&mut self) -> Option<AgentLifecycleObservation> {
-        self.lifecycle.take()
+        let index = self
+            .event
+            .facts
+            .iter()
+            .position(|fact| matches!(fact, CanonicalHookFact::Lifecycle(_)))?;
+        match self.event.facts.remove(index) {
+            CanonicalHookFact::Lifecycle(observation) => Some(observation),
+            _ => unreachable!("matched lifecycle fact"),
+        }
     }
 
     pub fn questions(&self) -> &[AskQuestion] {
-        &self.questions
+        self.event
+            .facts
+            .iter()
+            .find_map(|fact| match fact {
+                CanonicalHookFact::Ask { questions, .. } => Some(questions.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     pub fn ask_detail(&self) -> Option<&str> {
-        self.ask_detail.as_deref()
+        self.event.facts.iter().find_map(|fact| match fact {
+            CanonicalHookFact::Ask { detail, .. } => detail.as_deref(),
+            _ => None,
+        })
     }
 
     pub fn native_answers(&self) -> Option<&[AskAnswer]> {
-        self.native_answers.as_deref()
+        self.event.facts.iter().find_map(|fact| match fact {
+            CanonicalHookFact::NativeAnswers(answers) => Some(answers.as_slice()),
+            _ => None,
+        })
     }
 
     pub fn assistant_message(&self) -> Option<&str> {
-        self.assistant_message.as_deref()
+        self.event.facts.iter().find_map(|fact| match fact {
+            CanonicalHookFact::AssistantOutput(message) => Some(message.as_str()),
+            _ => None,
+        })
     }
 
     pub fn final_message(&self) -> Option<&str> {
-        self.final_message.as_deref()
+        self.event.facts.iter().find_map(|fact| match fact {
+            CanonicalHookFact::FinalOutput(message) => Some(message.as_str()),
+            _ => None,
+        })
     }
 
     pub fn turn_error(&self) -> Option<&AgentTurnError> {
-        self.turn_error.as_ref()
+        self.event.facts.iter().find_map(|fact| match fact {
+            CanonicalHookFact::Error(error) => Some(error),
+            _ => None,
+        })
     }
 
     pub fn observed_context(&self) -> Option<&ContextObservation> {
-        self.observed_context.as_ref()
+        self.event.facts.iter().find_map(|fact| match fact {
+            CanonicalHookFact::Context(context) => Some(context),
+            _ => None,
+        })
     }
 
     pub fn take_observed_context(&mut self) -> Option<ContextObservation> {
-        self.observed_context.take()
+        let index = self
+            .event
+            .facts
+            .iter()
+            .position(|fact| matches!(fact, CanonicalHookFact::Context(_)))?;
+        match self.event.facts.remove(index) {
+            CanonicalHookFact::Context(context) => Some(context),
+            _ => unreachable!("matched context fact"),
+        }
     }
 
-    pub fn neutral(&self) -> Option<&Value> {
-        self.neutral.as_ref()
+    pub const fn reply(&self) -> &HookReply {
+        &self.reply
+    }
+
+    pub fn json_reply(&self) -> Option<&Value> {
+        match &self.reply {
+            HookReply::Silent => None,
+            HookReply::Json(value) => Some(value),
+        }
     }
 
     pub fn event_agent_id(&self) -> Option<&AgentSessionId> {
-        self.lifecycle
-            .as_ref()
+        self.lifecycle()
             .and_then(|observation| observation.agent_id.as_ref())
             .or_else(|| self.routing.event_agent_id())
     }
 
     pub fn context_agent_id(&self) -> Option<&AgentSessionId> {
-        self.observed_context
-            .as_ref()
+        self.observed_context()
             .map(|observation| &observation.agent_id)
             .or_else(|| self.routing.context_agent_id())
     }
 
     pub fn worktree_path(&self) -> Option<&str> {
-        self.lifecycle
-            .as_ref()
+        self.lifecycle()
             .and_then(|observation| observation.worktree_path.as_deref())
             .or_else(|| self.routing.worktree_path())
     }
@@ -156,51 +261,92 @@ impl DecodedHook {
     }
 
     pub(crate) fn set_ask(&mut self, questions: Vec<AskQuestion>, detail: Option<String>) {
-        self.questions = questions;
-        self.ask_detail = detail;
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::Ask { .. }),
+            Some(CanonicalHookFact::Ask { questions, detail }),
+        );
     }
 
     pub(crate) fn set_native_answers(&mut self, answers: Option<Vec<AskAnswer>>) {
-        self.native_answers = answers;
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::NativeAnswers(_)),
+            answers.map(CanonicalHookFact::NativeAnswers),
+        );
     }
 
     pub(crate) fn set_assistant_message(&mut self, message: Option<String>) {
-        self.assistant_message = message;
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::AssistantOutput(_)),
+            message.map(CanonicalHookFact::AssistantOutput),
+        );
     }
 
     pub(crate) fn set_final_message(&mut self, message: Option<String>) {
-        self.final_message = message;
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::FinalOutput(_)),
+            message.map(CanonicalHookFact::FinalOutput),
+        );
     }
 
     pub(crate) fn set_turn_error(&mut self, error: Option<AgentTurnError>) {
-        self.turn_error = error;
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::Error(_)),
+            error.map(CanonicalHookFact::Error),
+        );
     }
 
     pub(crate) fn set_observed_context(&mut self, context: Option<ContextObservation>) {
-        self.observed_context = context.filter(|observation| {
+        let context = context.filter(|observation| {
             self.routing
                 .context_agent_id()
                 .is_none_or(|agent_id| agent_id == &observation.agent_id)
         });
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::Context(_)),
+            context.map(CanonicalHookFact::Context),
+        );
     }
 
-    pub(crate) fn set_neutral(&mut self, neutral: Option<Value>) {
-        self.neutral = neutral;
+    pub(crate) fn set_reply(&mut self, reply: HookReply) {
+        self.reply = reply;
     }
 
     pub(crate) fn attach_lifecycle(&mut self, observation: AgentLifecycleObservation) {
-        self.lifecycle = Some(observation);
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::Lifecycle(_)),
+            Some(CanonicalHookFact::Lifecycle(observation)),
+        );
     }
 
     pub fn update_lifecycle(&mut self, update: impl FnOnce(&mut AgentLifecycleObservation)) {
-        if let Some(observation) = self.lifecycle.as_mut() {
+        if let Some(observation) = self.event.facts.iter_mut().find_map(|fact| match fact {
+            CanonicalHookFact::Lifecycle(observation) => Some(observation),
+            _ => None,
+        }) {
             update(observation);
         }
     }
 
     pub(crate) fn set_policy(&mut self, progress: bool, session_ended: bool) {
-        self.progress = progress;
-        self.session_ended = session_ended;
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::Progress),
+            progress.then_some(CanonicalHookFact::Progress),
+        );
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::SessionEnded),
+            session_ended.then_some(CanonicalHookFact::SessionEnded),
+        );
+    }
+
+    fn replace_fact(
+        &mut self,
+        matches: impl Fn(&CanonicalHookFact) -> bool,
+        replacement: Option<CanonicalHookFact>,
+    ) {
+        self.event.facts.retain(|fact| !matches(fact));
+        if let Some(fact) = replacement {
+            self.event.facts.push(fact);
+        }
     }
 }
 
@@ -276,7 +422,7 @@ impl HookRouting {
 
 /// One installed managed hook and its classification policy.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct HookRecord {
+pub(crate) struct HookEventSpec {
     pub(crate) event: &'static str,
     pub(crate) matcher: Option<&'static str>,
     pub(crate) lifecycle_fallback: bool,
@@ -289,7 +435,7 @@ pub(crate) struct HookRecord {
     pub(crate) test_ask: Option<AskKind>,
 }
 
-impl HookRecord {
+impl HookEventSpec {
     pub(crate) const fn lifecycle(event: &'static str, _test_payload: &'static str) -> Self {
         Self {
             event,
@@ -363,21 +509,21 @@ impl HookRecord {
 
 macro_rules! hook_record {
     (lifecycle, $event:literal, $payload:literal) => {
-        $crate::agents::hook_types::HookRecord::lifecycle($event, $payload)
+        $crate::agents::hook_types::HookEventSpec::lifecycle($event, $payload)
     };
     (blocking, $event:literal, $payload:literal, $ask:expr) => {
-        $crate::agents::hook_types::HookRecord::blocking($event, $payload, $ask)
+        $crate::agents::hook_types::HookEventSpec::blocking($event, $payload, $ask)
     };
 }
 pub(crate) use hook_record;
 
-pub(crate) fn catalog_contains(hooks: &[HookRecord], event_name: &str) -> bool {
+pub(crate) fn catalog_contains(hooks: &[HookEventSpec], event_name: &str) -> bool {
     hooks.iter().any(|hook| hook.event == event_name)
 }
 
 #[cfg(test)]
 pub(crate) const fn catalog_event_name_array<const N: usize>(
-    hooks: &[HookRecord; N],
+    hooks: &[HookEventSpec; N],
 ) -> [&'static str; N] {
     let mut names = [""; N];
     let mut index = 0;
@@ -390,13 +536,13 @@ pub(crate) const fn catalog_event_name_array<const N: usize>(
 
 #[cfg(test)]
 pub(crate) fn catalog_classification_corpus(
-    hooks: &[HookRecord],
+    hooks: &[HookEventSpec],
 ) -> Vec<super::ClassificationSample> {
     hooks.iter().map(classification_sample).collect()
 }
 
 #[cfg(test)]
-pub(crate) fn classification_sample(hook: &HookRecord) -> super::ClassificationSample {
+pub(crate) fn classification_sample(hook: &HookEventSpec) -> super::ClassificationSample {
     super::ClassificationSample::new(
         hook.event,
         serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
@@ -406,24 +552,24 @@ pub(crate) fn classification_sample(hook: &HookRecord) -> super::ClassificationS
 }
 
 pub(crate) fn decode_catalog_hook(
-    hooks: &[HookRecord],
+    hooks: &[HookEventSpec],
     event_name: &str,
     ask_kind: Option<AskKind>,
-) -> DecodedHook {
+) -> HookOutput {
     let hook = hooks.iter().find(|hook| hook.event == event_name);
-    DecodedHook::new(classify_catalog_entry(hook, event_name, ask_kind)).with_policy(hook)
+    HookOutput::new(classify_catalog_entry(hook, event_name, ask_kind)).with_policy(hook)
 }
 
 pub(crate) fn decode_catalog_entry(
-    hook: Option<&HookRecord>,
+    hook: Option<&HookEventSpec>,
     event_name: &str,
     ask_kind: Option<AskKind>,
-) -> DecodedHook {
-    DecodedHook::new(classify_catalog_entry(hook, event_name, ask_kind)).with_policy(hook)
+) -> HookOutput {
+    HookOutput::new(classify_catalog_entry(hook, event_name, ask_kind)).with_policy(hook)
 }
 
 pub(crate) fn classify_catalog_entry(
-    hook: Option<&HookRecord>,
+    hook: Option<&HookEventSpec>,
     event_name: &str,
     ask_kind: Option<AskKind>,
 ) -> ClassifiedHook {
@@ -530,7 +676,7 @@ mod tests {
 
     #[test]
     fn hook_catalog_records_derive_policy_and_event_names() {
-        const HOOKS: [HookRecord; 4] = [
+        const HOOKS: [HookEventSpec; 4] = [
             hook_record!(lifecycle, "Start", r#"{}"#).progress(),
             hook_record!(blocking, "Ask", r#"{}"#, AskKind::Question).synchronous(),
             hook_record!(blocking, "Permission", r#"{}"#, AskKind::Permission)
@@ -568,7 +714,7 @@ mod tests {
 
     #[test]
     fn lifecycle_attachment_preserves_root_routing_and_promotes_event_identity() {
-        let mut decoded = DecodedHook::new(ClassifiedHook {
+        let mut decoded = HookOutput::new(ClassifiedHook {
             class: AgentHookClass::Lifecycle,
             ask_kind: None,
             event_name: "SubagentStop".to_owned(),
@@ -605,7 +751,7 @@ mod tests {
             ask_kind: None,
             event_name: "Context".to_owned(),
         };
-        let mut decoded = DecodedHook::new(classified.clone());
+        let mut decoded = HookOutput::new(classified.clone());
         decoded.set_routing(
             HookRouting::split(Some("root".into()), Some("context".into()))
                 .with_worktree(Some("/fallback".to_owned())),
@@ -620,7 +766,7 @@ mod tests {
             Some("context")
         );
 
-        let mut attached = DecodedHook::new(classified);
+        let mut attached = HookOutput::new(classified);
         attached.set_routing(decoded.routing().clone());
         attached.attach_lifecycle(AgentLifecycleObservation::new(
             None,

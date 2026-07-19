@@ -1,8 +1,8 @@
 //! Shared filesystem utilities for the per-adapter full-history spend parsers.
 //!
 //! Each adapter's `spend.rs` owns its typed deserialization, path discovery,
-//! and JSONL parser ([`AgentAdapter::spending_sources`] /
-//! [`AgentAdapter::parse_spend`](super::AgentAdapter::parse_spend)); the
+//! and JSONL parser ([`AgentDefinition::spending_sources`] /
+//! [`AgentDefinition::parse_spend`](super::AgentDefinition::parse_spend)); the
 //! consumer is [`super::spending`]. The walk helpers they share live here.
 //!
 //! This is the *full-history* read — distinct from the bounded-tail context
@@ -11,7 +11,7 @@
 //! the whole log for spend. Spend parsers are read-only and sidebar-safe — no
 //! store writes, run-wake, or broker imports (CI grep).
 //!
-//! [`AgentAdapter::spending_sources`]: super::AgentAdapter::spending_sources
+//! [`AgentDefinition::spending_sources`]: super::AgentDefinition::spending_sources
 
 use std::fs;
 use std::marker::PhantomData;

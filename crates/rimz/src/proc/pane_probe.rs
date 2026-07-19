@@ -296,7 +296,7 @@ fn in_pane_agent_cmdline_matches(kind: &str, cmdline: &str) -> bool {
 }
 
 fn in_pane_agent_probe_supported(kind: &str) -> bool {
-    crate::agents::descriptor_by_kind(kind).is_some()
+    crate::agents::spec_by_kind(kind).is_some()
 }
 
 #[cfg(test)]

@@ -166,7 +166,7 @@ pub enum LifecycleSignal {
 }
 
 impl LifecycleSignal {
-    /// Data-less kind for matrix rows and descriptor conformance.
+    /// Data-less kind for matrix rows and definition conformance.
     pub const fn kind(&self) -> LifecycleSignalKind {
         match self {
             Self::Registered => LifecycleSignalKind::Registered,

@@ -40,8 +40,8 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         .or_else(|| {
             pane.hosted_agent_kind
                 .as_ref()
-                .and_then(|kind| crate::agents::descriptor_by_kind(kind.as_str()))
-                .map(|descriptor| descriptor.kind.to_owned())
+                .and_then(|kind| crate::agents::spec_by_kind(kind.as_str()))
+                .map(|definition| definition.kind.to_owned())
         })
         .or_else(|| command.map(program_label))
         .unwrap_or_else(|| "process".to_owned());
@@ -109,8 +109,8 @@ pub fn pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
         .or_else(|| {
             pane.hosted_agent_kind
                 .as_ref()
-                .and_then(|kind| crate::agents::descriptor_by_kind(kind.as_str()))
-                .map(|descriptor| descriptor.kind)
+                .and_then(|kind| crate::agents::spec_by_kind(kind.as_str()))
+                .map(|definition| definition.kind)
         })
 }
 

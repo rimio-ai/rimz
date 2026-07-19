@@ -19,7 +19,7 @@ fn is_agent_spend_parser_path(path: &Path, agents_root: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(agents_root) else {
         return false;
     };
-    if relative == Path::new("plugin/probes.rs") {
+    if relative == Path::new("adapters/plugin/probes.rs") {
         return true;
     }
     relative
@@ -39,6 +39,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_banned_imports(root, &files)?;
     ensure_hook_stdio(root, &files)?;
     ensure_normalized_agent_process_decisions(root, &files)?;
+    ensure_private_agent_adapter_boundary(root, &files)?;
     ensure_adapter_kinds_stay_typed(root, &files)?;
     ensure_sidebar_renderer_boundaries(root, &files)?;
     ensure_spend_parser_boundaries(root, &files)?;
@@ -67,6 +68,74 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let crate_root = root.join("crates/rimz");
+    let agents_root = crate_root.join("src/agents");
+    let provider_names = [
+        "amp",
+        "antigravity",
+        "claude",
+        "codex",
+        "copilot",
+        "cursor",
+        "droid",
+        "grok",
+        "kimi",
+        "kiro",
+        "opencode",
+        "pi",
+        "qwen",
+    ];
+    let concrete_types = [
+        "AmpAdapter",
+        "AntigravityAdapter",
+        "ClaudeAdapter",
+        "CodexAdapter",
+        "CopilotAdapter",
+        "CursorAdapter",
+        "DroidAdapter",
+        "GrokAdapter",
+        "KimiAdapter",
+        "KiroAdapter",
+        "OpencodeAdapter",
+        "PiAdapter",
+        "QwenAdapter",
+    ];
+    let removed_api = [
+        concat!("Agent", "Adapter"),
+        concat!("Agent", "Descriptor"),
+        concat!("Decoded", "Hook"),
+        concat!("Integration", "Coverage"),
+        concat!("Lifecycle", "Coverage"),
+    ];
+    let mut offenders = Vec::new();
+    for path in files.iter().filter(|path| {
+        path.starts_with(&crate_root)
+            && path.extension().and_then(OsStr::to_str) == Some("rs")
+            && !path.starts_with(&agents_root)
+    }) {
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("read invariant source {}", path.display()))?;
+        let code = code_without_comments(&source);
+        let private_path = code.contains(concat!("agents", "::adapters"))
+            || provider_names
+                .iter()
+                .any(|provider| code.contains(&format!("agents::{provider}::")));
+        let concrete_type = concrete_types.iter().any(|name| code.contains(name));
+        let removed = removed_api.iter().any(|name| code.contains(name));
+        if private_path || concrete_type || removed {
+            offenders.push(path.display().to_string());
+        }
+    }
+    if !offenders.is_empty() {
+        bail!(
+            "agent consumers must resolve AgentDefinition and use provider-neutral services\n{}",
+            offenders.join("\n")
+        );
+    }
+    Ok(())
+}
+
 fn ensure_adapter_kinds_stay_typed(root: &Path, files: &[PathBuf]) -> Result<()> {
     let cli_root = root.join("crates/rimz/src/cli");
     let mut offenders = Vec::new();
@@ -87,7 +156,7 @@ fn ensure_adapter_kinds_stay_typed(root: &Path, files: &[PathBuf]) -> Result<()>
             let statement = suffix
                 .split_once(';')
                 .map_or(suffix, |(statement, _)| statement);
-            if statement.contains(".descriptor().kind") {
+            if statement.contains(".spec().kind") {
                 offenders.push(path.display().to_string());
                 break;
             }
@@ -96,7 +165,7 @@ fn ensure_adapter_kinds_stay_typed(root: &Path, files: &[PathBuf]) -> Result<()>
     }
     if !offenders.is_empty() {
         bail!(
-            "adapter descriptors expose typed kind_id(); keep unchecked kinds at open-set wire boundaries\n{}",
+            "agent definitions expose typed kind_id(); keep unchecked kinds at open-set wire boundaries\n{}",
             offenders.join("\n")
         );
     }
@@ -648,17 +717,17 @@ fn cli_color_violation_lines(text: &str) -> Vec<(usize, &str)> {
 }
 
 fn ensure_brand_resolution_single_home(root: &Path, files: &[PathBuf]) -> Result<()> {
-    let descriptor = root.join("crates/rimz/src/agents/descriptor.rs");
+    let definition = root.join("crates/rimz/src/agents/definition.rs");
     let provider = root.join("crates/rimz/src/theme/provider.rs");
-    let plugin_descriptor = root.join("crates/rimz/src/agents/plugin/mod.rs");
+    let plugin_definition = root.join("crates/rimz/src/agents/adapters/plugin/mod.rs");
     let sidebar_fixture = root.join("crates/rimz/src/cli/sidebar/fixture.rs");
     let needle = concat!(".brand", ".color");
     let mut violations = Vec::new();
     for path in files {
         if path.extension().and_then(OsStr::to_str) != Some("rs")
-            || path == &descriptor
+            || path == &definition
             || path == &provider
-            || path == &plugin_descriptor
+            || path == &plugin_definition
             || path == &sidebar_fixture
             || is_test_source_path(root, path)
         {

@@ -982,7 +982,8 @@ fn cursor_ask_local_store_waits_in_pane_without_creating_a_structured_ask() {
         assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
     }
     let pane = tmux_pane("%0", "agent", &env.project_root);
-    let discovered = rimz::agents::cursor::discover_local_sessions_under(
+    let discovered = rimz::agents::session::discover_local_sessions_under(
+        "cursor",
         &cursor_home,
         &[env.project_root.as_path()],
     );
@@ -1574,7 +1575,7 @@ fn internal_app_server_hook_is_suppressed_and_records_nothing() {
     .expect("payload");
 
     let mut cmd = env.hook_command("codex");
-    cmd.env(rimz::agents::codex::ENV_INTERNAL_APP_SERVER, "1");
+    cmd.env("RIMZ_CODEX_INTERNAL_APP_SERVER", "1");
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()
@@ -2476,7 +2477,7 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
     let transcript = env.project_root.join("qwen-rewound-session.jsonl");
     std::fs::write(
         &transcript,
-        include_str!("../../src/agents/qwen/tests/fixtures/rewound-session.jsonl"),
+        include_str!("../../src/agents/adapters/qwen/tests/fixtures/rewound-session.jsonl"),
     )
     .unwrap();
     let hook = json!({

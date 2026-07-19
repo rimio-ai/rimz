@@ -253,7 +253,7 @@ fn stamp_pane_resumed_session_ids(
                     .as_ref()
                     .map(crate::ids::AgentKind::as_str)
             })
-            .and_then(crate::agents::find_adapter)
+            .and_then(crate::agents::find_definition)
             .is_some();
         if !supports_resume_discovery {
             continue;

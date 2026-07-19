@@ -515,7 +515,7 @@ fn session_cost(
     runtime: &rimz::RuntimePaths,
     agent: &AgentState,
 ) -> Option<rimz::agents::AgentCost> {
-    let adapter = rimz::agents::find_adapter(agent.kind.as_str())?;
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())?;
     let transcript = Path::new(agent.transcript_path.as_deref()?);
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     rimz::agents::spending::session_cost_usd(adapter, agent.agent_id.as_str(), transcript, &prices)

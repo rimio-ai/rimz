@@ -454,12 +454,12 @@ impl<'de> Deserialize<'de> for MessageId {
 /// Agent adapter kind label (`claude`, `codex`, `pi`).
 ///
 /// An open set, deliberately: the registry
-/// ([`registry::all_adapters`](crate::agents::registry::all_adapters)) is the source of truth
+/// ([`registry::all_definitions`](crate::agents::registry::all_definitions)) is the source of truth
 /// for *known* kinds — every dispatch resolves through it and an unknown kind
 /// degrades gracefully (skipped probe, title-cased panel) — while store
 /// replay and snapshot decode stay open so events from a removed adapter
 /// still fold and render. CLI boundaries validate by registry lookup
-/// (`find_adapter`), which is where a typo dies; internally the kind is a
+/// (`find_definition`), which is where a typo dies; internally the kind is a
 /// label, so construction is unchecked.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]

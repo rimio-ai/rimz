@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents::ProviderAccountBinding;
 use crate::agents::{
     HookPreflightErr, LongestWindowSignal, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed,
-    WindowSurplus, find_adapter, preflight_hooks,
+    WindowSurplus, find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use crate::harness::assist_log::AssistWindowReset;
@@ -708,8 +708,8 @@ impl<'a> TaskFire<'a> {
         let timeout = effective_spawn_timeout(self.mode, task_timeout, configured_timeout);
         let effort = self.entry.effort.clone().or_else(|| {
             (is_ping
-                && find_adapter(resolved_kind)
-                    .is_some_and(|adapter| adapter.descriptor().launch.presets.effort.is_some()))
+                && find_definition(resolved_kind)
+                    .is_some_and(|adapter| adapter.spec().launch.presets.effort.is_some()))
             .then(|| "low".to_owned())
         });
         let budget = self
@@ -1036,7 +1036,7 @@ fn single_agent_cell(spec: &str, layout: &LayoutSpec) -> Result<ResolvedTaskSpec
 
 pub fn ping_kind_supported(kind: &str) -> Result<()> {
     let adapter =
-        find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+        find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     if adapter.ping_args().is_none() {
         anyhow::bail!(
             "agent kind `{kind}` does not support a ping turn; use `claude`, `codex`, or `qwen`"
@@ -1067,7 +1067,7 @@ fn preflight_resolved_task(spec: &str, resolved: &ResolvedTaskSpec) -> Result<()
 
 fn preflight_kind(kind: &str) -> Result<()> {
     let adapter =
-        find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+        find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     match preflight_hooks(adapter, TurnLifecycleNeed::NotUnsupported) {
         Ok(()) => Ok(()),
         Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => anyhow::bail!(
@@ -1164,7 +1164,7 @@ fn resolve_managed_spawn_state(
     resolved: &ResolvedTaskSpec,
     config: &MachineConfig,
 ) -> Result<ManagedLaunchState> {
-    let adapter = find_adapter(&resolved.kind)
+    let adapter = find_definition(&resolved.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", resolved.kind))?;
     if entry.worktree.is_some() {
         let applicability = adapter.resolve_managed_launch(
@@ -1665,7 +1665,7 @@ fn managed_ping_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState {
 }
 
 fn unresolved_managed_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState {
-    let Some(adapter) = find_adapter(kind) else {
+    let Some(adapter) = find_definition(kind) else {
         return ManagedLaunchState::Unsupported;
     };
     let state = adapter.resolve_managed_launch(

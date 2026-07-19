@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::SidebarSnapshot;
-use crate::agents::find_adapter;
+use crate::agents::find_definition;
 use crate::agents::spending::{
     NO_BURST_CUTOFF, SESSION_GAP_SECS, SpendScope, WorkspaceSpendingCache, live_session_keys,
     origin_path,
@@ -91,7 +91,7 @@ pub(crate) fn live_card_sessions(snapshot: &SidebarSnapshot) -> Vec<LiveCardSpen
             if !usd.is_finite() || usd < 0.0 {
                 return None;
             }
-            let adapter = find_adapter(agent.kind.as_str())?;
+            let adapter = find_definition(agent.kind.as_str())?;
             let transcript_path = PathBuf::from(agent.transcript_path.as_deref()?);
             if !transcript_path.is_absolute() {
                 return None;

@@ -38,7 +38,7 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 /// leaves the shared files to the elected producer.
 ///
 /// Every registered adapter is discovered fleet-wide
-/// ([`spending_sources`](crate::agents::AgentAdapter::spending_sources)) so each
+/// ([`spending_sources`](crate::agents::AgentDefinition::spending_sources)) so each
 /// counts on the same footing, and the dashboard panel and fleet store read
 /// one provider's spend the same way regardless of which project it ran in.
 pub(super) fn serve_request(
@@ -295,7 +295,7 @@ fn walk_fleet_spending_files(
     context: &SpendingRequestContext<'_>,
     publish: bool,
     progress: &mut dyn FnMut(SpendProgress),
-    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    files: &[(&'static crate::agents::AgentDefinition, PathBuf)],
     now_secs: u64,
 ) -> crate::agents::spending::SpendingCaches {
     use crate::agents::pricing;
@@ -464,7 +464,7 @@ fn walk_fleet_spending_files(
 struct PublishingWalkObserver<'a> {
     runtime: &'a RuntimePaths,
     provider_path: PathBuf,
-    files: &'a [(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    files: &'a [(&'static crate::agents::AgentDefinition, PathBuf)],
     user_inputs: &'a [crate::agents::spending::user_input::UserInputRecord],
     now_secs: u64,
     scope: Option<&'a crate::agents::spending::SpendScope>,
@@ -549,7 +549,7 @@ fn workspace_cache_from_shared_entries_inner(
     provider: &crate::agents::spending::ProviderSpendingCache,
     scope: &crate::agents::spending::SpendScope,
     scope_hash: Option<&str>,
-    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    files: &[(&'static crate::agents::AgentDefinition, PathBuf)],
     spec: &crate::agents::spending::HeadlineSpec,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
     publish: bool,
@@ -609,7 +609,7 @@ fn workspace_cache_from_shared_entries(
     provider: &crate::agents::spending::ProviderSpendingCache,
     scope: &crate::agents::spending::SpendScope,
     scope_hash: Option<&str>,
-    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    files: &[(&'static crate::agents::AgentDefinition, PathBuf)],
     spec: &crate::agents::spending::HeadlineSpec,
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
     workspace_cache_from_shared_entries_inner(

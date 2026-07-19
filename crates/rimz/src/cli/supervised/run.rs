@@ -128,7 +128,7 @@ struct PreparedRun {
     machine_config: Arc<rimz::config::MachineConfig>,
     mode: PermissionMode,
     layout: LayoutSpec,
-    adapter: &'static dyn AgentAdapter,
+    adapter: &'static AgentDefinition,
     launch: rimz::worktree::LaunchCheckout,
     store: rimz::Store,
     kind: AgentKind,
@@ -226,7 +226,9 @@ fn open_attempt_pane(
         let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
         room.backend()
             .open_tab(&TabOptions {
-                title: format!("run {}", prepared.adapter.descriptor().kind),
+                session_name: prepared.workspace.session_name.clone(),
+                title: format!("run {}", prepared.adapter.spec().kind),
+                cwd: prepared.launch.cwd.clone(),
                 panes: LayoutPanes {
                     columns: vec![LayoutColumn {
                         panes: vec![pane.clone()],
@@ -301,7 +303,7 @@ fn prepare_supervised(
         bail!("--print requires a single-cell agent layout");
     }
     let agent_cell = agent_cells[0];
-    let adapter = rimz::agents::find_adapter(&agent_cell.kind)
+    let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     let launch = rimz::worktree::resolve_launch_checkout(
         &workspace,
@@ -343,7 +345,7 @@ fn prepare_supervised(
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(&process)?;
     let store = crate::cli::open_store(&workspace)?;
-    let kind = adapter.descriptor().kind_id();
+    let kind = adapter.spec().kind_id();
     if let Some(channel) = request.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(store.paths(), channel)?;
@@ -388,7 +390,7 @@ fn execute_attempt(
     let permission_mode = agent_cell.launch.mode.unwrap_or(prepared.mode);
     let mut record = RunRecord::new(
         prepared.workspace.workspace_id.clone(),
-        prepared.adapter.descriptor().kind_id(),
+        prepared.adapter.spec().kind_id(),
         permission_mode,
         prompt.to_owned(),
         prepared.launch.cwd.clone(),

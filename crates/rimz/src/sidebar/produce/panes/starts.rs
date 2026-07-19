@@ -23,8 +23,8 @@ fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Opti
             process
                 .hosted_agent_kind
                 .as_ref()
-                .and_then(|kind| crate::agents::descriptor_by_kind(kind.as_str()))
-                .map(|descriptor| descriptor.kind)
+                .and_then(|kind| crate::agents::spec_by_kind(kind.as_str()))
+                .map(|definition| definition.kind)
         })
 }
 

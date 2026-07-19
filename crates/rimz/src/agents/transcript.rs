@@ -8,7 +8,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::AgentAdapter;
+use super::AgentDefinition;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -78,7 +78,7 @@ impl TranscriptCursor {
         &mut self,
         transcript_path: Option<&str>,
         session_id: Option<&crate::ids::AgentSessionId>,
-        adapter: &dyn AgentAdapter,
+        adapter: &AgentDefinition,
     ) -> Vec<String> {
         let Some(path) = transcript_path else {
             return Vec::new();
@@ -133,7 +133,11 @@ mod tests {
 
         assert!(
             cursor
-                .messages(Some(&first_path), None, &crate::agents::CodexAdapter)
+                .messages(
+                    Some(&first_path),
+                    None,
+                    crate::agents::definition_by_kind("codex").unwrap()
+                )
                 .is_empty(),
             "default attach starts at the current end"
         );
@@ -147,7 +151,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            cursor.messages(Some(&first_path), None, &crate::agents::CodexAdapter),
+            cursor.messages(
+                Some(&first_path),
+                None,
+                crate::agents::definition_by_kind("codex").unwrap()
+            ),
             vec!["new"]
         );
 
@@ -159,7 +167,11 @@ mod tests {
         .unwrap();
         let second_path = second.to_string_lossy().into_owned();
         assert_eq!(
-            cursor.messages(Some(&second_path), None, &crate::agents::CodexAdapter),
+            cursor.messages(
+                Some(&second_path),
+                None,
+                crate::agents::definition_by_kind("codex").unwrap()
+            ),
             vec!["fresh"],
             "a new transcript path starts at byte zero"
         );

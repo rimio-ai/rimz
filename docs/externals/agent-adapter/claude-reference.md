@@ -2,7 +2,7 @@
 
 > The mapping onto RimZ's internal types lives beside this doc: [claude.md](../../internals/agents/claude.md) maps the hooks, statusline, transcript, account, and spend surfaces onto RimZ's internal types; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Claude Code upstream protocol surface** RimZ binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, the auth surface, and the local-OAuth usage endpoint. It is a hand-maintained mirror of Anthropic's published docs plus the credential-file surfaces Claude Code itself uses, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks RimZ's internal types.
+This is the single home for the **Claude Code upstream protocol surface** RimZ binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, the auth surface, and the local-OAuth usage endpoint. It is a hand-maintained mirror of Anthropic's published docs plus the credential-file surfaces Claude Code itself uses, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/adapters/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks RimZ's internal types.
 
 Coverage is **depth on what RimZ wires, breadth as an index**: the events, statusline fields, and decision shapes the adapter actually parses or emits are documented in full; the rest of the upstream catalog is listed so a contributor wiring a new event knows it exists.
 
@@ -89,7 +89,7 @@ Per-event decision control rides `hookSpecificOutput` (or, for the post-* and st
 
 ### Hooks RimZ wires
 
-These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → RimZ status mapping is the [claude.md → Hooks and lifecycle](../../internals/agents/claude.md#hooks-and-lifecycle); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
+These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/adapters/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → RimZ status mapping is the [claude.md → Hooks and lifecycle](../../internals/agents/claude.md#hooks-and-lifecycle); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
 
 | Event | Fires | Event-specific input | RimZ channel |
 | --- | --- | --- | --- |
@@ -125,7 +125,7 @@ A plan approval or user question answers on the `PreToolUse` event and **require
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": {} } }
 ```
 
-The neutral path is empty stdout, exit 0. Exact bytes are the inline goldens in [`claude/mod.rs`](../../../crates/rimz/src/agents/claude/mod.rs).
+The neutral path is empty stdout, exit 0. Exact bytes are the inline goldens in [`claude/mod.rs`](../../../crates/rimz/src/agents/adapters/claude/mod.rs).
 
 ### Full event catalog (index)
 
@@ -166,7 +166,7 @@ The complete upstream set. ✓ marks what RimZ wires today; the rest is availabl
 
 ## Statusline JSON
 
-Claude `exec`s the configured `statusLine` command on every render and pipes this JSON to its stdin. RimZ wraps that command with `rimz statusline feed --source claude`; [`StatuslinePayload`](../../../crates/rimz/src/agents/claude/statusline.rs) parses the blob and the wrap forwards it unchanged to any prior command. The statusline runs locally and consumes no API tokens.
+Claude `exec`s the configured `statusLine` command on every render and pipes this JSON to its stdin. RimZ wraps that command with `rimz statusline feed --source claude`; [`StatuslinePayload`](../../../crates/rimz/src/agents/adapters/claude/statusline.rs) parses the blob and the wrap forwards it unchanged to any prior command. The statusline runs locally and consumes no API tokens.
 
 Claude captures the command's stdio rather than attaching it to the terminal. Claude Code 2.1.153+ exports `COLUMNS` and `LINES` for scripts that need the current terminal dimensions.
 
@@ -294,7 +294,7 @@ Claude captures the command's stdio rather than attaching it to the terminal. Cl
 
 **`subagentStatusLine`.** A separate command (`"subagentStatusLine": { "type": "command", "command": "…" }`) renders each subagent row in the agent panel, replacing the default `name · description · token count` body with whatever the script prints. The command runs once per refresh tick with **all visible subagent rows as a single JSON object on stdin**. The input includes the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. Write one JSON line to stdout per row to override: `{"id": "<task id>", "content": "<row body>"}`. The `content` string is rendered as-is, including ANSI escape codes and OSC 8 hyperlinks. Omit a task's `id` to keep its default rendering; emit an empty `content` to hide the row. The same trust and `disableAllHooks` gates that apply to `statusLine` apply here. Plugins can ship a default `subagentStatusLine` in their `settings.json`.
 
-RimZ wraps this command like the session `statusLine` and harvests each task's `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../../internals/sidebar/sidebar.md).
+RimZ wraps this command like the session `statusLine` and harvests each task's `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/adapters/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../../internals/sidebar/sidebar.md).
 
 ## Agent view
 
@@ -316,7 +316,7 @@ RimZ's remote-control preflight and badge read the user-level Claude `settings.j
 
 ## Auth surface
 
-[`claude/account.rs`](../../../crates/rimz/src/agents/claude/account.rs) forks `claude auth status` (JSON) for the logged-in-but-idle probe. Fields it reads:
+[`claude/account.rs`](../../../crates/rimz/src/agents/adapters/claude/account.rs) forks `claude auth status` (JSON) for the logged-in-but-idle probe. Fields it reads:
 
 | Field | Meaning |
 | --- | --- |
@@ -324,7 +324,7 @@ RimZ's remote-control preflight and badge read the user-level Claude `settings.j
 | `auth_method` | login type; `apiKey` is unmetered, anything else metered |
 | `subscription_type` | plan tier (`max`, `pro`, …) → the account `plan` label |
 
-[`oauth_usage.rs`](../../../crates/rimz/src/agents/claude/oauth_usage.rs) reads `~/.claude/.credentials.json` (macOS may hold the same JSON in the `Claude Code-credentials` Keychain item) and uses the root `claudeAiOauth` object:
+[`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/claude/oauth_usage.rs) reads `~/.claude/.credentials.json` (macOS may hold the same JSON in the `Claude Code-credentials` Keychain item) and uses the root `claudeAiOauth` object:
 
 | Field | Meaning |
 | --- | --- |
@@ -389,4 +389,4 @@ Older Claude sessions, or sessions whose hooks were installed after the failure,
 {"type": "system", "subtype": "turn_duration", "timestamp": "2026-06-04T02:56:32.923Z"}
 ```
 
-[`detect_turn_error`](../../../crates/rimz/src/agents/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push as the backstop. It classifies labels containing "spend limit" as spend-limit paused, labels containing "usage limit", "session limit", "rate limit", "quota", or "too many requests" as rate-limit paused, transient server/transport labels ("overloaded", "server is busy", "server error", "internal server error", "service unavailable", "bad gateway", "gateway timeout", "stalled", "timed out", "timeout", "connection error", or "network error") as the backoff paused class, and other API-error labels as failed; the decision rule and the internal mapping are [claude.md → Turn-death marker](../../internals/agents/claude.md#turn-death-marker). Reverse-engineered like the rest of this section; no source URL to pin.
+[`detect_turn_error`](../../../crates/rimz/src/agents/adapters/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push as the backstop. It classifies labels containing "spend limit" as spend-limit paused, labels containing "usage limit", "session limit", "rate limit", "quota", or "too many requests" as rate-limit paused, transient server/transport labels ("overloaded", "server is busy", "server error", "internal server error", "service unavailable", "bad gateway", "gateway timeout", "stalled", "timed out", "timeout", "connection error", or "network error") as the backoff paused class, and other API-error labels as failed; the decision rule and the internal mapping are [claude.md → Turn-death marker](../../internals/agents/claude.md#turn-death-marker). Reverse-engineered like the rest of this section; no source URL to pin.

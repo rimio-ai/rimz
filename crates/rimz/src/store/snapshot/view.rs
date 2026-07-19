@@ -136,7 +136,7 @@ pub struct SidebarSnapshot {
     pub wired_kinds: Vec<String>,
     /// Per-kind launch model defaults for idle synthesized agent rows, filled
     /// from adapter-owned config reads before the live-pane fold. The pure
-    /// reducer leaves it empty and falls back to descriptor defaults.
+    /// reducer leaves it empty and falls back to definition defaults.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub wired_default_models: BTreeMap<String, String>,
     /// Every live agent pane the producer bound during the pane fold, built at

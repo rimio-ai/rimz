@@ -858,19 +858,19 @@ pub(crate) fn fold_machine_config_with(
     // The `⇅ rc` flag per provider comes from either RimZ's auto-launch toggle
     // or the provider's own pane-session auto-enable setting.
     let mut remote_control_flags: BTreeMap<String, RemoteControlBadge> = BTreeMap::new();
-    for adapter in crate::agents::ADAPTERS {
-        let descriptor = adapter.descriptor();
-        let config_toggle = config.remote_control.enabled_for(descriptor.kind);
-        let pane_auto = descriptor.capabilities.remote_control.pane_sessions
+    for adapter in crate::agents::all_definitions() {
+        let definition = adapter.spec();
+        let config_toggle = config.remote_control.enabled_for(definition.kind);
+        let pane_auto = definition.capabilities.remote_control.pane_sessions
             && adapter
-                .remote_control_status(accounts.get(descriptor.kind))
+                .remote_control_status(accounts.get(definition.kind))
                 .pane_auto;
         remote_control_flags.insert(
-            descriptor.kind.to_owned(),
+            definition.kind.to_owned(),
             remote_control_badge(
                 config_toggle,
                 pane_auto,
-                remote_control_health.for_kind(descriptor.kind),
+                remote_control_health.for_kind(definition.kind),
             ),
         );
     }

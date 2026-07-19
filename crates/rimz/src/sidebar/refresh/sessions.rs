@@ -175,7 +175,7 @@ fn refresh_session_transcript_context_core(
     force: bool,
     trigger: RefreshTrigger<'_>,
 ) -> SessionRefreshResult<bool> {
-    let Some(adapter) = crate::agents::find_adapter(kind) else {
+    let Some(adapter) = crate::agents::find_definition(kind) else {
         return Ok(false);
     };
     let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
@@ -213,7 +213,7 @@ fn refresh_session_transcript_context_core(
     }
     crate::store::agent_context::merge_local_context(
         runtime,
-        adapter.descriptor(),
+        adapter.spec(),
         session_id,
         refresh,
         Timestamp::now(),
@@ -246,7 +246,9 @@ fn confirm_codex_turn_death_from_snapshot(
     let crate::agents::FieldPatch::Set(error) = &mut refresh.context.turn_error else {
         return;
     };
-    if kind != "codex" || !crate::agents::codex::turn_death_needs_pane_confirmation(error) {
+    if kind != "codex"
+        || !crate::agents::session::turn_death_needs_pane_confirmation("codex", error)
+    {
         return;
     }
     let pane = session_pane_from_snapshot(snapshot, kind, session_id);
@@ -276,7 +278,7 @@ pub fn confirm_codex_turn_death_from_pane(
     pane: Option<&PaneId>,
     error: &mut AgentTurnError,
 ) {
-    if !crate::agents::codex::turn_death_needs_pane_confirmation(error) {
+    if !crate::agents::session::turn_death_needs_pane_confirmation("codex", error) {
         return;
     }
     if let Some(pane) = pane {
@@ -284,13 +286,18 @@ pub fn confirm_codex_turn_death_from_pane(
         // rimz-invariant: codex-turn-death-confirmation
         if let Ok(capture) = backend.capture_pane(pane, Some(CODEX_TURN_DEATH_CAPTURE_LINES), false)
         {
-            crate::agents::codex::refine_turn_death_from_frame(error, &capture.raw_text);
+            crate::agents::session::refine_turn_death_from_frame("codex", error, &capture.raw_text);
         }
     }
-    if crate::agents::codex::turn_death_needs_pane_confirmation(error) {
+    if crate::agents::session::turn_death_needs_pane_confirmation("codex", error) {
         let now = Timestamp::now();
         let capacity = crate::agents::ProviderCapacity::read(runtime, "codex");
-        crate::agents::codex::infer_turn_death_from_spent_window(error, capacity.as_ref(), now);
+        crate::agents::session::infer_turn_death_from_spent_window(
+            "codex",
+            error,
+            capacity.as_ref(),
+            now,
+        );
     }
 }
 
@@ -322,7 +329,7 @@ fn retry_unconfirmed_codex_turn_death(
 
 fn codex_turn_death_retry_due(kind: &str, error: &AgentTurnError, now: Timestamp) -> bool {
     kind == "codex"
-        && crate::agents::codex::turn_death_needs_pane_confirmation(error)
+        && crate::agents::session::turn_death_needs_pane_confirmation("codex", error)
         && now.duration_since(error.at).as_secs() <= CODEX_TURN_DEATH_RETRY_WINDOW.as_secs() as i64
 }
 
@@ -339,7 +346,7 @@ pub(crate) fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSess
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
-        .filter(|agent| crate::agents::find_adapter(agent.kind.as_str()).is_some())
+        .filter(|agent| crate::agents::find_definition(agent.kind.as_str()).is_some())
         .map(|agent| LiveSessionRefresh {
             kind: agent.kind.as_str().to_owned(),
             session_id: agent.agent_id.to_string(),
@@ -415,7 +422,7 @@ fn session_context_refresh_spawn(
     session_id: &str,
     model_hint: Option<&str>,
 ) -> Option<RefreshSpawn> {
-    let adapter = crate::agents::find_adapter(kind)?;
+    let adapter = crate::agents::find_definition(kind)?;
     let refresh_ctx = LifecycleRefreshCtx {
         agent_id: session_id,
         workspace_id: runtime.workspace_id.as_str(),

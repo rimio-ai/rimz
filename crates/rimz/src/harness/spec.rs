@@ -709,7 +709,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             });
         }
         let Some(profile) = profiles.0.get(&cur) else {
-            if layers.is_empty() && crate::agents::find_adapter(&cur).is_some() {
+            if layers.is_empty() && crate::agents::find_definition(&cur).is_some() {
                 break cur;
             }
             return Err(LayoutErr::UnknownProfileBase {
@@ -720,7 +720,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         seen.push(cur.clone());
         layers.push(profile);
         let next = profile.agent.as_str();
-        if next == cur && crate::agents::find_adapter(next).is_some() {
+        if next == cur && crate::agents::find_definition(next).is_some() {
             break next.to_owned();
         }
         if profiles.0.contains_key(next) {
@@ -734,7 +734,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             cur = next.to_owned();
             continue;
         }
-        if crate::agents::find_adapter(next).is_some() {
+        if crate::agents::find_definition(next).is_some() {
             break next.to_owned();
         }
         return Err(LayoutErr::UnknownProfileBase {
@@ -747,10 +747,10 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     for layer in layers {
         resolved.fill_missing(layer);
     }
-    let adapter = crate::agents::find_adapter(resolved.kind.as_str())
+    let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
     adapter
-        .descriptor()
+        .spec()
         .render_preset(&profile_preset(&resolved))
         .map_err(|err| LayoutErr::InvalidProfile {
             profile: name.to_owned(),
@@ -894,7 +894,7 @@ fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig)
     commands.0.contains_key(raw)
         || profiles.0.contains_key(raw)
         || raw == "term"
-        || crate::agents::find_adapter(raw).is_some()
+        || crate::agents::find_definition(raw).is_some()
         || virtual_agent_shape(raw)
         || virtual_ping_shape(raw)
 }
@@ -923,7 +923,7 @@ fn validate_inline_role(name: &str) -> Result<()> {
             reason,
         });
     }
-    if crate::agents::find_adapter(name).is_some() {
+    if crate::agents::find_definition(name).is_some() {
         return Err(LayoutErr::InlineRoleShadowsAddress {
             name: name.to_owned(),
             reason: "it is a built-in kind handle like `@claude`",
@@ -943,7 +943,7 @@ fn parse_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -
     if raw == "term" {
         return Ok(Cell::shell());
     }
-    if crate::agents::find_adapter(raw).is_some() {
+    if crate::agents::find_definition(raw).is_some() {
         return Ok(Cell::agent(AgentKind::new_unchecked(raw)));
     }
     if let Some(cell) = virtual_agent_cell(raw, profiles)? {
@@ -990,17 +990,17 @@ fn agent_cell_from(
 }
 
 fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<String>> {
-    let adapter = crate::agents::find_adapter(resolved.kind.as_str())
+    let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
     let mut argv = adapter
-        .descriptor()
+        .spec()
         .render_preset(&profile_preset(resolved))
         .map_err(|err| LayoutErr::InvalidProfile {
             profile: name.to_owned(),
             reason: err.to_string(),
         })?;
     if let Some(mode) = resolved.launch.mode {
-        argv.extend(adapter.descriptor().launch.permission_args(mode));
+        argv.extend(adapter.spec().launch.permission_args(mode));
     }
     if let Some(raw) = resolved
         .args
@@ -1047,9 +1047,9 @@ fn virtual_agent_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cel
     let Some(resolved) = resolved else {
         return Ok(None);
     };
-    let adapter = crate::agents::find_adapter(resolved.kind.as_str())
+    let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
-    let posture = adapter.descriptor().launch.permission_args(mode);
+    let posture = adapter.spec().launch.permission_args(mode);
     if mode != PermissionMode::Ask && mode != PermissionMode::Plan && posture.is_empty() {
         return Ok(None);
     }
@@ -1065,14 +1065,14 @@ fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell
     let Some(kind_name) = raw.strip_suffix("-ping") else {
         return Ok(None);
     };
-    if crate::agents::find_adapter(kind_name).is_none() {
+    if crate::agents::find_definition(kind_name).is_none() {
         return Ok(None);
     }
     let (resolved, profile_name) = virtual_base(kind_name, profiles)?;
     let Some(resolved) = resolved else {
         return Ok(None);
     };
-    let adapter = crate::agents::find_adapter(resolved.kind.as_str())
+    let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
     let Some(ping_args) = adapter.ping_args() else {
         return Ok(None);
@@ -1107,7 +1107,7 @@ fn virtual_base(
     kind_name: &str,
     profiles: &ProfilesConfig,
 ) -> Result<(Option<ResolvedProfile>, Option<String>)> {
-    if crate::agents::find_adapter(kind_name).is_none() {
+    if crate::agents::find_definition(kind_name).is_none() {
         return Ok((None, None));
     }
     if profiles.0.contains_key(kind_name) {
@@ -1120,7 +1120,7 @@ fn virtual_base(
 fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {
     let (kind, mode) = raw.rsplit_once('-')?;
     let mode = PermissionMode::from_str(mode).ok()?;
-    (crate::agents::find_adapter(kind).is_some()).then_some((kind, mode))
+    (crate::agents::find_definition(kind).is_some()).then_some((kind, mode))
 }
 
 fn virtual_agent_shape(raw: &str) -> bool {
@@ -1136,15 +1136,15 @@ pub fn virtual_ping_shape(raw: &str) -> bool {
 
 pub fn ping_kind(raw: &str) -> Option<&str> {
     let kind = raw.strip_suffix("-ping")?;
-    crate::agents::find_adapter(kind)?
+    crate::agents::find_definition(kind)?
         .ping_args()
         .is_some()
         .then_some(kind)
 }
 
 fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<String>> {
-    let adapter = crate::agents::find_adapter(kind)?;
-    let args = adapter.descriptor().launch.permission_args(mode);
+    let adapter = crate::agents::find_definition(kind)?;
+    let args = adapter.spec().launch.permission_args(mode);
     if mode == PermissionMode::Ask || mode == PermissionMode::Plan || !args.is_empty() {
         Some(args)
     } else {
@@ -1213,7 +1213,7 @@ fn is_kind_ordinal_shape(name: &str) -> bool {
     let Some((kind, ordinal)) = name.rsplit_once('-') else {
         return false;
     };
-    crate::agents::find_adapter(kind).is_some() && ordinal.parse::<u32>().is_ok_and(|n| n > 0)
+    crate::agents::find_definition(kind).is_some() && ordinal.parse::<u32>().is_ok_and(|n| n > 0)
 }
 
 fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
@@ -1256,7 +1256,7 @@ fn prepare_team<'a>(
                 reason,
             });
         }
-        if crate::agents::find_adapter(&binding.role).is_some() {
+        if crate::agents::find_definition(&binding.role).is_some() {
             return Err(LayoutErr::RoleShadowsAddress {
                 team: name.to_owned(),
                 name: binding.role.clone(),
@@ -1270,7 +1270,7 @@ fn prepare_team<'a>(
             });
         }
         if !profiles.0.contains_key(&binding.profile)
-            && crate::agents::find_adapter(&binding.profile).is_none()
+            && crate::agents::find_definition(&binding.profile).is_none()
         {
             return Err(LayoutErr::UnknownRoleProfile {
                 team: name.to_owned(),
@@ -1319,7 +1319,7 @@ fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
                 values.insert(format!("{kind}-{mode}"));
             }
         }
-        if crate::agents::find_adapter(kind).is_some_and(|a| a.ping_args().is_some()) {
+        if crate::agents::find_definition(kind).is_some_and(|a| a.ping_args().is_some()) {
             values.insert(format!("{kind}-{PING_SUFFIX}"));
         }
     }

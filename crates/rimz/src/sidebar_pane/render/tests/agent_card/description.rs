@@ -205,7 +205,7 @@ fn rendered_group_lines_with(
 }
 
 /// A theme config pinning the unread effect to `blink`, so a test reads one
-/// whole-word descriptor span and the 2-pole weight toggle rather than the
+/// whole-word definition span and the 2-pole weight toggle rather than the
 /// default per-character shimmer.
 fn blink_theme() -> crate::config::ThemeConfig {
     let mut theme = crate::config::ThemeConfig::default();
@@ -266,7 +266,7 @@ fn parked_background_marker_falls_back_to_unicode() {
         .join("\n");
 
     // `card.parked_bg` sits outside the curated Nerd Font overlay, so the parked
-    // descriptor keeps its Unicode ellipsis even while the set is active. The
+    // definition keeps its Unicode ellipsis even while the set is active. The
     // stage-fixed placeholder meter uses the overlay's empty-context tile.
     assert!(rendered.contains("\u{f11d9}"), "{rendered}");
     assert!(rendered.contains("⋯ bg"), "{rendered}");
@@ -286,7 +286,7 @@ fn unread_descriptor_grows_bold_without_dimming() {
     );
     let mut unread = snapshot_with(vec![agent.clone()]);
     unread.worktree_groups[0].rows[0].unread = true;
-    // Under NO_COLOR the blink unread descriptor shares the lead glyph/name
+    // Under NO_COLOR the blink unread definition shares the lead glyph/name
     // 2-pole toggle through a grow-only weight: plain on the off-pole, bold on
     // the on-pole, never dim.
     let unread_mods: Vec<_> = (0..32)
@@ -300,7 +300,7 @@ fn unread_descriptor_grows_bold_without_dimming() {
     assert!(unread_mods.iter().any(|m| m.is_empty()));
     assert!(unread_mods.iter().all(|m| !m.contains(Modifier::DIM)));
 
-    // A read descriptor never blinks — its weight is the same at every phase.
+    // A read definition never blinks — its weight is the same at every phase.
     let read = snapshot_with(vec![agent]);
     for phase in 0..32 {
         let modifier = span_for(&rendered_group_lines_blink_no_color(&read, phase), "done")

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 
 use crate::agents::transcript::TranscriptCursor;
-use crate::agents::{AgentAdapter, AgentCardRef, AgentState, AgentStatus};
+use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus};
 use crate::harness::run::RunStatus;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{MessageRecord, MessageSender, MessageStatus};
@@ -162,7 +162,7 @@ impl ReplyPreparation {
                 .ok_or_else(|| ReplyPrepareErr::NotLive {
                     label: target.label.clone(),
                 })?;
-            let adapter = crate::agents::find_adapter(agent.kind.as_str())
+            let adapter = crate::agents::find_definition(agent.kind.as_str())
                 .ok_or_else(|| ReplyPrepareErr::UnknownAgentKind(agent.kind.clone()))?;
             if checked_kinds.insert(agent.kind.clone()) {
                 preflight_reply_hooks(agent, adapter)?;
@@ -383,7 +383,7 @@ struct ReplyTarget {
 }
 
 impl ReplyTarget {
-    fn new(agent: &AgentState, label: String, adapter: &dyn AgentAdapter) -> Self {
+    fn new(agent: &AgentState, label: String, adapter: &AgentDefinition) -> Self {
         let transcript_path = agent.transcript_path.clone();
         Self {
             kind: agent.kind.clone(),
@@ -563,7 +563,7 @@ fn advance_leg(
         .agents
         .iter()
         .find(|agent| leg.target.matches(agent));
-    let adapter = crate::agents::find_adapter(leg.target.kind.as_str())
+    let adapter = crate::agents::find_definition(leg.target.kind.as_str())
         .ok_or_else(|| ReplyErr::UnknownAgentKind(leg.target.kind.clone()))?;
     if let Some(path) = agent.and_then(|agent| agent.transcript_path.as_deref()) {
         leg.transcript_path = Some(path.to_owned());
@@ -618,7 +618,7 @@ fn advance_leg(
 fn anchored_cursor(
     path: Option<&str>,
     session_id: Option<&AgentSessionId>,
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
 ) -> TranscriptCursor {
     let mut cursor = TranscriptCursor::new(false);
     let _ = cursor.messages(path, session_id, adapter);
@@ -675,7 +675,7 @@ fn latest_terminal_message_status(
 
 fn preflight_reply_hooks(
     agent: &AgentState,
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
 ) -> Result<(), ReplyPrepareErr> {
     match crate::agents::preflight_hooks(adapter, crate::agents::TurnLifecycleNeed::NotUnsupported)
     {

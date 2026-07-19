@@ -181,7 +181,7 @@ pub fn refresh_heavy_lanes(
         daemon_probe_agents,
         runtime,
         unix_now_ms(),
-        config.remote_control.codex,
+        config.remote_control.enabled_for("codex"),
     );
 
     let accounts = produce_accounts(base, runtime);

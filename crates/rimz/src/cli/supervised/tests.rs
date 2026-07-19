@@ -178,7 +178,7 @@ fn blocking_stream_wakeup_reloads_terminal_record() {
     let loaded = stream_blocking_run(
         &waiter,
         &fixture.store,
-        &rimz::agents::CodexAdapter,
+        rimz::agents::definition_by_kind("codex").unwrap(),
         Some(Duration::from_secs(1)),
         (&mut cursor, &mut sink),
     )
@@ -200,7 +200,7 @@ fn blocking_stream_timeout_marks_run_timed_out() {
     let timed_out = stream_blocking_run(
         &waiter,
         &fixture.store,
-        &rimz::agents::CodexAdapter,
+        rimz::agents::definition_by_kind("codex").unwrap(),
         Some(Duration::ZERO),
         (&mut cursor, &mut sink),
     )
@@ -227,7 +227,7 @@ fn blocking_text_stream_leaves_forensics_to_its_caller() {
     let failed = stream_blocking_run(
         &waiter,
         &fixture.store,
-        &rimz::agents::CodexAdapter,
+        rimz::agents::definition_by_kind("codex").unwrap(),
         Some(Duration::from_secs(1)),
         (&mut cursor, &mut sink),
     )
@@ -248,7 +248,7 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
     let outcome = stream_attached_run(
         &fixture.store,
         &run_id,
-        &rimz::agents::CodexAdapter,
+        rimz::agents::definition_by_kind("codex").unwrap(),
         false,
         Some(Duration::ZERO),
         &mut sink,
@@ -279,7 +279,7 @@ fn blocking_stream_interrupt_marks_run_canceled() {
     let canceled = stream_blocking_run(
         &waiter,
         &fixture.store,
-        &rimz::agents::CodexAdapter,
+        rimz::agents::definition_by_kind("codex").unwrap(),
         Some(Duration::from_secs(1)),
         (&mut cursor, &mut sink),
     )

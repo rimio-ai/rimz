@@ -77,7 +77,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     record_conversation(
         &workspace,
         &store,
-        &rimz::agents::ClaudeAdapter,
+        rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
         None,
         &[],
@@ -101,7 +101,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     record_conversation(
         &workspace,
         &store,
-        &rimz::agents::ClaudeAdapter,
+        rimz::agents::definition_by_kind("claude").unwrap(),
         &recorded(LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
@@ -123,7 +123,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     record_conversation(
         &workspace,
         &store,
-        &rimz::agents::ClaudeAdapter,
+        rimz::agents::definition_by_kind("claude").unwrap(),
         &recorded(LifecycleSignal::AwaitingInput {
             kind: rimz::agents::AskKind::Question,
             ask_id: Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap()),
@@ -154,7 +154,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     record_conversation(
         &workspace,
         &store,
-        &rimz::agents::ClaudeAdapter,
+        rimz::agents::definition_by_kind("claude").unwrap(),
         &hand_typed,
         None,
         &[],
@@ -196,13 +196,14 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
         "text": "  safe final  ",
         "thinking": "must not persist"
     });
-    let decoded = rimz::agents::CursorAdapter
+    let decoded = rimz::agents::definition_by_kind("cursor")
+        .unwrap()
         .decode_hook("afterAgentResponse", &payload)
         .unwrap();
     let recorded_response = record_assistant_response(
         &workspace,
         &store,
-        &rimz::agents::CursorAdapter,
+        rimz::agents::definition_by_kind("cursor").unwrap(),
         &decoded,
         None,
     )
@@ -225,7 +226,7 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
         record_conversation(
             &workspace,
             &store,
-            &rimz::agents::CursorAdapter,
+            rimz::agents::definition_by_kind("cursor").unwrap(),
             &stopped,
             None,
             &[],

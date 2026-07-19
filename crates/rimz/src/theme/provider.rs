@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::agents::{EmblemTint, descriptor_by_kind, emblem_for};
+use crate::agents::{EmblemTint, emblem_for, spec_by_kind};
 use crate::config::{ColorDepth, PaletteRole, ThemeColor, ThemeProviderStyle, nearest_xterm_index};
 
 use super::{Palette, Tone};
@@ -20,7 +20,7 @@ pub enum BrandColor {
     Role(PaletteRole),
     Indexed(u8),
     Rgb(u8, u8, u8),
-    /// A registered descriptor's hand-tuned xterm index and truecolor tone.
+    /// A registered definition's hand-tuned xterm index and truecolor tone.
     Brand {
         index: u8,
         rgb: (u8, u8, u8),
@@ -28,9 +28,9 @@ pub enum BrandColor {
 }
 
 fn builtin_provider_brand(kind: &str) -> BrandColor {
-    descriptor_by_kind(kind).map_or(BrandColor::Indexed(244), |descriptor| BrandColor::Brand {
-        index: descriptor.brand.color,
-        rgb: descriptor.brand.color_rgb,
+    spec_by_kind(kind).map_or(BrandColor::Indexed(244), |definition| BrandColor::Brand {
+        index: definition.brand.color,
+        rgb: definition.brand.color_rgb,
     })
 }
 
@@ -82,15 +82,15 @@ pub fn resolve_provider_identity(
 ) -> ResolvedProviderIdentity {
     let emblem = emblem_for(kind);
     let brand = resolve_provider_brand(kind, styles);
-    let mut resolved = descriptor_by_kind(kind).map_or_else(
+    let mut resolved = spec_by_kind(kind).map_or_else(
         || ResolvedProviderIdentity {
             product_name: provider_title_case(kind),
             art: emblem.lines.clone(),
             art_tints: emblem.tints.clone(),
             brand,
         },
-        |descriptor| ResolvedProviderIdentity {
-            product_name: descriptor.display_name.to_owned(),
+        |definition| ResolvedProviderIdentity {
+            product_name: definition.display_name.to_owned(),
             art: emblem.lines.clone(),
             art_tints: emblem.tints.clone(),
             brand,

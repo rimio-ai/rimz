@@ -554,7 +554,7 @@ fn spending_walk_persists_cursor_before_aggregate() {
     let mut cache = read_spending_cache(&cache_path);
     cache.files = HashMap::from([cached_file(&transcript, vec![old_a, old_b])]);
     write_spending_cache(&cache_path, &cache);
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> =
+    let files: Vec<(&'static AgentDefinition, PathBuf)> =
         vec![(claude_adapter(), transcript.clone())];
     let mut walker = SpendingWalker::new();
 
@@ -593,7 +593,7 @@ fn spending_walk_gates_warm_cursor_persists() {
         &[&claude_line(&today, 1.0, "msg-1", "req-1")],
     );
     set_file_mtime(&transcript, NOW_SECS);
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> =
+    let files: Vec<(&'static AgentDefinition, PathBuf)> =
         vec![(claude_adapter(), transcript.clone())];
     let mut walker = SpendingWalker::new();
 

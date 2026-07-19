@@ -241,7 +241,7 @@ fn provider_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
             .iter()
             .filter(|agent| agent.parent_agent_id.is_none())
             .filter_map(|agent| {
-                crate::agents::find_adapter(agent.kind.as_str()).map(|_| agent.kind.to_string())
+                crate::agents::find_definition(agent.kind.as_str()).map(|_| agent.kind.to_string())
             }),
     );
     kinds
@@ -292,7 +292,7 @@ fn probe_accounts(
 
 fn probe_one_account(kind: &str, active: bool) -> Option<ProviderProbeResult> {
     let started = Instant::now();
-    let adapter = crate::agents::find_adapter(kind)?;
+    let adapter = crate::agents::find_definition(kind)?;
     let account_started = Instant::now();
     let outcome = adapter.probe_account();
     let account_ms = duration_ms(account_started.elapsed());
@@ -536,7 +536,7 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter_map(|agent| {
-            crate::agents::find_adapter(agent.kind.as_str()).map(|_| agent.kind.to_string())
+            crate::agents::find_definition(agent.kind.as_str()).map(|_| agent.kind.to_string())
         })
         .collect()
 }

@@ -5,8 +5,8 @@
 //! elected [`service`] owner of one warm [`SpendingWalker`], aggregates
 //! account-global and workspace-scoped windows, and publishes stamped
 //! provider/workspace caches. Discovery and parsing
-//! dispatch through the adapter ([`AgentAdapter::spending_sources`] /
-//! [`AgentAdapter::parse_spend`]): a dollar-logging provider (Claude's legacy
+//! dispatch through the adapter ([`AgentDefinition::spending_sources`] /
+//! [`AgentDefinition::parse_spend`]): a dollar-logging provider (Claude's legacy
 //! `costUSD`, Pi) reads its figures verbatim, a token-only provider (Codex,
 //! current Claude) multiplies counts through the
 //! [`PriceBook`](super::pricing) — either way every file yields
@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::pricing::PriceBook;
-use super::{AgentAdapter, AgentCost};
+use super::{AgentCost, AgentDefinition};
 
 /// How long a published fleet-spending walk remains fresh.
 pub const SPENDING_TTL: Duration = Duration::from_secs(15);
@@ -139,7 +139,7 @@ pub struct WalkStats {
 }
 
 #[cfg(test)]
-type DiscoveredSpendingFiles = Vec<(&'static dyn AgentAdapter, PathBuf)>;
+type DiscoveredSpendingFiles = Vec<(&'static AgentDefinition, PathBuf)>;
 
 #[cfg(test)]
 thread_local! {
@@ -204,7 +204,7 @@ struct SpendingMemoKey {
 }
 
 pub struct WalkRequest<'a> {
-    pub files: &'a [(&'static dyn AgentAdapter, PathBuf)],
+    pub files: &'a [(&'static AgentDefinition, PathBuf)],
     pub prices: &'a PriceBook,
     pub now_secs: u64,
     pub origin_overrides: &'a HashMap<PathBuf, PathBuf>,
@@ -232,7 +232,7 @@ impl SpendingWalker {
     pub fn discover_spending_files(
         &mut self,
         now_secs: u64,
-    ) -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
+    ) -> Vec<(&'static AgentDefinition, PathBuf)> {
         #[cfg(test)]
         if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.borrow().clone()) {
             if files.is_empty() {
@@ -242,7 +242,7 @@ impl SpendingWalker {
         }
 
         self.discovery
-            .discover(crate::agents::all_adapters(), now_secs)
+            .discover(crate::agents::all_definitions(), now_secs)
     }
 
     pub(crate) fn spending_discovery_is_authoritative(&self) -> bool {
@@ -255,10 +255,10 @@ impl SpendingWalker {
     #[doc(hidden)]
     pub fn discover_declared_spending_files(
         &mut self,
-        adapter: &'static dyn AgentAdapter,
+        adapter: &'static AgentDefinition,
         sources: Vec<SpendingSource>,
         now_secs: u64,
-    ) -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
+    ) -> Vec<(&'static AgentDefinition, PathBuf)> {
         self.discovery
             .discover_sources_for_testkit(sources, now_secs)
             .into_iter()
@@ -269,7 +269,7 @@ impl SpendingWalker {
     pub fn recorded_unknown_models(
         &mut self,
         cache_path: &Path,
-        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        files: &[(&'static AgentDefinition, PathBuf)],
         now_secs: u64,
     ) -> BTreeSet<String> {
         let mut stats = WalkStats::default();
@@ -405,7 +405,7 @@ impl SpendingWalker {
 
     fn ensure_memo(
         &mut self,
-        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        files: &[(&'static AgentDefinition, PathBuf)],
         stats: &mut WalkStats,
     ) {
         let key = SpendingMemoKey {
@@ -428,7 +428,7 @@ impl SpendingWalker {
     pub(crate) fn scoped_from_cache(
         &mut self,
         cache_path: &Path,
-        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        files: &[(&'static AgentDefinition, PathBuf)],
         user_inputs: &[user_input::UserInputRecord],
         scope: &SpendScope,
         now_secs: u64,
@@ -519,7 +519,7 @@ impl Default for SpendingWalker {
 /// when the parsed file has no thread ids at all, which is the one-file-per-session
 /// shape used by JSONL transcript providers.
 pub fn session_cost_usd(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     session_id: &str,
     transcript_path: &Path,
     prices: &PriceBook,
@@ -561,7 +561,7 @@ pub struct SessionTokenTotals {
 /// Cache reads and writes stay outside these headline totals, matching the
 /// token figures rendered by `rimz agents history`.
 pub fn session_token_totals(
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     session_id: &str,
     transcript_path: &Path,
     prices: &PriceBook,
@@ -607,7 +607,7 @@ pub fn session_entries<'a>(entries: &'a [CachedEntry], session_id: &str) -> Vec<
 }
 
 pub(crate) fn aggregate_walk_publish(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     user_inputs: &[user_input::UserInputRecord],
     now_secs: u64,
@@ -630,7 +630,7 @@ pub(crate) fn aggregate_walk_publish(
 }
 
 fn aggregate_walk_publish_from_counted<C: CountedPayload>(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     counted: &[C],
     workspace: Option<&SpendScope>,
@@ -670,7 +670,7 @@ pub(crate) struct CachedScopedSpending {
 /// Compute the cockpit's workspace-scoped tally plus the headline epoch cutoff
 /// that resets presentation ratchets at window boundaries.
 pub fn compute_scoped_spending(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     user_inputs: &[user_input::UserInputRecord],
     scope: &SpendScope,

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 
 use crate::cli::GlobalFlags;
-use rimz::agents::{AgentAdapter, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
+use rimz::agents::{AgentDefinition, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
 use rimz::harness::run::{RunCancellation, RunRecord};
 use rimz::mux::PaneCmd;
 use rimz::workspace::WorkspaceResolver;
@@ -61,9 +61,9 @@ pub(super) fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::Resol
         .context("resolving current workspace")
 }
 
-pub(super) fn preflight_agent(adapter: &dyn AgentAdapter) -> Result<()> {
-    let descriptor = adapter.descriptor();
-    let kind = descriptor.kind;
+pub(super) fn preflight_agent(adapter: &AgentDefinition) -> Result<()> {
+    let definition = adapter.spec();
+    let kind = definition.kind;
     match preflight_hooks(adapter, TurnLifecycleNeed::Wired) {
         Ok(()) => Ok(()),
         Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
@@ -118,7 +118,7 @@ pub(crate) fn stop_supervised_run(
 }
 
 pub(super) struct RunPaneCmdArgs<'a> {
-    pub(super) adapter: &'a dyn AgentAdapter,
+    pub(super) adapter: &'a AgentDefinition,
     pub(super) run_id: &'a rimz::RunId,
     pub(super) agent_name: Option<&'a str>,
     pub(super) agent_name_explicit: bool,
@@ -137,7 +137,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     let argv = rimz::harness::launch::exec_argv(
         &rimz_bin,
         &rimz::harness::launch::ExecRequest {
-            kind: args.adapter.descriptor().kind_id(),
+            kind: args.adapter.spec().kind_id(),
             action: rimz::harness::launch::ExecAction::Launch {
                 prompt: Some(args.prompt.to_owned()),
                 extra_args: args.permission_args.to_vec(),

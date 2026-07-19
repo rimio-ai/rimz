@@ -12,11 +12,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::account::ProviderCapacity;
-pub use crate::agents::codex::oauth_usage::ConsumeCode;
-use crate::agents::codex::oauth_usage::{
-    ResetCreditDetail, consume_reset_credit, fetch_reset_credit_state, fetch_usage_with_url,
-    load_configured_credentials, reset_credits_url, usage_url,
+use crate::agents::account::{
+    ProviderCapacity, RedemptionCode, RedemptionError, redeem_reset_credit,
 };
 use crate::agents::{AccountUsageSnapshot, ResetCredits};
 #[cfg(not(test))]
@@ -106,7 +103,7 @@ pub struct RedeemReport {
     pub credits: u32,
     pub soonest_expiry: Option<Timestamp>,
     pub natural_reset: Option<Timestamp>,
-    pub outcome: Option<ConsumeCode>,
+    pub outcome: Option<RedemptionCode>,
     pub windows_reset: bool,
     pub window_resets: Vec<AssistWindowReset>,
     pub reset: bool,
@@ -283,27 +280,47 @@ pub fn execute_auto_redeem(
         return Ok(None);
     }
 
-    let (credentials, base_url) =
-        load_configured_credentials().map_err(|err| AutoRedeemErr::Codex(err.to_string()))?;
-    let usage_identity = credentials.account_usage_identity();
-    let usage = fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials)
-        .map_err(|err| AutoRedeemErr::Codex(err.to_string()))?;
-    let (credits, details) =
-        fetch_reset_credit_state(&reset_credits_url(base_url.as_deref()), &credentials)
-            .map_err(|err| AutoRedeemErr::Codex(err.to_string()))?;
-    let capacity = usage
-        .rate_limits
-        .as_ref()
-        .map(|limits| ProviderCapacity::from_windows(limits.windows.clone()));
-    let Some(reason) = redeem_verdict(
-        capacity.as_ref(),
-        &credits,
-        config.auto_redeem_min_gain(),
-        config.auto_redeem,
-        now,
-    ) else {
+    let action = redeem_reset_credit(CODEX_KIND, request_id, |capacity, credits| {
+        redeem_verdict(
+            capacity,
+            credits,
+            config.auto_redeem_min_gain(),
+            config.auto_redeem,
+            now,
+        )
+    });
+    let action = match action {
+        Ok(action) => action,
+        Err(RedemptionError::BeforeAttempt(message)) => {
+            return Err(AutoRedeemErr::Codex(message));
+        }
+        Err(RedemptionError::Attempted {
+            decision,
+            capacity,
+            credits,
+            message,
+        }) => {
+            let report = RedeemReport {
+                reason: decision,
+                credits: credits.count,
+                soonest_expiry: credits.soonest_expiry,
+                natural_reset: capacity
+                    .as_ref()
+                    .and_then(|capacity| capacity.latest_spent_window_reset(now)),
+                outcome: None,
+                windows_reset: false,
+                window_resets: Vec::new(),
+                reset: false,
+            };
+            return Err(attempted_error(&report, AutoRedeemErr::Codex(message)));
+        }
+    };
+    let Some(action) = action else {
         return Ok(None);
     };
+    let reason = action.decision;
+    let capacity = action.capacity;
+    let credits = action.credits;
 
     let natural_reset = capacity
         .as_ref()
@@ -319,7 +336,6 @@ pub fn execute_auto_redeem(
         reset: false,
     };
 
-    let credit_id = soonest_credit_id(&details);
     let mut stamp = RedeemStamp {
         attempted_at: now,
         request_id: request_id.to_owned(),
@@ -335,28 +351,30 @@ pub fn execute_auto_redeem(
         reason = reason.as_str(),
         "auto-redeem: consuming reset credit",
     );
-    let outcome = consume_reset_credit(&credentials, base_url.as_deref(), request_id, credit_id)
-        .map_err(|err| attempted_error(&report, AutoRedeemErr::Codex(err.to_string())))?;
-    report.outcome = Some(outcome.code);
-    report.windows_reset = outcome.windows_reset > 0;
-    report.reset = outcome.code == ConsumeCode::Reset;
-    stamp.outcome = Some(outcome.code.as_str().to_owned());
+    report.outcome = Some(action.outcome);
+    report.windows_reset = action.windows_reset > 0;
+    report.reset = action.outcome == RedemptionCode::Reset;
+    stamp.outcome = Some(action.outcome.as_str().to_owned());
     write_stamp(&stamp_path, &stamp).map_err(|err| attempted_error(&report, err))?;
 
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         kind = CODEX_KIND,
         reason = reason.as_str(),
-        outcome = outcome.code.as_str(),
-        windows_reset = outcome.windows_reset,
+        outcome = action.outcome.as_str(),
+        windows_reset = action.windows_reset,
         "auto-redeem: reset-credit outcome",
     );
-    if outcome.code != ConsumeCode::Reset {
+    if action.outcome != RedemptionCode::Reset {
         return Ok(Some(report));
     }
 
-    let mut refreshed = fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials)
-        .map_err(|err| attempted_error(&report, AutoRedeemErr::Codex(err.to_string())))?;
+    let Some((usage_identity, refreshed)) = action.refreshed else {
+        let error = action
+            .refresh_error
+            .unwrap_or_else(|| "usage refresh returned no snapshot".to_owned());
+        return Err(attempted_error(&report, AutoRedeemErr::Codex(error)));
+    };
     report.window_resets = refreshed
         .rate_limits
         .as_ref()
@@ -372,10 +390,6 @@ pub fn execute_auto_redeem(
                 .collect()
         })
         .unwrap_or_default();
-    refreshed.reset_credits =
-        fetch_reset_credit_state(&reset_credits_url(base_url.as_deref()), &credentials)
-            .ok()
-            .map(|(credits, _)| credits);
     publish_usage(runtime, usage_identity, refreshed);
     Ok(Some(report))
 }
@@ -385,16 +399,6 @@ fn attempted_error(report: &RedeemReport, error: AutoRedeemErr) -> AutoRedeemErr
         report: Box::new(report.clone()),
         error: error.to_string(),
     }
-}
-
-fn soonest_credit_id(details: &[ResetCreditDetail]) -> Option<&str> {
-    details
-        .iter()
-        .filter_map(|detail| detail.expires_at.map(|expiry| (expiry, detail)))
-        .min_by_key(|(expiry, _)| *expiry)
-        .map(|(_, detail)| detail)
-        .or_else(|| details.first())
-        .and_then(|detail| detail.id.as_deref())
 }
 
 fn publish_usage(

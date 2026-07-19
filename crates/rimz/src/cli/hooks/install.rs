@@ -12,7 +12,7 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
         return run_install_dry_run(agent);
     }
 
-    let adapters = install_adapters(agent)?;
+    let adapters = install_definitions(agent)?;
     let mut out = crate::cli::render::out();
     for integration in adapters {
         let disposition = install_disposition(integration);
@@ -29,7 +29,7 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
 
 fn run_install_dry_run(agent: Option<String>) -> Result<()> {
     let mut previews = Vec::new();
-    for integration in install_adapters(agent)? {
+    for integration in install_definitions(agent)? {
         previews.push(integration.preview_hook_install()?);
     }
     let mut out = crate::cli::render::out();
@@ -38,7 +38,7 @@ fn run_install_dry_run(agent: Option<String>) -> Result<()> {
 
 pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
     let reports = match agent {
-        Some(agent) => vec![adapter_by_kind(&agent)?.uninstall_hooks()?],
+        Some(agent) => vec![definition_by_kind(&agent)?.uninstall_hooks()?],
         None => uninstall_managed_hooks()?,
     };
     let mut out = crate::cli::render::out();
@@ -54,9 +54,11 @@ pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn install_adapters(agent: Option<String>) -> Result<Vec<&'static dyn rimz::agents::AgentAdapter>> {
+fn install_definitions(
+    agent: Option<String>,
+) -> Result<Vec<&'static rimz::agents::AgentDefinition>> {
     if let Some(agent) = agent {
-        return Ok(vec![adapter_by_kind(&agent)?]);
+        return Ok(vec![definition_by_kind(&agent)?]);
     }
 
     let adapters = detected_installable_adapters();
@@ -70,9 +72,7 @@ fn install_adapters(agent: Option<String>) -> Result<Vec<&'static dyn rimz::agen
 }
 
 pub(crate) fn uninstall_managed_hooks() -> Result<Vec<HookUninstallReport>> {
-    let adapters = rimz::agents::ADAPTERS
-        .iter()
-        .copied()
+    let adapters = rimz::agents::all_definitions()
         .filter(|adapter| adapter.managed_hook_artifacts_present())
         .collect::<Vec<_>>();
     let mut reports = Vec::new();

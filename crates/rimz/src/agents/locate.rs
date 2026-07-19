@@ -5,47 +5,47 @@
 
 use std::path::{Path, PathBuf};
 
-use super::descriptor::AgentDescriptor;
+use super::definition::AgentSpec;
 use super::{AgentErr, Result, version};
 
 pub(crate) fn probe_descriptor_version(
-    descriptor: &AgentDescriptor,
+    definition: &AgentSpec,
     parse: &dyn Fn(&str, &str) -> Option<String>,
 ) -> Option<String> {
-    probe_descriptor_version_with_locator(descriptor, parse, locate_binary)
+    probe_descriptor_version_with_locator(definition, parse, locate_binary)
 }
 
 fn probe_descriptor_version_with_locator(
-    descriptor: &AgentDescriptor,
+    definition: &AgentSpec,
     parse: &dyn Fn(&str, &str) -> Option<String>,
-    locate: impl FnOnce(&AgentDescriptor) -> Option<PathBuf>,
+    locate: impl FnOnce(&AgentSpec) -> Option<PathBuf>,
 ) -> Option<String> {
-    let binary = locate(descriptor)?;
+    let binary = locate(definition)?;
     version::probe_cli_version_with(binary, parse)
 }
 
 /// Resolve an agent's binary on this machine: `$PATH` first, then the
-/// descriptor's [`extra_bin_dirs`](AgentDescriptor::extra_bin_dirs) joined under
+/// definition's [`extra_bin_dirs`](AgentSpec::extra_bin_dirs) joined under
 /// `$HOME`. An installer that drops its binary in a private dir (OpenCode's
 /// `~/.opencode/bin`) and edits a shell rc the running environment never sourced
 /// leaves the agent off `$PATH` yet present; this finds it. Returns the absolute
 /// path, or `None` when the binary is nowhere RimZ knows to look.
-pub fn locate_binary(descriptor: &AgentDescriptor) -> Option<PathBuf> {
-    for name in descriptor.bin_names {
+pub fn locate_binary(definition: &AgentSpec) -> Option<PathBuf> {
+    for name in definition.bin_names {
         if let Ok(path) = which::which(name) {
             return Some(path);
         }
     }
     let home = PathBuf::from(std::env::var_os("HOME").filter(|value| !value.is_empty())?);
-    binary_in_install_dirs(descriptor, &home)
+    binary_in_install_dirs(definition, &home)
 }
 
 /// The `$PATH`-miss branch of [`locate_binary`], split out so it tests without
 /// touching process env: the first existing `<home>/<dir>/<kind>` file across
-/// the descriptor's [`extra_bin_dirs`](AgentDescriptor::extra_bin_dirs).
-fn binary_in_install_dirs(descriptor: &AgentDescriptor, home: &Path) -> Option<PathBuf> {
-    descriptor.extra_bin_dirs.iter().find_map(|dir| {
-        descriptor.bin_names.iter().find_map(|name| {
+/// the definition's [`extra_bin_dirs`](AgentSpec::extra_bin_dirs).
+fn binary_in_install_dirs(definition: &AgentSpec, home: &Path) -> Option<PathBuf> {
+    definition.extra_bin_dirs.iter().find_map(|dir| {
+        definition.bin_names.iter().find_map(|name| {
             let candidate = home.join(dir).join(name);
             candidate.is_file().then_some(candidate)
         })
@@ -92,12 +92,12 @@ pub(crate) fn read_optional_file(agent: &'static str, path: &Path) -> Result<Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::descriptor_by_kind;
+    use crate::agents::spec_by_kind;
 
     #[test]
     fn binary_resolves_from_a_known_install_dir_off_path() {
         let home = tempfile::tempdir().unwrap();
-        let opencode = descriptor_by_kind("opencode").unwrap();
+        let opencode = spec_by_kind("opencode").unwrap();
         // Off PATH and not yet installed: nowhere under HOME to find it.
         assert_eq!(binary_in_install_dirs(opencode, home.path()), None);
         // OpenCode's installer drops the binary here without editing PATH.
@@ -107,7 +107,7 @@ mod tests {
         std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
         assert_eq!(binary_in_install_dirs(opencode, home.path()), Some(bin));
         // An agent declaring no install dirs is never found this way.
-        let claude = descriptor_by_kind("claude").unwrap();
+        let claude = spec_by_kind("claude").unwrap();
         assert_eq!(binary_in_install_dirs(claude, home.path()), None);
     }
 
@@ -117,7 +117,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let home = tempfile::tempdir().unwrap();
-        let opencode = descriptor_by_kind("opencode").unwrap();
+        let opencode = spec_by_kind("opencode").unwrap();
         let bin_dir = home.path().join(".opencode/bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let bin = bin_dir.join("opencode");
@@ -132,7 +132,7 @@ mod tests {
                 let version = version::conventional_cli_version(stdout, stderr)?;
                 Some(format!("selected:{version}"))
             },
-            |descriptor| binary_in_install_dirs(descriptor, home.path()),
+            |definition| binary_in_install_dirs(definition, home.path()),
         );
 
         assert_eq!(version.as_deref(), Some("selected:1.17.7"));

@@ -204,7 +204,10 @@ impl RoomContext {
     }
 
     fn launch_background_view(&self, options: &BackgroundViewOptions) {
-        crate::agents::codex::app_server::daemon::ensure(self.machine_config.remote_control.codex);
+        crate::agents::runtime_control::ensure(
+            "codex",
+            self.machine_config.remote_control.enabled_for("codex"),
+        );
         match self.backend.open_background_view(options) {
             Ok(BackgroundViewLaunch::Launched) => tracing::info!(
                 session = %self.workspace.session_name,

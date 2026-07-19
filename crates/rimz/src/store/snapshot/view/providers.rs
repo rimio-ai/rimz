@@ -26,7 +26,7 @@ impl SidebarSnapshot {
     /// `auth.json`), preferred only when the freshest context has none — and a kind
     /// whose only signal is a qualifying probed account still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` visibility and managed-server
-    /// health. Styling (emblem, color, name) and the descriptor-declared empty
+    /// health. Styling (emblem, color, name) and the definition-declared empty
     /// budget-window shape resolve here, so the renderer gets a ready-to-paint
     /// block. With no explicit
     /// `provider_list`, providers paint in usage-rank order: live sessions,
@@ -145,9 +145,9 @@ impl SidebarSnapshot {
                 BrandColor::Brand { index, rgb } => (index, Some(rgb), None),
             };
             let remote_control = remote_control.get(&kind).copied().unwrap_or_default();
-            let window_placeholders = crate::agents::descriptor_by_kind(&kind)
-                .map(|descriptor| {
-                    descriptor
+            let window_placeholders = crate::agents::spec_by_kind(&kind)
+                .map(|definition| {
+                    definition
                         .expected_windows
                         .iter()
                         .map(|&label| label.to_owned())
@@ -408,7 +408,7 @@ pub(crate) fn sort_windows(windows: &mut [RateLimitWindow]) {
 /// `Claude Max`), Codex's prefix `ChatGPT` (`pro` → `ChatGPT Pro`); any other
 /// provider just title-cases the tier.
 pub(crate) fn format_plan_label(kind: &str, raw: &str) -> String {
-    match crate::agents::descriptor_by_kind(kind).map(|descriptor| &descriptor.plan_label) {
+    match crate::agents::spec_by_kind(kind).map(|definition| &definition.plan_label) {
         Some(label) => label.format(raw),
         None => provider_title_case(raw),
     }

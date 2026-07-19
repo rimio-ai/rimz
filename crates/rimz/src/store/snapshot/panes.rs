@@ -260,8 +260,8 @@ pub struct SidebarOwnView {
 /// ([`crate::agents::codex::codex_daemon_pids`] today): a root (non-subagent)
 /// daemon-hooked session whose recorded hook owner is a daemon by kind or pid.
 pub(super) fn is_daemon_owned(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -> bool {
-    let daemon_hooked = crate::agents::descriptor_by_kind(agent.kind.as_str())
-        .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions);
+    let daemon_hooked = crate::agents::spec_by_kind(agent.kind.as_str())
+        .is_some_and(|definition| definition.capabilities.daemon_hooked_sessions);
     if !daemon_hooked || agent.parent_agent_id.is_some() {
         return false;
     }
@@ -346,8 +346,8 @@ pub fn stamped_agent_for_pane<'a>(
 
 fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
     let follows_latest = left.kind == right.kind
-        && crate::agents::descriptor_by_kind(left.kind.as_str()).is_some_and(|descriptor| {
-            descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
+        && crate::agents::spec_by_kind(left.kind.as_str()).is_some_and(|definition| {
+            definition.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
         });
     if !follows_latest {
         return registered_rank(left)
@@ -381,10 +381,10 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     if stamped.pane_id != pane.pane_id || !pane_start_matches_agent_stamp(stamped, pane) {
         return false;
     }
-    let Some(descriptor) = crate::agents::descriptor_by_kind(agent.kind.as_str()) else {
+    let Some(definition) = crate::agents::spec_by_kind(agent.kind.as_str()) else {
         return true;
     };
-    if !descriptor.capabilities.registers_lazily {
+    if !definition.capabilities.registers_lazily {
         return true;
     }
     if !pane_start_allows_bind(agent.last_activity, pane) {

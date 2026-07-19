@@ -111,7 +111,7 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
         .into_iter()
         .next()
         .expect("grok panel");
-    assert_eq!(grok.color, 15, "descriptor's tuned xterm index survives");
+    assert_eq!(grok.color, 15, "definition's tuned xterm index survives");
     assert_eq!(grok.color_rgb, Some((0xff, 0xff, 0xff)));
     assert_ne!(
         grok.color,

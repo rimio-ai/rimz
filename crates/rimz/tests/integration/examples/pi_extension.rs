@@ -34,7 +34,7 @@ fn extension_tracks_settled_boundary_cost_and_child_lineage() {
 fn run_extension_harness(pi_version: &str, boundary_event: &str, absent_event: &str) {
     use std::os::unix::fs::PermissionsExt as _;
 
-    const EXTENSION_SOURCE: &str = include_str!("../../../src/agents/pi/extension.ts");
+    const EXTENSION_SOURCE: &str = include_str!("../../../src/agents/adapters/pi/extension.ts");
 
     let dir = tempfile::tempdir().unwrap();
     let extension_path = dir.path().join("rimz.mjs");

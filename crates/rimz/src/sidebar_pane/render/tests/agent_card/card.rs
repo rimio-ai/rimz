@@ -177,7 +177,7 @@ fn render_agent_capability_uses_descriptor_default_window() {
 
     assert!(
         rendered.contains("GPT 5.5 Codex · 272k"),
-        "the identity line falls back to the Codex descriptor window:\n{rendered}"
+        "the identity line falls back to the Codex definition window:\n{rendered}"
     );
 }
 

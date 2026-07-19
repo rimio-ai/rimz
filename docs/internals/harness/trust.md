@@ -61,7 +61,7 @@ An applied `[[agents]]` env reaches the agent through the login-shell wrapper ([
 1. pane env
 2. shell rc and profile env
 3. trusted project `[[agents]]` env
-4. adapter launch built-ins ([`AgentAdapter::launch_env`](../../../crates/rimz/src/agents/mod.rs))
+4. adapter launch built-ins ([`AgentDefinition::launch_env`](../../../crates/rimz/src/agents/mod.rs))
 5. `RIMZ_RUN_ID`, `RIMZ_AGENT_PROFILE`, `RIMZ_AGENT_ROLE`, `RIMZ_AGENT_MODEL`, `RIMZ_AGENT_EFFORT`, and the render-toolkit mode
 
 Adapter built-ins apply after the project env so a trusted config tunes an agent's launch while the integration's own launch contract stays pinned. A malformed launch env key refuses before any tab, worktree, or run-record side effect ([`validate_agent_launch_env`](../../../crates/rimz/src/cli/agents_cmd/launch.rs)): keys must be non-empty, free of `=`, and not start with `-`.

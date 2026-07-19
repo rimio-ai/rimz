@@ -4,7 +4,7 @@
 //! derive from the imported palette; only depth quantization applies
 //! downstream.
 //!
-//! Per-agent provider brand colors live with each agent's descriptor
+//! Per-agent provider brand colors live with each agent's definition
 //! ([`SidebarProviderPanel::color_rgb`](crate::SidebarProviderPanel)), not
 //! here — identity holds only the tones the sidebar itself owns.
 

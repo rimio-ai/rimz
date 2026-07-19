@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use glob::{MatchOptions, Pattern};
 
-use crate::agents::AgentAdapter;
+use crate::agents::AgentDefinition;
 
 use super::aggregate::cold_parse_out_of_window;
 use super::cache::SpendingDiskCache;
@@ -343,16 +343,16 @@ pub(crate) struct DiscoveryStats {
 impl SpendingDiscoveryIndex {
     pub(crate) fn discover(
         &mut self,
-        adapters: impl Iterator<Item = &'static dyn AgentAdapter>,
+        adapters: impl Iterator<Item = &'static AgentDefinition>,
         now_secs: u64,
-    ) -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
+    ) -> Vec<(&'static AgentDefinition, PathBuf)> {
         self.stats = DiscoveryStats::default();
         let force_complete = self.complete_due();
         let mut authoritative = true;
         let mut discovered = Vec::new();
         let mut seen_kinds = HashSet::new();
         for adapter in adapters {
-            let kind = adapter.descriptor().kind;
+            let kind = adapter.spec().kind;
             if !seen_kinds.insert(kind) {
                 continue;
             }

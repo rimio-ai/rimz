@@ -428,11 +428,9 @@ fn storage_root(disk_usage: &RuntimeStorage, kind: StorageKind) -> Option<&Stora
 }
 
 fn managed_hook_agents() -> Vec<&'static str> {
-    rimz::agents::ADAPTERS
-        .iter()
-        .copied()
+    rimz::agents::all_definitions()
         .filter(|adapter| adapter.managed_hook_artifacts_present())
-        .map(|adapter| adapter.descriptor().kind)
+        .map(|adapter| adapter.spec().kind)
         .collect()
 }
 

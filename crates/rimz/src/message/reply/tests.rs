@@ -107,7 +107,7 @@ fn reply_target_anchors_transcript_before_dispatch() {
     .unwrap();
     let mut agent = crate::testkit::agent_state("claude", "sess-reply", Timestamp::UNIX_EPOCH);
     agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
-    let adapter = crate::agents::find_adapter("claude").unwrap();
+    let adapter = crate::agents::find_definition("claude").unwrap();
     let mut target = ReplyTarget::new(&agent, "@claude".to_owned(), adapter);
 
     let mut file = std::fs::OpenOptions::new()
@@ -146,7 +146,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
     let mut agent = crate::testkit::agent_state("claude", "sess-reply", Timestamp::UNIX_EPOCH);
     agent.status = AgentStatus::Running;
     agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
-    let adapter = crate::agents::find_adapter("claude").unwrap();
+    let adapter = crate::agents::find_definition("claude").unwrap();
     let target = ReplyTarget::new(&agent, "@claude".to_owned(), adapter);
     let outcome = DispatchOutcome::Queued {
         label: "@claude".to_owned(),

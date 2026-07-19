@@ -23,7 +23,7 @@ use rimz::agents::spending::{
     CachedEntry, FileCacheEntry, HeadlineSpec, SilentWalk, SpendCursor, SpendingSource,
     SpendingSourceTree, SpendingWalker, WalkRequest, read_spending_cache, write_spending_cache,
 };
-use rimz::agents::{AgentAdapter, ClaudeAdapter, PriceBook, TranscriptStat};
+use rimz::agents::{AgentDefinition, PriceBook, TranscriptStat};
 
 use crate::common::Env;
 
@@ -33,8 +33,8 @@ const HISTORY_LINES: usize = 30_000;
 /// windows hold the same verdict on any wall-clock day the suite runs.
 const NOW_SECS: u64 = 1_780_394_400;
 
-fn claude_adapter() -> &'static dyn AgentAdapter {
-    &ClaudeAdapter
+fn claude_adapter() -> &'static AgentDefinition {
+    rimz::agents::definition_by_kind("claude").expect("Claude definition")
 }
 
 fn claude_line(i: usize) -> String {
@@ -87,7 +87,7 @@ fn seed_spending_cache(
     dir: &std::path::Path,
     cache_path: &std::path::Path,
     entries_per_file: usize,
-) -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
+) -> Vec<(&'static AgentDefinition, PathBuf)> {
     let mut files = Vec::new();
     let mut cache = read_spending_cache(cache_path);
     cache.files = HashMap::new();

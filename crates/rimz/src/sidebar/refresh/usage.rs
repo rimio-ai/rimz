@@ -41,11 +41,11 @@ fn refresh_account_usage_with(
         }
         let started = Instant::now();
         let kind = panel.kind.as_str();
-        let Some(adapter) = crate::agents::find_adapter(kind) else {
+        let Some(adapter) = crate::agents::find_definition(kind) else {
             trace_claim(runtime, kind, "adapter_missing", started.elapsed());
             continue;
         };
-        if !adapter.descriptor().capabilities.direct_account_usage {
+        if !adapter.spec().capabilities.direct_account_usage {
             trace_claim(runtime, kind, "unsupported", started.elapsed());
             continue;
         }
@@ -95,7 +95,7 @@ pub fn refresh_claimed_account_usage(
         trace_usage_helper(runtime, kind, "superseded", 0, 0, 0, started.elapsed());
         return false;
     }
-    let Some(adapter) = crate::agents::find_adapter(kind) else {
+    let Some(adapter) = crate::agents::find_definition(kind) else {
         cancel_provider_account_usage_claim(runtime, kind, claim_id);
         trace_usage_helper(runtime, kind, "adapter_missing", 0, 0, 0, started.elapsed());
         return false;
@@ -107,7 +107,7 @@ pub fn refresh_claimed_account_usage(
         merge_windows,
         realtime.as_ref(),
         adapter
-            .descriptor()
+            .spec()
             .capabilities
             .realtime_usage
             .windows_defer_to_fresh_realtime,
@@ -319,10 +319,10 @@ fn complete_realtime_account_usage_with(
 /// Claim and execute a direct read in-process. Codex synchronous refresh paths
 /// use this instead of maintaining a separate cadence.
 fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> bool {
-    let Some(adapter) = crate::agents::find_adapter(kind) else {
+    let Some(adapter) = crate::agents::find_definition(kind) else {
         return false;
     };
-    if !adapter.descriptor().capabilities.direct_account_usage {
+    if !adapter.spec().capabilities.direct_account_usage {
         return false;
     }
     let cached_hint = cached_account_usage_hint(runtime, kind);
@@ -412,8 +412,8 @@ fn publish_account_usage_windows(
 }
 
 fn merge_windows_hint(snapshot: &SidebarSnapshot, kind: &str) -> bool {
-    !crate::agents::descriptor_by_kind(kind).is_some_and(|descriptor| {
-        descriptor
+    !crate::agents::spec_by_kind(kind).is_some_and(|definition| {
+        definition
             .capabilities
             .realtime_usage
             .windows_defer_to_fresh_realtime

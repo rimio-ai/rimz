@@ -573,7 +573,7 @@ fn wait_interactive_agent_stream(
     current_channel: Option<&str>,
     options: WaitStreamOptions,
 ) -> Result<()> {
-    let adapter = rimz::agents::find_adapter(kind.as_str())
+    let adapter = rimz::agents::find_definition(kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     let mut cursor = rimz::agents::transcript::TranscriptCursor::new(options.from_start);
     let mut stdout = render::out();
@@ -626,7 +626,7 @@ fn interactive_live_status(agent: &AgentState) -> rimz::harness::run::RunLiveSta
 }
 
 fn wait_run_stream(store: &rimz::Store, run: &RunRecord, options: WaitStreamOptions) -> Result<()> {
-    let adapter = rimz::agents::find_adapter(run.kind.as_str())
+    let adapter = rimz::agents::find_definition(run.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", run.kind))?;
     let mut stdout = render::out();
     let mut stderr = render::err();

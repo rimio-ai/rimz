@@ -228,7 +228,7 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
 }
 #[test]
 fn codex_line_two_walks_the_descriptor_precedence_ladder() {
-    // Codex's line-two descriptor follows a precedence ladder: thread preview >
+    // Codex's line-two definition follows a precedence ladder: thread preview >
     // thread name > task. A present preview wins over both name and task; with
     // the preview absent the name still beats the task fall-through.
     let codex_with = |session_name: &str, session_preview: Option<&str>| {

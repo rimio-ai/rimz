@@ -60,7 +60,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
 
 fn agent_context_window(agent: &AgentState) -> Option<u64> {
     agent.usage.context_window.or_else(|| {
-        crate::agents::descriptor_by_kind(agent.kind.as_str())
-            .and_then(|descriptor| descriptor.default_context_window)
+        crate::agents::spec_by_kind(agent.kind.as_str())
+            .and_then(|definition| definition.default_context_window)
     })
 }

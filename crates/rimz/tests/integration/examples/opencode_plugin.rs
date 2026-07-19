@@ -24,7 +24,7 @@ fn plugin_preserves_measured_usage_across_zero_only_updates() {
         return;
     }
 
-    const PLUGIN_SOURCE: &str = include_str!("../../../src/agents/opencode/plugin.ts");
+    const PLUGIN_SOURCE: &str = include_str!("../../../src/agents/adapters/opencode/plugin.ts");
 
     let dir = tempfile::tempdir().unwrap();
     let plugin_path = dir.path().join("rimz.ts");

@@ -10,8 +10,8 @@ use predicates::str::contains;
 
 use crate::common::Env;
 
-const PI_EXTENSION_SOURCE: &str = include_str!("../../src/agents/pi/extension.ts");
-const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/opencode/plugin.ts");
+const PI_EXTENSION_SOURCE: &str = include_str!("../../src/agents/adapters/pi/extension.ts");
+const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/adapters/opencode/plugin.ts");
 const STALE_MANAGED_SOURCE: &str = "// old _rimz_managed source\n";
 
 fn machine_config_path(env: &Env) -> std::path::PathBuf {

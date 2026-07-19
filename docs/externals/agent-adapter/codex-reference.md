@@ -2,7 +2,7 @@
 
 > The mapping onto RimZ's internal types lives beside this doc: [codex.md](../../internals/agents/codex.md) maps the hooks, rollout transcript, app-server, account, and spend surfaces onto RimZ's internal types; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Codex upstream protocol surface** RimZ binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, the auth file, and the local-OAuth usage endpoint. It is a hand-maintained mirror of OpenAI's published docs, the open-source `codex-rs` types, and the credential-file surfaces Codex itself uses, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client are the only code that reads this surface.
+This is the single home for the **Codex upstream protocol surface** RimZ binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, the auth file, and the local-OAuth usage endpoint. It is a hand-maintained mirror of OpenAI's published docs, the open-source `codex-rs` types, and the credential-file surfaces Codex itself uses, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/adapters/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/adapters/codex/app_server.rs) client are the only code that reads this surface.
 
 Refresh baseline: Codex CLI **0.144.1** and the OpenAI Codex docs/source available on **2026-07-10**. Generated app-server details below come from `codex app-server generate-json-schema` on that release; the method index also calls out newer `main`-branch additions where stated.
 
@@ -39,7 +39,7 @@ codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 
 ## Hooks
 
-Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. RimZ's [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → RimZ status mapping is the [codex.md → Hooks and lifecycle](../../internals/agents/codex.md#hooks-and-lifecycle).
+Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. RimZ's [`CodexAdapter`](../../../crates/rimz/src/agents/adapters/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → RimZ status mapping is the [codex.md → Hooks and lifecycle](../../internals/agents/codex.md#hooks-and-lifecycle).
 
 **Execution.** Matching groups from every active hook source run, and multiple matching command handlers for one event start concurrently. A hook command runs with the **session cwd** as working directory and the **spawning process's environment** (`command_runner.rs`: no `env_clear`, per-handler overlays only). Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent — and its environment — is the daemon's, not the pane's; the mux-stamped identity pin never arrives via env, and RimZ recovers it from the in-pane process instead ([agent.md → Hooks resolve the room they live in](../../internals/agents/model.md#hooks-resolve-the-room-they-live-in)).
 
@@ -137,7 +137,7 @@ For reference, Codex's common-control and block shapes:
 { "decision": "block", "reason": "string" }
 ```
 
-**Exit codes.** Exit `0` with JSON processes the output; exit `0` with no output continues; exit `2` is a blocking failure (stderr read as the reason/message). The neutral path RimZ takes is empty stdout, exit 0. Exact bytes are the inline goldens in [`codex/mod.rs`](../../../crates/rimz/src/agents/codex/mod.rs).
+**Exit codes.** Exit `0` with JSON processes the output; exit `0` with no output continues; exit `2` is a blocking failure (stderr read as the reason/message). The neutral path RimZ takes is empty stdout, exit 0. Exact bytes are the inline goldens in [`codex/mod.rs`](../../../crates/rimz/src/agents/adapters/codex/mod.rs).
 
 ## `notify` channel
 
@@ -185,7 +185,7 @@ The protocol is organized around three primitives: an **Item** (atomic input/out
 
 ### Methods RimZ uses
 
-The [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client speaks only **read-only, non-interfering** methods — it never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
+The [`codex::app_server`](../../../crates/rimz/src/agents/adapters/codex/app_server.rs) client speaks only **read-only, non-interfering** methods — it never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
 
 **`thread/loaded/list`** → the thread ids the app-server currently holds in memory; the daemon-mode liveness signal RimZ reaps ghost sessions against ([sidebar.md → Presence model](../../internals/sidebar/sidebar.md#presence-model)).
 
@@ -370,7 +370,7 @@ The questionnaire starts each option list on its first row; Down moves selection
 
 ## Auth file
 
-Codex stores credentials according to `cli_auth_credentials_store = "file" | "keyring" | "auto"`. With file storage, [`account.rs`](../../../crates/rimz/src/agents/codex/account.rs) reads `~/.codex/auth.json` directly for the logged-in-but-idle probe:
+Codex stores credentials according to `cli_auth_credentials_store = "file" | "keyring" | "auto"`. With file storage, [`account.rs`](../../../crates/rimz/src/agents/adapters/codex/account.rs) reads `~/.codex/auth.json` directly for the logged-in-but-idle probe:
 
 | Shape | Meaning |
 | --- | --- |
@@ -380,7 +380,7 @@ Codex stores credentials according to `cli_auth_credentials_store = "file" | "ke
 
 When no auth file exists, RimZ runs `codex login status` so keyring-backed logins still appear with the correct metered/unmetered posture. The command prints one line per auth mode: `Logged in using ChatGPT` (metered by subscription windows), `Logged in using an API key - <masked>` and `Logged in using Amazon Bedrock API key` (token/AWS-billed, so unmetered), `Logged in using access token` and `Logged in using personal access token` (logged in, metering unknown), or `Not logged in`. It reports login kind but no plan tier or token, so the plan rides the app-server (`account/rateLimits/read` `planType`) and direct OAuth usage remains available only when Codex exposes a file token. The semantics are in [codex.md → Account and balance](../../internals/agents/codex.md#account-and-balance).
 
-[`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`; the same trimmed explicit field identifies the idle `AgentAccount` and the successful usage observation, so a stale preflight read cannot assign fetched facts to the wrong cache owner. RimZ does not decode JWT claims for identity.
+[`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`; the same trimmed explicit field identifies the idle `AgentAccount` and the successful usage observation, so a stale preflight read cannot assign fetched facts to the wrong cache owner. RimZ does not decode JWT claims for identity.
 
 The app-server `account/rateLimits/read` `planType` is persisted with realtime credits even when plan is the only account field returned. A non-empty app-server plan replaces the cached OAuth plan; an absent app-server plan preserves it, so keyring-backed and idle sessions retain their last provider-authoritative label.
 

@@ -169,12 +169,10 @@ fn parse_rgb(value: &str) -> (u8, u8, u8) {
     (component(0..2), component(2..4), component(4..6))
 }
 
-/// Resolve the emblem for `kind`: descriptor brand override, curated catalog
+/// Resolve the emblem for `kind`: definition brand override, curated catalog
 /// entry, or the shared fallback.
 pub fn emblem_for(kind: &str) -> Emblem {
-    if let Some(art) =
-        super::descriptor_by_kind(kind).and_then(|descriptor| descriptor.brand.emblem)
-    {
+    if let Some(art) = super::spec_by_kind(kind).and_then(|definition| definition.brand.emblem) {
         return Emblem {
             lines: emblem_from(art),
             tints: Vec::new(),
@@ -191,7 +189,7 @@ pub fn emblem_for(kind: &str) -> Emblem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::registry::ADAPTERS;
+    use crate::agents::registry::BUILTINS;
 
     #[test]
     fn fallback_is_present_and_non_empty() {
@@ -201,8 +199,8 @@ mod tests {
     #[test]
     fn every_provider_has_curated_art_distinct_from_fallback() {
         let fallback = &catalog().fallback[0];
-        for adapter in ADAPTERS {
-            let kind = adapter.descriptor().kind;
+        for adapter in BUILTINS {
+            let kind = adapter.spec().kind;
             let art = catalog().curated.get(kind);
             assert!(art.is_some(), "{kind} must have a curated emblem");
             let art = art.expect("checked above");

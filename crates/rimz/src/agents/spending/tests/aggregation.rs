@@ -83,7 +83,7 @@ fn token_windows_and_native_sessions_populate_public_tallies() {
         )]),
         ..Default::default()
     };
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(opencode_adapter(), native_file)];
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(opencode_adapter(), native_file)];
     let counted = dedup_cached_entries(&files, &cache).into_counted();
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
     assert_eq!(spending.total.headline.sessions, 1);
@@ -100,7 +100,7 @@ fn headline_cutoffs_are_global_scoped_and_provider_local() {
     let claude_file = write_jsonl(dir.path(), "claude.jsonl", &[]);
     let codex_file = write_codex(dir.path(), &[]);
     let day_start = (NOW_SECS / 86_400) * 86_400;
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
         (claude_adapter(), claude_file.clone()),
         (codex_adapter(), codex_file.clone()),
     ];
@@ -202,7 +202,7 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
     let after: Timestamp = "2025-06-01T04:01:00Z".parse().expect("after midnight");
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/day.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &file,
@@ -258,7 +258,7 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
 fn scoped_spending_publishes_full_walked_session_baselines() {
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/live.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &file,
@@ -292,7 +292,7 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
     main_entry.thread_id = None;
     let mut sub_entry = cached_entry(NOW_SECS, 0.10, "");
     sub_entry.thread_id = None;
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
         (claude_adapter(), main.clone()),
         (claude_adapter(), sub.clone()),
     ];
@@ -321,7 +321,7 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
     );
 
     let codex_file = PathBuf::from("/tmp/codex/rollout.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> =
+    let files: Vec<(&'static AgentDefinition, PathBuf)> =
         vec![(codex_adapter(), codex_file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
@@ -359,7 +359,7 @@ fn live_baselines_sum_year_entries_only_for_recent_sessions() {
     const DAY: u64 = 86_400;
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/baselines.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &file,
@@ -396,7 +396,7 @@ fn priced_entries_bridge_but_never_open_a_session() {
     let first_file = PathBuf::from("/tmp/rimz/first.jsonl");
     let chatter_file = PathBuf::from("/tmp/rimz/chatter.jsonl");
     let second_file = PathBuf::from("/tmp/rimz/second.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
         (claude_adapter(), first_file.clone()),
         (claude_adapter(), chatter_file.clone()),
         (claude_adapter(), second_file.clone()),
@@ -444,7 +444,7 @@ fn priced_entries_bridge_but_never_open_a_session() {
 fn session_burst_resets_at_an_exact_activity_gap() {
     const HOUR: u64 = 3_600;
     let file = PathBuf::from("/tmp/rimz/activity-gap.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file(
             &file,
@@ -478,7 +478,7 @@ fn bridged_session_cutoff_stays_stable_while_activity_is_current() {
     const HOUR: u64 = 3_600;
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/stable-cutoff.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &file,
@@ -520,7 +520,7 @@ fn autonomous_spend_inside_user_prompt_burst_counts() {
     let first_file = PathBuf::from("/tmp/rimz/burst-first.jsonl");
     let automation_file = PathBuf::from("/tmp/rimz/burst-automation.jsonl");
     let second_file = PathBuf::from("/tmp/rimz/burst-second.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
         (claude_adapter(), first_file.clone()),
         (claude_adapter(), automation_file.clone()),
         (claude_adapter(), second_file.clone()),
@@ -561,7 +561,7 @@ fn provider_session_cutoffs_follow_same_kind_user_inputs() {
     const HOUR: u64 = 3_600;
     let claude_file = PathBuf::from("/tmp/rimz/provider-claude.jsonl");
     let codex_file = PathBuf::from("/tmp/rimz/provider-codex.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
         (claude_adapter(), claude_file.clone()),
         (codex_adapter(), codex_file.clone()),
     ];
@@ -596,7 +596,7 @@ fn workspace_session_cutoff_uses_only_scoped_user_inputs() {
     let other = PathBuf::from("/repo/other");
     let project_file = PathBuf::from("/tmp/rimz/scoped-project.jsonl");
     let other_file = PathBuf::from("/tmp/rimz/scoped-other.jsonl");
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
         (claude_adapter(), project_file.clone()),
         (claude_adapter(), other_file.clone()),
     ];
@@ -1013,7 +1013,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         ]),
         ..Default::default()
     };
-    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
         (claude_adapter(), claude_file),
         (codex_adapter(), codex_file),
     ];

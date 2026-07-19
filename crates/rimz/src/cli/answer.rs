@@ -70,7 +70,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let kind = agent.kind.clone();
     let agent_id = agent.agent_id.clone();
     let handle = rimz::harness::target::agent_handle(agent, &peers, true);
-    let adapter = rimz::agents::adapter_by_kind(kind.as_str())
+    let adapter = rimz::agents::definition_by_kind(kind.as_str())
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
     if let Err(AnswerPlanErr::Unsupported(kind)) =
         adapter.answer_plan(detail.open.kind, &detail.questions, &[])

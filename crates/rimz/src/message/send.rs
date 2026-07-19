@@ -313,7 +313,7 @@ pub fn compact_message_for_target(
     if agent.compacting_since.is_some() {
         return None;
     }
-    let command = crate::agents::descriptor_by_kind(target.kind.as_str())?
+    let command = crate::agents::spec_by_kind(target.kind.as_str())?
         .launch
         .compact_command()?;
     let occupied = agent.occupied_context_tokens();

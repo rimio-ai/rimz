@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::hook_types::HookRecord;
+use super::hook_types::HookEventSpec;
 use super::managed_statusline::{self, ManagedStatusLineSpec};
 use super::settings_json;
 use super::{
@@ -25,7 +25,7 @@ pub(crate) enum SyncEncoding {
 
 pub(crate) struct ManagedJsonHookSpec {
     pub agent: &'static str,
-    pub catalog: &'static [HookRecord],
+    pub catalog: &'static [HookEventSpec],
     pub command: &'static str,
     pub legacy_command_marker: &'static str,
     pub timeout: u64,
@@ -231,7 +231,7 @@ impl ManagedJsonHookSpec {
         Ok(())
     }
 
-    fn upsert(&self, root: &mut Map<String, Value>, hook: &HookRecord) {
+    fn upsert(&self, root: &mut Map<String, Value>, hook: &HookEventSpec) {
         let hooks = root
             .entry(HOOKS_KEY.to_owned())
             .or_insert_with(|| Value::Object(Map::new()));
@@ -251,7 +251,7 @@ impl ManagedJsonHookSpec {
             .push(self.build_entry(hook));
     }
 
-    fn build_entry(&self, hook: &HookRecord) -> Value {
+    fn build_entry(&self, hook: &HookEventSpec) -> Value {
         let mut entry = Map::new();
         if let Some(matcher) = hook.matcher {
             entry.insert("matcher".to_owned(), Value::String(matcher.to_owned()));
@@ -271,7 +271,11 @@ impl ManagedJsonHookSpec {
         Value::Object(entry)
     }
 
-    fn canonical_entry_is_installed(&self, entry: &Map<String, Value>, hook: &HookRecord) -> bool {
+    fn canonical_entry_is_installed(
+        &self,
+        entry: &Map<String, Value>,
+        hook: &HookEventSpec,
+    ) -> bool {
         if !matcher_matches(hook.matcher, entry.get("matcher").and_then(Value::as_str))
             || !self.entry_is_owned(entry)
         {
@@ -299,7 +303,7 @@ impl ManagedJsonHookSpec {
                 || self.entry_has_exact_handler(entry, hook))
     }
 
-    fn entry_has_exact_handler(&self, entry: &Map<String, Value>, hook: &HookRecord) -> bool {
+    fn entry_has_exact_handler(&self, entry: &Map<String, Value>, hook: &HookEventSpec) -> bool {
         if hook.matcher.is_none() && entry.contains_key("matcher") {
             return false;
         }

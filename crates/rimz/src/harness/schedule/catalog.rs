@@ -159,11 +159,11 @@ impl TaskCatalog {
         let Some(project_root) = project_root.filter(|_| enabled) else {
             return self;
         };
-        for adapter in crate::agents::registry::ADAPTERS {
+        for adapter in crate::agents::registry::BUILTINS {
             if adapter.ping_args().is_none() {
                 continue;
             }
-            let kind = adapter.descriptor().kind;
+            let kind = adapter.spec().kind;
             let name = format!("autoping-{kind}");
             if self.visible.contains_key(&name) {
                 continue;
@@ -536,10 +536,10 @@ mod tests {
     fn auto_ping_synthesizes_each_ping_capable_adapter_with_a_root() {
         let catalog = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
             .with_auto_ping(true, Some(Path::new("/repo")));
-        let expected = crate::agents::registry::ADAPTERS
+        let expected = crate::agents::registry::BUILTINS
             .iter()
             .filter(|adapter| adapter.ping_args().is_some())
-            .map(|adapter| format!("autoping-{}", adapter.descriptor().kind))
+            .map(|adapter| format!("autoping-{}", adapter.spec().kind))
             .collect::<BTreeSet<_>>();
 
         assert_eq!(

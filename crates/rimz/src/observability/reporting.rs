@@ -451,7 +451,7 @@ mod tests {
         // An unmarked INFO (e.g. a broker socket-path log) is ignored — its
         // fields never ride off-box as breadcrumb data. (`EventFilter::Ignore`
         // is the empty flag set.)
-        assert!(classify(Level::INFO, "rimz::agents::codex::broker").is_empty());
+        assert!(classify(Level::INFO, "rimz::agents::runtime_control").is_empty());
         // DEBUG/TRACE are always ignored, even on the trail target.
         assert!(classify(Level::DEBUG, BREADCRUMB_TARGET).is_empty());
         assert!(classify(Level::TRACE, "rimz::anything").is_empty());

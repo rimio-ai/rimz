@@ -197,7 +197,7 @@ fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line
             Span::styled(sub.name.clone(), theme.body()),
         ];
         // Prefer the `subagentStatusLine` description; fall back to the task
-        // descriptor, shown only when it differs from the name (the name already
+        // definition, shown only when it differs from the name (the name already
         // is the type for most children) so the line never reads `Explore —
         // Explore`.
         let detail = sub

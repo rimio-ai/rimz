@@ -12,7 +12,7 @@ pub use crate::store::event_log::testkit::{bytes_read, bytes_written};
 pub fn spending_scope_from_warm_walker(
     walker: &mut crate::agents::spending::SpendingWalker,
     cache_path: &std::path::Path,
-    files: &[(&'static dyn crate::agents::AgentAdapter, std::path::PathBuf)],
+    files: &[(&'static crate::agents::AgentDefinition, std::path::PathBuf)],
     scope: &crate::agents::spending::SpendScope,
     now_secs: u64,
     spec: &crate::agents::spending::HeadlineSpec,
@@ -34,7 +34,7 @@ pub fn agent_state(kind: &str, agent_id: &str, at: jiff::Timestamp) -> crate::ag
 
 /// Provider-local changed-session fixture used only by allocation/time benches.
 pub struct ChangedSessionRefreshFixture {
-    adapter: &'static dyn crate::agents::AgentAdapter,
+    adapter: &'static crate::agents::AgentDefinition,
     session_id: String,
     transcript: std::path::PathBuf,
     pricing: std::path::PathBuf,
@@ -72,7 +72,8 @@ pub fn changed_kimi_session_fixture(
     }
     std::fs::write(&transcript, body).expect("Kimi fixture");
     ChangedSessionRefreshFixture {
-        adapter: crate::agents::find_adapter("kimi").expect("Kimi fixture adapter is registered"),
+        adapter: crate::agents::find_definition("kimi")
+            .expect("Kimi fixture adapter is registered"),
         session_id: "s1".to_owned(),
         transcript,
         pricing: root.join("prices.json"),
@@ -102,7 +103,8 @@ pub fn changed_grok_session_fixture(
     }
     std::fs::write(&transcript, body).expect("Grok fixture");
     ChangedSessionRefreshFixture {
-        adapter: crate::agents::find_adapter("grok").expect("Grok fixture adapter is registered"),
+        adapter: crate::agents::find_definition("grok")
+            .expect("Grok fixture adapter is registered"),
         session_id: "s1".to_owned(),
         transcript,
         pricing: root.join("prices.json"),
@@ -135,7 +137,8 @@ pub fn changed_droid_session_fixture(
     )
     .expect("Droid settings fixture");
     ChangedSessionRefreshFixture {
-        adapter: crate::agents::find_adapter("droid").expect("Droid fixture adapter is registered"),
+        adapter: crate::agents::find_definition("droid")
+            .expect("Droid fixture adapter is registered"),
         session_id: "s1".to_owned(),
         transcript,
         pricing: root.join("prices.json"),

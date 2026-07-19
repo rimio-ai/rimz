@@ -227,19 +227,19 @@ fn build_report(
     panel: Option<&SidebarProviderPanel>,
     provider_spending: &ProviderSpendingCache,
 ) -> ProviderReport {
-    let descriptor = rimz::agents::descriptor_by_kind(kind)
+    let definition = rimz::agents::spec_by_kind(kind)
         .expect("reports are assembled only for registered provider kinds");
     let account = record.and_then(|record| record.account.as_ref());
     let raw_plan = account.and_then(|account| account.plan.clone());
     ProviderReport {
         kind: kind.to_owned(),
-        product_name: descriptor.display_name.to_owned(),
+        product_name: definition.display_name.to_owned(),
         status: ProviderStatus::from_record(record),
         probed_at: record.and_then(|record| timestamp_from_millis(record.probed_at_ms)),
         plan_label: panel.and_then(|panel| panel.plan.clone()).or_else(|| {
             raw_plan
                 .as_deref()
-                .map(|plan| descriptor.plan_label.format(plan))
+                .map(|plan| definition.plan_label.format(plan))
         }),
         plan: raw_plan,
         account_id: account.and_then(|account| account.account_id.clone()),

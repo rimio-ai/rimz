@@ -97,9 +97,11 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     assert!(
         spec(
             crate::remote_control::HostState::Uninstalled(
-                crate::remote_control::PreflightError::Claude(
-                    crate::agents::claude::remote_control::Issue::Uninstalled,
-                )
+                crate::remote_control::PreflightError::from_parts(
+                    "claude",
+                    "uninstalled",
+                    "Claude is not installed",
+                ),
             ),
             false,
         )
@@ -110,7 +112,7 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     assert_eq!(claude.hosts.len(), 1);
     assert_eq!(
         claude.hosts[0].argv,
-        crate::agents::claude::remote_control::host_argv()
+        crate::agents::runtime_control::host_argv("claude").expect("Claude host argv")
     );
     assert_eq!(claude.hosts[0].cwd, project_root);
 

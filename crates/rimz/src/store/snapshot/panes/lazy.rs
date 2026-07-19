@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use super::{PaneBindingEvidence, PaneBindingIndex, pane_binding_evidence, pane_start_allows_bind};
-use crate::agents::AgentDescriptor;
+use crate::agents::AgentSpec;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentState, AgentStatus, SamePaneSessionPolicy, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
@@ -39,7 +39,7 @@ pub(crate) fn agent_pane_for_pane<'a>(
     wired_default_models: &BTreeMap<String, String>,
     now: Timestamp,
 ) -> Option<AgentPaneRow<'a>> {
-    let (kind, descriptor, cwd) = agent_pane_identity(pane)?;
+    let (kind, definition, cwd) = agent_pane_identity(pane)?;
     if let Some(agent) = pairings
         .pairings
         .get(&pane.pane_id)
@@ -57,12 +57,12 @@ pub(crate) fn agent_pane_for_pane<'a>(
     wired_kinds.iter().any(|wired| wired == kind).then(|| {
         AgentPaneRow::Idle(Box::new(idle_agent_row(
             pane,
-            descriptor,
+            definition,
             cwd,
             wired_default_models
                 .get(kind)
                 .map(String::as_str)
-                .or(descriptor.default_model),
+                .or(definition.default_model),
             now,
         )))
     })
@@ -352,13 +352,13 @@ impl<'a> HookPaneRecoveryContext<'a> {
     /// eligible for its first turn start. Follow-latest kinds may retry until the
     /// incoming id carries a pane stamp.
     fn can_share_occupied_pane(&self) -> bool {
-        let Some(descriptor) = crate::agents::descriptor_by_kind(self.kind.as_str()) else {
+        let Some(definition) = crate::agents::spec_by_kind(self.kind.as_str()) else {
             return false;
         };
-        if descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest {
+        if definition.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest {
             return !self.already_stamped();
         }
-        descriptor.capabilities.daemon_hooked_sessions
+        definition.capabilities.daemon_hooked_sessions
             && !self.prior_agents.iter().any(|agent| {
                 agent.kind == *self.kind
                     && agent.agent_id == *self.agent_id
@@ -367,8 +367,8 @@ impl<'a> HookPaneRecoveryContext<'a> {
     }
 
     fn follows_latest(&self) -> bool {
-        crate::agents::descriptor_by_kind(self.kind.as_str()).is_some_and(|descriptor| {
-            descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
+        crate::agents::spec_by_kind(self.kind.as_str()).is_some_and(|definition| {
+            definition.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
         })
     }
 }
@@ -561,8 +561,8 @@ pub(in crate::store::snapshot) fn compute_lazy_agent_pairings_with_index(
                 return true;
             };
             !live_panes.contains(&stamped.pane_id)
-                && crate::agents::descriptor_by_kind(agent.kind.as_str())
-                    .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
+                && crate::agents::spec_by_kind(agent.kind.as_str())
+                    .is_some_and(|definition| definition.capabilities.registers_lazily)
         })
         .filter(|(_, agent)| !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .collect::<Vec<_>>();
@@ -742,34 +742,34 @@ fn lazy_pairing_diagnostic(
 /// known agent kind, the pane is not marked as a foreign-user elevated agent,
 /// and the pane has a non-empty worktree path from the mux cwd or RimZ's
 /// supervised-wrapper manifest.
-fn agent_pane_identity(pane: &PaneRef) -> Option<(&'static str, &'static AgentDescriptor, &str)> {
+fn agent_pane_identity(pane: &PaneRef) -> Option<(&'static str, &'static AgentSpec, &str)> {
     agent_pane_identity_from_evidence(pane_binding_evidence(pane))
 }
 
 fn agent_pane_identity_from_evidence(
     evidence: PaneBindingEvidence<'_>,
-) -> Option<(&'static str, &'static AgentDescriptor, &str)> {
+) -> Option<(&'static str, &'static AgentSpec, &str)> {
     if evidence.pane.elevated_agent.is_some() {
         return None;
     }
     let kind = evidence.agent_kind?;
-    let descriptor = crate::agents::descriptor_by_kind(kind)?;
+    let definition = crate::agents::spec_by_kind(kind)?;
     let worktree_path = evidence.projection_worktree?;
-    Some((kind, descriptor, worktree_path))
+    Some((kind, definition, worktree_path))
 }
 
 /// The resting row for a wired agent pane that no session claimed: `○ <kind>`
 /// with adapter-owned model/window defaults when known.
 fn idle_agent_row(
     pane: &PaneRef,
-    descriptor: &AgentDescriptor,
+    definition: &AgentSpec,
     worktree_path: &str,
     default_model: Option<&str>,
     now: Timestamp,
 ) -> SidebarRow {
     SidebarRow {
         id: pane.pane_id.to_string(),
-        name: descriptor.kind.to_owned(),
+        name: definition.kind.to_owned(),
         pane: Some(pane.clone()),
         worktree_path: Some(worktree_path.to_owned()),
         worktree_branch: None,
@@ -793,7 +793,7 @@ fn idle_agent_row(
             launch_group: None,
             launch_ordinal: None,
             usage: crate::agents::AgentUsageSummary {
-                context_window: descriptor.default_context_window,
+                context_window: definition.default_context_window,
                 ..crate::agents::AgentUsageSummary::default()
             },
             context: None,
@@ -817,17 +817,17 @@ pub(crate) fn row_from_frame_pane(
     wired_default_models: &BTreeMap<String, String>,
     now: Timestamp,
 ) -> Option<SidebarRow> {
-    if let Some((kind, descriptor, worktree_path)) = agent_pane_identity(pane)
+    if let Some((kind, definition, worktree_path)) = agent_pane_identity(pane)
         && wired_kinds.iter().any(|wired| wired == kind)
     {
         return Some(idle_agent_row(
             pane,
-            descriptor,
+            definition,
             worktree_path,
             wired_default_models
                 .get(kind)
                 .map(String::as_str)
-                .or(descriptor.default_model),
+                .or(definition.default_model),
             now,
         ));
     }

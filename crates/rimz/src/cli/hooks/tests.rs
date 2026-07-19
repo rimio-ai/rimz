@@ -1,8 +1,8 @@
 use super::lifecycle::fill_root_launch_identity;
 use super::lifecycle::handle_lifecycle_hook;
 use super::proctree::matches_agent_kind;
+use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
-use rimz::agents::{AgentAdapter as _, AgentLifecycleObservation};
 use rimz::ids::AgentSessionId;
 use rimz::ids::{MuxName, PaneId};
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
@@ -86,17 +86,36 @@ struct CorrelationTestAdapter {
     correlation_calls: AtomicUsize,
 }
 
-impl rimz::agents::AgentAdapter for CorrelationTestAdapter {
-    fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
-        rimz::agents::AntigravityAdapter.descriptor()
-    }
+fn hook_definition<T>(provider: &'static T) -> rimz::agents::AgentDefinition
+where
+    T: rimz::agents::capabilities::CoreCapability + rimz::agents::capabilities::HookCapability,
+{
+    rimz::agents::AgentDefinition::from_capabilities(
+        provider,
+        rimz::agents::AgentCapabilities {
+            hooks: Some(provider),
+            ..rimz::agents::AgentCapabilities::NONE
+        },
+    )
+}
 
+impl rimz::agents::capabilities::CoreCapability for CorrelationTestAdapter {
+    fn spec(&self) -> &'static rimz::agents::AgentSpec {
+        rimz::agents::definition_by_kind("antigravity")
+            .unwrap()
+            .spec()
+    }
+}
+
+impl rimz::agents::capabilities::HookCapability for CorrelationTestAdapter {
     fn decode_hook(
         &self,
         event_name: &str,
         payload: &serde_json::Value,
-    ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
-        let mut decoded = rimz::agents::AntigravityAdapter.decode_hook(event_name, payload)?;
+    ) -> rimz::agents::Result<rimz::agents::HookOutput> {
+        let mut decoded = rimz::agents::definition_by_kind("antigravity")
+            .unwrap()
+            .decode_hook(event_name, payload)?;
         decoded.update_lifecycle(|observation| {
             observation.pane_id = Some(id("terminal_77"));
         });
@@ -179,7 +198,7 @@ fn antigravity_payload(agent_id: &str) -> serde_json::Value {
 
 fn feed_antigravity(
     store: &rimz::Store,
-    adapter: &dyn rimz::agents::AgentAdapter,
+    adapter: &rimz::agents::AgentDefinition,
     event_name: &str,
     payload: serde_json::Value,
 ) {
@@ -198,17 +217,21 @@ fn feed_antigravity(
 
 struct CopilotCorrelationAdapter;
 
-impl rimz::agents::AgentAdapter for CopilotCorrelationAdapter {
-    fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
-        rimz::agents::CopilotAdapter.descriptor()
+impl rimz::agents::capabilities::CoreCapability for CopilotCorrelationAdapter {
+    fn spec(&self) -> &'static rimz::agents::AgentSpec {
+        rimz::agents::definition_by_kind("copilot").unwrap().spec()
     }
+}
 
+impl rimz::agents::capabilities::HookCapability for CopilotCorrelationAdapter {
     fn decode_hook(
         &self,
         event_name: &str,
         payload: &serde_json::Value,
-    ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
-        let mut decoded = rimz::agents::CopilotAdapter.decode_hook(event_name, payload)?;
+    ) -> rimz::agents::Result<rimz::agents::HookOutput> {
+        let mut decoded = rimz::agents::definition_by_kind("copilot")
+            .unwrap()
+            .decode_hook(event_name, payload)?;
         decoded.update_lifecycle(|observation| {
             observation.pane_id = Some(id("terminal_88"));
         });
@@ -219,25 +242,28 @@ impl rimz::agents::AgentAdapter for CopilotCorrelationAdapter {
         &self,
         input: rimz::agents::SubagentCorrelationInput<'_>,
     ) -> Option<rimz::agents::SubagentCorrelation> {
-        rimz::agents::CopilotAdapter.correlate_subagent(input)
+        rimz::agents::definition_by_kind("copilot")
+            .unwrap()
+            .correlate_subagent(input)
     }
 
     fn spawned_subagents(
         &self,
         input: rimz::agents::SubagentSpawnInput<'_>,
     ) -> Vec<rimz::agents::SpawnedSubagent> {
-        rimz::agents::CopilotAdapter.spawned_subagents(input)
+        rimz::agents::definition_by_kind("copilot")
+            .unwrap()
+            .spawned_subagents(input)
     }
 }
 
 fn feed_copilot(store: &rimz::Store, event_name: &str, payload: serde_json::Value) {
-    let mut decoded = CopilotCorrelationAdapter
-        .decode_hook(event_name, &payload)
-        .unwrap();
+    let adapter = hook_definition(Box::leak(Box::new(CopilotCorrelationAdapter)));
+    let mut decoded = adapter.decode_hook(event_name, &payload).unwrap();
     handle_lifecycle_hook(
         &hooks_test_workspace(Some("main")),
         store,
-        &CopilotCorrelationAdapter,
+        &adapter,
         &mut decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
@@ -250,17 +276,21 @@ struct PiAdoptionTestAdapter {
     pane_id: PaneId,
 }
 
-impl rimz::agents::AgentAdapter for PiAdoptionTestAdapter {
-    fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
-        rimz::agents::PiAdapter.descriptor()
+impl rimz::agents::capabilities::CoreCapability for PiAdoptionTestAdapter {
+    fn spec(&self) -> &'static rimz::agents::AgentSpec {
+        rimz::agents::definition_by_kind("pi").unwrap().spec()
     }
+}
 
+impl rimz::agents::capabilities::HookCapability for PiAdoptionTestAdapter {
     fn decode_hook(
         &self,
         event_name: &str,
         payload: &serde_json::Value,
-    ) -> rimz::agents::Result<rimz::agents::DecodedHook> {
-        let mut decoded = rimz::agents::PiAdapter.decode_hook(event_name, payload)?;
+    ) -> rimz::agents::Result<rimz::agents::HookOutput> {
+        let mut decoded = rimz::agents::definition_by_kind("pi")
+            .unwrap()
+            .decode_hook(event_name, payload)?;
         decoded.update_lifecycle(|observation| {
             observation.pane_id = Some(self.pane_id.clone());
         });
@@ -270,7 +300,7 @@ impl rimz::agents::AgentAdapter for PiAdoptionTestAdapter {
 
 fn feed_pi(
     store: &rimz::Store,
-    adapter: &dyn rimz::agents::AgentAdapter,
+    adapter: &rimz::agents::AgentDefinition,
     event_name: &str,
     payload: serde_json::Value,
 ) {
@@ -396,13 +426,14 @@ fn stop_failure_records_turn_error_transcript_entry() {
         "error": "overloaded",
         "last_assistant_message": "API Error: Response stalled mid-stream. The response above may be incomplete."
     });
-    let mut decoded = rimz::agents::ClaudeAdapter
+    let mut decoded = rimz::agents::definition_by_kind("claude")
+        .unwrap()
         .decode_hook("StopFailure", &payload)
         .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
-        &rimz::agents::ClaudeAdapter,
+        rimz::agents::definition_by_kind("claude").unwrap(),
         &mut decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
@@ -447,13 +478,14 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
         "transcript_path": path,
         "prompt": "ping"
     });
-    let mut prompt_decoded = rimz::agents::DroidAdapter
+    let mut prompt_decoded = rimz::agents::definition_by_kind("droid")
+        .unwrap()
         .decode_hook("UserPromptSubmit", &prompt_payload)
         .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
-        &rimz::agents::DroidAdapter,
+        rimz::agents::definition_by_kind("droid").unwrap(),
         &mut prompt_decoded,
         &prompt_payload,
         rimz::agents::HookIngressOwner::agent(Some(owner_pid)),
@@ -464,13 +496,14 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
         "session_id": "droid-session",
         "transcript_path": path
     });
-    let mut stop_decoded = rimz::agents::DroidAdapter
+    let mut stop_decoded = rimz::agents::definition_by_kind("droid")
+        .unwrap()
         .decode_hook("Stop", &stop_payload)
         .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
-        &rimz::agents::DroidAdapter,
+        rimz::agents::definition_by_kind("droid").unwrap(),
         &mut stop_decoded,
         &stop_payload,
         rimz::agents::HookIngressOwner::agent(Some(owner_pid)),
@@ -579,7 +612,8 @@ fn subagent_launch_identity_is_not_inherited_from_parent_env() {
 #[test]
 fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() {
     let (_dir, store) = hooks_test_store();
-    let adapter = CorrelationTestAdapter::default();
+    let provider = Box::leak(Box::new(CorrelationTestAdapter::default()));
+    let adapter = hook_definition(&*provider);
     let mut root = antigravity_payload("root");
     root["invocationNum"] = serde_json::json!(0);
     root["modelName"] = serde_json::json!("parent-model");
@@ -588,7 +622,7 @@ fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() 
     let mut clean = antigravity_payload("child-clean");
     clean["invocationNum"] = serde_json::json!(0);
     feed_antigravity(&store, &adapter, "PreInvocation", clean.clone());
-    let calls_after_start = adapter.correlation_calls.load(Ordering::Relaxed);
+    let calls_after_start = provider.correlation_calls.load(Ordering::Relaxed);
     let child = store
         .snapshot_cached()
         .unwrap()
@@ -611,7 +645,7 @@ fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() 
     clean_stop["terminationReason"] = serde_json::json!("model_stop");
     feed_antigravity(&store, &adapter, "Stop", clean_stop);
     assert_eq!(
-        adapter.correlation_calls.load(Ordering::Relaxed),
+        provider.correlation_calls.load(Ordering::Relaxed),
         calls_after_start,
         "a persisted child relation must skip later transcript correlation"
     );
@@ -695,7 +729,7 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
     let parent_dir = transcript_dir.path().join("parent-session");
     std::fs::create_dir(&parent_dir).unwrap();
     let transcript = parent_dir.join("events.jsonl");
-    let records = include_str!("../../agents/copilot/tests/fixtures/subagents.jsonl")
+    let records = include_str!("../../agents/adapters/copilot/tests/fixtures/subagents.jsonl")
         .lines()
         .collect::<Vec<_>>();
     std::fs::write(&transcript, format!("{}\n{}\n", records[0], records[1])).unwrap();
@@ -861,9 +895,9 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
 #[test]
 fn pi_bridge_adopts_an_existing_rich_root_with_the_live_signal() {
     let (_dir, store) = hooks_test_store();
-    let adapter = PiAdoptionTestAdapter {
+    let adapter = hook_definition(Box::leak(Box::new(PiAdoptionTestAdapter {
         pane_id: id("terminal_pi"),
-    };
+    })));
     feed_pi(
         &store,
         &adapter,
@@ -903,9 +937,9 @@ fn pi_bridge_adopts_an_existing_rich_root_with_the_live_signal() {
 
 #[test]
 fn pi_bridge_adoption_preserves_parented_and_foreign_pane_roots() {
-    let parent_adapter = PiAdoptionTestAdapter {
+    let parent_adapter = hook_definition(Box::leak(Box::new(PiAdoptionTestAdapter {
         pane_id: id("terminal_parent"),
-    };
+    })));
 
     let (_dir, parented_store) = hooks_test_store();
     let mut parented = AgentLifecycleObservation::new(
@@ -914,7 +948,7 @@ fn pi_bridge_adoption_preserves_parented_and_foreign_pane_roots() {
     );
     parented.parent_agent_id = Some(AgentSessionId::from("original-parent"));
     parented.task = Some("existing child".to_owned());
-    parented.pane_id = Some(parent_adapter.pane_id.clone());
+    parented.pane_id = Some(id("terminal_parent"));
     parented_store
         .append_agent_lifecycle(rimz::store::AgentLifecycleIntent {
             session_name: "hooks-test",
@@ -940,9 +974,9 @@ fn pi_bridge_adoption_preserves_parented_and_foreign_pane_roots() {
     assert!(adoption_signals(&parented_store).is_empty());
 
     let (_dir, foreign_store) = hooks_test_store();
-    let foreign_adapter = PiAdoptionTestAdapter {
+    let foreign_adapter = hook_definition(Box::leak(Box::new(PiAdoptionTestAdapter {
         pane_id: id("terminal_foreign"),
-    };
+    })));
     feed_pi(
         &foreign_store,
         &parent_adapter,
@@ -975,7 +1009,7 @@ fn pi_bridge_adoption_preserves_parented_and_foreign_pane_roots() {
 #[test]
 fn antigravity_parent_stop_adopts_children_after_late_transcript_flush() {
     let (_dir, store) = hooks_test_store();
-    let adapter = CorrelationTestAdapter::default();
+    let adapter = hook_definition(Box::leak(Box::new(CorrelationTestAdapter::default())));
     let mut root = antigravity_payload("late-root");
     root["invocationNum"] = serde_json::json!(0);
     feed_antigravity(&store, &adapter, "PreInvocation", root.clone());
@@ -1048,7 +1082,7 @@ fn antigravity_parent_stop_adopts_children_after_late_transcript_flush() {
 #[test]
 fn antigravity_parent_stop_rematerializes_a_reaped_child() {
     let (_dir, store) = hooks_test_store();
-    let adapter = CorrelationTestAdapter::default();
+    let adapter = hook_definition(Box::leak(Box::new(CorrelationTestAdapter::default())));
     let mut root = antigravity_payload("reaped-root");
     root["invocationNum"] = serde_json::json!(0);
     feed_antigravity(&store, &adapter, "PreInvocation", root.clone());
@@ -1101,7 +1135,7 @@ fn antigravity_parent_stop_rematerializes_a_reaped_child() {
 #[test]
 fn ambiguous_and_cyclic_antigravity_parent_candidates_stay_roots() {
     let (_dir, store) = hooks_test_store();
-    let adapter = CorrelationTestAdapter::default();
+    let adapter = hook_definition(Box::leak(Box::new(CorrelationTestAdapter::default())));
     for root_id in ["root", "other-root"] {
         let mut payload = antigravity_payload(root_id);
         payload["invocationNum"] = serde_json::json!(0);
@@ -1198,13 +1232,15 @@ fn ingress_accepts_camelcase_field_and_dispatches_the_canonical_event() {
         "hookEventName": "session_start",
         "sessionId": "session-1"
     });
-    let classified = rimz::agents::GrokAdapter
+    let classified = rimz::agents::definition_by_kind("grok")
+        .unwrap()
         .decode_hook("session_start", &payload)
         .unwrap();
     assert_eq!(classified.event_name(), "SessionStart");
     assert_eq!(classified.class(), rimz::agents::AgentHookClass::Lifecycle);
 
-    let explicit = rimz::agents::GrokAdapter
+    let explicit = rimz::agents::definition_by_kind("grok")
+        .unwrap()
         .decode_hook("post_tool_use", &payload)
         .unwrap();
     assert_eq!(explicit.event_name(), "PostToolUse");

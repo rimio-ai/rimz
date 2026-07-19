@@ -7,7 +7,7 @@
 //! render-only; turn-error, turn-settle, and native-attention markers also feed
 //! the shared status projection so read paths agree about hookless state. Each agent
 //! integration produces it from its own transport or local refresh via
-//! [`super::AgentAdapter`]; lifecycle hooks also keep the current turn's
+//! [`super::AgentDefinition`]; lifecycle hooks also keep the current turn's
 //! confirmed message openers here so an agent-authored send can retain exact
 //! reply causality. Storage ([`crate::store::agent_context`]) and the snapshot
 //! fold-in stay transport-agnostic; provider-specific wire fields normalize
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentSessionId, MessageId};
 
-use super::descriptor::AgentDescriptor;
+use super::definition::AgentSpec;
 
 /// One rich-context reading paired with the provider session that owns it.
 #[derive(Clone, Debug, PartialEq)]
@@ -85,7 +85,7 @@ pub struct AgentContext {
     /// Human-readable session or provider thread name. Claude fills this from
     /// the user-set session name (`--name` / `/rename`); Codex fills it from
     /// app-server thread `name`. Absent until named, so a renderer prefers it
-    /// over the task descriptor only when present.
+    /// over the task definition only when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
     /// Short provider-owned thread summary. Codex fills this from app-server
@@ -288,7 +288,7 @@ impl LocalContextPatch {
     }
 
     /// Apply adapter-owned policy without consulting provider identity.
-    pub fn apply(self, context: &mut AgentContext, descriptor: &AgentDescriptor) {
+    pub fn apply(self, context: &mut AgentContext, definition: &AgentSpec) {
         let prior_model_id = context.model_id.clone();
         let prior_model_display_name = context.model_display_name.clone();
         let prior_tokens = context.tokens.clone();
@@ -305,7 +305,7 @@ impl LocalContextPatch {
             &mut context.tokens,
             prior_tokens.as_ref(),
             model_changed,
-            descriptor.default_context_window,
+            definition.default_context_window,
             prior_model_id.as_deref(),
             context.model_id.as_deref(),
         );
@@ -1087,9 +1087,9 @@ mod tests {
 
     #[test]
     fn local_token_patches_preserve_established_and_replace_current_usage() {
-        let descriptor =
-            crate::agents::descriptor_by_kind("codex").expect("Codex descriptor is registered");
-        let exact_window = descriptor.default_context_window.unwrap() - 1_000;
+        let definition =
+            crate::agents::spec_by_kind("codex").expect("Codex definition is registered");
+        let exact_window = definition.default_context_window.unwrap() - 1_000;
         let mut context = AgentContext::new("codex", Timestamp::now());
         context.model_id = Some("gpt-5.5".to_owned());
         context.tokens = Some(AgentTokenUsage {
@@ -1109,13 +1109,13 @@ mod tests {
 
         LocalContextPatch {
             tokens: LocalTokenPatch::PreserveEstablished(Some(AgentTokenUsage {
-                context_window_size: descriptor.default_context_window,
+                context_window_size: definition.default_context_window,
                 current_usage: Some(AgentCurrentUsage::default()),
                 ..AgentTokenUsage::default()
             })),
             ..LocalContextPatch::default()
         }
-        .apply(&mut context, descriptor);
+        .apply(&mut context, definition);
         let preserved = context.tokens.as_ref().unwrap();
         assert_eq!(preserved.used_percentage, Some(42));
         assert_eq!(preserved.context_window_size, Some(exact_window));
@@ -1135,7 +1135,7 @@ mod tests {
             })),
             ..LocalContextPatch::default()
         }
-        .apply(&mut context, descriptor);
+        .apply(&mut context, definition);
         let replaced = context.tokens.as_ref().unwrap();
         assert_eq!(replaced.context_window_size, Some(exact_window));
         assert_eq!(
@@ -1156,7 +1156,7 @@ mod tests {
             tokens: LocalTokenPatch::ReplaceCurrentPreservingSession(None),
             ..LocalContextPatch::default()
         }
-        .apply(&mut context, descriptor);
+        .apply(&mut context, definition);
         let cleared = context.tokens.as_ref().unwrap();
         assert_eq!(cleared.context_window_size, None);
         assert_eq!(cleared.current_usage, None);
@@ -1165,15 +1165,15 @@ mod tests {
 
     #[test]
     fn authoritative_current_clears_unestablished_tokens_but_preserves_a_real_gauge() {
-        let descriptor =
-            crate::agents::descriptor_by_kind("cursor").expect("Cursor descriptor is registered");
+        let definition =
+            crate::agents::spec_by_kind("cursor").expect("Cursor definition is registered");
         let mut fresh = AgentContext::new("cursor", Timestamp::now());
         fresh.tokens = Some(AgentTokenUsage {
             current_usage: Some(AgentCurrentUsage::default()),
             ..AgentTokenUsage::default()
         });
 
-        LocalContextPatch::authoritative_current().apply(&mut fresh, descriptor);
+        LocalContextPatch::authoritative_current().apply(&mut fresh, definition);
         assert_eq!(fresh.tokens, None);
 
         let established = AgentTokenUsage {
@@ -1181,7 +1181,7 @@ mod tests {
             ..AgentTokenUsage::default()
         };
         fresh.tokens = Some(established.clone());
-        LocalContextPatch::authoritative_current().apply(&mut fresh, descriptor);
+        LocalContextPatch::authoritative_current().apply(&mut fresh, definition);
         assert_eq!(fresh.tokens, Some(established));
     }
 

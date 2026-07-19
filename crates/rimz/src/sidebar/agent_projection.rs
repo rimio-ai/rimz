@@ -43,10 +43,10 @@ impl LocalSessionInputs {
             let Some(kind) = crate::store::snapshot::pane_agent_kind(pane) else {
                 continue;
             };
-            let Some(adapter) = crate::agents::find_adapter(kind) else {
+            let Some(adapter) = crate::agents::find_definition(kind) else {
                 continue;
             };
-            if !adapter.descriptor().capabilities.local_session_discovery {
+            if !adapter.spec().capabilities.local_session_discovery {
                 continue;
             }
             let Some(workspace) = crate::store::snapshot::pane_worktree_path(pane) else {
@@ -70,7 +70,7 @@ impl LocalSessionInputs {
 
     fn discover(&self) -> Vec<LocalSessionObservation> {
         self.discover_with(|kind, workspaces| {
-            crate::agents::find_adapter(kind.as_str())
+            crate::agents::find_definition(kind.as_str())
                 .map(|adapter| adapter.discover_local_sessions(workspaces))
                 .unwrap_or_default()
         })
@@ -139,8 +139,7 @@ static WIRING_MEMO: Mutex<Option<MemoizedProjection>> = Mutex::new(None);
 /// metadata checks; a raced edit keeps the last stable projection and retries
 /// on the next call.
 pub fn probe_current() -> WiredAgentProjection {
-    let mut paths = crate::agents::ADAPTERS
-        .iter()
+    let mut paths = crate::agents::all_definitions()
         .flat_map(|adapter| adapter.wiring_input_paths())
         .collect::<Vec<_>>();
     paths.sort();
@@ -150,18 +149,18 @@ pub fn probe_current() -> WiredAgentProjection {
 
 fn probe_adapters() -> WiredAgentProjection {
     let mut projection = WiredAgentProjection::default();
-    for agent in crate::agents::ADAPTERS {
-        let descriptor = agent.descriptor();
-        let wired = descriptor.capabilities.local_session_discovery
-            || (descriptor.has_wired_hook_install() && agent.hooks_installed());
+    for agent in crate::agents::all_definitions() {
+        let definition = agent.spec();
+        let wired = definition.capabilities.local_session_discovery
+            || (definition.has_wired_hook_install() && agent.hooks_installed());
         if !wired {
             continue;
         }
-        projection.kinds.push(descriptor.kind.to_owned());
+        projection.kinds.push(definition.kind.to_owned());
         if let Some(model) = agent.default_launch_model() {
             projection
                 .default_models
-                .insert(descriptor.kind.to_owned(), model);
+                .insert(definition.kind.to_owned(), model);
         }
     }
     projection

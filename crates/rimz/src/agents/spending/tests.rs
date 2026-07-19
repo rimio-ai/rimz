@@ -7,20 +7,20 @@ use tempfile::TempDir;
 
 const NOW_SECS: u64 = 1_750_000_000;
 
-fn claude_adapter() -> &'static dyn AgentAdapter {
-    &crate::agents::ClaudeAdapter
+fn claude_adapter() -> &'static AgentDefinition {
+    crate::agents::definition_by_kind("claude").unwrap()
 }
 
-fn codex_adapter() -> &'static dyn AgentAdapter {
-    &crate::agents::CodexAdapter
+fn codex_adapter() -> &'static AgentDefinition {
+    crate::agents::definition_by_kind("codex").unwrap()
 }
 
-fn opencode_adapter() -> &'static dyn AgentAdapter {
-    &crate::agents::OpencodeAdapter
+fn opencode_adapter() -> &'static AgentDefinition {
+    crate::agents::definition_by_kind("opencode").unwrap()
 }
 
 fn compute_spending(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &mut SpendingDiskCache,
     prices: &PriceBook,
     now_secs: u64,
@@ -29,7 +29,7 @@ fn compute_spending(
 }
 
 fn compute_spending_with_origins(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &mut SpendingDiskCache,
     prices: &PriceBook,
     now_secs: u64,
@@ -49,7 +49,7 @@ fn compute_spending_with_origins(
 }
 
 fn compute_spending_with_origins_and_scope(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &mut SpendingDiskCache,
     prices: &PriceBook,
     now_secs: u64,
@@ -90,7 +90,7 @@ fn compute_spending_with_origins_and_scope(
 }
 
 fn aggregate_spending(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     counted: &[impl CountedPayload],
     now_secs: u64,
@@ -101,7 +101,7 @@ fn aggregate_spending(
 }
 
 fn aggregate_spending_with_user_inputs(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     counted: &[impl CountedPayload],
     user_inputs: &[user_input::UserInputRecord],
@@ -138,7 +138,7 @@ fn user_inputs_from_counted(counted: &[impl CountedPayload]) -> Vec<user_input::
 }
 
 fn user_inputs_from_cache(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
 ) -> Vec<user_input::UserInputRecord> {
     let counted = dedup_cached_entries(files, cache).into_counted();
@@ -146,7 +146,7 @@ fn user_inputs_from_cache(
 }
 
 fn compute_daily_spend(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
 ) -> BTreeMap<i64, DaySpend> {
     let counted = dedup_cached_entries(files, cache).into_counted();
@@ -167,7 +167,7 @@ fn compute_daily_spend(
 }
 
 fn compute_model_breakdown(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     now_secs: u64,
 ) -> BTreeMap<String, SpendTally> {
@@ -189,7 +189,7 @@ fn compute_model_breakdown(
 }
 
 fn compute_scoped_tally(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     scope: &SpendScope,
     now_secs: u64,
@@ -220,7 +220,7 @@ macro_rules! walk_spending {
 }
 
 fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally {
-    let tagged: Vec<(&'static dyn AgentAdapter, PathBuf)> = files
+    let tagged: Vec<(&'static AgentDefinition, PathBuf)> = files
         .iter()
         .map(|file| (claude_adapter(), file.clone()))
         .collect();

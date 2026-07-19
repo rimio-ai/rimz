@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use super::output::StreamSink;
-use rimz::agents::AgentAdapter;
+use rimz::agents::AgentDefinition;
 use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::run::RunRecord;
 use rimz::harness::run_wake::RunWaiter;
@@ -13,7 +13,7 @@ use rimz::harness::run_wake::RunWaiter;
 pub(crate) fn stream_blocking_run(
     waiter: &RunWaiter,
     store: &rimz::Store,
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     timeout: Option<Duration>,
     output: (&mut TranscriptCursor, &mut StreamSink<'_>),
 ) -> Result<RunRecord> {
@@ -37,7 +37,7 @@ pub(crate) fn stream_blocking_run(
 pub(crate) fn stream_attached_run(
     store: &rimz::Store,
     run_id: &rimz::RunId,
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     from_start: bool,
     timeout: Option<Duration>,
     sink: &mut StreamSink<'_>,
@@ -80,7 +80,7 @@ fn next_attached_stream_sleep(deadline: Option<Instant>) -> Duration {
 
 fn emit_stream_updates(
     store: &rimz::Store,
-    adapter: &dyn AgentAdapter,
+    adapter: &AgentDefinition,
     cursor: &mut TranscriptCursor,
     sink: &mut StreamSink<'_>,
     record: &RunRecord,

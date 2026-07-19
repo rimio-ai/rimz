@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::cli::render::{Cell, Table, cell, paint, palette};
 use rimz::agents::{
-    AgentDescriptor, ConcernCoverage, HookCoverage, IntegrationConcern, LifecycleSignalKind,
+    AgentDefinition, ConcernCoverage, HookCoverage, IntegrationConcern, LifecycleSignalKind,
 };
 
 use super::GlobalFlags;
@@ -99,9 +99,8 @@ fn collect_coverage() -> CoverageMatrix {
     let mut rows = Vec::new();
     for concern in IntegrationConcern::ALL {
         let mut cells = Vec::new();
-        for agent in rimz::agents::all_adapters() {
-            let descriptor = agent.descriptor();
-            let coverage = concern_coverage(descriptor, concern);
+        for agent in rimz::agents::all_definitions() {
+            let coverage = concern_coverage(agent, concern);
             match coverage {
                 ConcernCoverage::Wired { via } => cells.push(MatrixCell::ok(via)),
                 ConcernCoverage::Partial { via, gap } => {
@@ -124,9 +123,8 @@ fn collect_hook_matrix() -> CoverageMatrix {
     let mut rows = Vec::new();
     for signal_kind in LifecycleSignalKind::ALL {
         let mut cells = Vec::new();
-        for agent in rimz::agents::all_adapters() {
-            let descriptor = agent.descriptor();
-            let coverage = hook_coverage(descriptor, signal_kind);
+        for agent in rimz::agents::all_definitions() {
+            let coverage = hook_coverage(agent, signal_kind);
             match coverage {
                 HookCoverage::Native { event } => cells.push(MatrixCell::ok(event)),
                 HookCoverage::Derived { via, gap } => {
@@ -144,17 +142,17 @@ fn collect_hook_matrix() -> CoverageMatrix {
 }
 
 fn matrix_agents() -> Vec<String> {
-    rimz::agents::all_adapters()
-        .map(|agent| agent.descriptor().kind.to_owned())
+    rimz::agents::all_definitions()
+        .map(|agent| agent.spec().kind.to_owned())
         .collect()
 }
 
-fn concern_coverage(descriptor: &AgentDescriptor, concern: IntegrationConcern) -> ConcernCoverage {
-    descriptor.concern_coverage(concern)
+fn concern_coverage(definition: &AgentDefinition, concern: IntegrationConcern) -> ConcernCoverage {
+    definition.concern_coverage(concern)
 }
 
-fn hook_coverage(descriptor: &AgentDescriptor, signal_kind: LifecycleSignalKind) -> HookCoverage {
-    descriptor.lifecycle_hooks.get(signal_kind)
+fn hook_coverage(definition: &AgentDefinition, signal_kind: LifecycleSignalKind) -> HookCoverage {
+    definition.lifecycle_coverage(signal_kind)
 }
 
 fn render_human(report: &CoverageReport, w: &mut impl Write) -> io::Result<()> {

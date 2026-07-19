@@ -903,14 +903,14 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
             };
         }
     };
-    if !config.claude && !config.codex {
+    if !config.enabled_for("claude") && !config.enabled_for("codex") {
         return model::RemoteControl::Off;
     }
 
     let readiness = rimz::remote_control::ReadinessSnapshot::probe(&config);
     let advisories = rimz::remote_control::advisories(&config);
     let mut agents = Vec::new();
-    if config.claude {
+    if config.enabled_for("claude") {
         let (detail, ready) = match readiness
             .for_host(rimz::remote_control::RemoteControlHost::Claude)
         {
@@ -927,7 +927,7 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
             ready,
         });
     }
-    if config.codex {
+    if config.enabled_for("codex") {
         let (detail, ready) =
             match readiness.for_host(rimz::remote_control::RemoteControlHost::Codex) {
                 rimz::remote_control::HostState::Uninstalled(_) => {

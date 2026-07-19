@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use crate::agents::pricing::PriceBook;
-use crate::agents::{AgentAdapter, TranscriptStat};
+use crate::agents::{AgentDefinition, TranscriptStat};
 
 use super::aggregate::stamp_file_origin;
 use super::aggregate::{cold_parse_out_of_window, normalized_absolute_path, within_widest_window};
@@ -22,7 +22,7 @@ const MAX_SPENDING_PARSE_WORKERS: usize = 8;
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
 
 pub(crate) fn refresh_spending_cache(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &mut SpendingDiskCache,
     prices: &PriceBook,
     now_secs: u64,
@@ -97,7 +97,7 @@ pub(crate) fn refresh_spending_cache(
                 .map_or(stat.len, |cursor| stat.len.saturating_sub(cursor.offset)),
         );
         jobs.push(SpendingParseJob {
-            adapter: *adapter,
+            adapter,
             file,
             key,
             stat,
@@ -160,7 +160,7 @@ pub(crate) struct RefreshCallbacks<'a> {
 }
 
 struct SpendingParseJob<'a> {
-    adapter: &'static dyn AgentAdapter,
+    adapter: &'static AgentDefinition,
     file: &'a PathBuf,
     key: String,
     stat: TranscriptStat,
@@ -291,7 +291,7 @@ pub(crate) fn record_unknown_model(
 /// Unknown models recorded by files still discovered in this spending pass.
 /// Deleted or moved transcripts do not keep a never-resolving name alive.
 pub fn recorded_unknown_models(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     now_secs: u64,
 ) -> BTreeSet<String> {
@@ -437,7 +437,7 @@ mod tests {
             },
         );
         let job = SpendingParseJob {
-            adapter: crate::agents::registry::ADAPTERS[0],
+            adapter: crate::agents::registry::BUILTINS[0],
             file: &path,
             key,
             stat: TranscriptStat {

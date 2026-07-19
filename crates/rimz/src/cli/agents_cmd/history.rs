@@ -35,7 +35,7 @@ pub(super) fn history_agent(
         .filter(|path| !path.is_empty())
         .ok_or_else(|| anyhow::anyhow!("agent has no recorded transcript"))?;
     let path = Path::new(transcript);
-    let adapter = rimz::agents::find_adapter(agent.kind.as_str())
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let messages = adapter

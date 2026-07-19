@@ -47,18 +47,18 @@ impl AccountsConfig {
     }
 
     pub fn validate_budget_kind(kind: &str) -> Result<(), AccountBudgetConfigError> {
-        validate_budget_descriptor(kind, crate::agents::descriptor_by_kind(kind))
+        validate_budget_descriptor(kind, crate::agents::spec_by_kind(kind))
     }
 }
 
 fn validate_budget_descriptor(
     kind: &str,
-    descriptor: Option<&crate::agents::AgentDescriptor>,
+    definition: Option<&crate::agents::AgentSpec>,
 ) -> Result<(), AccountBudgetConfigError> {
-    let descriptor = descriptor.ok_or_else(|| AccountBudgetConfigError::UnknownKind {
+    let definition = definition.ok_or_else(|| AccountBudgetConfigError::UnknownKind {
         kind: kind.to_owned(),
     })?;
-    if !descriptor.has_authoritative_account_spend() {
+    if !definition.has_authoritative_account_spend() {
         return Err(AccountBudgetConfigError::Unsupported {
             kind: kind.to_owned(),
         });
@@ -237,12 +237,12 @@ spend = ["./spend"]
 "#,
         )
         .unwrap();
-        let loaded = crate::agents::plugin::load_from_root(root.path());
+        let loaded = crate::agents::plugins::load_from_root(root.path());
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        let descriptor = loaded.adapters[0].descriptor();
-        assert!(descriptor.has_authoritative_account_spend());
+        let definition = loaded.definitions[0].spec();
+        assert!(definition.has_authoritative_account_spend());
         assert_eq!(
-            validate_budget_descriptor("spendbot", Some(descriptor)),
+            validate_budget_descriptor("spendbot", Some(definition)),
             Ok(())
         );
     }

@@ -1,75 +1,132 @@
 //! The agent registry — the single registration point.
 //!
-//! Built-ins live in [`ADAPTERS`]; validated machine-tier process plugins join
-//! them through [`all_adapters`]. Every behavioral dispatch site resolves
+//! Built-ins live in [`BUILTINS`]; validated machine-tier process plugins join
+//! them through [`all_definitions`]. Every behavioral dispatch site resolves
 //! through this module, so no consumer grows a per-agent match arm.
 
 use std::collections::BTreeMap;
 
-use super::amp::AmpAdapter;
-use super::antigravity::AntigravityAdapter;
-use super::claude::ClaudeAdapter;
-use super::codex::CodexAdapter;
-use super::copilot::CopilotAdapter;
-use super::cursor::CursorAdapter;
-use super::descriptor::AgentDescriptor;
-use super::droid::DroidAdapter;
-use super::grok::GrokAdapter;
-use super::kimi::KimiAdapter;
-use super::kiro::KiroAdapter;
-use super::opencode::OpencodeAdapter;
-use super::pi::PiAdapter;
-use super::qwen::QwenAdapter;
-use super::{AgentAdapter, AgentErr, Result};
+use super::adapters::amp::AmpAdapter;
+use super::adapters::antigravity::AntigravityAdapter;
+use super::adapters::claude::ClaudeAdapter;
+use super::adapters::codex::CodexAdapter;
+use super::adapters::copilot::CopilotAdapter;
+use super::adapters::cursor::CursorAdapter;
+use super::adapters::droid::DroidAdapter;
+use super::adapters::grok::GrokAdapter;
+use super::adapters::kimi::KimiAdapter;
+use super::adapters::kiro::KiroAdapter;
+use super::adapters::opencode::OpencodeAdapter;
+use super::adapters::pi::PiAdapter;
+use super::adapters::qwen::QwenAdapter;
+use super::definition::{AgentCapabilities, AgentDefinition, AgentSpec};
+use super::{AgentErr, Result};
 use crate::ids::AgentSessionId;
 
 const PROCESS_DESCENT_DEPTH: usize = 8;
 
-/// Every wired agent, in display order. `&'static dyn` — adapters are
-/// zero-sized const values, so resolution never allocates.
-pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
-    &ClaudeAdapter,
-    &CodexAdapter,
-    &AmpAdapter,
-    &CopilotAdapter,
-    &KimiAdapter,
-    &PiAdapter,
-    &OpencodeAdapter,
-    &AntigravityAdapter,
-    &CursorAdapter,
-    &DroidAdapter,
-    &KiroAdapter,
-    &QwenAdapter,
-    &GrokAdapter,
+macro_rules! definition {
+    ($adapter:expr; $($capability:ident),* $(,)?) => {
+        AgentDefinition::from_capabilities(
+            &$adapter,
+            AgentCapabilities {
+                $($capability: Some(&$adapter),)*
+                ..AgentCapabilities::NONE
+            },
+        )
+    };
+}
+
+#[allow(clippy::needless_update)]
+static CLAUDE: AgentDefinition = definition!(ClaudeAdapter;
+    hooks, installation, launch, sessions, transcript, context, account, spending, runtime_control
+);
+#[allow(clippy::needless_update)]
+static CODEX: AgentDefinition = definition!(CodexAdapter;
+    hooks, installation, launch, sessions, transcript, context, account, spending, runtime_control
+);
+static AMP: AgentDefinition = definition!(AmpAdapter;
+    hooks, installation, launch, transcript, context, account, spending
+);
+static COPILOT: AgentDefinition = definition!(CopilotAdapter;
+    hooks, installation, launch, transcript, context, account, spending
+);
+static KIMI: AgentDefinition = definition!(KimiAdapter;
+    hooks, installation, launch, transcript, context, account, spending
+);
+static PI: AgentDefinition = definition!(PiAdapter;
+    hooks, installation, launch, transcript, context, account, spending
+);
+static OPENCODE: AgentDefinition = definition!(OpencodeAdapter;
+    hooks, installation, launch, transcript, context, account, spending
+);
+static ANTIGRAVITY: AgentDefinition = definition!(AntigravityAdapter;
+    hooks, installation, launch, sessions, transcript, context, account, spending
+);
+static CURSOR: AgentDefinition = definition!(CursorAdapter;
+    hooks, installation, launch, sessions, transcript, context, account, spending
+);
+static DROID: AgentDefinition = definition!(DroidAdapter;
+    hooks, installation, launch, transcript, context, spending
+);
+static KIRO: AgentDefinition = definition!(KiroAdapter;
+    installation, launch, sessions, transcript, context, spending
+);
+static QWEN: AgentDefinition = definition!(QwenAdapter;
+    hooks, installation, launch, transcript, context, account, spending
+);
+static GROK: AgentDefinition = definition!(GrokAdapter;
+    hooks, installation, launch, sessions, transcript, context, account, spending
+);
+
+/// Every built-in definition, in stable display order.
+pub(crate) static BUILTINS: &[&AgentDefinition] = &[
+    &CLAUDE,
+    &CODEX,
+    &AMP,
+    &COPILOT,
+    &KIMI,
+    &PI,
+    &OPENCODE,
+    &ANTIGRAVITY,
+    &CURSOR,
+    &DROID,
+    &KIRO,
+    &QWEN,
+    &GROK,
 ];
 
-/// Every built-in and valid machine-tier plugin adapter, in display order.
-pub fn all_adapters() -> impl Iterator<Item = &'static dyn AgentAdapter> {
-    ADAPTERS
-        .iter()
-        .copied()
-        .chain(super::plugin::loaded().adapters.iter().copied())
+/// Every built-in and valid machine-tier plugin definition, in display order.
+pub fn all_definitions() -> impl Iterator<Item = &'static AgentDefinition> {
+    BUILTINS.iter().copied().chain(
+        super::adapters::plugin::loaded()
+            .definitions
+            .iter()
+            .copied(),
+    )
 }
 
-/// Resolve an adapter for the `--source <agent>` CLI tag.
-pub fn adapter_by_kind(kind: &str) -> Result<&'static dyn AgentAdapter> {
-    find_adapter(kind).ok_or_else(|| AgentErr::Unknown(kind.to_owned()))
+/// Resolve a definition for the `--source <agent>` CLI tag.
+pub fn definition_by_kind(kind: &str) -> Result<&'static AgentDefinition> {
+    find_definition(kind).ok_or_else(|| AgentErr::Unknown(kind.to_owned()))
 }
 
-/// [`adapter_by_kind`] for callers that treat an unknown kind as absence.
-pub fn find_adapter(kind: &str) -> Option<&'static dyn AgentAdapter> {
-    all_adapters().find(|adapter| adapter.descriptor().kind == kind)
+/// [`definition_by_kind`] for callers that treat an unknown kind as absence.
+pub fn find_definition(kind: &str) -> Option<&'static AgentDefinition> {
+    all_definitions().find(|definition| {
+        definition.spec().kind == kind || definition.spec().aliases.contains(&kind)
+    })
 }
 
-/// The static descriptor for `kind`, for sites that need only const data
+/// The static definition for `kind`, for sites that need only const data
 /// (branding, capabilities, tool tables) without the behavioral trait.
-pub fn descriptor_by_kind(kind: &str) -> Option<&'static AgentDescriptor> {
-    find_adapter(kind).map(AgentAdapter::descriptor)
+pub fn spec_by_kind(kind: &str) -> Option<&'static AgentSpec> {
+    find_definition(kind).map(AgentDefinition::spec)
 }
 
 /// Display-order kinds — the walk doctor and the wiring probes iterate.
 pub fn known_kinds() -> impl Iterator<Item = &'static str> {
-    all_adapters().map(|adapter| adapter.descriptor().kind)
+    all_definitions().map(|definition| definition.spec().kind)
 }
 
 /// Agent kind for an interactive command, after shell syntax and process
@@ -86,7 +143,7 @@ pub(crate) fn command_agent_kind_with_comm(
     if let Some(adapter) = adapter_for_program(program) {
         return adapter
             .is_interactive_process(command)
-            .then(|| adapter.descriptor().kind);
+            .then(|| adapter.spec().kind);
     }
     let adapter = comm.and_then(adapter_for_comm)?;
     let policy_command = (!command.trim().is_empty())
@@ -95,21 +152,21 @@ pub(crate) fn command_agent_kind_with_comm(
         .unwrap_or_default();
     adapter
         .is_interactive_process(policy_command)
-        .then(|| adapter.descriptor().kind)
+        .then(|| adapter.spec().kind)
 }
 
 fn adapter_for_program(
     program: crate::proc::command::EffectiveProgram<'_>,
-) -> Option<&'static dyn AgentAdapter> {
+) -> Option<&'static AgentDefinition> {
     let label = crate::proc::command::basename(program.program);
-    all_adapters()
+    all_definitions()
         .find(|adapter| {
-            let descriptor = adapter.descriptor();
-            descriptor.launches_as(label)
+            let definition = adapter.spec();
+            definition.launches_as(label)
                 || (program.from_launcher
                     && crate::proc::command::agent_script_path_names_kind(
                         program.program,
-                        descriptor.kind,
+                        definition.kind,
                     ))
         })
         .or_else(|| {
@@ -119,12 +176,12 @@ fn adapter_for_program(
         })
 }
 
-fn adapter_for_comm(comm: &str) -> Option<&'static dyn AgentAdapter> {
+fn adapter_for_comm(comm: &str) -> Option<&'static AgentDefinition> {
     let comm = crate::proc::command::basename(comm.trim());
     if crate::proc::command::is_launcher(comm) {
         return None;
     }
-    let mut matches = all_adapters().filter(|adapter| adapter.descriptor().runs_as(comm));
+    let mut matches = all_definitions().filter(|adapter| adapter.spec().runs_as(comm));
     let adapter = matches.next()?;
     matches.next().is_none().then_some(adapter)
 }
@@ -133,7 +190,7 @@ fn adapter_for_comm(comm: &str) -> Option<&'static dyn AgentAdapter> {
 /// opaque map and remain independent of provider protocols.
 pub fn room_env(runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    for adapter in all_adapters() {
+    for adapter in all_definitions() {
         env.extend(adapter.room_env(runtime));
     }
     env
@@ -143,7 +200,7 @@ pub fn room_env(runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String
 /// resume syntax. Multiple matches abstain rather than guessing identity.
 pub fn resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSessionId> {
     let mut matches =
-        all_adapters().filter_map(|adapter| adapter.resumed_session_id_from_cmdline(cmdline));
+        all_definitions().filter_map(|adapter| adapter.resumed_session_id_from_cmdline(cmdline));
     let session = matches.next()?;
     matches.next().is_none().then_some(session)
 }
@@ -186,21 +243,34 @@ mod tests {
     fn registry_resolves_kinds_and_sub_providers_without_collisions() {
         // Every kind round-trips through resolution, an unknown kind errors, and
         // no two adapters claim the same kind.
-        for adapter in ADAPTERS {
-            let kind = adapter.descriptor().kind;
+        for adapter in BUILTINS {
+            let kind = adapter.spec().kind;
             assert_eq!(
-                adapter_by_kind(kind).unwrap().descriptor().kind,
+                definition_by_kind(kind).unwrap().spec().kind,
                 kind,
                 "registry round-trip for {kind}"
             );
         }
-        assert!(adapter_by_kind("unknown-agent").is_err());
+        assert!(definition_by_kind("unknown-agent").is_err());
 
         let mut kinds: Vec<_> = known_kinds().collect();
         kinds.sort_unstable();
         let before = kinds.len();
         kinds.dedup();
-        assert_eq!(kinds.len(), before, "duplicate kind in ADAPTERS");
+        assert_eq!(kinds.len(), before, "duplicate kind in BUILTINS");
+    }
+
+    #[test]
+    fn registered_definitions_are_valid_and_names_are_unique() {
+        let mut names = std::collections::BTreeSet::new();
+        for definition in BUILTINS {
+            definition.validate().expect("valid built-in definition");
+            for name in std::iter::once(definition.spec().kind)
+                .chain(definition.spec().aliases.iter().copied())
+            {
+                assert!(names.insert(name), "duplicate registered name `{name}`");
+            }
+        }
     }
 
     #[test]
@@ -258,7 +328,7 @@ mod tests {
     #[test]
     fn ordinary_adapters_accept_default_hook_ingress_ownership() {
         assert_eq!(
-            find_adapter("amp").unwrap().hook_ingress(Some(42)),
+            find_definition("amp").unwrap().hook_ingress(Some(42)),
             crate::agents::HookIngressDecision::Accept(
                 crate::agents::HookIngressAcceptance::agent(Some(42)),
             )
@@ -271,29 +341,29 @@ mod tests {
         // agent exposes a slash command (`/compact`, Cursor's `/summarize`), so
         // a new adapter that forgets to opt in fails
         // here rather than silently never compacting.
-        for adapter in ADAPTERS {
-            if let Some(command) = adapter.descriptor().launch.compact_command() {
+        for adapter in BUILTINS {
+            if let Some(command) = adapter.spec().launch.compact_command() {
                 assert!(!command.is_empty() && command.starts_with('/'));
                 continue;
             }
             assert!(
                 matches!(
                     adapter
-                        .descriptor()
+                        .spec()
                         .concern_coverage(IntegrationConcern::Compaction),
                     ConcernCoverage::Unsupported { .. }
                 ),
                 "missing compact command for {}",
-                adapter.descriptor().kind
+                adapter.spec().kind
             );
         }
     }
 
     #[test]
     fn sub_providers_are_unique() {
-        let mut providers: Vec<_> = ADAPTERS
+        let mut providers: Vec<_> = BUILTINS
             .iter()
-            .flat_map(|adapter| adapter.descriptor().sub_providers)
+            .flat_map(|adapter| adapter.spec().sub_providers)
             .collect();
         providers.sort_unstable();
         let before = providers.len();

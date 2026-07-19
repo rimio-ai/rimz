@@ -3,7 +3,7 @@
 //! Account/plan facts are account-scoped, not session-scoped, and some never
 //! ride the session context: Claude's subscription tier comes from `claude auth
 //! status`, not its statusline. Each adapter probes those out-of-band facts in
-//! its own `account.rs` ([`AgentAdapter::probe_account`]); this module owns the
+//! its own `account.rs` ([`AgentDefinition::probe_account`]); this module owns the
 //! shared [`AccountProbe`] outcome the sidebar producer folds onto the provider
 //! dashboard.
 //!
@@ -22,7 +22,7 @@
 //! unparseable output yields no account. It never fails a snapshot — account is
 //! enrichment, never correctness.
 //!
-//! [`AgentAdapter::probe_account`]: super::AgentAdapter::probe_account
+//! [`AgentDefinition::probe_account`]: super::AgentDefinition::probe_account
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -530,4 +530,119 @@ pub enum AccountProbe {
     /// The probe could not complete — the binary is missing, it exited non-zero,
     /// or its file was unreadable. Retry soon; absence here is not logged-out.
     Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RedemptionCode {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+    Unknown,
+}
+
+impl RedemptionCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reset => "reset",
+            Self::NothingToReset => "nothing_to_reset",
+            Self::NoCredit => "no_credit",
+            Self::AlreadyRedeemed => "already_redeemed",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+pub struct RedemptionAction<T> {
+    pub decision: T,
+    pub capacity: Option<ProviderCapacity>,
+    pub credits: super::ResetCredits,
+    pub outcome: RedemptionCode,
+    pub windows_reset: i64,
+    pub refreshed: Option<(super::AccountUsageIdentity, super::AccountUsageSnapshot)>,
+    pub refresh_error: Option<String>,
+}
+
+pub enum RedemptionError<T> {
+    BeforeAttempt(String),
+    Attempted {
+        decision: T,
+        capacity: Option<ProviderCapacity>,
+        credits: super::ResetCredits,
+        message: String,
+    },
+}
+
+pub struct ResetCreditOffer {
+    pub capacity: Option<ProviderCapacity>,
+    pub credits: super::ResetCredits,
+    action: Box<dyn ResetCreditAction>,
+}
+
+impl ResetCreditOffer {
+    pub fn new(
+        capacity: Option<ProviderCapacity>,
+        credits: super::ResetCredits,
+        action: impl ResetCreditAction + 'static,
+    ) -> Self {
+        Self {
+            capacity,
+            credits,
+            action: Box::new(action),
+        }
+    }
+
+    fn consume(self, request_id: &str) -> Result<ResetCreditResult, String> {
+        self.action.consume(request_id)
+    }
+}
+
+pub trait ResetCreditAction: Send {
+    fn consume(self: Box<Self>, request_id: &str) -> Result<ResetCreditResult, String>;
+}
+
+pub struct ResetCreditResult {
+    pub outcome: RedemptionCode,
+    pub windows_reset: i64,
+    pub refreshed: Option<(super::AccountUsageIdentity, super::AccountUsageSnapshot)>,
+    pub refresh_error: Option<String>,
+}
+
+/// Execute one provider-owned reset-credit action after a caller-supplied,
+/// provider-neutral policy verdict.
+pub fn redeem_reset_credit<T: Clone>(
+    kind: &str,
+    request_id: &str,
+    decide: impl FnOnce(Option<&ProviderCapacity>, &super::ResetCredits) -> Option<T>,
+) -> std::result::Result<Option<RedemptionAction<T>>, RedemptionError<T>> {
+    let offer = super::find_definition(kind)
+        .ok_or_else(|| {
+            RedemptionError::BeforeAttempt(format!(
+                "{kind} does not support reset-credit redemption"
+            ))
+        })?
+        .prepare_reset_credit()
+        .map_err(RedemptionError::BeforeAttempt)?;
+    let capacity = offer.capacity.clone();
+    let credits = offer.credits.clone();
+    let Some(decision) = decide(capacity.as_ref(), &credits) else {
+        return Ok(None);
+    };
+    let result = offer
+        .consume(request_id)
+        .map_err(|error| RedemptionError::Attempted {
+            decision: decision.clone(),
+            capacity: capacity.clone(),
+            credits: credits.clone(),
+            message: error,
+        })?;
+    Ok(Some(RedemptionAction {
+        decision,
+        capacity,
+        credits,
+        outcome: result.outcome,
+        windows_reset: result.windows_reset,
+        refreshed: result.refreshed,
+        refresh_error: result.refresh_error,
+    }))
 }

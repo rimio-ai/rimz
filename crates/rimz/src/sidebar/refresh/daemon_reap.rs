@@ -50,8 +50,8 @@ pub(crate) fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> b
 fn should_probe_codex_daemon_reap(agents: &[AgentState], codex_rc_enabled: bool) -> bool {
     codex_rc_enabled
         || agents.iter().any(|agent| {
-            let daemon_hooked = crate::agents::descriptor_by_kind(agent.kind.as_str())
-                .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions);
+            let daemon_hooked = crate::agents::spec_by_kind(agent.kind.as_str())
+                .is_some_and(|definition| definition.capabilities.daemon_hooked_sessions);
             daemon_hooked && agent.parent_agent_id.is_none()
         })
 }
@@ -68,16 +68,11 @@ pub(crate) fn refresh_codex_daemon_reap_cache(
     {
         return current.unwrap_or_default();
     }
-    let daemon_pids = crate::agents::codex::codex_daemon_pids();
-    let loaded = if daemon_pids.is_empty() {
-        None
-    } else {
-        crate::agents::codex::loaded_daemon_threads()
-    };
+    let evidence = crate::agents::session::daemon_session_evidence("codex");
     let inputs = CodexDaemonReap {
         produced_at_ms: now_ms,
-        daemon_pids,
-        loaded,
+        daemon_pids: evidence.pids,
+        loaded: evidence.loaded_session_ids,
     };
     if let Err(err) = write_codex_daemon_reap(runtime, &inputs) {
         tracing::debug!(

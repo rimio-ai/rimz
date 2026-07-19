@@ -33,7 +33,7 @@ use super::GlobalFlags;
 use crate::cli::render;
 use crate::cli::spinner::Spinner;
 use rimz::RuntimePaths;
-use rimz::agents::AgentAdapter;
+use rimz::agents::AgentDefinition;
 use rimz::agents::pricing;
 use rimz::agents::spending::{
     DaySpend, ProviderSpendingCache, SilentWalk, SpendProgress, SpendTally, SpendWindow, Spending,
@@ -346,7 +346,7 @@ impl WalkObserver for ProgressObserver<'_> {
 #[cfg(test)]
 fn compute_stats_from_files(
     paths: &RuntimePaths,
-    files: Vec<(&'static dyn AgentAdapter, PathBuf)>,
+    files: Vec<(&'static AgentDefinition, PathBuf)>,
     publish: bool,
     progress: Option<&mut dyn FnMut(SpendProgress)>,
     walker: &mut SpendingWalker,
@@ -356,7 +356,7 @@ fn compute_stats_from_files(
 
 fn compute_stats_from_files_at(
     paths: &RuntimePaths,
-    files: Vec<(&'static dyn AgentAdapter, PathBuf)>,
+    files: Vec<(&'static AgentDefinition, PathBuf)>,
     publish: bool,
     progress: Option<&mut dyn FnMut(SpendProgress)>,
     walker: &mut SpendingWalker,

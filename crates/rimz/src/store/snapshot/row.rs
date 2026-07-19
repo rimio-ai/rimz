@@ -547,7 +547,7 @@ fn is_zero_u32(n: &u32) -> bool {
 pub struct SidebarSubAgent {
     pub id: String,
     /// The subagent's type (`Explore`, `review`, …), from the `SubagentStart`
-    /// task descriptor; falls back to a short degraded id when none was
+    /// task definition; falls back to a short degraded id when none was
     /// reported.
     pub name: String,
     pub status: AgentStatus,

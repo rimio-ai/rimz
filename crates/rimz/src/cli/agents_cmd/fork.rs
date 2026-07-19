@@ -61,7 +61,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         validate_agent_name(name)?;
     }
     let config = machine_config();
-    let adapter = rimz::agents::find_adapter(seed.kind.as_str())
+    let adapter = rimz::agents::find_definition(seed.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", seed.kind))?;
     rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
@@ -117,7 +117,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let permission_args = launch
         .launch
         .mode
-        .map(|mode| adapter.descriptor().launch.permission_args(mode))
+        .map(|mode| adapter.spec().launch.permission_args(mode))
         .unwrap_or_default();
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),

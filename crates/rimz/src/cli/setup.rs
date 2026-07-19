@@ -134,23 +134,22 @@ impl SetupReport {
             Err(err) => Err(err.to_string()),
         };
 
-        let agents = rimz::agents::ADAPTERS
-            .iter()
+        let agents = rimz::agents::all_definitions()
             .map(|agent| {
-                let descriptor = agent.descriptor();
+                let definition = agent.spec();
                 DetectedAgent {
-                    name: descriptor.kind,
-                    on_path: descriptor
+                    name: definition.kind,
+                    on_path: definition
                         .bin_names
                         .iter()
                         .any(|name| which::which(name).is_ok()),
-                    binary: rimz::agents::locate_binary(descriptor),
-                    hook_install: descriptor.has_wired_hook_install(),
+                    binary: rimz::agents::locate_binary(definition),
+                    hook_install: definition.has_wired_hook_install(),
                     hooks_installed: agent.hooks_installed(),
                     hook_upgrade_available: agent
                         .managed_integration()
                         .is_some_and(rimz::agents::ManagedIntegration::upgrade_available),
-                    local_session_discovery: descriptor.capabilities.local_session_discovery,
+                    local_session_discovery: definition.capabilities.local_session_discovery,
                 }
             })
             .collect();

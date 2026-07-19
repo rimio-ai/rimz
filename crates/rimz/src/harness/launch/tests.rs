@@ -9,7 +9,7 @@ fn env(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
 
 #[test]
 fn provider_compiler_preserves_action_and_trailing_argument_order() {
-    let adapter = crate::agents::find_adapter("codex").expect("codex adapter");
+    let adapter = crate::agents::find_definition("codex").expect("codex adapter");
     let trailing = vec!["--model".to_owned(), "o3".to_owned()];
     for (action, verb, session) in [
         (
@@ -131,7 +131,7 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
 
 #[test]
 fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
-    let adapter = crate::agents::find_adapter("copilot").expect("copilot");
+    let adapter = crate::agents::find_definition("copilot").expect("copilot");
     let params = crate::agents::LaunchParams {
         channel: Some("identity".to_owned()),
         ..Default::default()
@@ -166,7 +166,7 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
 
 #[test]
 fn process_compiler_names_invalid_environment_key() {
-    let adapter = crate::agents::find_adapter("codex").expect("codex");
+    let adapter = crate::agents::find_definition("codex").expect("codex");
     let invocation = request(
         "codex",
         ExecAction::Launch {

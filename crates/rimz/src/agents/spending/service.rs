@@ -39,9 +39,9 @@ struct SpendingServiceNamespace(String);
 
 impl SpendingServiceNamespace {
     fn for_runtime(runtime: &RuntimePaths) -> Self {
-        let declarations = crate::agents::all_adapters()
+        let declarations = crate::agents::all_definitions()
             .flat_map(|adapter| {
-                let kind = adapter.descriptor().kind;
+                let kind = adapter.spec().kind;
                 adapter
                     .spending_sources()
                     .into_iter()
@@ -920,7 +920,7 @@ mod tests {
         )
         .unwrap();
         let _discovery = super::super::override_discovered_spending_files_for_test(vec![(
-            &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+            crate::agents::definition_by_kind("claude").unwrap(),
             transcript.clone(),
         )]);
         let request = SpendingServiceRequest::workspace(

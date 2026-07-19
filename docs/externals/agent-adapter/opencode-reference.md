@@ -260,7 +260,7 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 ## Mapping feasibility
 
-The adapter verdict has landed in [opencode.md](../../internals/agents/opencode.md): OpenCode is wired as a first-class `AgentAdapter` through one RimZ-authored in-process plugin plus a read-only SQLite spend reader. Current `permission.asked` and `question.asked` events expose native prompts for RimZ to route; their reply/rejection events expose the answer and clear waiting after the user responds in OpenCode. Like Pi, the integration is one whole-file plugin that runs RimZ as its child.
+The adapter verdict has landed in [opencode.md](../../internals/agents/opencode.md): OpenCode is wired as a first-class `AgentDefinition` through one RimZ-authored in-process plugin plus a read-only SQLite spend reader. Current `permission.asked` and `question.asked` events expose native prompts for RimZ to route; their reply/rejection events expose the answer and clear waiting after the user responds in OpenCode. Like Pi, the integration is one whole-file plugin that runs RimZ as its child.
 
 | Native surface | Channel | Landed mapping |
 | --- | --- | --- |

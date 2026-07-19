@@ -522,8 +522,8 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
     let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
-    let default_window = crate::agents::descriptor_by_kind(input.kind.as_str())
-        .and_then(|descriptor| descriptor.default_context_window);
+    let default_window = crate::agents::spec_by_kind(input.kind.as_str())
+        .and_then(|definition| definition.default_context_window);
     let usage = input
         .observation
         .usage

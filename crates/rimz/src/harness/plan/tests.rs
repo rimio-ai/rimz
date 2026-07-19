@@ -374,9 +374,9 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
 
 #[test]
 fn launch_options_apply_without_overwriting_spec_identity() {
-    let auto_args = crate::agents::find_adapter("codex")
+    let auto_args = crate::agents::find_definition("codex")
         .expect("codex")
-        .descriptor()
+        .spec()
         .launch
         .permission_args(PermissionMode::Auto);
     let cell = |args, mode| {
@@ -468,7 +468,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
 
 #[test]
 fn default_launch_models_stamp_only_cells_without_models() {
-    let codex_default = crate::agents::find_adapter("codex")
+    let codex_default = crate::agents::find_definition("codex")
         .expect("codex")
         .default_launch_model()
         .expect("codex default model");
@@ -616,7 +616,7 @@ fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags()
             .len(),
         1
     );
-    let codex_default = crate::agents::find_adapter("codex")
+    let codex_default = crate::agents::find_definition("codex")
         .expect("codex")
         .default_launch_model()
         .expect("codex default model");
@@ -697,7 +697,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
 
 #[test]
 fn finalization_handles_mixed_cells_without_leaking_state() {
-    let codex_default = crate::agents::find_adapter("codex")
+    let codex_default = crate::agents::find_definition("codex")
         .expect("codex")
         .default_launch_model()
         .expect("codex default model");
