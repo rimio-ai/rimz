@@ -294,3 +294,44 @@ fn attempted_errors_retain_the_redeem_decision_report() {
     assert_eq!(error.attempted_report(), Some(&report));
     assert!(error.to_string().contains("offline"));
 }
+
+#[test]
+fn failed_reservation_never_consumes_a_credit() {
+    let dir = tempfile::tempdir().unwrap();
+    let invalid_stamp_path = dir.path().join("parent-is-a-file").join("stamp.json");
+    std::fs::write(dir.path().join("parent-is-a-file"), b"occupied").unwrap();
+    let stamp = RedeemStamp {
+        attempted_at: ts(1_700_000_000),
+        request_id: "request".to_owned(),
+        reason: RedeemReason::BlockedGain,
+        outcome: None,
+    };
+    let report = RedeemReport {
+        reason: RedeemReason::BlockedGain,
+        credits: 1,
+        soonest_expiry: None,
+        natural_reset: None,
+        outcome: None,
+        windows_reset: false,
+        window_resets: Vec::new(),
+        reset: false,
+    };
+    let consumed = std::cell::Cell::new(false);
+
+    let result = consume_reserved_reset_credit(
+        &invalid_stamp_path,
+        &stamp,
+        &report,
+        RedeemReason::BlockedGain,
+        || {
+            consumed.set(true);
+            unreachable!("a failed durable reservation must stop the consume request")
+        },
+    );
+    let Err(error) = result else {
+        panic!("reservation must fail")
+    };
+
+    assert!(!consumed.get());
+    assert_eq!(error.attempted_report(), Some(&report));
+}

@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::account::{
-    ProviderCapacity, RedemptionCode, RedemptionError, redeem_reset_credit,
+    ProviderCapacity, RedemptionCode, ResetCreditResult, prepare_reset_credit_redemption,
 };
 use crate::agents::{AccountUsageSnapshot, ResetCredits};
 #[cfg(not(test))]
@@ -280,7 +280,7 @@ pub fn execute_auto_redeem(
         return Ok(None);
     }
 
-    let action = redeem_reset_credit(CODEX_KIND, request_id, |capacity, credits| {
+    let action = prepare_reset_credit_redemption(CODEX_KIND, |capacity, credits| {
         redeem_verdict(
             capacity,
             credits,
@@ -289,38 +289,13 @@ pub fn execute_auto_redeem(
             now,
         )
     });
-    let action = match action {
-        Ok(action) => action,
-        Err(RedemptionError::BeforeAttempt(message)) => {
-            return Err(AutoRedeemErr::Codex(message));
-        }
-        Err(RedemptionError::Attempted {
-            decision,
-            capacity,
-            credits,
-            message,
-        }) => {
-            let report = RedeemReport {
-                reason: decision,
-                credits: credits.count,
-                soonest_expiry: credits.soonest_expiry,
-                natural_reset: capacity
-                    .as_ref()
-                    .and_then(|capacity| capacity.latest_spent_window_reset(now)),
-                outcome: None,
-                windows_reset: false,
-                window_resets: Vec::new(),
-                reset: false,
-            };
-            return Err(attempted_error(&report, AutoRedeemErr::Codex(message)));
-        }
-    };
+    let action = action.map_err(AutoRedeemErr::Codex)?;
     let Some(action) = action else {
         return Ok(None);
     };
     let reason = action.decision;
-    let capacity = action.capacity;
-    let credits = action.credits;
+    let capacity = action.capacity.clone();
+    let credits = action.credits.clone();
 
     let natural_reset = capacity
         .as_ref()
@@ -342,15 +317,10 @@ pub fn execute_auto_redeem(
         reason,
         outcome: None,
     };
-    write_stamp(&stamp_path, &stamp)?;
-
-    tracing::info!(
-        target: crate::observability::BREADCRUMB_TARGET,
-        kind = CODEX_KIND,
-        requested_reason = requested_reason.as_str(),
-        reason = reason.as_str(),
-        "auto-redeem: consuming reset credit",
-    );
+    let action =
+        consume_reserved_reset_credit(&stamp_path, &stamp, &report, requested_reason, || {
+            action.consume(request_id)
+        })?;
     report.outcome = Some(action.outcome);
     report.windows_reset = action.windows_reset > 0;
     report.reset = action.outcome == RedemptionCode::Reset;
@@ -392,6 +362,24 @@ pub fn execute_auto_redeem(
         .unwrap_or_default();
     publish_usage(runtime, usage_identity, refreshed);
     Ok(Some(report))
+}
+
+fn consume_reserved_reset_credit(
+    stamp_path: &Path,
+    stamp: &RedeemStamp,
+    report: &RedeemReport,
+    requested_reason: RedeemReason,
+    consume: impl FnOnce() -> Result<ResetCreditResult, String>,
+) -> Result<ResetCreditResult, AutoRedeemErr> {
+    write_stamp(stamp_path, stamp).map_err(|error| attempted_error(report, error))?;
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        kind = CODEX_KIND,
+        requested_reason = requested_reason.as_str(),
+        reason = report.reason.as_str(),
+        "auto-redeem: consuming reset credit",
+    );
+    consume().map_err(|message| attempted_error(report, AutoRedeemErr::Codex(message)))
 }
 
 fn attempted_error(report: &RedeemReport, error: AutoRedeemErr) -> AutoRedeemErr {
