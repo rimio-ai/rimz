@@ -12,8 +12,7 @@ use jiff::Timestamp;
 use rimz::agents::LocalSessionObservation;
 use rimz::harness::resume::{
     LaneRestoreConfig, LaneResumeAction, LaneResumeError, LaneResumeRequest, LaneResumeSelector,
-    LaneSummary, LaneWorktree, ResumeSkip, materialize_lane_restore, plan_lane_resume,
-    resume_session_present,
+    LaneSummary, LaneWorktree, ResumeSkip, plan_lane_resume, resume_session_present,
 };
 use rimz::mux::{ResumeTab, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions};
 
@@ -159,7 +158,7 @@ pub(super) fn resume_lane(
         } => {
             report_discovery_skips(plan.discovery_skipped())?;
             report_resume_skips(plan.skipped())?;
-            let tabs = materialize_lane_restore(&store, &workspace.session_name, plan)?;
+            let tabs = plan.materialize(&store, &workspace.session_name)?;
             let count = tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
             for tab in tabs {
                 open_resume_tab(&workspace, &room, tab, bg)?;

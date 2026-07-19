@@ -1655,10 +1655,23 @@ fn lane_all_closed_counts_team_panes_before_flat_capacity() {
     let LaneResumeAction::RestoreClosed { plan, .. } = action else {
         panic!("expected closed restore");
     };
-    assert_eq!(plan.team.len(), 1);
-    assert!(plan.flat.tabs.is_empty());
+    assert_eq!(
+        plan.recovery
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry, RecoveryEntry::Team(_)))
+            .count(),
+        1
+    );
     assert!(
-        plan.flat
+        !plan
+            .recovery
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, RecoveryEntry::Flat(_)))
+    );
+    assert!(
+        plan.recovery
             .skipped
             .iter()
             .any(|skip| { skip.label == "codex:lane" && skip.reason == ResumeSkipReason::OverCap })
@@ -1695,9 +1708,92 @@ fn lane_all_closed_restores_team_and_flat_remainder() {
     let LaneResumeAction::RestoreClosed { plan, .. } = action else {
         panic!("expected closed restore");
     };
-    assert_eq!(plan.team.len(), 1);
-    assert_eq!(plan.flat.tabs.len(), 1);
-    assert_eq!(plan.flat.tabs[0].pane_count(), 1);
+    assert_eq!(plan.recovery.entries.len(), 2);
+    assert!(matches!(plan.recovery.entries[0], RecoveryEntry::Team(_)));
+    assert!(matches!(plan.recovery.entries[1], RecoveryEntry::Flat(_)));
+    assert_eq!(plan.recovery.entries[1].pane_count(), 1);
+}
+
+#[test]
+fn lane_recovery_materializes_team_first_and_fails_strictly() {
+    let (teams, profiles, commands) = team_configs();
+    let agents = [
+        team_agent("claude", "planner", "planner", "/lane", 1),
+        team_agent("codex", "coder", "coder", "/lane", 2),
+        agent("codex", "flat", "/lane", None, 3),
+    ];
+    let action = plan_lane_resume(
+        LaneResumeRequest {
+            current_root: Path::new("/lane"),
+            ..lane_request(LaneResumeSelector::Current, &agents, &[], 3)
+        },
+        |_| true,
+        |_| true,
+        dead,
+        |_| Vec::new(),
+        || {
+            Ok(LaneRestoreConfig {
+                teams,
+                profiles,
+                commands,
+            })
+        },
+    )
+    .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected closed restore");
+    };
+    let dir = tempfile::tempdir().expect("store root");
+    let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let paths =
+        crate::store::paths::StatePaths::under(workspace.clone(), &dir.path().join("state"))
+            .expect("state paths");
+    let runtime = crate::store::paths::RuntimePaths::under(workspace, &dir.path().join("runtime"))
+        .expect("runtime paths");
+    let store = Store::open(paths, runtime).expect("store");
+
+    let tabs = plan
+        .clone()
+        .materialize(&store, "rimz-test")
+        .expect("strict lane materialization");
+    assert_eq!(tabs.len(), 2);
+    assert_eq!(tabs[0].pane_count(), 2);
+    assert_eq!(tabs[1].pane_count(), 1);
+
+    let mut broken = plan;
+    let team = broken
+        .recovery
+        .entries
+        .iter_mut()
+        .find_map(|entry| match entry {
+            RecoveryEntry::Team(team) => Some(team),
+            RecoveryEntry::Flat(_) => None,
+        })
+        .expect("team entry");
+    team.cohort.seeds.truncate(1);
+    assert!(broken.materialize(&store, "rimz-test").is_err());
+}
+
+#[test]
+fn recovery_plan_sorts_equal_freshness_by_label() {
+    let when: Timestamp = "2025-01-01T00:00:00Z".parse().unwrap();
+    let mut zed = agent("codex", "zed", "/work/zed", None, 1);
+    zed.last_activity = when;
+    let mut alpha = agent("codex", "alpha", "/work/alpha", None, 1);
+    alpha.last_activity = when;
+    let flat = plan_resume_detailed(
+        &[zed, alpha],
+        &BTreeSet::new(),
+        2,
+        None,
+        |_| true,
+        |_| true,
+        Path::new("/bin/rimz"),
+    );
+    let mut recovery = RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat);
+    recovery.sort_by_freshness();
+
+    assert_eq!(recovery.labels(), ["#alpha", "#zed"]);
 }
 
 #[test]

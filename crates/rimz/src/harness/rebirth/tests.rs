@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
 use crate::config::{Profile, RoleBinding, Team};
+use crate::harness::resume::{CohortSeed, RecoveryEntry};
 use crate::ids::{MuxName, PaneId};
 
 struct Fixture {
@@ -96,6 +97,27 @@ impl Fixture {
                 &observation,
             ))
             .expect("team agent event");
+    }
+
+    fn touch_agent(&self, id: &str, worktree: &Path) {
+        let store = Store::open(self.paths.clone(), self.runtime.clone()).expect("store");
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(id)),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_name = Some(id.to_owned());
+        observation.worktree_path = Some(worktree.display().to_string());
+        observation.worktree_branch = Some("feature".to_owned());
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, format!("%{id}")));
+        store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                self.paths.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("touch agent event");
     }
 
     fn seed_named_channel(&self, name: &str) {
@@ -289,7 +311,7 @@ fn recover_ends_only_agents_not_resumed_without_overwriting_worktree_gone_reason
     let mut machine = MachineConfig::default();
     machine.resume.max = 1;
     let plan = fixture.inspect_with(&machine, false);
-    let resumed = plan.planned.flat.resumed.clone();
+    let resumed = plan.planned.base_resumed().clone();
     assert_eq!(resumed.len(), 1);
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
@@ -357,31 +379,83 @@ fn disabled_recovery_restores_empty_channels_without_seeding_agents() {
 }
 
 #[test]
+fn rebirth_recovery_globally_orders_fresher_flat_before_team() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let team_worktree = dir.path().join("forge");
+    let flat_worktree = dir.path().join("flat");
+    let fixture = Fixture::new(&[
+        ("planner", &team_worktree, true),
+        ("flat", &flat_worktree, true),
+    ]);
+    fixture.stamp_team("planner", &team_worktree, "forge", "planner", "claude-plan");
+    fixture.touch_agent("flat", &flat_worktree);
+    let plan = fixture.inspect_with(&team_machine(), false);
+
+    assert_eq!(plan.preview().labels()[0], "#flat");
+    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+    assert_eq!(outcome.resume.tabs[0].cwd, flat_worktree);
+    assert_eq!(outcome.resume.tabs[1].cwd, team_worktree);
+}
+
+#[test]
+fn rebirth_recovers_flat_tabs_when_store_is_unavailable() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let flat_worktree = dir.path().join("flat");
+    let fixture = Fixture::new(&[("flat", &flat_worktree, true)]);
+    let plan = fixture.inspect(false);
+    assert_eq!(plan.preview().pane_count(), 1);
+    std::fs::remove_file(&fixture.paths.events_log).expect("remove event log");
+    std::fs::create_dir(&fixture.paths.events_log).expect("block store open");
+
+    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+
+    assert_eq!(outcome.resume.tabs.len(), 1);
+    assert_eq!(outcome.resume.tabs[0].cwd, flat_worktree);
+}
+
+#[test]
 fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() {
     let dir = tempfile::tempdir().expect("worktrees");
     let worktree = dir.path().join("forge");
-    let fixture = Fixture::new(&[("planner", &worktree, true)]);
+    let flat_worktree = dir.path().join("flat");
+    let fixture = Fixture::new(&[("planner", &worktree, true), ("flat", &flat_worktree, true)]);
     fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
     let machine = team_machine();
     let mut plan = fixture.inspect_with(&machine, false);
-    assert_eq!(plan.planned.team.len(), 1);
-    assert_eq!(plan.preview().pane_count(), 2);
+    assert_eq!(
+        plan.planned
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry, RecoveryEntry::Team(_)))
+            .count(),
+        1
+    );
+    assert_eq!(plan.preview().pane_count(), 3);
 
-    let mut broken = plan.planned.team[0].clone();
+    let mut broken = plan
+        .planned
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            RecoveryEntry::Team(team) => Some(team.clone()),
+            RecoveryEntry::Flat(_) => None,
+        })
+        .expect("team entry");
     broken.label = "#broken".to_owned();
     broken.team = "broken".to_owned();
     broken.cohort.seeds.clear();
-    plan.planned.team.insert(0, broken);
-    plan.planned.flat.tabs.push(ResumeTab::flat(
-        "flat".to_owned(),
-        fixture.project.clone(),
-        vec![vec!["true".to_owned()]],
-    ));
+    plan.planned.entries.insert(0, RecoveryEntry::Team(broken));
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
 
     assert!(outcome.resume.tabs.iter().any(|tab| tab.label == "#forge"));
-    assert!(outcome.resume.tabs.iter().any(|tab| tab.label == "flat"));
+    assert!(
+        outcome
+            .resume
+            .tabs
+            .iter()
+            .any(|tab| tab.cwd == flat_worktree)
+    );
     assert!(!outcome.resume.tabs.iter().any(|tab| tab.label == "#broken"));
     let team = outcome
         .resume
@@ -436,11 +510,20 @@ fn failed_team_materialization_ends_its_resume_seeds() {
     let fixture = Fixture::new(&[("planner", &worktree, true)]);
     fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
     let mut plan = fixture.inspect_with(&team_machine(), false);
+    let team = plan
+        .planned
+        .entries
+        .iter_mut()
+        .find_map(|entry| match entry {
+            RecoveryEntry::Team(team) => Some(team),
+            RecoveryEntry::Flat(_) => None,
+        })
+        .expect("team entry");
     assert!(matches!(
-        plan.planned.team[0].cohort.seeds.first(),
+        team.cohort.seeds.first(),
         Some(CohortSeed::Resume(agent)) if agent.agent_id == "planner"
     ));
-    plan.planned.team[0].cohort.seeds.truncate(1);
+    team.cohort.seeds.truncate(1);
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
 

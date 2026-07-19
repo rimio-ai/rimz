@@ -8,9 +8,9 @@
 //! per prior root agent, so the next birth can recover where the user left off
 //! instead of empty.
 //!
-//! Planning stays pure over supplied rollups and filesystem predicates. Team
-//! materialization is the shared durable launch boundary used by room rebirth
-//! and explicit lane resume; the mux still receives only compiled tabs.
+//! Planning stays pure over supplied rollups and filesystem predicates. One
+//! ordered recovery plan and materializer serve room rebirth and explicit lane
+//! resume; the mux still receives only compiled tabs.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -110,20 +110,27 @@ pub enum LaneResumeError {
 /// All-closed lane plan awaiting durable identity allocation.
 #[derive(Clone, Debug)]
 pub struct LaneRestorePlan {
-    teams: TeamsConfig,
-    team: Vec<PlannedTeamTab>,
-    flat: ResumePlan,
+    recovery: RecoveryPlan,
     discovery_skipped: Vec<LocalSessionObservation>,
     preflight_kinds: Vec<AgentKind>,
 }
 
 impl LaneRestorePlan {
     pub fn skipped(&self) -> &[ResumeSkip] {
-        &self.flat.skipped
+        &self.recovery.skipped
     }
 
     pub fn discovery_skipped(&self) -> &[LocalSessionObservation] {
         &self.discovery_skipped
+    }
+
+    /// Materialize team entries strictly, then return every planned tab.
+    pub fn materialize(self, store: &Store, session_name: &str) -> anyhow::Result<Vec<ResumeTab>> {
+        Ok(self
+            .recovery
+            .materialize(session_name, RecoveryMaterializer::Strict(store))?
+            .resume
+            .tabs)
     }
 }
 
@@ -282,9 +289,203 @@ enum ResumeTabIdentity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct PlannedResumeTab {
+pub(crate) struct PlannedResumeTab {
     identity: ResumeTabIdentity,
     tab: ResumeTab,
+    freshest: Timestamp,
+    resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+}
+
+impl PlannedResumeTab {
+    fn pane_count(&self) -> usize {
+        self.tab.pane_count()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DetailedResumePlan {
+    tabs: Vec<PlannedResumeTab>,
+    resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+    skipped: Vec<ResumeSkip>,
+    agents_to_end: Vec<(AgentKind, AgentSessionId)>,
+}
+
+impl DetailedResumePlan {
+    fn lower(self) -> ResumePlan {
+        ResumePlan {
+            tabs: self.tabs.into_iter().map(|planned| planned.tab).collect(),
+            resumed: self.resumed,
+            skipped: self.skipped,
+            agents_to_end: self.agents_to_end,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum RecoveryEntry {
+    Flat(PlannedResumeTab),
+    Team(PlannedTeamTab),
+}
+
+impl RecoveryEntry {
+    pub(crate) fn label(&self) -> &str {
+        match self {
+            Self::Flat(planned) => &planned.tab.label,
+            Self::Team(planned) => &planned.label,
+        }
+    }
+
+    pub(crate) fn freshest(&self) -> Timestamp {
+        match self {
+            Self::Flat(planned) => planned.freshest,
+            Self::Team(planned) => planned.freshest,
+        }
+    }
+
+    pub(crate) fn pane_count(&self) -> usize {
+        match self {
+            Self::Flat(planned) => planned.pane_count(),
+            Self::Team(planned) => planned
+                .layout
+                .columns
+                .iter()
+                .map(|column| column.rows.len())
+                .sum(),
+        }
+    }
+
+    pub(crate) fn resumed_keys(&self) -> BTreeSet<(AgentKind, AgentSessionId)> {
+        match self {
+            Self::Flat(planned) => planned.resumed.clone(),
+            Self::Team(planned) => planned
+                .cohort
+                .seeds
+                .iter()
+                .filter_map(|seed| match seed {
+                    CohortSeed::Resume(agent) => Some((agent.kind.clone(), agent.agent_id.clone())),
+                    CohortSeed::Fresh => None,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RecoveryPlan {
+    teams: TeamsConfig,
+    pub(crate) entries: Vec<RecoveryEntry>,
+    skipped: Vec<ResumeSkip>,
+    agents_to_end: Vec<(AgentKind, AgentSessionId)>,
+    base_resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+}
+
+impl RecoveryPlan {
+    pub(crate) fn new(
+        teams: TeamsConfig,
+        team: Vec<PlannedTeamTab>,
+        flat: DetailedResumePlan,
+    ) -> Self {
+        let mut entries = team
+            .into_iter()
+            .map(RecoveryEntry::Team)
+            .collect::<Vec<_>>();
+        entries.extend(flat.tabs.into_iter().map(RecoveryEntry::Flat));
+        Self {
+            teams,
+            entries,
+            skipped: flat.skipped,
+            agents_to_end: flat.agents_to_end,
+            base_resumed: flat.resumed,
+        }
+    }
+
+    pub(crate) fn sort_by_freshness(&mut self) {
+        self.entries.sort_by(|left, right| {
+            newest_cmp(
+                left.freshest(),
+                left.label(),
+                right.freshest(),
+                right.label(),
+            )
+        });
+    }
+
+    pub(crate) fn pane_count(&self) -> usize {
+        self.entries.iter().map(RecoveryEntry::pane_count).sum()
+    }
+
+    pub(crate) fn labels(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.label().to_owned())
+            .collect()
+    }
+
+    pub(crate) fn base_resumed(&self) -> &BTreeSet<(AgentKind, AgentSessionId)> {
+        &self.base_resumed
+    }
+
+    pub(crate) fn materialize(
+        self,
+        session_name: &str,
+        materializer: RecoveryMaterializer<'_>,
+    ) -> anyhow::Result<MaterializedRecovery> {
+        let mut complete_resumed = self.base_resumed.clone();
+        let mut resume = ResumePlan {
+            tabs: Vec::with_capacity(self.entries.len()),
+            resumed: self.base_resumed,
+            skipped: self.skipped,
+            agents_to_end: self.agents_to_end,
+        };
+        for entry in self.entries {
+            match entry {
+                RecoveryEntry::Flat(planned) => resume.tabs.push(planned.tab),
+                RecoveryEntry::Team(planned) => {
+                    let Some(store) = materializer.store() else {
+                        continue;
+                    };
+                    match materialize_team_restore_tab(store, session_name, &self.teams, &planned) {
+                        Ok(tab) => {
+                            complete_resumed.extend(RecoveryEntry::Team(planned).resumed_keys());
+                            resume.tabs.push(tab);
+                        }
+                        Err(err) => match materializer {
+                            RecoveryMaterializer::Strict(_) => return Err(err),
+                            RecoveryMaterializer::BestEffort { workspace_id, .. } => {
+                                tracing::warn!(workspace = %workspace_id, team = %planned.team, error = %err, "team resume materialization skipped");
+                            }
+                        },
+                    }
+                }
+            }
+        }
+        Ok(MaterializedRecovery {
+            resume,
+            resumed: complete_resumed,
+        })
+    }
+}
+
+pub(crate) enum RecoveryMaterializer<'a> {
+    Strict(&'a Store),
+    BestEffort {
+        store: Option<&'a Store>,
+        workspace_id: &'a crate::ids::WorkspaceId,
+    },
+}
+
+impl<'a> RecoveryMaterializer<'a> {
+    fn store(&self) -> Option<&'a Store> {
+        match self {
+            Self::Strict(store) => Some(store),
+            Self::BestEffort { store, .. } => *store,
+        }
+    }
+}
+
+pub(crate) struct MaterializedRecovery {
+    pub(crate) resume: ResumePlan,
+    pub(crate) resumed: BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -716,7 +917,7 @@ fn plan_discovered_lane(
         .iter()
         .map(|candidate| candidate.kind.clone())
         .collect();
-    let flat = plan_resume_candidates(
+    let flat = plan_resume_candidates_detailed(
         candidates,
         request.max,
         Some(request.project_root),
@@ -732,9 +933,7 @@ fn plan_discovered_lane(
         lane_label: lane.display.clone(),
         cwd: lane.path.clone(),
         plan: LaneRestorePlan {
-            teams: TeamsConfig::default(),
-            team: Vec::new(),
-            flat,
+            recovery: RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat),
             discovery_skipped,
             preflight_kinds,
         },
@@ -827,7 +1026,7 @@ fn plan_closed_lane(
         .iter()
         .map(|planned| planned.cohort.seeds.len())
         .sum::<usize>();
-    let flat = plan_resume(
+    let flat = plan_resume_detailed(
         &flat_agents,
         &BTreeSet::new(),
         request.max.saturating_sub(team_panes),
@@ -856,9 +1055,7 @@ fn plan_closed_lane(
         lane_label: lane.display,
         cwd: lane.path,
         plan: LaneRestorePlan {
-            teams: restore.teams,
-            team,
-            flat,
+            recovery: RecoveryPlan::new(restore.teams, team, flat),
             discovery_skipped: Vec::new(),
             preflight_kinds,
         },
@@ -941,25 +1138,6 @@ fn path_label(path: &Path) -> String {
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| path.display().to_string())
-}
-
-/// Allocate fresh team members and return complete tabs for one lane restore.
-pub fn materialize_lane_restore(
-    store: &Store,
-    session_name: &str,
-    plan: LaneRestorePlan,
-) -> anyhow::Result<Vec<ResumeTab>> {
-    let mut tabs = Vec::with_capacity(plan.team.len() + plan.flat.tabs.len());
-    for planned in &plan.team {
-        tabs.push(materialize_team_restore_tab(
-            store,
-            session_name,
-            &plan.teams,
-            planned,
-        )?);
-    }
-    tabs.extend(plan.flat.tabs);
-    Ok(tabs)
 }
 
 /// Allocate fresh team members and compile one planned team restore tab.
@@ -1190,21 +1368,42 @@ pub fn plan_resume(
     session_backed: impl Fn(&AgentState) -> bool,
     rimz_bin: &Path,
 ) -> ResumePlan {
+    plan_resume_detailed(
+        agents,
+        ended,
+        max,
+        project_root,
+        worktree_exists,
+        session_backed,
+        rimz_bin,
+    )
+    .lower()
+}
+
+pub(crate) fn plan_resume_detailed(
+    agents: &[AgentState],
+    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
+    max: usize,
+    project_root: Option<&Path>,
+    worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+    rimz_bin: &Path,
+) -> DetailedResumePlan {
     let candidates = agents
         .iter()
         .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .filter_map(|agent| ResumeCandidate::from_agent(agent, || session_backed(agent)))
         .collect();
-    plan_resume_candidates(candidates, max, project_root, worktree_exists, rimz_bin)
+    plan_resume_candidates_detailed(candidates, max, project_root, worktree_exists, rimz_bin)
 }
 
-fn plan_resume_candidates(
+fn plan_resume_candidates_detailed(
     mut candidates: Vec<ResumeCandidate>,
     max: usize,
     project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
     rimz_bin: &Path,
-) -> ResumePlan {
+) -> DetailedResumePlan {
     candidates.sort_by(|left, right| {
         newest_cmp(
             left.last_activity,
@@ -1215,7 +1414,7 @@ fn plan_resume_candidates(
     });
 
     let mut seen: HashSet<ResumeCandidateKey> = HashSet::new();
-    let mut plan = ResumePlan::default();
+    let mut plan = DetailedResumePlan::default();
     let mut tabs: Vec<PlannedResumeTab> = Vec::new();
     for candidate in candidates {
         // An older relaunch that re-used a pane is superseded by the newest
@@ -1244,7 +1443,7 @@ fn plan_resume_candidates(
             });
             continue;
         }
-        let seeded = tabs.iter().map(|tab| tab.tab.pane_count()).sum::<usize>();
+        let seeded = tabs.iter().map(PlannedResumeTab::pane_count).sum::<usize>();
         if seeded >= max {
             plan.skipped.push(ResumeSkip {
                 label,
@@ -1260,22 +1459,26 @@ fn plan_resume_candidates(
         let command = candidate_resume_command(rimz_bin, &candidate, channel.as_deref());
         let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
         let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);
-        let resumed = (candidate.kind.clone(), candidate.session_id.clone());
+        let resumed_key = (candidate.kind.clone(), candidate.session_id.clone());
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
                 column.panes.push(crate::mux::PaneCmd { argv: command });
-                plan.resumed.insert(resumed);
+                tab.resumed.insert(resumed_key.clone());
+                plan.resumed.insert(resumed_key);
             }
         } else {
+            let resumed = BTreeSet::from([resumed_key.clone()]);
             tabs.push(PlannedResumeTab {
                 identity,
                 tab: ResumeTab::flat(tab_label, candidate.cwd, vec![command]),
+                freshest: candidate.last_activity,
+                resumed,
             });
-            plan.resumed.insert(resumed);
+            plan.resumed.insert(resumed_key);
         }
     }
     disambiguate_resume_tab_labels(&mut tabs);
-    plan.tabs = tabs.into_iter().map(|planned| planned.tab).collect();
+    plan.tabs = tabs;
     plan
 }
 

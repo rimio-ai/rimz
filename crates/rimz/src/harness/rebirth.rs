@@ -1,4 +1,4 @@
-//! Two-phase previous-incarnation inspection and room rebirth materialization.
+//! Two-phase previous-incarnation inspection through the shared recovery plan.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -10,8 +10,8 @@ use jiff::Timestamp;
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::resume::{
-    CohortSeed, PlannedTeamTab, ResumePlan, materialize_team_restore_tab, resume_session_present,
-    split_team_and_flat,
+    MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, ResumePlan, plan_resume_detailed,
+    resume_session_present, split_team_and_flat,
 };
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::mux::{MuxBackend, ResumeTab};
@@ -62,9 +62,8 @@ pub struct RebirthPlan {
     death: Option<LastDeathMarker>,
     crash_roster: Vec<AgentState>,
     crash_cache: CrashCacheSnapshot,
-    planned: PlannedResume,
+    planned: RecoveryPlan,
     empty_tabs: Vec<ResumeTab>,
-    teams: TeamsConfig,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -77,13 +76,6 @@ struct CrashCacheSnapshot {
 enum CrashCacheEntry {
     Directory(PathBuf),
     File { path: PathBuf, bytes: Vec<u8> },
-}
-
-#[derive(Clone, Debug, Default)]
-struct PlannedResume {
-    flat: ResumePlan,
-    team: Vec<PlannedTeamTab>,
-    agents: Vec<AgentState>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,26 +113,8 @@ impl RebirthPlan {
     }
 
     pub fn preview(&self) -> RebirthPreview {
-        let pane_count = self
-            .planned
-            .flat
-            .tabs
-            .iter()
-            .map(ResumeTab::pane_count)
-            .sum::<usize>()
-            + self
-                .planned
-                .team
-                .iter()
-                .map(planned_team_pane_count)
-                .sum::<usize>();
-        let labels = self
-            .planned
-            .team
-            .iter()
-            .map(|tab| tab.label.clone())
-            .chain(self.planned.flat.tabs.iter().map(|tab| tab.label.clone()))
-            .collect();
+        let pane_count = self.planned.pane_count();
+        let labels = self.planned.labels();
         RebirthPreview {
             death: self.death.clone(),
             pane_count,
@@ -188,7 +162,6 @@ impl RebirthPlan {
                 store.as_ref(),
                 &self.paths,
                 session_name,
-                &self.teams,
                 self.planned,
                 self.empty_tabs,
             )
@@ -209,7 +182,7 @@ impl RebirthPlan {
             .filter(|key| choice == RebirthChoice::Fresh || !worktree_gone.contains(key))
             .collect::<BTreeSet<_>>();
         if let Some(store) = store.as_ref() {
-            record_unrecovered_agents_ended(
+            record_agents_ended(
                 store,
                 &self.paths.workspace_id,
                 session_name,
@@ -300,7 +273,7 @@ fn inspect_at(
             &machine.agents.commands,
         )
     } else {
-        PlannedResume::default()
+        RecoveryPlan::default()
     };
     let empty_tabs = empty_named_channel_tabs(&paths);
     Ok(RebirthPlan {
@@ -312,7 +285,6 @@ fn inspect_at(
         crash_cache,
         planned,
         empty_tabs,
-        teams: teams_and_profiles.0,
     })
 }
 
@@ -340,9 +312,9 @@ fn plan_recovery(
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &crate::config::CommandsConfig,
-) -> PlannedResume {
+) -> RecoveryPlan {
     let Some(projection) = projection else {
-        return PlannedResume::default();
+        return RecoveryPlan::default();
     };
     let agents = scope_to_roster(projection.agents.clone(), roster);
     let project_root = crate::store::workspace_record::read(&paths.workspace_record)
@@ -357,8 +329,11 @@ fn plan_recovery(
         Path::is_dir,
         resume_session_present,
     );
-    let team_panes = team.iter().map(planned_team_pane_count).sum::<usize>();
-    let flat = crate::harness::resume::plan_resume(
+    let team_panes = team
+        .iter()
+        .map(|planned| planned.cohort.seeds.len())
+        .sum::<usize>();
+    let flat = plan_resume_detailed(
         &flat_agents,
         &projection.ended,
         resume_cfg.max.saturating_sub(team_panes),
@@ -367,53 +342,37 @@ fn plan_recovery(
         resume_session_present,
         &crate::proc::rimz_exe(),
     );
-    PlannedResume { flat, team, agents }
+    let mut plan = RecoveryPlan::new(teams.clone(), team, flat);
+    plan.sort_by_freshness();
+    plan
 }
 
 fn materialize_recovery(
     store: Option<&Store>,
     paths: &StatePaths,
     session_name: &str,
-    teams: &TeamsConfig,
-    planned: PlannedResume,
+    planned: RecoveryPlan,
     empty_tabs: Vec<ResumeTab>,
 ) -> (ResumePlan, BTreeSet<(AgentKind, AgentSessionId)>) {
-    let mut resumed = planned.flat.resumed.clone();
-    let mut final_plan = ResumePlan {
-        tabs: Vec::new(),
-        resumed: planned.flat.resumed,
-        skipped: planned.flat.skipped,
-        agents_to_end: planned.flat.agents_to_end,
-    };
-    let mut tabs = Vec::new();
-    for team in &planned.team {
-        let Some(store) = store else {
-            continue;
-        };
-        match materialize_team_restore_tab(store, session_name, teams, team) {
-            Ok(tab) => {
-                resumed.extend(team.cohort.seeds.iter().filter_map(|seed| match seed {
-                    CohortSeed::Resume(agent) => Some((agent.kind.clone(), agent.agent_id.clone())),
-                    CohortSeed::Fresh => None,
-                }));
-                tabs.push(MaterializedTab {
-                    freshest: Some(team.freshest),
-                    tab,
-                });
-            }
-            Err(err) => {
-                tracing::warn!(workspace = %paths.workspace_id, team = %team.team, error = %err, "team resume materialization skipped")
+    let MaterializedRecovery {
+        resume: mut final_plan,
+        resumed,
+    } = match planned.materialize(
+        session_name,
+        RecoveryMaterializer::BestEffort {
+            store,
+            workspace_id: &paths.workspace_id,
+        },
+    ) {
+        Ok(materialized) => materialized,
+        Err(err) => {
+            tracing::warn!(workspace = %paths.workspace_id, error = %err, "rebirth recovery materialization skipped");
+            MaterializedRecovery {
+                resume: ResumePlan::default(),
+                resumed: BTreeSet::new(),
             }
         }
-    }
-    for tab in planned.flat.tabs {
-        tabs.push(MaterializedTab {
-            freshest: flat_tab_freshness(&tab, &planned.agents),
-            tab,
-        });
-    }
-    tabs.sort_by(materialized_tab_cmp);
-    final_plan.tabs = tabs.into_iter().map(|tab| tab.tab).collect();
+    };
     for tab in empty_tabs {
         if !final_plan
             .tabs
@@ -424,63 +383,15 @@ fn materialize_recovery(
         }
     }
     if let Some(store) = store {
-        record_worktree_gone_agents_ended(store, &paths.workspace_id, session_name, &final_plan);
+        record_agents_ended(
+            store,
+            &paths.workspace_id,
+            session_name,
+            &final_plan.agents_to_end.iter().cloned().collect(),
+            "rimz.worktree-gone",
+        );
     }
     (final_plan, resumed)
-}
-
-struct MaterializedTab {
-    tab: ResumeTab,
-    freshest: Option<Timestamp>,
-}
-
-fn materialized_tab_cmp(left: &MaterializedTab, right: &MaterializedTab) -> std::cmp::Ordering {
-    match (left.freshest, right.freshest) {
-        (Some(left), Some(right)) => right.cmp(&left),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    }
-    .then_with(|| left.tab.label.cmp(&right.tab.label))
-}
-
-fn planned_team_pane_count(tab: &PlannedTeamTab) -> usize {
-    tab.layout
-        .columns
-        .iter()
-        .map(|column| column.rows.len())
-        .sum()
-}
-
-fn flat_tab_freshness(tab: &ResumeTab, agents: &[AgentState]) -> Option<Timestamp> {
-    agents
-        .iter()
-        .filter(|agent| flat_agent_matches_tab(agent, tab))
-        .map(|agent| agent.last_activity)
-        .max()
-}
-
-fn flat_agent_matches_tab(agent: &AgentState, tab: &ResumeTab) -> bool {
-    if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() || agent.pane.is_none() {
-        return false;
-    }
-    let Some(worktree) = agent
-        .worktree_path
-        .as_deref()
-        .filter(|path| !path.is_empty())
-    else {
-        return false;
-    };
-    let cwd = PathBuf::from(worktree);
-    if let Some(channel) = agent
-        .channel
-        .as_deref()
-        .filter(|channel| !channel.is_empty())
-    {
-        tab.label == format!("#{channel}")
-    } else {
-        tab.cwd == cwd
-    }
 }
 
 fn empty_named_channel_tabs(paths: &StatePaths) -> Vec<ResumeTab> {
@@ -500,31 +411,7 @@ fn empty_named_channel_tabs(paths: &StatePaths) -> Vec<ResumeTab> {
         .collect()
 }
 
-fn record_worktree_gone_agents_ended(
-    store: &Store,
-    workspace_id: &WorkspaceId,
-    session_name: &str,
-    plan: &ResumePlan,
-) {
-    for (kind, agent_id) in &plan.agents_to_end {
-        let observation = crate::agents::AgentLifecycleObservation::new(
-            Some(agent_id.clone()),
-            crate::agents::LifecycleSignal::Ended,
-        );
-        let event = crate::EventEnvelope::agent_lifecycle(
-            workspace_id.clone(),
-            session_name,
-            kind.as_str(),
-            "rimz.worktree-gone",
-            &observation,
-        );
-        if let Err(err) = store.append_event(&event) {
-            tracing::warn!(workspace = %workspace_id, kind = %kind, agent_id = %agent_id, error = %err, "resume: could not stamp missing-worktree agent ended");
-        }
-    }
-}
-
-fn record_unrecovered_agents_ended(
+fn record_agents_ended(
     store: &Store,
     workspace_id: &WorkspaceId,
     session_name: &str,
