@@ -625,3 +625,46 @@ fn untrusted_repo_profile_inside_machine_team_layout_is_blocked() {
         })
     ));
 }
+
+#[test]
+fn untrusted_layout_trust_uses_shared_structural_cells_and_inline_precedence() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(&project, "[profiles.planner]\nagent = \"claude\"\n");
+
+    for spec in [
+        "planner:lead+claude,codex/term",
+        "claude+planner:lead,codex/term",
+        "claude+term,planner:lead/codex",
+        "claude+term,codex/planner:lead",
+    ] {
+        assert!(
+            matches!(
+                block_untrusted_profile_reference(
+                    Some(spec),
+                    &ProfilesConfig::default(),
+                    &CommandsConfig::default(),
+                    &TeamsConfig::default(),
+                    project.path(),
+                    config.path(),
+                ),
+                Err(EffectiveConfigErr::Blocked { .. })
+            ),
+            "{spec}"
+        );
+    }
+
+    let exact_machine_command = CommandsConfig(BTreeMap::from([(
+        "planner:lead".to_owned(),
+        "true".to_owned(),
+    )]));
+    block_untrusted_profile_reference(
+        Some("planner:lead"),
+        &ProfilesConfig::default(),
+        &exact_machine_command,
+        &TeamsConfig::default(),
+        project.path(),
+        config.path(),
+    )
+    .expect("exact machine cell containing a colon stays inert");
+}

@@ -68,9 +68,23 @@ impl LayoutSpec {
     pub fn first_agent_kind(&self) -> Option<&str> {
         self.agent_kinds().next()
     }
+}
 
-    pub fn has_agent(&self) -> bool {
-        self.first_agent_kind().is_some()
+/// Borrowed structural layout grammar before cells acquire launch semantics.
+pub(crate) struct RawLayout<'a> {
+    pub(crate) columns: Vec<RawColumn<'a>>,
+}
+
+pub(crate) struct RawColumn<'a> {
+    pub(crate) cells: Vec<&'a str>,
+    pub(crate) stacked: bool,
+}
+
+impl<'a> RawLayout<'a> {
+    pub(crate) fn cells(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.columns
+            .iter()
+            .flat_map(|column| column.cells.iter().copied())
     }
 }
 
@@ -629,20 +643,15 @@ fn compile_team_layout(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> Result<LayoutSpec> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Err(LayoutErr::Empty);
-    }
-
+    let structure = parse_layout_structure(raw)?;
     let mut placements: BTreeMap<String, usize> = role_cells
         .keys()
         .map(|role| (role.clone(), 0usize))
         .collect();
     let mut columns = Vec::new();
-    for column_raw in raw.split(',') {
-        let (cell_names, stacked) = split_column_rows(raw, column_raw)?;
+    for column in structure.columns {
         let mut rows = Vec::new();
-        for cell_name in cell_names {
+        for cell_name in column.cells {
             if let Some(cell) = role_cells.get(cell_name) {
                 *placements
                     .get_mut(cell_name)
@@ -661,7 +670,10 @@ fn compile_team_layout(
                 Err(err) => return Err(err),
             }
         }
-        columns.push(Column { rows, stacked });
+        columns.push(Column {
+            rows,
+            stacked: column.stacked,
+        });
     }
 
     for (role, count) in placements {
@@ -803,17 +815,12 @@ fn parse_layout_spec_validated(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> Result<LayoutSpec> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Err(LayoutErr::Empty);
-    }
-
+    let structure = parse_layout_structure(raw)?;
     let mut seen_roles = BTreeSet::new();
     let mut columns = Vec::new();
-    for column_raw in raw.split(',') {
-        let (cell_names, stacked) = split_column_rows(raw, column_raw)?;
+    for column in structure.columns {
         let mut rows = Vec::new();
-        for raw_cell in cell_names {
+        for raw_cell in column.cells {
             let (cell_name, role) = split_inline_role(raw_cell, profiles, commands);
             if let Some(role) = role {
                 validate_inline_role(role)?;
@@ -835,33 +842,44 @@ fn parse_layout_spec_validated(
             }
             rows.push(cell);
         }
-        columns.push(Column { rows, stacked });
+        columns.push(Column {
+            rows,
+            stacked: column.stacked,
+        });
     }
     Ok(LayoutSpec { columns })
 }
 
-fn split_column_rows<'a>(layout_raw: &str, column_raw: &'a str) -> Result<(Vec<&'a str>, bool)> {
-    let column_raw = column_raw.trim();
-    if column_raw.is_empty() {
-        return Err(LayoutErr::EmptyCell(layout_raw.to_owned()));
+pub(crate) fn parse_layout_structure(raw: &str) -> Result<RawLayout<'_>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(LayoutErr::Empty);
     }
-    let tiled = column_raw.contains('+');
-    let stacked = column_raw.contains('/');
-    if tiled && stacked {
-        return Err(LayoutErr::MixedRowOperators {
-            column: column_raw.to_owned(),
-        });
-    }
-    let separator = if stacked { '/' } else { '+' };
-    let mut rows = Vec::new();
-    for cell_raw in column_raw.split(separator) {
-        let cell_raw = cell_raw.trim();
-        if cell_raw.is_empty() {
-            return Err(LayoutErr::EmptyCell(layout_raw.to_owned()));
+
+    let mut columns = Vec::new();
+    for column_raw in raw.split(',') {
+        let column_raw = column_raw.trim();
+        if column_raw.is_empty() {
+            return Err(LayoutErr::EmptyCell(raw.to_owned()));
         }
-        rows.push(cell_raw);
+        let tiled = column_raw.contains('+');
+        let stacked = column_raw.contains('/');
+        if tiled && stacked {
+            return Err(LayoutErr::MixedRowOperators {
+                column: column_raw.to_owned(),
+            });
+        }
+        let separator = if stacked { '/' } else { '+' };
+        let cells = column_raw
+            .split(separator)
+            .map(str::trim)
+            .collect::<Vec<_>>();
+        if cells.iter().any(|cell| cell.is_empty()) {
+            return Err(LayoutErr::EmptyCell(raw.to_owned()));
+        }
+        columns.push(RawColumn { cells, stacked });
     }
-    Ok((rows, stacked))
+    Ok(RawLayout { columns })
 }
 
 fn is_inline_spec(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
@@ -881,7 +899,7 @@ fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig)
         || virtual_ping_shape(raw)
 }
 
-fn split_inline_role<'a>(
+pub(crate) fn split_inline_role<'a>(
     raw: &'a str,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,

@@ -124,6 +124,43 @@ fn parses_layout_shape_and_command_precedence() {
 }
 
 #[test]
+fn structural_layout_grammar_table() {
+    let cases = [
+        (
+            "claude,codex",
+            Ok(vec![(false, vec!["claude"]), (false, vec!["codex"])]),
+        ),
+        (
+            " claude + codex ",
+            Ok(vec![(false, vec!["claude", "codex"])]),
+        ),
+        (
+            " claude / codex ",
+            Ok(vec![(true, vec!["claude", "codex"])]),
+        ),
+        (" ", Err(LayoutErr::Empty)),
+        ("claude, ", Err(LayoutErr::EmptyCell("claude,".to_owned()))),
+        (
+            "claude+codex/term",
+            Err(LayoutErr::MixedRowOperators {
+                column: "claude+codex/term".to_owned(),
+            }),
+        ),
+    ];
+
+    for (raw, expected) in cases {
+        let actual = parse_layout_structure(raw).map(|layout| {
+            layout
+                .columns
+                .iter()
+                .map(|column| (column.stacked, column.cells.clone()))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(actual, expected, "{raw:?}");
+    }
+}
+
+#[test]
 fn inline_roles_compose_and_validate() {
     let profiles = profiles([("planner", profile("claude"))]);
     let commands = commands([("logs", "tail -f rimz.log")]);
@@ -181,6 +218,17 @@ fn inline_roles_compose_and_validate() {
             role: "x".to_owned(),
         })
     );
+
+    let exact_commands = CommandsConfig(BTreeMap::from([(
+        "logs:lead".to_owned(),
+        "tail -f exact.log".to_owned(),
+    )]));
+    let exact = parse_layout_spec("logs:lead", &profiles, &exact_commands)
+        .expect("exact command name wins before inline role splitting");
+    assert!(matches!(
+        &exact.columns[0].rows[0],
+        Cell::Command { argv } if argv == &["tail", "-f", "exact.log"]
+    ));
 }
 
 #[test]

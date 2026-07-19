@@ -421,7 +421,7 @@ fn spec_references_repo_profile(
             .iter()
             .any(|binding| repo_profiles.contains(&binding.profile));
         let layout_refs_repo_profile = team.layout.as_deref().is_some_and(|layout| {
-            layout_tokens(layout).any(|token| {
+            layout_cells(layout).any(|token| {
                 let is_declared_role = team.roles.iter().any(|binding| binding.role == token);
                 !is_declared_role
                     && repo_profiles.contains(token)
@@ -430,20 +430,17 @@ fn spec_references_repo_profile(
         });
         return role_refs_repo_profile || layout_refs_repo_profile;
     }
-    layout_tokens(spec).any(|token| {
-        let cell = if machine_cell_word(token, profiles, commands) {
-            token
-        } else {
-            token.split_once(':').map_or(token, |(cell, _)| cell)
-        };
+    layout_cells(spec).any(|token| {
+        let (cell, _) = agents_spec::split_inline_role(token, profiles, commands);
         repo_profiles.contains(cell) && !machine_cell_word(cell, profiles, commands)
     })
 }
 
-fn layout_tokens(raw: &str) -> impl Iterator<Item = &str> {
-    raw.split([',', '+', '/'])
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
+fn layout_cells(raw: &str) -> impl Iterator<Item = &str> {
+    agents_spec::parse_layout_structure(raw)
+        .ok()
+        .into_iter()
+        .flat_map(|layout| layout.cells().collect::<Vec<_>>())
 }
 
 fn machine_cell_word(token: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
