@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use jiff::Timestamp;
 
 use super::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame};
-use super::gate::apply_gate;
+use super::gate::{apply_gate, gate_remaining};
 use super::health::degraded_too_long;
 use super::lifecycle::{grow_beyond_legit, self_close_decision};
 use super::paint::FramePainter;
@@ -301,6 +301,9 @@ impl LoopState {
                     .max(FRAME_MIN_TIMEOUT),
             );
         }
+        if let Some(remaining) = gate_remaining(&self.gate, jiff::Timestamp::now()) {
+            timeout = timeout.min(remaining.max(FRAME_MIN_TIMEOUT));
+        }
         (active, timeout)
     }
 
@@ -372,7 +375,7 @@ impl LoopState {
         // last-known-good cache heals to the next good frame. Single-flight
         // bounds this to one extra run.
         if !self.should_exit && saw_final && rejected {
-            fetch.request(FetchRequest::recovery(), false);
+            fetch.request(FetchRequest::default(), false);
         }
     }
 
@@ -576,15 +579,15 @@ impl LoopState {
 
                 match publication {
                     PaneFramePublicationKind::Presence => {
-                        fetch.request(FetchRequest::pane_frame_published(publication), true)
+                        fetch.request(FetchRequest::pane_frame_published(), true)
                     }
                     PaneFramePublicationKind::Topology => fetch.request_or_defer(
-                        FetchRequest::pane_frame_published(publication),
+                        FetchRequest::pane_frame_published(),
                         self.identity_free_fetch_immediate(),
                         crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
                     ),
                     PaneFramePublicationKind::Metrics => fetch.request_or_defer(
-                        FetchRequest::pane_frame_published(publication),
+                        FetchRequest::pane_frame_published(),
                         self.identity_free_fetch_immediate(),
                         crate::sidebar::timing::UNWATCHED_METRICS_FOLD_CLAMP,
                     ),
@@ -594,7 +597,7 @@ impl LoopState {
                 let request = if requests_verification {
                     FetchRequest::store_delta_with_fresh_panes()
                 } else {
-                    FetchRequest::store_delta()
+                    FetchRequest::default()
                 };
                 fetch.request_or_defer(
                     request,
@@ -1008,7 +1011,7 @@ impl LoopState {
         wake_room(runtime);
         self.dirty = true;
         self.next_frame = Instant::now();
-        fetch.request(FetchRequest::store_delta(), true);
+        fetch.request(FetchRequest::default(), true);
     }
 
     pub(super) fn run_maintenance(
@@ -1023,6 +1026,12 @@ impl LoopState {
         // placeholder cockpit.
         self.on_snapshot(ctx.config, fetch, ctx.result_rx, ctx.anim_start, ctx.diag);
         fetch.fire_due(Instant::now());
+
+        if gate_remaining(&self.gate, jiff::Timestamp::now())
+            .is_some_and(|remaining| remaining.is_zero())
+        {
+            fetch.request(FetchRequest::force_fold(), false);
+        }
 
         // Tab-view read dwell: once the user has stayed past the dwell, provoke
         // a fold so the normal clear path sweeps the unread siblings. The fold

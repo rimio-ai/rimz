@@ -1172,7 +1172,7 @@ fn normalized_incident_identity(event: &rimz::diag::record::DiagEvent) -> String
         DiagEvent::HealthAlert {
             reason, since_ms, ..
         } => format!("health:{reason}:{since_ms}"),
-        DiagEvent::LinkAlert { tier, since_ms, .. } => format!("link:{tier:?}:{since_ms}"),
+        DiagEvent::LinkAlert { since_ms, .. } => format!("link:{since_ms}"),
         DiagEvent::TickBudgetBreach {
             tick_loop,
             since_ms,
@@ -1206,7 +1206,7 @@ fn classify_diagnostic(
     event: &rimz::diag::record::DiagEvent,
     severity: rimz::diag::record::DiagSeverity,
 ) -> (model::DoctorState, model::DoctorImpact) {
-    use rimz::diag::record::{DiagEvent, RendererExitCause};
+    use rimz::diag::record::{DiagEvent, HostedCarryDropReason, RendererExitCause};
     let state = match event {
         DiagEvent::FrameRejected { .. }
         | DiagEvent::PaneCarryForward { .. }
@@ -1237,13 +1237,55 @@ fn classify_diagnostic(
         DiagEvent::RendererExit {
             cause: RendererExitCause::SelfCloseEmptyTab,
         }
+        | DiagEvent::HostedCarryDropped {
+            reason: HostedCarryDropReason::ProbeReportsAbsent | HostedCarryDropReason::CarryExpired,
+            ..
+        }
         | DiagEvent::SidebarWidthIntent { .. }
         | DiagEvent::SidebarWidthNudge { .. }
         | DiagEvent::SidebarWidthSettle { .. }
+        | DiagEvent::FetchFoldStats { .. }
         | DiagEvent::ProducerElected { .. }
         | DiagEvent::ProducerDemoted { .. }
         | DiagEvent::GroupMigration { .. } => model::DoctorState::Expected,
-        _ => model::DoctorState::Investigate,
+        DiagEvent::ResolutionFallback { .. }
+        | DiagEvent::PaneCountDrop { .. }
+        | DiagEvent::CarryForwardExpired { .. }
+        | DiagEvent::HostedCarryDropped {
+            reason:
+                HostedCarryDropReason::StartRegressed | HostedCarryDropReason::ForegroundKindMismatch,
+            ..
+        }
+        | DiagEvent::FetchFailure { .. }
+        | DiagEvent::HealthAlert {
+            recovered_after_ms: None,
+            ..
+        }
+        | DiagEvent::LinkAlert {
+            recovered_after_ms: None,
+            ..
+        }
+        | DiagEvent::ClientReaped { settled: false, .. }
+        | DiagEvent::TickBudgetBreach {
+            recovered_after_ms: None,
+            ..
+        }
+        | DiagEvent::RowConflict { .. }
+        | DiagEvent::DuplicatePaneId { .. }
+        | DiagEvent::ForeignSessionPane { .. }
+        | DiagEvent::MixedBuildWriters { .. }
+        | DiagEvent::RendererPanic { .. }
+        | DiagEvent::RendererSignalDeath { .. }
+        | DiagEvent::RendererOrphanReaped { .. }
+        | DiagEvent::SidebarOrphanReaped { .. }
+        | DiagEvent::PaneCacheDivergence { .. }
+        | DiagEvent::SupervisorConvergence { .. }
+        | DiagEvent::SupervisorPreflightRejected { .. }
+        | DiagEvent::SelfCloseRejected { .. }
+        | DiagEvent::RendererExit {
+            cause: RendererExitCause::DegradedGaveUp,
+        }
+        | DiagEvent::FrameAnomaly { .. } => model::DoctorState::Investigate,
     };
     let impact = if state == model::DoctorState::Investigate {
         match severity {
@@ -1592,6 +1634,33 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             "fetch fold totals over {interval_ms}ms across {} causes",
             causes.len()
         ),
+        DiagEvent::FrameAnomaly {
+            anomaly:
+                rimz::diag::record::AnomalyKind::RowPresenceFlap {
+                    row_id,
+                    gone_at_ms,
+                    back_at_ms,
+                    gap_evidence: Some(evidence),
+                    ..
+                },
+            suppressed_since_last,
+            ..
+        } => {
+            let pulled_pane = evidence
+                .pulled_pane_present
+                .map(|present| present.to_string())
+                .unwrap_or_else(|| "unknown".to_owned());
+            let suppressed = if *suppressed_since_last > 0 {
+                format!("; {suppressed_since_last} suppressed")
+            } else {
+                String::new()
+            };
+            format!(
+                "observed row_presence_flap on {row_id}; gap {}ms; pulled row present={}; pulled pane present={pulled_pane}{suppressed}",
+                back_at_ms.saturating_sub(*gone_at_ms),
+                evidence.pulled_row_present,
+            )
+        }
         DiagEvent::FrameAnomaly {
             anomaly,
             suppressed_since_last,

@@ -227,11 +227,12 @@ fn missing_foreground_command_keeps_demotion_protective() {
 }
 
 #[test]
-fn gate_releases_held_regression_by_count_or_timeout() {
+fn gate_releases_held_regression_only_at_wall_clock_deadline() {
     let ws = workspace();
+    let base_ms = 1_700_000_000_000i64;
     let gate = GateState {
-        reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
-        rejecting_since: Some(gate_now()),
+        reject_streak: 10_000,
+        rejecting_since: Some(Timestamp::from_millisecond(base_ms).unwrap()),
         spend_carry: SpendCarryEpisodes::default(),
         rule: Some(GateRule::AgentDemotedToProcess),
     };
@@ -240,39 +241,24 @@ fn gate_releases_held_regression_by_count_or_timeout() {
             &agent_snapshot(&ws),
             &process_on(&ws, "terminal_9"),
             &gate,
-            gate_now()
+            Timestamp::from_millisecond(base_ms + 999).unwrap()
         ),
-        CommitDecision::AcceptViaEscapeHatch,
-        "a stuck demotion must surface, not freeze forever"
+        CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess),
+        "rapid recovery reads do not consume the settling window"
     );
 
-    let base = 1_700_000_000i64;
-    let gate = GateState {
-        reject_streak: 1,
-        rejecting_since: Some(Timestamp::from_second(base).unwrap()),
-        spend_carry: SpendCarryEpisodes::default(),
-        rule: Some(GateRule::AgentDemotedToProcess),
-    };
-    let ceiling = ACCEPT_REGRESSION_AFTER.as_secs() as i64;
-    // Still brief: held.
     assert_eq!(
         gate_commit(
             &agent_snapshot(&ws),
             &process_on(&ws, "terminal_9"),
             &gate,
-            Timestamp::from_second(base + ceiling - 1).unwrap()
-        ),
-        CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess)
-    );
-    // Past the ceiling: released.
-    assert_eq!(
-        gate_commit(
-            &agent_snapshot(&ws),
-            &process_on(&ws, "terminal_9"),
-            &gate,
-            Timestamp::from_second(base + ceiling).unwrap()
+            Timestamp::from_millisecond(base_ms + 1_000).unwrap()
         ),
         CommitDecision::AcceptViaEscapeHatch
+    );
+    assert_eq!(
+        gate_remaining(&gate, Timestamp::from_millisecond(base_ms + 1_000).unwrap()),
+        Some(Duration::ZERO)
     );
 }
 
@@ -634,15 +620,17 @@ fn escape_release_reports_escape_hatch() {
     let prior = agent_snapshot(&ws);
     let incoming = process_on(&ws, "terminal_9");
     let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let base_ms = 1_700_000_000_000i64;
     let prev_gate = GateState {
-        reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
-        rejecting_since: Some(gate_now()),
+        reject_streak: 2,
+        rejecting_since: Some(Timestamp::from_millisecond(base_ms).unwrap()),
         spend_carry: SpendCarryEpisodes::default(),
         rule: Some(GateRule::AgentDemotedToProcess),
     };
 
+    let now = Timestamp::from_millisecond(base_ms + 1_000).unwrap();
     let (state, gate, rejected, released_via_escape_hatch, _) =
-        apply_gate(computed, true, &prior, &prev_gate, gate_now());
+        apply_gate(computed, true, &prior, &prev_gate, now);
 
     assert!(!rejected);
     assert!(released_via_escape_hatch);

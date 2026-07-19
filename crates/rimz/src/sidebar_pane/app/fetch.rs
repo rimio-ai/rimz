@@ -12,14 +12,14 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
-use crate::diag::record::{FetchFoldCause, TickLoop};
+use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::consumer::{
     ConsumerFoldInputsStamp, ConsumerSnapshotSource, PublishedSnapshotReader, RollupCursor,
 };
 use crate::sidebar::events::SidebarEvent;
-use crate::sidebar::meter::{FetchFoldOutcome, TickMeter};
+use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::sidebar::read_marks::ReadMarks;
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
@@ -351,41 +351,21 @@ impl FetchWorker {
             }
         });
         if self.consumer_fold_unchanged(request, role, fold_stamp.as_ref(), now_ms) {
-            self.meter.record_fetch_fold(
-                request.causes.iter(),
-                FetchFoldOutcome::MemoSkip,
-                Duration::ZERO,
-            );
             sink.publish(FetchUpdate::Unchanged { role });
             return;
         }
 
-        let fold_started = Instant::now();
-        let (fast, fold_outcome, adopted) = if role.is_producer() {
-            (
-                self.read_and_publish_workspace(state),
-                FetchFoldOutcome::Full,
-                false,
-            )
+        let (fast, adopted) = if role.is_producer() {
+            (self.read_and_publish_workspace(state), false)
         } else {
             match self.reader.read_adopting(state) {
-                Ok(read) => {
-                    let (outcome, adopted) = match read.source {
-                        ConsumerSnapshotSource::Adoption => (FetchFoldOutcome::Adoption, true),
-                        ConsumerSnapshotSource::Fallback => (FetchFoldOutcome::Fallback, false),
-                    };
-                    (Ok(read.snapshot), outcome, adopted)
-                }
-                Err(err) => (Err(err), FetchFoldOutcome::Fallback, false),
+                Ok(read) => (
+                    Ok(read.snapshot),
+                    read.source == ConsumerSnapshotSource::Adoption,
+                ),
+                Err(err) => (Err(err), false),
             }
         };
-        if fast.is_ok() {
-            self.meter.record_fetch_fold(
-                request.causes.iter(),
-                fold_outcome,
-                fold_started.elapsed(),
-            );
-        }
         if consumer_stamp_recordable(request, role.is_producer()) && adopted != last_was_adoption {
             fold_stamp = Some(if adopted {
                 self.reader.projection_inputs_stamp(state)
@@ -548,16 +528,10 @@ impl FetchWorker {
             min_pane_cache_ms: request.min_pane_cache_ms,
             diag: self.diag.clone(),
         };
-        let fold_started = Instant::now();
         match run_produce_guarded(&mut self.reader, |cursor| {
             crate::sidebar::produce::produce_workspace_snapshot(cursor, state, &self.runtime, &opts)
         }) {
             Ok(produced) => {
-                self.meter.record_fetch_fold(
-                    request.causes.iter(),
-                    FetchFoldOutcome::Full,
-                    fold_started.elapsed(),
-                );
                 if role.is_producer()
                     && let Err(err) = self.projection_publisher.publish(
                         &self.runtime,
@@ -825,39 +799,12 @@ fn notification_panes(notification: &Notification) -> Vec<PaneId> {
 /// only, while a hard refresh remains available for manual recovery. When a
 /// request carries `min_pane_cache_ms`, any producing lane ignores a pane cache
 /// older than the signal that asked for fresh topology.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct FetchCauseSet(u16);
-
-impl FetchCauseSet {
-    fn one(cause: FetchFoldCause) -> Self {
-        Self(1 << cause.index())
-    }
-
-    fn insert(&mut self, other: Self) {
-        self.0 |= other.0;
-    }
-
-    fn iter(self) -> impl Iterator<Item = FetchFoldCause> {
-        FetchFoldCause::ALL
-            .into_iter()
-            .enumerate()
-            .filter_map(move |(index, cause)| (self.0 & (1 << index) != 0).then_some(cause))
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FetchRequest {
     mode: FetchMode,
     min_pane_cache_ms: Option<u64>,
     published_frame_hint: bool,
     force_fold: bool,
-    causes: FetchCauseSet,
-}
-
-impl Default for FetchRequest {
-    fn default() -> Self {
-        Self::with_cause(FetchFoldCause::Backstop)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -891,39 +838,16 @@ impl FetchMode {
 }
 
 impl FetchRequest {
-    fn with_cause(cause: FetchFoldCause) -> Self {
-        Self {
-            mode: FetchMode::Normal,
-            min_pane_cache_ms: None,
-            published_frame_hint: false,
-            force_fold: false,
-            causes: FetchCauseSet::one(cause),
-        }
-    }
-
-    pub(super) fn store_delta() -> Self {
-        Self::with_cause(FetchFoldCause::StoreDelta)
-    }
-
     pub(super) fn store_delta_with_fresh_panes() -> Self {
-        Self::producer_fresh_panes_with_cause(FetchFoldCause::StoreDelta)
-    }
-
-    pub(super) fn recovery() -> Self {
-        Self::with_cause(FetchFoldCause::Recovery)
+        Self::producer_fresh_panes()
     }
 
     pub(super) fn producer_fresh_panes() -> Self {
-        Self::producer_fresh_panes_with_cause(FetchFoldCause::Topology)
-    }
-
-    fn producer_fresh_panes_with_cause(cause: FetchFoldCause) -> Self {
         Self {
             mode: FetchMode::ProducerFreshPanes,
             min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
             published_frame_hint: false,
             force_fold: false,
-            causes: FetchCauseSet::one(cause),
         }
     }
 
@@ -933,24 +857,15 @@ impl FetchRequest {
             min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
             published_frame_hint: false,
             force_fold: false,
-            causes: FetchCauseSet::one(FetchFoldCause::HardRefresh),
         }
     }
 
-    pub(super) fn pane_frame_published(
-        publication: crate::sidebar::events::PaneFramePublicationKind,
-    ) -> Self {
-        let cause = match publication {
-            crate::sidebar::events::PaneFramePublicationKind::Topology => FetchFoldCause::Topology,
-            crate::sidebar::events::PaneFramePublicationKind::Metrics => FetchFoldCause::Metrics,
-            crate::sidebar::events::PaneFramePublicationKind::Presence => FetchFoldCause::Presence,
-        };
+    pub(super) fn pane_frame_published() -> Self {
         Self {
             mode: FetchMode::Normal,
             min_pane_cache_ms: None,
             published_frame_hint: true,
             force_fold: false,
-            causes: FetchCauseSet::one(cause),
         }
     }
 
@@ -963,18 +878,12 @@ impl FetchRequest {
             min_pane_cache_ms: None,
             published_frame_hint: false,
             force_fold: true,
-            causes: FetchCauseSet::one(FetchFoldCause::WatchTransition),
         }
     }
 
     #[cfg(test)]
     pub(super) fn is_producer_fresh_panes(self) -> bool {
         matches!(self.mode, FetchMode::ProducerFreshPanes)
-    }
-
-    #[cfg(test)]
-    pub(super) fn has_cause(self, cause: FetchFoldCause) -> bool {
-        self.causes.iter().any(|candidate| candidate == cause)
     }
 
     #[cfg(test)]
@@ -986,7 +895,6 @@ impl FetchRequest {
         self.mode = self.mode.strongest(other.mode);
         self.published_frame_hint |= other.published_frame_hint;
         self.force_fold |= other.force_fold;
-        self.causes.insert(other.causes);
         self.min_pane_cache_ms = match (self.min_pane_cache_ms, other.min_pane_cache_ms) {
             (Some(current), Some(next)) => Some(current.max(next)),
             (Some(current), None) => Some(current),
@@ -1054,12 +962,6 @@ impl FetchWorker {
                         .finish(tick, crate::sidebar::timing::unix_now_ms())
                     {
                         crate::sidebar::meter::report(&self.diag, event);
-                    }
-                    if let Some(event) = self
-                        .meter
-                        .take_fetch_fold_report(crate::sidebar::timing::unix_now_ms())
-                    {
-                        self.diag.emit_unlimited(event);
                     }
                 }
                 Err(err) => sink.publish(FetchUpdate::Failed {

@@ -298,19 +298,9 @@ pub const RESIZE_PAINT_HOLD_CEILING: Duration = Duration::from_secs(2);
 /// contract) enters bounded retry instead of lingering on stale data.
 pub const GIVE_UP_AFTER_DEGRADED: Duration = Duration::from_secs(30);
 
-/// Consecutive regression-gate holds before the escape hatch accepts the
-/// regression anyway. Each reject fires one immediate self-heal refetch, and
-/// the rollup is read fresh from the atomic `latest.json` each fold, so the
-/// gate needs to absorb only a single slipped frame: two holds confirm a
-/// *genuine* exit and demote it promptly, while a true one-frame flicker
-/// recovers on the first reject's refetch and is never accepted.
-pub const ACCEPT_REGRESSION_AFTER_REJECTS: u32 = 2;
-
-/// Hard wall-clock ceiling on a regression-hold episode — the load-bearing
-/// hatch, since a slow poll cadence could otherwise stretch the count out.
-/// One second caps a genuine exit on the producer tab (whose reject-refetches
-/// each pay a mux roster read) while staying above a single such read, and well
-/// under [`GIVE_UP_AFTER_DEGRADED`].
+/// Settling window and maximum delay for an ambiguous same-command exit.
+/// Immediate recovery reads stay inside the window regardless of their count;
+/// the render loop wakes at this deadline and forces a non-skippable fold.
 pub const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(1);
 
 /// Consecutive refresh failures before the renderer surfaces a degraded

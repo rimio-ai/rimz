@@ -457,6 +457,48 @@ fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
 }
 
 #[test]
+fn maintenance_requests_force_fold_when_gate_deadline_is_due() {
+    let ws = workspace();
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+    let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+    let (_dir, mut state) = loop_state(&ws);
+    state.last_heartbeat = Some(Instant::now());
+    state.last_self_close_check = Instant::now();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
+    state.gate = GateState {
+        reject_streak: 2,
+        rejecting_since: Some(jiff::Timestamp::from_millisecond(now_ms - 1_001).unwrap()),
+        rule: Some(crate::diag::record::GateRule::AgentDemotedToProcess),
+        ..GateState::default()
+    };
+    let config = serve_config(&ws);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
+
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
+
+    assert!(
+        request_rx
+            .try_recv()
+            .expect("gate deadline fold request")
+            .forces_fold(),
+        "due gate reevaluation must bypass the unchanged-input skip"
+    );
+}
+
+#[test]
 fn maintenance_waits_for_own_view_before_tab_read_dwell_fetch() {
     let ws = workspace();
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
@@ -571,6 +613,28 @@ fn frame_timing_wakes_for_elapsed_tab_read_dwell() {
 
     assert!(!active);
     assert_eq!(timeout, FRAME_MIN_TIMEOUT);
+}
+
+#[test]
+fn frame_timing_caps_long_tick_at_gate_deadline() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    state.dirty = false;
+    state.last_self_close_check = Instant::now();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
+    state.gate = GateState {
+        reject_streak: 1,
+        rejecting_since: Some(jiff::Timestamp::from_millisecond(now_ms - 800).unwrap()),
+        rule: Some(crate::diag::record::GateRule::AgentDemotedToProcess),
+        ..GateState::default()
+    };
+
+    let (_active, timeout) = state.frame_timing(Duration::from_secs(60), Instant::now());
+
+    assert!(
+        timeout <= Duration::from_millis(200),
+        "idle wait wakes at the armed gate deadline: {timeout:?}"
+    );
 }
 
 #[test]
@@ -731,10 +795,6 @@ fn lifecycle_store_delta_preserves_fresh_pane_verification() {
 
         let request = request_rx.try_recv().expect("immediate lifecycle fetch");
         assert!(request.is_producer_fresh_panes(), "signal: {signal}");
-        assert!(
-            request.has_cause(crate::diag::record::FetchFoldCause::StoreDelta),
-            "signal: {signal}"
-        );
     }
 }
 
@@ -1707,6 +1767,8 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
         "the second rejected fold still stays held"
     );
     assert_eq!(state.gate.reject_streak, 2);
+    let now_ms = jiff::Timestamp::now().as_millisecond();
+    state.gate.rejecting_since = Some(jiff::Timestamp::from_millisecond(now_ms - 1_000).unwrap());
 
     fold_snapshot(
         &mut state,

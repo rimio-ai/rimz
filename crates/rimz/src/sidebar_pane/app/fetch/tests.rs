@@ -235,7 +235,6 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         min_pane_cache_ms: None,
         published_frame_hint: false,
         force_fold: false,
-        causes: FetchCauseSet::one(FetchFoldCause::HardRefresh),
     };
     let mut worker = FetchWorker::new(
         config,
@@ -704,9 +703,7 @@ fn consumer_stamp_skip_and_record_eligibility_are_separate() {
     assert!(consumer_stamp_recordable(FetchRequest::default(), false));
     assert!(!consumer_stamp_skippable(FetchRequest::default(), true));
     assert!(!consumer_stamp_recordable(FetchRequest::default(), true));
-    let publication = FetchRequest::pane_frame_published(
-        crate::sidebar::events::PaneFramePublicationKind::Topology,
-    );
+    let publication = FetchRequest::pane_frame_published();
     assert!(!consumer_stamp_skippable(publication, false));
     assert!(consumer_stamp_recordable(publication, false));
     for request in [
@@ -744,12 +741,7 @@ fn consumer_stamp_pane_publication_seeds_next_ordinary_skip() {
     let mut worker = fixture.worker();
 
     assert!(matches!(
-        fixture.run_with(
-            FetchRequest::pane_frame_published(
-                crate::sidebar::events::PaneFramePublicationKind::Topology,
-            ),
-            &mut worker,
-        )[0],
+        fixture.run_with(FetchRequest::pane_frame_published(), &mut worker,)[0],
         FetchUpdate::Snapshot { .. }
     ),);
     assert!(
@@ -771,7 +763,6 @@ fn consumer_stamp_other_mandatory_folds_clear_before_ordinary_reseed() {
             min_pane_cache_ms: None,
             published_frame_hint: false,
             force_fold: false,
-            causes: FetchCauseSet::one(FetchFoldCause::HardRefresh),
         },
     ] {
         let fixture = ConsumerFixture::new();
@@ -944,9 +935,7 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     assert_eq!(pending.mode, FetchMode::HardRefresh);
     assert!(pending.min_pane_cache_ms.is_some());
 
-    let request = FetchRequest::pane_frame_published(
-        crate::sidebar::events::PaneFramePublicationKind::Topology,
-    );
+    let request = FetchRequest::pane_frame_published();
     assert_eq!(request.mode, FetchMode::Normal);
     assert!(request.published_frame_hint);
     assert!(!request.force_fold);
@@ -1025,9 +1014,7 @@ fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
 fn pane_frame_published_refolds_a_consumer_from_cache() {
     let fixture = ConsumerFixture::new();
     fixture.write_pane_frame();
-    let mut outcomes = fixture.run(FetchRequest::pane_frame_published(
-        crate::sidebar::events::PaneFramePublicationKind::Topology,
-    ));
+    let mut outcomes = fixture.run(FetchRequest::pane_frame_published());
 
     assert_eq!(outcomes.len(), 1, "consumer folds once from cache");
     let outcome = outcomes.pop().unwrap();

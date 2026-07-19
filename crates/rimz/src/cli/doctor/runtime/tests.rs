@@ -1,8 +1,10 @@
 use super::*;
 use rimz::diag::record::{
-    AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FrameRejectReason, FrameStamp, ObserveRole,
-    PaneDropEvidence, PaneDropViewEvidence, RendererExitCause, TickLoop,
+    AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FetchFoldCause, FetchFoldCauseStats,
+    FrameRejectReason, FrameStamp, HostedCarryDropReason, ObserveRole, PaneDropEvidence,
+    PaneDropViewEvidence, RendererExitCause, RowPresenceGapEvidence, TickLoop,
 };
+use rimz::remote::link::LinkTier;
 
 fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
     rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
@@ -461,6 +463,54 @@ fn diagnostic_summary_describes_renderer_exit_without_cleanly_label() {
 }
 
 #[test]
+fn diagnostic_summary_attributes_row_presence_gap_at_missing_edge() {
+    let row_flap = |gap_evidence| DiagEvent::FrameAnomaly {
+        role: ObserveRole::Consumer,
+        anomaly: AnomalyKind::RowPresenceFlap {
+            row_id: "agent:a".to_owned(),
+            pane_id: Some("zellij:terminal_1".to_owned()),
+            gone_at_ms: 10,
+            back_at_ms: 25,
+            gap_evidence,
+        },
+        window_ms: Some(10_000),
+        frame: FrameStamp {
+            produced_at_ms: Some(8),
+            rows: 2,
+            agents: 2,
+            processes: 0,
+            pulled_rows: Some(2),
+            pulled_panes_produced_at_ms: Some(8),
+        },
+        events_recent: EventsSig::default(),
+        gate_reject_streak: 0,
+        health_failure_streak: 0,
+        suppressed_since_last: 0,
+        dropped_msgs: 0,
+    };
+
+    assert_eq!(
+        diagnostic_summary(&row_flap(None)),
+        "observed row_presence_flap on agent:a"
+    );
+    assert_eq!(
+        diagnostic_summary(&row_flap(Some(RowPresenceGapEvidence {
+            frame: FrameStamp {
+                produced_at_ms: Some(7),
+                rows: 1,
+                agents: 1,
+                processes: 0,
+                pulled_rows: Some(2),
+                pulled_panes_produced_at_ms: Some(7),
+            },
+            pulled_row_present: true,
+            pulled_pane_present: Some(true),
+        }))),
+        "observed row_presence_flap on agent:a; gap 15ms; pulled row present=true; pulled pane present=true"
+    );
+}
+
+#[test]
 fn diagnostic_incidents_collapse_same_episode_records() {
     let incidents = diagnostic_incidents(
         vec![
@@ -493,6 +543,48 @@ fn diagnostic_incidents_pair_recovery_and_keep_recurrence_distinct() {
     assert_eq!(incidents[0].state, model::DoctorState::Recovered);
     assert!(incidents[0].summary.contains("recovered after 10ms"));
     assert!(incidents[1].summary.contains("over budget for 5 ticks"));
+}
+
+#[test]
+fn diagnostic_incidents_pair_link_recovery_by_stable_episode_start() {
+    let active = DiagEvent::LinkAlert {
+        tier: LinkTier::Degraded,
+        rtt_ms: Some(231),
+        miss_pct: 0,
+        since_ms: 10,
+        recovered_after_ms: None,
+    };
+    let recovered = DiagEvent::LinkAlert {
+        tier: LinkTier::Good,
+        rtt_ms: Some(50),
+        miss_pct: 0,
+        since_ms: 10,
+        recovered_after_ms: Some(500),
+    };
+    let recurrence = DiagEvent::LinkAlert {
+        tier: LinkTier::Bad,
+        rtt_ms: None,
+        miss_pct: 100,
+        since_ms: 30,
+        recovered_after_ms: None,
+    };
+
+    let incidents = diagnostic_incidents(
+        vec![
+            diag_record(10, active),
+            diag_record(20, recovered),
+            diag_record(30, recurrence),
+        ],
+        12,
+        None,
+    );
+
+    assert_eq!(incidents.len(), 2);
+    assert_eq!(incidents[0].record_count, 2);
+    assert_eq!(incidents[0].state, model::DoctorState::Recovered);
+    assert_eq!(incidents[0].impact, model::DoctorImpact::Info);
+    assert_eq!(incidents[1].record_count, 1);
+    assert_eq!(incidents[1].state, model::DoctorState::Investigate);
 }
 
 #[test]
@@ -582,6 +674,83 @@ fn diagnostic_classification_requires_complete_positive_evidence() {
         classify_diagnostic(&legacy_drop, legacy_drop.severity()).0,
         model::DoctorState::Investigate
     );
+}
+
+#[test]
+fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
+    let hosted = |reason| DiagEvent::HostedCarryDropped {
+        pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_5"),
+        agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        reason,
+    };
+    let cases = [
+        (
+            DiagEvent::FetchFoldStats {
+                interval_ms: 30_000,
+                causes: vec![FetchFoldCauseStats {
+                    cause: FetchFoldCause::Backstop,
+                    memo_skips: 1,
+                    full_folds: 0,
+                    adoptions: 0,
+                    fallbacks: 0,
+                    fold_ms: 0,
+                }],
+            },
+            model::DoctorState::Expected,
+            model::DoctorImpact::Info,
+        ),
+        (
+            hosted(HostedCarryDropReason::ProbeReportsAbsent),
+            model::DoctorState::Expected,
+            model::DoctorImpact::Info,
+        ),
+        (
+            hosted(HostedCarryDropReason::CarryExpired),
+            model::DoctorState::Expected,
+            model::DoctorImpact::Info,
+        ),
+        (
+            hosted(HostedCarryDropReason::StartRegressed),
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+        (
+            hosted(HostedCarryDropReason::ForegroundKindMismatch),
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+        (
+            DiagEvent::LinkAlert {
+                tier: LinkTier::Degraded,
+                rtt_ms: Some(231),
+                miss_pct: 0,
+                since_ms: 10,
+                recovered_after_ms: None,
+            },
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+        (
+            DiagEvent::LinkAlert {
+                tier: LinkTier::Good,
+                rtt_ms: Some(50),
+                miss_pct: 0,
+                since_ms: 10,
+                recovered_after_ms: Some(500),
+            },
+            model::DoctorState::Recovered,
+            model::DoctorImpact::Info,
+        ),
+    ];
+
+    for (event, expected_state, expected_impact) in cases {
+        assert_eq!(
+            classify_diagnostic(&event, event.severity()),
+            (expected_state, expected_impact),
+            "{}",
+            event.kind_name()
+        );
+    }
 }
 
 #[test]

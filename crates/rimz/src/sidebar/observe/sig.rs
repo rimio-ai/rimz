@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -20,6 +20,8 @@ pub struct FrameSig {
     pub events: EventsSig,
     pub pulled_rows: usize,
     pub pulled_panes_produced_at_ms: Option<u64>,
+    pub pulled_row_ids: BTreeSet<String>,
+    pub pulled_pane_ids: BTreeSet<String>,
     pub gate_reject_streak: u32,
     pub health_failure_streak: u32,
 }
@@ -247,6 +249,11 @@ pub fn extract_sig(
         events: extract_events(event_store, now_ms),
         pulled_rows: last_pulled.rows,
         pulled_panes_produced_at_ms: last_pulled.panes_produced_at_ms,
+        pulled_row_ids: last_pulled.rows().map(|row| row.id.clone()).collect(),
+        pulled_pane_ids: last_pulled
+            .rows()
+            .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.to_string()))
+            .collect(),
         gate_reject_streak,
         health_failure_streak,
     }

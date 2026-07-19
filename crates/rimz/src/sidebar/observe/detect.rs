@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use crate::diag::record::RowPresenceGapEvidence;
 use crate::sidebar::timing::{
     OBSERVE_AGGREGATE_OSC_WINDOW, OBSERVE_ORDER_FLAP_WINDOW, OBSERVE_ROSTER_FLAP_WINDOW,
     OBSERVE_ROW_FLAP_WINDOW, OBSERVE_STATUS_CHURN_WINDOW, OBSERVE_VALUE_OSC_WINDOW, OBSERVE_WARMUP,
@@ -266,20 +267,26 @@ impl Observer {
         for row in &sig.rows {
             match self.presence.get_mut(&row.row_id) {
                 Some(presence) => {
-                    if let Some(gone_at) = presence.gone_at.take()
-                        && sig.at_ms.saturating_sub(gone_at) <= window
-                        && !presence.absence_justified
-                    {
-                        drafts.push(AnomalyDraft::from_sig(
-                            sig,
-                            AnomalyKind::RowPresenceFlap {
-                                row_id: row.row_id.clone(),
-                                pane_id: row.pane_id.clone().or_else(|| presence.pane_id.clone()),
-                                gone_at_ms: gone_at,
-                                back_at_ms: sig.at_ms,
-                            },
-                            Some(window),
-                        ));
+                    if let Some(gone_at) = presence.gone_at.take() {
+                        let gap_evidence = presence.gap_evidence.take();
+                        if sig.at_ms.saturating_sub(gone_at) <= window
+                            && !presence.absence_justified
+                        {
+                            drafts.push(AnomalyDraft::from_sig(
+                                sig,
+                                AnomalyKind::RowPresenceFlap {
+                                    row_id: row.row_id.clone(),
+                                    pane_id: row
+                                        .pane_id
+                                        .clone()
+                                        .or_else(|| presence.pane_id.clone()),
+                                    gone_at_ms: gone_at,
+                                    back_at_ms: sig.at_ms,
+                                    gap_evidence,
+                                },
+                                Some(window),
+                            ));
+                        }
                     }
                     presence.last_seen_at = sig.at_ms;
                     presence.pane_id = row.pane_id.clone();
@@ -295,6 +302,7 @@ impl Observer {
                             pane_id: row.pane_id.clone(),
                             group_key: row.group_key.clone(),
                             gone_at: None,
+                            gap_evidence: None,
                             absence_justified: false,
                             short_lived_emitted: false,
                         },
@@ -347,6 +355,14 @@ impl Observer {
                 presence.short_lived_emitted = true;
             }
             presence.gone_at = Some(sig.at_ms);
+            presence.gap_evidence = Some(RowPresenceGapEvidence {
+                frame: super::frame_stamp_from_sig(sig),
+                pulled_row_present: sig.pulled_row_ids.contains(&key),
+                pulled_pane_present: presence
+                    .pane_id
+                    .as_ref()
+                    .map(|pane_id| sig.pulled_pane_ids.contains(pane_id)),
+            });
             presence.absence_justified = closed || rebound;
         }
 
@@ -541,6 +557,7 @@ impl Observer {
                     pane_id: row.pane_id.clone(),
                     group_key: row.group_key.clone(),
                     gone_at: None,
+                    gap_evidence: None,
                     absence_justified: false,
                     short_lived_emitted: false,
                 });
@@ -578,6 +595,7 @@ struct RowPresence {
     pane_id: Option<String>,
     group_key: String,
     gone_at: Option<u64>,
+    gap_evidence: Option<RowPresenceGapEvidence>,
     absence_justified: bool,
     short_lived_emitted: bool,
 }

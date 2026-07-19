@@ -158,6 +158,41 @@ fn tick_budget_breach_deserializes_legacy_records_without_last_sample() {
 }
 
 #[test]
+fn row_presence_gap_evidence_is_backward_compatible() {
+    let legacy = serde_json::json!({
+        "detector": "row_presence_flap",
+        "row_id": "agent:a",
+        "pane_id": "zellij:terminal_1",
+        "gone_at_ms": 10,
+        "back_at_ms": 20
+    });
+    let decoded: AnomalyKind = serde_json::from_value(legacy).expect("decode legacy row flap");
+    assert!(matches!(
+        decoded,
+        AnomalyKind::RowPresenceFlap {
+            gap_evidence: None,
+            ..
+        }
+    ));
+
+    let populated = AnomalyKind::RowPresenceFlap {
+        row_id: "agent:a".to_owned(),
+        pane_id: Some("zellij:terminal_1".to_owned()),
+        gone_at_ms: 10,
+        back_at_ms: 20,
+        gap_evidence: Some(RowPresenceGapEvidence {
+            frame: frame_stamp(7),
+            pulled_row_present: true,
+            pulled_pane_present: Some(true),
+        }),
+    };
+    let value = serde_json::to_value(&populated).expect("encode populated row flap");
+    let round_trip: AnomalyKind = serde_json::from_value(value).expect("decode populated row flap");
+
+    assert_eq!(round_trip, populated);
+}
+
+#[test]
 fn severity_table_pins_conditional_and_regression_categories() {
     let info = [
         DiagEvent::SidebarWidthIntent {

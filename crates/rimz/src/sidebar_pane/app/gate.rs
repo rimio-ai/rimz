@@ -11,9 +11,10 @@ use crate::diag::record::GateRule;
 use crate::ids::{AgentKind, PaneId};
 use jiff::Timestamp;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::Duration;
 
 use super::state::RenderState;
-use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, ACCEPT_REGRESSION_AFTER_REJECTS};
+use crate::sidebar::timing::ACCEPT_REGRESSION_AFTER;
 
 /// Sticky state for the last-known-good commit gate, kept beside
 /// [`Health`](super::health::Health) but deliberately orthogonal to it:
@@ -133,15 +134,18 @@ fn foreground_command_changed(prev: Option<&str>, incoming: Option<&str>) -> boo
     matches!((prev, incoming), (Some(prev), Some(incoming)) if prev != incoming)
 }
 
-/// Whether a hold episode has run long enough — by count or wall-clock — to
-/// accept the regression and stop holding. Mirrors
+/// Whether a hold episode has run long enough to accept the regression and
+/// stop holding. Mirrors
 /// [`degraded_too_long`](super::health::degraded_too_long)'s "never freeze
 /// forever" rule for the gate.
 fn escape_hatch_open(gate: &GateState, now: Timestamp) -> bool {
-    gate.reject_streak >= ACCEPT_REGRESSION_AFTER_REJECTS
-        || gate.rejecting_since.is_some_and(|since| {
-            now.duration_since(since).as_secs() >= ACCEPT_REGRESSION_AFTER.as_secs() as i64
-        })
+    gate_remaining(gate, now).is_some_and(|remaining| remaining.is_zero())
+}
+
+pub(super) fn gate_remaining(gate: &GateState, now: Timestamp) -> Option<Duration> {
+    let since = gate.rejecting_since?;
+    let elapsed_ms = u64::try_from(now.duration_since(since).as_millis()).unwrap_or(0);
+    Some(ACCEPT_REGRESSION_AFTER.saturating_sub(Duration::from_millis(elapsed_ms)))
 }
 
 pub(super) fn gate_held_ms(gate: &GateState, now: Timestamp) -> u64 {

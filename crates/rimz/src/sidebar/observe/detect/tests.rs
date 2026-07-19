@@ -49,6 +49,8 @@ fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
         events: EventsSig::default(),
         pulled_rows: 0,
         pulled_panes_produced_at_ms: Some(1),
+        pulled_row_ids: BTreeSet::new(),
+        pulled_pane_ids: BTreeSet::new(),
         gate_reject_streak: 0,
         health_failure_streak: 0,
     }
@@ -116,6 +118,20 @@ fn with_sibling_count(mut frame: FrameSig, sibling_count: usize) -> FrameSig {
     if let Some(view) = &mut frame.own_view {
         view.sibling_count = sibling_count;
     }
+    frame
+}
+
+fn with_pulled_rows(mut frame: FrameSig, rows: &[(&str, &str)], produced_at_ms: u64) -> FrameSig {
+    frame.pulled_rows = rows.len();
+    frame.pulled_panes_produced_at_ms = Some(produced_at_ms);
+    frame.pulled_row_ids = rows
+        .iter()
+        .map(|(row_id, _)| (*row_id).to_owned())
+        .collect();
+    frame.pulled_pane_ids = rows
+        .iter()
+        .map(|(_, pane_id)| (*pane_id).to_owned())
+        .collect();
     frame
 }
 
@@ -388,7 +404,8 @@ fn row_presence_reports_real_blinks_and_short_lived_rows() {
             row_id,
             pane_id,
             gone_at_ms: 12_000,
-            back_at_ms: 13_000
+            back_at_ms: 13_000,
+            ..
         } if row_id == "a" && pane_id.as_deref() == Some("p1")
     )));
     assert_lacks_kind(
@@ -415,6 +432,79 @@ fn row_presence_reports_real_blinks_and_short_lived_rows() {
             ..
         }] if row_id == "p" && pane_id.as_deref() == Some("p9") && group_key == "external"
     ));
+}
+
+#[test]
+fn row_presence_records_missing_edge_pulled_truth_membership() {
+    struct Case {
+        name: &'static str,
+        missing_pulled: Vec<(&'static str, &'static str)>,
+        pulled_row_present: bool,
+        pulled_pane_present: bool,
+    }
+
+    for case in [
+        Case {
+            name: "published omission",
+            missing_pulled: vec![("b", "p2")],
+            pulled_row_present: false,
+            pulled_pane_present: false,
+        },
+        Case {
+            name: "renderer-local omission",
+            missing_pulled: vec![("a", "p1"), ("b", "p2")],
+            pulled_row_present: true,
+            pulled_pane_present: true,
+        },
+    ] {
+        let mut observer = Observer::default();
+        observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+        observer.observe(sig(
+            11_000,
+            vec![row("a", "p1", "main"), row("b", "p2", "main")],
+        ));
+        observer.observe(with_pulled_rows(
+            sig(12_000, vec![row("b", "p2", "main")]),
+            &case.missing_pulled,
+            77,
+        ));
+
+        let drafts = observer.observe(sig(
+            13_000,
+            vec![row("a", "p1", "main"), row("b", "p2", "main")],
+        ));
+        let evidence = drafts
+            .iter()
+            .find_map(|draft| match &draft.kind {
+                AnomalyKind::RowPresenceFlap {
+                    row_id,
+                    gap_evidence,
+                    ..
+                } if row_id == "a" => gap_evidence.as_ref(),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{} evidence", case.name));
+
+        assert_eq!(evidence.frame.produced_at_ms, Some(1), "{}", case.name);
+        assert_eq!(evidence.frame.rows, 1, "{}", case.name);
+        assert_eq!(
+            evidence.frame.pulled_panes_produced_at_ms,
+            Some(77),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            evidence.pulled_row_present, case.pulled_row_present,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            evidence.pulled_pane_present,
+            Some(case.pulled_pane_present),
+            "{}",
+            case.name
+        );
+    }
 }
 
 #[test]

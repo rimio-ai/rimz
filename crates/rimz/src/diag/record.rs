@@ -95,27 +95,6 @@ pub enum FetchFoldCause {
     Recovery,
 }
 
-impl FetchFoldCause {
-    pub const ALL: [Self; 8] = [
-        Self::StoreDelta,
-        Self::Topology,
-        Self::Metrics,
-        Self::Presence,
-        Self::Backstop,
-        Self::WatchTransition,
-        Self::HardRefresh,
-        Self::Recovery,
-    ];
-    pub const COUNT: usize = Self::ALL.len();
-
-    pub fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|candidate| *candidate == self)
-            .expect("fetch fold cause is present in FetchFoldCause::ALL")
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FetchFoldCauseStats {
     pub cause: FetchFoldCause,
@@ -905,6 +884,13 @@ pub struct FrameStamp {
     pub pulled_panes_produced_at_ms: Option<u64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RowPresenceGapEvidence {
+    pub frame: FrameStamp,
+    pub pulled_row_present: bool,
+    pub pulled_pane_present: Option<bool>,
+}
+
 /// Active pane open/close events at record time.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventsSig {
@@ -982,6 +968,8 @@ pub enum AnomalyKind {
         pane_id: Option<String>,
         gone_at_ms: u64,
         back_at_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gap_evidence: Option<RowPresenceGapEvidence>,
     },
     ShortLivedRow {
         row_id: String,
