@@ -49,7 +49,6 @@ const WIDE_COLS: u16 = 58;
 
 pub const KEY_UP: &[u8] = b"\x1b[A";
 pub const KEY_DOWN: &[u8] = b"\x1b[B";
-pub const KEY_RIGHT: &[u8] = b"\x1b[C";
 
 /// How long a phase may take to appear. The serve loop ticks every second, so
 /// a couple of ticks suffice on an idle machine; `wait_for` returns the instant
@@ -226,10 +225,6 @@ impl<'a> RoomHarness<'a> {
         let mut writer = self.writer.lock().expect("pty writer");
         writer.write_all(bytes).expect("write sidebar keys");
         writer.flush().expect("flush sidebar keys");
-    }
-
-    pub fn publish_provider_spending(&self, spending: &rimz::agents::spending::Spending) {
-        self.env.publish_provider_spending(spending);
     }
 
     pub fn publish_accounts(&self, accounts: &rimz::sidebar::refresh::AccountsCache) {

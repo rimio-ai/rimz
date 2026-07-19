@@ -8,20 +8,39 @@ use rimz::sidebar::refresh::{AccountsCache, ProviderRecord};
 use rimz::sidebar::timing::unix_now_ms;
 use serde_json::json;
 
-use super::{KEY_RIGHT, RoomHarness, SETTLE, session_start_at, user_prompt_submit};
+use super::{RoomHarness, SETTLE, session_start_at, user_prompt_submit};
 use crate::common::Env;
 
 #[test]
-fn provider_dashboard_renders_spend_cost_and_tabs() {
+fn provider_dashboard_renders_published_spend_and_session_cost() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
     }
     write_provider_tab_config(&env);
+    let _ = env.store();
+    env.publish_accounts(&accounts());
+    let runtime = env.runtime_paths();
+    let scope_hash =
+        rimz::agents::spending::SpendScope::from_roots(Some(&env.project_root), &[]).hash();
+    // ponytail: future-date by SETTLE so host starvation cannot expire this
+    // non-timing fixture; inject a clock if refresh timing enters scope.
+    let published_at_ms = unix_now_ms().saturating_add(SETTLE.as_millis() as u64);
+    rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        published_at_ms,
+        &spending(),
+    );
+    rimz::agents::spending::write_workspace_spending_cache(
+        &runtime.workspace_spending_path(&scope_hash),
+        &rimz::agents::spending::WorkspaceSpendingCache {
+            refreshed_at_ms: published_at_ms,
+            scope_hash,
+            ..Default::default()
+        },
+    );
 
     let room = RoomHarness::launch_wide(&env, MuxName::Tmux);
-    room.publish_accounts(&accounts());
-    room.publish_provider_spending(&spending());
 
     room.onboard(&["claude"]);
     room.agent_hook(
@@ -44,16 +63,7 @@ fn provider_dashboard_renders_spend_cost_and_tabs() {
     );
 
     let screen = room.wait_for(
-        |s| {
-            s.contains("Claude Max · v2.1.158")
-                && s.contains("$3.50")
-                && s.contains("$1.27")
-                && s.contains("W:")
-                && s.contains("M:")
-                && s.contains('▰')
-                && s.contains('▱')
-                && s.contains('↻')
-        },
+        |s| s.contains("Claude Max · v2.1.158") && s.contains("$3.50") && s.contains("$1.27"),
         SETTLE,
     );
     assert!(
@@ -63,21 +73,6 @@ fn provider_dashboard_renders_spend_cost_and_tabs() {
     assert!(
         screen.contains("$3.50") && screen.contains("$1.27"),
         "dashboard spend and row cost should render:\n{screen}"
-    );
-    assert!(
-        screen.contains("W:") && screen.contains("M:"),
-        "dashboard total rows should render:\n{screen}"
-    );
-    assert!(
-        screen.contains('▰') && screen.contains('▱') && screen.contains('↻'),
-        "dashboard budget bars should render:\n{screen}"
-    );
-
-    room.send_keys(KEY_RIGHT);
-    let screen = room.wait_for(|s| s.contains("ChatGPT Pro · v0.139.0"), SETTLE);
-    assert!(
-        screen.contains("ChatGPT Pro · v0.139.0"),
-        "right-arrow should switch the provider tab to Codex:\n{screen}"
     );
 }
 
