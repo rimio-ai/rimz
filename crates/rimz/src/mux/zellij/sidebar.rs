@@ -38,7 +38,7 @@ const CLIENT_PROBE_SETTLE: Duration = Duration::from_millis(100);
 // A false negative only defers one recoverable add pass; a false positive can
 // leak an unmounted sidebar serve pair.
 const CLIENT_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
-const STACK_REPAIR_SETTLE: Duration = Duration::from_millis(500);
+const GEOMETRY_REPAIR_SETTLE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DockOutcome {
@@ -530,30 +530,36 @@ impl ZellijBackend {
             .filter(|pane| pane.tab_position == tab_position && pane.is_terminal())
             .count()
             .saturating_sub(1);
-        while x > 0 && swaps_remaining > 0 {
+        'moves: while x > 0 && swaps_remaining > 0 {
             let action_floor = unix_now_ms();
             if self.dock_left(&opts.session_name, &pane_raw).is_err() {
                 break;
             }
             floor = Some(action_floor);
             swaps_remaining -= 1;
-            let Ok(next) = self.structural_geometry_listing(
-                &opts.session_name,
-                &opts.workspace_id,
-                Some(action_floor),
-            ) else {
-                break;
-            };
-            let Some(next_x) =
-                sidebar_pane(&next.panes, tab_position, raw_id).and_then(|pane| pane.pane_x)
-            else {
-                break;
-            };
-            listing = next;
-            if next_x >= x {
-                break;
+            let deadline = Instant::now() + GEOMETRY_REPAIR_SETTLE;
+            loop {
+                if let Ok(next) = self.structural_geometry_listing(
+                    &opts.session_name,
+                    &opts.workspace_id,
+                    Some(action_floor),
+                ) {
+                    let Some(next_x) = sidebar_pane(&next.panes, tab_position, raw_id)
+                        .and_then(|pane| pane.pane_x)
+                    else {
+                        break 'moves;
+                    };
+                    if next_x < x {
+                        listing = next;
+                        x = next_x;
+                        break;
+                    }
+                }
+                if Instant::now() >= deadline {
+                    break 'moves;
+                }
+                std::thread::sleep(MOUNT_POLL_STEP);
             }
-            x = next_x;
         }
 
         let excluded = HashSet::new();
@@ -569,7 +575,7 @@ impl ZellijBackend {
             )
         {
             floor = Some(action_ms);
-            let deadline = Instant::now() + STACK_REPAIR_SETTLE;
+            let deadline = Instant::now() + GEOMETRY_REPAIR_SETTLE;
             loop {
                 if let Ok(next) =
                     self.structural_geometry_listing(&opts.session_name, &opts.workspace_id, floor)
@@ -699,7 +705,7 @@ impl ZellijBackend {
         min_topology_produced_at_ms: Option<u64>,
         allow_multicolumn: bool,
     ) -> Option<u64> {
-        let deadline = Instant::now() + STACK_REPAIR_SETTLE;
+        let deadline = Instant::now() + GEOMETRY_REPAIR_SETTLE;
         let work = loop {
             let Ok(listing) = self.structural_geometry_listing(
                 &opts.session_name,

@@ -685,12 +685,13 @@ fn redock_moves_across_every_adjacent_pane_before_resizing() {
     room.write_cache(9_999_999_999_999, Some(1), None, stale);
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
-dir=$(dirname "$0"); log="$dir/zellij.log"; moves="$dir/move-count"; resized="$dir/resized"
+dir=$(dirname "$0"); log="$dir/zellij.log"; moves="$dir/move-count"; published="$dir/published-count"; resized="$dir/resized"
 printf '%s\n' "$*" >> "$log"
 case " $* " in
   *" action list-panes --all --json "*)
     count=$(cat "$moves" 2>/dev/null || printf 0); if [ "$count" -gt 7 ]; then count=7; fi
-    slot=$((7 - count)); sidebar_x=$((slot * 140)); cols=140; if [ -f "$resized" ]; then cols=72; fi
+    visible=$(cat "$published" 2>/dev/null || printf 0); if [ "$visible" -lt "$count" ]; then printf '%s\n' "$count" > "$published"; fi
+    slot=$((7 - visible)); sidebar_x=$((slot * 140)); cols=140; if [ -f "$resized" ]; then cols=72; fi
     printf '['; i=0
     while [ "$i" -lt 7 ]; do
       if [ "$i" -ge "$slot" ]; then x=$(((i + 1) * 140)); else x=$((i * 140)); fi
