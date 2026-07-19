@@ -268,11 +268,6 @@ if [ "$1" = "--session" ] && [ "$3" = "action" ] && [ "$4" = "list-panes" ]; the
   exit 5
 fi
 
-if [ "$1" = "--session" ] && [ "$3" = "action" ] && [ "$4" = "query-tab-names" ]; then
-  printf 'main\n'
-  exit 0
-fi
-
 exit 0
 	"#
 }

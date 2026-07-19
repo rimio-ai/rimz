@@ -380,9 +380,9 @@ impl ZellijBackend {
     }
 
     pub(super) fn list_tabs(&self, session: &str) -> Result<Vec<RawTab>> {
-        for attempt in 0..super::TAB_NAMES_ATTEMPTS {
+        for attempt in 0..super::LIST_TABS_ATTEMPTS {
             if attempt > 0 {
-                std::thread::sleep(super::TAB_NAMES_RETRY_DELAY);
+                std::thread::sleep(super::LIST_TABS_RETRY_DELAY);
             }
             let output = self
                 .zellij_action(session)
@@ -412,7 +412,7 @@ impl ZellijBackend {
             program: "zellij".to_owned(),
             reason: format!(
                 "list-tabs returned no output after {} attempts",
-                super::TAB_NAMES_ATTEMPTS
+                super::LIST_TABS_ATTEMPTS
             ),
         })
     }
