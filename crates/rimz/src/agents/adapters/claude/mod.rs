@@ -379,6 +379,51 @@ impl crate::agents::capabilities::CoreCapability for ClaudeAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &CLAUDE_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        use super::{AgentHookClass, ClassificationSample};
+
+        let mut samples = super::hook_types::catalog_classification_corpus(CLAUDE_HOOKS);
+        samples.extend([
+            ClassificationSample::new(
+                "PermissionRequest",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PermissionRequest",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::PlanApproval),
+            ),
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Question),
+            ),
+        ]);
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "sess-1",
+                file_name: "chat.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"timestamp":"2026-06-02T10:00:00.000Z","sessionId":"sess-1","costUSD":0.42,"requestId":"req-1","message":{"id":"msg-1","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+                ),
+            }),
+            local_session: Some(local_sessions::fixture_observation()),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {}
@@ -519,51 +564,6 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
             decoded.set_observed_context(self.observe_context(self.spec().kind, payload));
         }
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        use super::{AgentHookClass, ClassificationSample};
-
-        let mut samples = super::hook_types::catalog_classification_corpus(CLAUDE_HOOKS);
-        samples.extend([
-            ClassificationSample::new(
-                "PermissionRequest",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PermissionRequest",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::PlanApproval),
-            ),
-            ClassificationSample::new(
-                "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Question),
-            ),
-        ]);
-        super::AdapterConformance {
-            classification: samples,
-            spend: Some(super::SpendFixture {
-                session_id: "sess-1",
-                file_name: "chat.jsonl",
-                body: super::SpendFixtureBody::Jsonl(
-                    r#"{"timestamp":"2026-06-02T10:00:00.000Z","sessionId":"sess-1","costUSD":0.42,"requestId":"req-1","message":{"id":"msg-1","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50}}}"#,
-                ),
-            }),
-            local_session: Some(local_sessions::fixture_observation()),
-            ..super::AdapterConformance::default()
-        }
     }
 
     fn ask_options(&self, kind: AskKind) -> Option<Vec<crate::transcript::AskOption>> {

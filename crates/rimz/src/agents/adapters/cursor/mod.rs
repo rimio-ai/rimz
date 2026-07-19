@@ -292,6 +292,27 @@ impl crate::agents::capabilities::CoreCapability for CursorAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &CURSOR_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            classification: super::hook_types::catalog_classification_corpus(CURSOR_HOOKS),
+            hook_turn_cost: Some(super::TurnCostFixture {
+                event_name: "stop",
+                payload: test_json!({
+                    "generation_id": "gen-1",
+                    "status": "completed",
+                    "model_id": "default",
+                    "input_tokens": 22_725,
+                    "output_tokens": 26,
+                    "cache_read_tokens": 8_704,
+                    "cache_write_tokens": 0
+                }),
+            }),
+            local_session: Some(session::fixture_observation()),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::TranscriptCapability for CursorAdapter {}
@@ -395,27 +416,6 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
         }
         decoded.attach_lifecycle(observation);
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        super::AdapterConformance {
-            classification: super::hook_types::catalog_classification_corpus(CURSOR_HOOKS),
-            hook_turn_cost: Some(super::TurnCostFixture {
-                event_name: "stop",
-                payload: test_json!({
-                    "generation_id": "gen-1",
-                    "status": "completed",
-                    "model_id": "default",
-                    "input_tokens": 22_725,
-                    "output_tokens": 26,
-                    "cache_read_tokens": 8_704,
-                    "cache_write_tokens": 0
-                }),
-            }),
-            local_session: Some(session::fixture_observation()),
-            ..super::AdapterConformance::default()
-        }
     }
 
     fn derive_subagent_observations(&self, workspace: &Path) -> Vec<AgentLifecycleObservation> {
@@ -697,6 +697,10 @@ impl CursorAdapter {
         observation
     }
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for CursorAdapter {}
 
 #[cfg(test)]
 mod tests;

@@ -19,65 +19,25 @@ use super::adapters::kiro::KiroAdapter;
 use super::adapters::opencode::OpencodeAdapter;
 use super::adapters::pi::PiAdapter;
 use super::adapters::qwen::QwenAdapter;
-use super::definition::{AgentCapabilities, AgentDefinition, AgentSpec};
+use super::definition::{AgentDefinition, AgentSpec};
 use super::{AgentErr, Result};
 use crate::ids::AgentSessionId;
 
 const PROCESS_DESCENT_DEPTH: usize = 8;
 
-macro_rules! definition {
-    ($adapter:expr; $($capability:ident),* $(,)?) => {
-        AgentDefinition::from_capabilities(
-            &$adapter,
-            AgentCapabilities {
-                $($capability: Some(&$adapter),)*
-                ..AgentCapabilities::NONE
-            },
-        )
-    };
-}
-
-#[allow(clippy::needless_update)]
-static CLAUDE: AgentDefinition = definition!(ClaudeAdapter;
-    hooks, installation, launch, sessions, transcript, context, account, spending, runtime_control
-);
-#[allow(clippy::needless_update)]
-static CODEX: AgentDefinition = definition!(CodexAdapter;
-    hooks, installation, launch, sessions, transcript, context, account, spending, runtime_control
-);
-static AMP: AgentDefinition = definition!(AmpAdapter;
-    hooks, installation, launch, transcript, context, account, spending
-);
-static COPILOT: AgentDefinition = definition!(CopilotAdapter;
-    hooks, installation, launch, transcript, context, account, spending
-);
-static KIMI: AgentDefinition = definition!(KimiAdapter;
-    hooks, installation, launch, transcript, context, account, spending
-);
-static PI: AgentDefinition = definition!(PiAdapter;
-    hooks, installation, launch, transcript, context, account, spending
-);
-static OPENCODE: AgentDefinition = definition!(OpencodeAdapter;
-    hooks, installation, launch, transcript, context, account, spending
-);
-static ANTIGRAVITY: AgentDefinition = definition!(AntigravityAdapter;
-    hooks, installation, launch, sessions, transcript, context, account, spending
-);
-static CURSOR: AgentDefinition = definition!(CursorAdapter;
-    hooks, installation, launch, sessions, transcript, context, account, spending
-);
-static DROID: AgentDefinition = definition!(DroidAdapter;
-    hooks, installation, launch, transcript, context, spending
-);
-static KIRO: AgentDefinition = definition!(KiroAdapter;
-    installation, launch, sessions, transcript, context, spending
-);
-static QWEN: AgentDefinition = definition!(QwenAdapter;
-    hooks, installation, launch, transcript, context, account, spending
-);
-static GROK: AgentDefinition = definition!(GrokAdapter;
-    hooks, installation, launch, sessions, transcript, context, account, spending
-);
+static CLAUDE: AgentDefinition = AgentDefinition::new(&ClaudeAdapter);
+static CODEX: AgentDefinition = AgentDefinition::new(&CodexAdapter);
+static AMP: AgentDefinition = AgentDefinition::new(&AmpAdapter);
+static COPILOT: AgentDefinition = AgentDefinition::new(&CopilotAdapter);
+static KIMI: AgentDefinition = AgentDefinition::new(&KimiAdapter);
+static PI: AgentDefinition = AgentDefinition::new(&PiAdapter);
+static OPENCODE: AgentDefinition = AgentDefinition::new(&OpencodeAdapter);
+static ANTIGRAVITY: AgentDefinition = AgentDefinition::new(&AntigravityAdapter);
+static CURSOR: AgentDefinition = AgentDefinition::new(&CursorAdapter);
+static DROID: AgentDefinition = AgentDefinition::new(&DroidAdapter);
+static KIRO: AgentDefinition = AgentDefinition::new(&KiroAdapter);
+static QWEN: AgentDefinition = AgentDefinition::new(&QwenAdapter);
+static GROK: AgentDefinition = AgentDefinition::new(&GrokAdapter);
 
 /// Every built-in definition, in stable display order.
 pub(crate) static BUILTINS: &[&AgentDefinition] = &[

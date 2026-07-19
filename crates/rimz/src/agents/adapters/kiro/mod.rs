@@ -7,6 +7,12 @@
 
 mod install;
 mod session;
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::AccountCapability for KiroAdapter {}
+impl crate::agents::capabilities::HookCapability for KiroAdapter {}
+impl crate::agents::capabilities::RuntimeControlCapability for KiroAdapter {}
+
 #[cfg(test)]
 mod tests;
 
@@ -204,7 +210,7 @@ impl crate::agents::capabilities::CoreCapability for KiroAdapter {
     }
 
     #[cfg(test)]
-    fn core_conformance(&self) -> super::AdapterConformance {
+    fn conformance(&self) -> super::AdapterConformance {
         super::AdapterConformance {
             local_session: Some(session::fixture_observation()),
             ..super::AdapterConformance::default()

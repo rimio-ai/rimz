@@ -228,7 +228,7 @@ An agent reports through the same public shape everything else uses: a hook is a
 
 ### The seam: `AgentDefinition`
 
-`AgentDefinition` contains an immutable [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs) plus optional caller-aligned capabilities for hooks, installation, launch, sessions, transcripts, context, accounts, spending, and runtime control. A missing capability is an explicit unsupported workflow. External plugins use the same composed value, built for the process lifetime from a validated manifest and canonical envelope. The main workflows are:
+`AgentDefinition` wraps one adapter object implementing every caller-aligned capability — hooks, installation, launch, sessions, transcripts, context, accounts, spending, and runtime control. An adapter writes an empty `impl` for a capability it has no behavior for, so each method falls to its trait default and an unsupported workflow reads as that default. The default is the single home for that answer. External plugins use the same composed value, built for the process lifetime from a validated manifest and canonical envelope. The main workflows are:
 
 - **Hooks** parse one native event into a typed `CanonicalHookEvent` with lifecycle, ask, output/error, progress, context, transcript, and session facts plus an explicit `HookReply`. An absent lifecycle fact means "no transition here", so high-frequency events stay silent.
 - **`hook_ingress`** accepts or ignores a native hook emitter before workspace and store I/O, normalizing its owner PID, agent-versus-daemon role, and optional validated participant-start path; **`is_interactive_process`** rejects provider service roles after registry command matching.

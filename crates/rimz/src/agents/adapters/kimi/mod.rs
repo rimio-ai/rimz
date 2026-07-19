@@ -391,6 +391,38 @@ impl crate::agents::capabilities::CoreCapability for KimiAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &KIMI_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        use super::{AgentHookClass, ClassificationSample};
+        let mut samples = super::hook_types::catalog_classification_corpus(KIMI_HOOKS);
+        samples.extend([
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({"session_id":"s","tool_name":"ExitPlanMode"}),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PermissionRequest",
+                serde_json::json!({"session_id":"s","tool_call_id":"r","tool_name":"ExitPlanMode","action":"Exit plan mode"}),
+                AgentHookClass::AwaitingUser,
+                Some(super::AskKind::PlanApproval),
+            ),
+        ]);
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "s",
+                file_name: "sessions/wd/s/agents/main/wire.jsonl",
+                body: super::SpendFixtureBody::Jsonl(concat!(
+                    "{\"type\":\"metadata\",\"protocol_version\":\"1.4\"}\n",
+                    "{\"type\":\"usage.record\",\"time\":1770000000000,\"model\":\"moonshot/kimi-k2.5\",\"usage\":{\"inputOther\":100,\"output\":50,\"inputCacheRead\":10,\"inputCacheCreation\":5},\"usageScope\":\"turn\"}"
+                )),
+            }),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::HookCapability for KimiAdapter {
@@ -431,38 +463,6 @@ impl crate::agents::capabilities::HookCapability for KimiAdapter {
             decoded.attach_lifecycle(observation);
         }
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        use super::{AgentHookClass, ClassificationSample};
-        let mut samples = super::hook_types::catalog_classification_corpus(KIMI_HOOKS);
-        samples.extend([
-            ClassificationSample::new(
-                "PreToolUse",
-                serde_json::json!({"session_id":"s","tool_name":"ExitPlanMode"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PermissionRequest",
-                serde_json::json!({"session_id":"s","tool_call_id":"r","tool_name":"ExitPlanMode","action":"Exit plan mode"}),
-                AgentHookClass::AwaitingUser,
-                Some(super::AskKind::PlanApproval),
-            ),
-        ]);
-        super::AdapterConformance {
-            classification: samples,
-            spend: Some(super::SpendFixture {
-                session_id: "s",
-                file_name: "sessions/wd/s/agents/main/wire.jsonl",
-                body: super::SpendFixtureBody::Jsonl(concat!(
-                    "{\"type\":\"metadata\",\"protocol_version\":\"1.4\"}\n",
-                    "{\"type\":\"usage.record\",\"time\":1770000000000,\"model\":\"moonshot/kimi-k2.5\",\"usage\":{\"inputOther\":100,\"output\":50,\"inputCacheRead\":10,\"inputCacheCreation\":5},\"usageScope\":\"turn\"}"
-                )),
-            }),
-            ..super::AdapterConformance::default()
-        }
     }
 }
 
@@ -751,6 +751,11 @@ fn configured_context_window_at(path: &Path, model_hint: Option<&str>) -> Option
         .and_then(toml::Value::as_integer)
         .and_then(|value| u64::try_from(value).ok())
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for KimiAdapter {}
+impl crate::agents::capabilities::SessionCapability for KimiAdapter {}
 
 #[cfg(test)]
 mod tests;

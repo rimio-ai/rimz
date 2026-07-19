@@ -31,18 +31,18 @@ Produce the mapping worksheet from the reference before writing Rust; every late
 
 Create `crates/rimz/src/agents/adapters/<kind>/` on the established anatomy:
 
-- `mod.rs` — the private unit-struct adapter, its `const` [`AgentSpec`](../../crates/rimz/src/agents/definition.rs), and its selected capability implementations.
+- `mod.rs` — the private unit-struct adapter, its `const` [`AgentSpec`](../../crates/rimz/src/agents/definition.rs), and its capability implementations (empty where unsupported).
 - `payloads.rs` — typed structs for the native wire; structured parsers, never ad-hoc `Value` digging past the classify step.
 - `spend.rs` — the read-only cost parser (step 8).
 - `account.rs`, plus `oauth_usage.rs` when the provider has a usage API (step 8).
 - The install surface: return one [`ManagedIntegration`](../../crates/rimz/src/agents/managed_source.rs) from the adapter. Use `ManagedSource` for a JSON hook merge like Claude/Droid/Qwen or a RimZ-authored whole file like Pi/OpenCode; implement the same Interface in the provider's `install.rs` for TOML or multi-file transactions such as Codex and Cursor (step 5).
 - The `tests` module (step 9); past the size gate it becomes a sibling `tests.rs` or `tests/` dir.
 
-Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agents/adapters/mod.rs), then compose `CoreCapability` and the supported workflow capabilities in one [`registry::BUILTINS`](../../crates/rimz/src/agents/registry.rs) entry. That entry is the whole hookup — kind resolution, the `<kind>-auto`/`-ask`/`-yolo`/`-plan` permission variants, and `<kind>-ping` all derive from the definition, so no consumer grows a provider match. The one optional extra is the `BUILTIN_PEER` default-layout string in [`harness/spec.rs`](../../crates/rimz/src/harness/spec.rs) when the kind belongs in the zero-config room.
+Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agents/adapters/mod.rs), then name one `AgentDefinition` in [`registry::BUILTINS`](../../crates/rimz/src/agents/registry.rs). Implement every capability trait on the adapter: real behavior where the agent has it, an empty `impl` where it does not. That entry is the whole hookup — kind resolution, the `<kind>-auto`/`-ask`/`-yolo`/`-plan` permission variants, and `<kind>-ping` all derive from the definition, so no consumer grows a provider match. The one optional extra is the `BUILTIN_PEER` default-layout string in [`harness/spec.rs`](../../crates/rimz/src/harness/spec.rs) when the kind belongs in the zero-config room.
 
 ## Step 4 — Declare the definition
 
-`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, coverage annotations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness and capability/policy consistency. Add optional curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); kinds without an entry render the shared fallback.
+`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, coverage annotations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add optional curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); kinds without an entry render the shared fallback.
 
 [`pi/mod.rs`](../../crates/rimz/src/agents/adapters/pi/mod.rs) is the canonical filled-in example. [Conformance](../../crates/rimz/src/agents/conformance.rs) auto-enrolls every registered definition and cross-checks coverage, native events, classification samples, behavioral fixtures, and decoded lifecycle output.
 
@@ -101,7 +101,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 
 - [ ] `docs/externals/agent-adapter/<kind>-reference.md` — upstream protocol reference, pinned to sources
 - [ ] Mapping worksheet: 11 lifecycle signals, 16 concerns, asks, tools, identity, context sources, spend, launch argv
-- [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, selected capabilities
+- [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, every capability trait (empty where unsupported)
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
 - [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus

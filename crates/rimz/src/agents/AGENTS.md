@@ -6,7 +6,7 @@ Topic detail lives in the internals leaves the root map describes — [model.md]
 
 ## Layout
 
-- Shared, kind-agnostic code sits at the top level — [`definition.rs`](./definition.rs) owns the `AgentDefinition` catalog value and immutable `AgentSpec`, [`capabilities.rs`](./capabilities.rs) owns caller-aligned workflow contracts, and neutral services own lifecycle, session, context, runtime-control, account, transcript, and spending policy. Per-file detail lives in the `//!` headers.
+- Shared, kind-agnostic code sits at the top level — [`definition.rs`](./definition.rs) owns the `AgentDefinition` catalog value and immutable `AgentSpec`, [`capabilities.rs`](./capabilities.rs) owns caller-aligned workflow contracts and the `AgentIntegration` bundle every adapter implements, and neutral services own lifecycle, session, context, runtime-control, account, transcript, and spending policy. Per-file detail lives in the `//!` headers.
 - Private provider implementations live below [`adapters/`](./adapters/mod.rs). Each built-in directory owns its native payloads, parsers, installer, probes, and selected capability implementations; [`adapters/plugin/`](./adapters/plugin/mod.rs) loads validated machine-tier process plugins, while [`plugins.rs`](./plugins.rs) is the public provider-neutral plugin façade.
 - `spend.rs` is the read-only, sidebar-safe full-history cost parser; a CI grep keeps every `spend.rs` free of store-write, run-wake, and broker imports.
 - Amp, Pi, and OpenCode own their wire: each integrates through RimZ-authored in-process TypeScript installed whole-file — [`amp/plugin.ts`](./adapters/amp/plugin.ts), [`pi/extension.ts`](./adapters/pi/extension.ts), and [`opencode/plugin.ts`](./adapters/opencode/plugin.ts) — so the payload schema is RimZ's by design and drift is a RimZ bug, never an upstream one.
@@ -14,7 +14,7 @@ Topic detail lives in the internals leaves the root map describes — [model.md]
 
 ## The boundary
 
-An adapter is the *single* place an agent protocol is normalized. It implements `CoreCapability` plus only the workflow capabilities it supports; [`registry::BUILTINS`](./registry.rs) composes those objects into one `AgentDefinition`. Add a third-party agent with the manifest and canonical wire under [`adapters/plugin/`](./adapters/plugin/mod.rs). Add a built-in with a private adapter directory, an `AgentSpec`, selected capability implementations, and one registry definition.
+An adapter is the *single* place an agent protocol is normalized. It implements every capability trait — with behavior where it has any, and an empty `impl` where it has none, so a gap is visible in the adapter rather than inferred from a list elsewhere. Each trait method carries a default, and that default is the single home for "this agent does not do that": no dispatch layer restates it. [`registry::BUILTINS`](./registry.rs) names one `AgentDefinition` per adapter. Add a third-party agent with the manifest and canonical wire under [`adapters/plugin/`](./adapters/plugin/mod.rs). Add a built-in with a private adapter directory, an `AgentSpec`, capability implementations (empty where unsupported), and one registry definition.
 
 Provider modules own native protocol and process interpretation. Code outside `agents` resolves definitions and calls neutral services; the `xtask` private-adapter invariant keeps provider modules and concrete adapter types behind this boundary.
 

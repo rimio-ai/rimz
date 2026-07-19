@@ -371,14 +371,7 @@ mod tests {
             mux_hint: None,
         };
         let adapter = Box::leak(Box::new(SessionEndRefreshAdapter));
-        let definition = rimz::agents::AgentDefinition::from_capabilities(
-            adapter,
-            rimz::agents::AgentCapabilities {
-                hooks: Some(adapter),
-                context: Some(adapter),
-                ..rimz::agents::AgentCapabilities::NONE
-            },
-        );
+        let definition = rimz::agents::AgentDefinition::new(adapter);
         let payload = serde_json::json!({
             "sessionId": "root-session",
             "cwd": "/tmp/hooks-test"
@@ -425,4 +418,13 @@ mod tests {
             Some("final local context")
         );
     }
+
+    // Capabilities this test double has no behavior for.
+    impl rimz::agents::capabilities::InstallationCapability for SessionEndRefreshAdapter {}
+    impl rimz::agents::capabilities::LaunchCapability for SessionEndRefreshAdapter {}
+    impl rimz::agents::capabilities::SessionCapability for SessionEndRefreshAdapter {}
+    impl rimz::agents::capabilities::TranscriptCapability for SessionEndRefreshAdapter {}
+    impl rimz::agents::capabilities::AccountCapability for SessionEndRefreshAdapter {}
+    impl rimz::agents::capabilities::SpendingCapability for SessionEndRefreshAdapter {}
+    impl rimz::agents::capabilities::RuntimeControlCapability for SessionEndRefreshAdapter {}
 }

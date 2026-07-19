@@ -289,6 +289,29 @@ impl crate::agents::capabilities::CoreCapability for CopilotAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &COPILOT_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        use super::{AgentHookClass, ClassificationSample};
+
+        let mut samples = super::hook_types::catalog_classification_corpus(COPILOT_HOOKS);
+        samples.push(ClassificationSample::new(
+            "preToolUse",
+            json!({"sessionId":"sess-1","toolName":"bash"}),
+            AgentHookClass::Lifecycle,
+            None,
+        ));
+        super::AdapterConformance {
+            classification: samples,
+            context_cost: Some(super::ContextCostFixture {
+                payload: serde_json::from_str(include_str!(
+                    "tests/fixtures/statusline-modern.json"
+                ))
+                .expect("valid Copilot statusline fixture"),
+            }),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::HookCapability for CopilotAdapter {
@@ -455,29 +478,6 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
         );
         decoded.attach_lifecycle(observation);
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        use super::{AgentHookClass, ClassificationSample};
-
-        let mut samples = super::hook_types::catalog_classification_corpus(COPILOT_HOOKS);
-        samples.push(ClassificationSample::new(
-            "preToolUse",
-            json!({"sessionId":"sess-1","toolName":"bash"}),
-            AgentHookClass::Lifecycle,
-            None,
-        ));
-        super::AdapterConformance {
-            classification: samples,
-            context_cost: Some(super::ContextCostFixture {
-                payload: serde_json::from_str(include_str!(
-                    "tests/fixtures/statusline-modern.json"
-                ))
-                .expect("valid Copilot statusline fixture"),
-            }),
-            ..super::AdapterConformance::default()
-        }
     }
 
     fn correlate_subagent(
@@ -712,6 +712,11 @@ fn room_env_from(
         ),
     ])
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for CopilotAdapter {}
+impl crate::agents::capabilities::SessionCapability for CopilotAdapter {}
 
 #[cfg(test)]
 mod tests;

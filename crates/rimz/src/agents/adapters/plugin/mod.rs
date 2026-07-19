@@ -88,6 +88,62 @@ impl crate::agents::capabilities::CoreCapability for PluginAdapter {
     fn spec(&self) -> &'static AgentSpec {
         self.spec
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        use super::ClassificationSample;
+
+        let manifest: &'static PluginManifest = self.manifest;
+        let mut samples = Vec::new();
+        for event in &manifest.emits {
+            let event = event.as_str();
+            let mut payload = json!({
+                "protocol": 1,
+                "hook_event_name": event,
+                "session_id": "root"
+            });
+            if matches!(event, "subagent_start" | "subagent_end") {
+                payload["agent_id"] = json!("child");
+            }
+            if event == "tool_use" {
+                payload["tool_name"] = json!(
+                    manifest
+                        .tools
+                        .mutating
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("read")
+                );
+            }
+            if event == "awaiting_input" {
+                for (ask, kind) in [
+                    ("permission", AskKind::Permission),
+                    ("plan_approval", AskKind::PlanApproval),
+                    ("question", AskKind::Question),
+                ] {
+                    let mut ask_payload = payload.clone();
+                    ask_payload["ask"] = json!(ask);
+                    samples.push(ClassificationSample::new(
+                        event,
+                        ask_payload,
+                        AgentHookClass::AwaitingUser,
+                        Some(kind),
+                    ));
+                }
+            } else {
+                samples.push(ClassificationSample::new(
+                    event,
+                    payload,
+                    AgentHookClass::Lifecycle,
+                    None,
+                ));
+            }
+        }
+        super::AdapterConformance {
+            classification: samples,
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::HookCapability for PluginAdapter {
@@ -188,62 +244,6 @@ impl crate::agents::capabilities::HookCapability for PluginAdapter {
         }
         decoded.attach_lifecycle(observation);
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        use super::ClassificationSample;
-
-        let manifest: &'static PluginManifest = self.manifest;
-        let mut samples = Vec::new();
-        for event in &manifest.emits {
-            let event = event.as_str();
-            let mut payload = json!({
-                "protocol": 1,
-                "hook_event_name": event,
-                "session_id": "root"
-            });
-            if matches!(event, "subagent_start" | "subagent_end") {
-                payload["agent_id"] = json!("child");
-            }
-            if event == "tool_use" {
-                payload["tool_name"] = json!(
-                    manifest
-                        .tools
-                        .mutating
-                        .first()
-                        .map(String::as_str)
-                        .unwrap_or("read")
-                );
-            }
-            if event == "awaiting_input" {
-                for (ask, kind) in [
-                    ("permission", AskKind::Permission),
-                    ("plan_approval", AskKind::PlanApproval),
-                    ("question", AskKind::Question),
-                ] {
-                    let mut ask_payload = payload.clone();
-                    ask_payload["ask"] = json!(ask);
-                    samples.push(ClassificationSample::new(
-                        event,
-                        ask_payload,
-                        AgentHookClass::AwaitingUser,
-                        Some(kind),
-                    ));
-                }
-            } else {
-                samples.push(ClassificationSample::new(
-                    event,
-                    payload,
-                    AgentHookClass::Lifecycle,
-                    None,
-                ));
-            }
-        }
-        super::AdapterConformance {
-            classification: samples,
-            ..super::AdapterConformance::default()
-        }
     }
 }
 
@@ -734,6 +734,13 @@ fn leak_strings(values: &[String]) -> &'static [&'static str] {
 fn leak_slice<T>(values: Vec<T>) -> &'static [T] {
     Box::leak(values.into_boxed_slice())
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::InstallationCapability for PluginAdapter {}
+impl crate::agents::capabilities::RuntimeControlCapability for PluginAdapter {}
+impl crate::agents::capabilities::SessionCapability for PluginAdapter {}
+impl crate::agents::capabilities::TranscriptCapability for PluginAdapter {}
 
 #[cfg(test)]
 mod tests {

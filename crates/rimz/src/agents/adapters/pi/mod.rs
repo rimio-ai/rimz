@@ -275,6 +275,32 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &PI_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        let mut samples = super::hook_types::catalog_classification_corpus(PI_HOOKS);
+        samples.push(super::ClassificationSample::new(
+            "tool_execution_end",
+            serde_json::json!({
+                "session_id": "sess-1",
+                "tool_call_id": "ask-call",
+                "tool_name": "ask_user_question"
+            }),
+            super::AgentHookClass::Lifecycle,
+            None,
+        ));
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "sess-1",
+                file_name: "2026-06-02T10-00-00-000Z_sess-1.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","model":"gpt-5","usage":{"input":100,"output":50,"cost":{"total":0.42}}}}"#,
+                ),
+            }),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::LaunchCapability for PiAdapter {}
@@ -438,32 +464,6 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
         Ok(decoded)
     }
 
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        let mut samples = super::hook_types::catalog_classification_corpus(PI_HOOKS);
-        samples.push(super::ClassificationSample::new(
-            "tool_execution_end",
-            serde_json::json!({
-                "session_id": "sess-1",
-                "tool_call_id": "ask-call",
-                "tool_name": "ask_user_question"
-            }),
-            super::AgentHookClass::Lifecycle,
-            None,
-        ));
-        super::AdapterConformance {
-            classification: samples,
-            spend: Some(super::SpendFixture {
-                session_id: "sess-1",
-                file_name: "2026-06-02T10-00-00-000Z_sess-1.jsonl",
-                body: super::SpendFixtureBody::Jsonl(
-                    r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","model":"gpt-5","usage":{"input":100,"output":50,"cost":{"total":0.42}}}}"#,
-                ),
-            }),
-            ..super::AdapterConformance::default()
-        }
-    }
-
     fn answer_plan(
         &self,
         kind: AskKind,
@@ -599,6 +599,11 @@ fn pi_extension_path() -> Result<PathBuf> {
         Path::new(".pi/agent/extensions/rimz.ts"),
     )
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for PiAdapter {}
+impl crate::agents::capabilities::SessionCapability for PiAdapter {}
 
 #[cfg(test)]
 mod tests;

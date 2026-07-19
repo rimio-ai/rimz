@@ -73,11 +73,10 @@ pub use context::{
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
 pub use definition::{
-    AgentCapabilities, AgentDefinition, AgentSpec, Brand, Capabilities, ConcernCoverage,
-    DefinitionValidationError, HookCoverage, IntegrationConcern, LaunchPermissionArgs, LaunchSpec,
-    PlanLabel, PresetMatchers, PromptStyle, RealtimeUsageChannel, RemoteControlCapability,
-    SamePaneSessionPolicy, SessionCommand, StaticPresetMatcher, ThreadKey, ToolClassification,
-    program_names_kind,
+    AgentDefinition, AgentSpec, Brand, Capabilities, ConcernCoverage, DefinitionValidationError,
+    HookCoverage, IntegrationConcern, LaunchPermissionArgs, LaunchSpec, PlanLabel, PresetMatchers,
+    PromptStyle, RealtimeUsageChannel, RemoteControlCapability, SamePaneSessionPolicy,
+    SessionCommand, StaticPresetMatcher, ThreadKey, ToolClassification, program_names_kind,
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
 pub use hook_types::{

@@ -10,7 +10,7 @@ use tracing::warn;
 use super::manifest::{PluginManifest, resolve_path};
 use super::probes::resolve_executable;
 use super::{PluginAdapter, build_adapter};
-use crate::agents::{AgentCapabilities, AgentDefinition};
+use crate::agents::AgentDefinition;
 
 static PLUGINS: OnceLock<LoadedPlugins> = OnceLock::new();
 
@@ -129,17 +129,7 @@ pub fn load_from_root(root: &Path) -> LoadedPlugins {
             .to_path_buf();
         let diagnostic = valid_diagnostic(&path, &plugin_dir, &manifest);
         let adapter: &'static PluginAdapter = build_adapter(manifest, plugin_dir);
-        let definition = Box::leak(Box::new(AgentDefinition::from_capabilities(
-            adapter,
-            AgentCapabilities {
-                hooks: Some(adapter),
-                launch: Some(adapter),
-                context: Some(adapter),
-                account: Some(adapter),
-                spending: Some(adapter),
-                ..AgentCapabilities::default()
-            },
-        )));
+        let definition = Box::leak(Box::new(AgentDefinition::new(adapter)));
         if let Err(error) = definition.validate() {
             push_error(
                 &mut errors,

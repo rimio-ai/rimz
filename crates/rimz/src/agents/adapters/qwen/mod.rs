@@ -358,6 +358,64 @@ impl crate::agents::capabilities::CoreCapability for QwenAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &QWEN_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        use super::{AgentHookClass, ClassificationSample};
+        let mut samples = super::hook_types::catalog_classification_corpus(QWEN_HOOKS);
+        samples.push(ClassificationSample::new(
+            "PermissionRequest",
+            serde_json::json!({"session_id":"sess-1","tool_name":"ask_user_question"}),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::Question),
+        ));
+        samples.push(ClassificationSample::new(
+            "PermissionRequest",
+            serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode"}),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::PlanApproval),
+        ));
+        samples.push(ClassificationSample::new(
+            "PreToolUse",
+            serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode","tool_use_id":"plan-1"}),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::PlanApproval),
+        ));
+        samples.push(ClassificationSample::new(
+            "PreToolUse",
+            serde_json::json!({"session_id":"sess-1","tool_name":"run_shell_command","tool_use_id":"shell-1"}),
+            AgentHookClass::Lifecycle,
+            None,
+        ));
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "sess-1",
+                file_name: "sess-1.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"uuid":"msg-1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":20,"candidatesTokenCount":10,"thoughtsTokenCount":5,"totalTokenCount":115}}"#,
+                ),
+            }),
+            context_cost: Some(super::ContextCostFixture {
+                payload: serde_json::json!({
+                    "metrics": {
+                        "models": {
+                            "qwen3-coder-plus": {
+                                "tokens": {
+                                    "prompt": 100,
+                                    "completion": 20,
+                                    "total": 120,
+                                    "cached": 30,
+                                    "thoughts": 5
+                                }
+                            }
+                        }
+                    }
+                }),
+            }),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::LaunchCapability for QwenAdapter {}
@@ -441,64 +499,6 @@ impl crate::agents::capabilities::HookCapability for QwenAdapter {
             decoded.attach_lifecycle(observation);
         }
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        use super::{AgentHookClass, ClassificationSample};
-        let mut samples = super::hook_types::catalog_classification_corpus(QWEN_HOOKS);
-        samples.push(ClassificationSample::new(
-            "PermissionRequest",
-            serde_json::json!({"session_id":"sess-1","tool_name":"ask_user_question"}),
-            AgentHookClass::AwaitingUser,
-            Some(AskKind::Question),
-        ));
-        samples.push(ClassificationSample::new(
-            "PermissionRequest",
-            serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode"}),
-            AgentHookClass::AwaitingUser,
-            Some(AskKind::PlanApproval),
-        ));
-        samples.push(ClassificationSample::new(
-            "PreToolUse",
-            serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode","tool_use_id":"plan-1"}),
-            AgentHookClass::AwaitingUser,
-            Some(AskKind::PlanApproval),
-        ));
-        samples.push(ClassificationSample::new(
-            "PreToolUse",
-            serde_json::json!({"session_id":"sess-1","tool_name":"run_shell_command","tool_use_id":"shell-1"}),
-            AgentHookClass::Lifecycle,
-            None,
-        ));
-        super::AdapterConformance {
-            classification: samples,
-            spend: Some(super::SpendFixture {
-                session_id: "sess-1",
-                file_name: "sess-1.jsonl",
-                body: super::SpendFixtureBody::Jsonl(
-                    r#"{"uuid":"msg-1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":20,"candidatesTokenCount":10,"thoughtsTokenCount":5,"totalTokenCount":115}}"#,
-                ),
-            }),
-            context_cost: Some(super::ContextCostFixture {
-                payload: serde_json::json!({
-                    "metrics": {
-                        "models": {
-                            "qwen3-coder-plus": {
-                                "tokens": {
-                                    "prompt": 100,
-                                    "completion": 20,
-                                    "total": 120,
-                                    "cached": 30,
-                                    "thoughts": 5
-                                }
-                            }
-                        }
-                    }
-                }),
-            }),
-            ..super::AdapterConformance::default()
-        }
     }
 }
 
@@ -789,6 +789,11 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
         ..TranscriptUsage::default()
     }
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for QwenAdapter {}
+impl crate::agents::capabilities::SessionCapability for QwenAdapter {}
 
 #[cfg(test)]
 mod tests;

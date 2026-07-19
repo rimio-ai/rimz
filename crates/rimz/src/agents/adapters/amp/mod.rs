@@ -237,6 +237,21 @@ impl crate::agents::capabilities::CoreCapability for AmpAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &AMP_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            classification: super::hook_types::catalog_classification_corpus(AMP_HOOKS),
+            spend: Some(super::SpendFixture {
+                session_id: "T-conformance",
+                file_name: "T-conformance.json",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"id":"T-conformance","messages":[{"role":"assistant","messageId":"m1","content":"done","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":20}}]}"#,
+                ),
+            }),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::HookCapability for AmpAdapter {
@@ -296,21 +311,6 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
         }
         decoded.attach_lifecycle(observation);
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        super::AdapterConformance {
-            classification: super::hook_types::catalog_classification_corpus(AMP_HOOKS),
-            spend: Some(super::SpendFixture {
-                session_id: "T-conformance",
-                file_name: "T-conformance.json",
-                body: super::SpendFixtureBody::Jsonl(
-                    r#"{"id":"T-conformance","messages":[{"role":"assistant","messageId":"m1","content":"done","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":20}}]}"#,
-                ),
-            }),
-            ..super::AdapterConformance::default()
-        }
     }
 }
 
@@ -481,6 +481,11 @@ fn stamp_transcript_path(
     observation.transcript_path = spend::resolve_session_file_at(data_root, session_id)
         .map(|path| path.to_string_lossy().into_owned());
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for AmpAdapter {}
+impl crate::agents::capabilities::SessionCapability for AmpAdapter {}
 
 #[cfg(test)]
 mod tests;

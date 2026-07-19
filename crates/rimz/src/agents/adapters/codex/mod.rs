@@ -439,6 +439,50 @@ impl crate::agents::capabilities::CoreCapability for CodexAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &CODEX_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        use super::{AgentHookClass, ClassificationSample};
+
+        let mut samples = super::hook_types::catalog_classification_corpus(CODEX_HOOKS);
+        samples.extend([ClassificationSample::new(
+            "PreToolUse",
+            serde_json::json!({ "session_id": "sess-1", "tool_name": "request_user_input" }),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::Question),
+        )]);
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "sess-1",
+                file_name: "rollout-2026-06-02T10-00-00-sess-1.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"timestamp":"2026-06-02T10:00:00.000Z","model":"gpt-5","usage":{"input_tokens":100,"output_tokens":50}}"#,
+                ),
+            }),
+            derived_ask: Some(super::DerivedAskFixture {
+                event_name: "Stop",
+                payload: serde_json::json!({
+                    "session_id": "sess-plan",
+                    "turn_id": "turn-plan",
+                    "last_assistant_message": "Codex says:"
+                }),
+                transcript_file_name: "rollout-plan.jsonl",
+                transcript_body: concat!(
+                    r##"{"timestamp":"2026-07-13T10:00:00Z","type":"turn_context","payload":{"turn_id":"turn-plan","collaboration_mode":{"mode":"plan"}}}"##,
+                    "\n",
+                    r##"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","id":"turn-plan-plan","text":"# Plan\n\nShip it."}}}"##,
+                    "\n",
+                    r##"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"Codex says:"}}"##,
+                    "\n",
+                    r##"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"##,
+                ),
+                expected_kind: AskKind::PlanApproval,
+            }),
+            local_session: Some(local_sessions::fixture_observation()),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::HookCapability for CodexAdapter {
@@ -553,50 +597,6 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
         Ok(decoded)
     }
 
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        use super::{AgentHookClass, ClassificationSample};
-
-        let mut samples = super::hook_types::catalog_classification_corpus(CODEX_HOOKS);
-        samples.extend([ClassificationSample::new(
-            "PreToolUse",
-            serde_json::json!({ "session_id": "sess-1", "tool_name": "request_user_input" }),
-            AgentHookClass::AwaitingUser,
-            Some(AskKind::Question),
-        )]);
-        super::AdapterConformance {
-            classification: samples,
-            spend: Some(super::SpendFixture {
-                session_id: "sess-1",
-                file_name: "rollout-2026-06-02T10-00-00-sess-1.jsonl",
-                body: super::SpendFixtureBody::Jsonl(
-                    r#"{"timestamp":"2026-06-02T10:00:00.000Z","model":"gpt-5","usage":{"input_tokens":100,"output_tokens":50}}"#,
-                ),
-            }),
-            derived_ask: Some(super::DerivedAskFixture {
-                event_name: "Stop",
-                payload: serde_json::json!({
-                    "session_id": "sess-plan",
-                    "turn_id": "turn-plan",
-                    "last_assistant_message": "Codex says:"
-                }),
-                transcript_file_name: "rollout-plan.jsonl",
-                transcript_body: concat!(
-                    r##"{"timestamp":"2026-07-13T10:00:00Z","type":"turn_context","payload":{"turn_id":"turn-plan","collaboration_mode":{"mode":"plan"}}}"##,
-                    "\n",
-                    r##"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","id":"turn-plan-plan","text":"# Plan\n\nShip it."}}}"##,
-                    "\n",
-                    r##"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"Codex says:"}}"##,
-                    "\n",
-                    r##"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"##,
-                ),
-                expected_kind: AskKind::PlanApproval,
-            }),
-            local_session: Some(local_sessions::fixture_observation()),
-            ..super::AdapterConformance::default()
-        }
-    }
-
     fn ask_options(&self, kind: AskKind) -> Option<Vec<AskOption>> {
         match kind {
             AskKind::PlanApproval => Some(ask::plan_options()),
@@ -685,68 +685,6 @@ impl crate::agents::capabilities::TranscriptCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for CodexAdapter {
-    fn serve_context_broker(
-        &self,
-        session_name: Option<&str>,
-        socket_path: &Path,
-    ) -> std::io::Result<()> {
-        broker::serve(broker::BrokerInfo {
-            session: session_name,
-            socket_path,
-        })
-    }
-
-    fn refresh_transcript_context_runtime(
-        &self,
-        session_id: &str,
-        model_hint: Option<&str>,
-        prior_transcript_path: Option<&str>,
-        prior_transcript_stat: Option<&super::TranscriptStat>,
-        prior_spend_fold: Option<&super::LocalSpendFold>,
-        pricing_cache_path: &Path,
-    ) -> Option<LocalContextRefresh> {
-        refresh_transcript_context(
-            session_id,
-            model_hint,
-            prior_transcript_path,
-            prior_transcript_stat,
-            prior_spend_fold,
-            pricing_cache_path,
-        )
-    }
-
-    fn rich_context_refresh_due(
-        &self,
-        record: Option<&crate::store::agent_context::AgentContextRecord>,
-        within: i64,
-    ) -> bool {
-        app_server_due(record, within)
-    }
-
-    fn refresh_runtime_enrichment(
-        &self,
-        session_id: Option<&str>,
-        model_hint: Option<&str>,
-        broker_socket: Option<&Path>,
-    ) -> Option<super::context_runtime::RuntimeEnrichment> {
-        refresh_app_server_enrichment(session_id, model_hint, broker_socket).map(|enrichment| {
-            super::context_runtime::RuntimeEnrichment {
-                context: enrichment.context,
-                extra_credits: enrichment.extra_credits,
-                reset_credits: enrichment.reset_credits,
-            }
-        })
-    }
-
-    fn merge_runtime_context(
-        &self,
-        runtime: &crate::RuntimePaths,
-        session_id: &str,
-        context: AgentContext,
-    ) -> anyhow::Result<()> {
-        merge_app_server_context(runtime, session_id, context)
-    }
-
     /// Codex has no statusline, so app-server-owned metadata (rate-limit
     /// windows, model display name, thread preview/name, version) refreshes
     /// out-of-band on turn boundaries: `SessionStart` populates it early (rate

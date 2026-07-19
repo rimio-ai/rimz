@@ -9,6 +9,10 @@ mod local_api;
 mod payloads;
 mod session;
 mod statusline;
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for AntigravityAdapter {}
+
 #[cfg(test)]
 mod tests;
 
@@ -316,6 +320,31 @@ impl crate::agents::capabilities::CoreCapability for AntigravityAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &ANTIGRAVITY_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            classification: ANTIGRAVITY_HOOKS
+                .iter()
+                .map(|entry| super::hook_types::classification_sample(&entry.hook))
+                .collect(),
+            context_cost: Some(super::ContextCostFixture {
+                payload: serde_json::json!({
+                    "model": {"id": "gemini-3-flash-preview"},
+                    "context_window": {
+                        "current_usage": {
+                            "input_tokens": 100,
+                            "output_tokens": 20,
+                            "cache_creation_input_tokens": 30,
+                            "cache_read_input_tokens": 40
+                        }
+                    }
+                }),
+            }),
+            local_session: Some(session::fixture_observation()),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
@@ -353,31 +382,6 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
             decoded.attach_lifecycle(observation);
         }
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        super::AdapterConformance {
-            classification: ANTIGRAVITY_HOOKS
-                .iter()
-                .map(|entry| super::hook_types::classification_sample(&entry.hook))
-                .collect(),
-            context_cost: Some(super::ContextCostFixture {
-                payload: serde_json::json!({
-                    "model": {"id": "gemini-3-flash-preview"},
-                    "context_window": {
-                        "current_usage": {
-                            "input_tokens": 100,
-                            "output_tokens": 20,
-                            "cache_creation_input_tokens": 30,
-                            "cache_read_input_tokens": 40
-                        }
-                    }
-                }),
-            }),
-            local_session: Some(session::fixture_observation()),
-            ..super::AdapterConformance::default()
-        }
     }
 
     fn correlate_subagent(

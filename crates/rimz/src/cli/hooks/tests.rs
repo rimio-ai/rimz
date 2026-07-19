@@ -88,15 +88,9 @@ struct CorrelationTestAdapter {
 
 fn hook_definition<T>(provider: &'static T) -> rimz::agents::AgentDefinition
 where
-    T: rimz::agents::capabilities::CoreCapability + rimz::agents::capabilities::HookCapability,
+    T: rimz::agents::capabilities::AgentIntegration,
 {
-    rimz::agents::AgentDefinition::from_capabilities(
-        provider,
-        rimz::agents::AgentCapabilities {
-            hooks: Some(provider),
-            ..rimz::agents::AgentCapabilities::NONE
-        },
-    )
+    rimz::agents::AgentDefinition::new(provider)
 }
 
 impl rimz::agents::capabilities::CoreCapability for CorrelationTestAdapter {
@@ -1245,3 +1239,33 @@ fn ingress_accepts_camelcase_field_and_dispatches_the_canonical_event() {
         .unwrap();
     assert_eq!(explicit.event_name(), "PostToolUse");
 }
+
+// Capabilities this test double has no behavior for.
+impl rimz::agents::capabilities::InstallationCapability for CorrelationTestAdapter {}
+impl rimz::agents::capabilities::LaunchCapability for CorrelationTestAdapter {}
+impl rimz::agents::capabilities::SessionCapability for CorrelationTestAdapter {}
+impl rimz::agents::capabilities::TranscriptCapability for CorrelationTestAdapter {}
+impl rimz::agents::capabilities::ContextCapability for CorrelationTestAdapter {}
+impl rimz::agents::capabilities::AccountCapability for CorrelationTestAdapter {}
+impl rimz::agents::capabilities::SpendingCapability for CorrelationTestAdapter {}
+impl rimz::agents::capabilities::RuntimeControlCapability for CorrelationTestAdapter {}
+
+// Capabilities this test double has no behavior for.
+impl rimz::agents::capabilities::InstallationCapability for CopilotCorrelationAdapter {}
+impl rimz::agents::capabilities::LaunchCapability for CopilotCorrelationAdapter {}
+impl rimz::agents::capabilities::SessionCapability for CopilotCorrelationAdapter {}
+impl rimz::agents::capabilities::TranscriptCapability for CopilotCorrelationAdapter {}
+impl rimz::agents::capabilities::ContextCapability for CopilotCorrelationAdapter {}
+impl rimz::agents::capabilities::AccountCapability for CopilotCorrelationAdapter {}
+impl rimz::agents::capabilities::SpendingCapability for CopilotCorrelationAdapter {}
+impl rimz::agents::capabilities::RuntimeControlCapability for CopilotCorrelationAdapter {}
+
+// Capabilities this test double has no behavior for.
+impl rimz::agents::capabilities::InstallationCapability for PiAdoptionTestAdapter {}
+impl rimz::agents::capabilities::LaunchCapability for PiAdoptionTestAdapter {}
+impl rimz::agents::capabilities::SessionCapability for PiAdoptionTestAdapter {}
+impl rimz::agents::capabilities::TranscriptCapability for PiAdoptionTestAdapter {}
+impl rimz::agents::capabilities::ContextCapability for PiAdoptionTestAdapter {}
+impl rimz::agents::capabilities::AccountCapability for PiAdoptionTestAdapter {}
+impl rimz::agents::capabilities::SpendingCapability for PiAdoptionTestAdapter {}
+impl rimz::agents::capabilities::RuntimeControlCapability for PiAdoptionTestAdapter {}

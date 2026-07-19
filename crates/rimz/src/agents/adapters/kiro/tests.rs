@@ -22,7 +22,12 @@ fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
 fn native_hooks_are_explicitly_unsupported() {
     let agent = crate::agents::find_definition("kiro").expect("Kiro definition");
     let definition = agent.spec();
-    assert!(!agent.has_hooks());
+    assert!(
+        !definition
+            .lifecycle_hooks
+            .iter()
+            .any(|(_, coverage)| coverage.is_native())
+    );
     assert!(!definition.has_wired_hook_install());
     assert!(
         !agent

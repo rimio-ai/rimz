@@ -9,9 +9,12 @@ pub trait CoreCapability: Send + Sync {
     /// the trait methods own everything behavioral.
     fn spec(&self) -> &'static AgentSpec;
 
-    /// Test-only fixtures for definitions without a native hook decoder.
+    /// Test-only fixtures for registry-wide adapter conformance. Keeping one
+    /// record on the adapter avoids a parallel per-agent registry. Its corpus
+    /// covers the complete native event surface and may retain several payload
+    /// variants for broad hooks such as `PreToolUse`.
     #[cfg(test)]
-    fn core_conformance(&self) -> AdapterConformance {
+    fn conformance(&self) -> AdapterConformance {
         AdapterConformance::default()
     }
 }
@@ -24,15 +27,14 @@ pub trait HookCapability: CoreCapability {
     }
 
     /// Decode one native hook payload into every normalized hook output.
-    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput>;
-
-    /// Test-only fixtures for registry-wide adapter conformance. Keeping one
-    /// record on the adapter avoids a parallel per-agent registry. Its corpus
-    /// covers the complete native event surface and may retain several payload
-    /// variants for broad hooks such as `PreToolUse`.
-    #[cfg(test)]
-    fn conformance(&self) -> AdapterConformance {
-        AdapterConformance::default()
+    /// An agent with no native hook decoder (Kiro) classifies every event as
+    /// unknown, which the shared hook path reads as "nothing to record".
+    fn decode_hook(&self, event_name: &str, _payload: &Value) -> Result<HookOutput> {
+        Ok(HookOutput::new(ClassifiedHook {
+            class: AgentHookClass::Unknown,
+            ask_kind: None,
+            event_name: event_name.to_owned(),
+        }))
     }
 
     /// Derive provider-store-backed subagent lifecycle observations for parents in this workspace.
@@ -487,76 +489,6 @@ pub trait ContextCapability: CoreCapability {
     ) -> Option<LocalContextRefresh> {
         None
     }
-
-    fn serve_context_broker(
-        &self,
-        _session_name: Option<&str>,
-        _socket_path: &Path,
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            format!("{} has no context broker", self.spec().kind),
-        ))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn refresh_transcript_context_runtime(
-        &self,
-        _session_id: &str,
-        _model_hint: Option<&str>,
-        _prior_transcript_path: Option<&str>,
-        _prior_transcript_stat: Option<&TranscriptStat>,
-        _prior_spend_fold: Option<&LocalSpendFold>,
-        _pricing_cache_path: &Path,
-    ) -> Option<LocalContextRefresh> {
-        None
-    }
-
-    fn rich_context_refresh_due(
-        &self,
-        _record: Option<&crate::store::agent_context::AgentContextRecord>,
-        _within: i64,
-    ) -> bool {
-        false
-    }
-
-    fn refresh_runtime_enrichment(
-        &self,
-        _session_id: Option<&str>,
-        _model_hint: Option<&str>,
-        _broker_socket: Option<&Path>,
-    ) -> Option<context_runtime::RuntimeEnrichment> {
-        None
-    }
-
-    fn merge_runtime_context(
-        &self,
-        _runtime: &crate::RuntimePaths,
-        _session_id: &str,
-        _context: AgentContext,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn refresh_embedded_context(
-        &self,
-        _server_url: &str,
-        _session_id: &str,
-        _current_model: Option<&str>,
-        _prior: Option<&AgentContext>,
-        _rich_observed_at: Option<Timestamp>,
-        _now: Timestamp,
-    ) -> Option<AgentContext> {
-        None
-    }
-
-    fn merge_embedded_context(
-        &self,
-        _current: &mut AgentContext,
-        _observed: &AgentContext,
-    ) -> bool {
-        false
-    }
 }
 
 #[doc(hidden)]
@@ -691,7 +623,12 @@ pub trait SpendingCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait RuntimeControlCapability: CoreCapability {
-    fn runtime_control_readiness(&self, enabled: bool) -> runtime_control::RuntimeControlReadiness;
+    fn runtime_control_readiness(
+        &self,
+        _enabled: bool,
+    ) -> runtime_control::RuntimeControlReadiness {
+        runtime_control::RuntimeControlReadiness::Disabled
+    }
 
     fn runtime_control_host_argv(&self) -> Option<Vec<String>> {
         None
@@ -713,4 +650,39 @@ pub trait RuntimeControlCapability: CoreCapability {
     fn runtime_control_wiring_input_path(&self) -> Option<PathBuf> {
         None
     }
+}
+
+/// Every capability an agent integration can implement, in one object.
+///
+/// Each capability trait carries a default for every method, so an adapter
+/// implements the traits it has behavior for and leaves the rest empty. The
+/// default *is* the "unsupported" answer — it has one home, here, and no
+/// dispatch layer restates it.
+#[doc(hidden)]
+pub trait AgentIntegration:
+    CoreCapability
+    + HookCapability
+    + InstallationCapability
+    + LaunchCapability
+    + SessionCapability
+    + TranscriptCapability
+    + ContextCapability
+    + AccountCapability
+    + SpendingCapability
+    + RuntimeControlCapability
+{
+}
+
+impl<T> AgentIntegration for T where
+    T: CoreCapability
+        + HookCapability
+        + InstallationCapability
+        + LaunchCapability
+        + SessionCapability
+        + TranscriptCapability
+        + ContextCapability
+        + AccountCapability
+        + SpendingCapability
+        + RuntimeControlCapability
+{
 }

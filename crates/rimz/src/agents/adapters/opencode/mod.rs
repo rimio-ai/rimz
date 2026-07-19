@@ -287,6 +287,30 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &OPENCODE_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        use super::{AgentHookClass, ClassificationSample};
+
+        let mut samples = super::hook_types::catalog_classification_corpus(OPENCODE_HOOKS);
+        samples.push(ClassificationSample::new(
+            "session_idle",
+            json!({ "session_id": "ses_1", "plan_proposed": true }),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::PlanApproval),
+        ));
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "ses_1",
+                file_name: "opencode.db",
+                body: super::SpendFixtureBody::OpencodeSqlite {
+                    data: r#"{"cost":0.42,"modelID":"gpt-5","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
+                },
+            }),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {}
@@ -463,30 +487,6 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
         decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        use super::{AgentHookClass, ClassificationSample};
-
-        let mut samples = super::hook_types::catalog_classification_corpus(OPENCODE_HOOKS);
-        samples.push(ClassificationSample::new(
-            "session_idle",
-            json!({ "session_id": "ses_1", "plan_proposed": true }),
-            AgentHookClass::AwaitingUser,
-            Some(AskKind::PlanApproval),
-        ));
-        super::AdapterConformance {
-            classification: samples,
-            spend: Some(super::SpendFixture {
-                session_id: "ses_1",
-                file_name: "opencode.db",
-                body: super::SpendFixtureBody::OpencodeSqlite {
-                    data: r#"{"cost":0.42,"modelID":"gpt-5","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
-                },
-            }),
-            ..super::AdapterConformance::default()
-        }
-    }
 }
 
 impl crate::agents::capabilities::InstallationCapability for OpencodeAdapter {
@@ -523,33 +523,6 @@ impl crate::agents::capabilities::TranscriptCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for OpencodeAdapter {
-    fn refresh_embedded_context(
-        &self,
-        server_url: &str,
-        session_id: &str,
-        current_model: Option<&str>,
-        prior: Option<&super::AgentContext>,
-        rich_observed_at: Option<jiff::Timestamp>,
-        now: jiff::Timestamp,
-    ) -> Option<super::AgentContext> {
-        server::refresh_rich_context(
-            server_url,
-            session_id,
-            current_model,
-            prior,
-            rich_observed_at,
-            now,
-        )
-    }
-
-    fn merge_embedded_context(
-        &self,
-        current: &mut super::AgentContext,
-        observed: &super::AgentContext,
-    ) -> bool {
-        server::merge_rich_context(current, observed)
-    }
-
     fn context_refresh_spawn(
         &self,
         trigger: RefreshTrigger<'_>,
@@ -667,6 +640,11 @@ fn opencode_plugin_path() -> Result<PathBuf> {
         })?;
     Ok(config_home.join("opencode/plugin/rimz.ts"))
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for OpencodeAdapter {}
+impl crate::agents::capabilities::SessionCapability for OpencodeAdapter {}
 
 #[cfg(test)]
 mod tests;

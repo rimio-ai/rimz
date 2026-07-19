@@ -106,8 +106,7 @@ fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     let socket = runtime.codex_app_server_socket_path();
-    context_runtime::serve_broker("codex", session_name, &socket)
-        .context("running codex app-server broker")
+    context_runtime::serve_broker(session_name, &socket).context("running codex app-server broker")
 }
 
 fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) -> Result<()> {
@@ -124,7 +123,6 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     });
     let mut wrote = false;
     let mut transcript_refresh = context_runtime::refresh_transcript_context(
-        "codex",
         session_id,
         transcript_model_hint,
         prior
@@ -153,7 +151,6 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
 
     let prior = rimz::store::agent_context::read_one(&runtime, "codex", session_id);
     if !context_runtime::rich_refresh_due(
-        "codex",
         prior.as_ref(),
         context_runtime::RICH_REFRESH_THROTTLE_SECS,
     ) {
@@ -167,12 +164,8 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     // the per-user daemon then a cold-spawn when it isn't up.
     let broker_socket = runtime.codex_app_server_socket_path();
     let oauth_enabled = !agents::credits::oauth_usage_offline();
-    let enrichment = context_runtime::refresh_runtime_enrichment(
-        "codex",
-        Some(session_id),
-        model,
-        Some(&broker_socket),
-    );
+    let enrichment =
+        context_runtime::refresh_runtime_enrichment(Some(session_id), model, Some(&broker_socket));
     let realtime = enrichment
         .as_ref()
         .map(|enrichment| rimz::AccountUsageSnapshot {
@@ -192,7 +185,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         realtime,
     );
     if let Some(enrichment) = enrichment {
-        context_runtime::merge_runtime_context("codex", &runtime, session_id, enrichment.context)
+        context_runtime::merge_runtime_context(&runtime, session_id, enrichment.context)
             .context("writing app-server agent-context sidecar")?;
         wrote = true;
     }

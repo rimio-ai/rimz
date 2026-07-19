@@ -75,7 +75,6 @@ fn refresh_context(
 
     let prior = rimz::store::agent_context::read_one(&runtime, "opencode", session_id);
     let Some(observed) = rimz::agents::context_runtime::refresh_embedded_context(
-        "opencode",
         server_url,
         session_id,
         model,
@@ -105,7 +104,6 @@ fn merge_observation(
         observed_at,
         |record, _| {
             if !rimz::agents::context_runtime::merge_embedded_context(
-                "opencode",
                 &mut record.context,
                 &observed,
             ) {

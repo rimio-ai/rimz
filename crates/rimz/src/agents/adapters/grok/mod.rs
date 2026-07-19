@@ -277,6 +277,22 @@ impl crate::agents::capabilities::CoreCapability for GrokAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &GROK_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            classification: tests::classification_corpus(),
+            spend: Some(super::SpendFixture {
+                session_id: "s1",
+                file_name: "updates.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"},"_meta":{"promptIndex":0}}}}
+{"timestamp":1700000001,"method":"_x.ai/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn","usage":{"inputTokens":100,"cachedReadTokens":20,"outputTokens":10,"costUsdTicks":1000000000}}}}"#,
+                ),
+            }),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::LaunchCapability for GrokAdapter {}
@@ -389,22 +405,6 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
         );
         decoded.attach_lifecycle(observation);
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        super::AdapterConformance {
-            classification: tests::classification_corpus(),
-            spend: Some(super::SpendFixture {
-                session_id: "s1",
-                file_name: "updates.jsonl",
-                body: super::SpendFixtureBody::Jsonl(
-                    r#"{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"},"_meta":{"promptIndex":0}}}}
-{"timestamp":1700000001,"method":"_x.ai/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn","usage":{"inputTokens":100,"cachedReadTokens":20,"outputTokens":10,"costUsdTicks":1000000000}}}}"#,
-                ),
-            }),
-            ..super::AdapterConformance::default()
-        }
     }
 }
 
@@ -680,6 +680,10 @@ fn resumed_session_id(cmdline: &str) -> Option<AgentSessionId> {
     }
     None
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::RuntimeControlCapability for GrokAdapter {}
 
 #[cfg(test)]
 mod tests;

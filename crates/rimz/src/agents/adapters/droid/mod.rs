@@ -220,6 +220,28 @@ impl crate::agents::capabilities::CoreCapability for DroidAdapter {
     fn spec(&self) -> &'static AgentSpec {
         &DROID_DESCRIPTOR
     }
+
+    #[cfg(test)]
+    fn conformance(&self) -> super::AdapterConformance {
+        let mut samples = super::hook_types::catalog_classification_corpus(DROID_HOOKS);
+        samples.push(super::ClassificationSample::new(
+            "SessionStart",
+            serde_json::json!({"session_id": "sess-1", "source": "compact"}),
+            AgentHookClass::Lifecycle,
+            None,
+        ));
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "droid-conformance",
+                file_name: "droid-conformance.settings.json",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"model":"gpt-5","tokenUsage":{"inputTokens":100,"outputTokens":20,"cacheCreationTokens":10,"cacheReadTokens":30,"thinkingTokens":5}}"#,
+                ),
+            }),
+            ..super::AdapterConformance::default()
+        }
+    }
 }
 
 impl crate::agents::capabilities::LaunchCapability for DroidAdapter {}
@@ -298,28 +320,6 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
         );
         decoded.attach_lifecycle(observation);
         Ok(decoded)
-    }
-
-    #[cfg(test)]
-    fn conformance(&self) -> super::AdapterConformance {
-        let mut samples = super::hook_types::catalog_classification_corpus(DROID_HOOKS);
-        samples.push(super::ClassificationSample::new(
-            "SessionStart",
-            serde_json::json!({"session_id": "sess-1", "source": "compact"}),
-            AgentHookClass::Lifecycle,
-            None,
-        ));
-        super::AdapterConformance {
-            classification: samples,
-            spend: Some(super::SpendFixture {
-                session_id: "droid-conformance",
-                file_name: "droid-conformance.settings.json",
-                body: super::SpendFixtureBody::Jsonl(
-                    r#"{"model":"gpt-5","tokenUsage":{"inputTokens":100,"outputTokens":20,"cacheCreationTokens":10,"cacheReadTokens":30,"thinkingTokens":5}}"#,
-                ),
-            }),
-            ..super::AdapterConformance::default()
-        }
     }
 }
 
@@ -463,6 +463,12 @@ impl crate::agents::capabilities::SpendingCapability for DroidAdapter {
         spend::parse(path, prices)
     }
 }
+
+// Capabilities this agent has no behavior for; every method keeps its
+// default from `agents::capabilities`.
+impl crate::agents::capabilities::AccountCapability for DroidAdapter {}
+impl crate::agents::capabilities::RuntimeControlCapability for DroidAdapter {}
+impl crate::agents::capabilities::SessionCapability for DroidAdapter {}
 
 #[cfg(test)]
 mod tests;
