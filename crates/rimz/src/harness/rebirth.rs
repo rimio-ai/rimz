@@ -336,11 +336,14 @@ fn plan_recovery(
     let flat = plan_resume_detailed(
         &flat_agents,
         &projection.ended,
-        resume_cfg.max.saturating_sub(team_panes),
-        project_root.as_deref(),
+        crate::harness::resume::ResumeContext {
+            project_root: project_root.as_deref(),
+            rimz_bin: &crate::proc::rimz_exe(),
+            profiles,
+            max: resume_cfg.max.saturating_sub(team_panes),
+        },
         Path::is_dir,
         resume_session_present,
-        &crate::proc::rimz_exe(),
     );
     let mut plan = RecoveryPlan::new(teams.clone(), team, flat);
     plan.sort_by_freshness();

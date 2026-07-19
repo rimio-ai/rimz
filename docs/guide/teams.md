@@ -107,7 +107,7 @@ Point any co-launched layout — a named team or an inline multi-agent spec — 
 
 `rimz agents claude:planner,codex:coder -w feat-once` focuses the existing pair when the same command runs again.
 
-`--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume takes identity, working directory, and channel from RimZ's durable records, so it stands alone: no prompt, model, or channel flags ride with it.
+`--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume takes identity, working directory, and channel from RimZ's durable records and each role's model, effort, system prompt, and permission mode from its profile, so a resumed team comes back configured exactly as it launched. It stands alone: no prompt, model, or channel flags ride with it.
 
 ```sh
 rimz agents forge --resume         # reopen the newest closed forge team

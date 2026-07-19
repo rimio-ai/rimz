@@ -724,11 +724,14 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
                     agent,
                     fallback_channel,
                 } => {
+                    // The layout already resolved this cell from its profile or
+                    // role binding, so the posture to replay is right here.
                     return Ok(PaneCmd {
                         argv: crate::harness::resume::resume_command(
                             options.rimz_bin,
                             agent,
                             *fallback_channel,
+                            &crate::harness::resume::ResumePosture::from_cell(cell),
                         ),
                     });
                 }

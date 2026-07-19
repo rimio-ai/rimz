@@ -31,16 +31,10 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.worktree_root.clone());
-    let adapter = rimz::agents::find_definition(agent.kind.as_str())
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let machine_config = crate::cli::machine_config();
-    let mut cell = restart_cell(&agent, workspace, &machine_config, adapter)?;
-    let Cell::Agent(agent_cell) = &mut cell else {
-        bail!("restart profile did not resolve to an agent");
-    };
-    let extra_args = std::mem::take(&mut agent_cell.args);
-    let mode = agent_cell.launch.mode;
-    let budget = agent_cell.launch.budget.clone();
+    let posture = restart_posture(&agent, workspace, &machine_config)?;
+    let cell = restart_cell(&agent, &posture);
+    let extra_args = posture.args.clone();
 
     // Fail at the entry point if this project's configured launch environment
     // is not trusted, before the old pane is touched.
@@ -51,6 +45,8 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         &cwd,
     )?;
 
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let resume_support = !agent.agent_id.is_provisional()
         && agent.worktree_path.is_some()
         && rimz::harness::launch::compile_provider_argv(
@@ -67,7 +63,12 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let fresh_reason = fresh_reason(resume_support, session_present);
     let fresh_batch = if fresh_reason.is_some() {
         Some(append_fresh_launch(
-            store, workspace, &agent, &cwd, cell, mode,
+            store,
+            workspace,
+            &agent,
+            &cwd,
+            cell,
+            posture.mode,
         )?)
     } else {
         None
@@ -81,16 +82,15 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     });
     let restart_params = rimz::agents::LaunchParams {
         profile: agent.profile.clone(),
-        mode,
         role: agent.role.clone(),
-        budget,
         team: agent.team.clone(),
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
         channel: agent.channel.clone(),
-        // Restart intentionally omits one-off model and effort selections.
-        model: None,
-        effort: None,
+        mode: posture.mode,
+        model: posture.model.clone(),
+        effort: posture.effort.clone(),
+        budget: posture.budget.clone(),
         kind_ordinal: None,
     };
     let invocation = rimz::harness::launch::ExecRequest {
@@ -185,93 +185,61 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     Ok(())
 }
 
-fn restart_cell(
+/// The posture this restart replays, from the same seam resume uses.
+///
+/// Restart is interactive, so a profile that now names a different provider
+/// refuses here rather than degrading — switching providers under a running
+/// agent is the user's call. Every other degrade prints and continues.
+fn restart_posture(
     agent: &AgentState,
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
-    adapter: &AgentDefinition,
-) -> Result<Cell> {
+) -> Result<ResumePosture> {
     let launch = rimz::config::effective::load(
         &machine_config.agents,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
-    let configured_profile = agent
-        .profile
-        .as_deref()
-        .filter(|profile| launch.profiles.0.contains_key(*profile));
-    let mut cell = match configured_profile {
-        Some(profile) => {
-            resolve_restart_profile_cell(profile, &launch, &machine_config.agents.commands)?
-        }
-        None => {
-            if let Some(profile) = agent.profile.as_deref() {
-                writeln!(
-                    crate::cli::render::err(),
-                    "rimz: profile `{profile}` is no longer configured; restarting as bare {}",
-                    agent.kind
-                )?;
-            }
-            Cell::agent(agent.kind.clone())
-        }
-    };
-    let Cell::Agent(agent_cell) = &mut cell else {
-        bail!("restart profile did not resolve to an agent");
-    };
-    if agent_cell.kind != agent.kind {
-        bail!(
-            "profile `{}` now resolves to {}, but the running agent is {}; launch it fresh to change providers",
-            agent.profile.as_deref().unwrap_or("<unknown>"),
-            agent_cell.kind,
-            agent.kind
-        );
-    }
-    let permission_args = agent
-        .mode
-        .map(|mode| adapter.spec().launch.permission_args(mode))
-        .unwrap_or_default();
-    let (replayed_args, replayed_mode) = replay_posture(
-        std::mem::take(&mut agent_cell.args),
-        agent_cell.launch.mode,
-        agent.mode,
-        &permission_args,
+    let posture = rimz::harness::resume::resolve_posture(
+        rimz::harness::resume::PostureRequest {
+            profile: agent.profile.as_deref(),
+            kind: &agent.kind,
+            stamped_mode: agent.mode,
+        },
+        &launch.profiles,
     );
-    agent_cell.args = replayed_args;
-    agent_cell.launch.mode = replayed_mode;
-    agent_cell.launch.profile.clone_from(&agent.profile);
-    agent_cell.launch.role.clone_from(&agent.role);
-    agent_cell.launch.budget.clone_from(&agent.budget);
-    Ok(cell)
+    match &posture.degraded {
+        Some(reason @ PostureDegrade::KindChanged { .. }) => {
+            bail!("{reason}; launch it fresh to change providers")
+        }
+        Some(reason) => writeln!(
+            crate::cli::render::err(),
+            "rimz: {reason}; restarting as bare {}",
+            agent.kind
+        )?,
+        None => {}
+    }
+    Ok(posture)
 }
 
-fn resolve_restart_profile_cell(
-    profile: &str,
-    launch: &rimz::config::effective::LaunchAgents,
-    commands: &rimz::config::CommandsConfig,
-) -> Result<Cell> {
-    let resolved = rimz::harness::plan::resolve_launch(launch, commands, Some(profile))?;
-    rimz::harness::plan::validate_profile_prompt_files(&resolved.layout)?;
-    let mut cells = resolved.layout.agent_cells();
-    let cell = cells
-        .next()
-        .cloned()
-        .context("restart profile produced no agent cell")?;
-    if cells.next().is_some() {
-        bail!("restart profile `{profile}` produced more than one agent cell");
-    }
-    Ok(Cell::Agent(cell))
-}
-
-fn replay_posture(
-    mut profile_args: Vec<String>,
-    profile_mode: Option<PermissionMode>,
-    stamped_mode: Option<PermissionMode>,
-    stamped_permission_args: &[String],
-) -> (Vec<String>, Option<PermissionMode>) {
-    if profile_mode.is_none() && stamped_mode.is_some() {
-        profile_args.extend(stamped_permission_args.iter().cloned());
-    }
-    (profile_args, profile_mode.or(stamped_mode))
+/// The layout cell a fresh restart launches, carrying the replayed posture and
+/// the agent's durable identity.
+fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
+    Cell::Agent(AgentCell {
+        kind: agent.kind.clone(),
+        args: posture.args.clone(),
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+        launch: rimz::agents::LaunchParams {
+            profile: agent.profile.clone(),
+            role: agent.role.clone(),
+            mode: posture.mode,
+            model: posture.model.clone(),
+            effort: posture.effort.clone(),
+            budget: posture.budget.clone(),
+            ..Default::default()
+        },
+    })
 }
 
 fn fresh_reason(resume_support: bool, session_present: bool) -> Option<FreshReason> {
@@ -346,39 +314,6 @@ fn mark_fresh_failed(
 mod tests {
     use super::*;
 
-    fn args(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    }
-
-    #[test]
-    fn profile_mode_wins_over_stamped_mode() {
-        let (replayed, mode) = replay_posture(
-            args(&["--profile-auto"]),
-            Some(PermissionMode::Auto),
-            Some(PermissionMode::Yolo),
-            &args(&["--stamped-yolo"]),
-        );
-
-        assert_eq!(replayed, args(&["--profile-auto"]));
-        assert_eq!(mode, Some(PermissionMode::Auto));
-    }
-
-    #[test]
-    fn stamped_mode_fills_profile_without_posture() {
-        let (replayed, mode) = replay_posture(
-            args(&["--model", "opus"]),
-            None,
-            Some(PermissionMode::Yolo),
-            &args(&["--dangerously-skip-permissions"]),
-        );
-
-        assert_eq!(
-            replayed,
-            args(&["--model", "opus", "--dangerously-skip-permissions"])
-        );
-        assert_eq!(mode, Some(PermissionMode::Yolo));
-    }
-
     #[test]
     fn resume_classification_names_each_fresh_reason() {
         assert_eq!(
@@ -390,82 +325,5 @@ mod tests {
             Some(FreshReason::NoRecordedConversation)
         );
         assert_eq!(fresh_reason(true, true), None);
-    }
-
-    #[test]
-    fn restart_profile_without_model_stays_unfinalized() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let prompt_file = dir.path().join("prompt.md");
-        std::fs::write(&prompt_file, "follow project rules").expect("write prompt file");
-        let mut machine = rimz::config::MachineConfig::default();
-        machine.agents.profiles.0.insert(
-            "codex-plain".to_owned(),
-            rimz::config::Profile {
-                agent: "codex".to_owned(),
-                mode: None,
-                model: None,
-                effort: None,
-                budget: None,
-                system_prompt_file: Some(prompt_file),
-                append_system_prompt_file: None,
-                args: Some("--search".to_owned()),
-            },
-        );
-        let launch = rimz::config::effective::load(
-            &machine.agents,
-            dir.path(),
-            &dir.path().join("config-home"),
-        )
-        .expect("effective launch");
-
-        let cell = resolve_restart_profile_cell("codex-plain", &launch, &machine.agents.commands)
-            .expect("restart profile cell");
-        let Cell::Agent(rimz::harness::spec::AgentCell {
-            args,
-            launch: rimz::agents::LaunchParams { model, .. },
-            ..
-        }) = cell
-        else {
-            panic!("agent cell");
-        };
-
-        assert_eq!(model, None);
-        assert!(args.iter().any(|arg| arg == "--search"));
-        assert!(
-            args.iter()
-                .any(|arg| arg.contains("model_instructions_file=") && arg.ends_with("prompt.md"))
-        );
-        assert!(!args.iter().any(|arg| arg == "-m" || arg == "--model"));
-    }
-
-    #[test]
-    fn restart_profile_rejects_missing_prompt_file() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let mut machine = rimz::config::MachineConfig::default();
-        machine.agents.profiles.0.insert(
-            "codex-plain".to_owned(),
-            rimz::config::Profile {
-                agent: "codex".to_owned(),
-                mode: None,
-                model: None,
-                effort: None,
-                budget: None,
-                system_prompt_file: Some(dir.path().join("missing.md")),
-                append_system_prompt_file: None,
-                args: Some("--search".to_owned()),
-            },
-        );
-        let launch = rimz::config::effective::load(
-            &machine.agents,
-            dir.path(),
-            &dir.path().join("config-home"),
-        )
-        .expect("effective launch");
-
-        let err = resolve_restart_profile_cell("codex-plain", &launch, &machine.agents.commands)
-            .expect_err("missing prompt file must fail restart");
-
-        assert!(err.to_string().contains("system-prompt-file"), "{err:#}");
-        assert!(err.to_string().contains("not found"), "{err:#}");
     }
 }

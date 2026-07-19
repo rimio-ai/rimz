@@ -64,6 +64,47 @@ fn no_ended() -> BTreeSet<(AgentKind, AgentSessionId)> {
     BTreeSet::new()
 }
 
+fn no_profiles() -> ProfilesConfig {
+    ProfilesConfig::default()
+}
+
+/// The argv of the one pane a single-candidate plan seeds.
+fn single_pane_argv(plan: &ResumePlan) -> Vec<String> {
+    let [tab] = plan.tabs.as_slice() else {
+        panic!("expected exactly one resume tab, got {}", plan.tabs.len());
+    };
+    let [column] = tab.layout.columns.as_slice() else {
+        panic!("expected exactly one column");
+    };
+    let [pane] = column.panes.as_slice() else {
+        panic!("expected exactly one pane");
+    };
+    pane.argv.clone()
+}
+
+/// One machine profile, so a resume candidate has posture to replay.
+fn profiles(entries: &[(&str, Profile)]) -> ProfilesConfig {
+    ProfilesConfig(
+        entries
+            .iter()
+            .map(|(name, profile)| ((*name).to_owned(), profile.clone()))
+            .collect(),
+    )
+}
+
+fn profile(agent: &str) -> Profile {
+    Profile {
+        agent: agent.to_owned(),
+        mode: None,
+        model: None,
+        effort: None,
+        budget: None,
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+        args: None,
+    }
+}
+
 fn exec_resume(kind: &str, id: &str) -> Vec<String> {
     crate::harness::launch::exec_argv(
         Path::new("/bin/rimz"),
@@ -728,11 +769,14 @@ fn resumes_root_agents_most_recent_first() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert!(plan.skipped.is_empty());
     assert_eq!(plan.tabs.len(), 2);
@@ -773,11 +817,14 @@ fn rebirth_resume_skips_provisional_launch_placeholder() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
 
     assert!(plan.tabs.is_empty());
@@ -797,11 +844,14 @@ fn plan_resume_skips_agent_without_conversation() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| false,
-        Path::new("/bin/rimz"),
     );
 
     assert!(plan.tabs.is_empty());
@@ -824,11 +874,14 @@ fn disambiguates_reborn_tabs_with_the_same_basename() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
 
     assert_eq!(plan.tabs.len(), 2);
@@ -857,7 +910,12 @@ fn resume_command_replays_launch_identity() {
     agent.team = Some("forge".to_owned());
     agent.launch_group = Some("launch_group_1".to_owned());
     agent.launch_ordinal = Some(2);
-    let argv = resume_command(Path::new("/bin/rimz"), &agent, agent.channel.as_deref());
+    let argv = resume_command(
+        Path::new("/bin/rimz"),
+        &agent,
+        agent.channel.as_deref(),
+        &ResumePosture::default(),
+    );
     assert_eq!(&argv[..4], ["/bin/rimz", "agents", "exec", "claude"]);
     let request = decode_exec_request(&argv);
     assert_eq!(
@@ -883,6 +941,231 @@ fn resume_command_replays_launch_identity() {
 }
 
 #[test]
+fn resume_replays_the_profile_declared_posture() {
+    // A session that launched as `@planner` comes back as a planner: the
+    // profile's model, effort, and appended system prompt ride the resume argv,
+    // not just the `@planner` handle.
+    let prompt = tempfile::NamedTempFile::new().expect("temp prompt file");
+    let mut planner = profile("claude");
+    planner.model = Some("opus".to_owned());
+    planner.effort = Some("high".to_owned());
+    planner.append_system_prompt_file = Some(prompt.path().to_path_buf());
+    let profiles = profiles(&[("planner", planner)]);
+
+    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
+    agent.profile = Some("planner".to_owned());
+    let plan = plan_resume(
+        &[agent],
+        &no_ended(),
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &profiles,
+            max: DEFAULT_RESUME_MAX,
+        },
+        |_| true,
+        |_| true,
+    );
+
+    assert!(plan.warnings.is_empty());
+    let argv = single_pane_argv(&plan);
+    let request = decode_exec_request(&argv);
+    let expected = crate::harness::spec::profile_cell("planner", &profiles)
+        .expect("planner profile resolves")
+        .args;
+    assert!(
+        expected.iter().any(|arg| arg == "opus"),
+        "profile argv should carry the model: {expected:?}"
+    );
+    assert_eq!(
+        request.action,
+        crate::harness::launch::ExecAction::Resume {
+            session_id: "a1".to_owned(),
+            extra_args: expected,
+        }
+    );
+    assert_eq!(request.identity.params.model.as_deref(), Some("opus"));
+    assert_eq!(request.identity.params.effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn resume_leaves_one_off_launch_values_out_of_the_posture() {
+    // `model` on the rollup is observed, not declared — the user may have
+    // switched it mid-session with `/model`. Only the profile speaks here.
+    let profiles = profiles(&[("planner", profile("claude"))]);
+    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
+    agent.profile = Some("planner".to_owned());
+    agent.model = Some("some-one-off-model".to_owned());
+
+    let plan = plan_resume(
+        &[agent],
+        &no_ended(),
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &profiles,
+            max: DEFAULT_RESUME_MAX,
+        },
+        |_| true,
+        |_| true,
+    );
+
+    let argv = single_pane_argv(&plan);
+    assert!(
+        !argv.iter().any(|arg| arg == "some-one-off-model"),
+        "one-off model leaked into the resume argv: {argv:?}"
+    );
+    assert_eq!(decode_exec_request(&argv).identity.params.model, None);
+}
+
+#[test]
+fn resume_replays_the_stamped_mode_when_the_profile_declares_none() {
+    // The launch event records the permission posture the user granted, so a
+    // profile-less agent still comes back with it.
+    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
+    agent.mode = Some(crate::harness::run::PermissionMode::Yolo);
+
+    let plan = plan_resume(
+        &[agent],
+        &no_ended(),
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
+        |_| true,
+        |_| true,
+    );
+
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    let expected = crate::agents::find_definition("claude")
+        .expect("claude adapter")
+        .spec()
+        .launch
+        .permission_args(crate::harness::run::PermissionMode::Yolo);
+    assert_eq!(request.action.extra_args(), expected);
+    assert_eq!(
+        request.identity.params.mode,
+        Some(crate::harness::run::PermissionMode::Yolo)
+    );
+}
+
+#[test]
+fn resume_degrades_to_bare_when_the_profile_is_gone() {
+    // Rebirth runs unattended, so a profile dropped from config warns and
+    // recovers rather than refusing to bring the session back.
+    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
+    agent.profile = Some("retired".to_owned());
+
+    let plan = plan_resume(
+        &[agent],
+        &no_ended(),
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
+        |_| true,
+        |_| true,
+    );
+
+    assert_eq!(plan.tabs.len(), 1, "the session still comes back");
+    assert_eq!(plan.warnings.len(), 1);
+    assert!(
+        plan.warnings[0].contains("retired"),
+        "warning should name the profile: {}",
+        plan.warnings[0]
+    );
+    assert_eq!(
+        decode_exec_request(&single_pane_argv(&plan))
+            .action
+            .extra_args(),
+        &[] as &[String]
+    );
+}
+
+#[test]
+fn profile_mode_wins_over_the_stamped_mode() {
+    // The profile is the standing decision; the stamp only fills a gap.
+    let mut auto = profile("claude");
+    auto.mode = Some(crate::harness::run::PermissionMode::Auto);
+    let profiles = profiles(&[("planner", auto)]);
+    let kind = AgentKind::new_unchecked("claude");
+
+    let posture = resolve_posture(
+        PostureRequest {
+            profile: Some("planner"),
+            kind: &kind,
+            stamped_mode: Some(crate::harness::run::PermissionMode::Yolo),
+        },
+        &profiles,
+    );
+
+    assert_eq!(
+        posture.mode,
+        Some(crate::harness::run::PermissionMode::Auto)
+    );
+    let yolo = crate::agents::find_definition("claude")
+        .expect("claude adapter")
+        .spec()
+        .launch
+        .permission_args(crate::harness::run::PermissionMode::Yolo);
+    assert!(
+        !yolo.iter().any(|arg| posture.args.contains(arg)),
+        "stamped yolo argv leaked past the profile's mode: {:?}",
+        posture.args
+    );
+}
+
+#[test]
+fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
+    // Rebirth is unattended: a deleted prompt file must not strand the session.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut planner = profile("codex");
+    planner.system_prompt_file = Some(dir.path().join("missing.md"));
+    let profiles = profiles(&[("planner", planner)]);
+    let kind = AgentKind::new_unchecked("codex");
+
+    let posture = resolve_posture(
+        PostureRequest {
+            profile: Some("planner"),
+            kind: &kind,
+            stamped_mode: None,
+        },
+        &profiles,
+    );
+
+    assert!(posture.args.is_empty());
+    assert!(matches!(
+        posture.degraded,
+        Some(PostureDegrade::PromptFileMissing { .. })
+    ));
+}
+
+#[test]
+fn posture_refuses_nothing_and_reports_a_provider_switch() {
+    // Restart escalates this; unattended resume degrades on it. Either way the
+    // resolver reports rather than fails.
+    let profiles = profiles(&[("planner", profile("codex"))]);
+    let kind = AgentKind::new_unchecked("claude");
+    let posture = resolve_posture(
+        PostureRequest {
+            profile: Some("planner"),
+            kind: &kind,
+            stamped_mode: None,
+        },
+        &profiles,
+    );
+    assert!(posture.args.is_empty());
+    assert!(matches!(
+        posture.degraded,
+        Some(PostureDegrade::KindChanged { .. })
+    ));
+}
+
+#[test]
 fn filters_subagents_and_ended_candidates_but_resumes_paneless_roots() {
     let mut child = agent("claude", "kid", "/code/query-engine", Some("main"), 1);
     child.parent_agent_id = Some("parent".into());
@@ -901,11 +1184,14 @@ fn filters_subagents_and_ended_candidates_but_resumes_paneless_roots() {
             agent("claude", "ended", "/code/query-engine", Some("main"), 1),
         ],
         &ended,
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(
@@ -925,11 +1211,14 @@ fn dedups_paneless_records_by_provider_session_identity() {
     let plan = plan_resume(
         &[older, newer],
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
 
     assert_eq!(plan.tabs.len(), 1);
@@ -945,11 +1234,14 @@ fn stamps_a_missing_worktree_session_ended() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| false,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert!(plan.tabs.is_empty());
     assert!(plan.skipped.is_empty());
@@ -984,11 +1276,14 @@ fn dedups_a_relaunched_agent_keeping_the_newest() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(
@@ -1025,11 +1320,14 @@ fn collapses_a_relaunch_that_changed_branch_on_one_pane() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(
@@ -1065,11 +1363,14 @@ fn keeps_two_same_kind_agents_in_one_worktree() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(plan.tabs[0].label, "#query-engine");
@@ -1093,11 +1394,14 @@ fn caps_and_reports_the_overflow() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        1,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: 1,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
     // The freshest survives the cap; the older overflows.
@@ -1121,11 +1425,14 @@ fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
     let plan = plan_resume(
         &agents,
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs[0].label, "#query-engine");
     assert_eq!(
@@ -1145,11 +1452,14 @@ fn named_channel_groups_by_explicit_channel_and_replays_identity() {
     let plan = plan_resume(
         &[design],
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
 
     assert_eq!(plan.tabs[0].label, "#design");
@@ -1175,11 +1485,14 @@ fn worktree_team_resume_replays_flat_worktree_channel() {
     let plan = plan_resume(
         &[planner],
         &no_ended(),
-        DEFAULT_RESUME_MAX,
-        Some(Path::new("/code/project")),
+        ResumeContext {
+            project_root: Some(Path::new("/code/project")),
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
 
     assert_eq!(plan.tabs[0].label, "#auth");
@@ -1550,7 +1863,9 @@ fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
             }
         },
         |_| Vec::new(),
-        || panic!("partial resume must not load restore config"),
+        // The split relaunches the closed member, so it resolves posture like
+        // any other relaunch path.
+        empty_lane_restore,
     )
     .unwrap();
 
@@ -1810,11 +2125,14 @@ fn recovery_plan_sorts_equal_freshness_by_label() {
     let flat = plan_resume_detailed(
         &[zed, alpha],
         &BTreeSet::new(),
-        2,
-        None,
+        ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &no_profiles(),
+            max: 2,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     let mut recovery = RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat);
     recovery.sort_by_freshness();

@@ -61,18 +61,13 @@ pub(super) fn resume_lane(
         rimz::store::runtime::agent_liveness,
         discover_lane_sessions,
         || {
-            let launch = rimz::config::effective::load(
+            LaneRestoreConfig::load(
                 &machine_config.agents,
                 &workspace.project_root,
                 &rimz::store::paths::config_home(),
             )
             .map_err(|error| LaneResumeError::RestoreConfig {
                 message: error.to_string(),
-            })?;
-            Ok(LaneRestoreConfig {
-                teams: launch.teams,
-                profiles: launch.profiles,
-                commands: machine_config.agents.commands.clone(),
             })
         },
     )?;
@@ -122,10 +117,12 @@ pub(super) fn resume_lane(
             target_pane_id,
             commands,
             skipped,
+            warnings,
             live_labels,
             ..
         } => {
             report_resume_skips(&skipped)?;
+            report_posture_warnings(&warnings)?;
             let resumed = commands.len();
             let direction = rimz::mux::detect_terminal_size()
                 .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
@@ -158,6 +155,7 @@ pub(super) fn resume_lane(
         } => {
             report_discovery_skips(plan.discovery_skipped())?;
             report_resume_skips(plan.skipped())?;
+            report_posture_warnings(plan.warnings())?;
             let tabs = plan.materialize(&store, &workspace.session_name)?;
             let count = tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
             for tab in tabs {
@@ -236,6 +234,14 @@ fn report_resume_skips(skips: &[ResumeSkip]) -> Result<()> {
             skip.label,
             skip.reason.label()
         )?;
+    }
+    Ok(())
+}
+
+fn report_posture_warnings(warnings: &[String]) -> Result<()> {
+    let mut out = std::io::stderr().lock();
+    for warning in warnings {
+        writeln!(out, "rimz: {warning}")?;
     }
     Ok(())
 }

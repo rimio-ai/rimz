@@ -582,9 +582,6 @@ fn compile_team(
             Some(role.role.clone()),
             role.resolved.launch.mode,
         );
-        let Cell::Agent(cell) = cell else {
-            unreachable!("agent_cell_from always returns an agent cell");
-        };
         role_cells.insert(role.role, cell);
     }
     let layout = if let Some(raw) = prepared.team.layout.as_deref() {
@@ -937,8 +934,7 @@ fn parse_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -
         return command_cell(raw, command);
     }
     if profiles.0.contains_key(raw) {
-        let resolved = resolve_profile(raw, profiles)?;
-        return cell_from_profile(raw, &resolved);
+        return Ok(Cell::Agent(profile_cell(raw, profiles)?));
     }
     if raw == "term" {
         return Ok(Cell::shell());
@@ -958,7 +954,16 @@ fn parse_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -
     })
 }
 
-fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<Cell> {
+/// The agent cell a named profile launches as: its rendered provider argv plus
+/// the typed launch params it declares. Layout resolution builds profile cells
+/// through this, and relaunch replays a stored profile name through it to
+/// recover the same posture.
+pub fn profile_cell(name: &str, profiles: &ProfilesConfig) -> Result<AgentCell> {
+    let resolved = resolve_profile(name, profiles)?;
+    cell_from_profile(name, &resolved)
+}
+
+fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<AgentCell> {
     Ok(agent_cell_from(
         resolved,
         render_profile_args(name, resolved)?,
@@ -974,8 +979,8 @@ fn agent_cell_from(
     profile: Option<String>,
     role: Option<String>,
     mode: Option<PermissionMode>,
-) -> Cell {
-    Cell::Agent(AgentCell {
+) -> AgentCell {
+    AgentCell {
         kind: resolved.kind.clone(),
         args,
         system_prompt_file: resolved.system_prompt_file.clone(),
@@ -986,7 +991,7 @@ fn agent_cell_from(
             role,
             ..resolved.launch.clone()
         },
-    })
+    }
 }
 
 fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<String>> {
@@ -1100,7 +1105,13 @@ fn virtual_cell_from(
         None => Vec::new(),
     };
     args.extend(extra_args);
-    Ok(agent_cell_from(&resolved, args, profile_name, None, mode))
+    Ok(Cell::Agent(agent_cell_from(
+        &resolved,
+        args,
+        profile_name,
+        None,
+        mode,
+    )))
 }
 
 fn virtual_base(

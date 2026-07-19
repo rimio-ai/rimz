@@ -38,15 +38,15 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::GlobalFlags;
 pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
-use rimz::agents::AgentDefinition;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
     LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, agent_pane_plans,
     apply_in_place_downgrade, cohort_cells, launch_identity_requests, layout_panes_with_names,
     mint_launch_id, resolve_fork_placement, resolve_placement, validate_agent_name,
 };
+use rimz::harness::resume::{PostureDegrade, ResumePosture};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
-use rimz::harness::spec::{Cell, LayoutSpec};
+use rimz::harness::spec::{AgentCell, Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, own_pane_id};

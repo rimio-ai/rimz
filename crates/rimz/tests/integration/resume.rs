@@ -65,11 +65,14 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
     rimz::harness::resume::plan_resume(
         &projection.agents,
         &projection.ended,
-        rimz::harness::resume::DEFAULT_RESUME_MAX,
-        None,
+        rimz::harness::resume::ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &rimz::config::ProfilesConfig::default(),
+            max: rimz::harness::resume::DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     )
 }
 
@@ -310,11 +313,14 @@ fn soft_reset_preserves_dead_paneless_resume_identity() {
     let plan = rimz::harness::resume::plan_resume(
         &projection.agents,
         &projection.ended,
-        rimz::harness::resume::DEFAULT_RESUME_MAX,
-        None,
+        rimz::harness::resume::ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &rimz::config::ProfilesConfig::default(),
+            max: rimz::harness::resume::DEFAULT_RESUME_MAX,
+        },
         |_| true,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
     let commands = single_column(&plan.tabs[0]);
@@ -412,11 +418,14 @@ fn missing_worktree_candidate_is_stamped_ended_not_reported() {
     let plan = rimz::harness::resume::plan_resume(
         &projection.agents,
         &projection.ended,
-        rimz::harness::resume::DEFAULT_RESUME_MAX,
-        None,
+        rimz::harness::resume::ResumeContext {
+            project_root: None,
+            rimz_bin: Path::new("/bin/rimz"),
+            profiles: &rimz::config::ProfilesConfig::default(),
+            max: rimz::harness::resume::DEFAULT_RESUME_MAX,
+        },
         |_| false,
         |_| true,
-        Path::new("/bin/rimz"),
     );
     assert!(plan.tabs.is_empty());
     assert!(plan.skipped.is_empty());

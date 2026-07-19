@@ -1323,11 +1323,14 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     }
 }
 
+/// A resumed pane takes its *identity* from the durable record — it is the same
+/// agent coming back — and its *posture* from the resolved cell, so a team
+/// member returns with the model, effort, and argv its role binding declares.
 #[test]
-fn pane_command_resume_replays_prior_identity_without_launch_preset() {
+fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     let cell = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
-        args: vec!["--ignored".to_owned()],
+        args: vec!["--profile-declared".to_owned()],
         system_prompt_file: None,
         append_system_prompt_file: None,
         launch: LaunchParams {
@@ -1384,11 +1387,17 @@ fn pane_command_resume_replays_prior_identity_without_launch_preset() {
     }
     let request = exec_request(&pane.argv);
     assert!(request.close_pane_on_exit);
-    assert!(request.identity.params.model.is_none());
-    assert!(request.identity.params.effort.is_none());
+    // Posture is the cell's, not the session's observed values: `old-model` was
+    // whatever the user last switched to mid-session and stays out.
+    assert_eq!(request.identity.params.model.as_deref(), Some("new-model"));
+    assert_eq!(
+        request.identity.params.effort.as_deref(),
+        Some("new-effort")
+    );
     assert!(matches!(
         request.action,
-        crate::harness::launch::ExecAction::Resume { .. }
+        crate::harness::launch::ExecAction::Resume { ref extra_args, .. }
+            if extra_args == &vec!["--profile-declared".to_owned()]
     ));
 }
 

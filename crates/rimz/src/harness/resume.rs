@@ -25,6 +25,7 @@ use crate::harness::plan::{
     LayoutPaneParams, agent_pane_plans, cohort_cells, launch_identity_requests,
     layout_panes_with_names,
 };
+use crate::harness::run::PermissionMode;
 use crate::harness::spec::LayoutSpec;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::mux::ResumeTab;
@@ -54,12 +55,29 @@ pub enum LaneResumeSelector {
     Current,
 }
 
-/// Effective launch configuration used only when every lane member is closed.
+/// Effective launch configuration a lane resume restores against: the team and
+/// profile definitions its closed members relaunch from.
 #[derive(Clone, Debug)]
 pub struct LaneRestoreConfig {
     pub teams: TeamsConfig,
     pub profiles: ProfilesConfig,
     pub commands: CommandsConfig,
+}
+
+impl LaneRestoreConfig {
+    /// The trust-filtered effective launch config for one workspace.
+    pub fn load(
+        machine: &crate::config::AgentsConfig,
+        project_root: &Path,
+        config_root: &Path,
+    ) -> anyhow::Result<Self> {
+        let launch = crate::config::effective::load(machine, project_root, config_root)?;
+        Ok(Self {
+            teams: launch.teams,
+            profiles: launch.profiles,
+            commands: machine.commands.clone(),
+        })
+    }
 }
 
 /// Pure facts needed to decide one lane resume request.
@@ -72,6 +90,19 @@ pub struct LaneResumeRequest<'a> {
     pub project_root: &'a Path,
     pub max: usize,
     pub rimz_bin: &'a Path,
+}
+
+impl<'a> LaneResumeRequest<'a> {
+    /// The planning environment this lane request implies, against the profiles
+    /// its members replay posture from.
+    fn context(&self, profiles: &'a ProfilesConfig) -> ResumeContext<'a> {
+        ResumeContext {
+            project_root: Some(self.project_root),
+            rimz_bin: self.rimz_bin,
+            profiles,
+            max: self.max,
+        }
+    }
 }
 
 /// One row in the root-level lane resume listing.
@@ -120,6 +151,11 @@ impl LaneRestorePlan {
         &self.recovery.skipped
     }
 
+    /// Members coming back bare because their profile no longer resolves.
+    pub fn warnings(&self) -> &[String] {
+        &self.recovery.warnings
+    }
+
     pub fn discovery_skipped(&self) -> &[LocalSessionObservation] {
         &self.discovery_skipped
     }
@@ -151,6 +187,7 @@ pub enum LaneResumeAction {
         target_pane_id: PaneId,
         commands: Vec<Vec<String>>,
         skipped: Vec<ResumeSkip>,
+        warnings: Vec<String>,
         live_labels: Vec<String>,
         preflight_kinds: Vec<AgentKind>,
     },
@@ -212,6 +249,155 @@ pub struct ResumeSkip {
     pub reason: ResumeSkipReason,
 }
 
+/// The profile-declared launch posture a relaunched session replays: the
+/// provider argv its profile renders plus the typed values its launch params
+/// carry.
+///
+/// A profile is durable, named configuration, so a session that launched as
+/// `@planner` comes back as a planner. One-off `--model` / `--effort` flags
+/// typed at the original launch stay out — they were a single invocation's
+/// choice, and `--resume` refuses them for the same reason.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResumePosture {
+    pub args: Vec<String>,
+    pub mode: Option<PermissionMode>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub budget: Option<String>,
+    /// Set when the profile no longer applies and the session comes back bare.
+    /// Unattended recovery prints it and continues; restart escalates
+    /// [`PostureDegrade::KindChanged`] because switching providers under a
+    /// running agent is a decision the user makes, not a fallback.
+    pub degraded: Option<PostureDegrade>,
+}
+
+/// Why a stored profile no longer produces the posture it once did.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PostureDegrade {
+    #[error("profile `{profile}` no longer resolves ({reason})")]
+    Unresolved { profile: String, reason: String },
+    #[error("profile `{profile}` now resolves to {now}, but this session is {was}")]
+    KindChanged {
+        profile: String,
+        was: AgentKind,
+        now: AgentKind,
+    },
+    #[error("profile `{profile}` prompt file is missing ({reason})")]
+    PromptFileMissing { profile: String, reason: String },
+}
+
+impl ResumePosture {
+    /// The posture a layout cell already carries. Team restore and cohort
+    /// resume resolve their layout up front, so the cell is the answer.
+    pub fn from_cell(cell: &crate::harness::spec::AgentCell) -> Self {
+        Self {
+            args: cell.args.clone(),
+            mode: cell.launch.mode,
+            model: cell.launch.model.clone(),
+            effort: cell.launch.effort.clone(),
+            budget: cell.launch.budget.clone(),
+            degraded: None,
+        }
+    }
+
+    /// A bare posture that replays only the permission mode stamped on the
+    /// original launch event, so an agent launched with no profile still comes
+    /// back with the posture the user granted it.
+    fn bare(stamped_mode: Option<PermissionMode>, kind: &AgentKind) -> Self {
+        Self {
+            args: stamped_mode
+                .zip(find_definition(kind.as_str()))
+                .map(|(mode, adapter)| adapter.spec().launch.permission_args(mode))
+                .unwrap_or_default(),
+            mode: stamped_mode,
+            ..Self::default()
+        }
+    }
+
+    fn degrade(
+        stamped_mode: Option<PermissionMode>,
+        kind: &AgentKind,
+        reason: PostureDegrade,
+    ) -> Self {
+        Self {
+            degraded: Some(reason),
+            ..Self::bare(stamped_mode, kind)
+        }
+    }
+}
+
+/// The durable facts a resumed session offers when looking up its posture.
+#[derive(Clone, Copy, Debug)]
+pub struct PostureRequest<'a> {
+    pub profile: Option<&'a str>,
+    pub kind: &'a AgentKind,
+    /// The permission mode recorded on the original launch event.
+    pub stamped_mode: Option<PermissionMode>,
+}
+
+/// Resolve a stored profile name back into the posture it launches with.
+///
+/// `profiles` is the effective, trust-filtered set from
+/// [`crate::config::effective::load`], which has already rooted prompt paths at
+/// their config source.
+///
+/// Recovery paths run unattended at room birth, so this never fails: a profile
+/// that is gone, broken, or now resolves to a different provider degrades to a
+/// bare resume carrying a warning.
+pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -> ResumePosture {
+    let Some(name) = request.profile else {
+        return ResumePosture::bare(request.stamped_mode, request.kind);
+    };
+    let cell = match crate::harness::spec::profile_cell(name, profiles) {
+        Ok(cell) => cell,
+        Err(err) => {
+            return ResumePosture::degrade(
+                request.stamped_mode,
+                request.kind,
+                PostureDegrade::Unresolved {
+                    profile: name.to_owned(),
+                    reason: err.to_string(),
+                },
+            );
+        }
+    };
+    if &cell.kind != request.kind {
+        return ResumePosture::degrade(
+            request.stamped_mode,
+            request.kind,
+            PostureDegrade::KindChanged {
+                profile: name.to_owned(),
+                was: request.kind.clone(),
+                now: cell.kind,
+            },
+        );
+    }
+    let layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(cell.clone()));
+    if let Err(err) = crate::harness::plan::validate_profile_prompt_files(&layout) {
+        return ResumePosture::degrade(
+            request.stamped_mode,
+            request.kind,
+            PostureDegrade::PromptFileMissing {
+                profile: name.to_owned(),
+                reason: err.to_string(),
+            },
+        );
+    }
+    let mut posture = ResumePosture::from_cell(&cell);
+    // A profile that declares no mode leaves the granted posture to the launch
+    // event, so replay the stamped mode's permission argv instead.
+    if posture.mode.is_none()
+        && let Some(mode) = request.stamped_mode
+        && let Some(adapter) = find_definition(request.kind.as_str())
+    {
+        posture
+            .args
+            .extend(adapter.spec().launch.permission_args(mode));
+        posture.mode = Some(mode);
+    }
+    posture
+}
+
 /// What a reborn session should re-seed, and what it deliberately left out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePlan {
@@ -225,6 +411,9 @@ pub struct ResumePlan {
     /// Candidates whose worktree disappeared; the caller records these as
     /// durable end traces so they leave the next resume candidate set.
     pub agents_to_end: Vec<(AgentKind, AgentSessionId)>,
+    /// Sessions that came back bare because their profile no longer resolves.
+    /// The caller prints these; the resume itself succeeded.
+    pub warnings: Vec<String>,
 }
 
 /// One cell in an explicit cohort resume spec, reduced to the matching fields
@@ -308,6 +497,7 @@ pub(crate) struct DetailedResumePlan {
     resumed: BTreeSet<(AgentKind, AgentSessionId)>,
     skipped: Vec<ResumeSkip>,
     agents_to_end: Vec<(AgentKind, AgentSessionId)>,
+    warnings: Vec<String>,
 }
 
 impl DetailedResumePlan {
@@ -317,6 +507,7 @@ impl DetailedResumePlan {
             resumed: self.resumed,
             skipped: self.skipped,
             agents_to_end: self.agents_to_end,
+            warnings: self.warnings,
         }
     }
 }
@@ -375,6 +566,7 @@ pub(crate) struct RecoveryPlan {
     teams: TeamsConfig,
     pub(crate) entries: Vec<RecoveryEntry>,
     skipped: Vec<ResumeSkip>,
+    pub(crate) warnings: Vec<String>,
     agents_to_end: Vec<(AgentKind, AgentSessionId)>,
     base_resumed: BTreeSet<(AgentKind, AgentSessionId)>,
 }
@@ -394,6 +586,7 @@ impl RecoveryPlan {
             teams,
             entries,
             skipped: flat.skipped,
+            warnings: flat.warnings,
             agents_to_end: flat.agents_to_end,
             base_resumed: flat.resumed,
         }
@@ -437,6 +630,7 @@ impl RecoveryPlan {
             resumed: self.base_resumed,
             skipped: self.skipped,
             agents_to_end: self.agents_to_end,
+            warnings: self.warnings,
         };
         for entry in self.entries {
             match entry {
@@ -502,6 +696,9 @@ struct ResumeCandidate {
     name: Option<String>,
     name_explicit: bool,
     profile: Option<String>,
+    /// The permission mode the original launch event recorded, replayed when
+    /// the profile declares none of its own.
+    stamped_mode: Option<PermissionMode>,
     role: Option<String>,
     team: Option<String>,
     launch_group: Option<String>,
@@ -528,6 +725,7 @@ impl ResumeCandidate {
             name: agent.name.clone(),
             name_explicit: agent.name_explicit,
             profile: agent.profile.clone(),
+            stamped_mode: agent.mode,
             role: agent.role.clone(),
             team: agent.team.clone(),
             launch_group: agent.launch_group.clone(),
@@ -550,6 +748,7 @@ impl ResumeCandidate {
             name: None,
             name_explicit: false,
             profile: None,
+            stamped_mode: None,
             role: None,
             team: None,
             launch_group: None,
@@ -675,8 +874,17 @@ pub fn plan_lane_resume(
         .cloned()
         .partition(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }));
 
+    // Only the branches that plan a relaunch read the effective config; a lane
+    // that just needs focus stays independent of it.
     if candidates.is_empty() || (live.is_empty() && !closed.iter().any(&session_backed)) {
-        return plan_discovered_lane(&request, &lane, discover_sessions(&lane.path), path_exists);
+        let restore = restore_config()?;
+        return plan_discovered_lane(
+            &request,
+            &lane,
+            discover_sessions(&lane.path),
+            path_exists,
+            &restore.profiles,
+        );
     }
     if closed.is_empty() {
         let agent = live.first().ok_or(LaneResumeError::LiveNoFocus)?;
@@ -692,14 +900,15 @@ pub fn plan_lane_resume(
         });
     }
     if !live.is_empty() {
+        let restore = restore_config()?;
         return plan_live_lane_split(
             &request,
             lane,
-            candidates,
             live,
             closed,
             path_exists,
             session_backed,
+            &restore.profiles,
         );
     }
     plan_closed_lane(
@@ -903,6 +1112,7 @@ fn plan_discovered_lane(
     lane: &ResolvedLane,
     observations: Vec<LocalSessionObservation>,
     path_exists: impl Fn(&Path) -> bool,
+    profiles: &ProfilesConfig,
 ) -> Result<LaneResumeAction, LaneResumeError> {
     if observations.is_empty() {
         return Err(LaneResumeError::Nothing {
@@ -918,13 +1128,7 @@ fn plan_discovered_lane(
         .iter()
         .map(|candidate| candidate.kind.clone())
         .collect();
-    let flat = plan_resume_candidates_detailed(
-        candidates,
-        request.max,
-        Some(request.project_root),
-        path_exists,
-        request.rimz_bin,
-    );
+    let flat = plan_resume_candidates_detailed(candidates, request.context(profiles), path_exists);
     if flat.tabs.is_empty() {
         return Err(LaneResumeError::Nothing {
             scope: lane.display.clone(),
@@ -944,20 +1148,18 @@ fn plan_discovered_lane(
 fn plan_live_lane_split(
     request: &LaneResumeRequest<'_>,
     lane: ResolvedLane,
-    candidates: Vec<AgentState>,
     live: Vec<AgentState>,
     closed: Vec<AgentState>,
     path_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
+    profiles: &ProfilesConfig,
 ) -> Result<LaneResumeAction, LaneResumeError> {
     let flat = plan_resume(
         &closed,
         &BTreeSet::new(),
-        request.max,
-        Some(request.project_root),
+        request.context(profiles),
         path_exists,
         &session_backed,
-        request.rimz_bin,
     );
     let commands = flat
         .tabs
@@ -979,7 +1181,8 @@ fn plan_live_lane_split(
         .ok_or(LaneResumeError::LiveNoPane)?
         .pane_id
         .clone();
-    let peers = candidates.iter().collect::<Vec<_>>();
+    // Handles disambiguate against the whole lane, live and closed alike.
+    let peers = live.iter().chain(closed.iter()).collect::<Vec<_>>();
     let live_labels = live
         .iter()
         .map(|agent| crate::harness::target::agent_handle(agent, &peers, true))
@@ -1001,6 +1204,7 @@ fn plan_live_lane_split(
         target_pane_id,
         commands,
         skipped: flat.skipped,
+        warnings: flat.warnings,
         live_labels,
         preflight_kinds,
     })
@@ -1030,11 +1234,12 @@ fn plan_closed_lane(
     let flat = plan_resume_detailed(
         &flat_agents,
         &BTreeSet::new(),
-        request.max.saturating_sub(team_panes),
-        Some(request.project_root),
+        ResumeContext {
+            max: request.max.saturating_sub(team_panes),
+            ..request.context(&restore.profiles)
+        },
         path_exists,
         &session_backed,
-        request.rimz_bin,
     );
     if team.is_empty() && flat.tabs.is_empty() {
         return Err(LaneResumeError::Nothing {
@@ -1360,50 +1565,46 @@ fn newest_cmp(
 /// collapses to its newest stamp — the same rule the live sidebar binds by
 /// (`stamped_agent_for_pane`, in `store::snapshot::panes`) — while distinct
 /// sessions without stamps each remain candidates.
+/// The environment one resume plan is built against: where the room lives, what
+/// binary its panes re-enter through, how many panes it may seed, and the
+/// profiles its members replay their posture from.
+#[derive(Clone, Copy)]
+pub struct ResumeContext<'a> {
+    pub project_root: Option<&'a Path>,
+    pub rimz_bin: &'a Path,
+    pub profiles: &'a ProfilesConfig,
+    pub max: usize,
+}
+
 pub fn plan_resume(
     agents: &[AgentState],
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
-    max: usize,
-    project_root: Option<&Path>,
+    ctx: ResumeContext<'_>,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
-    rimz_bin: &Path,
 ) -> ResumePlan {
-    plan_resume_detailed(
-        agents,
-        ended,
-        max,
-        project_root,
-        worktree_exists,
-        session_backed,
-        rimz_bin,
-    )
-    .lower()
+    plan_resume_detailed(agents, ended, ctx, worktree_exists, session_backed).lower()
 }
 
 pub(crate) fn plan_resume_detailed(
     agents: &[AgentState],
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
-    max: usize,
-    project_root: Option<&Path>,
+    ctx: ResumeContext<'_>,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
-    rimz_bin: &Path,
 ) -> DetailedResumePlan {
     let candidates = agents
         .iter()
         .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .filter_map(|agent| ResumeCandidate::from_agent(agent, || session_backed(agent)))
         .collect();
-    plan_resume_candidates_detailed(candidates, max, project_root, worktree_exists, rimz_bin)
+    plan_resume_candidates_detailed(candidates, ctx, worktree_exists)
 }
 
 fn plan_resume_candidates_detailed(
     mut candidates: Vec<ResumeCandidate>,
-    max: usize,
-    project_root: Option<&Path>,
+    ctx: ResumeContext<'_>,
     worktree_exists: impl Fn(&Path) -> bool,
-    rimz_bin: &Path,
 ) -> DetailedResumePlan {
     candidates.sort_by(|left, right| {
         newest_cmp(
@@ -1423,7 +1624,7 @@ fn plan_resume_candidates_detailed(
         if !seen.insert(candidate.key()) {
             continue;
         }
-        let channel = candidate_room_channel(project_root, &candidate);
+        let channel = candidate_room_channel(ctx.project_root, &candidate);
         let label = build_label(&candidate.kind, channel.as_deref(), &candidate.cwd);
         if !worktree_exists(&candidate.cwd) {
             plan.agents_to_end
@@ -1445,7 +1646,7 @@ fn plan_resume_candidates_detailed(
             continue;
         }
         let seeded = tabs.iter().map(PlannedResumeTab::pane_count).sum::<usize>();
-        if seeded >= max {
+        if seeded >= ctx.max {
             plan.skipped.push(ResumeSkip {
                 label,
                 reason: ResumeSkipReason::OverCap,
@@ -1457,7 +1658,22 @@ fn plan_resume_candidates_detailed(
         // which replays the durable launch identity, applies trusted
         // `[[agents]]` env and the adapter's launch pins before spawning the
         // resume argv.
-        let command = candidate_resume_command(rimz_bin, &candidate, channel.as_deref());
+        let posture = resolve_posture(
+            PostureRequest {
+                profile: candidate.profile.as_deref(),
+                kind: &candidate.kind,
+                stamped_mode: candidate.stamped_mode,
+            },
+            ctx.profiles,
+        );
+        plan.warnings.extend(
+            posture
+                .degraded
+                .as_ref()
+                .map(|reason| format!("{reason}; resuming bare")),
+        );
+        let command =
+            candidate_resume_command(ctx.rimz_bin, &candidate, channel.as_deref(), &posture);
         let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
         let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);
         let resumed_key = (candidate.kind.clone(), candidate.session_id.clone());
@@ -2030,12 +2246,18 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
 }
 
 /// Wrapper argv for resuming one prior provider-native session with its durable
-/// RimZ launch identity and rebirth channel.
-pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>) -> Vec<String> {
+/// RimZ launch identity, rebirth channel, and profile-declared posture.
+pub fn resume_command(
+    rimz_bin: &Path,
+    agent: &AgentState,
+    channel: Option<&str>,
+    posture: &ResumePosture,
+) -> Vec<String> {
     candidate_resume_command(
         rimz_bin,
         &ResumeCandidate::from_agent_identity(agent, true),
         channel,
+        posture,
     )
 }
 
@@ -2043,6 +2265,7 @@ fn candidate_resume_command(
     rimz_bin: &Path,
     candidate: &ResumeCandidate,
     channel: Option<&str>,
+    posture: &ResumePosture,
 ) -> Vec<String> {
     let channel = candidate
         .channel
@@ -2056,7 +2279,11 @@ fn candidate_resume_command(
         launch_group: candidate.launch_group.clone(),
         launch_ordinal: candidate.launch_ordinal,
         channel: channel.map(ToOwned::to_owned),
-        // Resume intentionally omits mode, model, effort, and budget.
+        // Posture is profile-declared; one-off launch values stay out.
+        mode: posture.mode,
+        model: posture.model.clone(),
+        effort: posture.effort.clone(),
+        budget: posture.budget.clone(),
         ..Default::default()
     };
     let result = crate::harness::launch::exec_argv(
@@ -2065,7 +2292,7 @@ fn candidate_resume_command(
             kind: candidate.kind.clone(),
             action: crate::harness::launch::ExecAction::Resume {
                 session_id: candidate.session_id.to_string(),
-                extra_args: Vec::new(),
+                extra_args: posture.args.clone(),
             },
             provider_account: crate::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
