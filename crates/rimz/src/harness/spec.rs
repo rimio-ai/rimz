@@ -9,6 +9,7 @@
 //! `[agents.profiles]` entries can specialize agent cells and `[agents.commands]`
 //! entries provide raw command panes.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -250,6 +251,14 @@ pub enum LayoutErr {
         "team name `{0}` is reserved for an inline profile/command cell; choose another [agents.teams] name"
     )]
     ReservedTeamName(String),
+    #[error(
+        "`{spec}` is ambiguous in `#{channel}`: team `{team}` declares role `{spec}` and a `{spec}` profile or command resolves to a different agent; launch `{team}.{spec}` for the role, or rename one of them"
+    )]
+    AmbiguousInChannel {
+        spec: String,
+        channel: String,
+        team: String,
+    },
     #[error("team `{team}` must declare at least one role")]
     EmptyTeam { team: String },
     #[error("team `{team}` role `{role}` references unknown profile `{profile}`")]
@@ -401,6 +410,48 @@ pub fn spec_team<'a>(spec: &'a str, teams: &TeamsConfig) -> Option<&'a str> {
     }
     let (team, _) = spec.split_once('.')?;
     teams.0.contains_key(team).then_some(team)
+}
+
+/// Qualify a bare role spec with the team that owns the current lane.
+///
+/// Inside `#forge`, `reviewer` means `forge.reviewer`. Returns the spec
+/// unchanged when no team owns the lane, when the spec already names a team or
+/// a multi-cell inline layout, or when the team declares no such role.
+///
+/// A role bound to its same-named profile refines that profile — same agent,
+/// plus role and team identity — so it qualifies silently. A role bound to a
+/// different profile than a same-named global cell is a genuine collision and
+/// refuses.
+pub fn qualify_spec_in_channel<'a>(
+    raw: &'a str,
+    channel: &str,
+    channel_team: &str,
+    teams: &TeamsConfig,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<Cow<'a, str>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.contains(['.', ',', '+', '/', ':'])
+        || teams.0.contains_key(trimmed)
+    {
+        return Ok(Cow::Borrowed(raw));
+    }
+    // A stale stamp can name a team the config no longer declares.
+    let Some(team) = teams.0.get(channel_team) else {
+        return Ok(Cow::Borrowed(raw));
+    };
+    let Some(binding) = team.roles.iter().find(|binding| binding.role == trimmed) else {
+        return Ok(Cow::Borrowed(raw));
+    };
+    if is_cell_word(trimmed, profiles, commands) && binding.profile != trimmed {
+        return Err(LayoutErr::AmbiguousInChannel {
+            spec: trimmed.to_owned(),
+            channel: channel.to_owned(),
+            team: channel_team.to_owned(),
+        });
+    }
+    Ok(Cow::Owned(format!("{channel_team}.{trimmed}")))
 }
 
 pub fn parse_layout_spec(

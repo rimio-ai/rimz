@@ -316,6 +316,43 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
 }
 
 #[test]
+fn channel_team_reads_the_stamped_team_of_each_lane_shape() {
+    // In place: the lane is `<dir>/<team>`.
+    let mut planner = agent("claude", "session-planner", None, "terminal_1");
+    planner.worktree_path = Some("/code/team-channel".to_owned());
+    planner.channel = Some("team-channel/forge".to_owned());
+    planner.team = Some("forge".to_owned());
+    // Worktree: the lane is the directory basename, which names no team at all.
+    let mut scout = agent("codex", "session-scout", None, "terminal_2");
+    scout.worktree_path = Some("/code/feat-x".to_owned());
+    scout.channel = Some("feat-x".to_owned());
+    scout.team = Some("forge".to_owned());
+    // A teamless agent contributes nothing.
+    let mut solo = agent("claude", "session-solo", None, "terminal_3");
+    solo.worktree_path = Some("/code/team-channel".to_owned());
+    solo.channel = Some("team-channel/docs".to_owned());
+    let agents = vec![planner, scout, solo];
+
+    assert_eq!(channel_team(&agents, "team-channel/forge"), Some("forge"));
+    assert_eq!(channel_team(&agents, "feat-x"), Some("forge"));
+    assert_eq!(channel_team(&agents, "team-channel/docs"), None);
+    assert_eq!(channel_team(&agents, "unknown-lane"), None);
+}
+
+#[test]
+fn channel_team_declines_a_lane_holding_two_teams() {
+    let mut forge = agent("claude", "session-forge", None, "terminal_1");
+    forge.channel = Some("shared".to_owned());
+    forge.team = Some("forge".to_owned());
+    let mut docs = agent("codex", "session-docs", None, "terminal_2");
+    docs.channel = Some("shared".to_owned());
+    docs.team = Some("docs".to_owned());
+    let agents = vec![forge, docs];
+
+    assert_eq!(channel_team(&agents, "shared"), None);
+}
+
+#[test]
 fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
     assert_eq!(
         resolve_room_channel(

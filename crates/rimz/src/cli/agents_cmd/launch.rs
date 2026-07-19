@@ -1,23 +1,50 @@
 //! Interactive launch orchestration and presentation.
 
+use std::borrow::Cow;
+
 use super::*;
-use crate::cli::{machine_config, open_store};
+use crate::cli::ctx::Ctx;
+use crate::cli::machine_config;
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
 pub(super) fn launch_layout(
-    args: AgentsArgs,
+    mut args: AgentsArgs,
     globals: &GlobalFlags,
     allow_in_place: bool,
 ) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .context("resolving current workspace")?;
+    let ctx = Ctx::open(globals)?;
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
     let machine_config = machine_config();
     let effective = rimz::config::effective::load(
         &machine_config.agents,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
+    // Inside a team's lane, a bare role names that team's role: in `#forge`,
+    // `reviewer` means `forge.reviewer`. The lane's agents carry the team, since
+    // the channel string alone does not name it. An explicit `--channel` picks
+    // the lane to infer from, so the inference works from outside the tab too.
+    let lane = args.channel.as_deref().or_else(|| ctx.channel());
+    let mut inferred_lane = None;
+    if let (Some(spec), Some(channel)) = (args.spec.as_deref(), lane) {
+        let snapshot = ctx.cached_snapshot()?;
+        if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
+            let qualified = rimz::harness::spec::qualify_spec_in_channel(
+                spec,
+                channel,
+                team,
+                &effective.teams,
+                &effective.profiles,
+                &machine_config.agents.commands,
+            )?;
+            if let Cow::Owned(qualified) = qualified {
+                args.spec = Some(qualified);
+                inferred_lane = Some(channel.to_owned());
+            }
+        }
+    }
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         &machine_config.agents.commands,
@@ -87,12 +114,12 @@ pub(super) fn launch_layout(
         == 1;
     if args.resume {
         let worktree_filter =
-            resume_worktree_scope(args.worktree.as_deref(), &workspace, &machine_config)?;
+            resume_worktree_scope(args.worktree.as_deref(), workspace, &machine_config)?;
         return launch_resume_layout(
             args,
             globals,
             allow_in_place,
-            &workspace,
+            &ctx,
             &machine_config,
             &teams,
             layout,
@@ -118,14 +145,13 @@ pub(super) fn launch_layout(
     let in_place = placement == Placement::SamePane;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let room = RoomContext::from_resolved(
-        &workspace,
+        workspace,
         machine_config.clone(),
         mux,
         RoomSizing::OrdinaryTab,
     )?;
     let backend = room.backend();
     rimz::room::require_live_session(backend, &workspace.session_name)?;
-    let store = open_store(&workspace)?;
 
     let explicit_worktree_name = args
         .worktree
@@ -141,10 +167,10 @@ pub(super) fn launch_layout(
     {
         let spec_display = args.spec.as_deref().unwrap_or("<spec>");
         match reconcile::reconcile_cohort_launch(
-            &workspace,
+            workspace,
             &machine_config,
             backend,
-            &store,
+            store,
             name,
             spec_display,
             team_name.as_deref(),
@@ -156,7 +182,7 @@ pub(super) fn launch_layout(
                     args,
                     globals,
                     allow_in_place,
-                    &workspace,
+                    &ctx,
                     &machine_config,
                     &teams,
                     layout,
@@ -170,7 +196,7 @@ pub(super) fn launch_layout(
     }
 
     let launch = rimz::worktree::resolve_launch_checkout(
-        &workspace,
+        workspace,
         &machine_config.agents.worktree,
         args.worktree.as_deref(),
         args.from_pr.as_ref(),
@@ -182,14 +208,17 @@ pub(super) fn launch_layout(
         )?;
     }
     if let Some(channel) = args.channel.as_deref() {
-        crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
+        crate::cli::channel::ensure_named_channel_available(workspace, channel)?;
         rimz::channel::register(store.paths(), channel)?;
     }
+    // An inferred lane joins the exact channel it was inferred from, rather than
+    // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
+    // subdirectory would otherwise stamp that subdirectory's basename.
     let room_channel = rimz::harness::target::resolve_room_channel(
         &workspace.project_root,
         &launch.cwd,
         team_name.as_deref(),
-        args.channel.as_deref(),
+        args.channel.as_deref().or(inferred_lane.as_deref()),
     );
     let launch_requests = launch_identity_requests(
         &layout,
@@ -240,7 +269,7 @@ pub(super) fn launch_layout(
     )?;
     super::placement::execute(
         backend,
-        &store,
+        store,
         &launch_batch,
         PlacementRequest {
             placement,
@@ -250,7 +279,7 @@ pub(super) fn launch_layout(
             panes,
             sidebar,
             identity_env: rimz::room::pane_identity_env(
-                &workspace,
+                workspace,
                 room_channel.as_deref(),
                 !worktree_launch,
             ),
@@ -269,7 +298,7 @@ fn launch_resume_layout(
     args: AgentsArgs,
     globals: &GlobalFlags,
     allow_in_place: bool,
-    workspace: &rimz::ResolvedWorkspace,
+    ctx: &Ctx,
     machine_config: &rimz::config::MachineConfig,
     teams: &rimz::config::TeamsConfig,
     layout: LayoutSpec,
@@ -277,7 +306,8 @@ fn launch_resume_layout(
     single_cell: bool,
     worktree_filter: Option<&Path>,
 ) -> Result<()> {
-    let store = open_store(workspace)?;
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let agents = match worktree_filter {
         Some(target) => {
@@ -390,7 +420,7 @@ fn launch_resume_layout(
     }
     super::placement::execute(
         backend,
-        &store,
+        store,
         &launch_batch,
         PlacementRequest {
             placement,

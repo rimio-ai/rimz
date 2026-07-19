@@ -134,9 +134,99 @@ fn message_routes_to_named_channel_targets() {
     }));
 }
 
+#[test]
+fn bare_role_spawn_resolves_against_the_lane_team() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    write_forge_team_config(&env);
+    register_idle_lane_agent(&env, "sess-forge-planner", "forge", Some("forge"));
+
+    // Outside any lane, a bare role is not a spec RimZ knows.
+    let outside = env
+        .rimz()
+        .args(["agents", "planner"])
+        .output()
+        .expect("spawn agents");
+    let stderr = String::from_utf8_lossy(&outside.stderr).into_owned();
+    assert!(
+        stderr.contains("unknown team `planner`"),
+        "bare role outside a lane stays unknown: {stderr}"
+    );
+
+    // Inside the forge lane it resolves to `forge.planner`, so resolution is no
+    // longer what stops the launch.
+    let inside = env
+        .rimz()
+        .args(["agents", "planner"])
+        .env(rimz::harness::run::ENV_CHANNEL, "forge")
+        .output()
+        .expect("spawn agents");
+    let stderr = String::from_utf8_lossy(&inside.stderr).into_owned();
+    assert!(
+        !stderr.contains("unknown team") && stderr.contains("no live RimZ room"),
+        "bare role in its team lane resolves and reaches the room check: {stderr}"
+    );
+}
+
+#[test]
+fn bare_role_colliding_with_a_cell_word_refuses() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    write_forge_team_config(&env);
+    register_idle_lane_agent(&env, "sess-forge-planner", "forge", Some("forge"));
+
+    // The team binds role `reviewer` to claude while the global `reviewer`
+    // profile is codex, so the bare spec would mean two different agents.
+    let out = env
+        .rimz()
+        .args(["agents", "reviewer"])
+        .env(rimz::harness::run::ENV_CHANNEL, "forge")
+        .output()
+        .expect("spawn agents");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!out.status.success(), "ambiguous spawn refuses: {stderr}");
+    assert!(
+        stderr.contains("is ambiguous in `#forge`") && stderr.contains("forge.reviewer"),
+        "refusal names the lane and the qualified form: {stderr}"
+    );
+}
+
+/// A `forge` team whose roles cover both spawn cases: `planner` is a plain role,
+/// and `reviewer` shares its name with a global profile that resolves to a
+/// different agent.
+fn write_forge_team_config(env: &Env) {
+    let path = env.config_root().join("rimz").join("agents.toml");
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config");
+    std::fs::write(
+        &path,
+        r#"
+[agents.profiles.claude]
+agent = "claude"
+
+[agents.profiles.reviewer]
+agent = "codex"
+
+[agents.teams.forge]
+[[agents.teams.forge.roles]]
+role = "planner"
+profile = "claude"
+[[agents.teams.forge.roles]]
+role = "reviewer"
+profile = "claude"
+"#,
+    )
+    .expect("write agents config");
+}
+
 const TRACE_PANE: &str = "terminal_3";
 
 fn register_idle_channel_agent(env: &Env, session_id: &str, channel: &str) {
+    register_idle_lane_agent(env, session_id, channel, None);
+}
+
+/// Seed one idle agent stamped into `channel`, optionally carrying the team it
+/// launched under — the stamp channel-aware spawn reads the lane's team from.
+fn register_idle_lane_agent(env: &Env, session_id: &str, channel: &str, team: Option<&str>) {
     let payload = json!({
         "hook_event_name": "SessionStart",
         "session_id": session_id,
@@ -146,6 +236,9 @@ fn register_idle_channel_agent(env: &Env, session_id: &str, channel: &str) {
     let mut cmd = env.hook_command("claude");
     cmd.env(rimz::harness::run::ENV_CHANNEL, channel)
         .env("ZELLIJ_PANE_ID", "3");
+    if let Some(team) = team {
+        cmd.env(rimz::harness::run::ENV_TEAM, team);
+    }
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()

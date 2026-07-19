@@ -593,10 +593,12 @@ mod launch_options {
 
         let prepared = crate::cli::supervised::run::prepare_supervised_launch_layout(
             &request,
+            &request.spec,
             &workspace,
             &MachineConfig::default(),
         )
-        .expect("prepare supervised launch");
+        .expect("prepare supervised launch")
+        .layout;
         let [
             Cell::Agent(rimz::harness::spec::AgentCell {
                 launch: LaunchParams { model, effort, .. },

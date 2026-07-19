@@ -1053,3 +1053,79 @@ fn default_tab_title_uses_launch_identity_precedence() {
         assert_eq!(default_tab_title(spec, cwd, worktree, team), expected);
     }
 }
+
+#[test]
+fn bare_role_qualifies_against_the_lane_team() {
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".to_owned(),
+        team(vec![
+            role("planner", "claude"),
+            role("reviewer", "reviewer"),
+        ]),
+    )]));
+    let profiles = profiles([("reviewer", profile("claude"))]);
+    let commands = commands([]);
+
+    // A role bound to an unrelated profile qualifies.
+    assert_eq!(
+        qualify_spec_in_channel("planner", "forge", "forge", &teams, &profiles, &commands)
+            .expect("qualify"),
+        Cow::Owned::<str>("forge.planner".to_owned())
+    );
+    // A role bound to its same-named profile refines it, so it qualifies too.
+    assert_eq!(
+        qualify_spec_in_channel("reviewer", "forge", "forge", &teams, &profiles, &commands)
+            .expect("qualify"),
+        Cow::Owned::<str>("forge.reviewer".to_owned())
+    );
+}
+
+#[test]
+fn role_colliding_with_an_unrelated_cell_word_refuses() {
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".to_owned(),
+        team(vec![role("planner", "claude"), role("codex", "claude")]),
+    )]));
+    let profiles = profiles([]);
+    let commands = commands([]);
+
+    // `codex` is a registered agent kind, and the role binds a different agent.
+    let err = qualify_spec_in_channel("codex", "forge", "forge", &teams, &profiles, &commands)
+        .expect_err("ambiguous");
+    assert!(matches!(err, LayoutErr::AmbiguousInChannel { .. }));
+    let message = err.to_string();
+    assert!(message.contains("forge.codex"), "{message}");
+}
+
+#[test]
+fn specs_that_need_no_help_pass_through_unchanged() {
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".to_owned(),
+        team(vec![role("planner", "claude")]),
+    )]));
+    let profiles = profiles([]);
+    let commands = commands([]);
+
+    for raw in [
+        "forge.planner", // already qualified
+        "forge",         // the whole team
+        "claude+codex",  // an inline layout
+        "claude:lead",   // an inline role
+        "claude",        // a kind the team declares no role for
+        "",              // no spec at all
+    ] {
+        assert_eq!(
+            qualify_spec_in_channel(raw, "forge", "forge", &teams, &profiles, &commands)
+                .expect("qualify"),
+            Cow::Borrowed(raw),
+            "{raw}"
+        );
+    }
+
+    // A stale stamp naming a team the config no longer declares.
+    assert_eq!(
+        qualify_spec_in_channel("planner", "gone", "gone", &teams, &profiles, &commands)
+            .expect("qualify"),
+        Cow::Borrowed("planner")
+    );
+}

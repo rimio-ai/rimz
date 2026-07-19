@@ -796,6 +796,30 @@ pub fn agent_channel(agent: &AgentState) -> Option<String> {
     )
 }
 
+/// The team whose members occupy this lane, from the durable rollup.
+///
+/// A team launch stamps its lane three ways — an explicit channel name, a
+/// worktree basename, or `<dir>/<team>` in place — so the channel string does
+/// not name the team. The stamped `team` on the lane's agents does. `None` when
+/// the lane holds no team members, or holds members of more than one team.
+pub fn channel_team<'a>(agents: &'a [AgentState], channel: &str) -> Option<&'a str> {
+    let mut found: Option<&str> = None;
+    for agent in agents {
+        let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
+            continue;
+        };
+        if agent_channel(agent).as_deref() != Some(channel) {
+            continue;
+        }
+        match found {
+            None => found = Some(team),
+            Some(existing) if existing == team => {}
+            Some(_) => return None,
+        }
+    }
+    found
+}
+
 /// The lane a message is delivered into: the bound session's channel when known,
 /// else the live pane's channel, else the lane the address resolved within.
 ///

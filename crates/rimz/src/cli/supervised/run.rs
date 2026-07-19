@@ -15,6 +15,7 @@ use rimz::mux::{
     own_pane_id,
 };
 use rimz::store::{AgentLaunchBatch, AgentLaunchName, AgentLaunchScope};
+use std::borrow::Cow;
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;
 
@@ -45,9 +46,10 @@ pub(in crate::cli) fn run_placement(
 /// Resolve and finalize the one-cell layout for a command-neutral supervised request.
 pub(in crate::cli) fn prepare_supervised_launch_layout(
     request: &SupervisedRunRequest,
+    spec: &str,
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
-) -> Result<LayoutSpec> {
+) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let effective = rimz::config::effective::load(
         &machine_config.agents,
         &workspace.project_root,
@@ -56,10 +58,10 @@ pub(in crate::cli) fn prepare_supervised_launch_layout(
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         &machine_config.agents.commands,
-        Some(&request.spec),
+        Some(spec),
     )?;
     rimz::harness::plan::reject_prompt_that_looks_like_spec(
-        Some(&request.spec),
+        Some(spec),
         Some(&request.prompt),
         &effective.profiles,
         &machine_config.agents.commands,
@@ -90,7 +92,7 @@ pub(in crate::cli) fn prepare_supervised_launch_layout(
     for warning in warnings {
         writeln!(std::io::stderr(), "{warning}")?;
     }
-    Ok(resolved.layout)
+    Ok(resolved)
 }
 
 pub(in crate::cli) fn run_print(
@@ -292,7 +294,40 @@ fn prepare_supervised(
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
     let mode = request.permission_mode;
-    let layout = prepare_supervised_launch_layout(request, &workspace, &machine_config)?;
+    let store = crate::cli::open_store(&workspace)?;
+    // Inside a team's lane, a bare role names that team's role, exactly as it
+    // does for an interactive launch: in `#forge`, `reviewer` means
+    // `forge.reviewer`.
+    let effective = rimz::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
+    let lane = request
+        .channel
+        .clone()
+        .or_else(|| crate::cli::current_channel(&workspace));
+    let mut spec = Cow::Borrowed(request.spec.as_str());
+    let mut inferred_lane = None;
+    if let Some(channel) = lane.as_deref() {
+        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+        if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
+            spec = rimz::harness::spec::qualify_spec_in_channel(
+                &request.spec,
+                channel,
+                team,
+                &effective.teams,
+                &effective.profiles,
+                &machine_config.agents.commands,
+            )?;
+            if matches!(spec, Cow::Owned(_)) {
+                inferred_lane = Some(channel.to_owned());
+            }
+        }
+    }
+    let resolved = prepare_supervised_launch_layout(request, &spec, &workspace, &machine_config)?;
+    let team_name = resolved.team_name;
+    let layout = resolved.layout;
     let agent_cells = layout.agent_cells().collect::<Vec<_>>();
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");
@@ -342,17 +377,18 @@ fn prepare_supervised(
     )?;
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(&process)?;
-    let store = crate::cli::open_store(&workspace)?;
     let kind = adapter.spec().kind_id();
     if let Some(channel) = request.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(store.paths(), channel)?;
     }
+    // An inferred lane joins the exact channel it was inferred from, rather than
+    // one recomputed from the caller's cwd.
     let room_channel = rimz::harness::target::resolve_room_channel(
         &workspace.project_root,
         &launch.cwd,
-        None,
-        request.channel.as_deref(),
+        team_name.as_deref(),
+        request.channel.as_deref().or(inferred_lane.as_deref()),
     );
     Ok(PreparedRun {
         workspace,
