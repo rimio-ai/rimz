@@ -38,6 +38,7 @@ fn warm_discovery_reuses_unchanged_directories_and_finds_changed_frontier() {
     let cold = index.stats_for_test();
     assert!(cold.read_dirs >= 3);
     assert_eq!(cold.candidate_stats, 1);
+    assert_eq!(cold.materializations, 1);
 
     assert_eq!(
         index.discover_sources_for_test(vec![source.clone()], now),
@@ -46,6 +47,7 @@ fn warm_discovery_reuses_unchanged_directories_and_finds_changed_frontier() {
     let warm = index.stats_for_test();
     assert_eq!(warm.read_dirs, 0);
     assert_eq!(warm.candidate_stats, 0);
+    assert_eq!(warm.materializations, 0);
 
     let second = root.join("project/session/deeper/second.jsonl");
     std::fs::create_dir_all(second.parent().unwrap()).unwrap();
@@ -55,6 +57,7 @@ fn warm_discovery_reuses_unchanged_directories_and_finds_changed_frontier() {
         [second.clone(), first.clone()]
     );
     assert!(index.stats_for_test().read_dirs > 0);
+    assert_eq!(index.stats_for_test().materializations, 1);
 
     std::fs::remove_file(&first).unwrap();
     File::open(first.parent().unwrap())
@@ -191,10 +194,17 @@ fn cursor_mtime_retires_active_files_without_rediscovery_stats() {
     );
     assert!(
         index
-            .discover_sources_for_test(vec![source], now)
+            .discover_sources_for_test(vec![source.clone()], now)
             .is_empty()
     );
     assert_eq!(index.stats_for_test().candidate_stats, 0);
+    assert_eq!(index.stats_for_test().materializations, 1);
+    assert!(
+        index
+            .discover_sources_for_test(vec![source], now)
+            .is_empty()
+    );
+    assert_eq!(index.stats_for_test().materializations, 0);
 }
 
 #[test]

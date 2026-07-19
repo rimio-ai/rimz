@@ -1,6 +1,6 @@
 //! Process-local, frontier-bounded discovery of historical spend stores.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -286,6 +286,15 @@ pub(crate) struct SpendingDiscoveryIndex {
 struct AdapterState {
     key: Vec<u8>,
     sources: Vec<SourceState>,
+    frontier_generation: u64,
+    reconcile_generation: u64,
+    materialized: Option<MaterializedPaths>,
+}
+
+struct MaterializedPaths {
+    frontier_generation: u64,
+    reconcile_generation: u64,
+    paths: Vec<PathBuf>,
 }
 
 enum SourceState {
@@ -318,7 +327,7 @@ struct DirectoryNode {
     active_frontier: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct KnownFile {
     active: bool,
 }
@@ -328,6 +337,7 @@ pub(crate) struct DiscoveryStats {
     pub(crate) directory_stats: u64,
     pub(crate) read_dirs: u64,
     pub(crate) candidate_stats: u64,
+    pub(crate) materializations: u64,
 }
 
 impl SpendingDiscoveryIndex {
@@ -340,43 +350,53 @@ impl SpendingDiscoveryIndex {
         let force_complete = self.complete_due();
         let mut authoritative = true;
         let mut discovered = Vec::new();
+        let mut seen_kinds = HashSet::new();
         for adapter in adapters {
+            let kind = adapter.descriptor().kind;
+            if !seen_kinds.insert(kind) {
+                continue;
+            }
             let declarations = adapter.spending_sources();
             let key = source_set_key(&declarations);
-            let kind = adapter.descriptor().kind;
             let changed = self.adapters.get(kind).is_none_or(|state| state.key != key);
             if changed {
-                self.adapters.insert(
-                    kind,
-                    AdapterState {
-                        key,
-                        sources: declarations.into_iter().map(SourceState::from).collect(),
-                    },
-                );
+                self.adapters
+                    .insert(kind, AdapterState::new(key, declarations));
             }
             let Some(state) = self.adapters.get_mut(kind) else {
                 continue;
             };
             let full = force_complete && !changed;
-            let (files, complete) = scan_adapter(state, now_secs, full, Some(&mut self.stats));
+            let before = self.stats.frontier_work();
+            let complete = scan_adapter(state, now_secs, full, Some(&mut self.stats));
+            if self.stats.frontier_work() != before {
+                state.frontier_generation = state.frontier_generation.saturating_add(1);
+            }
             authoritative &= complete;
-            discovered.extend(files.into_iter().map(|path| (adapter, path)));
+            discovered.extend(
+                state
+                    .materialized_paths(&mut self.stats)
+                    .iter()
+                    .cloned()
+                    .map(|path| (adapter, path)),
+            );
         }
         if (force_complete || self.last_complete.is_none()) && authoritative {
             self.last_complete = Some(Instant::now());
             self.force_complete = false;
         }
         self.last_authoritative = authoritative;
-
-        let mut seen = BTreeSet::new();
-        discovered.retain(|(adapter, path)| seen.insert((adapter.descriptor().kind, path.clone())));
         discovered
     }
 
     pub(crate) fn reconcile(&mut self, cache: &SpendingDiskCache, now_secs: u64) {
         for state in self.adapters.values_mut() {
+            let mut changed = false;
             for source in &mut state.sources {
-                source.reconcile(cache, now_secs);
+                changed |= source.reconcile(cache, now_secs);
+            }
+            if changed {
+                state.reconcile_generation = state.reconcile_generation.saturating_add(1);
             }
         }
     }
@@ -437,29 +457,72 @@ impl SpendingDiscoveryIndex {
         let key = source_set_key(&sources);
         let changed = self.adapters.get(kind).is_none_or(|state| state.key != key);
         if changed {
-            self.adapters.insert(
-                kind,
-                AdapterState {
-                    key,
-                    sources: sources.into_iter().map(SourceState::from).collect(),
-                },
-            );
+            self.adapters.insert(kind, AdapterState::new(key, sources));
         }
         let full = self.complete_due() && !changed;
-        let (files, authoritative) = scan_adapter(
-            self.adapters
-                .get_mut(kind)
-                .expect("declared state inserted"),
-            now_secs,
-            full,
-            Some(&mut self.stats),
-        );
+        let state = self
+            .adapters
+            .get_mut(kind)
+            .expect("declared state inserted");
+        let before = self.stats.frontier_work();
+        let authoritative = scan_adapter(state, now_secs, full, Some(&mut self.stats));
+        if self.stats.frontier_work() != before {
+            state.frontier_generation = state.frontier_generation.saturating_add(1);
+        }
+        let files = state.materialized_paths(&mut self.stats).to_vec();
         if (full || self.last_complete.is_none()) && authoritative {
             self.last_complete = Some(Instant::now());
             self.force_complete = false;
         }
         self.last_authoritative = authoritative;
         files
+    }
+}
+
+impl DiscoveryStats {
+    fn frontier_work(self) -> (u64, u64) {
+        (self.read_dirs, self.candidate_stats)
+    }
+}
+
+impl AdapterState {
+    fn new(key: Vec<u8>, sources: Vec<SpendingSource>) -> Self {
+        Self {
+            key,
+            sources: sources.into_iter().map(SourceState::from).collect(),
+            frontier_generation: 1,
+            reconcile_generation: 0,
+            materialized: None,
+        }
+    }
+
+    fn materialized_paths(&mut self, stats: &mut DiscoveryStats) -> &[PathBuf] {
+        let current = (self.frontier_generation, self.reconcile_generation);
+        let fresh = self.materialized.as_ref().is_some_and(|materialized| {
+            (
+                materialized.frontier_generation,
+                materialized.reconcile_generation,
+            ) == current
+        });
+        if !fresh {
+            let mut paths = Vec::new();
+            for source in &self.sources {
+                source.collect_active_paths(&mut paths);
+            }
+            paths.sort();
+            paths.dedup();
+            self.materialized = Some(MaterializedPaths {
+                frontier_generation: current.0,
+                reconcile_generation: current.1,
+                paths,
+            });
+            stats.materializations = stats.materializations.saturating_add(1);
+        }
+        &self
+            .materialized
+            .as_ref()
+            .expect("materialized paths installed")
+            .paths
     }
 }
 
@@ -497,58 +560,55 @@ fn scan_adapter(
     now_secs: u64,
     full: bool,
     mut stats: Option<&mut DiscoveryStats>,
-) -> (Vec<PathBuf>, bool) {
-    let mut files = Vec::new();
+) -> bool {
     let mut authoritative = true;
     for source in &mut state.sources {
-        let (mut source_files, complete) = source.scan(now_secs, full, stats.as_deref_mut());
-        authoritative &= complete;
-        files.append(&mut source_files);
+        authoritative &= source.scan(now_secs, full, stats.as_deref_mut());
     }
-    files.sort();
-    files.dedup();
-    (files, authoritative)
+    authoritative
 }
 
 impl SourceState {
-    fn scan(
-        &mut self,
-        now_secs: u64,
-        full: bool,
-        stats: Option<&mut DiscoveryStats>,
-    ) -> (Vec<PathBuf>, bool) {
+    fn scan(&mut self, now_secs: u64, full: bool, stats: Option<&mut DiscoveryStats>) -> bool {
         match self {
             Self::Exact(state) => state.scan(now_secs, full, stats),
             Self::Group(state) => state.scan(now_secs, full, stats),
         }
     }
 
-    fn reconcile(&mut self, cache: &SpendingDiskCache, now_secs: u64) {
+    fn collect_active_paths(&self, paths: &mut Vec<PathBuf>) {
+        match self {
+            Self::Exact(state) => paths.extend(state.active_paths()),
+            Self::Group(state) => paths.extend(state.active_paths()),
+        }
+    }
+
+    fn reconcile(&mut self, cache: &SpendingDiskCache, now_secs: u64) -> bool {
         match self {
             Self::Exact(state) => {
+                let before = state.known;
                 if let Some(known) = state.known.as_mut()
                     && let Some(entry) = cache.files.get(&state.path.to_string_lossy().into_owned())
                 {
                     known.active =
                         !cold_parse_out_of_window(entry.stat.newest_mtime_secs(), now_secs);
                 }
+                state.known != before
             }
             Self::Group(state) => {
+                let mut changed = false;
                 for tree in &mut state.trees {
-                    reconcile_node(&tree.declaration.root, &mut tree.root, cache, now_secs);
+                    changed |=
+                        reconcile_node(&tree.declaration.root, &mut tree.root, cache, now_secs);
                 }
+                changed
             }
         }
     }
 }
 
 impl ExactState {
-    fn scan(
-        &mut self,
-        now_secs: u64,
-        full: bool,
-        stats: Option<&mut DiscoveryStats>,
-    ) -> (Vec<PathBuf>, bool) {
+    fn scan(&mut self, now_secs: u64, full: bool, stats: Option<&mut DiscoveryStats>) -> bool {
         if self.known.is_none() || full {
             count_candidate_stat(stats);
             match std::fs::metadata(&self.path) {
@@ -560,12 +620,12 @@ impl ExactState {
                 Ok(_) => self.known = None,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     self.known = None;
-                    return (Vec::new(), true);
+                    return true;
                 }
-                Err(_) => return (self.active_paths(), false),
+                Err(_) => return false,
             }
         }
-        (self.active_paths(), true)
+        true
     }
 
     fn active_paths(&self) -> Vec<PathBuf> {
@@ -578,30 +638,30 @@ impl ExactState {
 }
 
 impl GroupState {
-    fn scan(
-        &mut self,
-        now_secs: u64,
-        full: bool,
-        mut stats: Option<&mut DiscoveryStats>,
-    ) -> (Vec<PathBuf>, bool) {
-        let mut by_relative = BTreeMap::<PathBuf, PathBuf>::new();
+    fn scan(&mut self, now_secs: u64, full: bool, mut stats: Option<&mut DiscoveryStats>) -> bool {
         let mut authoritative = true;
         for tree in &mut self.trees {
-            let complete = DirectoryScanner {
+            authoritative &= DirectoryScanner {
                 tree: &tree.declaration,
                 now_secs,
                 full,
                 stats: stats.as_deref_mut(),
             }
             .scan(Path::new(""), &mut tree.root, true);
-            authoritative &= complete;
+        }
+        authoritative
+    }
+
+    fn active_paths(&self) -> Vec<PathBuf> {
+        let mut by_relative = BTreeMap::<PathBuf, PathBuf>::new();
+        for tree in &self.trees {
             let mut tree_files = Vec::new();
             collect_active_files(Path::new(""), &tree.root, &mut tree_files);
             tree_files.sort();
             if matches!(self.selection, GroupSelection::FirstPath)
                 && let Some(relative) = tree_files.first()
             {
-                return (vec![tree.declaration.root.join(relative)], authoritative);
+                return vec![tree.declaration.root.join(relative)];
             }
             for relative in tree_files {
                 by_relative
@@ -609,7 +669,7 @@ impl GroupState {
                     .or_insert_with(|| tree.declaration.root.join(relative));
             }
         }
-        (by_relative.into_values().collect(), authoritative)
+        by_relative.into_values().collect()
     }
 }
 
@@ -842,17 +902,26 @@ fn collect_active_files(relative: &Path, node: &DirectoryNode, out: &mut Vec<Pat
     }
 }
 
-fn reconcile_node(root: &Path, node: &mut DirectoryNode, cache: &SpendingDiskCache, now_secs: u64) {
+fn reconcile_node(
+    root: &Path,
+    node: &mut DirectoryNode,
+    cache: &SpendingDiskCache,
+    now_secs: u64,
+) -> bool {
+    let mut changed = false;
     for (name, known) in &mut node.files {
         let path = root.join(name);
         if let Some(entry) = cache.files.get(&path.to_string_lossy().into_owned()) {
-            known.active = !cold_parse_out_of_window(entry.stat.newest_mtime_secs(), now_secs);
+            let active = !cold_parse_out_of_window(entry.stat.newest_mtime_secs(), now_secs);
+            changed |= known.active != active;
+            known.active = active;
         }
     }
     for (name, child) in &mut node.children {
-        reconcile_node(&root.join(name), child, cache, now_secs);
+        changed |= reconcile_node(&root.join(name), child, cache, now_secs);
     }
     refresh_frontier(node);
+    changed
 }
 
 fn metadata_is_active(meta: &std::fs::Metadata, now_secs: u64) -> bool {
@@ -896,28 +965,19 @@ fn codex_partition_is_old(relative: &Path, now_secs: u64) -> bool {
 }
 
 fn count_directory_stat(stats: Option<&mut DiscoveryStats>) {
-    #[cfg(test)]
     if let Some(stats) = stats {
         stats.directory_stats += 1;
     }
-    #[cfg(not(test))]
-    let _ = stats;
 }
 
 fn count_read_dir(stats: Option<&mut DiscoveryStats>) {
-    #[cfg(test)]
     if let Some(stats) = stats {
         stats.read_dirs += 1;
     }
-    #[cfg(not(test))]
-    let _ = stats;
 }
 
 fn count_candidate_stat(stats: Option<&mut DiscoveryStats>) {
-    #[cfg(test)]
     if let Some(stats) = stats {
         stats.candidate_stats += 1;
     }
-    #[cfg(not(test))]
-    let _ = stats;
 }
