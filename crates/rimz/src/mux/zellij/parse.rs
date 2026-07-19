@@ -120,75 +120,6 @@ pub(super) fn strip_ansi(line: &str) -> String {
     out
 }
 
-#[cfg(test)]
-pub(super) fn parse_focused_client_panes(stdout: &[u8]) -> Vec<PaneId> {
-    let mut panes = Vec::new();
-    for line in String::from_utf8_lossy(stdout).lines() {
-        let clean = strip_ansi(line);
-        let mut cols = clean.split_whitespace();
-        let Some(first) = cols.next() else {
-            continue;
-        };
-        let Some(raw_pane) = cols.next() else {
-            continue;
-        };
-        if first == "CLIENT_ID" || raw_pane == "ZELLIJ_PANE_ID" {
-            continue;
-        }
-        if !raw_pane.starts_with("terminal_") {
-            continue;
-        }
-        let pane = PaneId::from_parts(MuxName::Zellij, raw_pane);
-        if !panes.iter().any(|known| known == &pane) {
-            panes.push(pane);
-        }
-    }
-    panes
-}
-
-pub(super) fn parse_focused_terminal_client_ids(stdout: &[u8]) -> BTreeSet<u32> {
-    let mut clients = BTreeSet::new();
-    for line in String::from_utf8_lossy(stdout).lines() {
-        let clean = strip_ansi(line);
-        let mut cols = clean.split_whitespace();
-        let Some(first) = cols.next() else {
-            continue;
-        };
-        let Some(raw_pane) = cols.next() else {
-            continue;
-        };
-        if first == "CLIENT_ID" || raw_pane == "ZELLIJ_PANE_ID" {
-            continue;
-        }
-        if !raw_pane.starts_with("terminal_") {
-            continue;
-        }
-        if let Ok(client) = first.parse::<u32>() {
-            clients.insert(client);
-        }
-    }
-    clients
-}
-
-#[cfg(test)]
-pub(super) fn parse_client_count(stdout: &[u8]) -> usize {
-    let mut clients = BTreeSet::new();
-    for line in String::from_utf8_lossy(stdout).lines() {
-        let clean = strip_ansi(line);
-        let mut cols = clean.split_whitespace();
-        let (Some(client), Some(raw_pane)) = (cols.next(), cols.next()) else {
-            continue;
-        };
-        if client == "CLIENT_ID" || raw_pane == "ZELLIJ_PANE_ID" {
-            continue;
-        }
-        if let Ok(client) = client.parse::<u32>() {
-            clients.insert(client);
-        }
-    }
-    clients.len()
-}
-
 pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     let mut client_ids = BTreeSet::new();
     let mut clients = Vec::new();
@@ -228,6 +159,17 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     }
 }
 
+pub(super) fn terminal_client_ids(view: &ClientView) -> BTreeSet<u32> {
+    view.clients
+        .iter()
+        .filter(|client| client.pane_id.raw().starts_with("terminal_"))
+        .filter_map(|client| match &client.client_id {
+            MuxClientId::Zellij(id) => Some(*id),
+            MuxClientId::Tmux(_) => None,
+        })
+        .collect()
+}
+
 pub(super) fn trim_capture(raw_text: String, max_lines: Option<u16>) -> (String, Vec<String>) {
     let mut lines: Vec<String> = raw_text.lines().map(str::to_owned).collect();
     if let Some(max_lines) = max_lines {
@@ -253,29 +195,7 @@ mod tests {
     use crate::mux::MuxErr;
 
     #[test]
-    fn parse_focused_client_panes_reads_unique_terminals_and_skips_noise() {
-        let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
-                       1         terminal_30    codex\n\
-                       2         terminal_30    codex\n\
-                       3         terminal_4     claude\n\
-                       4         plugin_2       rimz-presence-zellij\n\
-                       5         -              unknown\n";
-        let panes = parse_focused_client_panes(output);
-        assert_eq!(
-            panes,
-            vec![
-                PaneId::from_parts(MuxName::Zellij, "terminal_30"),
-                PaneId::from_parts(MuxName::Zellij, "terminal_4"),
-            ]
-        );
-
-        assert!(
-            parse_focused_client_panes(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n").is_empty()
-        );
-    }
-
-    #[test]
-    fn parse_focused_terminal_client_ids_reads_terminals_and_skips_noise() {
+    fn terminal_client_ids_reads_terminals_and_skips_noise() {
         let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
                        1         terminal_30    codex\n\
                        2         terminal_30    codex\n\
@@ -284,26 +204,16 @@ mod tests {
                        5         -              unknown\n\
                        action    terminal_9     unknown\n";
         assert_eq!(
-            parse_focused_terminal_client_ids(output),
+            terminal_client_ids(&parse_client_view(output)),
             BTreeSet::from([1, 2, 3])
         );
 
         assert!(
-            parse_focused_terminal_client_ids(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n")
-                .is_empty()
+            terminal_client_ids(&parse_client_view(
+                b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n"
+            ))
+            .is_empty()
         );
-    }
-
-    #[test]
-    fn parse_client_count_includes_plugin_and_unknown_views() {
-        let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
-                       1         terminal_30    codex\n\
-                       1         terminal_30    codex\n\
-                       2         plugin_2       rimz-presence-zellij\n\
-                       3         -              unknown\n\
-                       action    terminal_9     unknown\n";
-
-        assert_eq!(parse_client_count(output), 3);
     }
 
     #[test]

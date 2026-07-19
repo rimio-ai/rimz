@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use super::layout::{TempLayoutFile, render_session_layout};
 use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
 use super::parse::{
-    SessionState, classify_session_not_found, is_session_not_found,
-    parse_focused_terminal_client_ids, strip_ansi,
+    SessionState, classify_session_not_found, is_session_not_found, parse_client_view, strip_ansi,
+    terminal_client_ids,
 };
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
@@ -803,7 +803,7 @@ impl ZellijBackend {
         self.zellij_action(session)
             .arg("list-clients")
             .run()
-            .map(|output| parse_focused_terminal_client_ids(&output.stdout))
+            .map(|output| terminal_client_ids(&parse_client_view(&output.stdout)))
             .unwrap_or_default()
     }
 
