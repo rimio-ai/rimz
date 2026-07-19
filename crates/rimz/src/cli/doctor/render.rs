@@ -9,7 +9,7 @@ use std::io::{self, Write};
 use jiff::Timestamp;
 
 use crate::cli::render::{
-    Cell, KeyVals, Table, cell, fmt_bytes, home_relative, paint, palette, status,
+    Cell, KeyVals, Table, age_label, cell, fmt_bytes, home_relative, paint, palette, status,
 };
 use rimz::agents::AgentStatus;
 use rimz::trust::TrustState;
@@ -17,9 +17,10 @@ use rimz::trust::TrustState;
 use super::model::{
     AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport, DoctorState,
     DuplicateSessions, HookStatus, Host, LogScope, LoopTasks, MachineConfigHealth,
-    MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow, Presence,
-    PresencePluginStatus, PresencePlugins, Probe, Protocols, RemoteAgent, RemoteControl, Room,
-    RoomState, SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust, Version, Workspace,
+    MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow, Presence, PresencePluginRow,
+    PresencePluginStatus, PresencePluginTelemetry, PresencePlugins, Probe, Protocols, RemoteAgent,
+    RemoteControl, Room, RoomState, SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust,
+    Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -329,9 +330,11 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     }
     if let Some(plugins) = &mux.presence_plugins {
         match plugins {
-            Probe::Ready(plugins) => push_presence_plugins(&mut kv, tally, plugins),
+            Probe::Ready(plugins) => {
+                push_presence_plugins(&mut kv, tally, plugins, server_version(&mux.version))
+            }
             Probe::Unavailable { error } => {
-                kv.push("presence plugins", unavailable(tally, Health::Warn, error))
+                kv.push("presence plugin", unavailable(tally, Health::Warn, error))
             }
         }
     }
@@ -497,118 +500,236 @@ fn push_topology_writer(kv: &mut KeyVals, tally: &mut Tally, writer: &TopologyWr
             .stale
             .as_ref()
             .map(topology_writer_label)
-            .unwrap_or_else(|| "legacy".to_owned());
+            .unwrap_or_else(|| "a legacy plugin".to_owned());
         let accepted = conflict
             .accepted
             .as_ref()
             .map(topology_writer_label)
-            .unwrap_or_else(|| "legacy".to_owned());
+            .unwrap_or_else(|| "a legacy plugin".to_owned());
         kv.push(
             "topology writers",
             verdict(
                 tally,
                 Health::Info,
                 format!(
-                    "contained stale writer: rejected {stale}, accepted {accepted}; {} rejects, {}s ago — {}",
-                    conflict.rejected_count, conflict.age_secs, conflict.fix
+                    "contained a stale writer: {stale} lost to {accepted}; {} writes rejected, last {} ago — {}",
+                    conflict.rejected_count,
+                    age_label(conflict.age_secs),
+                    conflict.fix
                 ),
             ),
         );
     }
 }
 
-fn push_presence_plugins(kv: &mut KeyVals, tally: &mut Tally, plugins: &PresencePlugins) {
-    let desired = plugins
-        .desired_build
-        .as_deref()
-        .map(short_build)
-        .unwrap_or_else(|| "unknown".to_owned());
-    let loaded = plugins.rows.len();
-    let header = format!("desired {desired} · {loaded} loaded");
-    let (health, header) = match loaded {
-        0 => (
-            Health::Warn,
-            format!("{header} — none loaded; run `rimz reload`"),
-        ),
-        1 => (Health::Info, header),
-        _ => (
-            Health::Warn,
-            format!("{header} — multiple presence plugins; run `rimz reload`"),
-        ),
-    };
-    kv.push("presence plugins", verdict(tally, health, header));
-
-    for row in &plugins.rows {
-        let build = row
-            .build
+/// The presence-plugin block: a verdict line per loaded plugin, then the
+/// identity and traffic that explain it.
+///
+/// The plugin is the sidebar's eyes on Zellij, so the reader's question is
+/// "does the sidebar still see my panes, and if not what do I run". Each row
+/// leads with that answer and its remedy; build hash, load time, and the
+/// telemetry window follow as subordinate evidence. Counters the report can
+/// derive stay off the human surface — `--json` keeps every raw field.
+fn push_presence_plugins(
+    kv: &mut KeyVals,
+    tally: &mut Tally,
+    plugins: &PresencePlugins,
+    server_version: Option<&str>,
+) {
+    let desired = plugins.desired_build.as_deref().map(short_build);
+    if plugins.rows.is_empty() {
+        let want = desired
             .as_deref()
-            .map(short_build)
-            .unwrap_or_else(|| "unknown".to_owned());
-        let status = match row.status {
-            PresencePluginStatus::Active => "active".to_owned(),
-            PresencePluginStatus::Rejected => format!(
-                "rejected ×{} — run `rimz reload`",
-                row.rejected_count.unwrap_or_default()
-            ),
-            PresencePluginStatus::Inactive => "inactive".to_owned(),
-        };
-        let outdated = if row.outdated { " · outdated" } else { "" };
-        let (version, telemetry, recent_failures) = if let Some(telemetry) = &row.telemetry {
-            let topology_failures = telemetry.topology_failures_delta.unwrap_or_default();
-            let other_failures = telemetry.other_failures_delta.unwrap_or_default();
-            let recent_failures = telemetry.last_seen_age_secs
-                <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs()
-                && (topology_failures > 0 || other_failures > 0);
-            let succeeded = telemetry
-                .commands_succeeded_delta
-                .map(|delta| format!("/{delta} succeeded"))
-                .unwrap_or_default();
-            let rejects = telemetry
-                .stale_writer_rejections_delta
-                .filter(|delta| *delta > 0)
-                .map(|delta| format!(" · stale rejects +{delta}"))
-                .unwrap_or_default();
-            let failures = if topology_failures > 0 || other_failures > 0 {
-                format!(" · failures {topology_failures}/{other_failures}")
-            } else {
-                String::new()
-            };
-            (
-                telemetry.zellij_version.as_deref().unwrap_or("unknown"),
-                format!(
-                    "{} samples · seen {}s ago · pages {:+} · bytes {:+} · commands +{}{}{rejects}{failures}",
-                    telemetry.sample_count,
-                    telemetry.last_seen_age_secs,
-                    telemetry.page_growth,
-                    telemetry.byte_growth,
-                    telemetry.commands_completed_delta,
-                    succeeded,
-                ),
-                recent_failures,
-            )
-        } else {
-            ("unknown", "no telemetry".to_owned(), false)
-        };
+            .map(|build| format!(" (want build {build})"))
+            .unwrap_or_default();
         kv.push(
-            format!("plugin {}", row.plugin_id),
+            "presence plugin",
             verdict(
                 tally,
-                if recent_failures {
-                    Health::Warn
-                } else if row.status == PresencePluginStatus::Active && !row.outdated {
-                    Health::Ok
-                } else {
-                    Health::Info
-                },
+                Health::Warn,
+                format!("none loaded{want} — the sidebar cannot see panes; run `rimz reload`"),
+            ),
+        );
+        push_presence_telemetry_log(kv, plugins);
+        return;
+    }
+
+    let many = plugins.rows.len() > 1;
+    if many {
+        kv.push(
+            "presence plugins",
+            verdict(
+                tally,
+                Health::Warn,
                 format!(
-                    "loaded {} · build {build} · zellij {version} · {status}{outdated} · {telemetry}",
-                    row.loaded_at_ms
-                        .map(plugin_loaded_time)
-                        .unwrap_or_else(|| "unknown".to_owned()),
+                    "{} loaded — only one may write pane topology; run `rimz reload`",
+                    plugins.rows.len()
                 ),
             ),
         );
     }
+    for row in &plugins.rows {
+        let key = if many {
+            format!("  plugin #{}", row.plugin_id)
+        } else {
+            "presence plugin".to_owned()
+        };
+        let mut lines = vec![
+            vec![presence_plugin_verdict(tally, row)],
+            vec![
+                cell(presence_plugin_identity(
+                    row,
+                    desired.as_deref(),
+                    server_version,
+                    many,
+                ))
+                .fg(palette::body()),
+            ],
+        ];
+        if let Some(traffic) = presence_plugin_traffic(row) {
+            lines.push(vec![cell(traffic).fg(palette::faint())]);
+        }
+        kv.push_lines(key, lines);
+    }
+    push_presence_telemetry_log(kv, plugins);
+}
+
+/// What this plugin is doing for the sidebar right now, and the fix when that
+/// answer is unwelcome.
+fn presence_plugin_verdict(tally: &mut Tally, row: &PresencePluginRow) -> Cell {
+    if row.status == PresencePluginStatus::Rejected {
+        return verdict(
+            tally,
+            Health::Warn,
+            format!(
+                "a newer plugin took over — {} of its topology writes were ignored; run `rimz reload`",
+                row.rejected_count.unwrap_or_default()
+            ),
+        );
+    }
+    if row.status == PresencePluginStatus::Inactive {
+        return verdict(tally, Health::Info, "loaded; not writing pane topology");
+    }
+    let commands = row
+        .telemetry
+        .as_ref()
+        .map(|telemetry| telemetry.commands_completed_delta)
+        .unwrap_or_default();
+    match row.telemetry.as_ref().and_then(recent_command_failures) {
+        Some((topology, _)) if topology > 0 => verdict(
+            tally,
+            Health::Warn,
+            format!(
+                "writing pane topology; {topology} of {commands} commands failed — pane discovery lags; run `rimz reload`"
+            ),
+        ),
+        Some((_, other)) => verdict(
+            tally,
+            Health::Warn,
+            format!("writing pane topology; {other} plugin commands failed"),
+        ),
+        None if row.outdated => verdict(
+            tally,
+            Health::Info,
+            "writing pane topology on an outdated build; run `rimz reload`",
+        ),
+        None => verdict(tally, Health::Ok, "writing pane topology"),
+    }
+}
+
+/// Command failures the plugin reported while its telemetry was still fresh.
+fn recent_command_failures(telemetry: &PresencePluginTelemetry) -> Option<(u64, u64)> {
+    let topology = telemetry.topology_failures_delta.unwrap_or_default();
+    let other = telemetry.other_failures_delta.unwrap_or_default();
+    let fresh =
+        telemetry.last_seen_age_secs <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs();
+    (fresh && (topology > 0 || other > 0)).then_some((topology, other))
+}
+
+/// Which build is loaded, when it loaded, and how recently it reported in.
+fn presence_plugin_identity(
+    row: &PresencePluginRow,
+    desired: Option<&str>,
+    server_version: Option<&str>,
+    keyed_by_id: bool,
+) -> String {
+    let mut parts = Vec::new();
+    parts.push(match (row.build.as_deref().map(short_build), desired) {
+        (Some(build), Some(desired)) if row.outdated => {
+            format!("build {build}, outdated (want {desired})")
+        }
+        (Some(build), Some(_)) => format!("build {build}, current"),
+        (Some(build), None) => format!("build {build}"),
+        (None, _) => "build unknown".to_owned(),
+    });
+    if let Some(loaded_at_ms) = row.loaded_at_ms {
+        parts.push(format!("loaded {}", plugin_loaded_time(loaded_at_ms)));
+    }
+    match &row.telemetry {
+        Some(telemetry) => parts.push(format!(
+            "last report {} ago",
+            age_label(telemetry.last_seen_age_secs)
+        )),
+        None => parts.push("no telemetry yet".to_owned()),
+    }
+    // The server's own version already heads this section; repeat it only when
+    // the plugin loaded under a different one, which a restart resolves.
+    if let Some(version) = row
+        .telemetry
+        .as_ref()
+        .and_then(|telemetry| telemetry.zellij_version.as_deref())
+        && server_version.is_none_or(|server| !server.contains(version))
+    {
+        parts.push(format!("loaded under zellij {version}"));
+    }
+    if !keyed_by_id {
+        parts.push(format!("plugin #{}", row.plugin_id));
+    }
+    parts.join(" · ")
+}
+
+/// The work and memory the plugin logged across its telemetry window. Deltas
+/// only mean something against the span that produced them, so the window
+/// leads.
+fn presence_plugin_traffic(row: &PresencePluginRow) -> Option<String> {
+    let telemetry = row.telemetry.as_ref()?;
+    if telemetry.sample_count < 2 {
+        return Some("one telemetry sample so far; no trend yet".to_owned());
+    }
+    let mut parts = Vec::new();
+    let window_secs = telemetry.last_at_ms.saturating_sub(telemetry.first_at_ms) / 1_000;
+    if window_secs > 0 {
+        parts.push(format!("last {}", age_label(window_secs)));
+    }
+    parts.push(format!("{} commands", telemetry.commands_completed_delta));
+    let topology = telemetry.topology_failures_delta.unwrap_or_default();
+    let other = telemetry.other_failures_delta.unwrap_or_default();
+    if topology > 0 {
+        parts.push(format!("{topology} failed to apply topology"));
+    }
+    if other > 0 {
+        parts.push(format!("{other} other failures"));
+    }
+    if topology == 0 && other == 0 {
+        parts.push("all applied".to_owned());
+    }
+    if let Some(rejected) = telemetry
+        .stale_writer_rejections_delta
+        .filter(|delta| *delta > 0)
+    {
+        parts.push(format!("{rejected} writes rejected as stale"));
+    }
+    // `bytes` is `pages * 64 KiB`; one of the two is enough, and bytes are the
+    // ones a reader can judge.
+    parts.push(match telemetry.byte_growth {
+        0 => "memory steady".to_owned(),
+        growth if growth > 0 => format!("memory +{}", fmt_bytes(growth.unsigned_abs())),
+        growth => format!("memory -{}", fmt_bytes(growth.unsigned_abs())),
+    });
+    Some(parts.join(" · "))
+}
+
+fn push_presence_telemetry_log(kv: &mut KeyVals, plugins: &PresencePlugins) {
     if let Some(path) = plugins.history.first() {
         let rotated = if plugins.history.len() > 1 {
             " (+ rotated .1)"
@@ -616,9 +737,16 @@ fn push_presence_plugins(kv: &mut KeyVals, tally: &mut Tally, plugins: &Presence
             ""
         };
         kv.push(
-            "history",
+            "telemetry log",
             cell(format!("{path}{rotated}")).fg(palette::faint()),
         );
+    }
+}
+
+fn server_version(version: &Version) -> Option<&str> {
+    match version {
+        Version::Reported { version } => Some(version.as_str()),
+        Version::Unknown | Version::Unavailable { .. } => None,
     }
 }
 
@@ -683,8 +811,14 @@ fn render_duplicate_session_notes(
     Ok(())
 }
 
+/// Name a writer generation the way the presence-plugin rows do, so the two
+/// rows describe the same plugin in the same words.
 fn topology_writer_label(writer: &super::model::TopologyWriterId) -> String {
-    format!("{}:{}", writer.loaded_at_ms, writer.plugin_id)
+    format!(
+        "plugin #{} loaded {}",
+        writer.plugin_id,
+        plugin_loaded_time(writer.loaded_at_ms)
+    )
 }
 
 fn binary_label(row: &MuxBinaryRow) -> String {

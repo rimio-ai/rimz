@@ -245,6 +245,142 @@ fn mux_section_shows_backend_socket() {
     assert!(out.contains("/tmp/tmux-1001/default"), "{out}");
 }
 
+fn presence_telemetry_fixture() -> PresencePluginTelemetry {
+    PresencePluginTelemetry {
+        sample_count: 17,
+        first_at_ms: 1_000,
+        last_at_ms: 481_000,
+        last_seen_age_secs: 3,
+        zellij_version: Some("0.44.3".to_owned()),
+        page_growth: 5,
+        byte_growth: 327_680,
+        commands_completed_delta: 142,
+        commands_succeeded_delta: Some(142),
+        stale_writer_rejections_delta: Some(0),
+        topology_failures_delta: Some(0),
+        other_failures_delta: Some(0),
+    }
+}
+
+fn presence_plugins_fixture(rows: Vec<PresencePluginRow>) -> Probe<PresencePlugins> {
+    Probe::Ready(PresencePlugins {
+        desired_build: Some("desired-build".to_owned()),
+        rows,
+        history: vec!["/tmp/plugin-presence.log.jsonl".to_owned()],
+    })
+}
+
+/// The common case is one current plugin doing its job: name the job, and keep
+/// the raw counters off the human report.
+#[test]
+fn mux_section_states_what_a_healthy_presence_plugin_does() {
+    let mut mux = mux_fixture();
+    mux.version = Version::Reported {
+        version: "zellij 0.44.3".to_owned(),
+    };
+    mux.presence_plugins = presence_plugins_fixture(vec![PresencePluginRow {
+        plugin_id: 80,
+        loaded_at_ms: Some(1_000),
+        build: Some("desired-build".to_owned()),
+        status: PresencePluginStatus::Active,
+        rejected_count: None,
+        outdated: false,
+        telemetry: Some(presence_telemetry_fixture()),
+    }])
+    .into();
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+
+    for expected in [
+        "presence plugin",
+        "writing pane topology",
+        "build desired-, current",
+        "last report 3s ago",
+        "plugin #80",
+        "last 8m",
+        "142 commands",
+        "all applied",
+        "memory +320 KB",
+        "telemetry log",
+    ] {
+        assert!(out.contains(expected), "missing {expected}:\n{out}");
+    }
+    for absent in ["pages", "succeeded", "zellij 0.44.3 ·", "warning"] {
+        assert!(!out.contains(absent), "unexpected {absent}:\n{out}");
+    }
+}
+
+/// Failures are the finding, so they lead the row with their cost and remedy
+/// rather than trailing a counter pair.
+#[test]
+fn mux_section_leads_with_the_cost_of_presence_plugin_failures() {
+    let mut mux = mux_fixture();
+    mux.presence_plugins = presence_plugins_fixture(vec![PresencePluginRow {
+        plugin_id: 80,
+        loaded_at_ms: Some(1_000),
+        build: Some("desired-build".to_owned()),
+        status: PresencePluginStatus::Active,
+        rejected_count: None,
+        outdated: false,
+        telemetry: Some(PresencePluginTelemetry {
+            commands_succeeded_delta: Some(125),
+            topology_failures_delta: Some(17),
+            ..presence_telemetry_fixture()
+        }),
+    }])
+    .into();
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+
+    for expected in [
+        "17 of 142 commands failed",
+        "pane discovery lags",
+        "rimz reload",
+        "17 failed to apply topology",
+        "! 1 warning",
+    ] {
+        assert!(out.contains(expected), "missing {expected}:\n{out}");
+    }
+}
+
+/// A plugin loaded under a different Zellij than the running server is the one
+/// case worth repeating the version for.
+#[test]
+fn mux_section_names_a_presence_plugin_loaded_under_another_zellij() {
+    let mut mux = mux_fixture();
+    mux.version = Version::Reported {
+        version: "zellij 0.44.3".to_owned(),
+    };
+    mux.presence_plugins = presence_plugins_fixture(vec![PresencePluginRow {
+        plugin_id: 80,
+        loaded_at_ms: Some(1_000),
+        build: Some("desired-build".to_owned()),
+        status: PresencePluginStatus::Active,
+        rejected_count: None,
+        outdated: false,
+        telemetry: Some(PresencePluginTelemetry {
+            zellij_version: Some("0.43.1".to_owned()),
+            ..presence_telemetry_fixture()
+        }),
+    }])
+    .into();
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)
+    });
+
+    assert!(out.contains("loaded under zellij 0.43.1"), "{out}");
+}
+
 #[test]
 fn mux_section_renders_multiple_presence_plugin_generations() {
     let row = |plugin_id, loaded_at_ms, build: &str, status, rejected_count| PresencePluginRow {
@@ -255,18 +391,9 @@ fn mux_section_renders_multiple_presence_plugin_generations() {
         rejected_count,
         outdated: build != "desired-build",
         telemetry: Some(PresencePluginTelemetry {
-            sample_count: 2,
             first_at_ms: loaded_at_ms,
             last_at_ms: loaded_at_ms,
-            last_seen_age_secs: 3,
-            zellij_version: Some("0.44.3".to_owned()),
-            page_growth: 1,
-            byte_growth: 65_536,
-            commands_completed_delta: 2,
-            commands_succeeded_delta: Some(2),
-            stale_writer_rejections_delta: Some(0),
-            topology_failures_delta: Some(0),
-            other_failures_delta: Some(0),
+            ..presence_telemetry_fixture()
         }),
     };
     let mut mux = mux_fixture();
@@ -302,64 +429,22 @@ fn mux_section_renders_multiple_presence_plugin_generations() {
 
     for expected in [
         "presence plugins",
-        "desired desired-",
         "2 loaded",
-        "multiple presence plugins",
-        "plugin 49",
+        "only one may write pane topology",
+        "plugin #49",
         "loaded 00:00:01",
-        "build desired-",
-        "zellij 0.44.3",
-        "active",
-        "plugin 41",
-        "rejected ×3",
+        "build desired-, current",
+        "writing pane topology",
+        "plugin #41",
+        "a newer plugin took over",
+        "3 of its topology writes were ignored",
         "rimz reload",
-        "outdated",
-        "history",
+        "telemetry log",
         "/tmp/plugin-presence.log.jsonl (+ rotated .1)",
-        "! 1 warning",
+        "! 2 warnings",
     ] {
         assert!(out.contains(expected), "missing {expected}:\n{out}");
     }
-}
-
-#[test]
-fn mux_section_warns_on_recent_presence_plugin_failures() {
-    let mut mux = mux_fixture();
-    mux.presence_plugins = Some(Probe::Ready(PresencePlugins {
-        desired_build: Some("desired-build".to_owned()),
-        rows: vec![PresencePluginRow {
-            plugin_id: 49,
-            loaded_at_ms: Some(1_000),
-            build: Some("desired-build".to_owned()),
-            status: PresencePluginStatus::Active,
-            rejected_count: None,
-            outdated: false,
-            telemetry: Some(PresencePluginTelemetry {
-                sample_count: 2,
-                first_at_ms: 1_000,
-                last_at_ms: 2_000,
-                last_seen_age_secs: 3,
-                zellij_version: Some("0.44.3".to_owned()),
-                page_growth: 0,
-                byte_growth: 0,
-                commands_completed_delta: 1,
-                commands_succeeded_delta: Some(0),
-                stale_writer_rejections_delta: Some(0),
-                topology_failures_delta: Some(1),
-                other_failures_delta: Some(0),
-            }),
-        }],
-        history: Vec::new(),
-    }));
-
-    let out = strip(|w| {
-        let mut tally = Tally::default();
-        render_mux(w, &Probe::Ready(mux), &mut tally)?;
-        render_tally(w, &tally)
-    });
-
-    assert!(out.contains("failures 1/0"), "{out}");
-    assert!(out.contains("! 1 warning"), "{out}");
 }
 
 #[test]
@@ -376,7 +461,7 @@ fn mux_section_renders_presence_plugin_listing_unavailable() {
     });
 
     assert!(
-        out.contains("presence plugins") && out.contains("unavailable (list-panes failed)"),
+        out.contains("presence plugin") && out.contains("unavailable (list-panes failed)"),
         "{out}"
     );
     assert!(out.contains("! 1 warning"), "{out}");
@@ -385,11 +470,7 @@ fn mux_section_renders_presence_plugin_listing_unavailable() {
 #[test]
 fn mux_section_warns_when_no_presence_plugin_is_loaded() {
     let mut mux = mux_fixture();
-    mux.presence_plugins = Some(Probe::Ready(PresencePlugins {
-        desired_build: Some("desired-build".to_owned()),
-        rows: Vec::new(),
-        history: vec!["/tmp/plugin-presence.log.jsonl".to_owned()],
-    }));
+    mux.presence_plugins = presence_plugins_fixture(Vec::new()).into();
 
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -398,10 +479,11 @@ fn mux_section_warns_when_no_presence_plugin_is_loaded() {
     });
 
     for expected in [
-        "0 loaded",
         "none loaded",
+        "want build desired-",
+        "the sidebar cannot see panes",
         "rimz reload",
-        "history",
+        "telemetry log",
         "! 1 warning",
     ] {
         assert!(out.contains(expected), "missing {expected}:\n{out}");
