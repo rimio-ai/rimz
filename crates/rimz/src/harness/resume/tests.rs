@@ -614,55 +614,48 @@ fn cohort_refuses_live_and_unmatched_specs() {
     }
 }
 
+/// A cell that matched a prior member but cannot resume it keeps the match and
+/// relaunches fresh, rather than asking an adapter to reopen a session that is
+/// not there.
 #[test]
-fn cohort_resume_starts_fresh_for_kind_without_resume_cli() {
-    let agents = vec![agent("ghost", "g1", "/code/query-engine", 1)];
-    let plan = cohort(&agents, &[cohort_cell("ghost", None)], None)
-        .expect("unsupported kind still matched prior cohort");
+fn cohort_relaunches_an_unresumable_match_fresh() {
+    let provisional = "launch_019f2cecea067320b667c5946d266e64";
 
-    assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
-    assert_eq!(plan.fresh, vec!["ghost:query-engine".to_owned()]);
-    assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/query-engine")));
-}
+    for (label, agents, cells, team, redeemable, fresh, cwd) in [
+        (
+            "a kind with no resume CLI",
+            vec![agent("ghost", "g1", "/code/query-engine", 1)],
+            vec![cohort_cell("ghost", None)],
+            None,
+            true,
+            "ghost:query-engine",
+            "/code/query-engine",
+        ),
+        (
+            "a provisional launch placeholder",
+            vec![team_agent("codex", provisional, "coder", "/code/pets-l", 4)],
+            vec![cohort_cell("codex", Some("coder"))],
+            Some("forge"),
+            true,
+            "codex:pets-l",
+            "/code/pets-l",
+        ),
+        (
+            "a session the provider never persisted",
+            vec![agent("claude", "a1", "/code/query-engine", 1)],
+            vec![cohort_cell("claude", None)],
+            None,
+            false,
+            "claude:query-engine",
+            "/code/query-engine",
+        ),
+    ] {
+        let plan = cohort_with(&agents, &cells, team, dead, |_| true, |_| redeemable).expect(label);
 
-#[test]
-fn cohort_resume_starts_fresh_for_provisional_launch_placeholder() {
-    let coder = team_agent(
-        "codex",
-        "launch_019f2cecea067320b667c5946d266e64",
-        "coder",
-        "/code/pets-l",
-        4,
-    );
-
-    let plan = cohort(
-        &[coder],
-        &[cohort_cell("codex", Some("coder"))],
-        Some("forge"),
-    )
-    .expect("provisional placeholder still matched the cohort");
-
-    assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
-    assert_eq!(plan.fresh, vec!["codex:pets-l".to_owned()]);
-    assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/pets-l")));
-}
-
-#[test]
-fn cohort_resume_relaunches_empty_session_fresh() {
-    let agents = vec![agent("claude", "a1", "/code/query-engine", 1)];
-    let plan = cohort_with(
-        &agents,
-        &[cohort_cell("claude", None)],
-        None,
-        dead,
-        |_| true,
-        |_| false,
-    )
-    .expect("empty session still relaunches the matched cohort cell");
-
-    assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
-    assert_eq!(plan.fresh, vec!["claude:query-engine".to_owned()]);
-    assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/query-engine")));
+        assert_eq!(plan.seeds, vec![CohortSeed::Fresh], "{label}");
+        assert_eq!(plan.fresh, vec![fresh.to_owned()], "{label}");
+        assert_eq!(plan.cwd.as_deref(), Some(Path::new(cwd)), "{label}");
+    }
 }
 
 #[test]
@@ -681,86 +674,90 @@ fn cohort_resume_matches_inline_group_by_launch_ordinal() {
     assert_eq!(plan.launch_group.as_deref(), Some("launch_new"));
 }
 
+/// `match_cohort` walks a ladder: a named team claims by role, an inline group
+/// claims by launch ordinal, then by role, then by bare kind. Legacy members
+/// carrying roles but no ordinals must still land on their own cell.
 #[test]
-fn inline_cohort_without_ordinals_matches_same_kind_members_by_role() {
-    let planner = AgentState {
+fn match_cohort_resolves_cells_by_team_then_ordinal_then_role_then_kind() {
+    let roled = |kind, id, role: &str| AgentState {
         launch_group: Some("launch_new".to_owned()),
-        role: Some("planner".to_owned()),
-        ..agent("claude", "planner", "/code/new", 2)
+        role: Some(role.to_owned()),
+        ..agent(kind, id, "/code/new", 2)
     };
-    let coder = AgentState {
+    let grouped = |kind, id| AgentState {
         launch_group: Some("launch_new".to_owned()),
-        role: Some("coder".to_owned()),
-        ..agent("claude", "coder", "/code/new", 3)
+        ..agent(kind, id, "/code/new", 2)
     };
-    let cells = vec![
-        cohort_cell("claude", Some("coder")),
-        cohort_cell("claude", Some("planner")),
+
+    let by_role = [
+        roled("claude", "planner", "planner"),
+        roled("claude", "coder", "coder"),
+    ];
+    let by_kind = [grouped("claude", "claude"), grouped("codex", "codex")];
+    let mixed = [
+        team_agent("claude", "team", "planner", "/code/forge", 3),
+        team_agent("codex", "team-coder", "coder", "/code/forge", 4),
+        inline_agent("claude", "inline", "launch_inline", 0, "/code/forge", 2),
+        inline_agent(
+            "codex",
+            "inline-coder",
+            "launch_inline",
+            1,
+            "/code/forge",
+            1,
+        ),
     ];
 
-    let matches = match_cohort(&[&planner, &coder], &cells, None);
-
-    assert_eq!(
-        matches
+    for (label, candidates, cells, team, expected) in [
+        (
+            "same-kind inline members without ordinals claim by role",
+            by_role.iter().collect::<Vec<_>>(),
+            vec![
+                cohort_cell("claude", Some("coder")),
+                cohort_cell("claude", Some("planner")),
+            ],
+            None,
+            vec![Some("coder"), Some("planner")],
+        ),
+        (
+            "inline members without roles fall back to bare kind",
+            by_kind.iter().collect::<Vec<_>>(),
+            vec![cohort_cell("codex", None), cohort_cell("claude", None)],
+            None,
+            vec![Some("codex"), Some("claude")],
+        ),
+        (
+            "one pool, team membership claims the cell",
+            mixed.iter().collect::<Vec<_>>(),
+            vec![
+                cohort_cell("claude", Some("planner")),
+                cohort_cell("codex", Some("coder")),
+            ],
+            Some("forge"),
+            vec![Some("team"), Some("team-coder")],
+        ),
+        (
+            "the same pool without a team falls to the inline group",
+            mixed.iter().collect::<Vec<_>>(),
+            vec![
+                cohort_cell("claude", Some("planner")),
+                cohort_cell("codex", Some("coder")),
+            ],
+            None,
+            vec![Some("inline"), Some("inline-coder")],
+        ),
+    ] {
+        let matched = match_cohort(&candidates, &cells, team)
             .into_iter()
             .map(|agent| agent.map(|agent| agent.agent_id.as_str()))
-            .collect::<Vec<_>>(),
-        [Some("coder"), Some("planner")]
-    );
+            .collect::<Vec<_>>();
+        assert_eq!(matched, expected, "{label}");
+    }
 }
 
-#[test]
-fn inline_cohort_without_roles_falls_back_to_kind() {
-    let claude = AgentState {
-        launch_group: Some("launch_new".to_owned()),
-        ..agent("claude", "claude", "/code/new", 2)
-    };
-    let codex = AgentState {
-        launch_group: Some("launch_new".to_owned()),
-        ..agent("codex", "codex", "/code/new", 3)
-    };
-    let cells = vec![cohort_cell("codex", None), cohort_cell("claude", None)];
-
-    let matches = match_cohort(&[&claude, &codex], &cells, None);
-
-    assert_eq!(
-        matches
-            .into_iter()
-            .map(|agent| agent.map(|agent| agent.agent_id.as_str()))
-            .collect::<Vec<_>>(),
-        [Some("codex"), Some("claude")]
-    );
-}
-
-#[test]
-fn match_cohort_dispatches_team_and_inline_membership() {
-    let team_planner = team_agent("claude", "team", "planner", "/code/forge", 3);
-    let team_coder = team_agent("codex", "team-coder", "coder", "/code/forge", 4);
-    let inline_planner = inline_agent("claude", "inline", "launch_inline", 0, "/code/forge", 2);
-    let inline_coder = inline_agent(
-        "codex",
-        "inline-coder",
-        "launch_inline",
-        1,
-        "/code/forge",
-        1,
-    );
-    let cells = vec![
-        cohort_cell("claude", Some("planner")),
-        cohort_cell("codex", Some("coder")),
-    ];
-    let candidates = [&team_planner, &team_coder, &inline_planner, &inline_coder];
-
-    let team = match_cohort(&candidates, &cells, Some("forge"));
-    let inline = match_cohort(&candidates, &cells, None);
-
-    assert_eq!(team[0].map(|agent| agent.agent_id.as_str()), Some("team"));
-    assert_eq!(
-        inline[0].map(|agent| agent.agent_id.as_str()),
-        Some("inline")
-    );
-}
-
+/// A `..` segment in the requested worktree normalizes before matching, and a
+/// named team keeps every sibling in the cohort — so a closed planner still
+/// focuses its live reviewer.
 #[test]
 fn cohort_relaunch_normalizes_worktrees_and_keeps_named_team_siblings() {
     let planner = AgentState {
@@ -872,27 +869,6 @@ fn cohort_relaunch_presence_table() {
 }
 
 #[test]
-fn cohort_resume_drops_members_whose_worktree_is_gone() {
-    let agents = vec![agent("claude", "a1", "/code/gone", 1)];
-    let err = cohort_with(
-        &agents,
-        &[cohort_cell("claude", None)],
-        None,
-        dead,
-        |_| false,
-        |_| true,
-    )
-    .expect_err("missing worktree drops candidate");
-
-    assert_eq!(
-        err,
-        CohortResumeErr::NothingToResume {
-            spec: "claude".to_owned()
-        }
-    );
-}
-
-#[test]
 fn resumes_root_agents_most_recent_first() {
     let agents = vec![
         agent("codex", "c1", "/code/query-engine", 30),
@@ -926,41 +902,57 @@ fn resumes_root_agents_most_recent_first() {
     );
 }
 
+/// A candidate that cannot be seeded is reported, never silently dropped: a
+/// skip carries its reason, and a vanished worktree instead yields a durable
+/// end trace so the agent leaves the next candidate set.
 #[test]
-fn rebirth_resume_skips_provisional_launch_placeholder() {
-    let agents = vec![agent(
-        "codex",
-        "launch_019f2cecea067320b667c5946d266e64",
-        "/code/pets-l",
-        4,
-    )];
-    let plan = plan(&agents);
+fn resume_reports_why_a_candidate_was_not_seeded() {
+    let provisional = "launch_019f2cecea067320b667c5946d266e64";
 
-    assert!(plan.tabs.is_empty());
-    assert_eq!(
-        plan.skipped,
-        vec![ResumeSkip {
-            label: "codex:pets-l".to_owned(),
-            reason: ResumeSkipReason::NoResumeSupport,
-        }]
-    );
-    assert!(plan.agents_to_end.is_empty());
-}
+    for (label, agent, on_disk, redeemable, skipped, to_end) in [
+        (
+            "a provisional launch placeholder is not a provider session",
+            agent("codex", provisional, "/code/pets-l", 4),
+            true,
+            true,
+            vec![ResumeSkip {
+                label: "codex:pets-l".to_owned(),
+                reason: ResumeSkipReason::NoResumeSupport,
+            }],
+            vec![],
+        ),
+        (
+            "a session the provider cannot reopen plans fresh instead",
+            agent("claude", "a1", "/code/query-engine", 1),
+            true,
+            false,
+            vec![ResumeSkip {
+                label: "claude:query-engine".to_owned(),
+                reason: ResumeSkipReason::NoConversation,
+            }],
+            vec![],
+        ),
+        (
+            "a vanished worktree ends the session rather than skipping it",
+            agent("claude", "a1", "/code/gone", 1),
+            false,
+            true,
+            vec![],
+            vec![(AgentKind::new_unchecked("claude"), "a1".into())],
+        ),
+    ] {
+        let plan = plan_with(
+            &[agent],
+            DEFAULT_RESUME_MAX,
+            None,
+            |_| on_disk,
+            |_| redeemable,
+        );
 
-#[test]
-fn plan_resume_skips_agent_without_conversation() {
-    let agents = vec![agent("claude", "a1", "/code/query-engine", 1)];
-    let plan = plan_with(&agents, DEFAULT_RESUME_MAX, None, |_| true, |_| false);
-
-    assert!(plan.tabs.is_empty());
-    assert_eq!(
-        plan.skipped,
-        vec![ResumeSkip {
-            label: "claude:query-engine".to_owned(),
-            reason: ResumeSkipReason::NoConversation,
-        }]
-    );
-    assert!(plan.agents_to_end.is_empty());
+        assert!(plan.tabs.is_empty(), "{label}");
+        assert_eq!(plan.skipped, skipped, "{label}");
+        assert_eq!(plan.agents_to_end, to_end, "{label}");
+    }
 }
 
 #[test]
@@ -1230,100 +1222,67 @@ fn filters_subagents_and_ended_candidates_but_resumes_paneless_roots() {
 }
 
 #[test]
-fn dedups_paneless_records_by_provider_session_identity() {
-    let older = AgentState {
+fn resume_dedupes_by_pane_then_session_identity() {
+    let paneless = |agent: AgentState| AgentState {
         pane: None,
-        ..agent("claude", "same", "/code/query-engine", 60)
+        ..agent
     };
-    let newer = AgentState {
-        pane: None,
-        ..agent("claude", "same", "/code/query-engine", 2)
+    let on_branch = |branch: &str, agent: AgentState| AgentState {
+        worktree_branch: Some(branch.to_owned()),
+        ..agent
     };
+    let qe = "/code/query-engine";
 
-    let plan = plan(&[older, newer]);
-
-    assert_eq!(plan.tabs.len(), 1);
-    assert_eq!(
-        single_column(&plan.tabs[0]),
-        vec![exec_resume("claude", "same")]
-    );
-}
-
-#[test]
-fn stamps_a_missing_worktree_session_ended() {
-    let agents = vec![agent("claude", "a1", "/code/gone", 1)];
-    let plan = plan_with(&agents, DEFAULT_RESUME_MAX, None, |_| false, |_| true);
-    assert!(plan.tabs.is_empty());
-    assert!(plan.skipped.is_empty());
-    assert_eq!(
-        plan.agents_to_end,
-        vec![(AgentKind::new_unchecked("claude"), "a1".into())]
-    );
-}
-
-#[test]
-fn dedups_a_relaunched_agent_keeping_the_newest() {
-    // A relaunch in place re-uses the same pane id; the older stamp is
-    // superseded by the newest, exactly as the live sidebar binds the pane.
-    let agents = vec![
-        agent_on_pane("claude", "old", "/code/query-engine", 60, "terminal_4"),
-        agent_on_pane("claude", "new", "/code/query-engine", 2, "terminal_4"),
-    ];
-    let plan = plan(&agents);
-    assert_eq!(plan.tabs.len(), 1);
-    assert_eq!(
-        single_column(&plan.tabs[0]),
-        vec![exec_resume("claude", "new")]
-    );
-    // The superseded relaunch is dropped silently, not reported as a skip.
-    assert!(plan.skipped.is_empty());
-}
-
-#[test]
-fn collapses_a_relaunch_that_changed_branch_on_one_pane() {
-    // Same pane, a branch checkout between the two sessions. The pane is the
-    // identity, so the differing branch must not leak a second resume pane —
-    // the `(kind, worktree, branch)` key used to double this.
-    let agents = vec![
-        AgentState {
-            worktree_branch: Some("main".to_owned()),
-            ..agent_on_pane("claude", "old", "/code/query-engine", 60, "terminal_4")
-        },
-        AgentState {
-            worktree_branch: Some("feature".to_owned()),
-            ..agent_on_pane("claude", "new", "/code/query-engine", 2, "terminal_4")
-        },
-    ];
-    let plan = plan(&agents);
-    assert_eq!(plan.tabs.len(), 1);
-    assert_eq!(
-        single_column(&plan.tabs[0]),
-        vec![exec_resume("claude", "new")]
-    );
-}
-
-#[test]
-fn keeps_two_same_kind_agents_in_one_worktree() {
-    // Two Claude sessions running side by side in one worktree — distinct
-    // panes, so each is its own live agent. The `(kind, worktree, branch)`
-    // key used to collapse them to one; pane identity keeps both.
-    let agents = vec![
-        agent_on_pane("claude", "a1", "/code/query-engine", 5, "terminal_4"),
-        agent_on_pane("claude", "a2", "/code/query-engine", 9, "terminal_5"),
-        agent("codex", "c1", "/code/query-engine", 12),
-    ];
-    let plan = plan(&agents);
-    assert_eq!(plan.tabs.len(), 1);
-    assert_eq!(plan.tabs[0].label, "#query-engine");
-    // Freshest leads within the tab; all same-worktree sessions are resumed.
-    assert_eq!(
-        single_column(&plan.tabs[0]),
-        vec![
-            exec_resume("claude", "a1"),
-            exec_resume("claude", "a2"),
-            exec_resume("codex", "c1")
-        ]
-    );
+    for (label, agents, expected) in [
+        (
+            "a relaunch on one pane keeps the newest stamp",
+            vec![
+                agent_on_pane("claude", "old", qe, 60, "terminal_4"),
+                agent_on_pane("claude", "new", qe, 2, "terminal_4"),
+            ],
+            vec![exec_resume("claude", "new")],
+        ),
+        (
+            "a branch checkout between the two does not leak a second pane",
+            vec![
+                on_branch("main", agent_on_pane("claude", "old", qe, 60, "terminal_4")),
+                on_branch(
+                    "feature",
+                    agent_on_pane("claude", "new", qe, 2, "terminal_4"),
+                ),
+            ],
+            vec![exec_resume("claude", "new")],
+        ),
+        (
+            "two same-kind agents on distinct panes both survive",
+            vec![
+                agent_on_pane("claude", "a1", qe, 5, "terminal_4"),
+                agent_on_pane("claude", "a2", qe, 9, "terminal_5"),
+                agent("codex", "c1", qe, 12),
+            ],
+            vec![
+                exec_resume("claude", "a1"),
+                exec_resume("claude", "a2"),
+                exec_resume("codex", "c1"),
+            ],
+        ),
+        (
+            "paneless records dedupe on provider session identity",
+            vec![
+                paneless(agent("claude", "same", qe, 60)),
+                paneless(agent("claude", "same", qe, 2)),
+            ],
+            vec![exec_resume("claude", "same")],
+        ),
+    ] {
+        let plan = plan(&agents);
+        assert_eq!(plan.tabs.len(), 1, "{label}");
+        assert_eq!(plan.tabs[0].label, "#query-engine", "{label}");
+        // Freshest leads within the tab.
+        assert_eq!(single_column(&plan.tabs[0]), expected, "{label}");
+        // A superseded relaunch is dropped silently, never reported as a skip.
+        assert!(plan.skipped.is_empty(), "{label}");
+    }
 }
 
 #[test]
@@ -1454,53 +1413,59 @@ fn resume_session_present_requires_a_redeemable_conversation() {
     }
 }
 
+/// A restorable team tab carries one seed per declared role, in the team's own
+/// layout order: a prior member resumes, a missing one launches fresh, and a
+/// group whose team no longer resolves is left alone entirely.
 #[test]
-fn plans_team_restore_in_declared_layout_order() {
+fn team_restore_tabs_seed_every_declared_role() {
     let (teams, profiles, commands) = team_configs();
     let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
     let coder = team_agent("codex", "coder", "coder", "/repo/forge", 5);
 
-    let tabs = plan_team_restore_tabs(
-        &[coder, planner],
-        &teams,
-        &profiles,
-        &commands,
-        Some(Path::new("/repo")),
-        |_| true,
-        |_| true,
-    );
+    for (label, agents, teams, expected) in [
+        (
+            "declared layout order, not arrival order",
+            vec![coder, planner.clone()],
+            teams.clone(),
+            Some(vec![Some("planner"), Some("coder")]),
+        ),
+        (
+            "a missing member launches fresh beside the resumed one",
+            vec![planner.clone()],
+            teams,
+            Some(vec![Some("planner"), None]),
+        ),
+        (
+            "a team that no longer resolves plans no tab",
+            vec![planner],
+            TeamsConfig::default(),
+            None,
+        ),
+    ] {
+        let tabs = plan_team_restore_tabs(
+            &agents,
+            &teams,
+            &profiles,
+            &commands,
+            Some(Path::new("/repo")),
+            |_| true,
+            |_| true,
+        );
 
-    assert_eq!(tabs.len(), 1);
-    assert_eq!(tabs[0].label, "#forge");
-    assert_eq!(tabs[0].cohort.seeds.len(), 2);
-    assert!(matches!(
-        &tabs[0].cohort.seeds[0],
-        CohortSeed::Resume(agent) if agent.agent_id.as_str() == "planner"
-    ));
-    assert!(matches!(
-        &tabs[0].cohort.seeds[1],
-        CohortSeed::Resume(agent) if agent.agent_id.as_str() == "coder"
-    ));
-}
-
-#[test]
-fn plans_fresh_seed_for_missing_team_member() {
-    let (teams, profiles, commands) = team_configs();
-    let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
-
-    let tabs = plan_team_restore_tabs(
-        &[planner],
-        &teams,
-        &profiles,
-        &commands,
-        Some(Path::new("/repo")),
-        |_| true,
-        |_| true,
-    );
-
-    assert_eq!(tabs.len(), 1);
-    assert!(matches!(tabs[0].cohort.seeds[0], CohortSeed::Resume(_)));
-    assert_eq!(tabs[0].cohort.seeds[1], CohortSeed::Fresh);
+        let Some(expected) = expected else {
+            assert!(tabs.is_empty(), "{label}");
+            continue;
+        };
+        assert_eq!(tabs.len(), 1, "{label}");
+        assert_eq!(tabs[0].label, "#forge", "{label}");
+        let seeds = tabs[0]
+            .cohort
+            .seeds
+            .iter()
+            .map(resume_id)
+            .collect::<Vec<_>>();
+        assert_eq!(seeds, expected, "{label}");
+    }
 }
 
 #[test]
@@ -1524,85 +1489,84 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
     assert_eq!(flat_agents[0].agent_id.as_str(), "flat");
 }
 
+/// Lane selectors resolve to a place before anything is planned. A durable
+/// agent outranks a same-named worktree, a scope matches a worktree by name,
+/// branch, full path, or directory name, and a PR marker outranks the legacy
+/// `pr-<n>` naming. Each case reports the resolved worktree through `Removed`.
 #[test]
-fn team_restore_ignores_group_whose_team_no_longer_resolves() {
-    let (_teams, profiles, commands) = team_configs();
-    let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
-
-    let tabs = plan_team_restore_tabs(
-        &[planner],
-        &TeamsConfig::default(),
-        &profiles,
-        &commands,
-        Some(Path::new("/repo")),
-        |_| true,
-        |_| true,
-    );
-
-    assert!(tabs.is_empty());
-}
-
-#[test]
-fn lane_scope_prefers_agent_over_colliding_worktree_name() {
+fn lane_selectors_resolve_to_a_place() {
     let durable = AgentState {
         channel: Some("docs".to_owned()),
         ..agent("codex", "durable", "/other/agent-lane", 1)
     };
-    let agents = [durable];
-    let worktrees = [lane_worktree("docs", "feat/docs", None)];
-    let error = LaneCase::new(LaneResumeSelector::Scope("docs".to_owned()), &agents)
-        .worktrees(&worktrees)
-        .path_exists(|_| false)
-        .liveness(live)
-        .run()
-        .unwrap_err();
-
-    assert_eq!(
-        error,
-        LaneResumeError::Removed {
-            scope: "docs".to_owned(),
-            worktree: "agent-lane".to_owned(),
-        }
-    );
-}
-
-#[test]
-fn lane_scope_matches_branch_full_path_and_file_name() {
-    let worktrees = [LaneWorktree {
+    let agent_lane = [durable];
+    let review = [LaneWorktree {
         name: "review".to_owned(),
         path: PathBuf::from("/repo-worktrees/docs"),
         branch: Some("feat/docs".to_owned()),
         from_pr: None,
     }];
-    for scope in ["review", "feat/docs", "/repo-worktrees/docs", "docs"] {
-        let error = LaneCase::new(LaneResumeSelector::Scope(scope.to_owned()), &[])
-            .worktrees(&worktrees)
-            .path_exists(|_| false)
-            .run()
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            LaneResumeError::Removed { ref worktree, .. } if worktree == "review"
-        ));
-    }
-}
-
-#[test]
-fn lane_pr_prefers_marker_before_legacy_name() {
-    let worktrees = [
+    let pr_lanes = [
         lane_worktree("pr-42", "legacy", None),
         lane_worktree("review", "pull/42", Some(42)),
     ];
-    let error = LaneCase::new(LaneResumeSelector::PullRequest(42), &[])
-        .worktrees(&worktrees)
-        .path_exists(|_| false)
-        .run()
-        .unwrap_err();
+    let scope = |name: &str| LaneResumeSelector::Scope(name.to_owned());
 
-    assert!(matches!(
-        error,
-        LaneResumeError::Removed { worktree, .. } if worktree == "review"
-    ));
+    for (label, selector, agents, worktrees, resolved) in [
+        (
+            "a durable agent outranks a colliding worktree name",
+            scope("docs"),
+            agent_lane.as_slice(),
+            [lane_worktree("docs", "feat/docs", None)].as_slice(),
+            "agent-lane",
+        ),
+        (
+            "scope by worktree name",
+            scope("review"),
+            &[],
+            &review,
+            "review",
+        ),
+        (
+            "scope by branch",
+            scope("feat/docs"),
+            &[],
+            &review,
+            "review",
+        ),
+        (
+            "scope by full path",
+            scope("/repo-worktrees/docs"),
+            &[],
+            &review,
+            "review",
+        ),
+        (
+            "scope by directory name",
+            scope("docs"),
+            &[],
+            &review,
+            "review",
+        ),
+        (
+            "a PR marker outranks the legacy pr-<n> name",
+            LaneResumeSelector::PullRequest(42),
+            &[],
+            &pr_lanes,
+            "review",
+        ),
+    ] {
+        let error = LaneCase::new(selector, agents)
+            .worktrees(worktrees)
+            .path_exists(|_| false)
+            .liveness(live)
+            .run()
+            .unwrap_err();
+        assert!(
+            matches!(error, LaneResumeError::Removed { ref worktree, .. } if worktree == resolved),
+            "{label}: got {error:?}"
+        );
+    }
 }
 
 #[test]
