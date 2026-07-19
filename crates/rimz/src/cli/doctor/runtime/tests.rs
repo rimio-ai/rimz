@@ -145,7 +145,34 @@ fn frame_anomaly(produced_at_ms: u64) -> DiagEvent {
         events_recent: EventsSig::default(),
         gate_reject_streak: 0,
         health_failure_streak: 0,
-        suppressed_since_last: 0,
+        dropped_msgs: 0,
+    }
+}
+
+/// A presence flap stamped with the frame the row went missing on, returning at
+/// `back_at_ms` — the field that varies across renderers observing one fault.
+fn presence_flap(onset_produced_at_ms: u64, back_at_ms: u64) -> DiagEvent {
+    DiagEvent::FrameAnomaly {
+        role: ObserveRole::Consumer,
+        anomaly: AnomalyKind::RowPresenceFlap {
+            row_id: "zellij:terminal_6".to_owned(),
+            pane_id: Some("zellij:terminal_6".to_owned()),
+            gone_at_ms: 1_000,
+            back_at_ms,
+            gap_evidence: None,
+        },
+        window_ms: Some(7_000),
+        frame: FrameStamp {
+            produced_at_ms: Some(onset_produced_at_ms),
+            rows: 1,
+            agents: 1,
+            processes: 0,
+            pulled_rows: Some(1),
+            pulled_panes_produced_at_ms: Some(onset_produced_at_ms),
+        },
+        events_recent: EventsSig::default(),
+        gate_reject_streak: 0,
+        health_failure_streak: 0,
         dropped_msgs: 0,
     }
 }
@@ -493,6 +520,25 @@ fn diagnostic_incidents_collapse_cross_observer_frame_copies_only() {
     assert_eq!(incidents[0].record_count, 2);
     assert_eq!(incidents[0].distinct_observer_count, 2);
     assert_eq!(incidents[1].record_count, 1);
+}
+
+#[test]
+fn diagnostic_incidents_collapse_cross_observer_presence_flaps() {
+    // Every renderer sees the same missing edge and returns on its own pull
+    // cadence, so one fault reaches the log as N records that agree on the
+    // onset frame and disagree on `back_at_ms`.
+    let mut first = diag_record(1, presence_flap(900, 1_500));
+    first.instance_id = Some(sidebar("sb_019e8c565bbd708097fce9514f79da04"));
+    let mut second = diag_record(2, presence_flap(900, 2_400));
+    second.instance_id = Some(sidebar("sb_019eb7da41f478b2a84079743e472a87"));
+    let mut third = diag_record(3, presence_flap(900, 2_400));
+    third.instance_id = Some(sidebar("sb_019ec1f0a25c7f9284d3b1e5c6a70b12"));
+
+    let incidents = diagnostic_incidents(vec![first, second, third], 12, None);
+
+    assert_eq!(incidents.len(), 1);
+    assert_eq!(incidents[0].record_count, 3);
+    assert_eq!(incidents[0].distinct_observer_count, 3);
 }
 
 #[test]

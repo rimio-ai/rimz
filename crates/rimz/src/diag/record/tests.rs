@@ -440,7 +440,7 @@ fn representative_events_keep_json_wire_shape() {
             },
         ),
         (
-            r#"{"kind":"frame_anomaly","role":"consumer","anomaly":{"detector":"aggregate_oscillation","aggregate":{"aggregate":"provider_spend","kind":"claude"},"from":"1234","via":"0","back":"1234","span_ms":7000,"pulled_via":"0"},"frame":{"produced_at_ms":13000,"rows":2,"agents":2,"processes":0,"pulled_rows":2,"pulled_panes_produced_at_ms":13000},"events_recent":{"pane_closed":[],"pane_opened":[]},"gate_reject_streak":0,"health_failure_streak":0,"suppressed_since_last":3,"dropped_msgs":0}"#,
+            r#"{"kind":"frame_anomaly","role":"consumer","anomaly":{"detector":"aggregate_oscillation","aggregate":{"aggregate":"provider_spend","kind":"claude"},"from":"1234","via":"0","back":"1234","span_ms":7000,"pulled_via":"0"},"frame":{"produced_at_ms":13000,"rows":2,"agents":2,"processes":0,"pulled_rows":2,"pulled_panes_produced_at_ms":13000},"events_recent":{"pane_closed":[],"pane_opened":[]},"gate_reject_streak":0,"health_failure_streak":0,"dropped_msgs":0}"#,
             DiagEvent::FrameAnomaly {
                 role: ObserveRole::Consumer,
                 anomaly: AnomalyKind::AggregateOscillation {
@@ -458,7 +458,6 @@ fn representative_events_keep_json_wire_shape() {
                 events_recent: EventsSig::default(),
                 gate_reject_streak: 0,
                 health_failure_streak: 0,
-                suppressed_since_last: 3,
                 dropped_msgs: 0,
             },
         ),
@@ -604,7 +603,6 @@ fn summary_attributes_row_presence_gap_at_missing_edge() {
         events_recent: EventsSig::default(),
         gate_reject_streak: 0,
         health_failure_streak: 0,
-        suppressed_since_last: 0,
         dropped_msgs: 0,
     };
 

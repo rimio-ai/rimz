@@ -508,6 +508,39 @@ fn row_presence_records_missing_edge_pulled_truth_membership() {
 }
 
 #[test]
+fn row_presence_flap_stamps_the_frame_the_row_went_missing_on() {
+    fn at_frame(mut sig: FrameSig, produced_at_ms: u64) -> FrameSig {
+        sig.panes_produced_at_ms = Some(produced_at_ms);
+        sig
+    }
+
+    let mut observer = Observer::default();
+    observer.observe(at_frame(
+        sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
+        100,
+    ));
+    observer.observe(at_frame(
+        sig(11_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
+        400,
+    ));
+    observer.observe(at_frame(sig(12_000, vec![row("b", "p2", "main")]), 500));
+    // Renderers return on their own pull cadence, so the recovery frame varies
+    // across observers of one fault while the missing edge is shared.
+    let drafts = observer.observe(at_frame(
+        sig(13_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
+        900,
+    ));
+
+    let flap = drafts
+        .iter()
+        .find(|draft| matches!(&draft.kind, AnomalyKind::RowPresenceFlap { row_id, .. } if row_id == "a"))
+        .expect("presence flap");
+
+    assert_eq!(flap.frame.produced_at_ms, Some(500));
+    assert_eq!(flap.frame.rows, 1);
+}
+
+#[test]
 fn row_presence_ignores_expected_absence_causes() {
     let mut pane_closed = Observer::default();
     pane_closed.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));

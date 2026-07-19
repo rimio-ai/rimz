@@ -1715,6 +1715,9 @@ fn incident_summary(incident: &super::model::DiagIncident) -> String {
     if incident.record_count > 1 {
         summary.push_str(&format!(" · {} records", incident.record_count));
     }
+    if incident.sink_suppressed > 0 {
+        summary.push_str(&format!(" · {} suppressed", incident.sink_suppressed));
+    }
     if incident.stale_build
         && let Some(build) = &incident.build
     {

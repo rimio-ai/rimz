@@ -1069,7 +1069,6 @@ struct IncidentBuilder {
     record_count: usize,
     observer_ids: BTreeSet<String>,
     sink_suppressed: u64,
-    observer_suppressed: u64,
     dropped_messages: u64,
     summary: String,
     build: Option<String>,
@@ -1089,7 +1088,6 @@ impl IncidentBuilder {
             record_count: 0,
             observer_ids: BTreeSet::new(),
             sink_suppressed: 0,
-            observer_suppressed: 0,
             dropped_messages: 0,
             summary: String::new(),
             build: record.build.clone(),
@@ -1110,15 +1108,7 @@ impl IncidentBuilder {
         self.sink_suppressed = self
             .sink_suppressed
             .saturating_add(u64::from(record.suppressed_since_last));
-        if let rimz::diag::record::DiagEvent::FrameAnomaly {
-            suppressed_since_last,
-            dropped_msgs,
-            ..
-        } = &record.event
-        {
-            self.observer_suppressed = self
-                .observer_suppressed
-                .saturating_add(u64::from(*suppressed_since_last));
+        if let rimz::diag::record::DiagEvent::FrameAnomaly { dropped_msgs, .. } = &record.event {
             self.dropped_messages = self
                 .dropped_messages
                 .saturating_add(u64::from(*dropped_msgs));
@@ -1141,7 +1131,6 @@ impl IncidentBuilder {
             distinct_observer_count: observer_ids.len(),
             observer_ids,
             sink_suppressed: self.sink_suppressed,
-            observer_suppressed: self.observer_suppressed,
             dropped_messages: self.dropped_messages,
             summary: self.summary,
             build: self.build,

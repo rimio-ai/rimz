@@ -27,8 +27,10 @@ const DIAG_LOG_NAME: &str = "diag.log.jsonl";
 const DIAG_LOG_MAX_BYTES: u64 = 1_048_576;
 const DIAG_FRAMES_DIR: &str = "diag-frames";
 const DIAG_FRAME_RING: usize = 8;
-/// Matches the observer diagnostics cadence (`OBSERVE_COOLDOWN`) so per-tick
-/// repeats collapse into periodic records carrying their suppressed count.
+/// The one diagnostics rate-limit window, applied per [`DiagEvent::identity_key`]
+/// so per-tick repeats on one subject collapse into periodic records carrying
+/// their suppressed count while a fault on a different subject reports now.
+/// `DIAG_KIND_CEILING` bounds each kind's total within the same window.
 const DIAG_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(30);
 const DIAG_KIND_CEILING: u32 = 120;
 static DIAG_FRAME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -48,7 +50,7 @@ struct Inner {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Limiter {
+struct Limiter {
     window: Duration,
     entries: HashMap<String, LimiterEntry>,
     kind_windows: HashMap<String, KindWindow>,
@@ -68,7 +70,7 @@ struct KindWindow {
 }
 
 impl Limiter {
-    pub(crate) fn new(window: Duration) -> Self {
+    fn new(window: Duration) -> Self {
         Self {
             window,
             entries: HashMap::new(),
@@ -78,7 +80,7 @@ impl Limiter {
 
     /// Returns `Some(suppressed_since_last)` when `key` may emit now; `None`
     /// when the emission is suppressed.
-    pub(crate) fn allow(&mut self, key: &str, kind: &str, at_ms: u64) -> Option<u32> {
+    fn allow(&mut self, key: &str, kind: &str, at_ms: u64) -> Option<u32> {
         let window_ms = self.window.as_millis() as u64;
         self.gc(at_ms, window_ms, key);
         let suppressed = {
@@ -99,7 +101,7 @@ impl Limiter {
         Some(suppressed.saturating_add(kind_dropped))
     }
 
-    pub(crate) fn allow_kind_only(&mut self, kind: &str, at_ms: u64) -> Option<u32> {
+    fn allow_kind_only(&mut self, kind: &str, at_ms: u64) -> Option<u32> {
         let window_ms = self.window.as_millis() as u64;
         self.gc(at_ms, window_ms, "");
         self.allow_kind_emit(kind, at_ms, window_ms)

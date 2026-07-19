@@ -469,7 +469,6 @@ pub enum DiagEvent {
         events_recent: EventsSig,
         gate_reject_streak: u32,
         health_failure_streak: u32,
-        suppressed_since_last: u32,
         dropped_msgs: u32,
     },
 }
@@ -1156,39 +1155,24 @@ impl DiagEvent {
                         gap_evidence: Some(evidence),
                         ..
                     },
-                suppressed_since_last,
                 ..
             } => {
                 let pulled_pane = evidence
                     .pulled_pane_present
                     .map(|present| present.to_string())
                     .unwrap_or_else(|| "unknown".to_owned());
-                let suppressed = if *suppressed_since_last > 0 {
-                    format!("; {suppressed_since_last} suppressed")
-                } else {
-                    String::new()
-                };
                 format!(
-                    "observed row_presence_flap on {row_id}; gap {}ms; pulled row present={}; pulled pane present={pulled_pane}{suppressed}",
+                    "observed row_presence_flap on {row_id}; gap {}ms; pulled row present={}; pulled pane present={pulled_pane}",
                     back_at_ms.saturating_sub(*gone_at_ms),
                     evidence.pulled_row_present,
                 )
             }
-            Self::FrameAnomaly {
-                anomaly,
-                suppressed_since_last,
-                ..
-            } => {
+            Self::FrameAnomaly { anomaly, .. } => {
                 let subject = anomaly
                     .subject()
                     .map(|subject| format!(" on {subject}"))
                     .unwrap_or_default();
-                let suppressed = if *suppressed_since_last > 0 {
-                    format!("; {suppressed_since_last} suppressed")
-                } else {
-                    String::new()
-                };
-                format!("observed {}{subject}{suppressed}", anomaly.key())
+                format!("observed {}{subject}", anomaly.key())
             }
         }
     }
@@ -1476,8 +1460,10 @@ impl AnomalyKind {
         }
     }
 
-    /// The row/pane/group identity an anomaly is about, for rate-limit
-    /// identity; detectors with whole-frame scope have no subject.
+    /// The row/pane/group identity an anomaly is about. It composes
+    /// [`DiagEvent::identity_key`], which the sink rate limit and Doctor's
+    /// incident fold both key on; detectors with whole-frame scope have no
+    /// subject.
     pub fn subject(&self) -> Option<Cow<'_, str>> {
         match self {
             Self::RowPresenceFlap { row_id, .. }

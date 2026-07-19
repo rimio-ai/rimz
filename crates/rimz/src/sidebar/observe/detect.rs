@@ -272,7 +272,15 @@ impl Observer {
                         if sig.at_ms.saturating_sub(gone_at) <= window
                             && !presence.absence_justified
                         {
-                            drafts.push(AnomalyDraft::from_sig(
+                            // Stamp the frame the row went missing on, not the
+                            // one it came back on: producer records describe the
+                            // missing edge, and every renderer sees that frame
+                            // while each returns on its own pull cadence.
+                            let onset_frame = gap_evidence
+                                .as_ref()
+                                .map(|evidence| evidence.frame.clone())
+                                .unwrap_or_else(|| super::frame_stamp_from_sig(sig));
+                            drafts.push(AnomalyDraft::from_sig_at_frame(
                                 sig,
                                 AnomalyKind::RowPresenceFlap {
                                     row_id: row.row_id.clone(),
@@ -285,6 +293,7 @@ impl Observer {
                                     gap_evidence,
                                 },
                                 Some(window),
+                                onset_frame,
                             ));
                         }
                     }

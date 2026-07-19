@@ -342,9 +342,6 @@ pub const OBSERVE_CROSSCHECK_TTL: Duration = Duration::from_secs(5);
 /// logged.
 pub const OBSERVE_DEADPID_CONFIRMATIONS: u32 = 2;
 
-/// Per-kind diagnostic cooldown window.
-pub const OBSERVE_COOLDOWN: Duration = Duration::from_secs(30);
-
 /// Default render base grid: 100ms, or 10Hz.
 pub const DEFAULT_REFRESH_MS: u16 = 100;
 

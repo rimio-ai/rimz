@@ -687,7 +687,6 @@ pub(super) struct DiagIncident {
     pub(super) distinct_observer_count: usize,
     pub(super) observer_ids: Vec<String>,
     pub(super) sink_suppressed: u64,
-    pub(super) observer_suppressed: u64,
     pub(super) dropped_messages: u64,
     pub(super) summary: String,
     #[serde(skip_serializing_if = "Option::is_none")]

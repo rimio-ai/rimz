@@ -1,20 +1,18 @@
-//! Observer writer thread: cooldown, elder-only real-world cross-checks, and
-//! emission of [`DiagEvent::FrameAnomaly`] records through the shared
-//! diagnostics sink — the render thread never does IO for the observer.
+//! Observer writer thread: elder-only real-world cross-checks and emission of
+//! [`DiagEvent::FrameAnomaly`] records through the shared diagnostics sink,
+//! which owns the rate limit — the render thread never does IO for the observer.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Instant;
 
+use crate::diag::DiagSink;
 use crate::diag::record::DiagEvent;
-use crate::diag::{DiagSink, Limiter};
 use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::cache::read_snapshot_cache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::unix_now_ms;
-use crate::sidebar::timing::{
-    OBSERVE_COOLDOWN, OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS,
-};
+use crate::sidebar::timing::{OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS};
 use crate::store::paths::RuntimePaths;
 use jiff::Timestamp;
 
@@ -31,7 +29,6 @@ pub fn spawn(
             runtime,
             sink,
             election,
-            cooldowns: Limiter::new(OBSERVE_COOLDOWN),
             latest_roster: None,
             last_crosscheck: Instant::now(),
             dead_pids: DeadPidTracker::default(),
@@ -48,7 +45,6 @@ struct Writer {
     runtime: RuntimePaths,
     sink: DiagSink,
     election: ProducerElectionTracker,
-    cooldowns: Limiter,
     latest_roster: Option<RosterSig>,
     last_crosscheck: Instant,
     dead_pids: DeadPidTracker,
@@ -70,13 +66,9 @@ impl Writer {
         }
     }
 
+    /// The sink is the one rate limit: it keys on `identity_key()`, so repeats
+    /// on one subject collapse while a fault on a different row reports now.
     fn emit_anomaly(&mut self, draft: AnomalyDraft) {
-        let Some(suppressed_since_last) =
-            self.cooldowns
-                .allow(draft.kind.key(), draft.kind.key(), draft.at_ms)
-        else {
-            return;
-        };
         let role = current_role(&self.election);
         self.sink.emit_at_ms(
             DiagEvent::FrameAnomaly {
@@ -87,7 +79,6 @@ impl Writer {
                 events_recent: draft.events_recent,
                 gate_reject_streak: draft.gate_reject_streak,
                 health_failure_streak: draft.health_failure_streak,
-                suppressed_since_last,
                 dropped_msgs: draft.dropped_msgs,
             },
             draft.at_ms,
@@ -332,19 +323,6 @@ mod tests {
                 AnomalyKind::RowPaneMissingFromFrame { row_id, .. }
             ] if row_id == "b"
         ));
-    }
-
-    #[test]
-    fn cooldown_suppresses_per_kind_and_flushes_count() {
-        let mut cooldowns = Limiter::new(OBSERVE_COOLDOWN);
-        let kind = AnomalyKind::DuplicateRowId {
-            row_id: "a".to_owned(),
-            count: 2,
-        };
-
-        assert_eq!(cooldowns.allow(kind.key(), kind.key(), 1_000), Some(0));
-        assert_eq!(cooldowns.allow(kind.key(), kind.key(), 2_000), None);
-        assert_eq!(cooldowns.allow(kind.key(), kind.key(), 31_001), Some(1));
     }
 
     #[test]

@@ -1,10 +1,10 @@
 //! Sidebar frame-stream observer.
 //!
 //! Every renderer feeds the observer one compact signature per committed frame.
-//! The pure detectors run in-process; the writer thread handles cooldown,
-//! elder-only real-world checks, and emission into the typed diagnostics
-//! channel ([`crate::diag`]). The durable record vocabulary lives in
-//! [`crate::diag::record`].
+//! The pure detectors run in-process; the writer thread handles elder-only
+//! real-world checks and emission into the typed diagnostics channel
+//! ([`crate::diag`]), which owns the one rate limit. The durable record
+//! vocabulary lives in [`crate::diag::record`].
 
 mod detect;
 mod sig;
@@ -39,11 +39,25 @@ pub struct AnomalyDraft {
 
 impl AnomalyDraft {
     pub fn from_sig(sig: &FrameSig, kind: AnomalyKind, window_ms: Option<u64>) -> Self {
+        Self::from_sig_at_frame(sig, kind, window_ms, frame_stamp_from_sig(sig))
+    }
+
+    /// A draft stamped with the frame that caused the anomaly rather than the
+    /// frame that revealed it. Detectors that fire on a later frame than the
+    /// fault (a presence flap fires when the row returns) name the causal frame
+    /// here, so the `produced_at_ms` join reaches the producer records for the
+    /// same episode and every renderer's copy of one fault carries one stamp.
+    pub fn from_sig_at_frame(
+        sig: &FrameSig,
+        kind: AnomalyKind,
+        window_ms: Option<u64>,
+        frame: FrameStamp,
+    ) -> Self {
         Self {
             at_ms: sig.at_ms,
             kind,
             window_ms,
-            frame: frame_stamp_from_sig(sig),
+            frame,
             events_recent: sig.events.clone(),
             gate_reject_streak: sig.gate_reject_streak,
             health_failure_streak: sig.health_failure_streak,
