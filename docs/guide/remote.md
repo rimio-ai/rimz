@@ -67,9 +67,11 @@ The badge always shows the worse of latency and loss, so a fast but lossy link s
 
 Attach normally, then start `python3 -m http.server 3000`, `pnpm serve`, or another dev server in a room pane on the host. Within seconds `http://localhost:3000` opens on your local machine without another flag or SSH command.
 
-RimZ forwards a listener when it starts after you attach, belongs to your remote user, uses port 1024 or above, and binds to loopback or a wildcard address. Wildcard detection includes containerized servers exposed through docker-proxy. The local side binds only `127.0.0.1`, so the forwarded service stays on your machine.
+RimZ forwards a listener when it starts after you attach, belongs to your remote user, uses port 1024 or above, and binds to loopback or a wildcard address. The local side binds only `127.0.0.1`, so the forwarded service stays on your machine.
 
 The forward closes after the server stops and reopens with the room after a link recovery; every forward closes when you detach. Use `rimz remote connect dev --no-auto-forward` for one connection, or save the switch with `rimz remote add dev dev-box:~/code/query-engine --no-auto-forward`.
+
+A port already in use on your local machine is skipped. Free it and restart `rimz remote connect` to retry that listener.
 
 Automatic forwarding rides the supervised link probe and ControlMaster, so it is unavailable with `--no-reconnect` and `--web`. Listener discovery supports Linux hosts today; other hosts keep the normal remote connection without automatic forwards.
 

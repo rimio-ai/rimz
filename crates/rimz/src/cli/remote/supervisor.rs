@@ -1444,9 +1444,7 @@ impl ProbeChild {
             let outcome = monitor.record_ack(ack.seq, rimz::sidebar::timing::unix_now_ms());
             drain.acked |= outcome.accepted;
             drain.reported_rtt_changed |= outcome.reported_rtt_changed;
-            if outcome.accepted
-                && let (Some(sync), Some(ports)) = (port_sync, ack.ports)
-            {
+            if let (Some(sync), Some(ports)) = (port_sync, ack.ports) {
                 apply_port_report(sync, &ports, target, control_path);
             }
             for event in outcome.events {
