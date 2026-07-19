@@ -658,7 +658,12 @@ fn cohort_relaunch_presence_table() {
         ),
     ] {
         assert_eq!(
-            inspect_cohort_relaunch(&agents, Path::new("/code/feature"), &[cell.clone()], None),
+            inspect_cohort_relaunch(
+                &agents,
+                Path::new("/code/feature"),
+                std::slice::from_ref(&cell),
+                None,
+            ),
             expected,
             "{label}"
         );

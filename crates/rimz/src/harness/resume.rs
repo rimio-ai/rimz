@@ -421,6 +421,7 @@ impl RecoveryPlan {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn base_resumed(&self) -> &BTreeSet<(AgentKind, AgentSessionId)> {
         &self.base_resumed
     }
@@ -1823,7 +1824,7 @@ fn map_inline_group_to_cells<'a>(
             continue;
         };
         if ordinal < cells.len() {
-            assignments.claim(ordinal, *agent);
+            assignments.claim(ordinal, agent);
         }
     }
 
@@ -1846,7 +1847,7 @@ fn map_inline_group_to_cells<'a>(
         else {
             continue;
         };
-        assignments.claim(index, *agent);
+        assignments.claim(index, agent);
     }
 
     for agent in group {
@@ -1861,7 +1862,7 @@ fn map_inline_group_to_cells<'a>(
         else {
             continue;
         };
-        assignments.claim(index, *agent);
+        assignments.claim(index, agent);
     }
 
     assignments.matches
