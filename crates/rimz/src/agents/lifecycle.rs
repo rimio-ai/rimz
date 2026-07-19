@@ -439,58 +439,31 @@ fn map_status(
         }
         LifecycleSignal::TurnInterrupted => AgentStatus::Idle,
         LifecycleSignal::ToolUsed { native_key, .. } => {
-            // A completed tool proves the agent is working; if the rollup thinks
-            // it is resting (or it is unknown), reconcile to running. Attention
-            // states (anything not resting) are left alone.
-            match prior_status {
-                Some(AgentStatus::Waiting)
-                    if open_ask_key.is_some()
-                        && native_key.as_deref().is_some()
-                        && open_ask_key != native_key.as_deref() =>
-                {
-                    *kind = TransitionKind::Ignored {
-                        reason: "sibling tool completed while a keyed ask is open",
-                    };
-                    AgentStatus::Waiting
-                }
-                Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Running,
-                Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
-                    *kind = TransitionKind::Reconciled {
-                        from: resting,
-                        reason: "tool used outside a running turn",
-                    };
-                    AgentStatus::Running
-                }
-                Some(other) => other,
-                None => {
-                    *kind = TransitionKind::Reconciled {
-                        from: AgentStatus::Idle,
-                        reason: "tool used before session registered",
-                    };
-                    AgentStatus::Running
-                }
+            if prior_status == Some(AgentStatus::Waiting)
+                && open_ask_key.is_some()
+                && native_key.as_deref().is_some()
+                && open_ask_key != native_key.as_deref()
+            {
+                *kind = TransitionKind::Ignored {
+                    reason: "sibling tool completed while a keyed ask is open",
+                };
+                AgentStatus::Waiting
+            } else {
+                reconcile_activity(
+                    prior_status,
+                    prior_status.map_or(
+                        "tool used before session registered",
+                        |_| "tool used outside a running turn",
+                    ),
+                    kind,
+                )
             }
         }
         // Status preserved; only the head is stamped.
         LifecycleSignal::Compacting => prior_status.unwrap_or(AgentStatus::Idle),
-        LifecycleSignal::CompactionEnded { auto: Some(true) } => match prior_status {
-            Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Running,
-            Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
-                *kind = TransitionKind::Reconciled {
-                    from: resting,
-                    reason: "auto-compaction resumed a turn",
-                };
-                AgentStatus::Running
-            }
-            Some(other) => other,
-            None => {
-                *kind = TransitionKind::Reconciled {
-                    from: AgentStatus::Idle,
-                    reason: "auto-compaction resumed a turn",
-                };
-                AgentStatus::Running
-            }
-        },
+        LifecycleSignal::CompactionEnded { auto: Some(true) } => {
+            reconcile_activity(prior_status, "auto-compaction resumed a turn", kind)
+        }
         LifecycleSignal::CompactionEnded { auto: Some(false) }
             if prior_status == Some(AgentStatus::Waiting) =>
         {
@@ -507,6 +480,33 @@ fn map_status(
         // Handled above.
         LifecycleSignal::Ended | LifecycleSignal::Lost => {
             unreachable!("terminal side-channel signals return early")
+        }
+    }
+}
+
+/// Proof of resumed activity reconciles resting state without hiding attention
+/// or terminal outcomes already recorded for the agent.
+fn reconcile_activity(
+    prior_status: Option<AgentStatus>,
+    reason: &'static str,
+    kind: &mut TransitionKind,
+) -> AgentStatus {
+    match prior_status {
+        Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Running,
+        Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
+            *kind = TransitionKind::Reconciled {
+                from: resting,
+                reason,
+            };
+            AgentStatus::Running
+        }
+        Some(other) => other,
+        None => {
+            *kind = TransitionKind::Reconciled {
+                from: AgentStatus::Idle,
+                reason,
+            };
+            AgentStatus::Running
         }
     }
 }

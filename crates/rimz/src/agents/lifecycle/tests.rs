@@ -213,6 +213,70 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
 }
 
 #[test]
+fn activity_evidence_reconciles_only_running_and_resting_states() {
+    let cases = [
+        (Some(AgentStatus::Running), AgentStatus::Running, None),
+        (Some(AgentStatus::Waiting), AgentStatus::Running, None),
+        (
+            Some(AgentStatus::Idle),
+            AgentStatus::Running,
+            Some(AgentStatus::Idle),
+        ),
+        (
+            Some(AgentStatus::Success),
+            AgentStatus::Running,
+            Some(AgentStatus::Success),
+        ),
+        (Some(AgentStatus::Failed), AgentStatus::Failed, None),
+        (Some(AgentStatus::Paused), AgentStatus::Paused, None),
+        (None, AgentStatus::Running, Some(AgentStatus::Idle)),
+    ];
+
+    for (prior, expected, reconciled_from) in cases {
+        for (signal, existing_reason, missing_reason) in [
+            (
+                LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                    native_key: None,
+                },
+                "tool used outside a running turn",
+                "tool used before session registered",
+            ),
+            (
+                LifecycleSignal::CompactionEnded { auto: Some(true) },
+                "auto-compaction resumed a turn",
+                "auto-compaction resumed a turn",
+            ),
+        ] {
+            let previous = prior.map(|status| {
+                state(
+                    status,
+                    TurnPhase::Idle,
+                    matches!(signal, LifecycleSignal::CompactionEnded { .. }),
+                )
+            });
+            let transition = step(previous.as_ref(), None, &signal);
+            assert_eq!(transition.next.status, expected, "{prior:?} + {signal:?}");
+            assert_eq!(
+                transition.kind,
+                reconciled_from.map_or(TransitionKind::Normal, |from| {
+                    TransitionKind::Reconciled {
+                        from,
+                        reason: if prior.is_some() {
+                            existing_reason
+                        } else {
+                            missing_reason
+                        },
+                    }
+                }),
+                "{prior:?} + {signal:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn subagent_and_terminal_edges_follow_the_contract() {
     let reasoning = state(AgentStatus::Running, TurnPhase::Reasoning, false);
     let started = assert_next(
