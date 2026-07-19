@@ -1423,6 +1423,7 @@ fn single_terminal_transitions_share_exact_history_and_event_contract() {
         (3, MessageStatus::Errored, "message.errored"),
         (4, MessageStatus::Abandoned, "message.abandoned"),
         (5, MessageStatus::Archived, "message.archived"),
+        (6, MessageStatus::Canceled, "message.canceled"),
     ] {
         let (_dir, store, workspace_id) = store();
         let mut queued = message(&workspace_id);

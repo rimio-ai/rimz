@@ -157,8 +157,7 @@ git diff main | rimz message @reviewer --stdin "review this"
 Bare `rimz message` opens the current lane's inbox. Every message is a durable record you can read back and steer after the fact:
 
 ```sh
-rimz message                            # the current lane's inbox, newest first
-rimz message list                       # the current channel's inbox, newest first
+rimz message list                       # the current lane's inbox, newest first
 rimz message list --all                 # every channel, grouped by #channel
 rimz message show msg_01k…              # full text, event timeline, and the first delivery blocker
 rimz message edit msg_01k… --text "…"   # revise a still-queued message before it lands

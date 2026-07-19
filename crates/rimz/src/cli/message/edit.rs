@@ -223,7 +223,7 @@ pub(super) fn cancel_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags
             failed = true;
             #[expect(clippy::print_stdout, reason = "command result")]
             {
-                println!("{message_id} is not open");
+                println!("{message_id} cannot be canceled");
             }
         }
     }

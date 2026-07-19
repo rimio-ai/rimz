@@ -35,7 +35,7 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     assert!(!canceled.status.success(), "missing ID reports failure");
     let stdout = String::from_utf8_lossy(&canceled.stdout);
     assert!(stdout.contains(&format!("canceled {first}")));
-    assert!(stdout.contains(&format!("{missing} is not open")));
+    assert!(stdout.contains(&format!("{missing} cannot be canceled")));
     assert!(stdout.contains(&format!("canceled {second}")));
 
     let alias = queue_add(&env, "@claude", "alias task");
