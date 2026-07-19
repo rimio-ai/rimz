@@ -42,13 +42,16 @@ pub enum ZellijWakeReason {
     SwitchSettled,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct ZellijPluginTelemetry {
     pub plugin_id: Option<u32>,
+    #[serde(rename = "plugin_build")]
     pub build: Option<String>,
     pub loaded_at_ms: u64,
+    #[serde(rename = "mem_pages")]
     pub pages: u64,
     pub uptime_ms: u64,
+    #[serde(rename = "commands_completed")]
     pub commands: u64,
     pub commands_succeeded: Option<u64>,
     pub commands_failed: u64,

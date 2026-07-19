@@ -173,7 +173,7 @@ fn bool_kdl(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PluginTelemetry {
     pub plugin_id: Option<u32>,
     pub plugin_build: Option<String>,
@@ -262,34 +262,8 @@ pub fn wake_argv(
         }
         WakeRequest::Alive(telemetry) => {
             push_workspace(ctx, &mut argv);
-            if let Some(plugin_id) = telemetry.plugin_id {
-                argv.push("--plugin-id".to_owned());
-                argv.push(plugin_id.to_string());
-            }
-            if let Some(plugin_build) = telemetry.plugin_build {
-                argv.push("--plugin-build".to_owned());
-                argv.push(plugin_build);
-            }
-            argv.push("--plugin-loaded-at-ms".to_owned());
-            argv.push(telemetry.loaded_at_ms.to_string());
-            argv.push("--plugin-mem-pages".to_owned());
-            argv.push(telemetry.mem_pages.to_string());
-            argv.push("--plugin-uptime-ms".to_owned());
-            argv.push(telemetry.uptime_ms.to_string());
-            argv.push("--plugin-commands".to_owned());
-            argv.push(telemetry.commands_completed.to_string());
-            argv.push("--plugin-commands-succeeded".to_owned());
-            argv.push(telemetry.commands_succeeded.to_string());
-            argv.push("--plugin-commands-failed".to_owned());
-            argv.push(telemetry.commands_failed.to_string());
-            argv.push("--plugin-stale-writer-rejections".to_owned());
-            argv.push(telemetry.stale_writer_rejections.to_string());
-            argv.push("--plugin-topology-failures".to_owned());
-            argv.push(telemetry.topology_failures.to_string());
-            argv.push("--plugin-other-failures".to_owned());
-            argv.push(telemetry.other_failures.to_string());
-            argv.push("--plugin-zellij-version".to_owned());
-            argv.push(telemetry.zellij_version);
+            argv.push("--plugin-telemetry".to_owned());
+            argv.push(serde_json::to_string(&telemetry).ok()?);
             if let Some(session_name) = ctx.session_name {
                 argv.push("--session-name".to_owned());
                 argv.push(session_name.to_owned());

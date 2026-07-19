@@ -1,6 +1,19 @@
 use super::SidebarFixtureState;
 use super::fixture::sidebar_fixture_snapshot;
 
+fn parse_wake(argv: &[&str]) -> Box<super::WakeArgs> {
+    use clap::Parser;
+
+    let cli = crate::cli::Cli::try_parse_from(argv.iter().copied()).expect("wake argv parses");
+    let Some(crate::cli::Subcmd::Sidebar(super::SidebarArgs {
+        command: super::SidebarSubcmd::Wake(args),
+    })) = cli.subcommand
+    else {
+        panic!("expected sidebar wake command");
+    };
+    args
+}
+
 #[test]
 fn plugin_focus_argv_parses_without_workspace_id() {
     use clap::Parser;
@@ -95,6 +108,80 @@ fn settled_switch_wake_argv_parses() {
         r#"[{"client_id":1,"pane_id":{"kind":"terminal","id":10}}]"#,
     ])
     .expect("settled switch wake parses");
+}
+
+#[test]
+fn plugin_telemetry_decodes_structured_and_legacy_argv() {
+    let structured = parse_wake(&[
+        "rimz",
+        "sidebar",
+        "wake",
+        "--reason",
+        "alive",
+        "--plugin-telemetry",
+        r#"{"plugin_id":9,"plugin_build":"wasm-build","loaded_at_ms":1000,"mem_pages":12,"uptime_ms":34,"commands_completed":56,"commands_succeeded":49,"commands_failed":7,"stale_writer_rejections":3,"topology_failures":2,"other_failures":2,"zellij_version":"0.44.3"}"#,
+        "--plugin-mem-pages",
+        "999",
+    ]);
+    assert_eq!(
+        structured.telemetry(),
+        Some(rimz::sidebar::presence::ZellijPluginTelemetry {
+            plugin_id: Some(9),
+            build: Some("wasm-build".to_owned()),
+            loaded_at_ms: 1_000,
+            pages: 12,
+            uptime_ms: 34,
+            commands: 56,
+            commands_succeeded: Some(49),
+            commands_failed: 7,
+            stale_writer_rejections: Some(3),
+            topology_failures: Some(2),
+            other_failures: Some(2),
+            zellij_version: Some("0.44.3".to_owned()),
+        }),
+        "structured telemetry supersedes legacy flags",
+    );
+
+    let legacy = parse_wake(&[
+        "rimz",
+        "sidebar",
+        "wake",
+        "--reason",
+        "alive",
+        "--plugin-id",
+        "8",
+        "--plugin-build",
+        "old-build",
+        "--plugin-loaded-at-ms",
+        "900",
+        "--plugin-mem-pages",
+        "10",
+        "--plugin-uptime-ms",
+        "30",
+        "--plugin-commands",
+        "40",
+        "--plugin-commands-failed",
+        "5",
+        "--plugin-zellij-version",
+        "0.43.1",
+    ]);
+    assert_eq!(
+        legacy.telemetry(),
+        Some(rimz::sidebar::presence::ZellijPluginTelemetry {
+            plugin_id: Some(8),
+            build: Some("old-build".to_owned()),
+            loaded_at_ms: 900,
+            pages: 10,
+            uptime_ms: 30,
+            commands: 40,
+            commands_succeeded: None,
+            commands_failed: 5,
+            stale_writer_rejections: None,
+            topology_failures: None,
+            other_failures: None,
+            zellij_version: Some("0.43.1".to_owned()),
+        }),
+    );
 }
 
 #[test]

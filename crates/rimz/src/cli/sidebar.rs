@@ -203,6 +203,10 @@ struct WakeArgs {
         allow_hyphen_values = true
     )]
     topology: Vec<String>,
+    #[arg(long, hide = true, value_parser = parse_plugin_telemetry)]
+    plugin_telemetry: Option<ZellijPluginTelemetry>,
+    // Compatibility bridge: remove after no supported vendored or shared
+    // presence-plugin artifact emits the split telemetry flags.
     #[arg(long, hide = true)]
     plugin_mem_pages: Option<u64>,
     #[arg(long, hide = true)]
@@ -227,6 +231,32 @@ struct WakeArgs {
     plugin_other_failures: Option<u64>,
     #[arg(long, hide = true)]
     plugin_zellij_version: Option<String>,
+}
+
+fn parse_plugin_telemetry(raw: &str) -> std::result::Result<ZellijPluginTelemetry, String> {
+    serde_json::from_str(raw).map_err(|err| format!("invalid plugin telemetry JSON: {err}"))
+}
+
+impl WakeArgs {
+    fn telemetry(&self) -> Option<ZellijPluginTelemetry> {
+        if let Some(telemetry) = &self.plugin_telemetry {
+            return Some(telemetry.clone());
+        }
+        self.plugin_mem_pages.map(|pages| ZellijPluginTelemetry {
+            plugin_id: self.plugin_id,
+            build: self.plugin_build.clone(),
+            loaded_at_ms: self.plugin_loaded_at_ms.unwrap_or_default(),
+            pages,
+            uptime_ms: self.plugin_uptime_ms.unwrap_or_default(),
+            commands: self.plugin_commands.unwrap_or_default(),
+            commands_succeeded: self.plugin_commands_succeeded,
+            commands_failed: self.plugin_commands_failed.unwrap_or_default(),
+            stale_writer_rejections: self.plugin_stale_writer_rejections,
+            topology_failures: self.plugin_topology_failures,
+            other_failures: self.plugin_other_failures,
+            zellij_version: self.plugin_zellij_version.clone(),
+        })
+    }
 }
 
 /// Why a presence poke fired. Every reason refreshes the liveness stamp;
@@ -377,6 +407,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
         SidebarSubcmd::Gallery { pets } => gallery(globals, pets),
         SidebarSubcmd::GalleryRender { pets } => gallery_render(pets),
         SidebarSubcmd::Wake(args) => {
+            let telemetry = args.telemetry();
             let WakeArgs {
                 workspace_id,
                 reason,
@@ -389,18 +420,19 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 _focused_pane_ids: _,
                 _unfocused_pane_ids: _,
                 topology,
-                plugin_mem_pages,
-                plugin_id,
-                plugin_build,
-                plugin_loaded_at_ms,
-                plugin_uptime_ms,
-                plugin_commands,
-                plugin_commands_succeeded,
-                plugin_commands_failed,
-                plugin_stale_writer_rejections,
-                plugin_topology_failures,
-                plugin_other_failures,
-                plugin_zellij_version,
+                plugin_telemetry: _,
+                plugin_mem_pages: _,
+                plugin_id: _,
+                plugin_build: _,
+                plugin_loaded_at_ms: _,
+                plugin_uptime_ms: _,
+                plugin_commands: _,
+                plugin_commands_succeeded: _,
+                plugin_commands_failed: _,
+                plugin_stale_writer_rejections: _,
+                plugin_topology_failures: _,
+                plugin_other_failures: _,
+                plugin_zellij_version: _,
             } = *args;
             wake(
                 globals,
@@ -424,20 +456,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                             }
                         }
                     }),
-                    telemetry: plugin_mem_pages.map(|pages| ZellijPluginTelemetry {
-                        plugin_id,
-                        build: plugin_build,
-                        loaded_at_ms: plugin_loaded_at_ms.unwrap_or_default(),
-                        pages,
-                        uptime_ms: plugin_uptime_ms.unwrap_or_default(),
-                        commands: plugin_commands.unwrap_or_default(),
-                        commands_succeeded: plugin_commands_succeeded,
-                        commands_failed: plugin_commands_failed.unwrap_or_default(),
-                        stale_writer_rejections: plugin_stale_writer_rejections,
-                        topology_failures: plugin_topology_failures,
-                        other_failures: plugin_other_failures,
-                        zellij_version: plugin_zellij_version,
-                    }),
+                    telemetry,
                 },
             )
         }
