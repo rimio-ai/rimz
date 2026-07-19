@@ -82,6 +82,7 @@ struct SettledSwitch {
     clients: Vec<ProjectedClientFocus>,
 }
 
+#[derive(Default)]
 struct FocusUpdate {
     transition: Option<(Option<u32>, Option<u32>)>,
     settled: Option<SettledSwitch>,
@@ -411,16 +412,9 @@ impl FocusSync {
         let sample = client_sample(&clients);
         let sample_changed = self.client_sample.as_ref() != Some(&sample);
         self.client_sample = Some(sample);
-        let (transition, settled) = self.apply_observation(room, purpose, &clients);
-        FocusUpdate {
-            transition,
-            settled: settled.map(|(generation, tab)| SettledSwitch {
-                tab,
-                generation,
-                clients,
-            }),
-            sample_changed,
-        }
+        let mut update = self.apply_observation(room, purpose, clients);
+        update.sample_changed = sample_changed;
+        update
     }
 
     fn drive_due_query(&mut self, now: u64) -> Option<FocusWork> {
@@ -516,32 +510,40 @@ impl FocusSync {
         &mut self,
         room: &RoomState,
         purpose: ClientQueryPurpose,
-        clients: &[ProjectedClientFocus],
-    ) -> (Option<(Option<u32>, Option<u32>)>, Option<(u64, usize)>) {
+        clients: Vec<ProjectedClientFocus>,
+    ) -> FocusUpdate {
         match purpose {
             ClientQueryPurpose::General => {
                 if matches!(self.mode, FocusMode::Switching(_)) {
-                    return (None, None);
+                    return FocusUpdate::default();
                 }
-                (self.transition(observed_focus(room, clients)), None)
+                FocusUpdate {
+                    transition: self.transition(observed_focus(room, &clients)),
+                    ..FocusUpdate::default()
+                }
             }
             ClientQueryPurpose::SwitchSettled { generation, tab } => {
                 let FocusMode::Switching(pending) = self.mode else {
-                    return (None, None);
+                    return FocusUpdate::default();
                 };
                 if pending.generation != generation
                     || pending.tab != tab
                     || self.active_tab != Some(tab)
                 {
-                    return (None, None);
+                    return FocusUpdate::default();
                 }
-                let current = observed_focus(room, clients);
+                let current = observed_focus(room, &clients);
                 self.mode = FocusMode::Stable;
                 self.session_focused_pane = current;
-                (
-                    transition_outcome(pending.previous, current),
-                    Some((generation, tab)),
-                )
+                FocusUpdate {
+                    transition: transition_outcome(pending.previous, current),
+                    settled: Some(SettledSwitch {
+                        tab,
+                        generation,
+                        clients,
+                    }),
+                    sample_changed: false,
+                }
             }
         }
     }
