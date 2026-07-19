@@ -12,47 +12,26 @@ const USD_TICKS_PER_USD: f64 = 10_000_000_000.0;
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, _prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);
     let Some((bytes, next)) = read_transcript_lines(path, from) else {
-        return SpendParse {
-            cursor: resume.cloned().unwrap_or_default(),
-            ..SpendParse::default()
-        };
+        return SpendParse::stalled(resume);
     };
     let suffix = String::from_utf8_lossy(&bytes);
     let rewound = resume.is_some() && transcript::contains_rewind(&suffix);
-    let (completions, cursor) = if rewound {
+    // A rewind invalidates the suffix, so re-fold the whole transcript from the
+    // top; a plain resume trusts the physical suffix. Grok carries no cross-line
+    // state either way — the fold is rebuilt from the bytes it reads.
+    let (completions, offset) = if rewound {
         let Some((bytes, next)) = read_transcript_lines(path, 0) else {
             return SpendParse::default();
         };
-        let text = String::from_utf8_lossy(&bytes);
-        (
-            transcript::fold(&text)
-                .completions()
-                .cloned()
-                .collect::<Vec<_>>(),
-            SpendCursor {
-                offset: next,
-                state: None,
-            },
-        )
+        (folded_completions(&String::from_utf8_lossy(&bytes)), next)
     } else if resume.is_some() {
-        (
-            transcript::physical_completions(&suffix),
-            SpendCursor {
-                offset: next,
-                state: None,
-            },
-        )
+        (transcript::physical_completions(&suffix), next)
     } else {
-        (
-            transcript::fold(&suffix)
-                .completions()
-                .cloned()
-                .collect::<Vec<_>>(),
-            SpendCursor {
-                offset: next,
-                state: None,
-            },
-        )
+        (folded_completions(&suffix), next)
+    };
+    let cursor = SpendCursor {
+        offset,
+        state: None,
     };
     let fallback_session_id = path
         .parent()
@@ -84,6 +63,10 @@ pub(super) fn cost_from_folded(
     let completions = folded.completions().cloned().collect::<Vec<_>>();
     let entries = entries_for_completions(&completions, fallback_session_id);
     crate::agents::spending::session_cost_from_entries(&entries, session_id)
+}
+
+fn folded_completions(text: &str) -> Vec<TurnCompletion> {
+    transcript::fold(text).completions().cloned().collect()
 }
 
 fn entries_for_completions(

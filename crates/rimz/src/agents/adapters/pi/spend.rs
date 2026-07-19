@@ -161,20 +161,11 @@ pub(crate) fn pi_config_dir() -> PathBuf {
 /// deserialization.
 pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
-    let mut state: PiSpendState = resume
-        .and_then(|cursor| cursor.state.clone())
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default();
+    let mut state: PiSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
     let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
         return SpendParse {
-            entries: Vec::new(),
             origin: state.cwd.clone(),
-            cursor: SpendCursor {
-                offset: from_offset,
-                state: serde_json::to_value(&state).ok(),
-            },
-            unknown_models: BTreeMap::new(),
-            replace_entries: false,
+            ..SpendParse::stalled(resume)
         };
     };
     let content = String::from_utf8_lossy(&content);
@@ -259,10 +250,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
     SpendParse {
         entries: out,
         origin: state.cwd.clone(),
-        cursor: SpendCursor {
-            offset: next_offset,
-            state: serde_json::to_value(&state).ok(),
-        },
+        cursor: SpendCursor::with_state(next_offset, &state),
         unknown_models,
         replace_entries: false,
     }

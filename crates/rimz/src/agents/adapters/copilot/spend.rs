@@ -224,10 +224,7 @@ struct CopilotSpendState {
 
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);
-    let mut state: CopilotSpendState = resume
-        .and_then(|cursor| cursor.state.clone())
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default();
+    let mut state: CopilotSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
     let Some(session_id) = native_session_id(path) else {
         return result(state, from, Vec::new(), BTreeMap::new());
     };
@@ -346,10 +343,7 @@ fn result(
     SpendParse {
         entries,
         origin: state.cwd.clone(),
-        cursor: SpendCursor {
-            offset,
-            state: serde_json::to_value(state).ok(),
-        },
+        cursor: SpendCursor::with_state(offset, &state),
         unknown_models,
         replace_entries: false,
     }

@@ -21,13 +21,7 @@ struct KimiSpendState {
 pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);
     let Some((records, next)) = wire::read_records(path, from) else {
-        return SpendParse {
-            cursor: SpendCursor {
-                offset: from,
-                state: None,
-            },
-            ..SpendParse::default()
-        };
+        return SpendParse::stalled(resume);
     };
     fold_records(path, &records, next, resume, prices)
 }
@@ -53,10 +47,7 @@ fn fold_records(
     resume: Option<&SpendCursor>,
     prices: &PriceBook,
 ) -> SpendParse {
-    let mut state: KimiSpendState = resume
-        .and_then(|cursor| cursor.state.clone())
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default();
+    let mut state: KimiSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
     let mut entries = Vec::new();
     let mut unknown_models = BTreeMap::new();
     for wire_record in records {
@@ -130,10 +121,7 @@ fn fold_records(
     SpendParse {
         entries,
         origin: None,
-        cursor: SpendCursor {
-            offset: next,
-            state: serde_json::to_value(state).ok(),
-        },
+        cursor: SpendCursor::with_state(next, &state),
         unknown_models,
         replace_entries: false,
     }

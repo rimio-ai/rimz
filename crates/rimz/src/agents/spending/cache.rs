@@ -133,6 +133,27 @@ pub struct SpendCursor {
     pub state: Option<serde_json::Value>,
 }
 
+impl SpendCursor {
+    /// Decode the adapter's cross-line state. The state was serialized by the
+    /// same adapter under the current [`SPENDING_CACHE_VERSION`] (a shape change
+    /// bumps it and cold-rebuilds), so a missing or odd value degrades to a
+    /// fresh fold rather than failing the pass.
+    pub fn state_as<T: serde::de::DeserializeOwned + Default>(&self) -> T {
+        self.state
+            .clone()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
+    }
+
+    /// Build the cursor an adapter hands back after folding to `offset`.
+    pub fn with_state<T: Serialize>(offset: u64, state: &T) -> Self {
+        Self {
+            offset,
+            state: serde_json::to_value(state).ok(),
+        }
+    }
+}
+
 /// One spend parse: the entries read past the resume point, the single
 /// workspace origin observed for that parsed slice, and the cursor the cache
 /// stores for the next pass. A parser whose append-only log contains
@@ -214,6 +235,19 @@ pub struct CachedEntry {
     /// counts exact.
     #[serde(default, rename = "d", skip_serializing_if = "is_false")]
     pub rolled: bool,
+}
+
+impl SpendParse {
+    /// The no-progress result for a file that could not be read: hold the
+    /// resume point and its state so the next pass resumes the fold rather than
+    /// restarting it from a default at an offset already past the lines that
+    /// produced it.
+    pub fn stalled(resume: Option<&SpendCursor>) -> Self {
+        Self {
+            cursor: resume.cloned().unwrap_or_default(),
+            ..Self::default()
+        }
+    }
 }
 
 impl CachedEntry {

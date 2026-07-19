@@ -95,13 +95,7 @@ pub(crate) fn parse_codex_spend(
     prices: &PriceBook,
 ) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
-    // The state was serialized by this same code under the current
-    // SPENDING_CACHE_VERSION (a shape change bumps it and cold-rebuilds), so a
-    // missing/odd value degrades to a fresh fold rather than failing the pass.
-    let mut state: CodexSpendState = resume
-        .and_then(|cursor| cursor.state.clone())
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default();
+    let mut state: CodexSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
     let (events, next_offset) = parse_codex_session(path, from_offset, &mut state);
     let mut out = Vec::with_capacity(events.len());
     let mut unknown_models = BTreeMap::new();
@@ -139,10 +133,7 @@ pub(crate) fn parse_codex_spend(
         // override (`codex_origin_overrides`) can still supersede it for live or
         // headless sessions whose rollout omits the header.
         origin: state.cwd.clone(),
-        cursor: SpendCursor {
-            offset: next_offset,
-            state: serde_json::to_value(&state).ok(),
-        },
+        cursor: SpendCursor::with_state(next_offset, &state),
         unknown_models,
         replace_entries: false,
     }

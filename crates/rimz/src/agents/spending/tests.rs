@@ -423,6 +423,44 @@ fn session_token_totals_sum_and_scope_fresh_tokens() {
     );
 }
 
+/// A file that cannot be read makes no progress: the resume offset holds and no
+/// entries appear. An adapter that also carries cross-line state keeps it, so
+/// the next pass resumes its fold instead of restarting it from a default at an
+/// offset already past the lines that produced it.
+#[test]
+fn an_unreadable_transcript_makes_no_progress() {
+    let dir = TempDir::new().unwrap();
+    let missing = dir.path().join("gone.jsonl");
+    let resume = SpendCursor {
+        offset: 512,
+        state: Some(serde_json::json!({"cwd": "/work"})),
+    };
+
+    for kind in ["claude", "codex", "pi", "copilot", "kimi", "grok"] {
+        let adapter = crate::agents::definition_by_kind(kind).unwrap();
+        let parsed = adapter.parse_spend(&missing, Some(&resume), &PriceBook::default());
+        assert!(
+            parsed.entries.is_empty(),
+            "{kind} invented entries for a missing file"
+        );
+        assert_eq!(
+            parsed.cursor.offset, resume.offset,
+            "{kind} moved its resume offset on an unreadable file"
+        );
+    }
+
+    // Claude and Grok fold no cross-line state, so an absent state is theirs to
+    // report; the rest must carry it forward.
+    for kind in ["codex", "pi", "copilot", "kimi"] {
+        let adapter = crate::agents::definition_by_kind(kind).unwrap();
+        let parsed = adapter.parse_spend(&missing, Some(&resume), &PriceBook::default());
+        assert!(
+            parsed.cursor.state.is_some(),
+            "{kind} dropped its resume state on an unreadable file"
+        );
+    }
+}
+
 fn sample_spending() -> Spending {
     let mut spending = Spending::default();
     spending.total.headline.usd = 1.25;
