@@ -11,6 +11,7 @@ struct ListEntryJson<'a> {
     reconnect: bool,
     no_resume: bool,
     mux: Option<&'a str>,
+    forward: &'a [String],
 }
 
 pub(super) fn print(entries: &[RemoteAlias], json: bool) -> anyhow::Result<()> {
@@ -33,13 +34,14 @@ fn list_json(entries: &[RemoteAlias]) -> serde_json::Value {
             reconnect: entry.reconnect,
             no_resume: entry.no_resume,
             mux: entry.mux.map(|mux| mux.as_str()),
+            forward: &entry.forward,
         })
         .collect();
     json!({ "remotes": rows })
 }
 
 fn human_table(entries: &[RemoteAlias]) -> render::Table {
-    let mut table = render::Table::new(["NAME", "TARGET", "RECONNECT", "RESUME", "MUX"]);
+    let mut table = render::Table::new(["NAME", "TARGET", "RECONNECT", "RESUME", "MUX", "FORWARD"]);
     for entry in entries {
         let reconnect = if entry.reconnect {
             "reconnect"
@@ -55,6 +57,11 @@ fn human_table(entries: &[RemoteAlias]) -> render::Table {
             .mux
             .map(|mux| mux.as_str().to_owned())
             .unwrap_or_else(|| "-".to_owned());
+        let forward = if entry.forward.is_empty() {
+            "-".to_owned()
+        } else {
+            entry.forward.join(",")
+        };
         let reconnect_style = if entry.reconnect {
             render::palette::good()
         } else {
@@ -66,6 +73,7 @@ fn human_table(entries: &[RemoteAlias]) -> render::Table {
             render::cell(reconnect).fg(reconnect_style),
             render::cell(no_resume).fg(render::palette::body()),
             render::cell(mux).dash(),
+            render::cell(forward).dash(),
         ]);
     }
     table
@@ -89,6 +97,7 @@ mod tests {
                 reconnect: true,
                 no_resume: false,
                 mux: None,
+                forward: Vec::new(),
             },
             RemoteAlias {
                 name: "prod".to_owned(),
@@ -96,12 +105,14 @@ mod tests {
                 reconnect: false,
                 no_resume: true,
                 mux: Some(MuxName::Tmux),
+                forward: vec!["3000".to_owned(), "8080:3000".to_owned()],
             },
         ];
         insta::assert_snapshot!(render_list_json(&entries), @r#"
         {
           "remotes": [
             {
+              "forward": [],
               "mux": null,
               "name": "dev",
               "no_resume": false,
@@ -109,6 +120,10 @@ mod tests {
               "target": "dev-box:query-engine"
             },
             {
+              "forward": [
+                "3000",
+                "8080:3000"
+              ],
               "mux": "tmux",
               "name": "prod",
               "no_resume": true,
@@ -124,6 +139,7 @@ mod tests {
             reconnect: true,
             no_resume: false,
             mux: Some(MuxName::Zellij),
+            forward: vec!["3000".to_owned()],
         }];
         // Render the table with ANSI stripped so the snapshot is the plain,
         // aligned text; `print` re-styles on the real stdout via `render::out`.
@@ -133,8 +149,8 @@ mod tests {
             .expect("table renders to an in-memory buffer");
         let rendered = String::from_utf8(buf).expect("table output is utf-8");
         insta::assert_snapshot!(rendered, @r"
-        NAME  TARGET                 RECONNECT  RESUME  MUX
-        prod  prod-box:query-engine  reconnect  resume  zellij
+        NAME  TARGET                 RECONNECT  RESUME  MUX     FORWARD
+        prod  prod-box:query-engine  reconnect  resume  zellij  3000
         ");
     }
 }

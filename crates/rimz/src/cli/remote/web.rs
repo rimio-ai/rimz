@@ -227,7 +227,21 @@ pub(super) fn run_remote_web(
     relay_web_token(remote, payload.engine);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
-    let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
+    if remote
+        .forwards
+        .iter()
+        .any(|forward| forward.local == local_port)
+    {
+        bail!(
+            "local forward port {local_port} conflicts with the web tunnel; pick another with --forward LOCAL:REMOTE or --web-port"
+        );
+    }
+    let spec = rimz::remote::web::web_tunnel_spec(
+        &remote.target,
+        local_port,
+        payload.port,
+        &remote.forwards,
+    );
     let mut tunnel = RemoteTunnel::start(
         spec,
         remote.target.ssh_destination().as_str().to_owned(),

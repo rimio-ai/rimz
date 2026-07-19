@@ -63,6 +63,7 @@ mod tests {
             reconnect: true,
             no_resume: false,
             mux: None,
+            forward: Vec::new(),
         }
     }
 

@@ -9,6 +9,7 @@ rimz remote add dev-box dev-box:query-engine     # save an alias in remote.toml
 rimz remote setup dev-box                        # install rimz on the remote host
 rimz remote connect dev-box                      # attach the saved room over SSH
 rimz remote connect dev-box --web                # open the remote room's web UI locally
+rimz remote connect dev-box --forward 3000       # browse a host dev server on localhost:3000
 rimz remote connect dev-box --force-version      # bypass one minor version mismatch
 rimz remote connect agent@prod-box:/srv/query-engine
 rimz remote bandwidth --secs 5                   # attribute pane write-rate in this room
@@ -36,6 +37,7 @@ The details that matter in practice:
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`; `remote add --no-resume` saves that birth behavior on the alias.
 - `remote connect --force-version` and `remote reset --force-version` attach despite a minor client/host version difference, including with `--web`. The bypass applies to that invocation only, is not saved by `remote add` or `remote update`, and does not bypass a major difference.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it, so you can inspect or wrap it.
+- `--forward <[LOCAL:]REMOTE>` (short `-L`) repeats and opens loopback-only local forwards: `3000` keeps the same port, while `8080:3000` maps local 8080 to remote 3000. `remote add` and `remote update` persist their forward values on an alias, `remote connect` adds per-invocation values, and a busy local port refuses before SSH starts. With `--print`, RimZ skips the bind check and emits the corresponding `-L` arguments.
 - For `remote add` and `remote update`, `--mux`, `--zellij`, or `--tmux` given anywhere on the invocation is saved on the alias; `rimz remote connect --mux <name>` keeps `--mux` as a per-invocation override.
 - `rimz remote bandwidth [--secs N] [--json]` runs on the Linux host serving the room and samples VFS write-rate counters to attribute per-pane terminal output on both backends; tmux reports pane pids natively, and Zellij pane pids resolve through RimZ's process matcher. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
 
@@ -50,5 +52,7 @@ The details that matter in practice:
 5. Stays in the foreground until Ctrl-C, which tears the tunnel down.
 
 `--web-port <port>` pins the local browser origin; otherwise RimZ derives a stable port from the session name in `8300..8399`. The room itself is [`rimz web`](./web.md).
+
+Additional `--forward` values ride the same supervised web tunnel and close with it.
 
 Link health, web tunneling, reconnect mechanics, and bandwidth attribution are in [remote internals](../../internals/remote.md).

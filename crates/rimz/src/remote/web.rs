@@ -8,7 +8,8 @@ use crate::web::WebEngine;
 
 use super::{
     REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV, RemoteSpec, RemoteTarget,
-    client_size_env_setup, quote_remote_path, remote_exec_snippet, sh_quote, ssh_program,
+    client_size_env_setup, forward, forward::PortForward, quote_remote_path, remote_exec_snippet,
+    sh_quote, ssh_program,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -54,7 +55,12 @@ pub fn web_token_ensure_spec(target: &RemoteTarget, engine: WebEngine) -> Comman
     )
 }
 
-pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16) -> CommandSpec {
+pub fn web_tunnel_spec(
+    target: &RemoteTarget,
+    local_port: u16,
+    remote_port: u16,
+    forwards: &[PortForward],
+) -> CommandSpec {
     CommandSpec::new(ssh_program())
         .args([
             "-N",
@@ -73,6 +79,7 @@ pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16)
             "-L",
         ])
         .arg(format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"))
+        .args(forward::ssh_args(forwards))
         .args(["--", target.ssh_destination().as_str()])
 }
 
@@ -169,7 +176,7 @@ mod tests {
 
     #[test]
     fn web_tunnel_builds_local_forward() {
-        let spec = web_tunnel_spec(&parse("dev-box:query-engine"), 8301, 8082);
+        let spec = web_tunnel_spec(&parse("dev-box:query-engine"), 8301, 8082, &[]);
         assert_eq!(
             spec.args,
             [
@@ -190,6 +197,24 @@ mod tests {
                 "127.0.0.1:8301:127.0.0.1:8082",
                 "--",
                 "dev-box"
+            ]
+        );
+
+        let spec = web_tunnel_spec(
+            &parse("dev-box:query-engine"),
+            8301,
+            8082,
+            &["3000".parse().unwrap(), "8080:3001".parse().unwrap()],
+        );
+        assert_eq!(
+            spec.args[15..21],
+            [
+                "-L",
+                "127.0.0.1:3000:127.0.0.1:3000",
+                "-L",
+                "127.0.0.1:8080:127.0.0.1:3001",
+                "--",
+                "dev-box",
             ]
         );
     }

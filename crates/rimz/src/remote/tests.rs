@@ -13,6 +13,7 @@ fn attach_plan(
 ) -> SshAttachPlan {
     SshAttachPlan::new(SshAttachOptions {
         target: parse(target),
+        forwards: Vec::new(),
         lineage: "0123456789abcdef".to_owned(),
         force_version: false,
         no_resume,
@@ -551,6 +552,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
 fn ssh_attach_plan_exports_client_size_when_present() {
     let plan = SshAttachPlan::new(SshAttachOptions {
         target: parse("dev-box:query-engine"),
+        forwards: Vec::new(),
         lineage: "0123456789abcdef".to_owned(),
         force_version: false,
         no_resume: false,
@@ -564,6 +566,34 @@ fn ssh_attach_plan_exports_client_size_when_present() {
     assert!(
         snippet.contains("export RIMZ_CLIENT_SIZE=180x50; exec rimz"),
         "{snippet}",
+    );
+}
+
+#[test]
+fn ssh_attach_plan_compiles_local_forwards_before_the_tty_flag() {
+    let plan = SshAttachPlan::new(SshAttachOptions {
+        target: parse("dev-box:query-engine"),
+        forwards: vec!["3000".parse().unwrap(), "8080:3001".parse().unwrap()],
+        lineage: "0123456789abcdef".to_owned(),
+        force_version: false,
+        no_resume: false,
+        mux: None,
+        term: TermPlan::Keep,
+        truecolor: false,
+        client_size: None,
+    });
+    let args = plan.initial().plain().args;
+
+    assert_eq!(
+        args[8..14],
+        [
+            "-L",
+            "127.0.0.1:3000:127.0.0.1:3000",
+            "-L",
+            "127.0.0.1:8080:127.0.0.1:3001",
+            "-t",
+            "--",
+        ]
     );
 }
 
