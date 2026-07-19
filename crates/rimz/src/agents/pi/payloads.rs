@@ -182,12 +182,17 @@ fn timestamp_from_value(value: &Value) -> Option<Timestamp> {
 /// Tolerant parse: non-conforming typed fields read as the empty default while
 /// independently valid rate-limit windows survive sibling drift.
 pub(crate) fn parse_payload(payload: &Value) -> PiHookPayload {
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let rate_limits = payload
         .get("rate_limits")
         .or_else(|| payload.get("rateLimits"))
         .map(rate_limits_from_value)
         .unwrap_or_default();
     serde_json::from_value(payload.clone()).unwrap_or_else(|_| PiHookPayload {
+        session_id,
         rate_limits,
         ..PiHookPayload::default()
     })
