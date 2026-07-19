@@ -334,8 +334,8 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// a noisy sub-`5m` clock — as the clock-fill glyph ([`elapsed_glyph`]) over the
 /// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
 /// through warn, caution, and alarm toward the hour, when resuming would likely
-/// re-read the whole context uncached. A finished-success row keeps the muted
-/// resting tone because its context is spent rather than waiting to resume.
+/// re-read the whole context uncached. A finished row heats on the same ramp —
+/// its context is exactly what a follow-up prompt would pay to re-read.
 pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Line<'static> {
     let theme = row_ctx.theme;
     let bands = row_ctx.bands;
@@ -346,14 +346,9 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     let age = activity_short(row.last_activity, now)
         .map(|label| {
             let secs = age_secs(row.last_activity, now);
-            let style = if row.status() == Some(AgentStatus::Success) {
-                theme.muted()
-            } else {
-                activity_age_style(theme, secs)
-            };
             vec![Span::styled(
                 format!("{} {label}", elapsed_glyph(theme, secs)),
-                style,
+                activity_age_style(theme, secs),
             )]
         })
         .unwrap_or_default();

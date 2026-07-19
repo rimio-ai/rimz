@@ -885,7 +885,8 @@ fn calm_context_bar_orders_segments_left_to_right() {
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the
 /// idle span) with a continuous tone: the dim resting weight while a resume
 /// would still hit cache, then a warn-caution-alarm ramp to the hour — the cost
-/// warning that resuming will likely re-read the whole context uncached.
+/// warning that resuming will likely re-read the whole context uncached. The
+/// ramp reads off the clock alone, so a finished card carries the same warning.
 #[test]
 fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
@@ -937,8 +938,9 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     );
     assert_eq!(
         age_style(AgentStatus::Success, 10 * 60 * 60, '◉'),
-        theme.muted(),
-        "a finished-success context stays at rest after the heat threshold"
+        theme.alarm(Modifier::empty()),
+        "a finished-success context heats on the same ramp — prompting it again \
+         re-reads the whole context uncached"
     );
 }
 #[test]
