@@ -429,6 +429,52 @@ fn nonexistent_dotted_root_override_is_normalized_before_identity() {
 }
 
 #[test]
+fn lexical_normalization_folds_bare_cur_dir_to_empty() {
+    // The sharp edge `normalized_root` guards against: folding `.` lexically
+    // erases it, so an unresolved relative root must never reach the hash.
+    assert_eq!(
+        crate::worktree::normalize_path_lexical(std::path::Path::new(".")),
+        std::path::PathBuf::new(),
+    );
+}
+
+#[test]
+fn relative_root_refuses_when_the_cwd_is_unlinked() {
+    // nextest runs each test in its own process, so unlinking this process's
+    // cwd cannot disturb a sibling test.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let scratch = dir.path().join("scratch");
+    std::fs::create_dir_all(&scratch).expect("create scratch");
+    std::env::set_current_dir(&scratch).expect("enter scratch");
+    std::fs::remove_dir(&scratch).expect("unlink scratch");
+
+    // `canonicalize(".")` and `current_dir()` now fail together — the exact
+    // shape that used to fold to `""` and mint one shared identity.
+    let err = super::normalized_root(std::path::PathBuf::from("."))
+        .expect_err("an unlinked cwd must refuse, not resolve to an empty root");
+    assert!(
+        err.to_string().contains("current directory is unreadable"),
+        "error should name the unreadable cwd and its fix, got: {err}"
+    );
+}
+
+#[test]
+fn resolution_refuses_rather_than_minting_the_empty_root_identity() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let scratch = dir.path().join("scratch");
+    std::fs::create_dir_all(&scratch).expect("create scratch");
+    std::env::set_current_dir(&scratch).expect("enter scratch");
+    std::fs::remove_dir(&scratch).expect("unlink scratch");
+
+    let resolved = WorkspaceResolver::resolve(std::path::Path::new("."), None);
+    assert!(
+        resolved.is_err(),
+        "resolving from an unlinked cwd must fail; \
+         succeeding collapses every caller into one shared store"
+    );
+}
+
+#[test]
 fn create_mode_accepts_home_like_directory_root() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let home = dir.path().join("home");

@@ -719,6 +719,11 @@ pub fn path_inside(path: &Path, parent: &Path) -> bool {
     path == parent || path.starts_with(parent)
 }
 
+/// Fold `.` and `..` components without touching the filesystem.
+///
+/// This is purely lexical, so it preserves relativeness and can return an
+/// empty path — `.` folds to `""`. Callers that need an absolute result
+/// absolutize first and check the result is non-empty.
 pub fn normalize_path_lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {

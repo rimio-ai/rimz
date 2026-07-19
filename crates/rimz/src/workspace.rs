@@ -438,8 +438,8 @@ impl WorkspaceResolver {
         } else {
             (start.clone(), start.clone(), RootClass::Directory)
         };
-        let project_root = normalized_root(project_root);
-        let worktree_root = normalized_root(worktree_root);
+        let project_root = normalized_root(project_root)?;
+        let worktree_root = normalized_root(worktree_root)?;
 
         let workspace_id = WorkspaceId::from_project_root(&project_root);
         let session_name = session_name_for(&project_root);
@@ -460,20 +460,36 @@ impl WorkspaceResolver {
 /// Absolute, `.`/`..`-free root: canonicalize when the path exists, else
 /// absolutize against the cwd and fold components lexically, so the identity
 /// hash and the persisted record never see a relative or dotted path.
-fn normalized_root(root: PathBuf) -> PathBuf {
-    match root.canonicalize() {
-        Ok(root) => root,
-        Err(_) => {
-            let abs = if root.is_absolute() {
-                root
-            } else {
-                std::env::current_dir()
-                    .map(|cwd| cwd.join(&root))
-                    .unwrap_or(root)
-            };
-            crate::worktree::normalize_path_lexical(&abs)
-        }
+///
+/// Resolving a relative root needs the process cwd. When that cwd has been
+/// unlinked — a deleted worktree, a swept tempdir — `canonicalize` and
+/// `current_dir` fail together, so this refuses instead of folding the
+/// surviving `.` into an empty path. An empty root hashes to one shared
+/// identity, which would collapse unrelated projects into a single store.
+fn normalized_root(root: PathBuf) -> Result<PathBuf> {
+    if let Ok(root) = root.canonicalize() {
+        return Ok(root);
     }
+    let abs = if root.is_absolute() {
+        root
+    } else {
+        let cwd = std::env::current_dir().map_err(|err| WorkspaceErr::Resolve {
+            path: root.clone(),
+            reason: format!(
+                "the current directory is unreadable ({err}); \
+                 re-run from an existing directory or pass --root <path>"
+            ),
+        })?;
+        cwd.join(&root)
+    };
+    let normalized = crate::worktree::normalize_path_lexical(&abs);
+    if normalized.as_os_str().is_empty() || !normalized.is_absolute() {
+        return Err(WorkspaceErr::Resolve {
+            path: abs,
+            reason: "it did not normalize to an absolute path".to_owned(),
+        });
+    }
+    Ok(normalized)
 }
 
 /// Read and verify the session's identity pin from the participant's own

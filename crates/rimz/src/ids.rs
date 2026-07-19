@@ -104,7 +104,18 @@ pub struct WorkspaceId(String);
 pub struct InvalidWorkspaceId(pub String);
 
 impl WorkspaceId {
+    /// Hash an absolute, canonical project root into its workspace identity.
+    ///
+    /// The caller resolves the root first — [`crate::workspace`] is the one
+    /// path that does so. An empty or relative root would hash to a single
+    /// shared identity and collapse unrelated projects into one store, so
+    /// debug builds assert the precondition rather than mint that collision.
     pub fn from_project_root(project_root: &Path) -> Self {
+        debug_assert!(
+            project_root.is_absolute(),
+            "workspace identity needs an absolute project root, got `{}`",
+            project_root.display()
+        );
         let mut hasher = Sha256::new();
         hasher.update(project_root.to_string_lossy().as_bytes());
         let hash = hex::encode(hasher.finalize());
