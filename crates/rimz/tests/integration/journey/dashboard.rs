@@ -21,8 +21,7 @@ fn provider_dashboard_renders_published_spend_and_session_cost() {
     let _ = env.store();
     env.publish_accounts(&accounts());
     let runtime = env.runtime_paths();
-    let scope_hash =
-        rimz::agents::spending::SpendScope::from_roots(Some(&env.project_root), &[]).hash();
+    let scope_hash = super::journey_spending_scope(&env);
     // ponytail: future-date by SETTLE so host starvation cannot expire this
     // non-timing fixture; inject a clock if refresh timing enters scope.
     let published_at_ms = unix_now_ms().saturating_add(SETTLE.as_millis() as u64);

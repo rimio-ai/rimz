@@ -64,10 +64,8 @@ pub const SETTLE: Duration = Duration::from_secs(45);
 /// The renderer shares the `Env` *state* (the store, via `XDG_STATE_HOME`) but
 /// gets its own short `XDG_RUNTIME_DIR`: the per-instance wakeup socket
 /// (`sock/sidebar.<35-char-id>.sock`) must stay under the 108-byte AF_UNIX
-/// limit, which `Env`'s deep tempdir would overflow. The renderer only needs
-/// that socket for nudges; the 1 s tick covers the rest. Tests that need
-/// runtime sidecars feed them through the harness so they land in this short
-/// runtime.
+/// limit. Workspace spending fixtures are copied into that runtime before the
+/// child starts; later runtime sidecars go through the harness.
 pub struct RoomHarness<'a> {
     env: &'a Env,
     parser: Arc<Mutex<vt100::Parser>>,
@@ -122,6 +120,7 @@ impl<'a> RoomHarness<'a> {
             .rand_bytes(6)
             .tempdir()
             .expect("short runtime tempdir");
+        seed_workspace_spending_fixture(env, runtime.path());
         let pane_file = runtime.path().join("panes.json");
         let initial_roster = PaneRoster::from_store(env);
         if broken_pane_fixture {
@@ -860,4 +859,34 @@ fn process_pane(mux: MuxName, index: usize, command: &str, cwd: String) -> PaneR
 fn write_panes(path: &std::path::Path, panes: Vec<PaneRef>) {
     std::fs::write(path, serde_json::to_vec_pretty(&panes).expect("pane json"))
         .expect("write pane fixture");
+}
+
+fn journey_spending_scope(env: &Env) -> String {
+    let worktree_home = rimz::worktree::worktree_parent(
+        &env.project_root,
+        &rimz::config::MachineConfig::default().agents.worktree,
+    )
+    .expect("default worktree home");
+    rimz::agents::spending::SpendScope::for_workspace(
+        Some(&env.project_root),
+        &[],
+        Some(&worktree_home),
+    )
+    .hash()
+}
+
+fn seed_workspace_spending_fixture(env: &Env, target_runtime: &std::path::Path) {
+    let scope_hash = journey_spending_scope(env);
+    let source = env.runtime_paths().workspace_spending_path(&scope_hash);
+    if !source.exists() {
+        return;
+    }
+    let target = rimz::RuntimePaths::under(env.workspace_id.clone(), target_runtime)
+        .expect("renderer runtime paths");
+    target.ensure_dirs().expect("renderer runtime dirs");
+    let cache = rimz::agents::spending::read_workspace_spending_cache(&source);
+    rimz::agents::spending::write_workspace_spending_cache(
+        &target.workspace_spending_path(&scope_hash),
+        &cache,
+    );
 }
