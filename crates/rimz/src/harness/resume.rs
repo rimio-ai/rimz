@@ -228,6 +228,14 @@ pub struct CohortCell {
     pub role: Option<String>,
 }
 
+/// Durable relaunch state for one worktree cohort.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CohortRelaunchState {
+    Absent,
+    Present { focus_pane: Option<PaneId> },
+    Closed,
+}
+
 /// One agent cell's explicit-resume seed.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CohortSeed {
@@ -1413,7 +1421,7 @@ fn cohort_candidates(
 ///
 /// Named teams match by team and role, single-agent inline specs match by kind,
 /// and multi-agent inline specs match by launch group and cell identity.
-pub fn match_cohort<'a>(
+fn match_cohort<'a>(
     candidates: &[&'a AgentState],
     cells: &[CohortCell],
     team: Option<&str>,
@@ -1431,6 +1439,71 @@ pub fn match_cohort<'a>(
         (Some(team), _) => match_team_cohort(&candidates, cells, team),
         (None, 1) => match_single_cohort(&candidates, &cells[0]),
         (None, _) => match_inline_cohort(&candidates, cells),
+    }
+}
+
+/// Inspect prior worktree members before a fresh cohort launch.
+pub fn inspect_cohort_relaunch(
+    agents: &[AgentState],
+    worktree: &Path,
+    cells: &[CohortCell],
+    team: Option<&str>,
+) -> CohortRelaunchState {
+    let target = crate::worktree::normalize_path_lexical(worktree);
+    let candidates = agents
+        .iter()
+        .filter(|agent| {
+            agent.parent_agent_id.is_none()
+                && agent.worktree_path.as_deref().is_some_and(|path| {
+                    crate::worktree::normalize_path_lexical(Path::new(path)) == target
+                })
+        })
+        .collect::<Vec<_>>();
+    let members = match team {
+        Some(team) => candidates
+            .into_iter()
+            .filter(|agent| agent.team.as_deref() == Some(team))
+            .collect::<Vec<_>>(),
+        None => match_cohort(
+            &candidates
+                .into_iter()
+                .filter(|agent| !agent.agent_id.is_empty())
+                .collect::<Vec<_>>(),
+            cells,
+            None,
+        )
+        .into_iter()
+        .flatten()
+        .collect(),
+    };
+    if members.is_empty() {
+        return CohortRelaunchState::Absent;
+    }
+
+    let present = members
+        .into_iter()
+        .filter(|agent| cohort_member_is_present(agent))
+        .collect::<Vec<_>>();
+    if present.is_empty() {
+        return CohortRelaunchState::Closed;
+    }
+    let focus_pane = present
+        .into_iter()
+        .filter(|agent| agent.pane.is_some())
+        .max_by(|left, right| left.last_activity.cmp(&right.last_activity))
+        .and_then(|agent| agent.pane.as_ref())
+        .map(|pane| pane.pane_id.clone());
+    CohortRelaunchState::Present { focus_pane }
+}
+
+fn cohort_member_is_present(agent: &AgentState) -> bool {
+    if agent.ended_at.is_some() {
+        return false;
+    }
+    match crate::store::runtime::agent_liveness(agent) {
+        AgentLiveness::Live { .. } => true,
+        AgentLiveness::Unknown => agent.pane.is_some(),
+        AgentLiveness::Dead => false,
     }
 }
 
@@ -1537,8 +1610,7 @@ fn map_inline_group_to_cells<'a>(
     group: &[&'a AgentState],
     cells: &[CohortCell],
 ) -> Vec<Option<&'a AgentState>> {
-    let mut matches = vec![None; cells.len()];
-    let mut claimed = BTreeSet::new();
+    let mut assignments = CohortAssignments::new(cells.len());
 
     for agent in group {
         let Some(ordinal) = agent
@@ -1547,15 +1619,13 @@ fn map_inline_group_to_cells<'a>(
         else {
             continue;
         };
-        if ordinal >= cells.len() || matches[ordinal].is_some() {
-            continue;
+        if ordinal < cells.len() {
+            assignments.claim(ordinal, *agent);
         }
-        matches[ordinal] = Some(*agent);
-        claimed.insert(agent.agent_id.clone());
     }
 
     for agent in group {
-        if claimed.contains(&agent.agent_id) {
+        if assignments.is_claimed(agent) {
             continue;
         }
         let Some(role) = agent.role.as_deref() else {
@@ -1565,7 +1635,7 @@ fn map_inline_group_to_cells<'a>(
             .iter()
             .enumerate()
             .find(|(index, cell)| {
-                matches[*index].is_none()
+                assignments.is_open(*index)
                     && cell.kind == agent.kind
                     && cell.role.as_deref() == Some(role)
             })
@@ -1573,27 +1643,54 @@ fn map_inline_group_to_cells<'a>(
         else {
             continue;
         };
-        matches[index] = Some(*agent);
-        claimed.insert(agent.agent_id.clone());
+        assignments.claim(index, *agent);
     }
 
     for agent in group {
-        if claimed.contains(&agent.agent_id) {
+        if assignments.is_claimed(agent) {
             continue;
         }
         let Some(index) = cells
             .iter()
             .enumerate()
-            .find(|(index, cell)| matches[*index].is_none() && cell.kind == agent.kind)
+            .find(|(index, cell)| assignments.is_open(*index) && cell.kind == agent.kind)
             .map(|(index, _)| index)
         else {
             continue;
         };
-        matches[index] = Some(*agent);
-        claimed.insert(agent.agent_id.clone());
+        assignments.claim(index, *agent);
     }
 
-    matches
+    assignments.matches
+}
+
+struct CohortAssignments<'a> {
+    matches: Vec<Option<&'a AgentState>>,
+    claimed: BTreeSet<AgentSessionId>,
+}
+
+impl<'a> CohortAssignments<'a> {
+    fn new(cell_count: usize) -> Self {
+        Self {
+            matches: vec![None; cell_count],
+            claimed: BTreeSet::new(),
+        }
+    }
+
+    fn is_open(&self, index: usize) -> bool {
+        self.matches[index].is_none()
+    }
+
+    fn is_claimed(&self, agent: &AgentState) -> bool {
+        self.claimed.contains(&agent.agent_id)
+    }
+
+    fn claim(&mut self, index: usize, agent: &'a AgentState) {
+        if self.is_open(index) && !self.is_claimed(agent) {
+            self.matches[index] = Some(agent);
+            self.claimed.insert(agent.agent_id.clone());
+        }
+    }
 }
 
 fn supports_agent_resume(agent: &AgentState) -> bool {

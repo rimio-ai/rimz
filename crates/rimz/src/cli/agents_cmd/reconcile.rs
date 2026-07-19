@@ -1,36 +1,10 @@
 use super::*;
 use std::io::IsTerminal;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReconcileAction {
-    FreshLaunch,
-    Focus,
-    Resume,
-    Recreate,
-}
-
 pub(super) enum Reconciled {
     Continue,
     Done,
     Resume(PathBuf),
-}
-
-pub(super) fn reconcile_action(
-    present_members: bool,
-    has_history: bool,
-    assessment: rimz::worktree::RemovalAssessment,
-) -> ReconcileAction {
-    if present_members {
-        return ReconcileAction::Focus;
-    }
-    if !has_history {
-        return ReconcileAction::FreshLaunch;
-    }
-    if assessment == rimz::worktree::RemovalAssessment::Removable {
-        ReconcileAction::Recreate
-    } else {
-        ReconcileAction::Resume
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -57,28 +31,17 @@ pub(super) fn reconcile_cohort_launch(
     };
 
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let members = cohort_members(&projection.agents, &path, cells, team);
-    let present_members = members.iter().any(|member| member_is_present(member));
-    let status = if present_members || members.is_empty() {
-        rimz::worktree::WorktreeStatus::default()
-    } else {
-        rimz::worktree::status(&path, &marker)?
-    };
-    let assessment = rimz::worktree::ProtectionSet::default().assess(&path, status);
-
     let subject = cohort_subject(spec_display, team);
-    match reconcile_action(present_members, !members.is_empty(), assessment) {
-        ReconcileAction::FreshLaunch => Ok(Reconciled::Continue),
-        ReconcileAction::Focus => {
-            if let Some(member) = newest_present_member_with_pane(&members)
-                && let Some(pane) = member.pane.as_ref()
-            {
+    match rimz::harness::resume::inspect_cohort_relaunch(&projection.agents, &path, cells, team) {
+        rimz::harness::resume::CohortRelaunchState::Absent => Ok(Reconciled::Continue),
+        rimz::harness::resume::CohortRelaunchState::Present { focus_pane } => {
+            if let Some(pane_id) = focus_pane {
                 let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
                 rimz::sidebar::focus_anchor::execute_action(
                     backend,
                     &runtime,
                     &workspace.session_name,
-                    pane.pane_id.clone(),
+                    pane_id,
                     rimz::sidebar::focus_anchor::FocusOrigin::User,
                     None,
                 )?;
@@ -94,43 +57,14 @@ pub(super) fn reconcile_cohort_launch(
             )?;
             Ok(Reconciled::Done)
         }
-        ReconcileAction::Resume => resume_or_done(name, spec_display, &subject, &path),
-        ReconcileAction::Recreate => {
-            recreate_or_done(workspace, machine_config, store, name, &subject)
-        }
-    }
-}
-
-fn cohort_members<'a>(
-    agents: &'a [AgentState],
-    worktree: &Path,
-    cells: &[rimz::harness::resume::CohortCell],
-    team: Option<&str>,
-) -> Vec<&'a AgentState> {
-    let target = rimz::worktree::normalize_path_lexical(worktree);
-    let candidates = agents
-        .iter()
-        .filter(|agent| {
-            agent.parent_agent_id.is_none()
-                && agent.worktree_path.as_deref().is_some_and(|path| {
-                    rimz::worktree::normalize_path_lexical(Path::new(path)) == target
-                })
-        })
-        .collect::<Vec<_>>();
-    match team {
-        Some(team) => candidates
-            .into_iter()
-            .filter(|agent| agent.team.as_deref() == Some(team))
-            .collect(),
-        None => {
-            let candidates = candidates
-                .into_iter()
-                .filter(|agent| !agent.agent_id.is_empty())
-                .collect::<Vec<_>>();
-            rimz::harness::resume::match_cohort(&candidates, cells, None)
-                .into_iter()
-                .flatten()
-                .collect()
+        rimz::harness::resume::CohortRelaunchState::Closed => {
+            let status = rimz::worktree::status(&path, &marker)?;
+            let assessment = rimz::worktree::ProtectionSet::default().assess(&path, status);
+            if assessment == rimz::worktree::RemovalAssessment::Removable {
+                recreate_or_done(workspace, machine_config, store, name, &subject)
+            } else {
+                resume_or_done(name, spec_display, &subject, &path)
+            }
         }
     }
 }
@@ -139,25 +73,6 @@ fn cohort_subject(spec_display: &str, team: Option<&str>) -> String {
     match team {
         Some(team) => format!("team `{team}`"),
         None => format!("`{spec_display}`"),
-    }
-}
-
-fn newest_present_member_with_pane<'a>(members: &[&'a AgentState]) -> Option<&'a AgentState> {
-    members
-        .iter()
-        .copied()
-        .filter(|member| member.pane.is_some() && member_is_present(member))
-        .max_by(|a, b| a.last_activity.cmp(&b.last_activity))
-}
-
-fn member_is_present(member: &AgentState) -> bool {
-    if member.ended_at.is_some() {
-        return false;
-    }
-    match rimz::store::runtime::agent_liveness(member) {
-        rimz::store::runtime::AgentLiveness::Live { .. } => true,
-        rimz::store::runtime::AgentLiveness::Unknown => member.pane.is_some(),
-        rimz::store::runtime::AgentLiveness::Dead => false,
     }
 }
 
@@ -225,160 +140,4 @@ fn recreate_or_done(
     session_retirement?;
     message_archival?;
     Ok(Reconciled::Continue)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reconcile_action_table() {
-        let removable = rimz::worktree::RemovalAssessment::Removable;
-        let dirty = rimz::worktree::RemovalAssessment::Dirty;
-        let pending = rimz::worktree::RemovalAssessment::NotLanded;
-
-        assert_eq!(
-            reconcile_action(true, false, removable),
-            ReconcileAction::Focus
-        );
-        assert_eq!(reconcile_action(true, true, dirty), ReconcileAction::Focus);
-        assert_eq!(
-            reconcile_action(false, false, dirty),
-            ReconcileAction::FreshLaunch
-        );
-        assert_eq!(
-            reconcile_action(false, true, removable),
-            ReconcileAction::Recreate
-        );
-        assert_eq!(
-            reconcile_action(false, true, dirty),
-            ReconcileAction::Resume
-        );
-        assert_eq!(
-            reconcile_action(false, true, pending),
-            ReconcileAction::Resume
-        );
-    }
-
-    #[test]
-    fn member_presence_needs_live_owner_or_pane_evidence() {
-        let mut agent = test_agent("sess-paneless");
-
-        assert!(!member_is_present(&agent));
-
-        agent.pane = Some(rimz::pane::PaneRef::from_id(rimz::PaneId::from_parts(
-            rimz::MuxName::Zellij,
-            "terminal_1",
-        )));
-        assert!(member_is_present(&agent));
-    }
-
-    #[test]
-    fn ended_member_is_not_present_while_its_owner_exits() {
-        let mut agent = test_agent("sess-ended");
-        agent.pane = Some(rimz::pane::PaneRef::from_id(rimz::PaneId::from_parts(
-            rimz::MuxName::Zellij,
-            "terminal_94",
-        )));
-        agent.runtime_owner = Some(rimz::store::runtime::current_process_owner(
-            rimz::pane::RuntimeOwnerKind::Agent,
-            agent.agent_id.to_string(),
-        ));
-        agent.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
-
-        assert!(!member_is_present(&agent));
-    }
-
-    #[test]
-    fn cohort_members_match_inline_cells_in_the_target_worktree() {
-        let mut planner = test_agent_kind("claude", "planner");
-        planner.worktree_path = Some("/code/feature".to_owned());
-        planner.launch_group = Some("launch_feature".to_owned());
-        planner.launch_ordinal = Some(0);
-        planner.role = Some("planner".to_owned());
-        let mut coder = test_agent_kind("codex", "coder");
-        coder.worktree_path = Some("/code/feature".to_owned());
-        coder.launch_group = Some("launch_feature".to_owned());
-        coder.launch_ordinal = Some(1);
-        coder.role = Some("coder".to_owned());
-        let mut unrelated = test_agent_kind("pi", "researcher");
-        unrelated.worktree_path = Some("/code/feature".to_owned());
-        unrelated.launch_group = Some("launch_unrelated".to_owned());
-        unrelated.role = Some("researcher".to_owned());
-        let agents = vec![planner, coder, unrelated];
-        let cells = vec![
-            rimz::harness::resume::CohortCell {
-                kind: rimz::ids::AgentKind::new_unchecked("claude"),
-                role: Some("planner".to_owned()),
-            },
-            rimz::harness::resume::CohortCell {
-                kind: rimz::ids::AgentKind::new_unchecked("codex"),
-                role: Some("coder".to_owned()),
-            },
-        ];
-
-        let members = cohort_members(&agents, Path::new("/code/feature"), &cells, None);
-        let unrelated_members = cohort_members(
-            &agents,
-            Path::new("/code/feature"),
-            &[rimz::harness::resume::CohortCell {
-                kind: rimz::ids::AgentKind::new_unchecked("opencode"),
-                role: Some("reviewer".to_owned()),
-            }],
-            None,
-        );
-
-        assert_eq!(
-            members
-                .iter()
-                .map(|agent| agent.agent_id.as_str())
-                .collect::<Vec<_>>(),
-            ["planner", "coder"]
-        );
-        assert!(unrelated_members.is_empty());
-    }
-
-    #[test]
-    fn cohort_members_keep_all_named_team_roles_for_partial_specs() {
-        let mut planner = test_agent_kind("claude", "planner");
-        planner.worktree_path = Some("/code/feature".to_owned());
-        planner.team = Some("forge".to_owned());
-        planner.role = Some("planner".to_owned());
-        let mut reviewer = test_agent_kind("codex", "reviewer");
-        reviewer.worktree_path = Some("/code/feature".to_owned());
-        reviewer.team = Some("forge".to_owned());
-        reviewer.role = Some("reviewer".to_owned());
-        let mut unrelated = test_agent_kind("pi", "unrelated");
-        unrelated.worktree_path = Some("/code/feature".to_owned());
-        unrelated.team = Some("other".to_owned());
-        unrelated.role = Some("reviewer".to_owned());
-        let agents = vec![planner, reviewer, unrelated];
-        let reviewer_cell = rimz::harness::resume::CohortCell {
-            kind: rimz::ids::AgentKind::new_unchecked("codex"),
-            role: Some("reviewer".to_owned()),
-        };
-
-        let members = cohort_members(
-            &agents,
-            Path::new("/code/feature"),
-            &[reviewer_cell],
-            Some("forge"),
-        );
-
-        assert_eq!(
-            members
-                .iter()
-                .map(|agent| agent.agent_id.as_str())
-                .collect::<Vec<_>>(),
-            ["planner", "reviewer"]
-        );
-    }
-
-    fn test_agent(id: &str) -> AgentState {
-        test_agent_kind("codex", id)
-    }
-
-    fn test_agent_kind(kind: &str, id: &str) -> AgentState {
-        rimz::testkit::agent_state(kind, id, jiff::Timestamp::UNIX_EPOCH)
-    }
 }

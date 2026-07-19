@@ -571,6 +571,123 @@ fn match_cohort_dispatches_team_and_inline_membership() {
 }
 
 #[test]
+fn cohort_relaunch_normalizes_worktrees_and_keeps_named_team_siblings() {
+    let mut planner = agent("claude", "planner", "/code/feature", None, 3);
+    planner.team = Some("forge".to_owned());
+    planner.role = Some("planner".to_owned());
+    planner.ended_at = Some(Timestamp::UNIX_EPOCH);
+    let mut reviewer = agent("codex", "reviewer", "/code/feature", None, 1);
+    reviewer.team = Some("forge".to_owned());
+    reviewer.role = Some("reviewer".to_owned());
+
+    assert_eq!(
+        inspect_cohort_relaunch(
+            &[planner, reviewer],
+            Path::new("/code/topic/../feature"),
+            &[cohort_cell("claude", Some("planner"))],
+            Some("forge"),
+        ),
+        CohortRelaunchState::Present {
+            focus_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_reviewer")),
+        }
+    );
+}
+
+#[test]
+fn cohort_relaunch_uses_newest_inline_launch_group() {
+    let mut old_planner = agent("claude", "old-planner", "/code/feature", None, 10);
+    old_planner.launch_group = Some("launch_old".to_owned());
+    old_planner.launch_ordinal = Some(0);
+    let mut old_coder = agent("codex", "old-coder", "/code/feature", None, 9);
+    old_coder.launch_group = Some("launch_old".to_owned());
+    old_coder.launch_ordinal = Some(1);
+    let mut new_planner = agent("claude", "new-planner", "/code/feature", None, 2);
+    new_planner.launch_group = Some("launch_new".to_owned());
+    new_planner.launch_ordinal = Some(0);
+    new_planner.ended_at = Some(Timestamp::UNIX_EPOCH);
+    let mut new_coder = agent("codex", "new-coder", "/code/feature", None, 1);
+    new_coder.launch_group = Some("launch_new".to_owned());
+    new_coder.launch_ordinal = Some(1);
+    new_coder.ended_at = Some(Timestamp::UNIX_EPOCH);
+
+    assert_eq!(
+        inspect_cohort_relaunch(
+            &[old_planner, old_coder, new_planner, new_coder],
+            Path::new("/code/feature"),
+            &[cohort_cell("claude", None), cohort_cell("codex", None)],
+            None,
+        ),
+        CohortRelaunchState::Closed
+    );
+}
+
+#[test]
+fn cohort_relaunch_presence_table() {
+    let cell = cohort_cell("codex", None);
+    let mut ended = agent("codex", "ended", "/code/feature", None, 4);
+    ended.ended_at = Some(Timestamp::UNIX_EPOCH);
+    let with_pane = agent("codex", "pane", "/code/feature", None, 3);
+    let mut without_pane = agent("codex", "paneless", "/code/feature", None, 2);
+    without_pane.pane = None;
+    let mut live_without_pane = agent("codex", "live", "/code/feature", None, 1);
+    live_without_pane.pane = None;
+    live_without_pane.runtime_owner = Some(crate::store::runtime::current_process_owner(
+        crate::pane::RuntimeOwnerKind::Agent,
+        live_without_pane.agent_id.to_string(),
+    ));
+
+    for (label, agents, expected) in [
+        ("absent", Vec::new(), CohortRelaunchState::Absent),
+        ("ended", vec![ended], CohortRelaunchState::Closed),
+        (
+            "unknown with pane",
+            vec![with_pane],
+            CohortRelaunchState::Present {
+                focus_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_pane")),
+            },
+        ),
+        (
+            "unknown without pane",
+            vec![without_pane],
+            CohortRelaunchState::Closed,
+        ),
+        (
+            "live without pane",
+            vec![live_without_pane],
+            CohortRelaunchState::Present { focus_pane: None },
+        ),
+    ] {
+        assert_eq!(
+            inspect_cohort_relaunch(&agents, Path::new("/code/feature"), &[cell.clone()], None),
+            expected,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn cohort_relaunch_focuses_freshest_present_pane() {
+    let mut older = agent("claude", "older", "/code/feature", None, 5);
+    older.launch_group = Some("launch_group".to_owned());
+    older.launch_ordinal = Some(0);
+    let mut fresher = agent("codex", "fresher", "/code/feature", None, 1);
+    fresher.launch_group = Some("launch_group".to_owned());
+    fresher.launch_ordinal = Some(1);
+
+    assert_eq!(
+        inspect_cohort_relaunch(
+            &[older, fresher],
+            Path::new("/code/feature"),
+            &[cohort_cell("claude", None), cohort_cell("codex", None)],
+            None,
+        ),
+        CohortRelaunchState::Present {
+            focus_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_fresher")),
+        }
+    );
+}
+
+#[test]
 fn cohort_resume_drops_members_whose_worktree_is_gone() {
     let agents = vec![agent("claude", "a1", "/code/gone", None, 1)];
     let err = plan_cohort_resume(
