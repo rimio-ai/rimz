@@ -294,12 +294,7 @@ impl AgentAdapter for DroidAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(DROID_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+    fn conformance(&self) -> super::AdapterConformance {
         let mut samples = super::hook_types::catalog_classification_corpus(DROID_HOOKS);
         samples.push(super::ClassificationSample::new(
             "SessionStart",
@@ -307,18 +302,17 @@ impl AgentAdapter for DroidAdapter {
             AgentHookClass::Lifecycle,
             None,
         ));
-        samples
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "droid-conformance",
-            file_name: "droid-conformance.settings.json",
-            body: super::SpendFixtureBody::Jsonl(
-                r#"{"model":"gpt-5","tokenUsage":{"inputTokens":100,"outputTokens":20,"cacheCreationTokens":10,"cacheReadTokens":30,"thinkingTokens":5}}"#,
-            ),
-        })
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "droid-conformance",
+                file_name: "droid-conformance.settings.json",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"model":"gpt-5","tokenUsage":{"inputTokens":100,"outputTokens":20,"cacheCreationTokens":10,"cacheReadTokens":30,"thinkingTokens":5}}"#,
+                ),
+            }),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {

@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::{
-    ADAPTERS, AgentAdapter, AgentHookClass, AskReply, ClassificationSample, ClassifiedHook,
-    ConcernCoverage, DerivedAskFixture, HookCoverage, IntegrationConcern, PresetArgMatcher,
-    PresetField, PriceBook, SpendFixture, SpendFixtureBody,
+    ADAPTERS, AdapterConformance, AgentAdapter, AgentHookClass, AskReply, ClassificationSample,
+    ClassifiedHook, ConcernCoverage, DerivedAskFixture, HookCoverage, IntegrationConcern,
+    PresetArgMatcher, PresetField, PriceBook, SpendFixture, SpendFixtureBody,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
@@ -260,8 +260,8 @@ fn strings(values: &[&str]) -> Vec<String> {
 fn classify_matches_corpus() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;
-        let samples = corpus(*adapter);
-        for sample in samples {
+        let conformance = adapter.conformance();
+        for sample in conformance.classification {
             let decoded = adapter
                 .decode_hook(sample.event_name, &sample.payload)
                 .expect("corpus payload decodes");
@@ -280,18 +280,11 @@ fn classify_matches_corpus() {
 }
 
 #[test]
-fn native_events_are_covered_by_the_corpus_and_classify_to_a_channel() {
+fn classification_corpus_samples_decode_to_declared_channels() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;
-        let samples = corpus(*adapter);
-        let native_events = adapter.native_hook_events();
-        for event in native_events {
-            assert!(
-                samples.iter().any(|sample| sample.event_name == event),
-                "{kind} native event {event} has no classification corpus sample"
-            );
-        }
-        for sample in samples {
+        let conformance = adapter.conformance();
+        for sample in conformance.classification {
             assert_ne!(
                 sample.expected.class,
                 AgentHookClass::Unknown,
@@ -316,8 +309,9 @@ fn capability_honesty() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;
         let capabilities = adapter.descriptor().capabilities;
-        let samples = corpus(*adapter);
-        let ask_kinds = producible_ask_kinds(&samples);
+        let conformance = adapter.conformance();
+        let samples = &conformance.classification;
+        let ask_kinds = producible_ask_kinds(samples);
         let has_blocking = samples
             .iter()
             .any(|sample| sample.expected.class == AgentHookClass::AwaitingUser);
@@ -358,10 +352,10 @@ fn capability_honesty() {
 
         assert_eq!(
             capabilities.local_session_discovery,
-            adapter.local_session_fixture().is_some(),
+            conformance.local_session.is_some(),
             "{kind} local-session discovery requires fixture-backed behavior"
         );
-        if let Some(observation) = adapter.local_session_fixture() {
+        if let Some(observation) = conformance.local_session {
             assert_eq!(observation.kind.as_str(), kind);
             assert!(!observation.session_id.as_str().is_empty());
             assert!(observation.workspace.is_absolute());
@@ -376,8 +370,8 @@ fn coverage_is_complete_and_honest() {
     for adapter in ADAPTERS {
         let descriptor = adapter.descriptor();
         let kind = descriptor.kind;
-        let samples = corpus(*adapter);
-        let native_events = adapter.native_hook_events();
+        let conformance = adapter.conformance();
+        let native_events = conformance.native_event_names();
 
         for concern in IntegrationConcern::ALL {
             let coverage = descriptor.concern_coverage(concern);
@@ -391,7 +385,7 @@ fn coverage_is_complete_and_honest() {
                     "{kind} {concern:?} partial coverage must name the derivation that reconstructs it"
                 );
             }
-            assert_coverage_honest(*adapter, &samples, &native_events, concern, coverage);
+            assert_coverage_honest(*adapter, &conformance, &native_events, concern, coverage);
         }
     }
 }
@@ -401,8 +395,8 @@ fn lifecycle_hooks_are_complete_and_honest() {
     for adapter in ADAPTERS {
         let descriptor = adapter.descriptor();
         let kind = descriptor.kind;
-        let samples = corpus(*adapter);
-        let native_events = adapter.native_hook_events();
+        let conformance = adapter.conformance();
+        let native_events = conformance.native_event_names();
 
         for signal_kind in LifecycleSignalKind::ALL {
             let coverage = descriptor.lifecycle_hooks.get(signal_kind);
@@ -416,7 +410,13 @@ fn lifecycle_hooks_are_complete_and_honest() {
                     "{kind} {signal_kind:?} derived hook coverage must name the derivation that reconstructs it"
                 );
             }
-            assert_lifecycle_hook_honest(*adapter, &samples, &native_events, signal_kind, coverage);
+            assert_lifecycle_hook_honest(
+                *adapter,
+                &conformance.classification,
+                &native_events,
+                signal_kind,
+                coverage,
+            );
         }
 
         assert_hook_matches_concern(
@@ -442,7 +442,8 @@ fn lifecycle_hooks_are_complete_and_honest() {
 fn session_end_policy_follows_native_catalog_event() {
     for adapter in ADAPTERS {
         let descriptor = adapter.descriptor();
-        let samples = corpus(*adapter);
+        let conformance = adapter.conformance();
+        let samples = &conformance.classification;
         let decoded_ends = |event: &str| {
             samples
                 .iter()
@@ -474,9 +475,10 @@ fn realtime_cost_matches_coverage() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;
         let coverage = coverage_for(*adapter, IntegrationConcern::RealtimeCost);
+        let conformance = adapter.conformance();
         assert_eq!(
             !matches!(coverage, ConcernCoverage::Unsupported { .. }),
-            realtime_cost_from_fixture(*adapter),
+            realtime_cost_from_fixture(*adapter, &conformance),
             "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
         );
     }
@@ -508,7 +510,8 @@ fn wiring_inputs_cover_every_provider_file_used_for_admission() {
 fn awaiting_input_projects_to_waiting() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;
-        for ask_kind in producible_ask_kinds(&corpus(*adapter)) {
+        let conformance = adapter.conformance();
+        for ask_kind in producible_ask_kinds(&conformance.classification) {
             let prior = LifecycleState {
                 status: AgentStatus::Running,
                 phase: TurnPhase::Reasoning,
@@ -559,17 +562,23 @@ setup-doc = "README.md"
     let loaded = super::plugin::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let adapter = loaded.adapters[0];
-    let samples = corpus(adapter);
-    let native_events = adapter.native_hook_events();
+    let conformance = adapter.conformance();
+    let native_events = conformance.native_event_names();
 
     for concern in IntegrationConcern::ALL {
         let coverage = coverage_for(adapter, concern);
-        assert_coverage_honest(adapter, &samples, &native_events, concern, coverage);
+        assert_coverage_honest(adapter, &conformance, &native_events, concern, coverage);
     }
 
     for signal_kind in LifecycleSignalKind::ALL {
         let coverage = hook_coverage_for(adapter, signal_kind);
-        assert_lifecycle_hook_honest(adapter, &samples, &native_events, signal_kind, coverage);
+        assert_lifecycle_hook_honest(
+            adapter,
+            &conformance.classification,
+            &native_events,
+            signal_kind,
+            coverage,
+        );
     }
     assert_hook_matches_concern(
         adapter,
@@ -589,10 +598,6 @@ setup-doc = "README.md"
     assert_compaction_hooks_match_concern(adapter);
 }
 
-fn corpus(adapter: &dyn AgentAdapter) -> Vec<ClassificationSample> {
-    adapter.classification_corpus()
-}
-
 fn producible_ask_kinds(samples: &[ClassificationSample]) -> Vec<AskKind> {
     let mut kinds = Vec::new();
     for sample in samples {
@@ -607,13 +612,14 @@ fn producible_ask_kinds(samples: &[ClassificationSample]) -> Vec<AskKind> {
 
 fn assert_coverage_honest(
     adapter: &dyn AgentAdapter,
-    samples: &[ClassificationSample],
+    conformance: &AdapterConformance,
     native_events: &[&str],
     concern: IntegrationConcern,
     coverage: ConcernCoverage,
 ) {
     let descriptor = adapter.descriptor();
     let kind = descriptor.kind;
+    let samples = &conformance.classification;
     // `Partial` and `Unsupported` generally assert no native signal carries
     // the concern. Compaction and subagents are the exceptions: a partial can
     // expose only part of their multi-signal or multi-provider surface.
@@ -633,7 +639,8 @@ fn assert_coverage_honest(
             wired,
             has_ask_kind(samples, AskKind::PlanApproval)
                 || has_blocking_tool_kind(descriptor, AskKind::PlanApproval)
-                || derived_ask_kind(adapter) == Some(AskKind::PlanApproval),
+                || derived_ask_kind(adapter, conformance.derived_ask.as_ref())
+                    == Some(AskKind::PlanApproval),
             "{kind} PlanApproval coverage must match blocking plan ask/tool classification"
         ),
         IntegrationConcern::UserQuestion => assert_eq!(
@@ -720,7 +727,7 @@ fn assert_coverage_honest(
         IntegrationConcern::ContextUsage => {}
         IntegrationConcern::RealtimeCost => assert_eq!(
             !matches!(coverage, ConcernCoverage::Unsupported { .. }),
-            realtime_cost_from_fixture(adapter),
+            realtime_cost_from_fixture(adapter, conformance),
             "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
         ),
         IntegrationConcern::AccountSpend => {}
@@ -875,22 +882,25 @@ fn assert_compaction_hooks_match_concern(adapter: &dyn AgentAdapter) {
     );
 }
 
-fn realtime_cost_from_fixture(adapter: &dyn AgentAdapter) -> bool {
+fn realtime_cost_from_fixture(
+    adapter: &dyn AgentAdapter,
+    conformance: &AdapterConformance,
+) -> bool {
     let prices = PriceBook::embedded();
-    if let Some(fixture) = adapter.context_cost_fixture() {
+    if let Some(fixture) = conformance.context_cost.as_ref() {
         return adapter
             .context_cost(&fixture.payload, &prices)
             .and_then(|cost| cost.total_cost_usd)
             .is_some_and(|cost| cost > 0.0);
     }
-    if let Some(fixture) = adapter.turn_cost_fixture() {
+    if let Some(fixture) = conformance.hook_turn_cost.as_ref() {
         return adapter
             .price_turn_locally(fixture.event_name, &fixture.payload, &prices)
             .is_some_and(|cost| cost.cost_usd > 0.0);
     }
-    adapter.spend_fixture().is_some_and(|fixture| {
+    conformance.spend.as_ref().is_some_and(|fixture| {
         let dir = tempfile::TempDir::new().expect("spend fixture tempdir");
-        let path = materialize_spend_fixture(dir.path(), &fixture);
+        let path = materialize_spend_fixture(dir.path(), fixture);
         super::spending::session_cost_usd(adapter, fixture.session_id, &path, &prices)
             .and_then(|cost| cost.total_cost_usd)
             .is_some_and(|cost| cost > 0.0)
@@ -923,11 +933,14 @@ fn materialize_spend_fixture(dir: &Path, fixture: &SpendFixture) -> PathBuf {
     path
 }
 
-fn derived_ask_kind(adapter: &dyn AgentAdapter) -> Option<AskKind> {
-    let fixture = adapter.derived_ask_fixture()?;
+fn derived_ask_kind(
+    adapter: &dyn AgentAdapter,
+    fixture: Option<&DerivedAskFixture>,
+) -> Option<AskKind> {
+    let fixture = fixture?;
     let dir = tempfile::TempDir::new().expect("derived ask fixture tempdir");
-    let path = materialize_derived_ask_fixture(dir.path(), &fixture);
-    let mut payload = fixture.payload;
+    let path = materialize_derived_ask_fixture(dir.path(), fixture);
+    let mut payload = fixture.payload.clone();
     payload.as_object_mut()?.insert(
         "transcript_path".to_owned(),
         serde_json::json!(path.to_string_lossy()),

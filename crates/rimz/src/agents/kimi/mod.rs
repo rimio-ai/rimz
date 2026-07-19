@@ -433,12 +433,7 @@ impl AgentAdapter for KimiAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(KIMI_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+    fn conformance(&self) -> super::AdapterConformance {
         use super::{AgentHookClass, ClassificationSample};
         let mut samples = super::hook_types::catalog_classification_corpus(KIMI_HOOKS);
         samples.extend([
@@ -455,19 +450,18 @@ impl AgentAdapter for KimiAdapter {
                 Some(super::AskKind::PlanApproval),
             ),
         ]);
-        samples
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "s",
-            file_name: "sessions/wd/s/agents/main/wire.jsonl",
-            body: super::SpendFixtureBody::Jsonl(concat!(
-                "{\"type\":\"metadata\",\"protocol_version\":\"1.4\"}\n",
-                "{\"type\":\"usage.record\",\"time\":1770000000000,\"model\":\"moonshot/kimi-k2.5\",\"usage\":{\"inputOther\":100,\"output\":50,\"inputCacheRead\":10,\"inputCacheCreation\":5},\"usageScope\":\"turn\"}"
-            )),
-        })
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "s",
+                file_name: "sessions/wd/s/agents/main/wire.jsonl",
+                body: super::SpendFixtureBody::Jsonl(concat!(
+                    "{\"type\":\"metadata\",\"protocol_version\":\"1.4\"}\n",
+                    "{\"type\":\"usage.record\",\"time\":1770000000000,\"model\":\"moonshot/kimi-k2.5\",\"usage\":{\"inputOther\":100,\"output\":50,\"inputCacheRead\":10,\"inputCacheCreation\":5},\"usageScope\":\"turn\"}"
+                )),
+            }),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<super::TranscriptMessage> {

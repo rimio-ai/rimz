@@ -442,6 +442,32 @@ pub enum SpendFixtureBody {
     OpencodeSqlite { data: &'static str },
 }
 
+/// One adapter-owned fixture set for registry-wide conformance checks.
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub struct AdapterConformance {
+    pub classification: Vec<ClassificationSample>,
+    pub spend: Option<SpendFixture>,
+    pub hook_turn_cost: Option<TurnCostFixture>,
+    pub context_cost: Option<ContextCostFixture>,
+    pub derived_ask: Option<DerivedAskFixture>,
+    pub local_session: Option<LocalSessionObservation>,
+}
+
+#[cfg(test)]
+impl AdapterConformance {
+    /// Deduplicated native event surface represented by the full corpus.
+    pub(crate) fn native_event_names(&self) -> Vec<&'static str> {
+        let mut events = Vec::new();
+        for sample in &self.classification {
+            if !events.contains(&sample.event_name) {
+                events.push(sample.event_name);
+            }
+        }
+        events
+    }
+}
+
 #[cfg(test)]
 impl ClassificationSample {
     pub(crate) fn new(
@@ -805,60 +831,13 @@ pub trait AgentAdapter: Send + Sync {
     /// Decode one native hook payload into every normalized hook output.
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook>;
 
-    /// Test-only native payload corpus for registry-wide adapter conformance.
-    /// Keeping it on the adapter avoids a parallel per-agent registry. The
-    /// corpus must cover every event name in
-    /// [`native_hook_events`](Self::native_hook_events), and may include
-    /// multiple payload variants for broad hooks such as `PreToolUse`.
+    /// Test-only fixtures for registry-wide adapter conformance. Keeping one
+    /// record on the adapter avoids a parallel per-agent registry. Its corpus
+    /// covers the complete native event surface and may retain several payload
+    /// variants for broad hooks such as `PreToolUse`.
     #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<ClassificationSample> {
-        Vec::new()
-    }
-
-    /// Test-only list of native event names the adapter emits. Conformance uses
-    /// it to prove the hand-authored corpus and lifecycle coverage include the
-    /// declared native surface, independently of who installs its hooks.
-    #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        Vec::new()
-    }
-
-    /// Test-only representative transcript/store fixture that must produce a
-    /// positive session cost through the same spend parser the live-card fallback
-    /// uses. Adapters with declared realtime-cost coverage provide one so the
-    /// registry-wide conformance suite can prove the claim is backed by behavior.
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<SpendFixture> {
-        None
-    }
-
-    /// Test-only token-bearing event for adapters whose live cost comes from
-    /// hooks rather than a provider transcript.
-    #[cfg(test)]
-    fn turn_cost_fixture(&self) -> Option<TurnCostFixture> {
-        None
-    }
-
-    /// Test-only statusline/context payload for adapters whose live cost comes
-    /// from a provider-owned rich-context channel.
-    #[cfg(test)]
-    fn context_cost_fixture(&self) -> Option<ContextCostFixture> {
-        None
-    }
-
-    /// Test-only transcript-backed ask fixture for native prompts whose hook
-    /// payload remains lifecycle-only. Conformance materializes the transcript
-    /// and feeds the event through [`Self::decode_hook`].
-    #[cfg(test)]
-    fn derived_ask_fixture(&self) -> Option<DerivedAskFixture> {
-        None
-    }
-
-    /// Test-only representative provider-owned local session observation.
-    /// Conformance keeps this evidence separate from executable-hook corpus.
-    #[cfg(test)]
-    fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
-        None
+    fn conformance(&self) -> AdapterConformance {
+        AdapterConformance::default()
     }
 
     /// Derive provider-store-backed subagent lifecycle observations for parents in this workspace.

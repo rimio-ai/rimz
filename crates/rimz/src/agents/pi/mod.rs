@@ -432,12 +432,7 @@ impl AgentAdapter for PiAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(PI_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+    fn conformance(&self) -> super::AdapterConformance {
         let mut samples = super::hook_types::catalog_classification_corpus(PI_HOOKS);
         samples.push(super::ClassificationSample::new(
             "tool_execution_end",
@@ -449,18 +444,17 @@ impl AgentAdapter for PiAdapter {
             super::AgentHookClass::Lifecycle,
             None,
         ));
-        samples
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "sess-1",
-            file_name: "2026-06-02T10-00-00-000Z_sess-1.jsonl",
-            body: super::SpendFixtureBody::Jsonl(
-                r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","model":"gpt-5","usage":{"input":100,"output":50,"cost":{"total":0.42}}}}"#,
-            ),
-        })
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "sess-1",
+                file_name: "2026-06-02T10-00-00-000Z_sess-1.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","model":"gpt-5","usage":{"input":100,"output":50,"cost":{"total":0.42}}}}"#,
+                ),
+            }),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn answer_plan(

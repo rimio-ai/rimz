@@ -192,13 +192,7 @@ impl AgentAdapter for PluginAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        let manifest: &'static PluginManifest = self.manifest;
-        manifest.emits.iter().map(String::as_str).collect()
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+    fn conformance(&self) -> super::AdapterConformance {
         use super::ClassificationSample;
 
         let manifest: &'static PluginManifest = self.manifest;
@@ -247,7 +241,10 @@ impl AgentAdapter for PluginAdapter {
                 ));
             }
         }
-        samples
+        super::AdapterConformance {
+            classification: samples,
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<ContextObservation> {

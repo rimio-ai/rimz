@@ -460,11 +460,6 @@ impl AgentAdapter for CodexAdapter {
         )
     }
 
-    #[cfg(test)]
-    fn local_session_fixture(&self) -> Option<super::LocalSessionObservation> {
-        Some(local_sessions::fixture_observation())
-    }
-
     fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<super::LocalSessionObservation> {
         local_sessions::discover(workspaces)
     }
@@ -597,12 +592,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(CODEX_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+    fn conformance(&self) -> super::AdapterConformance {
         use super::{AgentHookClass, ClassificationSample};
 
         let mut samples = super::hook_types::catalog_classification_corpus(CODEX_HOOKS);
@@ -612,41 +602,37 @@ impl AgentAdapter for CodexAdapter {
             AgentHookClass::AwaitingUser,
             Some(AskKind::Question),
         )]);
-        samples
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "sess-1",
-            file_name: "rollout-2026-06-02T10-00-00-sess-1.jsonl",
-            body: super::SpendFixtureBody::Jsonl(
-                r#"{"timestamp":"2026-06-02T10:00:00.000Z","model":"gpt-5","usage":{"input_tokens":100,"output_tokens":50}}"#,
-            ),
-        })
-    }
-
-    #[cfg(test)]
-    fn derived_ask_fixture(&self) -> Option<super::DerivedAskFixture> {
-        Some(super::DerivedAskFixture {
-            event_name: "Stop",
-            payload: serde_json::json!({
-                "session_id": "sess-plan",
-                "turn_id": "turn-plan",
-                "last_assistant_message": "Codex says:"
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "sess-1",
+                file_name: "rollout-2026-06-02T10-00-00-sess-1.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"timestamp":"2026-06-02T10:00:00.000Z","model":"gpt-5","usage":{"input_tokens":100,"output_tokens":50}}"#,
+                ),
             }),
-            transcript_file_name: "rollout-plan.jsonl",
-            transcript_body: concat!(
-                r##"{"timestamp":"2026-07-13T10:00:00Z","type":"turn_context","payload":{"turn_id":"turn-plan","collaboration_mode":{"mode":"plan"}}}"##,
-                "\n",
-                r##"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","id":"turn-plan-plan","text":"# Plan\n\nShip it."}}}"##,
-                "\n",
-                r##"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"Codex says:"}}"##,
-                "\n",
-                r##"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"##,
-            ),
-            expected_kind: AskKind::PlanApproval,
-        })
+            derived_ask: Some(super::DerivedAskFixture {
+                event_name: "Stop",
+                payload: serde_json::json!({
+                    "session_id": "sess-plan",
+                    "turn_id": "turn-plan",
+                    "last_assistant_message": "Codex says:"
+                }),
+                transcript_file_name: "rollout-plan.jsonl",
+                transcript_body: concat!(
+                    r##"{"timestamp":"2026-07-13T10:00:00Z","type":"turn_context","payload":{"turn_id":"turn-plan","collaboration_mode":{"mode":"plan"}}}"##,
+                    "\n",
+                    r##"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","id":"turn-plan-plan","text":"# Plan\n\nShip it."}}}"##,
+                    "\n",
+                    r##"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"Codex says:"}}"##,
+                    "\n",
+                    r##"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"##,
+                ),
+                expected_kind: AskKind::PlanApproval,
+            }),
+            local_session: Some(local_sessions::fixture_observation()),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn ask_options(&self, kind: AskKind) -> Option<Vec<AskOption>> {

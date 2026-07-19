@@ -449,12 +449,7 @@ impl AgentAdapter for QwenAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(QWEN_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+    fn conformance(&self) -> super::AdapterConformance {
         use super::{AgentHookClass, ClassificationSample};
         let mut samples = super::hook_types::catalog_classification_corpus(QWEN_HOOKS);
         samples.push(ClassificationSample::new(
@@ -481,39 +476,34 @@ impl AgentAdapter for QwenAdapter {
             AgentHookClass::Lifecycle,
             None,
         ));
-        samples
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "sess-1",
-            file_name: "sess-1.jsonl",
-            body: super::SpendFixtureBody::Jsonl(
-                r#"{"uuid":"msg-1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":20,"candidatesTokenCount":10,"thoughtsTokenCount":5,"totalTokenCount":115}}"#,
-            ),
-        })
-    }
-
-    #[cfg(test)]
-    fn context_cost_fixture(&self) -> Option<super::ContextCostFixture> {
-        Some(super::ContextCostFixture {
-            payload: serde_json::json!({
-                "metrics": {
-                    "models": {
-                        "qwen3-coder-plus": {
-                            "tokens": {
-                                "prompt": 100,
-                                "completion": 20,
-                                "total": 120,
-                                "cached": 30,
-                                "thoughts": 5
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "sess-1",
+                file_name: "sess-1.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"uuid":"msg-1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":20,"candidatesTokenCount":10,"thoughtsTokenCount":5,"totalTokenCount":115}}"#,
+                ),
+            }),
+            context_cost: Some(super::ContextCostFixture {
+                payload: serde_json::json!({
+                    "metrics": {
+                        "models": {
+                            "qwen3-coder-plus": {
+                                "tokens": {
+                                    "prompt": 100,
+                                    "completion": 20,
+                                    "total": 120,
+                                    "cached": 30,
+                                    "thoughts": 5
+                                }
                             }
                         }
                     }
-                }
+                }),
             }),
-        })
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {

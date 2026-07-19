@@ -48,7 +48,7 @@ The descriptor is the adapter's contract with the rest of RimZ. Fill every field
 
 ## Step 5 — Implement the hook wire and install
 
-The trait requires `descriptor` and `decode_hook`; the decoder parses one native payload and returns routing, optional [`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs), ask/transcript values, sidecar evidence, and neutral stdout together. The channels and the mapping jobs are [model.md → The adapter boundary](../internals/agents/model.md#the-adapter-boundary). Two conformance inputs ship with it: `classification_corpus` (a real sample payload per native event, each decoding to its declared channel) and `native_hook_events` (the native events the adapter emits, independent of who installs its hooks). Claude and Codex use one provider-local hook catalog to drive install, detection, decoded routing, and ordinary corpus rows because their native config models repeat that knowledge; use the catalog as a template only when a new adapter has equivalent duplication, not as a requirement for experimental adapters or different installer shapes.
+The trait requires `descriptor` and `decode_hook`; the decoder parses one native payload and returns routing, optional [`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs), ask/transcript values, sidecar evidence, and neutral stdout together. The channels and the mapping jobs are [model.md → The adapter boundary](../internals/agents/model.md#the-adapter-boundary). One `conformance` record ships the classification corpus and optional spend, hook-cost, context-cost, derived-ask, and local-session fixtures. The corpus covers the full native event surface and retains every payload variant needed to exercise broad events; conformance derives the deduplicated event set from it. Claude and Codex use one provider-local hook catalog to drive install, detection, decoded routing, and ordinary corpus rows because their native config models repeat that knowledge; use the catalog as a template only when a new adapter has equivalent duplication, not as a requirement for experimental adapters or different installer shapes.
 
 The contract rules, each owned by [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) and [model.md → Hook stdout is the decision channel](../internals/agents/model.md#hook-stdout-is-the-decision-channel): blocking ask hooks install sync, neutral is the agent-native no-op on stdout with diagnostics on stderr, helper children get fresh piped stdio, install is idempotent by command-substring reclaim, and installed hook timeouts leave margin under the upstream deadline.
 
@@ -68,7 +68,7 @@ Implement the context source(s) the worksheet found; either alone is valid, and 
 
 ## Step 8 — Wire account, spend, and pricing
 
-The provider half of the integration is [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider): `probe_account` (login state, plan, rate-limit windows), the OAuth-usage probe where one exists, and full-history cost through `spending_sources` plus `parse_spend`. Keep `transcript_files` for live transcript/session lookup. Ship a `spend_fixture` — conformance requires one yielding a positive session cost unless the descriptor declares `RealtimeCost` unsupported.
+The provider half of the integration is [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider): `probe_account` (login state, plan, rate-limit windows), the OAuth-usage probe where one exists, and full-history cost through `spending_sources` plus `parse_spend`. Keep `transcript_files` for live transcript/session lookup. Put a positive-cost spend, hook-turn-cost, or context-cost fixture in `conformance` unless the descriptor declares `RealtimeCost` unsupported.
 
 `spend.rs` is sidebar-safe by construction: read-only, and the `ensure_spend_parser_boundaries` invariant grep ([`xtask/src/invariants.rs`](../../xtask/src/invariants.rs)) rejects store-write, run-wake, and broker imports in any spend path.
 
@@ -104,11 +104,11 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] `crates/rimz/src/agents/<kind>/mod.rs` — adapter, descriptor, both matrices
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] `pub mod` + re-export in `agents/mod.rs`, one line in `registry::ADAPTERS`
-- [ ] `decode_hook` · `classification_corpus` · `native_hook_events`
+- [ ] `decode_hook` · one `conformance` record with a complete classification corpus
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed`
 - [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` · `ping_args`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
-- [ ] `probe_account` · `spending_sources` + `parse_spend` · `spend_fixture`
+- [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
 - [ ] The step-9 test set, stdout shapes as inline `insta` goldens
 - [ ] `docs/internals/agents/<kind>.md` + links in model.md, the module contract, and the root documentation map
 - [ ] `agent-support.md` row and section · README matrix

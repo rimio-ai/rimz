@@ -204,8 +204,11 @@ impl AgentAdapter for KiroAdapter {
     }
 
     #[cfg(test)]
-    fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
-        Some(session::fixture_observation())
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            local_session: Some(session::fixture_observation()),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn decode_hook(&self, event_name: &str, _payload: &Value) -> Result<DecodedHook> {

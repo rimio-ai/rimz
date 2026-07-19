@@ -503,12 +503,7 @@ impl AgentAdapter for OpencodeAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(OPENCODE_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+    fn conformance(&self) -> super::AdapterConformance {
         use super::{AgentHookClass, ClassificationSample};
 
         let mut samples = super::hook_types::catalog_classification_corpus(OPENCODE_HOOKS);
@@ -518,18 +513,17 @@ impl AgentAdapter for OpencodeAdapter {
             AgentHookClass::AwaitingUser,
             Some(AskKind::PlanApproval),
         ));
-        samples
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "ses_1",
-            file_name: "opencode.db",
-            body: super::SpendFixtureBody::OpencodeSqlite {
-                data: r#"{"cost":0.42,"modelID":"gpt-5","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
-            },
-        })
+        super::AdapterConformance {
+            classification: samples,
+            spend: Some(super::SpendFixture {
+                session_id: "ses_1",
+                file_name: "opencode.db",
+                body: super::SpendFixtureBody::OpencodeSqlite {
+                    data: r#"{"cost":0.42,"modelID":"gpt-5","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
+                },
+            }),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn context_refresh_spawn(

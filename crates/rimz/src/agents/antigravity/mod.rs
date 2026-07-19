@@ -335,28 +335,6 @@ impl AgentAdapter for AntigravityAdapter {
         None
     }
 
-    #[cfg(test)]
-    fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
-        Some(session::fixture_observation())
-    }
-
-    #[cfg(test)]
-    fn context_cost_fixture(&self) -> Option<super::ContextCostFixture> {
-        Some(super::ContextCostFixture {
-            payload: serde_json::json!({
-                "model": {"id": "gemini-3-flash-preview"},
-                "context_window": {
-                    "current_usage": {
-                        "input_tokens": 100,
-                        "output_tokens": 20,
-                        "cache_creation_input_tokens": 30,
-                        "cache_read_input_tokens": 40
-                    }
-                }
-            }),
-        })
-    }
-
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let mut decoded = decode_catalog_entry(
             ANTIGRAVITY_HOOKS
@@ -393,16 +371,28 @@ impl AgentAdapter for AntigravityAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        ANTIGRAVITY_EVENT_NAMES.to_vec()
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        ANTIGRAVITY_HOOKS
-            .iter()
-            .map(|entry| super::hook_types::classification_sample(&entry.hook))
-            .collect()
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            classification: ANTIGRAVITY_HOOKS
+                .iter()
+                .map(|entry| super::hook_types::classification_sample(&entry.hook))
+                .collect(),
+            context_cost: Some(super::ContextCostFixture {
+                payload: serde_json::json!({
+                    "model": {"id": "gemini-3-flash-preview"},
+                    "context_window": {
+                        "current_usage": {
+                            "input_tokens": 100,
+                            "output_tokens": 20,
+                            "cache_creation_input_tokens": 30,
+                            "cache_read_input_tokens": 40
+                        }
+                    }
+                }),
+            }),
+            local_session: Some(session::fixture_observation()),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn correlate_subagent(

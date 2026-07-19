@@ -300,24 +300,18 @@ impl AgentAdapter for AmpAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(AMP_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        super::hook_types::catalog_classification_corpus(AMP_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "T-conformance",
-            file_name: "T-conformance.json",
-            body: super::SpendFixtureBody::Jsonl(
-                r#"{"id":"T-conformance","messages":[{"role":"assistant","messageId":"m1","content":"done","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":20}}]}"#,
-            ),
-        })
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            classification: super::hook_types::catalog_classification_corpus(AMP_HOOKS),
+            spend: Some(super::SpendFixture {
+                session_id: "T-conformance",
+                file_name: "T-conformance.json",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"id":"T-conformance","messages":[{"role":"assistant","messageId":"m1","content":"done","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":20}}]}"#,
+                ),
+            }),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn local_context_refresh(

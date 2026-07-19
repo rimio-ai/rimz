@@ -307,14 +307,6 @@ impl AgentAdapter for CopilotAdapter {
         parse_copilot_version(stdout).or_else(|| parse_copilot_version(stderr))
     }
 
-    #[cfg(test)]
-    fn context_cost_fixture(&self) -> Option<super::ContextCostFixture> {
-        Some(super::ContextCostFixture {
-            payload: serde_json::from_str(include_str!("tests/fixtures/statusline-modern.json"))
-                .expect("valid Copilot statusline fixture"),
-        })
-    }
-
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let parsed = payloads::parse_payload(payload);
         let tools = parsed.normalized_tool_calls();
@@ -481,12 +473,7 @@ impl AgentAdapter for CopilotAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(COPILOT_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+    fn conformance(&self) -> super::AdapterConformance {
         use super::{AgentHookClass, ClassificationSample};
 
         let mut samples = super::hook_types::catalog_classification_corpus(COPILOT_HOOKS);
@@ -496,7 +483,16 @@ impl AgentAdapter for CopilotAdapter {
             AgentHookClass::Lifecycle,
             None,
         ));
-        samples
+        super::AdapterConformance {
+            classification: samples,
+            context_cost: Some(super::ContextCostFixture {
+                payload: serde_json::from_str(include_str!(
+                    "tests/fixtures/statusline-modern.json"
+                ))
+                .expect("valid Copilot statusline fixture"),
+            }),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn correlate_subagent(

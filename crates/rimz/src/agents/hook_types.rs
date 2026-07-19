@@ -371,11 +371,6 @@ macro_rules! hook_record {
 }
 pub(crate) use hook_record;
 
-#[cfg(test)]
-pub(crate) fn catalog_event_names(hooks: &[HookRecord]) -> Vec<&'static str> {
-    hooks.iter().map(|hook| hook.event).collect()
-}
-
 pub(crate) fn catalog_contains(hooks: &[HookRecord], event_name: &str) -> bool {
     hooks.iter().any(|hook| hook.event == event_name)
 }
@@ -549,7 +544,6 @@ mod tests {
         const NAMES: [&str; 4] = catalog_event_name_array(&HOOKS);
 
         assert_eq!(NAMES, ["Start", "Ask", "Permission", "Stop"]);
-        assert_eq!(catalog_event_names(&HOOKS), NAMES);
         assert!(catalog_contains(&HOOKS, "Permission"));
         assert!(!catalog_contains(&HOOKS, "Unknown"));
         assert_eq!(HOOKS[1].matcher, None);

@@ -28,7 +28,7 @@ fn native_hooks_are_explicitly_unsupported() {
             .expect("unknown hook decodes")
             .records_progress()
     );
-    assert!(KiroAdapter.native_hook_events().is_empty());
+    assert!(KiroAdapter.conformance().classification.is_empty());
     assert!(matches!(
         descriptor.concern_coverage(IntegrationConcern::TurnLifecycle),
         ConcernCoverage::Partial { .. }

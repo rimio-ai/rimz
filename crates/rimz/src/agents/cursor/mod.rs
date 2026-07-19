@@ -401,34 +401,24 @@ impl AgentAdapter for CursorAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        super::hook_types::catalog_event_names(CURSOR_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        super::hook_types::catalog_classification_corpus(CURSOR_HOOKS)
-    }
-
-    #[cfg(test)]
-    fn turn_cost_fixture(&self) -> Option<super::TurnCostFixture> {
-        Some(super::TurnCostFixture {
-            event_name: "stop",
-            payload: test_json!({
-                "generation_id": "gen-1",
-                "status": "completed",
-                "model_id": "default",
-                "input_tokens": 22_725,
-                "output_tokens": 26,
-                "cache_read_tokens": 8_704,
-                "cache_write_tokens": 0
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            classification: super::hook_types::catalog_classification_corpus(CURSOR_HOOKS),
+            hook_turn_cost: Some(super::TurnCostFixture {
+                event_name: "stop",
+                payload: test_json!({
+                    "generation_id": "gen-1",
+                    "status": "completed",
+                    "model_id": "default",
+                    "input_tokens": 22_725,
+                    "output_tokens": 26,
+                    "cache_read_tokens": 8_704,
+                    "cache_write_tokens": 0
+                }),
             }),
-        })
-    }
-
-    #[cfg(test)]
-    fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
-        Some(session::fixture_observation())
+            local_session: Some(session::fixture_observation()),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn derive_subagent_observations(&self, workspace: &Path) -> Vec<AgentLifecycleObservation> {

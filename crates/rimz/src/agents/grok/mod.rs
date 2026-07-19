@@ -392,25 +392,19 @@ impl AgentAdapter for GrokAdapter {
     }
 
     #[cfg(test)]
-    fn native_hook_events(&self) -> Vec<&'static str> {
-        GROK_HOOKS.iter().map(|hook| hook.event).collect()
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        tests::classification_corpus()
-    }
-
-    #[cfg(test)]
-    fn spend_fixture(&self) -> Option<super::SpendFixture> {
-        Some(super::SpendFixture {
-            session_id: "s1",
-            file_name: "updates.jsonl",
-            body: super::SpendFixtureBody::Jsonl(
-                r#"{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"},"_meta":{"promptIndex":0}}}}
+    fn conformance(&self) -> super::AdapterConformance {
+        super::AdapterConformance {
+            classification: tests::classification_corpus(),
+            spend: Some(super::SpendFixture {
+                session_id: "s1",
+                file_name: "updates.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"},"_meta":{"promptIndex":0}}}}
 {"timestamp":1700000001,"method":"_x.ai/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn","usage":{"inputTokens":100,"cachedReadTokens":20,"outputTokens":10,"costUsdTicks":1000000000}}}}"#,
-            ),
-        })
+                ),
+            }),
+            ..super::AdapterConformance::default()
+        }
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
