@@ -88,6 +88,8 @@ pub struct AggregateSig {
 pub struct PulledFrameSig {
     rows: usize,
     panes_produced_at_ms: Option<u64>,
+    row_ids: BTreeSet<String>,
+    pane_ids: BTreeSet<String>,
     aggregates: BTreeMap<String, Option<String>>,
 }
 
@@ -129,6 +131,11 @@ impl PulledFrameSig {
                 .map(|group| group.rows.len())
                 .sum(),
             panes_produced_at_ms: snapshot.panes_produced_at_ms,
+            row_ids: snapshot.rows().map(|row| row.id.clone()).collect(),
+            pane_ids: snapshot
+                .rows()
+                .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.to_string()))
+                .collect(),
             aggregates,
         }
     }
@@ -249,11 +256,8 @@ pub fn extract_sig(
         events: extract_events(event_store, now_ms),
         pulled_rows: last_pulled.rows,
         pulled_panes_produced_at_ms: last_pulled.panes_produced_at_ms,
-        pulled_row_ids: last_pulled.rows().map(|row| row.id.clone()).collect(),
-        pulled_pane_ids: last_pulled
-            .rows()
-            .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.to_string()))
-            .collect(),
+        pulled_row_ids: last_pulled.row_ids.clone(),
+        pulled_pane_ids: last_pulled.pane_ids.clone(),
         gate_reject_streak,
         health_failure_streak,
     }
