@@ -378,6 +378,10 @@ fn gc_keeps_worktree_with_live_agent() {
         "gc should report why the worktree was kept: {stdout}"
     );
     assert!(
+        stdout.contains("kept: demo — in use"),
+        "gc should name the kept worktree and its reason: {stdout}"
+    );
+    assert!(
         !stdout.contains("removed: demo"),
         "gc should not remove a live worktree: {stdout}"
     );

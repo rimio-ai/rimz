@@ -250,7 +250,9 @@ gc — would reclaim 62 MB (dry run)
   checked 4 of 8 areas · cutoff 24h
 
   ✦ worktrees       would remove 3 · 62 MB · 4 kept
-      kept: 3 in use, 1 not merged yet
+      kept: api-redesign — in use
+      kept: auth-fix — not merged yet
+      …
       would remove: guides-tune  21 MB  merged
       …
   ✦ workspaces      would prune 31 · 9.2 KB

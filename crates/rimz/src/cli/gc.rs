@@ -286,6 +286,14 @@ enum KeptReason {
 }
 
 impl KeptReason {
+    fn text(self) -> &'static str {
+        match self {
+            Self::InUse => "in use",
+            Self::Dirty => "uncommitted changes",
+            Self::NotMerged => "not merged yet",
+        }
+    }
+
     fn json(self) -> &'static str {
         match self {
             Self::InUse => "in_use",
@@ -624,11 +632,11 @@ fn render_worktrees(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
                 RowVerdict::Healthy
             };
             render_row(w, verdict, "worktrees", &outcome)?;
-            if removed > 0 && kept > 0 {
+            for kept in &sweep.kept {
                 render_subline(
                     w,
                     palette::muted(),
-                    &format!("kept: {}", kept_summary(&sweep.kept)),
+                    &format!("kept: {} — {}", kept.name, kept.reason.text()),
                 )?;
             }
             let action = if out.dry_run {
@@ -1395,6 +1403,39 @@ mod tests {
     }
 
     #[test]
+    fn render_report_names_every_kept_worktree_and_reason() {
+        let out = strip_report(&GcOutcome {
+            older_than: Duration::from_secs(3600),
+            worktrees: WorktreeSweepStatus::Swept(WorktreeSweep {
+                kept: vec![
+                    KeptWorktree {
+                        name: "active".to_owned(),
+                        path: PathBuf::from("/repo-worktrees/active"),
+                        reason: KeptReason::InUse,
+                    },
+                    KeptWorktree {
+                        name: "dirty".to_owned(),
+                        path: PathBuf::from("/repo-worktrees/dirty"),
+                        reason: KeptReason::Dirty,
+                    },
+                    KeptWorktree {
+                        name: "pending".to_owned(),
+                        path: PathBuf::from("/repo-worktrees/pending"),
+                        reason: KeptReason::NotMerged,
+                    },
+                ],
+                ..WorktreeSweep::default()
+            }),
+            ..GcOutcome::default()
+        });
+
+        assert!(out.contains("3 kept — 1 in use, 1 with uncommitted changes, 1 not merged yet"));
+        assert!(out.contains("kept: active — in use"));
+        assert!(out.contains("kept: dirty — uncommitted changes"));
+        assert!(out.contains("kept: pending — not merged yet"));
+    }
+
+    #[test]
     fn render_report_lists_active_checklist_details() {
         let out = strip_report(&full_outcome(false));
 
@@ -1402,7 +1443,9 @@ mod tests {
         assert!(out.contains("· 3 problems"));
         assert!(out.contains("✦ worktrees"));
         assert!(out.contains("2 removed · 1.4 GB · 3 kept"));
-        assert!(out.contains("kept: 2 in use, 1 not merged yet"));
+        assert!(out.contains("kept: active — in use"));
+        assert!(out.contains("kept: shell — in use"));
+        assert!(out.contains("kept: pending — not merged yet"));
         assert!(out.contains("removed: demo"));
         assert!(out.contains("merged, branch deleted"));
         assert!(out.contains("removed: gc-info"));
@@ -1424,6 +1467,9 @@ mod tests {
         assert!(out.contains("(dry run)"));
         assert!(out.contains("checked 4 of 8 areas · cutoff 1h"));
         assert!(out.contains("would remove 2 · 1.4 GB · 3 kept"));
+        assert!(out.contains("kept: active — in use"));
+        assert!(out.contains("kept: shell — in use"));
+        assert!(out.contains("kept: pending — not merged yet"));
         assert!(out.contains("would prune 1 · 2 KB"));
         assert!(out.contains("would remove 5 stale files"));
         assert!(out.contains("would remove 2 orphaned"));
