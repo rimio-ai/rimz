@@ -1427,6 +1427,141 @@ fn gc_sweeps_merged_worktree() {
 }
 
 #[test]
+fn gc_sweeps_rewritten_worktree_whose_tip_tree_landed() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    if !git_succeeds(
+        &env.project_root,
+        &["merge-tree", "--write-tree", "HEAD", "HEAD"],
+    ) {
+        return;
+    }
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+
+    commit_file(
+        &path,
+        "builder.txt",
+        "builder.private.example\n",
+        "record private builder",
+    );
+    git(&path, &["rm", "builder.txt"]);
+    git(&path, &["commit", "-m", "remove private builder"]);
+    commit_file(&path, "feature.txt", "feature\n", "finish feature");
+    let branch_tree = git_stdout(&path, &["rev-parse", "HEAD^{tree}"]);
+
+    commit_file(
+        &env.project_root,
+        "builder.txt",
+        "builder.redacted.example\n",
+        "record redacted builder",
+    );
+    git(&env.project_root, &["rm", "builder.txt"]);
+    git(
+        &env.project_root,
+        &["commit", "-m", "remove redacted builder"],
+    );
+    commit_file(
+        &env.project_root,
+        "feature.txt",
+        "feature\n",
+        "land rewritten feature",
+    );
+    let landing_commit = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git_stdout(&env.project_root, &["rev-parse", "HEAD^{tree}"]),
+        branch_tree,
+        "rewritten history reaches the complete worktree tip tree"
+    );
+
+    commit_file(
+        &env.project_root,
+        "feature.txt",
+        "feature advanced\n",
+        "advance feature",
+    );
+    for index in 0..501 {
+        let message = format!("advance main {index}");
+        git(
+            &env.project_root,
+            &["commit", "--allow-empty", "-m", message.as_str()],
+        );
+    }
+
+    assert_ne!(
+        git_stdout(&env.project_root, &["rev-parse", "main^{tree}"]),
+        branch_tree,
+        "main advances beyond the previously landed worktree tree"
+    );
+    assert!(
+        !git_succeeds(&path, &["merge-tree", "--write-tree", "main", "HEAD"]),
+        "the later feature edit prevents merge absorption from proving landing"
+    );
+    let residue = git_stdout(
+        &path,
+        &[
+            "log",
+            "--right-only",
+            "--cherry-pick",
+            "--no-merges",
+            "--format=%H",
+            "main...HEAD",
+        ],
+    );
+    assert_eq!(
+        residue.lines().count(),
+        2,
+        "the rewritten transient commits remain as branch-side patch residue"
+    );
+    assert!(
+        git_stdout(&path, &["log", "--format=%T", "HEAD..main"])
+            .lines()
+            .any(|tree| tree == branch_tree),
+        "the exact worktree tip tree occurs in main's exclusive history"
+    );
+    assert!(
+        git_stdout(
+            &env.project_root,
+            &["rev-list", "--count", &format!("{landing_commit}..main")],
+        )
+        .parse::<u32>()
+        .expect("commit count")
+            > 500,
+        "the matching snapshot sits beyond the capped merge-tree scan"
+    );
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .landed,
+        rimz::worktree::LandedVerdict::Landed,
+        "the complete branch-tip snapshot proves rewritten work landed"
+    );
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees"))
+        .stdout(contains("1 removed"))
+        .stdout(contains("removed: demo"));
+
+    assert!(!path.exists(), "gc swept rewritten worktree");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "gc force-deleted rewritten content-landed branch"
+    );
+}
+
+#[test]
 fn gc_sweeps_merge_landed_worktree() {
     if git_missing() {
         return;

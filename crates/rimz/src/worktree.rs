@@ -978,8 +978,11 @@ pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Lande
         return LandedVerdict::Landed;
     }
 
-    if tree_id(cwd, comparison_ref)
-        .zip(tree_id(cwd, head_ref))
+    let comparison_tree = tree_id(cwd, comparison_ref);
+    let head_tree = tree_id(cwd, head_ref);
+    if comparison_tree
+        .as_ref()
+        .zip(head_tree.as_ref())
         .is_some_and(|(comparison, head)| comparison == head)
     {
         return LandedVerdict::Landed;
@@ -1005,7 +1008,24 @@ pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Lande
         Err(_) => return LandedVerdict::Unknown,
     };
     if non_merge.lines().any(|line| !line.trim().is_empty()) {
-        return LandedVerdict::Pending;
+        let Some(head_tree) = head_tree else {
+            return LandedVerdict::Unknown;
+        };
+        let exclusive_range = format!("{head_ref}..{comparison_ref}");
+        let comparison_trees =
+            match git_stdout(cwd, ["log", "--format=%T", exclusive_range.as_str()]) {
+                Ok(output) => output,
+                Err(_) => return LandedVerdict::Unknown,
+            };
+        return if comparison_trees
+            .lines()
+            .map(str::trim)
+            .any(|tree| tree == head_tree)
+        {
+            LandedVerdict::Landed
+        } else {
+            LandedVerdict::Pending
+        };
     }
 
     let merge_trees = match git_stdout(
