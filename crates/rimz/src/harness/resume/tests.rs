@@ -1,113 +1,63 @@
 use super::*;
-use crate::agents::AgentStatus;
-use crate::config::{Profile, RoleBinding, Team};
+use crate::config::Profile;
 use crate::ids::{MuxName, PaneId};
 use crate::pane::PaneRef;
 use jiff::Timestamp;
 
-fn pane(raw: &str) -> PaneRef {
-    PaneRef {
-        pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-        session_name: String::new(),
-        view_id: None,
-        view_kind: None,
-        view_name: None,
-        title: None,
-        is_floating: false,
-        command: None,
-        foreground_cmdline: None,
-        spawn_command: None,
-        cwd: None,
-        pane_pid: None,
-        pane_process_start: None,
-        hosted_agent_kind: None,
-        hosted_agent_process_start: None,
-        resumed_session_id: None,
-        elevated_agent: None,
-        first_seen_at_ms: None,
-    }
+const RIMZ_BIN: &str = "/bin/rimz";
+
+fn pane_id(raw: &str) -> PaneId {
+    PaneId::from_parts(MuxName::Zellij, raw)
 }
 
-/// A root agent bound to a pane, active `secs_ago` seconds back.
-fn agent(kind: &str, id: &str, worktree: &str, branch: Option<&str>, secs_ago: i64) -> AgentState {
+/// A root agent bound to its own pane, active `secs_ago` seconds back.
+fn agent(kind: &str, id: &str, worktree: &str, secs_ago: i64) -> AgentState {
     let when = Timestamp::now() - std::time::Duration::from_secs(secs_ago.max(0) as u64);
-    let mut agent = crate::sidebar::test_support::root_agent(kind, id, None);
-    agent.name = None;
-    agent.kind_ordinal = None;
-    agent.status = AgentStatus::Idle;
-    agent.pane = Some(pane(&format!("terminal_{id}")));
-    agent.worktree_path = Some(worktree.to_owned());
-    agent.worktree_branch = branch.map(ToOwned::to_owned);
-    agent.last_seen = when;
-    agent.last_activity = when;
-    agent.registered_at = Some(when);
-    agent
+    AgentState {
+        pane: Some(PaneRef::from_id(pane_id(&format!("terminal_{id}")))),
+        worktree_path: Some(worktree.to_owned()),
+        ..crate::testkit::agent_state(kind, id, when)
+    }
 }
 
 /// As [`agent`], but stamped on an explicit pane id so a test can model two
 /// sessions sharing one pane (a relaunch in place) rather than the default
 /// one-pane-per-id.
-fn agent_on_pane(
+fn agent_on_pane(kind: &str, id: &str, worktree: &str, secs_ago: i64, raw: &str) -> AgentState {
+    AgentState {
+        pane: Some(PaneRef::from_id(pane_id(raw))),
+        ..agent(kind, id, worktree, secs_ago)
+    }
+}
+
+/// A named-team member holding a role.
+fn team_agent(kind: &str, id: &str, role: &str, worktree: &str, secs_ago: i64) -> AgentState {
+    AgentState {
+        team: Some("forge".to_owned()),
+        role: Some(role.to_owned()),
+        ..agent(kind, id, worktree, secs_ago)
+    }
+}
+
+/// An inline-spec member carrying its launch group and cell ordinal.
+fn inline_agent(
     kind: &str,
     id: &str,
+    group: &str,
+    ordinal: u32,
     worktree: &str,
-    branch: Option<&str>,
     secs_ago: i64,
-    pane_raw: &str,
 ) -> AgentState {
-    let mut agent = agent(kind, id, worktree, branch, secs_ago);
-    agent.pane = Some(pane(pane_raw));
-    agent
-}
-
-fn no_ended() -> BTreeSet<(AgentKind, AgentSessionId)> {
-    BTreeSet::new()
-}
-
-fn no_profiles() -> ProfilesConfig {
-    ProfilesConfig::default()
-}
-
-/// The argv of the one pane a single-candidate plan seeds.
-fn single_pane_argv(plan: &ResumePlan) -> Vec<String> {
-    let [tab] = plan.tabs.as_slice() else {
-        panic!("expected exactly one resume tab, got {}", plan.tabs.len());
-    };
-    let [column] = tab.layout.columns.as_slice() else {
-        panic!("expected exactly one column");
-    };
-    let [pane] = column.panes.as_slice() else {
-        panic!("expected exactly one pane");
-    };
-    pane.argv.clone()
-}
-
-/// One machine profile, so a resume candidate has posture to replay.
-fn profiles(entries: &[(&str, Profile)]) -> ProfilesConfig {
-    ProfilesConfig(
-        entries
-            .iter()
-            .map(|(name, profile)| ((*name).to_owned(), profile.clone()))
-            .collect(),
-    )
-}
-
-fn profile(agent: &str) -> Profile {
-    Profile {
-        agent: agent.to_owned(),
-        mode: None,
-        model: None,
-        effort: None,
-        budget: None,
-        system_prompt_file: None,
-        append_system_prompt_file: None,
-        args: None,
+    AgentState {
+        launch_group: Some(group.to_owned()),
+        launch_ordinal: Some(ordinal),
+        ..agent(kind, id, worktree, secs_ago)
     }
 }
 
 fn exec_resume(kind: &str, id: &str) -> Vec<String> {
     crate::harness::launch::exec_argv(
-        Path::new("/bin/rimz"),
+        Path::new(RIMZ_BIN),
         &crate::harness::launch::ExecRequest {
             kind: AgentKind::new_unchecked(kind),
             action: crate::harness::launch::ExecAction::Resume {
@@ -161,6 +111,10 @@ fn dead(_: &AgentState) -> AgentLiveness {
     AgentLiveness::Dead
 }
 
+fn live(_: &AgentState) -> AgentLiveness {
+    AgentLiveness::Live { pid: 7 }
+}
+
 fn resume_id(seed: &CohortSeed) -> Option<&str> {
     match seed {
         CohortSeed::Resume(agent) => Some(agent.agent_id.as_str()),
@@ -179,6 +133,295 @@ fn local_session(kind: &str, id: &str, created: &str, last: &str) -> LocalSessio
         first_event_at: None,
         last_activity: last.parse().unwrap(),
         projection: crate::agents::LocalSessionProjection::IdentityOnly,
+    }
+}
+
+/// The planning environment, so a call site names only what it varies.
+fn ctx<'a>(
+    max: usize,
+    project_root: Option<&'a Path>,
+    profiles: &'a ProfilesConfig,
+) -> ResumeContext<'a> {
+    ResumeContext {
+        project_root,
+        rimz_bin: Path::new(RIMZ_BIN),
+        profiles,
+        max,
+    }
+}
+
+fn no_profiles() -> ProfilesConfig {
+    ProfilesConfig::default()
+}
+
+/// A bare machine profile; each test sets the posture fields it exercises.
+fn profile(agent: &str) -> Profile {
+    toml::from_str(&format!("agent = {agent:?}")).expect("profile fixture")
+}
+
+/// One machine profile, so a resume candidate has posture to replay.
+fn profiles(name: &str, profile: Profile) -> ProfilesConfig {
+    ProfilesConfig(BTreeMap::from([(name.to_owned(), profile)]))
+}
+
+/// The argv of the one pane a single-candidate plan seeds.
+fn single_pane_argv(plan: &ResumePlan) -> Vec<String> {
+    let [tab] = plan.tabs.as_slice() else {
+        panic!("expected exactly one resume tab, got {}", plan.tabs.len());
+    };
+    let [column] = tab.layout.columns.as_slice() else {
+        panic!("expected exactly one column");
+    };
+    let [pane] = column.panes.as_slice() else {
+        panic!("expected exactly one pane");
+    };
+    pane.argv.clone()
+}
+
+/// [`plan_resume`] with the permissive defaults every rebirth test shares:
+/// every worktree on disk, every session redeemable, nothing cleanly ended.
+fn plan(agents: &[AgentState]) -> ResumePlan {
+    plan_capped(agents, DEFAULT_RESUME_MAX)
+}
+
+fn plan_capped(agents: &[AgentState], max: usize) -> ResumePlan {
+    plan_with(agents, max, None, |_| true, |_| true)
+}
+
+fn plan_excluding(
+    agents: &[AgentState],
+    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
+) -> ResumePlan {
+    plan_resume(
+        agents,
+        ended,
+        ctx(DEFAULT_RESUME_MAX, None, &no_profiles()),
+        |_| true,
+        |_| true,
+    )
+}
+
+fn plan_with(
+    agents: &[AgentState],
+    max: usize,
+    project_root: Option<&Path>,
+    worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+) -> ResumePlan {
+    plan_resume(
+        agents,
+        &BTreeSet::new(),
+        ctx(max, project_root, &no_profiles()),
+        worktree_exists,
+        session_backed,
+    )
+}
+
+/// The argv `Yolo` compiles to for an adapter, for asserting the stamped mode
+/// reached (or never reached) the resume argv.
+fn yolo_argv(kind: &str) -> Vec<String> {
+    crate::agents::find_definition(kind)
+        .expect("registered adapter")
+        .spec()
+        .launch
+        .permission_args(PermissionMode::Yolo)
+}
+
+/// [`resolve_posture`] for one profile against one agent kind.
+fn posture_for(
+    kind: &str,
+    profile: Option<&str>,
+    stamped_mode: Option<PermissionMode>,
+    profiles: &ProfilesConfig,
+) -> ResumePosture {
+    let kind = AgentKind::new_unchecked(kind);
+    resolve_posture(
+        PostureRequest {
+            profile,
+            kind: &kind,
+            stamped_mode,
+        },
+        profiles,
+    )
+}
+
+/// [`plan_resume`] for one candidate whose profile posture rides the argv.
+fn plan_profiled(agent: AgentState, profiles: &ProfilesConfig) -> ResumePlan {
+    plan_resume(
+        &[agent],
+        &BTreeSet::new(),
+        ctx(DEFAULT_RESUME_MAX, None, profiles),
+        |_| true,
+        |_| true,
+    )
+}
+
+/// [`plan_cohort_resume`] over a closed cohort whose worktrees are all on disk
+/// and whose sessions are all redeemable.
+fn cohort(
+    agents: &[AgentState],
+    cells: &[CohortCell],
+    team: Option<&str>,
+) -> Result<CohortResumePlan, CohortResumeErr> {
+    cohort_with(agents, cells, team, dead, |_| true, |_| true)
+}
+
+fn cohort_with(
+    agents: &[AgentState],
+    cells: &[CohortCell],
+    team: Option<&str>,
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
+    worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+) -> Result<CohortResumePlan, CohortResumeErr> {
+    plan_cohort_resume(
+        agents,
+        liveness,
+        cells,
+        team,
+        worktree_exists,
+        session_backed,
+    )
+}
+
+fn team_configs() -> (TeamsConfig, ProfilesConfig, CommandsConfig) {
+    let profiles = toml::from_str(
+        r#"
+        claude-plan = { agent = "claude" }
+        codex-code = { agent = "codex" }
+        "#,
+    )
+    .expect("profiles fixture");
+    let teams = toml::from_str(
+        r#"
+        [forge]
+        layout = "planner,coder"
+        roles = [
+            { role = "planner", profile = "claude-plan" },
+            { role = "coder", profile = "codex-code" },
+        ]
+        "#,
+    )
+    .expect("teams fixture");
+    (teams, profiles, CommandsConfig::default())
+}
+
+fn lane_worktree(name: &str, branch: &str, from_pr: Option<u64>) -> LaneWorktree {
+    LaneWorktree {
+        name: name.to_owned(),
+        path: PathBuf::from(format!("/repo-worktrees/{name}")),
+        branch: Some(branch.to_owned()),
+        from_pr,
+    }
+}
+
+fn empty_lane_restore() -> Result<LaneRestoreConfig, LaneResumeError> {
+    Ok(LaneRestoreConfig {
+        teams: TeamsConfig::default(),
+        profiles: ProfilesConfig::default(),
+        commands: CommandsConfig::default(),
+    })
+}
+
+type PathPredicate<'a> = Box<dyn Fn(&Path) -> bool + 'a>;
+type AgentPredicate<'a> = Box<dyn Fn(&AgentState) -> bool + 'a>;
+type LivenessFn<'a> = Box<dyn Fn(&AgentState) -> AgentLiveness + 'a>;
+type DiscoverFn<'a> = Box<dyn FnMut(&Path) -> Vec<LocalSessionObservation> + 'a>;
+type RestoreFn<'a> = Box<dyn FnOnce() -> Result<LaneRestoreConfig, LaneResumeError> + 'a>;
+
+/// One [`plan_lane_resume`] call. Defaults are the permissive lane: the
+/// worktree is on disk, every session is redeemable, every member is closed,
+/// nothing is discoverable natively, and the restore config is empty. Each
+/// test names only what it varies.
+struct LaneCase<'a> {
+    selector: LaneResumeSelector,
+    agents: &'a [AgentState],
+    worktrees: &'a [LaneWorktree],
+    current_root: &'a Path,
+    max: usize,
+    path_exists: PathPredicate<'a>,
+    session_backed: AgentPredicate<'a>,
+    liveness: LivenessFn<'a>,
+    discover: DiscoverFn<'a>,
+    restore: RestoreFn<'a>,
+}
+
+impl<'a> LaneCase<'a> {
+    fn new(selector: LaneResumeSelector, agents: &'a [AgentState]) -> Self {
+        Self {
+            selector,
+            agents,
+            worktrees: &[],
+            current_root: Path::new("/repo"),
+            max: 128,
+            path_exists: Box::new(|_| true),
+            session_backed: Box::new(|_| true),
+            liveness: Box::new(dead),
+            discover: Box::new(|_| Vec::new()),
+            restore: Box::new(empty_lane_restore),
+        }
+    }
+
+    fn worktrees(mut self, worktrees: &'a [LaneWorktree]) -> Self {
+        self.worktrees = worktrees;
+        self
+    }
+
+    fn current_root(mut self, root: &'a str) -> Self {
+        self.current_root = Path::new(root);
+        self
+    }
+
+    fn max(mut self, max: usize) -> Self {
+        self.max = max;
+        self
+    }
+
+    fn path_exists(mut self, f: impl Fn(&Path) -> bool + 'a) -> Self {
+        self.path_exists = Box::new(f);
+        self
+    }
+
+    fn session_backed(mut self, f: impl Fn(&AgentState) -> bool + 'a) -> Self {
+        self.session_backed = Box::new(f);
+        self
+    }
+
+    fn liveness(mut self, f: impl Fn(&AgentState) -> AgentLiveness + 'a) -> Self {
+        self.liveness = Box::new(f);
+        self
+    }
+
+    fn discover(mut self, f: impl FnMut(&Path) -> Vec<LocalSessionObservation> + 'a) -> Self {
+        self.discover = Box::new(f);
+        self
+    }
+
+    fn restore(
+        mut self,
+        f: impl FnOnce() -> Result<LaneRestoreConfig, LaneResumeError> + 'a,
+    ) -> Self {
+        self.restore = Box::new(f);
+        self
+    }
+
+    fn run(self) -> Result<LaneResumeAction, LaneResumeError> {
+        plan_lane_resume(
+            LaneResumeRequest {
+                selector: self.selector,
+                agents: self.agents,
+                worktrees: self.worktrees,
+                current_root: self.current_root,
+                project_root: Path::new("/repo"),
+                max: self.max,
+                rimz_bin: Path::new(RIMZ_BIN),
+            },
+            self.path_exists,
+            self.session_backed,
+            self.liveness,
+            self.discover,
+            self.restore,
+        )
     }
 }
 
@@ -290,30 +533,18 @@ fn discovered_candidate_requires_session_and_workspace() {
 
 #[test]
 fn cohort_resume_selects_newest_team_member_per_role() {
-    let mut old_planner = agent("claude", "old-planner", "/code/forge", Some("forge"), 30);
-    old_planner.team = Some("forge".to_owned());
-    old_planner.role = Some("planner".to_owned());
-    let mut planner = agent("claude", "planner", "/code/forge", Some("forge"), 2);
-    planner.team = Some("forge".to_owned());
-    planner.role = Some("planner".to_owned());
-    planner.channel = Some("design".to_owned());
-    let mut coder = agent("codex", "coder", "/code/forge", Some("forge"), 4);
-    coder.team = Some("forge".to_owned());
-    coder.role = Some("coder".to_owned());
+    let old_planner = team_agent("claude", "old-planner", "planner", "/code/forge", 30);
+    let planner = AgentState {
+        channel: Some("design".to_owned()),
+        ..team_agent("claude", "planner", "planner", "/code/forge", 2)
+    };
+    let coder = team_agent("codex", "coder", "coder", "/code/forge", 4);
     let cells = vec![
         cohort_cell("claude", Some("planner")),
         cohort_cell("codex", Some("coder")),
     ];
 
-    let plan = plan_cohort_resume(
-        &[old_planner, planner, coder],
-        dead,
-        &cells,
-        Some("forge"),
-        |_| true,
-        |_| true,
-    )
-    .expect("cohort plan");
+    let plan = cohort(&[old_planner, planner, coder], &cells, Some("forge")).expect("cohort plan");
 
     assert_eq!(
         plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
@@ -326,31 +557,12 @@ fn cohort_resume_selects_newest_team_member_per_role() {
 
 #[test]
 fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere() {
-    let mut newest_planner = agent("claude", "newest-planner", "/code/newer", Some("newer"), 1);
-    newest_planner.team = Some("forge".to_owned());
-    newest_planner.role = Some("planner".to_owned());
-    let mut newest_coder = agent("codex", "newest-coder", "/code/newer", Some("newer"), 2);
-    newest_coder.team = Some("forge".to_owned());
-    newest_coder.role = Some("coder".to_owned());
-    let mut target_planner = agent(
-        "claude",
-        "target-planner",
-        "/code/restore",
-        Some("restore"),
-        50,
-    );
-    target_planner.team = Some("forge".to_owned());
-    target_planner.role = Some("planner".to_owned());
-    let mut target_coder = agent(
-        "codex",
-        "target-coder",
-        "/code/restore",
-        Some("restore"),
-        60,
-    );
-    target_coder.team = Some("forge".to_owned());
-    target_coder.role = Some("coder".to_owned());
-    let agents = vec![newest_planner, newest_coder, target_planner, target_coder];
+    let agents = vec![
+        team_agent("claude", "newest-planner", "planner", "/code/newer", 1),
+        team_agent("codex", "newest-coder", "coder", "/code/newer", 2),
+        team_agent("claude", "target-planner", "planner", "/code/restore", 50),
+        team_agent("codex", "target-coder", "coder", "/code/restore", 60),
+    ];
     let scoped = agents
         .into_iter()
         .filter(|agent| agent.worktree_path.as_deref() == Some("/code/restore"))
@@ -360,8 +572,7 @@ fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere
         cohort_cell("codex", Some("coder")),
     ];
 
-    let plan = plan_cohort_resume(&scoped, dead, &cells, Some("forge"), |_| true, |_| true)
-        .expect("filtered cohort plan");
+    let plan = cohort(&scoped, &cells, Some("forge")).expect("filtered cohort plan");
 
     assert_eq!(
         plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
@@ -372,25 +583,24 @@ fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere
 
 #[test]
 fn cohort_resume_includes_every_ended_session_backed_member() {
-    let mut planner = agent("claude", "planner", "/code/forge", Some("forge"), 1);
-    planner.team = Some("forge".to_owned());
-    planner.role = Some("planner".to_owned());
-    planner.ended_at = Some(planner.last_seen);
-    let mut coder = agent("codex", "coder", "/code/forge", Some("forge"), 2);
-    coder.team = Some("forge".to_owned());
-    coder.role = Some("coder".to_owned());
-    coder.ended_at = Some(coder.last_seen);
+    let planner = team_agent("claude", "planner", "planner", "/code/forge", 1);
+    let planner = AgentState {
+        ended_at: Some(planner.last_seen),
+        ..planner
+    };
+    let coder = team_agent("codex", "coder", "coder", "/code/forge", 2);
+    let coder = AgentState {
+        ended_at: Some(coder.last_seen),
+        ..coder
+    };
 
-    let plan = plan_cohort_resume(
+    let plan = cohort(
         &[planner, coder],
-        dead,
         &[
             cohort_cell("claude", Some("planner")),
             cohort_cell("codex", Some("coder")),
         ],
         Some("forge"),
-        |_| true,
-        |_| true,
     )
     .expect("closed team member remains a cohort candidate");
 
@@ -402,15 +612,15 @@ fn cohort_resume_includes_every_ended_session_backed_member() {
 
 #[test]
 fn cohort_resume_refuses_a_still_live_member() {
-    let mut planner = agent("claude", "planner", "/code/forge", Some("forge"), 1);
-    planner.team = Some("forge".to_owned());
-    planner.role = Some("planner".to_owned());
-    planner.name = Some("swift-otter".to_owned());
-    let err = plan_cohort_resume(
+    let planner = AgentState {
+        name: Some("swift-otter".to_owned()),
+        ..team_agent("claude", "planner", "planner", "/code/forge", 1)
+    };
+    let err = cohort_with(
         &[planner],
-        |_| AgentLiveness::Live { pid: 42 },
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),
+        live,
         |_| true,
         |_| true,
     )
@@ -426,16 +636,8 @@ fn cohort_resume_refuses_a_still_live_member() {
 
 #[test]
 fn cohort_resume_refuses_when_nothing_matches() {
-    let agents = vec![agent("codex", "c1", "/code/query-engine", Some("main"), 1)];
-    let err = plan_cohort_resume(
-        &agents,
-        dead,
-        &[cohort_cell("claude", None)],
-        None,
-        |_| true,
-        |_| true,
-    )
-    .expect_err("no matching kind");
+    let agents = vec![agent("codex", "c1", "/code/query-engine", 1)];
+    let err = cohort(&agents, &[cohort_cell("claude", None)], None).expect_err("no matching kind");
 
     assert_eq!(
         err,
@@ -447,16 +649,9 @@ fn cohort_resume_refuses_when_nothing_matches() {
 
 #[test]
 fn cohort_resume_starts_fresh_for_kind_without_resume_cli() {
-    let agents = vec![agent("ghost", "g1", "/code/query-engine", None, 1)];
-    let plan = plan_cohort_resume(
-        &agents,
-        dead,
-        &[cohort_cell("ghost", None)],
-        None,
-        |_| true,
-        |_| true,
-    )
-    .expect("unsupported kind still matched prior cohort");
+    let agents = vec![agent("ghost", "g1", "/code/query-engine", 1)];
+    let plan = cohort(&agents, &[cohort_cell("ghost", None)], None)
+        .expect("unsupported kind still matched prior cohort");
 
     assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
     assert_eq!(plan.fresh, vec!["ghost:query-engine".to_owned()]);
@@ -465,23 +660,18 @@ fn cohort_resume_starts_fresh_for_kind_without_resume_cli() {
 
 #[test]
 fn cohort_resume_starts_fresh_for_provisional_launch_placeholder() {
-    let mut coder = agent(
+    let coder = team_agent(
         "codex",
         "launch_019f2cecea067320b667c5946d266e64",
+        "coder",
         "/code/pets-l",
-        Some("pets-l"),
         4,
     );
-    coder.team = Some("forge".to_owned());
-    coder.role = Some("coder".to_owned());
 
-    let plan = plan_cohort_resume(
+    let plan = cohort(
         &[coder],
-        dead,
         &[cohort_cell("codex", Some("coder"))],
         Some("forge"),
-        |_| true,
-        |_| true,
     )
     .expect("provisional placeholder still matched the cohort");
 
@@ -492,12 +682,12 @@ fn cohort_resume_starts_fresh_for_provisional_launch_placeholder() {
 
 #[test]
 fn cohort_resume_relaunches_empty_session_fresh() {
-    let agents = vec![agent("claude", "a1", "/code/query-engine", None, 1)];
-    let plan = plan_cohort_resume(
+    let agents = vec![agent("claude", "a1", "/code/query-engine", 1)];
+    let plan = cohort_with(
         &agents,
-        dead,
         &[cohort_cell("claude", None)],
         None,
+        dead,
         |_| true,
         |_| false,
     )
@@ -510,26 +700,12 @@ fn cohort_resume_relaunches_empty_session_fresh() {
 
 #[test]
 fn cohort_resume_matches_inline_group_by_launch_ordinal() {
-    let mut old = agent("claude", "old", "/code/old", None, 50);
-    old.launch_group = Some("launch_old".to_owned());
-    old.launch_ordinal = Some(0);
-    let mut first = agent("codex", "first", "/code/new", None, 2);
-    first.launch_group = Some("launch_new".to_owned());
-    first.launch_ordinal = Some(0);
-    let mut second = agent("claude", "second", "/code/new", None, 3);
-    second.launch_group = Some("launch_new".to_owned());
-    second.launch_ordinal = Some(1);
+    let old = inline_agent("claude", "old", "launch_old", 0, "/code/old", 50);
+    let first = inline_agent("codex", "first", "launch_new", 0, "/code/new", 2);
+    let second = inline_agent("claude", "second", "launch_new", 1, "/code/new", 3);
     let cells = vec![cohort_cell("claude", None), cohort_cell("codex", None)];
 
-    let plan = plan_cohort_resume(
-        &[old, first, second],
-        dead,
-        &cells,
-        None,
-        |_| true,
-        |_| true,
-    )
-    .expect("inline cohort plan");
+    let plan = cohort(&[old, first, second], &cells, None).expect("inline cohort plan");
 
     assert_eq!(
         plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
@@ -540,12 +716,16 @@ fn cohort_resume_matches_inline_group_by_launch_ordinal() {
 
 #[test]
 fn inline_cohort_without_ordinals_matches_same_kind_members_by_role() {
-    let mut planner = agent("claude", "planner", "/code/new", None, 2);
-    planner.launch_group = Some("launch_new".to_owned());
-    planner.role = Some("planner".to_owned());
-    let mut coder = agent("claude", "coder", "/code/new", None, 3);
-    coder.launch_group = Some("launch_new".to_owned());
-    coder.role = Some("coder".to_owned());
+    let planner = AgentState {
+        launch_group: Some("launch_new".to_owned()),
+        role: Some("planner".to_owned()),
+        ..agent("claude", "planner", "/code/new", 2)
+    };
+    let coder = AgentState {
+        launch_group: Some("launch_new".to_owned()),
+        role: Some("coder".to_owned()),
+        ..agent("claude", "coder", "/code/new", 3)
+    };
     let cells = vec![
         cohort_cell("claude", Some("coder")),
         cohort_cell("claude", Some("planner")),
@@ -564,10 +744,14 @@ fn inline_cohort_without_ordinals_matches_same_kind_members_by_role() {
 
 #[test]
 fn inline_cohort_without_roles_falls_back_to_kind() {
-    let mut claude = agent("claude", "claude", "/code/new", None, 2);
-    claude.launch_group = Some("launch_new".to_owned());
-    let mut codex = agent("codex", "codex", "/code/new", None, 3);
-    codex.launch_group = Some("launch_new".to_owned());
+    let claude = AgentState {
+        launch_group: Some("launch_new".to_owned()),
+        ..agent("claude", "claude", "/code/new", 2)
+    };
+    let codex = AgentState {
+        launch_group: Some("launch_new".to_owned()),
+        ..agent("codex", "codex", "/code/new", 3)
+    };
     let cells = vec![cohort_cell("codex", None), cohort_cell("claude", None)];
 
     let matches = match_cohort(&[&claude, &codex], &cells, None);
@@ -583,18 +767,17 @@ fn inline_cohort_without_roles_falls_back_to_kind() {
 
 #[test]
 fn match_cohort_dispatches_team_and_inline_membership() {
-    let mut team_planner = agent("claude", "team", "/code/forge", None, 3);
-    team_planner.team = Some("forge".to_owned());
-    team_planner.role = Some("planner".to_owned());
-    let mut team_coder = agent("codex", "team-coder", "/code/forge", None, 4);
-    team_coder.team = Some("forge".to_owned());
-    team_coder.role = Some("coder".to_owned());
-    let mut inline_planner = agent("claude", "inline", "/code/forge", None, 2);
-    inline_planner.launch_group = Some("launch_inline".to_owned());
-    inline_planner.launch_ordinal = Some(0);
-    let mut inline_coder = agent("codex", "inline-coder", "/code/forge", None, 1);
-    inline_coder.launch_group = Some("launch_inline".to_owned());
-    inline_coder.launch_ordinal = Some(1);
+    let team_planner = team_agent("claude", "team", "planner", "/code/forge", 3);
+    let team_coder = team_agent("codex", "team-coder", "coder", "/code/forge", 4);
+    let inline_planner = inline_agent("claude", "inline", "launch_inline", 0, "/code/forge", 2);
+    let inline_coder = inline_agent(
+        "codex",
+        "inline-coder",
+        "launch_inline",
+        1,
+        "/code/forge",
+        1,
+    );
     let cells = vec![
         cohort_cell("claude", Some("planner")),
         cohort_cell("codex", Some("coder")),
@@ -613,13 +796,11 @@ fn match_cohort_dispatches_team_and_inline_membership() {
 
 #[test]
 fn cohort_relaunch_normalizes_worktrees_and_keeps_named_team_siblings() {
-    let mut planner = agent("claude", "planner", "/code/feature", None, 3);
-    planner.team = Some("forge".to_owned());
-    planner.role = Some("planner".to_owned());
-    planner.ended_at = Some(Timestamp::UNIX_EPOCH);
-    let mut reviewer = agent("codex", "reviewer", "/code/feature", None, 1);
-    reviewer.team = Some("forge".to_owned());
-    reviewer.role = Some("reviewer".to_owned());
+    let planner = AgentState {
+        ended_at: Some(Timestamp::UNIX_EPOCH),
+        ..team_agent("claude", "planner", "planner", "/code/feature", 3)
+    };
+    let reviewer = team_agent("codex", "reviewer", "reviewer", "/code/feature", 1);
 
     assert_eq!(
         inspect_cohort_relaunch(
@@ -629,27 +810,30 @@ fn cohort_relaunch_normalizes_worktrees_and_keeps_named_team_siblings() {
             Some("forge"),
         ),
         CohortRelaunchState::Present {
-            focus_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_reviewer")),
+            focus_pane: Some(pane_id("terminal_reviewer")),
         }
     );
 }
 
 #[test]
 fn cohort_relaunch_uses_newest_inline_launch_group() {
-    let mut old_planner = agent("claude", "old-planner", "/code/feature", None, 10);
-    old_planner.launch_group = Some("launch_old".to_owned());
-    old_planner.launch_ordinal = Some(0);
-    let mut old_coder = agent("codex", "old-coder", "/code/feature", None, 9);
-    old_coder.launch_group = Some("launch_old".to_owned());
-    old_coder.launch_ordinal = Some(1);
-    let mut new_planner = agent("claude", "new-planner", "/code/feature", None, 2);
-    new_planner.launch_group = Some("launch_new".to_owned());
-    new_planner.launch_ordinal = Some(0);
-    new_planner.ended_at = Some(Timestamp::UNIX_EPOCH);
-    let mut new_coder = agent("codex", "new-coder", "/code/feature", None, 1);
-    new_coder.launch_group = Some("launch_new".to_owned());
-    new_coder.launch_ordinal = Some(1);
-    new_coder.ended_at = Some(Timestamp::UNIX_EPOCH);
+    let old_planner = inline_agent(
+        "claude",
+        "old-planner",
+        "launch_old",
+        0,
+        "/code/feature",
+        10,
+    );
+    let old_coder = inline_agent("codex", "old-coder", "launch_old", 1, "/code/feature", 9);
+    let new_planner = AgentState {
+        ended_at: Some(Timestamp::UNIX_EPOCH),
+        ..inline_agent("claude", "new-planner", "launch_new", 0, "/code/feature", 2)
+    };
+    let new_coder = AgentState {
+        ended_at: Some(Timestamp::UNIX_EPOCH),
+        ..inline_agent("codex", "new-coder", "launch_new", 1, "/code/feature", 1)
+    };
 
     assert_eq!(
         inspect_cohort_relaunch(
@@ -665,17 +849,26 @@ fn cohort_relaunch_uses_newest_inline_launch_group() {
 #[test]
 fn cohort_relaunch_presence_table() {
     let cell = cohort_cell("codex", None);
-    let mut ended = agent("codex", "ended", "/code/feature", None, 4);
-    ended.ended_at = Some(Timestamp::UNIX_EPOCH);
-    let with_pane = agent("codex", "pane", "/code/feature", None, 3);
-    let mut without_pane = agent("codex", "paneless", "/code/feature", None, 2);
-    without_pane.pane = None;
-    let mut live_without_pane = agent("codex", "live", "/code/feature", None, 1);
-    live_without_pane.pane = None;
-    live_without_pane.runtime_owner = Some(crate::store::runtime::current_process_owner(
-        crate::pane::RuntimeOwnerKind::Agent,
-        live_without_pane.agent_id.to_string(),
-    ));
+    let ended = AgentState {
+        ended_at: Some(Timestamp::UNIX_EPOCH),
+        ..agent("codex", "ended", "/code/feature", 4)
+    };
+    let with_pane = agent("codex", "pane", "/code/feature", 3);
+    let without_pane = AgentState {
+        pane: None,
+        ..agent("codex", "paneless", "/code/feature", 2)
+    };
+    let live_without_pane = {
+        let base = agent("codex", "live", "/code/feature", 1);
+        AgentState {
+            pane: None,
+            runtime_owner: Some(crate::store::runtime::current_process_owner(
+                crate::pane::RuntimeOwnerKind::Agent,
+                base.agent_id.to_string(),
+            )),
+            ..base
+        }
+    };
 
     for (label, agents, expected) in [
         ("absent", Vec::new(), CohortRelaunchState::Absent),
@@ -684,7 +877,7 @@ fn cohort_relaunch_presence_table() {
             "unknown with pane",
             vec![with_pane],
             CohortRelaunchState::Present {
-                focus_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_pane")),
+                focus_pane: Some(pane_id("terminal_pane")),
             },
         ),
         (
@@ -713,12 +906,8 @@ fn cohort_relaunch_presence_table() {
 
 #[test]
 fn cohort_relaunch_focuses_freshest_present_pane() {
-    let mut older = agent("claude", "older", "/code/feature", None, 5);
-    older.launch_group = Some("launch_group".to_owned());
-    older.launch_ordinal = Some(0);
-    let mut fresher = agent("codex", "fresher", "/code/feature", None, 1);
-    fresher.launch_group = Some("launch_group".to_owned());
-    fresher.launch_ordinal = Some(1);
+    let older = inline_agent("claude", "older", "launch_group", 0, "/code/feature", 5);
+    let fresher = inline_agent("codex", "fresher", "launch_group", 1, "/code/feature", 1);
 
     assert_eq!(
         inspect_cohort_relaunch(
@@ -728,19 +917,19 @@ fn cohort_relaunch_focuses_freshest_present_pane() {
             None,
         ),
         CohortRelaunchState::Present {
-            focus_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_fresher")),
+            focus_pane: Some(pane_id("terminal_fresher")),
         }
     );
 }
 
 #[test]
 fn cohort_resume_drops_members_whose_worktree_is_gone() {
-    let agents = vec![agent("claude", "a1", "/code/gone", None, 1)];
-    let err = plan_cohort_resume(
+    let agents = vec![agent("claude", "a1", "/code/gone", 1)];
+    let err = cohort_with(
         &agents,
-        dead,
         &[cohort_cell("claude", None)],
         None,
+        dead,
         |_| false,
         |_| true,
     )
@@ -757,27 +946,10 @@ fn cohort_resume_drops_members_whose_worktree_is_gone() {
 #[test]
 fn resumes_root_agents_most_recent_first() {
     let agents = vec![
-        agent("codex", "c1", "/code/query-engine", Some("main"), 30),
-        agent(
-            "claude",
-            "a1",
-            "/code/qe-feature",
-            Some("feature-migration"),
-            5,
-        ),
+        agent("codex", "c1", "/code/query-engine", 30),
+        agent("claude", "a1", "/code/qe-feature", 5),
     ];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan(&agents);
     assert!(plan.skipped.is_empty());
     assert_eq!(plan.tabs.len(), 2);
     // Most-recently-active leads (the focus target).
@@ -811,21 +983,9 @@ fn rebirth_resume_skips_provisional_launch_placeholder() {
         "codex",
         "launch_019f2cecea067320b667c5946d266e64",
         "/code/pets-l",
-        Some("pets-l"),
         4,
     )];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan(&agents);
 
     assert!(plan.tabs.is_empty());
     assert_eq!(
@@ -840,19 +1000,8 @@ fn rebirth_resume_skips_provisional_launch_placeholder() {
 
 #[test]
 fn plan_resume_skips_agent_without_conversation() {
-    let agents = vec![agent("claude", "a1", "/code/query-engine", Some("main"), 1)];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| false,
-    );
+    let agents = vec![agent("claude", "a1", "/code/query-engine", 1)];
+    let plan = plan_with(&agents, DEFAULT_RESUME_MAX, None, |_| true, |_| false);
 
     assert!(plan.tabs.is_empty());
     assert_eq!(
@@ -868,21 +1017,10 @@ fn plan_resume_skips_agent_without_conversation() {
 #[test]
 fn disambiguates_reborn_tabs_with_the_same_basename() {
     let agents = vec![
-        agent("claude", "a1", "/work/repoA/main", None, 5),
-        agent("codex", "c1", "/work/repoB/main", None, 9),
+        agent("claude", "a1", "/work/repoA/main", 5),
+        agent("codex", "c1", "/work/repoB/main", 9),
     ];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan(&agents);
 
     assert_eq!(plan.tabs.len(), 2);
     assert_eq!(plan.tabs[0].cwd, PathBuf::from("/work/repoA/main"));
@@ -903,20 +1041,22 @@ fn disambiguates_reborn_tabs_with_the_same_basename() {
 fn resume_command_replays_launch_identity() {
     // A reborn agent re-stamps its durable launch identity, so it answers
     // to `@<profile>` and `@<role>` again after a mux rebirth.
-    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
-    agent.name = Some("swift-otter".to_owned());
-    agent.profile = Some("claude-planner".to_owned());
-    agent.role = Some("planner".to_owned());
-    agent.team = Some("forge".to_owned());
-    agent.launch_group = Some("launch_group_1".to_owned());
-    agent.launch_ordinal = Some(2);
+    let agent = AgentState {
+        name: Some("swift-otter".to_owned()),
+        profile: Some("claude-planner".to_owned()),
+        role: Some("planner".to_owned()),
+        team: Some("forge".to_owned()),
+        launch_group: Some("launch_group_1".to_owned()),
+        launch_ordinal: Some(2),
+        ..agent("claude", "a1", "/code/qe", 1)
+    };
     let argv = resume_command(
-        Path::new("/bin/rimz"),
+        Path::new(RIMZ_BIN),
         &agent,
         agent.channel.as_deref(),
         &ResumePosture::default(),
     );
-    assert_eq!(&argv[..4], ["/bin/rimz", "agents", "exec", "claude"]);
+    assert_eq!(&argv[..4], [RIMZ_BIN, "agents", "exec", "claude"]);
     let request = decode_exec_request(&argv);
     assert_eq!(
         request.action,
@@ -946,30 +1086,24 @@ fn resume_replays_the_profile_declared_posture() {
     // profile's model, effort, and appended system prompt ride the resume argv,
     // not just the `@planner` handle.
     let prompt = tempfile::NamedTempFile::new().expect("temp prompt file");
-    let mut planner = profile("claude");
-    planner.model = Some("opus".to_owned());
-    planner.effort = Some("high".to_owned());
-    planner.append_system_prompt_file = Some(prompt.path().to_path_buf());
-    let profiles = profiles(&[("planner", planner)]);
-
-    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
-    agent.profile = Some("planner".to_owned());
-    let plan = plan_resume(
-        &[agent],
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &profiles,
-            max: DEFAULT_RESUME_MAX,
+    let profiles = profiles(
+        "planner",
+        Profile {
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+            append_system_prompt_file: Some(prompt.path().to_path_buf()),
+            ..profile("claude")
         },
-        |_| true,
-        |_| true,
     );
+    let agent = AgentState {
+        profile: Some("planner".to_owned()),
+        ..agent("claude", "a1", "/code/qe", 1)
+    };
+
+    let plan = plan_profiled(agent, &profiles);
 
     assert!(plan.warnings.is_empty());
-    let argv = single_pane_argv(&plan);
-    let request = decode_exec_request(&argv);
+    let request = decode_exec_request(&single_pane_argv(&plan));
     let expected = crate::harness::spec::profile_cell("planner", &profiles)
         .expect("planner profile resolves")
         .args;
@@ -992,23 +1126,13 @@ fn resume_replays_the_profile_declared_posture() {
 fn resume_leaves_one_off_launch_values_out_of_the_posture() {
     // `model` on the rollup is observed, not declared — the user may have
     // switched it mid-session with `/model`. Only the profile speaks here.
-    let profiles = profiles(&[("planner", profile("claude"))]);
-    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
-    agent.profile = Some("planner".to_owned());
-    agent.model = Some("some-one-off-model".to_owned());
+    let agent = AgentState {
+        profile: Some("planner".to_owned()),
+        model: Some("some-one-off-model".to_owned()),
+        ..agent("claude", "a1", "/code/qe", 1)
+    };
 
-    let plan = plan_resume(
-        &[agent],
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &profiles,
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan_profiled(agent, &profiles("planner", profile("claude")));
 
     let argv = single_pane_argv(&plan);
     assert!(
@@ -1022,54 +1146,28 @@ fn resume_leaves_one_off_launch_values_out_of_the_posture() {
 fn resume_replays_the_stamped_mode_when_the_profile_declares_none() {
     // The launch event records the permission posture the user granted, so a
     // profile-less agent still comes back with it.
-    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
-    agent.mode = Some(crate::harness::run::PermissionMode::Yolo);
+    let agent = AgentState {
+        mode: Some(PermissionMode::Yolo),
+        ..agent("claude", "a1", "/code/qe", 1)
+    };
 
-    let plan = plan_resume(
-        &[agent],
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan_profiled(agent, &no_profiles());
 
     let request = decode_exec_request(&single_pane_argv(&plan));
-    let expected = crate::agents::find_definition("claude")
-        .expect("claude adapter")
-        .spec()
-        .launch
-        .permission_args(crate::harness::run::PermissionMode::Yolo);
-    assert_eq!(request.action.extra_args(), expected);
-    assert_eq!(
-        request.identity.params.mode,
-        Some(crate::harness::run::PermissionMode::Yolo)
-    );
+    assert_eq!(request.action.extra_args(), yolo_argv("claude"));
+    assert_eq!(request.identity.params.mode, Some(PermissionMode::Yolo));
 }
 
 #[test]
 fn resume_degrades_to_bare_when_the_profile_is_gone() {
     // Rebirth runs unattended, so a profile dropped from config warns and
     // recovers rather than refusing to bring the session back.
-    let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
-    agent.profile = Some("retired".to_owned());
+    let agent = AgentState {
+        profile: Some("retired".to_owned()),
+        ..agent("claude", "a1", "/code/qe", 1)
+    };
 
-    let plan = plan_resume(
-        &[agent],
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan_profiled(agent, &no_profiles());
 
     assert_eq!(plan.tabs.len(), 1, "the session still comes back");
     assert_eq!(plan.warnings.len(), 1);
@@ -1089,31 +1187,26 @@ fn resume_degrades_to_bare_when_the_profile_is_gone() {
 #[test]
 fn profile_mode_wins_over_the_stamped_mode() {
     // The profile is the standing decision; the stamp only fills a gap.
-    let mut auto = profile("claude");
-    auto.mode = Some(crate::harness::run::PermissionMode::Auto);
-    let profiles = profiles(&[("planner", auto)]);
-    let kind = AgentKind::new_unchecked("claude");
-
-    let posture = resolve_posture(
-        PostureRequest {
-            profile: Some("planner"),
-            kind: &kind,
-            stamped_mode: Some(crate::harness::run::PermissionMode::Yolo),
+    let profiles = profiles(
+        "planner",
+        Profile {
+            mode: Some(PermissionMode::Auto),
+            ..profile("claude")
         },
+    );
+
+    let posture = posture_for(
+        "claude",
+        Some("planner"),
+        Some(PermissionMode::Yolo),
         &profiles,
     );
 
-    assert_eq!(
-        posture.mode,
-        Some(crate::harness::run::PermissionMode::Auto)
-    );
-    let yolo = crate::agents::find_definition("claude")
-        .expect("claude adapter")
-        .spec()
-        .launch
-        .permission_args(crate::harness::run::PermissionMode::Yolo);
+    assert_eq!(posture.mode, Some(PermissionMode::Auto));
     assert!(
-        !yolo.iter().any(|arg| posture.args.contains(arg)),
+        !yolo_argv("claude")
+            .iter()
+            .any(|arg| posture.args.contains(arg)),
         "stamped yolo argv leaked past the profile's mode: {:?}",
         posture.args
     );
@@ -1123,19 +1216,15 @@ fn profile_mode_wins_over_the_stamped_mode() {
 fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
     // Rebirth is unattended: a deleted prompt file must not strand the session.
     let dir = tempfile::tempdir().expect("temp dir");
-    let mut planner = profile("codex");
-    planner.system_prompt_file = Some(dir.path().join("missing.md"));
-    let profiles = profiles(&[("planner", planner)]);
-    let kind = AgentKind::new_unchecked("codex");
-
-    let posture = resolve_posture(
-        PostureRequest {
-            profile: Some("planner"),
-            kind: &kind,
-            stamped_mode: None,
+    let profiles = profiles(
+        "planner",
+        Profile {
+            system_prompt_file: Some(dir.path().join("missing.md")),
+            ..profile("codex")
         },
-        &profiles,
     );
+
+    let posture = posture_for("codex", Some("planner"), None, &profiles);
 
     assert!(posture.args.is_empty());
     assert!(matches!(
@@ -1145,19 +1234,13 @@ fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
 }
 
 #[test]
-fn posture_refuses_nothing_and_reports_a_provider_switch() {
+fn posture_reports_a_provider_switch_rather_than_refusing() {
     // Restart escalates this; unattended resume degrades on it. Either way the
     // resolver reports rather than fails.
-    let profiles = profiles(&[("planner", profile("codex"))]);
-    let kind = AgentKind::new_unchecked("claude");
-    let posture = resolve_posture(
-        PostureRequest {
-            profile: Some("planner"),
-            kind: &kind,
-            stamped_mode: None,
-        },
-        &profiles,
-    );
+    let profiles = profiles("planner", profile("codex"));
+
+    let posture = posture_for("claude", Some("planner"), None, &profiles);
+
     assert!(posture.args.is_empty());
     assert!(matches!(
         posture.degraded,
@@ -1167,31 +1250,27 @@ fn posture_refuses_nothing_and_reports_a_provider_switch() {
 
 #[test]
 fn filters_subagents_and_ended_candidates_but_resumes_paneless_roots() {
-    let mut child = agent("claude", "kid", "/code/query-engine", Some("main"), 1);
-    child.parent_agent_id = Some("parent".into());
+    let child = AgentState {
+        parent_agent_id: Some("parent".into()),
+        ..agent("claude", "kid", "/code/query-engine", 1)
+    };
     // A rebirth boundary retires the pane stamp, but durable provider identity
     // keeps the root session resumable.
-    let mut paneless = agent("claude", "paneless", "/code/query-engine", Some("main"), 1);
-    paneless.pane = None;
+    let paneless = AgentState {
+        pane: None,
+        ..agent("claude", "paneless", "/code/query-engine", 1)
+    };
     let ended: BTreeSet<(AgentKind, AgentSessionId)> =
         [(AgentKind::new_unchecked("claude"), "ended".into())]
             .into_iter()
             .collect();
-    let plan = plan_resume(
+    let plan = plan_excluding(
         &[
             child,
             paneless,
-            agent("claude", "ended", "/code/query-engine", Some("main"), 1),
+            agent("claude", "ended", "/code/query-engine", 1),
         ],
         &ended,
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
     );
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(
@@ -1203,23 +1282,16 @@ fn filters_subagents_and_ended_candidates_but_resumes_paneless_roots() {
 
 #[test]
 fn dedups_paneless_records_by_provider_session_identity() {
-    let mut older = agent("claude", "same", "/code/query-engine", Some("main"), 60);
-    older.pane = None;
-    let mut newer = agent("claude", "same", "/code/query-engine", Some("main"), 2);
-    newer.pane = None;
+    let older = AgentState {
+        pane: None,
+        ..agent("claude", "same", "/code/query-engine", 60)
+    };
+    let newer = AgentState {
+        pane: None,
+        ..agent("claude", "same", "/code/query-engine", 2)
+    };
 
-    let plan = plan_resume(
-        &[older, newer],
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan(&[older, newer]);
 
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(
@@ -1230,19 +1302,8 @@ fn dedups_paneless_records_by_provider_session_identity() {
 
 #[test]
 fn stamps_a_missing_worktree_session_ended() {
-    let agents = vec![agent("claude", "a1", "/code/gone", Some("dead-branch"), 1)];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| false,
-        |_| true,
-    );
+    let agents = vec![agent("claude", "a1", "/code/gone", 1)];
+    let plan = plan_with(&agents, DEFAULT_RESUME_MAX, None, |_| false, |_| true);
     assert!(plan.tabs.is_empty());
     assert!(plan.skipped.is_empty());
     assert_eq!(
@@ -1256,35 +1317,10 @@ fn dedups_a_relaunched_agent_keeping_the_newest() {
     // A relaunch in place re-uses the same pane id; the older stamp is
     // superseded by the newest, exactly as the live sidebar binds the pane.
     let agents = vec![
-        agent_on_pane(
-            "claude",
-            "old",
-            "/code/query-engine",
-            Some("main"),
-            60,
-            "terminal_4",
-        ),
-        agent_on_pane(
-            "claude",
-            "new",
-            "/code/query-engine",
-            Some("main"),
-            2,
-            "terminal_4",
-        ),
+        agent_on_pane("claude", "old", "/code/query-engine", 60, "terminal_4"),
+        agent_on_pane("claude", "new", "/code/query-engine", 2, "terminal_4"),
     ];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan(&agents);
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(
         single_column(&plan.tabs[0]),
@@ -1300,35 +1336,16 @@ fn collapses_a_relaunch_that_changed_branch_on_one_pane() {
     // identity, so the differing branch must not leak a second resume pane —
     // the `(kind, worktree, branch)` key used to double this.
     let agents = vec![
-        agent_on_pane(
-            "claude",
-            "old",
-            "/code/query-engine",
-            Some("main"),
-            60,
-            "terminal_4",
-        ),
-        agent_on_pane(
-            "claude",
-            "new",
-            "/code/query-engine",
-            Some("feature"),
-            2,
-            "terminal_4",
-        ),
-    ];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
+        AgentState {
+            worktree_branch: Some("main".to_owned()),
+            ..agent_on_pane("claude", "old", "/code/query-engine", 60, "terminal_4")
         },
-        |_| true,
-        |_| true,
-    );
+        AgentState {
+            worktree_branch: Some("feature".to_owned()),
+            ..agent_on_pane("claude", "new", "/code/query-engine", 2, "terminal_4")
+        },
+    ];
+    let plan = plan(&agents);
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(
         single_column(&plan.tabs[0]),
@@ -1342,36 +1359,11 @@ fn keeps_two_same_kind_agents_in_one_worktree() {
     // panes, so each is its own live agent. The `(kind, worktree, branch)`
     // key used to collapse them to one; pane identity keeps both.
     let agents = vec![
-        agent_on_pane(
-            "claude",
-            "a1",
-            "/code/query-engine",
-            Some("main"),
-            5,
-            "terminal_4",
-        ),
-        agent_on_pane(
-            "claude",
-            "a2",
-            "/code/query-engine",
-            Some("main"),
-            9,
-            "terminal_5",
-        ),
-        agent("codex", "c1", "/code/query-engine", Some("main"), 12),
+        agent_on_pane("claude", "a1", "/code/query-engine", 5, "terminal_4"),
+        agent_on_pane("claude", "a2", "/code/query-engine", 9, "terminal_5"),
+        agent("codex", "c1", "/code/query-engine", 12),
     ];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan(&agents);
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(plan.tabs[0].label, "#query-engine");
     // Freshest leads within the tab; all same-worktree sessions are resumed.
@@ -1388,21 +1380,10 @@ fn keeps_two_same_kind_agents_in_one_worktree() {
 #[test]
 fn caps_and_reports_the_overflow() {
     let agents = vec![
-        agent("claude", "a1", "/code/wt-1", Some("b1"), 5),
-        agent("claude", "a2", "/code/wt-2", Some("b2"), 10),
+        agent("claude", "a1", "/code/wt-1", 5),
+        agent("claude", "a2", "/code/wt-2", 10),
     ];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: 1,
-        },
-        |_| true,
-        |_| true,
-    );
+    let plan = plan_capped(&agents, 1);
     assert_eq!(plan.tabs.len(), 1);
     // The freshest survives the cap; the older overflows.
     assert_eq!(
@@ -1421,24 +1402,9 @@ fn caps_and_reports_the_overflow() {
 
 #[test]
 fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
-    let agents = vec![agent("codex", "c1", "/code/query-engine", None, 1)];
-    let plan = plan_resume(
-        &agents,
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let agents = vec![agent("codex", "c1", "/code/query-engine", 1)];
+    let plan = plan(&agents);
     assert_eq!(plan.tabs[0].label, "#query-engine");
-    assert_eq!(
-        build_label("codex", None, Path::new("/code/query-engine")),
-        "codex:query-engine"
-    );
     assert_eq!(
         build_label("codex", None, Path::new("/code/query-engine")),
         "codex:query-engine"
@@ -1447,20 +1413,11 @@ fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
 
 #[test]
 fn named_channel_groups_by_explicit_channel_and_replays_identity() {
-    let mut design = agent("codex", "c1", "/code/query-engine", Some("main"), 1);
-    design.channel = Some("design".to_owned());
-    let plan = plan_resume(
-        &[design],
-        &no_ended(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
-        |_| true,
-        |_| true,
-    );
+    let design = AgentState {
+        channel: Some("design".to_owned()),
+        ..agent("codex", "c1", "/code/query-engine", 1)
+    };
+    let plan = plan(&[design]);
 
     assert_eq!(plan.tabs[0].label, "#design");
     assert_eq!(
@@ -1473,24 +1430,11 @@ fn named_channel_groups_by_explicit_channel_and_replays_identity() {
 
 #[test]
 fn worktree_team_resume_replays_flat_worktree_channel() {
-    let mut planner = agent(
-        "claude",
-        "planner",
-        "/code/project-wt/auth",
-        Some("feature/auth"),
-        1,
-    );
-    planner.team = Some("forge".to_owned());
-    planner.role = Some("planner".to_owned());
-    let plan = plan_resume(
+    let planner = team_agent("claude", "planner", "planner", "/code/project-wt/auth", 1);
+    let plan = plan_with(
         &[planner],
-        &no_ended(),
-        ResumeContext {
-            project_root: Some(Path::new("/code/project")),
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: DEFAULT_RESUME_MAX,
-        },
+        DEFAULT_RESUME_MAX,
+        Some(Path::new("/code/project")),
         |_| true,
         |_| true,
     );
@@ -1499,76 +1443,6 @@ fn worktree_team_resume_replays_flat_worktree_channel() {
     let request = decode_exec_request(&first_argv(&plan.tabs[0]));
     assert_eq!(request.identity.params.channel.as_deref(), Some("auth"));
     assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
-}
-
-fn team_configs() -> (TeamsConfig, ProfilesConfig, CommandsConfig) {
-    let mut profiles = ProfilesConfig::default();
-    profiles.0.insert(
-        "claude-plan".to_owned(),
-        Profile {
-            agent: "claude".to_owned(),
-            mode: None,
-            model: None,
-            effort: None,
-            budget: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            args: None,
-        },
-    );
-    profiles.0.insert(
-        "codex-code".to_owned(),
-        Profile {
-            agent: "codex".to_owned(),
-            mode: None,
-            model: None,
-            effort: None,
-            budget: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            args: None,
-        },
-    );
-    let mut teams = TeamsConfig::default();
-    teams.0.insert(
-        "forge".to_owned(),
-        Team {
-            roles: vec![
-                RoleBinding {
-                    role: "planner".to_owned(),
-                    profile: "claude-plan".to_owned(),
-                    mode: None,
-                    model: None,
-                    effort: None,
-                    budget: None,
-                    system_prompt_file: None,
-                    append_system_prompt_file: None,
-                    args: None,
-                },
-                RoleBinding {
-                    role: "coder".to_owned(),
-                    profile: "codex-code".to_owned(),
-                    mode: None,
-                    model: None,
-                    effort: None,
-                    budget: None,
-                    system_prompt_file: None,
-                    append_system_prompt_file: None,
-                    args: None,
-                },
-            ],
-            leader: None,
-            layout: Some("planner,coder".to_owned()),
-        },
-    );
-    (teams, profiles, CommandsConfig::default())
-}
-
-fn team_agent(kind: &str, id: &str, role: &str, worktree: &str, secs_ago: i64) -> AgentState {
-    let mut agent = agent(kind, id, worktree, None, secs_ago);
-    agent.team = Some("forge".to_owned());
-    agent.role = Some(role.to_owned());
-    agent
 }
 
 #[test]
@@ -1580,7 +1454,7 @@ fn resume_session_present_requires_non_empty_recorded_file() {
     std::fs::write(&empty, "").expect("write empty transcript");
     let missing = dir.path().join("missing.jsonl");
 
-    let mut agent = agent("claude", "a1", "/repo", None, 0);
+    let mut agent = agent("claude", "a1", "/repo", 0);
     agent.transcript_path = Some(present.to_string_lossy().into_owned());
     assert!(resume_session_present(&agent));
     agent.transcript_path = Some(missing.to_string_lossy().into_owned());
@@ -1598,18 +1472,10 @@ fn resume_session_present_requires_non_empty_recorded_file() {
 /// resumable.
 #[test]
 fn resume_session_without_recorded_transcript_falls_back_to_resumable() {
-    let mut unplaced = agent(
-        "claude",
-        "06e78f43-ecc1-486b-b50d-3c1f7770a5ae",
-        "",
-        None,
-        0,
-    );
-    unplaced.transcript_path = None;
+    let unplaced = agent("claude", "06e78f43-ecc1-486b-b50d-3c1f7770a5ae", "", 0);
     assert!(resume_session_present(&unplaced));
 
-    let mut opencode = agent("opencode", "ses_abc", "/repo", None, 0);
-    opencode.transcript_path = None;
+    let opencode = agent("opencode", "ses_abc", "/repo", 0);
     assert!(resume_session_present(&opencode));
 }
 
@@ -1666,7 +1532,7 @@ fn plans_fresh_seed_for_missing_team_member() {
 fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
     let (teams, profiles, commands) = team_configs();
     let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
-    let flat = agent("codex", "flat", "/repo/other", None, 5);
+    let flat = agent("codex", "flat", "/repo/other", 5);
 
     let (tabs, flat_agents) = split_team_and_flat(
         &[planner, flat],
@@ -1701,60 +1567,20 @@ fn team_restore_ignores_group_whose_team_no_longer_resolves() {
     assert!(tabs.is_empty());
 }
 
-fn lane_worktree(name: &str, branch: &str, from_pr: Option<u64>) -> LaneWorktree {
-    LaneWorktree {
-        name: name.to_owned(),
-        path: PathBuf::from(format!("/repo-worktrees/{name}")),
-        branch: Some(branch.to_owned()),
-        from_pr,
-    }
-}
-
-fn lane_request<'a>(
-    selector: LaneResumeSelector,
-    agents: &'a [AgentState],
-    worktrees: &'a [LaneWorktree],
-    max: usize,
-) -> LaneResumeRequest<'a> {
-    LaneResumeRequest {
-        selector,
-        agents,
-        worktrees,
-        current_root: Path::new("/repo"),
-        project_root: Path::new("/repo"),
-        max,
-        rimz_bin: Path::new("/bin/rimz"),
-    }
-}
-
-fn empty_lane_restore() -> Result<LaneRestoreConfig, LaneResumeError> {
-    Ok(LaneRestoreConfig {
-        teams: TeamsConfig::default(),
-        profiles: ProfilesConfig::default(),
-        commands: CommandsConfig::default(),
-    })
-}
-
 #[test]
 fn lane_scope_prefers_agent_over_colliding_worktree_name() {
-    let mut durable = agent("codex", "durable", "/other/agent-lane", None, 1);
-    durable.channel = Some("docs".to_owned());
+    let durable = AgentState {
+        channel: Some("docs".to_owned()),
+        ..agent("codex", "durable", "/other/agent-lane", 1)
+    };
     let agents = [durable];
     let worktrees = [lane_worktree("docs", "feat/docs", None)];
-    let error = plan_lane_resume(
-        lane_request(
-            LaneResumeSelector::Scope("docs".to_owned()),
-            &agents,
-            &worktrees,
-            128,
-        ),
-        |_| false,
-        |_| true,
-        |_| AgentLiveness::Live { pid: 7 },
-        |_| Vec::new(),
-        empty_lane_restore,
-    )
-    .unwrap_err();
+    let error = LaneCase::new(LaneResumeSelector::Scope("docs".to_owned()), &agents)
+        .worktrees(&worktrees)
+        .path_exists(|_| false)
+        .liveness(live)
+        .run()
+        .unwrap_err();
 
     assert_eq!(
         error,
@@ -1774,20 +1600,11 @@ fn lane_scope_matches_branch_full_path_and_file_name() {
         from_pr: None,
     }];
     for scope in ["review", "feat/docs", "/repo-worktrees/docs", "docs"] {
-        let error = plan_lane_resume(
-            lane_request(
-                LaneResumeSelector::Scope(scope.to_owned()),
-                &[],
-                &worktrees,
-                128,
-            ),
-            |_| false,
-            |_| true,
-            dead,
-            |_| Vec::new(),
-            empty_lane_restore,
-        )
-        .unwrap_err();
+        let error = LaneCase::new(LaneResumeSelector::Scope(scope.to_owned()), &[])
+            .worktrees(&worktrees)
+            .path_exists(|_| false)
+            .run()
+            .unwrap_err();
         assert!(matches!(
             error,
             LaneResumeError::Removed { ref worktree, .. } if worktree == "review"
@@ -1801,15 +1618,11 @@ fn lane_pr_prefers_marker_before_legacy_name() {
         lane_worktree("pr-42", "legacy", None),
         lane_worktree("review", "pull/42", Some(42)),
     ];
-    let error = plan_lane_resume(
-        lane_request(LaneResumeSelector::PullRequest(42), &[], &worktrees, 128),
-        |_| false,
-        |_| true,
-        dead,
-        |_| Vec::new(),
-        empty_lane_restore,
-    )
-    .unwrap_err();
+    let error = LaneCase::new(LaneResumeSelector::PullRequest(42), &[])
+        .worktrees(&worktrees)
+        .path_exists(|_| false)
+        .run()
+        .unwrap_err();
 
     assert!(matches!(
         error,
@@ -1819,55 +1632,41 @@ fn lane_pr_prefers_marker_before_legacy_name() {
 
 #[test]
 fn lane_focus_uses_freshest_live_member_after_pane_dedupe() {
-    let older = agent_on_pane("codex", "older", "/lane", None, 20, "shared");
-    let newer = agent_on_pane("codex", "newer", "/lane", None, 2, "shared");
-    let other = agent_on_pane("claude", "other", "/lane", None, 5, "other");
-    let agents = [older, other, newer];
-    let action = plan_lane_resume(
-        LaneResumeRequest {
-            current_root: Path::new("/lane"),
-            ..lane_request(LaneResumeSelector::Current, &agents, &[], 128)
-        },
-        |_| true,
-        |_| true,
-        |_| AgentLiveness::Live { pid: 7 },
-        |_| Vec::new(),
-        || panic!("focus must not load restore config"),
-    )
-    .unwrap();
+    let agents = [
+        agent_on_pane("codex", "older", "/lane", 20, "shared"),
+        agent_on_pane("claude", "other", "/lane", 5, "other"),
+        agent_on_pane("codex", "newer", "/lane", 2, "shared"),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .liveness(live)
+        .restore(|| panic!("focus must not load restore config"))
+        .run()
+        .unwrap();
 
     assert!(matches!(
         action,
-        LaneResumeAction::Focus { pane_id, .. }
-            if pane_id == PaneId::from_parts(MuxName::Zellij, "shared")
+        LaneResumeAction::Focus { pane_id: id, .. } if id == pane_id("shared")
     ));
 }
 
 #[test]
 fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
-    let live = agent_on_pane("claude", "live", "/lane", None, 1, "live-pane");
-    let closed = agent_on_pane("codex", "closed", "/lane", None, 2, "closed-pane");
-    let agents = [live, closed];
-    let action = plan_lane_resume(
-        LaneResumeRequest {
-            current_root: Path::new("/lane"),
-            ..lane_request(LaneResumeSelector::Current, &agents, &[], 128)
-        },
-        |_| true,
-        |_| true,
-        |agent| {
+    let agents = [
+        agent_on_pane("claude", "live", "/lane", 1, "live-pane"),
+        agent_on_pane("codex", "closed", "/lane", 2, "closed-pane"),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .liveness(|agent| {
             if agent.agent_id.as_str() == "live" {
                 AgentLiveness::Live { pid: 7 }
             } else {
                 AgentLiveness::Dead
             }
-        },
-        |_| Vec::new(),
-        // The split relaunches the closed member, so it resolves posture like
-        // any other relaunch path.
-        empty_lane_restore,
-    )
-    .unwrap();
+        })
+        .run()
+        .unwrap();
 
     let LaneResumeAction::SplitClosed {
         target_pane_id,
@@ -1878,10 +1677,7 @@ fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
     else {
         panic!("expected partial split");
     };
-    assert_eq!(
-        target_pane_id,
-        PaneId::from_parts(MuxName::Zellij, "live-pane")
-    );
+    assert_eq!(target_pane_id, pane_id("live-pane"));
     assert_eq!(commands.len(), 1);
     assert!(matches!(
         decode_exec_request(&commands[0]).action,
@@ -1893,20 +1689,11 @@ fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
 
 #[test]
 fn lane_rejects_provisional_or_unbacked_conversations() {
-    let provisional = agent("codex", "launch_pending", "/lane", None, 1);
-    let agents = [provisional];
-    let provisional_error = plan_lane_resume(
-        LaneResumeRequest {
-            current_root: Path::new("/lane"),
-            ..lane_request(LaneResumeSelector::Current, &agents, &[], 128)
-        },
-        |_| true,
-        |_| true,
-        dead,
-        |_| Vec::new(),
-        empty_lane_restore,
-    )
-    .unwrap_err();
+    let provisional = [agent("codex", "launch_pending", "/lane", 1)];
+    let provisional_error = LaneCase::new(LaneResumeSelector::Current, &provisional)
+        .current_root("/lane")
+        .run()
+        .unwrap_err();
     assert_eq!(
         provisional_error,
         LaneResumeError::Nothing {
@@ -1914,19 +1701,12 @@ fn lane_rejects_provisional_or_unbacked_conversations() {
         }
     );
 
-    let durable = [agent("codex", "durable", "/lane", None, 1)];
-    let no_conversation = plan_lane_resume(
-        LaneResumeRequest {
-            current_root: Path::new("/lane"),
-            ..lane_request(LaneResumeSelector::Current, &durable, &[], 128)
-        },
-        |_| true,
-        |_| false,
-        dead,
-        |_| Vec::new(),
-        empty_lane_restore,
-    )
-    .unwrap_err();
+    let durable = [agent("codex", "durable", "/lane", 1)];
+    let no_conversation = LaneCase::new(LaneResumeSelector::Current, &durable)
+        .current_root("/lane")
+        .session_backed(|_| false)
+        .run()
+        .unwrap_err();
     assert_eq!(
         no_conversation,
         LaneResumeError::Nothing {
@@ -1938,25 +1718,21 @@ fn lane_rejects_provisional_or_unbacked_conversations() {
 #[test]
 fn lane_listing_groups_deduped_members_and_sorts_freshest_first() {
     let agents = [
-        agent_on_pane("codex", "old", "/docs", None, 30, "docs"),
-        agent_on_pane("codex", "new", "/docs", None, 10, "docs"),
-        agent_on_pane("claude", "api", "/api", None, 2, "api"),
+        agent_on_pane("codex", "old", "/docs", 30, "docs"),
+        agent_on_pane("codex", "new", "/docs", 10, "docs"),
+        agent_on_pane("claude", "api", "/api", 2, "api"),
     ];
-    let action = plan_lane_resume(
-        lane_request(LaneResumeSelector::List, &agents, &[], 128),
-        |_| true,
-        |_| true,
-        |agent| {
+    let action = LaneCase::new(LaneResumeSelector::List, &agents)
+        .liveness(|agent| {
             if agent.agent_id.as_str() == "api" {
                 AgentLiveness::Live { pid: 7 }
             } else {
                 AgentLiveness::Dead
             }
-        },
-        |_| Vec::new(),
-        || panic!("listing must not load restore config"),
-    )
-    .unwrap();
+        })
+        .restore(|| panic!("listing must not load restore config"))
+        .run()
+        .unwrap();
 
     let LaneResumeAction::List { lanes } = action else {
         panic!("expected listing");
@@ -1970,28 +1746,23 @@ fn lane_listing_groups_deduped_members_and_sorts_freshest_first() {
 #[test]
 fn lane_all_closed_counts_team_panes_before_flat_capacity() {
     let (teams, profiles, commands) = team_configs();
-    let planner = team_agent("claude", "planner", "planner", "/lane", 1);
-    let coder = team_agent("codex", "coder", "coder", "/lane", 2);
-    let flat = agent("codex", "flat", "/lane", None, 3);
-    let agents = [planner, coder, flat];
-    let action = plan_lane_resume(
-        LaneResumeRequest {
-            current_root: Path::new("/lane"),
-            ..lane_request(LaneResumeSelector::Current, &agents, &[], 2)
-        },
-        |_| true,
-        |_| true,
-        dead,
-        |_| Vec::new(),
-        || {
+    let agents = [
+        team_agent("claude", "planner", "planner", "/lane", 1),
+        team_agent("codex", "coder", "coder", "/lane", 2),
+        agent("codex", "flat", "/lane", 3),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .max(2)
+        .restore(|| {
             Ok(LaneRestoreConfig {
                 teams,
                 profiles,
                 commands,
             })
-        },
-    )
-    .unwrap();
+        })
+        .run()
+        .unwrap();
 
     let LaneResumeAction::RestoreClosed { plan, .. } = action else {
         panic!("expected closed restore");
@@ -2025,26 +1796,20 @@ fn lane_all_closed_restores_team_and_flat_remainder() {
     let agents = [
         team_agent("claude", "planner", "planner", "/lane", 1),
         team_agent("codex", "coder", "coder", "/lane", 2),
-        agent("codex", "flat", "/lane", None, 3),
+        agent("codex", "flat", "/lane", 3),
     ];
-    let action = plan_lane_resume(
-        LaneResumeRequest {
-            current_root: Path::new("/lane"),
-            ..lane_request(LaneResumeSelector::Current, &agents, &[], 3)
-        },
-        |_| true,
-        |_| true,
-        dead,
-        |_| Vec::new(),
-        || {
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .max(3)
+        .restore(|| {
             Ok(LaneRestoreConfig {
                 teams,
                 profiles,
                 commands,
             })
-        },
-    )
-    .unwrap();
+        })
+        .run()
+        .unwrap();
 
     let LaneResumeAction::RestoreClosed { plan, .. } = action else {
         panic!("expected closed restore");
@@ -2061,26 +1826,20 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
     let agents = [
         team_agent("claude", "planner", "planner", "/lane", 1),
         team_agent("codex", "coder", "coder", "/lane", 2),
-        agent("codex", "flat", "/lane", None, 3),
+        agent("codex", "flat", "/lane", 3),
     ];
-    let action = plan_lane_resume(
-        LaneResumeRequest {
-            current_root: Path::new("/lane"),
-            ..lane_request(LaneResumeSelector::Current, &agents, &[], 3)
-        },
-        |_| true,
-        |_| true,
-        dead,
-        |_| Vec::new(),
-        || {
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .max(3)
+        .restore(|| {
             Ok(LaneRestoreConfig {
                 teams,
                 profiles,
                 commands,
             })
-        },
-    )
-    .unwrap();
+        })
+        .run()
+        .unwrap();
     let LaneResumeAction::RestoreClosed { plan, .. } = action else {
         panic!("expected closed restore");
     };
@@ -2118,19 +1877,18 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
 #[test]
 fn recovery_plan_sorts_equal_freshness_by_label() {
     let when: Timestamp = "2025-01-01T00:00:00Z".parse().unwrap();
-    let mut zed = agent("codex", "zed", "/work/zed", None, 1);
-    zed.last_activity = when;
-    let mut alpha = agent("codex", "alpha", "/work/alpha", None, 1);
-    alpha.last_activity = when;
+    let zed = AgentState {
+        last_activity: when,
+        ..agent("codex", "zed", "/work/zed", 1)
+    };
+    let alpha = AgentState {
+        last_activity: when,
+        ..agent("codex", "alpha", "/work/alpha", 1)
+    };
     let flat = plan_resume_detailed(
         &[zed, alpha],
         &BTreeSet::new(),
-        ResumeContext {
-            project_root: None,
-            rimz_bin: Path::new("/bin/rimz"),
-            profiles: &no_profiles(),
-            max: 2,
-        },
+        ctx(2, None, &no_profiles()),
         |_| true,
         |_| true,
     );
@@ -2142,17 +1900,14 @@ fn recovery_plan_sorts_equal_freshness_by_label() {
 
 #[test]
 fn lane_listing_discovers_only_worktrees_without_durable_members() {
-    let durable = [agent("codex", "docs", "/repo-worktrees/docs", None, 5)];
+    let durable = [agent("codex", "docs", "/repo-worktrees/docs", 5)];
     let worktrees = [
         lane_worktree("docs", "feat/docs", None),
         lane_worktree("native", "feat/native", None),
     ];
-    let action = plan_lane_resume(
-        lane_request(LaneResumeSelector::List, &durable, &worktrees, 128),
-        |_| true,
-        |_| true,
-        dead,
-        |path| {
+    let action = LaneCase::new(LaneResumeSelector::List, &durable)
+        .worktrees(&worktrees)
+        .discover(|path| {
             assert_eq!(path, Path::new("/repo-worktrees/native"));
             vec![local_session(
                 "claude",
@@ -2160,10 +1915,10 @@ fn lane_listing_discovers_only_worktrees_without_durable_members() {
                 "2025-01-04T09:00:00Z",
                 "2025-01-04T10:00:00Z",
             )]
-        },
-        || panic!("listing must not load restore config"),
-    )
-    .unwrap();
+        })
+        .restore(|| panic!("listing must not load restore config"))
+        .run()
+        .unwrap();
 
     let LaneResumeAction::List { lanes } = action else {
         panic!("expected listing");
