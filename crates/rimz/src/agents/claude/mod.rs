@@ -511,7 +511,7 @@ impl AgentAdapter for ClaudeAdapter {
             decoded.attach_lifecycle(observation);
         }
         let final_message = decoded.lifecycle().and_then(|observation| {
-            final_message_for_lifecycle(payload, &observation, |path| {
+            final_message_for_lifecycle(payload, observation, |path| {
                 terminal_tail.or_else(|| read_transcript_tail(path))
             })
         });
