@@ -922,7 +922,7 @@ exit 1
     ] {
         let (_temp, shim) = zellij_shim(script);
         let err = ZellijBackend::with_program_for_test(&shim)
-            .tab_names("missing-room")
+            .list_tabs("missing-room")
             .expect_err(name);
         assert!(
             matches!(err, crate::mux::MuxErr::SessionNotFound { ref session } if session == "missing-room"),
@@ -930,6 +930,28 @@ exit 1
         );
         assert!(!err.to_string().contains("rimz-other"), "{name}: {err}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn list_tabs_retries_a_parsed_empty_listing() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); log="$dir/zellij.log"; count_file="$dir/list-tabs-count"
+printf '%s\n' "$*" >> "$log"
+count=$(cat "$count_file" 2>/dev/null || printf 0); count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
+if [ "$count" -eq 1 ]; then printf '[]\n'; else printf '[{"name":"main"}]\n'; fi
+"#,
+    );
+
+    let tabs = ZellijBackend::with_program_for_test(&shim)
+        .list_tabs("room")
+        .expect("retry empty listing");
+
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(tabs[0].name, "main");
+    let log = shim_log(&temp);
+    assert_eq!(command_count(&log, "action list-tabs --json --panes"), 2);
 }
 
 #[cfg(unix)]
@@ -942,7 +964,6 @@ dir=$(dirname "$0"); log="$dir/zellij.log"; tab="$dir/tab-created"; layout_ref="
 printf '%s\n' "$*" >> "$log"
 if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
 case " $* " in
-  *" action query-tab-names "*) printf 'main\n'; if [ -f "$tab" ]; then printf 'work\n'; fi; exit 0 ;;
   *" action new-tab "*) while [ "$#" -gt 0 ]; do if [ "$1" = "--layout" ]; then shift; printf '%s' "$1" > "$layout_ref"; fi; shift; done; : > "$tab"; exit 0 ;;
   *" action list-tabs "*)
     count=$(cat "$count_file" 2>/dev/null || printf 0); count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
@@ -975,6 +996,7 @@ exit 0
         "{log}"
     );
     assert!(!log.contains("layout-missing-before-materialized"), "{log}");
+    assert!(!log.contains("query-tab-names"), "{log}");
     assert_eq!(command_count(&log, "action new-tab "), 1, "{log}");
 }
 

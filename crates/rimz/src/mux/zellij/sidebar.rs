@@ -5,10 +5,7 @@ use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
 use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
-use super::parse::{
-    classify_session_not_found, is_session_not_found, parse_client_view, strip_ansi,
-    terminal_client_ids,
-};
+use super::parse::{parse_client_view, terminal_client_ids};
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
     nested_work_pane_ids, parse_new_pane_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
@@ -16,8 +13,8 @@ use super::raw_pane::{
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
-    MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT, TAB_NAMES_ATTEMPTS,
-    TAB_NAMES_RETRY_DELAY, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
+    MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT, TOPOLOGY_CACHE_POLL_STEP,
+    ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
@@ -1010,44 +1007,14 @@ impl ZellijBackend {
         false
     }
 
-    /// The session's tab names, in tab order. `query-tab-names` prints one name
-    /// per line; the ANSI banner newer Zellij ships is stripped.
-    pub(super) fn tab_names(&self, session: &str) -> Result<Vec<String>> {
-        for attempt in 0..TAB_NAMES_ATTEMPTS {
-            if attempt > 0 {
-                std::thread::sleep(TAB_NAMES_RETRY_DELAY);
-            }
-            let output = self
-                .zellij_action(session)
-                .arg("query-tab-names")
-                .run()
-                .map_err(|err| classify_session_not_found(err, session))?;
-            if is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr) {
-                return Err(MuxErr::SessionNotFound {
-                    session: session.to_owned(),
-                });
-            }
-            let names: Vec<String> = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(strip_ansi)
-                .map(|line| line.trim().to_owned())
-                .filter(|line| !line.is_empty())
-                .collect();
-            if !names.is_empty() {
-                return Ok(names);
-            }
-        }
-        Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("query-tab-names returned no tabs after {TAB_NAMES_ATTEMPTS} attempts"),
-        })
-    }
-
     /// Whether `session` already holds a tab named `tab_name`. A RimZ background
-    /// view is idempotent on its name, so a relaunch into a session that already
-    /// carries it is skipped.
+    /// view is idempotent on its name, so a relaunch into a session carrying it
+    /// is skipped.
     pub(super) fn session_has_named_tab(&self, session: &str, tab_name: &str) -> Result<bool> {
-        Ok(self.tab_names(session)?.iter().any(|name| name == tab_name))
+        Ok(self
+            .list_tabs(session)?
+            .iter()
+            .any(|tab| tab.name == tab_name))
     }
 }
 

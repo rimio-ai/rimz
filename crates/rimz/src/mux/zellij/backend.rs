@@ -50,8 +50,8 @@ struct FocusRestoreTarget {
 }
 
 #[derive(Debug, Deserialize)]
-struct RawTab {
-    name: String,
+pub(super) struct RawTab {
+    pub(super) name: String,
     #[serde(default)]
     selectable_tiled_panes_count: u64,
 }
@@ -306,20 +306,36 @@ impl ZellijBackend {
     }
 
     fn run_new_tab_confirmed(&self, session: &str, args: &[String], tab_name: &str) -> Result<()> {
-        let before = self.named_tab_count(session, tab_name)?;
-        let before_materialized = self.named_materialized_tab_count(session, tab_name)?;
+        let tabs = self.list_tabs(session)?;
+        let (before, before_materialized) = named_tab_counts(&tabs, tab_name);
         for attempt in 0..super::NEW_TAB_ATTEMPTS {
-            if attempt > 0 && self.named_tab_count(session, tab_name)? > before {
-                self.wait_for_named_tab_materialized(session, tab_name, before_materialized)?;
-                return Ok(());
+            if attempt > 0 {
+                let tabs = self.list_tabs(session)?;
+                let (named, materialized) = named_tab_counts(&tabs, tab_name);
+                if named > before {
+                    self.wait_for_named_tab_materialized(
+                        session,
+                        tab_name,
+                        before_materialized,
+                        materialized,
+                    )?;
+                    return Ok(());
+                }
             }
             self.zellij_action(session)
                 .args(args.iter().cloned())
                 .run()?;
             let deadline = Instant::now() + super::NEW_TAB_CONFIRM_WINDOW;
             loop {
-                if self.named_tab_count(session, tab_name)? > before {
-                    self.wait_for_named_tab_materialized(session, tab_name, before_materialized)?;
+                let tabs = self.list_tabs(session)?;
+                let (named, materialized) = named_tab_counts(&tabs, tab_name);
+                if named > before {
+                    self.wait_for_named_tab_materialized(
+                        session,
+                        tab_name,
+                        before_materialized,
+                        materialized,
+                    )?;
                     return Ok(());
                 }
                 if Instant::now() >= deadline {
@@ -337,23 +353,15 @@ impl ZellijBackend {
         })
     }
 
-    fn named_tab_count(&self, session: &str, tab_name: &str) -> Result<usize> {
-        Ok(self
-            .tab_names(session)?
-            .iter()
-            .filter(|name| name.as_str() == tab_name)
-            .count())
-    }
-
     fn wait_for_named_tab_materialized(
         &self,
         session: &str,
         tab_name: &str,
         before_materialized: usize,
+        mut last_count: usize,
     ) -> Result<()> {
         let deadline = Instant::now() + super::NEW_TAB_MATERIALIZE_WINDOW;
         loop {
-            let last_count = self.named_materialized_tab_count(session, tab_name)?;
             if last_count > before_materialized {
                 return Ok(());
             }
@@ -367,18 +375,11 @@ impl ZellijBackend {
                 });
             }
             std::thread::sleep(super::NEW_TAB_MATERIALIZE_STEP);
+            last_count = named_tab_counts(&self.list_tabs(session)?, tab_name).1;
         }
     }
 
-    fn named_materialized_tab_count(&self, session: &str, tab_name: &str) -> Result<usize> {
-        Ok(self
-            .list_tabs(session)?
-            .into_iter()
-            .filter(|tab| tab.name == tab_name && tab.selectable_tiled_panes_count > 0)
-            .count())
-    }
-
-    fn list_tabs(&self, session: &str) -> Result<Vec<RawTab>> {
+    pub(super) fn list_tabs(&self, session: &str) -> Result<Vec<RawTab>> {
         for attempt in 0..super::TAB_NAMES_ATTEMPTS {
             if attempt > 0 {
                 std::thread::sleep(super::TAB_NAMES_RETRY_DELAY);
@@ -396,12 +397,16 @@ impl ZellijBackend {
             if is_transient_empty(&output.stdout) {
                 continue;
             }
-            return serde_json::from_slice::<Vec<RawTab>>(&output.stdout).map_err(|e| {
+            let tabs = serde_json::from_slice::<Vec<RawTab>>(&output.stdout).map_err(|e| {
                 MuxErr::Output {
                     program: "zellij".to_owned(),
                     reason: format!("parsing list-tabs JSON: {e}"),
                 }
-            });
+            })?;
+            if tabs.is_empty() {
+                continue;
+            }
+            return Ok(tabs);
         }
         Err(MuxErr::Output {
             program: "zellij".to_owned(),
@@ -411,6 +416,17 @@ impl ZellijBackend {
             ),
         })
     }
+}
+
+fn named_tab_counts(tabs: &[RawTab], tab_name: &str) -> (usize, usize) {
+    tabs.iter()
+        .filter(|tab| tab.name == tab_name)
+        .fold((0, 0), |(named, materialized), tab| {
+            (
+                named + 1,
+                materialized + usize::from(tab.selectable_tiled_panes_count > 0),
+            )
+        })
 }
 
 impl MuxBackend for ZellijBackend {
