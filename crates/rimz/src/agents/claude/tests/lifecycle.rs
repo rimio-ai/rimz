@@ -122,6 +122,7 @@ fn permission_request_does_not_duplicate_native_ask_tools() {
         .expect("test hook decodes");
     assert_eq!(classified.class(), AgentHookClass::AwaitingUser);
     assert_eq!(classified.ask_kind(), Some(AskKind::Permission));
+    assert_eq!(classified.ask_detail(), Some("Bash"));
     assert!(matches!(
         ClaudeAdapter
             .decode_hook("PermissionRequest", &payload)
@@ -134,6 +135,41 @@ fn permission_request_does_not_duplicate_native_ask_tools() {
             ..
         })
     ));
+
+    for payload in [
+        json!({"session_id": "sess-1", "tool_name": " Bash ", "tool_input": {}}),
+        json!({"session_id": "sess-1", "tool_name": " Bash ", "tool_input": null}),
+    ] {
+        assert_eq!(
+            ClaudeAdapter
+                .decode_hook("PermissionRequest", &payload)
+                .expect("test hook decodes")
+                .ask_detail(),
+            Some("Bash")
+        );
+    }
+
+    let detail = ClaudeAdapter
+        .decode_hook(
+            "PermissionRequest",
+            &json!({
+                "session_id": "sess-1",
+                "tool_name": "Bash",
+                "tool_input": {"command": "x".repeat(200)}
+            }),
+        )
+        .expect("test hook decodes")
+        .ask_detail()
+        .expect("detail")
+        .to_owned();
+    assert_eq!(
+        detail
+            .strip_prefix("Bash: ")
+            .expect("summary")
+            .chars()
+            .count(),
+        160
+    );
 }
 
 #[test]

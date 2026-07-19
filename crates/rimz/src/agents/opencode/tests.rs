@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::agents::AgentErr;
+use crate::transcript::{AskOption, AskQuestion};
 use serde_json::json;
 
 #[test]
@@ -382,6 +383,30 @@ fn opencode_parses_structured_native_questions() {
             .to_vec()
             .is_empty()
     );
+}
+
+#[test]
+fn opencode_caps_normalized_questions_after_filtering() {
+    let questions = OpencodeAdapter
+        .decode_hook(
+            "question_ask",
+            &json!({
+                "questions": [
+                    {"question": "one"},
+                    {"question": "   "},
+                    {"question": "two"},
+                    {"question": "three"},
+                    {"question": "four"},
+                    {"question": "five"}
+                ]
+            }),
+        )
+        .expect("test hook decodes")
+        .questions()
+        .iter()
+        .map(|question| question.question.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(questions, ["one", "two", "three", "four"]);
 }
 
 #[test]

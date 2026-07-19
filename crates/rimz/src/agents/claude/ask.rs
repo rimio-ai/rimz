@@ -56,22 +56,6 @@ pub(super) fn plan_options() -> Vec<AskOption> {
     }]
 }
 
-pub(super) fn permission_detail(payload: &Value) -> Option<String> {
-    let tool = payload.get("tool_name")?.as_str()?.trim();
-    if tool.is_empty() {
-        return None;
-    }
-    let summary = payload
-        .get("tool_input")
-        .and_then(|input| serde_json::to_string(input).ok())
-        .map(|input| input.chars().take(160).collect::<String>())
-        .filter(|input| input != "{}" && input != "null");
-    Some(match summary {
-        Some(summary) => format!("{tool}: {summary}"),
-        None => tool.to_owned(),
-    })
-}
-
 pub(super) fn answer_plan(
     kind: AskKind,
     questions: &[AskQuestion],

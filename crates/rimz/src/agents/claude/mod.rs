@@ -444,7 +444,7 @@ impl AgentAdapter for ClaudeAdapter {
             })
             .unwrap_or_default();
         let ask_detail = if event_name == "PermissionRequest" {
-            ask::permission_detail(payload)
+            super::question::permission_detail(payload)
         } else {
             questions
                 .first()

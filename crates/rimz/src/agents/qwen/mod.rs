@@ -401,7 +401,7 @@ impl AgentAdapter for QwenAdapter {
             .and_then(|question| question.question.lines().next().map(ToOwned::to_owned))
             .or_else(|| {
                 matches!(event_name, "PermissionRequest" | "PreToolUse")
-                    .then(|| ask::permission_detail(payload))
+                    .then(|| super::question::permission_detail(payload))
                     .flatten()
             });
         decoded.set_ask(questions, ask_detail);

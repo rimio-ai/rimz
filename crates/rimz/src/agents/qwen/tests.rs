@@ -381,6 +381,81 @@ fn reads_gate_details_from_permission_requests() {
 }
 
 #[test]
+fn shared_questionnaire_and_permission_normalization_preserves_qwen_details() {
+    let questions = QwenAdapter
+        .decode_hook(
+            "PermissionRequest",
+            &json!({
+                "tool_name": "ask_user_question",
+                "tool_input": {
+                    "questions": [
+                        {"question": "Camel?", "multiSelect": true},
+                        {"question": "Snake?", "multi_select": true},
+                        {"question": "OpenCode?", "multiple": true, "options": [
+                            {"label": " keep ", "description": "   "},
+                            {"label": "   "}
+                        ]},
+                        {"question": "   "}
+                    ]
+                }
+            }),
+        )
+        .expect("test hook decodes")
+        .questions()
+        .to_vec();
+    assert_eq!(questions.len(), 3);
+    assert!(questions.iter().all(|question| question.multi_select));
+    assert_eq!(questions[2].options.len(), 1);
+    assert_eq!(questions[2].options[0].description, None);
+
+    let plan = QwenAdapter
+        .decode_hook(
+            "PermissionRequest",
+            &json!({"tool_name": "exit_plan_mode", "tool_input": {"plan": " Ship it "}}),
+        )
+        .expect("test hook decodes")
+        .questions()
+        .to_vec();
+    assert_eq!(plan[0].question, "Requesting plan approval:\n\nShip it");
+    assert!(plan[0].options.is_empty());
+
+    for payload in [
+        json!({"tool_name": " run_shell_command "}),
+        json!({"tool_name": " run_shell_command ", "tool_input": {}}),
+        json!({"tool_name": " run_shell_command ", "tool_input": null}),
+    ] {
+        assert_eq!(
+            QwenAdapter
+                .decode_hook("PermissionRequest", &payload)
+                .expect("test hook decodes")
+                .ask_detail(),
+            Some("run_shell_command")
+        );
+    }
+
+    let detail = QwenAdapter
+        .decode_hook(
+            "PermissionRequest",
+            &json!({
+                "tool_name": "run_shell_command",
+                "tool_input": {"command": "x".repeat(200)}
+            }),
+        )
+        .expect("test hook decodes")
+        .ask_detail()
+        .expect("detail")
+        .to_owned();
+    assert_eq!(
+        detail
+            .strip_prefix("run_shell_command: ")
+            .expect("summary")
+            .chars()
+            .count(),
+        160
+    );
+}
+
+#[test]
 fn maps_lifecycle_context_background_and_subagents() {
     let adapter = QwenAdapter;
     let start = adapter

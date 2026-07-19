@@ -31,7 +31,7 @@ struct QuestionWire {
     header: Option<String>,
     question: Option<String>,
     options: Vec<OptionWire>,
-    #[serde(alias = "multiSelect")]
+    #[serde(alias = "multiSelect", alias = "multiple")]
     multi_select: bool,
 }
 
@@ -102,6 +102,19 @@ pub(crate) fn plan_question(plan: &str, options: Vec<AskOption>) -> Option<Vec<A
     }])
 }
 
+pub(crate) fn permission_detail(payload: &Value) -> Option<String> {
+    let tool = non_empty(payload.get("tool_name").and_then(Value::as_str))?;
+    let summary = payload
+        .get("tool_input")
+        .and_then(|input| serde_json::to_string(input).ok())
+        .filter(|input| input != "{}" && input != "null")
+        .map(|input| input.chars().take(160).collect::<String>());
+    Some(match summary {
+        Some(summary) => format!("{tool}: {summary}"),
+        None => tool,
+    })
+}
+
 fn normalize(
     question: QuestionWire,
     preview_policy: PreviewPolicy,
@@ -162,7 +175,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_both_multi_select_spellings_and_preview_policies() {
+    fn normalizes_all_multi_select_spellings_and_preview_policies() {
         let input = json!({
             "questions": [
                 {
@@ -179,14 +192,24 @@ mod tests {
                     "multiSelect": true,
                     "options": [{"label": "B", "preview": ""}]
                 },
+                {
+                    "question": " OpenCode? ",
+                    "multiple": true,
+                    "options": [{"label": " C ", "description": "   ", "preview": 0}]
+                },
                 {"question": " "}
             ]
         });
 
         let any = decode_with_header_fallback(&input, PreviewPolicy::AnyValue).expect("questions");
-        assert_eq!(any.len(), 2);
+        assert_eq!(any.len(), 3);
         assert_eq!(any[0].native_id.as_deref(), Some("first"));
         assert_eq!(any[0].question.options.len(), 1);
+        assert_eq!(
+            any[0].question.options[0].description.as_deref(),
+            Some("useful")
+        );
+        assert_eq!(any[2].question.options[0].description, None);
         assert!(any.iter().all(|question| question.question.multi_select));
         assert!(
             any.iter()
@@ -197,7 +220,30 @@ mod tests {
             .expect("questions");
         assert!(strings[0].has_option_previews);
         assert!(!strings[1].has_option_previews);
-        assert_eq!(questions(&input, PreviewPolicy::None).unwrap().len(), 1);
+        assert!(!strings[2].has_option_previews);
+        assert_eq!(questions(&input, PreviewPolicy::None).unwrap().len(), 2);
         assert!(questions(&json!({"questions": []}), PreviewPolicy::None).is_none());
+    }
+
+    #[test]
+    fn permission_detail_suppresses_empty_input_and_bounds_summary() {
+        for payload in [
+            json!({"tool_name": " shell "}),
+            json!({"tool_name": " shell ", "tool_input": {}}),
+            json!({"tool_name": " shell ", "tool_input": null}),
+        ] {
+            assert_eq!(permission_detail(&payload).as_deref(), Some("shell"));
+        }
+        assert_eq!(permission_detail(&json!({})), None);
+        assert_eq!(permission_detail(&json!({"tool_name": "  "})), None);
+
+        let detail = permission_detail(&json!({
+            "tool_name": "shell",
+            "tool_input": {"command": "x".repeat(200)}
+        }))
+        .expect("detail");
+        let summary = detail.strip_prefix("shell: ").expect("summary");
+        assert_eq!(summary.chars().count(), 160);
+        assert!(summary.starts_with(r#"{"command":"#));
     }
 }

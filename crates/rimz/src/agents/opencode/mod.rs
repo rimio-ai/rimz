@@ -46,7 +46,7 @@ use super::{
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
-use crate::transcript::{AskAnswer, AskOption, AskQuestion};
+use crate::transcript::AskAnswer;
 
 static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "opencode",
@@ -313,38 +313,9 @@ impl AgentAdapter for OpencodeAdapter {
                 .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
         );
         let questions = if event_name == "question_ask" {
-            parsed
-                .questions
-                .clone()
+            super::question::questions(payload, super::question::PreviewPolicy::None)
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|question| {
-                    let text = question.question?.trim().to_owned();
-                    if text.is_empty() {
-                        return None;
-                    }
-                    let options = question
-                        .options
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|option| {
-                            let label = option.label?.trim().to_owned();
-                            (!label.is_empty()).then_some(AskOption {
-                                label,
-                                description: option
-                                    .description
-                                    .filter(|value| !value.trim().is_empty()),
-                                caution: None,
-                            })
-                        })
-                        .collect();
-                    Some(AskQuestion {
-                        question: text,
-                        options,
-                        multi_select: question.multiple.unwrap_or(false),
-                        has_option_previews: false,
-                    })
-                })
                 .take(4)
                 .collect()
         } else {
