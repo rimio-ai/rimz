@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use crate::SidebarSnapshot;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::SidebarEvent;
-use crate::sidebar::focus_anchor::{FocusAnchor, FocusPresentation};
+use crate::sidebar::focus_anchor::{FocusAnchor, FocusObservation, FocusPresentation};
 
 pub fn fuse(
     pulled: &SidebarSnapshot,
@@ -18,6 +18,35 @@ pub fn fuse(
     intent: Option<&FocusPresentation>,
     now_ms: u64,
 ) -> SidebarSnapshot {
+    let active = active_events(pulled, events, now_ms);
+    if active.is_empty() && intent.is_none() {
+        return pulled.clone();
+    }
+    apply_fusion(pulled.clone(), &active, intent)
+}
+
+/// Move an unmodified pull straight into presentation when no realtime state
+/// overlays it. The returned baseline exists only while an overlay or focus
+/// fence can outlive this pull; the renderer uses it for later synthetic folds.
+pub fn fuse_owned(
+    pulled: SidebarSnapshot,
+    events: &EventStore,
+    intent: Option<&FocusPresentation>,
+    now_ms: u64,
+) -> (SidebarSnapshot, Option<SidebarSnapshot>) {
+    let active = active_events(&pulled, events, now_ms);
+    if active.is_empty() && intent.is_none() {
+        return (pulled, None);
+    }
+    let fused = apply_fusion(pulled.clone(), &active, intent);
+    (fused, Some(pulled))
+}
+
+fn active_events<'a>(
+    pulled: &SidebarSnapshot,
+    events: &'a EventStore,
+    now_ms: u64,
+) -> Vec<&'a crate::sidebar::events::StoredEvent> {
     let baseline = pulled
         .panes_observed_at_ms
         .or(pulled.panes_produced_at_ms)
@@ -27,17 +56,19 @@ pub fn fuse(
         .as_ref()
         .map(|notice| notice.pane_ids.iter().cloned().collect::<HashSet<_>>())
         .unwrap_or_default();
-    let active = events
+    events
         .active(now_ms)
         .filter(|event| event.sent_at_ms > baseline || closes_carried_pane(event, &carried_panes))
-        .collect::<Vec<_>>();
-    if active.is_empty() && intent.is_none() {
-        return pulled.clone();
-    }
+        .collect()
+}
 
-    let mut fused = pulled.clone();
+fn apply_fusion(
+    mut fused: SidebarSnapshot,
+    active: &[&crate::sidebar::events::StoredEvent],
+    intent: Option<&FocusPresentation>,
+) -> SidebarSnapshot {
     let mut deleted = HashSet::new();
-    for event in &active {
+    for event in active {
         if let SidebarEvent::PaneClosed { pane_id } = &event.event {
             deleted.insert(pane_id.clone());
             fused.remove_pane_rows(pane_id);
@@ -45,7 +76,7 @@ pub fn fuse(
         }
     }
 
-    for event in &active {
+    for event in active {
         if let SidebarEvent::CommandChanged { pane_id, command } = &event.event
             && !deleted.contains(pane_id)
         {
@@ -79,6 +110,20 @@ pub fn fuse(
 
 pub fn focus_intent_confirmed(
     pulled: &SidebarSnapshot,
+    events: &EventStore,
+    intent: &FocusAnchor,
+    now_ms: u64,
+) -> bool {
+    focus_intent_confirmed_from(
+        &FocusObservation::from_snapshot(pulled),
+        events,
+        intent,
+        now_ms,
+    )
+}
+
+pub(crate) fn focus_intent_confirmed_from(
+    pulled: &FocusObservation,
     events: &EventStore,
     intent: &FocusAnchor,
     now_ms: u64,
@@ -233,6 +278,34 @@ mod tests {
             .iter()
             .flat_map(|group| group.rows.iter().map(|row| row.id.clone()))
             .collect()
+    }
+
+    #[test]
+    fn owned_pull_retains_a_baseline_only_while_fusion_is_active() {
+        let snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+        let empty = EventStore::default();
+        let (moved, baseline) = fuse_owned(snapshot, &empty, None, 11);
+        assert!(baseline.is_none());
+        assert_eq!(row_ids(&moved).len(), 1);
+
+        let mut events = EventStore::default();
+        append(
+            &mut events,
+            12,
+            SidebarEvent::CommandChanged {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+                command: "claude".to_owned(),
+            },
+        );
+        let (fused, baseline) = fuse_owned(moved, &events, None, 12);
+        assert_eq!(
+            fused.worktree_groups[0].rows[0]
+                .pane
+                .as_ref()
+                .and_then(|pane| pane.command.as_deref()),
+            Some("claude")
+        );
+        assert!(baseline.is_some());
     }
 
     #[test]

@@ -79,6 +79,35 @@ pub enum FocusPresentation {
     Fence,
 }
 
+/// Compact pulled truth retained by the renderer while no realtime overlay
+/// needs the full snapshot. Focus resolution reads only pane membership,
+/// session/client observations, and the pane observation stamp.
+#[derive(Clone, Debug)]
+pub(crate) struct FocusObservation {
+    pub(crate) panes_observed_at_ms: Option<u64>,
+    pub(crate) pane_session_name: Option<String>,
+    pub(crate) pane_ids: Vec<PaneId>,
+    pub(crate) presence_known: bool,
+    pub(crate) client_views: Vec<ClientPaneView>,
+}
+
+impl FocusObservation {
+    pub(crate) fn from_snapshot(snapshot: &crate::SidebarSnapshot) -> Self {
+        Self {
+            panes_observed_at_ms: snapshot.panes_observed_at_ms,
+            pane_session_name: snapshot.pane_session_name.clone(),
+            pane_ids: snapshot
+                .worktree_groups
+                .iter()
+                .flat_map(|group| &group.rows)
+                .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.clone()))
+                .collect(),
+            presence_known: snapshot.presence.is_some(),
+            client_views: snapshot.client_views.clone(),
+        }
+    }
+}
+
 pub struct FocusActionRequest<'a> {
     pub pane_id: PaneId,
     pub origin: FocusOrigin,
@@ -363,25 +392,33 @@ pub fn observation_outcome(
     snapshot: &crate::SidebarSnapshot,
     now_ms: u64,
 ) -> FocusObservationOutcome {
+    observation_outcome_from(anchor, &FocusObservation::from_snapshot(snapshot), now_ms)
+}
+
+pub(crate) fn observation_outcome_from(
+    anchor: &FocusAnchor,
+    observation: &FocusObservation,
+    now_ms: u64,
+) -> FocusObservationOutcome {
     if anchor.state == FocusIntentState::Requested {
         return FocusObservationOutcome::Requested;
     }
-    if snapshot.pane_session_name.as_deref() != Some(anchor.session_name.as_str())
-        || !snapshot_has_pane(snapshot, &anchor.pane_id)
+    if observation.pane_session_name.as_deref() != Some(anchor.session_name.as_str())
+        || !observation.pane_ids.contains(&anchor.pane_id)
     {
         return FocusObservationOutcome::Invalidated;
     }
     let Some(applied_at_ms) = anchor.applied_at_ms else {
         return FocusObservationOutcome::Requested;
     };
-    if snapshot.presence.is_none() {
+    if !observation.presence_known {
         return if is_fresh(applied_at_ms, now_ms) {
             FocusObservationOutcome::Present
         } else {
             FocusObservationOutcome::Fence
         };
     }
-    let mut observed = snapshot.client_views.clone();
+    let mut observed = observation.client_views.clone();
     normalize_views(&mut observed);
     if observed.is_empty() {
         return FocusObservationOutcome::Invalidated;
@@ -434,18 +471,6 @@ pub fn clear_matching(runtime: &RuntimePaths, nonce: FocusNonce) -> bool {
 fn normalize_views(views: &mut Vec<ClientPaneView>) {
     views.sort();
     views.dedup();
-}
-
-fn snapshot_has_pane(snapshot: &crate::SidebarSnapshot, pane_id: &PaneId) -> bool {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .any(|row| {
-            row.pane
-                .as_ref()
-                .is_some_and(|pane| pane.pane_id == *pane_id)
-        })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

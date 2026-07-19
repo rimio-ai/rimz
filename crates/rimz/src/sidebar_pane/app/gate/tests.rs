@@ -285,10 +285,11 @@ fn reject_holds_prior_frame_as_committed_render() {
         &prior,
         &Health::default(),
     );
-    let (state, gate, rejected, released_via_escape_hatch) =
+    let (state, gate, rejected, released_via_escape_hatch, rejected_snapshot) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
     assert!(rejected);
     assert!(!released_via_escape_hatch);
+    assert!(rejected_snapshot.is_some());
     // The committed render stays on the good frame, so the cache never
     // advances onto the demotion.
     assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
@@ -301,11 +302,12 @@ fn reject_holds_prior_frame_as_committed_render() {
 
     let computed = compute_next_state(Ok(snapshot(&ws)), &prior, &Health::default());
 
-    let (state, gate, rejected, released_via_escape_hatch) =
+    let (state, gate, rejected, released_via_escape_hatch, rejected_snapshot) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
 
     assert!(rejected);
     assert!(!released_via_escape_hatch);
+    assert!(rejected_snapshot.is_some());
     assert_eq!(
         state.snapshot.panes_produced_at_ms,
         prior.panes_produced_at_ms
@@ -323,7 +325,7 @@ fn rejected_snapshot_then_failure_keeps_prior_frame_and_gate_episode() {
         &prior,
         &Health::default(),
     );
-    let (held, gate, rejected, _) =
+    let (held, gate, rejected, _, _) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
     assert!(rejected);
 
@@ -332,7 +334,7 @@ fn rejected_snapshot_then_failure_keeps_prior_frame_and_gate_episode() {
         &held.snapshot,
         &held.health,
     );
-    let (failed, next_gate, rejected, released) =
+    let (failed, next_gate, rejected, released, _) =
         apply_gate(failed, false, &held.snapshot, &gate, gate_now());
 
     assert!(!rejected);
@@ -350,7 +352,7 @@ fn accept_carries_collapsed_spend_without_touching_roster() {
     let incoming_row_id = incoming.worktree_groups[0].rows[0].id.clone();
     let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
 
-    let (state, gate, rejected, released_via_escape_hatch) =
+    let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
 
     assert!(!rejected);
@@ -403,7 +405,7 @@ fn accept_keeps_different_nonzero_spend() {
     let incoming = spend_snapshot(&ws, Some(20.00), Some(18.00), Some(9.00), 0);
     let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
 
-    let (state, gate, rejected, released_via_escape_hatch) =
+    let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
 
     assert!(!rejected);
@@ -443,7 +445,8 @@ fn spend_carry_repairs_only_collapsed_families_and_recovers_independently() {
         .providers
         .push(provider("claude", Some(spend_tally(3.50)), 0));
     let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
-    let (state, gate, _, _) = apply_gate(computed, true, &prior, &GateState::default(), gate_now());
+    let (state, gate, _, _, _) =
+        apply_gate(computed, true, &prior, &GateState::default(), gate_now());
 
     assert_eq!(state.snapshot.value_tally.as_ref().unwrap().year.usd, 13.00);
     assert_eq!(
@@ -487,7 +490,7 @@ fn spend_carry_repairs_only_collapsed_families_and_recovers_independently() {
         .providers
         .push(provider("claude", Some(spend_tally(4.00)), 0));
     let computed = compute_next_state(Ok(recovered), &state.snapshot, &Health::default());
-    let (state, gate, _, _) = apply_gate(computed, true, &state.snapshot, &gate, gate_now());
+    let (state, gate, _, _, _) = apply_gate(computed, true, &state.snapshot, &gate, gate_now());
 
     assert_eq!(state.snapshot.workspace_value_tally.unwrap().year.usd, 8.00);
     assert_eq!(state.snapshot.today_spend_live_usd, Some(9.00));
@@ -528,7 +531,7 @@ fn spend_carry_expires_each_family_without_coupling_mana_zero() {
     )
     .unwrap();
     let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
-    let (state, gate, _, _) = apply_gate(computed, true, &prior, &gate, now);
+    let (state, gate, _, _, _) = apply_gate(computed, true, &prior, &gate, now);
 
     assert!(state.snapshot.value_tally.is_none());
     assert_eq!(state.snapshot.workspace_value_tally.unwrap().year.usd, 7.25);
@@ -562,7 +565,7 @@ fn spend_carry_escape_hatch_commits_sustained_zero() {
     };
     let now = Timestamp::from_second(base + ACCEPT_REGRESSION_AFTER.as_secs() as i64).unwrap();
 
-    let (state, gate, rejected, released_via_escape_hatch) =
+    let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, true, &prior, &prev_gate, now);
 
     assert!(!rejected);
@@ -593,7 +596,7 @@ fn failed_fetch_keeps_a_gate_episode_open() {
         rule: Some(GateRule::EmptyStampedFrame),
     };
 
-    let (state, gate, rejected, released_via_escape_hatch) =
+    let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, false, &prior, &prev_gate, gate_now());
 
     assert!(!rejected);
@@ -617,7 +620,7 @@ fn accept_resets_the_gate() {
         spend_carry: SpendCarryEpisodes::default(),
         rule: Some(GateRule::AgentDemotedToProcess),
     };
-    let (state, gate, rejected, released_via_escape_hatch) =
+    let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, true, &prior, &prev_gate, gate_now());
     assert!(!rejected);
     assert!(!released_via_escape_hatch);
@@ -638,7 +641,7 @@ fn escape_release_reports_escape_hatch() {
         rule: Some(GateRule::AgentDemotedToProcess),
     };
 
-    let (state, gate, rejected, released_via_escape_hatch) =
+    let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, true, &prior, &prev_gate, gate_now());
 
     assert!(!rejected);

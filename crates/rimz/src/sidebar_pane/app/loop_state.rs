@@ -118,7 +118,12 @@ struct PendingFocusRepair {
 
 pub(super) struct LoopState {
     pub(super) current: SidebarSnapshot,
-    last_pulled: SidebarSnapshot,
+    /// Full pulled truth retained only while an overlay, focus fence, or gate
+    /// hold can outlive its source. The steady overlay-free path moves the pull
+    /// directly into `current` and keeps only the compact projections below.
+    overlay_baseline: Option<SidebarSnapshot>,
+    last_focus_observation: FocusObservation,
+    last_pulled_sig: observe::PulledFrameSig,
     own_pane: Option<PaneId>,
     last_known_elder: bool,
     optimistic_watch_until: Option<Instant>,
@@ -217,7 +222,9 @@ impl LoopState {
             width_cap,
         );
         Self {
-            last_pulled: current.clone(),
+            last_focus_observation: FocusObservation::from_snapshot(&current),
+            last_pulled_sig: observe::PulledFrameSig::from_snapshot(&current),
+            overlay_baseline: None,
             current,
             own_pane,
             last_known_elder: true,
@@ -448,11 +455,17 @@ impl LoopState {
                 phase,
                 pane_frame,
             } => {
-                self.last_pulled = *snapshot;
                 let now_ms = crate::sidebar::timing::unix_now_ms();
                 self.event_store.prune(now_ms);
+                let pulled = *snapshot;
+                self.last_focus_observation = FocusObservation::from_snapshot(&pulled);
+                self.last_pulled_sig = observe::PulledFrameSig::from_snapshot(&pulled);
+                let intent = self.pending_focus_intent(now_ms);
+                let (snapshot, baseline) =
+                    fuse_owned(pulled, &self.event_store, intent.as_ref(), now_ms);
+                self.overlay_baseline = baseline;
                 FetchUpdate::Snapshot {
-                    snapshot: Box::new(self.fused_snapshot(now_ms)),
+                    snapshot: Box::new(snapshot),
                     role,
                     phase,
                     pane_frame,
@@ -491,9 +504,14 @@ impl LoopState {
     /// Fuse the last pulled snapshot with the overlay event store and any
     /// pending focus intent as of `now_ms`.
     fn fused_snapshot(&mut self, now_ms: u64) -> SidebarSnapshot {
+        if self.overlay_baseline.is_none() {
+            self.overlay_baseline = Some(self.current.clone());
+        }
         let intent = self.pending_focus_intent(now_ms);
         fuse(
-            &self.last_pulled,
+            self.overlay_baseline
+                .as_ref()
+                .expect("overlay baseline installed"),
             &self.event_store,
             intent.as_ref(),
             now_ms,
@@ -1330,8 +1348,11 @@ impl LoopState {
         }
         let incoming_panes_produced_at_ms = computed.snapshot.panes_produced_at_ms;
         let now = Timestamp::now();
-        let (state, next_gate, rejected, released_via_escape_hatch) =
+        let (state, next_gate, rejected, released_via_escape_hatch, rejected_snapshot) =
             apply_gate(computed, fetch_was_ok, &self.current, &self.gate, now);
+        if self.overlay_baseline.is_none() {
+            self.overlay_baseline = rejected_snapshot;
+        }
         emit_diagnostics(
             diag,
             FetchDiagnostics {
@@ -1574,16 +1595,20 @@ impl LoopState {
 
     fn pending_focus_intent(&mut self, now_ms: u64) -> Option<FocusPresentation> {
         let anchor = crate::sidebar::focus_anchor::load(self.read_marks.runtime())?;
-        let outcome =
-            if focus_intent_confirmed(&self.last_pulled, &self.event_store, &anchor, now_ms) {
-                FocusObservationOutcome::Confirmed
-            } else {
-                crate::sidebar::focus_anchor::observation_outcome(
-                    &anchor,
-                    &self.last_pulled,
-                    now_ms,
-                )
-            };
+        let outcome = if focus_intent_confirmed_from(
+            &self.last_focus_observation,
+            &self.event_store,
+            &anchor,
+            now_ms,
+        ) {
+            FocusObservationOutcome::Confirmed
+        } else {
+            crate::sidebar::focus_anchor::observation_outcome_from(
+                &anchor,
+                &self.last_focus_observation,
+                now_ms,
+            )
+        };
         match outcome {
             FocusObservationOutcome::Requested => None,
             FocusObservationOutcome::Present => Some(FocusPresentation::Target(Box::new(anchor))),
@@ -1648,7 +1673,7 @@ impl LoopState {
         let now_ms = crate::sidebar::timing::unix_now_ms();
         let sig = observe::extract_sig(
             &self.current,
-            &self.last_pulled,
+            &self.last_pulled_sig,
             &self.event_store,
             self.gate.reject_streak,
             self.health.failure_streak,

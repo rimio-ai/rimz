@@ -1,6 +1,6 @@
 use super::super::sig::{
-    AggregateKey, AggregateSig, EventPaneSig, EventsSig, GroupSig, OwnViewSig, WatchedValues,
-    extract_sig,
+    AggregateKey, AggregateSig, EventPaneSig, EventsSig, GroupSig, OwnViewSig, PulledFrameSig,
+    WatchedValues, extract_sig,
 };
 use super::*;
 use crate::SidebarWorktreeKind;
@@ -154,9 +154,10 @@ fn snapshot_with_spend(year_usd: Option<f64>) -> crate::SidebarSnapshot {
 }
 
 fn extracted_spend_sig(at_ms: u64, committed_usd: f64, pulled_usd: f64) -> FrameSig {
+    let pulled = snapshot_with_spend(Some(pulled_usd));
     extract_sig(
         &snapshot_with_spend(Some(committed_usd)),
-        &snapshot_with_spend(Some(pulled_usd)),
+        &PulledFrameSig::from_snapshot(&pulled),
         &EventStore::default(),
         0,
         0,

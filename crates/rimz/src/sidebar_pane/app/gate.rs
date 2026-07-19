@@ -158,28 +158,29 @@ pub(super) fn gate_held_ms(gate: &GateState, now: Timestamp) -> u64 {
 /// regression is held: the prior committed frame remains rendered, so the cache
 /// never advances onto bad data and the next comparison still uses that frame.
 /// Returns the possibly-held state, the next gate state, whether this fetch was
-/// rejected (the loop fires one self-heal refetch on a reject), and whether a
-/// held regression was accepted by the escape hatch.
+/// rejected (the loop fires one self-heal refetch on a reject), whether a held
+/// regression was accepted by the escape hatch, and the rejected incoming
+/// snapshot so realtime fusion can retain it without a speculative clone.
 pub(super) fn apply_gate(
     mut state: RenderState,
     fetch_was_ok: bool,
     prev_good: &SidebarSnapshot,
     gate: &GateState,
     now: Timestamp,
-) -> (RenderState, GateState, bool, bool) {
+) -> (RenderState, GateState, bool, bool, Option<SidebarSnapshot>) {
     if !fetch_was_ok {
-        return (state, gate.clone(), false, false);
+        return (state, gate.clone(), false, false, None);
     }
     match gate_commit(prev_good, &state.snapshot, gate, now) {
         CommitDecision::KeepPrior(rule) => {
-            state.snapshot = prev_good.clone();
+            let rejected_snapshot = std::mem::replace(&mut state.snapshot, prev_good.clone());
             let next = GateState {
                 reject_streak: gate.reject_streak.saturating_add(1),
                 rejecting_since: gate.rejecting_since.or(Some(now)),
                 spend_carry: gate.spend_carry.clone(),
                 rule: Some(rule),
             };
-            (state, next, true, false)
+            (state, next, true, false, Some(rejected_snapshot))
         }
         CommitDecision::AcceptViaEscapeHatch => {
             let spend_carry = repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
@@ -191,6 +192,7 @@ pub(super) fn apply_gate(
                 },
                 false,
                 true,
+                None,
             )
         }
         CommitDecision::Accept => {
@@ -203,6 +205,7 @@ pub(super) fn apply_gate(
                 },
                 false,
                 false,
+                None,
             )
         }
     }

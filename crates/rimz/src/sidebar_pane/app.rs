@@ -23,9 +23,9 @@ use crate::ids::PaneId;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::focus_anchor::{
-    FocusIntentState, FocusObservationOutcome, FocusOrigin, FocusPresentation,
+    FocusIntentState, FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
-use crate::sidebar::fuse::{focus_intent_confirmed, fuse};
+use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};

@@ -13,8 +13,8 @@ pub mod writer;
 pub use crate::diag::record::{AggregateKey, AnomalyKind, FrameStamp, ObserveRole, WatchedField};
 pub use detect::Observer;
 pub use sig::{
-    AggregateSig, EventsSig, FrameSig, GroupSig, OwnViewSig, RosterRowSig, RosterSig, RowSig,
-    StatusCountSig, WatchedValues, extract_sig,
+    AggregateSig, EventsSig, FrameSig, GroupSig, OwnViewSig, PulledFrameSig, RosterRowSig,
+    RosterSig, RowSig, StatusCountSig, WatchedValues, extract_sig,
 };
 
 const EVIDENCE_LIMIT: usize = 32;

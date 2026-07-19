@@ -138,6 +138,12 @@ fn frame_active(state: &LoopState) -> bool {
         .0
 }
 
+fn set_pulled(state: &mut LoopState, snapshot: &SidebarSnapshot) {
+    state.last_focus_observation = FocusObservation::from_snapshot(snapshot);
+    state.last_pulled_sig = observe::PulledFrameSig::from_snapshot(snapshot);
+    state.overlay_baseline = Some(snapshot.clone());
+}
+
 #[test]
 fn spend_ratchet_holds_within_epoch_and_resets_across_epochs() {
     let ws = workspace();
@@ -226,7 +232,8 @@ fn hide_consumer(state: &mut LoopState, ws: &WorkspaceId) {
     state.current = animating_agent_snapshot(ws);
     state.current.own_view = Some(own_view(false, false));
     state.current.viewed_panes.clear();
-    state.last_pulled = state.current.clone();
+    let pulled = state.current.clone();
+    set_pulled(state, &pulled);
     state.last_known_elder = false;
 }
 
@@ -584,7 +591,7 @@ fn frame_timing_resumes_on_own_pane_focus() {
     .expect("terminal");
     for (focused, resumes) in [(own_pane.clone(), true), (foreign_pane, false)] {
         let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-        state.last_pulled = snapshot.clone();
+        set_pulled(&mut state, &snapshot);
         state.current = snapshot.clone();
         state.dirty = false;
         let (mut fetch, request_rx) = fetch_dispatcher();
@@ -1066,7 +1073,7 @@ fn focus_out_closes_help_popup() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
     let snapshot = snapshot_with_focused_pane(&ws, own_pane.clone());
-    state.last_pulled = snapshot.clone();
+    set_pulled(&mut state, &snapshot);
     state.current = snapshot;
     state.ui.help_visible = true;
     state.optimistic_watch_until = Some(Instant::now() + Duration::from_secs(1));
@@ -1679,6 +1686,14 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
         "the rejected fold stays held"
     );
     assert_eq!(state.gate.reject_streak, 1);
+    assert_eq!(
+        state
+            .overlay_baseline
+            .as_ref()
+            .and_then(|snapshot| snapshot.panes_observed_at_ms),
+        Some(150),
+        "the held incoming pull becomes the lazy realtime baseline"
+    );
 
     fold_snapshot(
         &mut state,
@@ -1703,6 +1718,10 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     assert!(
         !state.paint_hold.is_engaged(),
         "the escape-hatch accepted fold releases by pane stamp"
+    );
+    assert!(
+        state.overlay_baseline.is_none(),
+        "an accepted overlay-free pull releases the full baseline"
     );
 }
 

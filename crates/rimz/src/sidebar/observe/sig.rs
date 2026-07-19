@@ -79,6 +79,59 @@ pub struct AggregateSig {
     pub pulled: Option<String>,
 }
 
+/// The small pulled-truth subset diagnostics compares with a committed frame.
+/// Keeping this projection lets the renderer move an overlay-free pull into
+/// presentation without retaining and cloning the full snapshot.
+#[derive(Clone, Debug)]
+pub struct PulledFrameSig {
+    rows: usize,
+    panes_produced_at_ms: Option<u64>,
+    aggregates: BTreeMap<String, Option<String>>,
+}
+
+impl PulledFrameSig {
+    pub fn from_snapshot(snapshot: &SidebarSnapshot) -> Self {
+        let mut aggregates = BTreeMap::new();
+        aggregates.insert(
+            AggregateKey::CockpitTally.identity(),
+            spend_cents(snapshot.value_tally.as_ref()),
+        );
+        aggregates.insert(
+            AggregateKey::WorkspaceTally.identity(),
+            spend_cents(snapshot.workspace_value_tally.as_ref()),
+        );
+        for panel in &snapshot.providers {
+            aggregates.insert(
+                AggregateKey::ProviderSpend {
+                    kind: panel.kind.clone(),
+                }
+                .identity(),
+                spend_cents(panel.spending.as_ref()),
+            );
+            for window in &panel.windows {
+                aggregates.insert(
+                    AggregateKey::ProviderMana {
+                        kind: panel.kind.clone(),
+                        scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
+                        duration_mins: window.duration_mins,
+                    }
+                    .identity(),
+                    window.used_percentage.map(|pct| pct.to_string()),
+                );
+            }
+        }
+        Self {
+            rows: snapshot
+                .worktree_groups
+                .iter()
+                .map(|group| group.rows.len())
+                .sum(),
+            panes_produced_at_ms: snapshot.panes_produced_at_ms,
+            aggregates,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnViewSig {
     pub sibling_count: usize,
@@ -103,7 +156,7 @@ pub struct RosterRowSig {
 
 pub fn extract_sig(
     current: &SidebarSnapshot,
-    last_pulled: &SidebarSnapshot,
+    last_pulled: &PulledFrameSig,
     event_store: &EventStore,
     gate_reject_streak: u32,
     health_failure_streak: u32,
@@ -192,11 +245,7 @@ pub fn extract_sig(
                 .collect(),
         }),
         events: extract_events(event_store, now_ms),
-        pulled_rows: last_pulled
-            .worktree_groups
-            .iter()
-            .map(|group| group.rows.len())
-            .sum(),
+        pulled_rows: last_pulled.rows,
         pulled_panes_produced_at_ms: last_pulled.panes_produced_at_ms,
         gate_reject_streak,
         health_failure_streak,
@@ -205,56 +254,55 @@ pub fn extract_sig(
 
 fn extract_aggregates(
     current: &SidebarSnapshot,
-    last_pulled: &SidebarSnapshot,
+    last_pulled: &PulledFrameSig,
 ) -> Vec<AggregateSig> {
-    let pulled_providers = last_pulled
-        .providers
-        .iter()
-        .map(|panel| (panel.kind.as_str(), panel))
-        .collect::<BTreeMap<_, _>>();
     let mut aggregates = vec![
         AggregateSig {
             key: AggregateKey::CockpitTally,
             committed: spend_cents(current.value_tally.as_ref()),
-            pulled: spend_cents(last_pulled.value_tally.as_ref()),
+            pulled: last_pulled
+                .aggregates
+                .get(&AggregateKey::CockpitTally.identity())
+                .cloned()
+                .flatten(),
         },
         AggregateSig {
             key: AggregateKey::WorkspaceTally,
             committed: spend_cents(current.workspace_value_tally.as_ref()),
-            pulled: spend_cents(last_pulled.workspace_value_tally.as_ref()),
+            pulled: last_pulled
+                .aggregates
+                .get(&AggregateKey::WorkspaceTally.identity())
+                .cloned()
+                .flatten(),
         },
     ];
     for panel in &current.providers {
-        let pulled_panel = pulled_providers.get(panel.kind.as_str()).copied();
+        let spend_key = AggregateKey::ProviderSpend {
+            kind: panel.kind.clone(),
+        };
         aggregates.push(AggregateSig {
-            key: AggregateKey::ProviderSpend {
-                kind: panel.kind.clone(),
-            },
+            key: spend_key.clone(),
             committed: spend_cents(panel.spending.as_ref()),
-            pulled: pulled_panel.and_then(|panel| spend_cents(panel.spending.as_ref())),
+            pulled: last_pulled
+                .aggregates
+                .get(&spend_key.identity())
+                .cloned()
+                .flatten(),
         });
-        let pulled_windows = pulled_panel
-            .map(|panel| {
-                panel
-                    .windows
-                    .iter()
-                    .map(|window| (window.key(), window.used_percentage))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
         for window in &panel.windows {
+            let key = AggregateKey::ProviderMana {
+                kind: panel.kind.clone(),
+                scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
+                duration_mins: window.duration_mins,
+            };
             aggregates.push(AggregateSig {
-                key: AggregateKey::ProviderMana {
-                    kind: panel.kind.clone(),
-                    scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
-                    duration_mins: window.duration_mins,
-                },
+                key: key.clone(),
                 committed: window.used_percentage.map(|pct| pct.to_string()),
-                pulled: pulled_windows
-                    .get(&window.key())
-                    .copied()
-                    .flatten()
-                    .map(|pct| pct.to_string()),
+                pulled: last_pulled
+                    .aggregates
+                    .get(&key.identity())
+                    .cloned()
+                    .flatten(),
             });
         }
     }
@@ -347,7 +395,7 @@ mod tests {
                 vec![scoped("chat", 30), scoped("premium", 60)],
             )],
         );
-        let mana = extract_aggregates(&current, &pulled)
+        let mana = extract_aggregates(&current, &PulledFrameSig::from_snapshot(&pulled))
             .into_iter()
             .filter(|aggregate| matches!(aggregate.key, AggregateKey::ProviderMana { .. }))
             .collect::<Vec<_>>();
