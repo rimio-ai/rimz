@@ -1,8 +1,8 @@
 use super::*;
 use crate::cli::doctor::model::{
-    HookRow, Host, IncidentAgent, LastIncident, LoopTaskRow, MessageProblemRow, MuxBinaries,
-    OpenCounts, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry, PresencePlugins,
-    RemoteAgent, StorageRootView, TmuxCaps,
+    HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow, MessageProblemRow,
+    MuxBinaries, OpenCounts, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
+    PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps,
 };
 use rimz::ids::MuxName;
 
@@ -49,7 +49,8 @@ fn mux_fixture() -> Mux {
         room: None,
         presence_plugins: None,
         zellij_socket: None,
-        socket: Some("/tmp/tmux-1001/default".to_owned()),
+        socket: Some("/run/user/1001/rimz/tmux/server".to_owned()),
+        legacy_session: None,
         session_health: None,
         duplicate_sessions: None,
         presence: None,
@@ -242,7 +243,29 @@ fn mux_section_shows_backend_socket() {
         render_mux(w, &Probe::Ready(mux), &mut tally)
     });
     assert!(out.contains("MULTIPLEXER"), "{out}");
-    assert!(out.contains("/tmp/tmux-1001/default"), "{out}");
+    // The RimZ-owned endpoint, not the user's default server.
+    assert!(out.contains("/run/user/1001/rimz/tmux/server"), "{out}");
+}
+
+#[test]
+fn mux_section_names_a_stranded_legacy_session_with_its_fix() {
+    let mux = Mux {
+        legacy_session: Some(LegacySession {
+            session: "rimz-project-a1b2c3".to_owned(),
+            socket: "/tmp/tmux-1001/default".to_owned(),
+            fix: "tmux -S /tmp/tmux-1001/default kill-session -t rimz-project-a1b2c3".to_owned(),
+        }),
+        ..mux_fixture()
+    };
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)
+    });
+
+    assert!(out.contains("legacy session"), "{out}");
+    // Session-scoped: the user's other sessions on that server survive.
+    assert!(out.contains("kill-session -t rimz-project-a1b2c3"), "{out}");
+    assert!(!out.contains("kill-server"), "{out}");
 }
 
 fn presence_telemetry_fixture() -> PresencePluginTelemetry {

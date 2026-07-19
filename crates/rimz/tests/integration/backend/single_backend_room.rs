@@ -66,7 +66,9 @@ fn attach_from_cwd_uses_live_backend_over_ambient_backend() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("tmux attach") && stdout.contains(&room.session_name),
+        stdout.contains("tmux -S")
+            && stdout.contains("attach")
+            && stdout.contains(&room.session_name),
         "attach should target the live tmux room, got: {stdout}",
     );
     assert!(
@@ -267,7 +269,7 @@ impl TmuxRoom {
 
     fn tmux_sessions(&self) -> Vec<String> {
         let output = tmux_output(
-            &self.tmux_tmpdir,
+            &self.env.runtime_root,
             &["list-sessions", "-F", "#{session_name}"],
         );
         assert!(
@@ -286,7 +288,7 @@ impl TmuxRoom {
 
 impl Drop for TmuxRoom {
     fn drop(&mut self) {
-        let _ = tmux_output(&self.tmux_tmpdir, &["kill-server"]);
+        let _ = tmux_output(&self.env.runtime_root, &["kill-server"]);
     }
 }
 
@@ -369,7 +371,7 @@ impl ZellijRoom {
 
     fn tmux_sessions(&self) -> Vec<String> {
         let output = tmux_output(
-            &self.tmux_tmpdir,
+            &self.env.runtime_root,
             &["list-sessions", "-F", "#{session_name}"],
         );
         if !output.status.success() {
@@ -415,7 +417,7 @@ impl Drop for ZellijRoom {
             .zellij()
             .args(["delete-session", &self.session_name, "--force"])
             .bounded_output();
-        let _ = tmux_output(&self.tmux_tmpdir, &["kill-server"]);
+        let _ = tmux_output(&self.env.runtime_root, &["kill-server"]);
     }
 }
 
@@ -433,10 +435,15 @@ fn archive_entry_count(dir: &Path) -> usize {
     }
 }
 
-fn tmux_output(tmpdir: &Path, args: &[&str]) -> std::process::Output {
+/// Query the same server `rimz` uses: the managed endpoint derived from the
+/// room's runtime root. `TMUX_TMPDIR` no longer decides where RimZ's sessions
+/// live, so isolating on it alone would inspect an empty default server.
+fn tmux_output(runtime_root: &Path, args: &[&str]) -> std::process::Output {
+    let socket = rimz::mux::tmux::managed_server_socket_path_under(runtime_root);
     Command::new("tmux")
         .scrub_session_env()
-        .env("TMUX_TMPDIR", tmpdir)
+        .arg("-S")
+        .arg(&socket)
         .args(args)
         .output()
         .expect("spawn tmux")

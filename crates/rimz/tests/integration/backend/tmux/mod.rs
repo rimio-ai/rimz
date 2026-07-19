@@ -17,6 +17,7 @@ mod layout;
 mod pane_io;
 mod presence;
 mod reconcile;
+mod server_cwd;
 mod session;
 mod sidebar;
 mod support;

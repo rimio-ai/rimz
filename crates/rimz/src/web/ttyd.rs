@@ -319,10 +319,24 @@ fn stop_instances(instances: &[TtydInstance]) -> Result<()> {
 }
 
 fn spawn_spec(session: &str, port: u16, secret: &str) -> Result<CommandSpec> {
-    Ok(spawn_spec_for(&program()?, session, port, secret))
+    Ok(spawn_spec_for(
+        &program()?,
+        session,
+        port,
+        secret,
+        &crate::mux::tmux::managed_server_socket_path(),
+    ))
 }
 
-fn spawn_spec_for(program: &Path, session: &str, port: u16, secret: &str) -> CommandSpec {
+/// ttyd's child attaches to the managed room, so it addresses the managed
+/// socket explicitly — ttyd runs detached with no inherited `$TMUX` to follow.
+fn spawn_spec_for(
+    program: &Path,
+    session: &str,
+    port: u16,
+    secret: &str,
+    tmux_socket: &Path,
+) -> CommandSpec {
     CommandSpec::new(program.display().to_string())
         .args(["-W", "-O", "-c"])
         .arg(format!("rimz:{secret}"))
@@ -330,7 +344,9 @@ fn spawn_spec_for(program: &Path, session: &str, port: u16, secret: &str) -> Com
         .arg(port.to_string())
         .args(["-b"])
         .arg(format!("/{session}"))
-        .args(["tmux", "attach", "-t"])
+        .args(["tmux", "-S"])
+        .arg(tmux_socket.display().to_string())
+        .args(["attach", "-t"])
         .arg(session.to_owned())
 }
 
@@ -457,6 +473,7 @@ mod tests {
             "rimz-project-a1b2c3",
             8201,
             "secret",
+            Path::new("/run/user/1000/rimz/tmux/server"),
         );
         assert_eq!(
             spec.args,
@@ -472,6 +489,8 @@ mod tests {
                 "-b",
                 "/rimz-project-a1b2c3",
                 "tmux",
+                "-S",
+                "/run/user/1000/rimz/tmux/server",
                 "attach",
                 "-t",
                 "rimz-project-a1b2c3"

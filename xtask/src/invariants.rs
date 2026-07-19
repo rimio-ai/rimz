@@ -64,8 +64,54 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_store_durability(root, &files)?;
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
+    ensure_managed_tmux_endpoint(root, &files)?;
     ensure_inline_tests_stay_small(&files)?;
     Ok(())
+}
+
+/// Every managed tmux command addresses the RimZ-owned socket.
+///
+/// A bare `tmux` argv inherits the user's default server, where RimZ owns no
+/// session and where its server-global options and root key bindings would
+/// land on the user's own rooms. `mux::tmux::managed_cmd` is the seam for
+/// readers outside the backend.
+fn ensure_managed_tmux_endpoint(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let src_root = root.join("crates/rimz/src");
+    // `tmux.rs` builds the managed argv; `presence.rs` spawns the control
+    // client with its own explicit `-S`; `uninstall.rs` deliberately asks the
+    // ambient server "which session am I in", which must follow `$TMUX`.
+    let exempt = [
+        src_root.join("mux/tmux.rs"),
+        src_root.join("mux/tmux/presence.rs"),
+        src_root.join("cli/uninstall.rs"),
+    ];
+    let mut violations = Vec::new();
+    for path in files {
+        if !path.starts_with(&src_root)
+            || exempt.iter().any(|allowed| path == allowed)
+            || is_test_source_path(root, path)
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in lines_outside_inline_tests(&text) {
+            if line.contains(r#"CommandSpec::new("tmux")"#)
+                || line.contains(r#"Command::new("tmux")"#)
+            {
+                violations.push(format!("{}:{}: {}", path.display(), idx, line.trim()));
+            }
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "tmux commands must address the RimZ-owned server; use `mux::tmux::managed_cmd()` \
+         instead of a bare `tmux` argv:\n{}",
+        violations.join("\n")
+    );
 }
 
 fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Result<()> {

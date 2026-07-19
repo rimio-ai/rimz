@@ -6,6 +6,7 @@
 //! Shared data caches live under `$XDG_STATE_HOME/rimz/shared/`; shared
 //! election locks live under `$XDG_RUNTIME_DIR/rimz/shared/`.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io;
@@ -691,6 +692,33 @@ pub(crate) fn runtime_home_from(xdg_runtime: Option<&Path>, uid: u32) -> PathBuf
 
 pub fn persistent_shared_home() -> PathBuf {
     state_home().join("rimz").join("shared")
+}
+
+/// The resolved runtime domain as concrete environment values.
+///
+/// A managed session stamps these at birth and on every ensure, so a pane
+/// resolves the same store and the same mux endpoint as the client that
+/// created it — rather than inheriting whatever ambient environment that
+/// client happened to carry, or nothing at all under a re-parented daemon.
+///
+/// Every value is the resolved one, so a variable the user left unset is
+/// pinned to the default RimZ already computes instead of drifting per pane.
+/// Deriving these beside [`runtime_home`] is what keeps socket identity and
+/// stamped environment two projections of one domain.
+pub fn runtime_domain_env() -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    let mut put = |key: &str, path: PathBuf| {
+        env.insert(key.to_owned(), path.display().to_string());
+    };
+    if let Some(home) = env_path("HOME") {
+        put("HOME", home);
+    }
+    put("XDG_CONFIG_HOME", config_home());
+    put("XDG_DATA_HOME", data_home());
+    put("XDG_CACHE_HOME", cache_home());
+    put("XDG_STATE_HOME", state_home());
+    put("XDG_RUNTIME_DIR", runtime_home());
+    env
 }
 
 #[cfg(test)]

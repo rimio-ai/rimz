@@ -130,6 +130,14 @@ pub(super) struct SockBudget {
 }
 
 #[derive(Debug, Serialize)]
+pub(super) struct LegacySession {
+    pub(super) session: String,
+    pub(super) socket: String,
+    /// Session-scoped, so unrelated sessions on that server are untouched.
+    pub(super) fix: String,
+}
+
+#[derive(Debug, Serialize)]
 pub(super) struct Mux {
     pub(super) name: MuxName,
     pub(super) version: Version,
@@ -144,6 +152,10 @@ pub(super) struct Mux {
     pub(super) zellij_socket: Option<ZellijSocket>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) socket: Option<String>,
+    /// A same-named RimZ session stranded on the user's default tmux server by
+    /// a release predating the managed endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) legacy_session: Option<LegacySession>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) session_health: Option<Probe<SessionHealth>>,
     #[serde(skip_serializing_if = "Option::is_none")]

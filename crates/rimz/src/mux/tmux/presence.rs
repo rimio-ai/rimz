@@ -1,7 +1,6 @@
 //! tmux control-mode presence watcher.
 
 use std::io::{BufRead as _, Write as _};
-use std::path::PathBuf;
 
 // ── Control-mode presence stream ──────────────────────────────────────────────
 
@@ -63,15 +62,17 @@ pub struct PresenceWatch {
 }
 
 impl PresenceWatch {
-    /// Attach a writable control client to `session` (on `socket` when given,
-    /// else the default server), excluding it from size negotiation and pane
-    /// output. `$TMUX` is dropped from the child's env so the nested attach is
-    /// deliberate rather than refused.
-    pub fn attach(socket: Option<&std::path::Path>, session: &str) -> std::io::Result<Self> {
+    /// Attach a writable control client to `session` on `socket`, excluding it
+    /// from size negotiation and pane output. `$TMUX` is dropped from the
+    /// child's env so the nested attach is deliberate rather than refused.
+    ///
+    /// The socket is explicit rather than inherited: the watch always follows
+    /// a named managed session, so resolving the endpoint from the ambient
+    /// `$TMUX` would point it at the wrong server whenever the sidebar runs
+    /// outside a managed pane.
+    pub fn attach(socket: &std::path::Path, session: &str) -> std::io::Result<Self> {
         let mut cmd = std::process::Command::new("tmux");
-        if let Some(socket) = socket {
-            cmd.arg("-S").arg(socket);
-        }
+        cmd.arg("-S").arg(socket);
         cmd.args([
             "-C",
             "attach-session",
@@ -138,12 +139,6 @@ impl Drop for PresenceWatch {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-
-/// The control-mode socket of the server this process is running inside, from
-/// `$TMUX` (`<socket>,<pid>,<session-idx>`). `None` outside tmux.
-pub fn control_socket_from_env() -> Option<PathBuf> {
-    super::socket_path_from_tmux_var(&std::env::var("TMUX").ok()?)
 }
 
 /// Classify one tmux control-mode line. Reply blocks, pane output, and

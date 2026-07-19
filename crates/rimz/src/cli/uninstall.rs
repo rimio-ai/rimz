@@ -266,6 +266,13 @@ fn ensure_not_in_rimz_room(workspaces: &[KnownWorkspace]) -> Result<()> {
     Ok(())
 }
 
+/// Which tmux session this process is running inside, if any.
+///
+/// Deliberately ambient: the question is "where am I", so it resolves through
+/// the inherited `$TMUX` rather than the managed endpoint. A caller inside a
+/// managed pane inherits the managed socket and answers with its RimZ session;
+/// one inside an unrelated tmux answers with that session, which matches no
+/// RimZ session name and correctly does not block the uninstall.
 fn current_tmux_session() -> Option<String> {
     let output = Command::new("tmux")
         .args(["display-message", "-p", "#S"])

@@ -63,7 +63,7 @@ fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
     require_tmux!();
     let server = TmuxServer::new();
     server.ensure_with_shell("presence");
-    let watch = rimz::mux::tmux::PresenceWatch::attach(Some(&server.socket), "presence")
+    let watch = rimz::mux::tmux::PresenceWatch::attach(&server.socket, "presence")
         .expect("attach control client");
     server.wait_for_control_client("presence");
     // Drain on a helper thread so the main thread owns the timeout. Initial

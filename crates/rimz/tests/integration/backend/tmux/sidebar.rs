@@ -6,7 +6,7 @@ use super::support::*;
 fn sidebar_reload_keeps_mouse_capture_alive() {
     require_tmux!();
     let env = Env::new();
-    let server = TmuxServer::new();
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
     let session = "mouse-reload";
     let binary_dir = TempDir::new().expect("binary tempdir");
     let binary = binary_dir.path().join("rimz");
@@ -312,7 +312,7 @@ fn sidebar_birth_and_first_attach_preserve_work_shell_contract() {
     );
     let work_id = work.pane_id.raw().to_owned();
     let birth_pid = server.display(&work_id, "#{pane_pid}");
-    let _watch = rimz::mux::tmux::PresenceWatch::attach(Some(&server.socket), session)
+    let _watch = rimz::mux::tmux::PresenceWatch::attach(&server.socket, session)
         .expect("attach control watch");
     server.wait_for_control_client(session);
     thread::sleep(Duration::from_millis(100));

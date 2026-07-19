@@ -106,7 +106,15 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()> {
-        let mut env = crate::workspace::pin_env(&opts.workspace_id, &opts.project_root);
+        self.ensure_endpoint_ready()?;
+        // The runtime domain goes in first so the pin and any caller override
+        // win on conflict: a pane inherits concrete HOME/XDG values naming the
+        // same store and mux endpoint this client resolved.
+        let mut env = crate::store::paths::runtime_domain_env();
+        env.extend(crate::workspace::pin_env(
+            &opts.workspace_id,
+            &opts.project_root,
+        ));
         env.extend(opts.extra_env.clone());
         // tmux strips COLORTERM and births panes under `tmux-256color`, whose
         // terminfo carries no RGB cap, so apps inside the room — the sidebar and
@@ -148,7 +156,9 @@ impl MuxBackend for TmuxBackend {
             ]);
         }
         match spec.run() {
-            Ok(_) => {}
+            // Only a session this call created proves anything about the
+            // server's cwd: a live room's pane may have been `cd`-ed since.
+            Ok(_) => self.verify_birth_cwd(&opts.session_name, &opts.cwd)?,
             Err(MuxErr::Command { stderr, .. })
                 if stderr.to_ascii_lowercase().contains("duplicate session") => {}
             Err(err) => return Err(err),

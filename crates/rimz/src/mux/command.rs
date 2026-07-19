@@ -5,7 +5,7 @@
 //! the caller as a [`Command`] for `exec(3)` (the interactive attach). Pure
 //! process/thread/timeout machinery — no panes, no sessions, no backends.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::io::Read as _;
 use std::path::PathBuf;
@@ -30,6 +30,8 @@ pub struct CommandSpec {
     pub program: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+    /// Keys cleared from the inherited environment before `env` is applied.
+    pub env_remove: BTreeSet<String>,
     pub cwd: Option<PathBuf>,
 }
 
@@ -39,6 +41,7 @@ impl CommandSpec {
             program: program.into(),
             args: Vec::new(),
             env: BTreeMap::new(),
+            env_remove: BTreeSet::new(),
             cwd: None,
         }
     }
@@ -62,6 +65,14 @@ impl CommandSpec {
         self
     }
 
+    /// Clear an inherited variable for the child. [`Self::env`] adds to the
+    /// parent environment rather than replacing it, so an inherited value must
+    /// be dropped explicitly.
+    pub fn env_remove(mut self, key: impl Into<String>) -> Self {
+        self.env_remove.insert(key.into());
+        self
+    }
+
     pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
         self.cwd = Some(dir.into());
         self
@@ -81,6 +92,9 @@ impl CommandSpec {
     pub fn to_command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
+        for key in &self.env_remove {
+            command.env_remove(key);
+        }
         command.envs(&self.env);
         if let Some(cwd) = &self.cwd {
             command.current_dir(cwd);

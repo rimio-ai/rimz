@@ -217,7 +217,7 @@ fn send_keys_works_with_presence_watch_as_only_client() {
         .panes[0]
         .pane_id
         .clone();
-    let _watch = rimz::mux::tmux::PresenceWatch::attach(Some(&server.socket), "headless")
+    let _watch = rimz::mux::tmux::PresenceWatch::attach(&server.socket, "headless")
         .expect("attach control client");
     server.wait_for_control_client("headless");
     server

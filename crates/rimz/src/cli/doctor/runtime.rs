@@ -151,6 +151,7 @@ pub(super) fn collect_mux(
         presence_plugins: None,
         zellij_socket: None,
         socket: None,
+        legacy_session: None,
         session_health: None,
         duplicate_sessions: None,
         presence: None,
@@ -158,11 +159,21 @@ pub(super) fn collect_mux(
         ttyd: (mux == MuxName::Tmux).then(collect_ttyd),
     };
     if mux == MuxName::Tmux {
-        report.socket = Some(tmux_mod::default_server_socket_path().display().to_string());
+        report.socket = Some(tmux_mod::managed_server_socket_path().display().to_string());
     }
     if let Some(ws) = ws {
         let ownership = rimz::room::session::probe_room_ownership(mux, &ws.session_name);
         report.room = Some(room_view(&ws.session_name, &ownership));
+        if mux == MuxName::Tmux {
+            report.legacy_session =
+                tmux_mod::legacy_session_conflict(&ws.session_name).map(|conflict| {
+                    model::LegacySession {
+                        session: conflict.session.clone(),
+                        socket: conflict.socket.display().to_string(),
+                        fix: conflict.recovery_command(),
+                    }
+                });
+        }
         if mux == MuxName::Zellij {
             report.zellij_socket = Some(collect_zellij_socket_headroom(ws));
         }
@@ -770,7 +781,7 @@ fn presence_stamp_is_event(
 }
 
 fn tmux_watch_client_attached(session: &str) -> bool {
-    let output = rimz::mux::CommandSpec::new("tmux")
+    let output = rimz::mux::tmux::managed_cmd()
         .args(["list-clients", "-t", session, "-F", "#{client_flags}"])
         .run()
         .ok();

@@ -955,10 +955,12 @@ fn stub_mux_rooms(env: &Env, zellij: StubRoomState, tmux: StubRoomState) -> Path
         StubRoomState::Absent => "printf '%s\\n' 'no server running' >&2; exit 1".to_owned(),
         StubRoomState::Unavailable => "printf '%s\\n' 'permission denied' >&2; exit 1".to_owned(),
     };
+    // RimZ addresses its own server, so every tmux argv leads with
+    // `-S <socket>`; the stub steps past it before matching the verb.
     write_executable(
         &dir.join("tmux"),
         &format!(
-            "#!/bin/sh\nif [ \"${{1:-}}\" = \"-V\" ]; then printf '%s\\n' 'tmux 3.5'; exit 0; fi\nif [ \"${{1:-}}\" = \"list-sessions\" ]; then {tmux_list}; fi\nexit 1\n"
+            "#!/bin/sh\nif [ \"${{1:-}}\" = \"-S\" ]; then shift 2; fi\nif [ \"${{1:-}}\" = \"-V\" ]; then printf '%s\\n' 'tmux 3.5'; exit 0; fi\nif [ \"${{1:-}}\" = \"list-sessions\" ]; then {tmux_list}; fi\nexit 1\n"
         ),
     );
     dir

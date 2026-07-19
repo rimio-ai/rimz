@@ -1,5 +1,70 @@
 use super::*;
 
+/// Argv past the `-S <socket>` prefix every managed command carries, so a verb
+/// assertion stays about the verb. [`managed_endpoint_prefixes_every_command`]
+/// owns the prefix itself.
+fn verb_args(spec: &CommandSpec) -> &[String] {
+    assert_eq!(
+        &spec.args[..1],
+        ["-S"],
+        "every tmux command must address an explicit socket",
+    );
+    &spec.args[2..]
+}
+
+#[test]
+fn managed_endpoint_prefixes_every_command() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let spec = backend.cmd();
+
+    assert_eq!(
+        &spec.args[..2],
+        ["-S", "/run/user/1000/rimz/tmux/server"],
+        "commands address the RimZ-owned server, never the user's default",
+    );
+    // A tmux server inherits its cwd from the client that births it, and only
+    // honours a pane's `-c` while `getcwd()` succeeds. Birth from a directory
+    // that can be deleted strands every later pane there.
+    assert_eq!(spec.cwd.as_deref(), Some(Path::new("/")));
+    assert!(
+        spec.env_remove.contains("TMUX"),
+        "an inherited $TMUX would let an ambient server capture a managed command",
+    );
+}
+
+#[test]
+fn the_managed_endpoint_needs_no_workspace_to_reconstruct() {
+    // Any caller rebuilds the same endpoint from the runtime domain alone —
+    // this is what keeps `backend_for(MuxName)` free of a workspace argument.
+    let runtime_root = Path::new("/run/user/1000");
+    assert_eq!(
+        managed_server_socket_path_under(runtime_root),
+        PathBuf::from("/run/user/1000/rimz/tmux/server"),
+    );
+    // A disposable runtime root yields a private server, which is what gives
+    // sandboxes and tests their isolation for free.
+    assert_ne!(
+        managed_server_socket_path_under(Path::new("/tmp/rimz-sandbox/runtime")),
+        managed_server_socket_path_under(runtime_root),
+    );
+}
+
+#[test]
+fn legacy_conflict_recovery_is_scoped_to_the_one_session() {
+    let conflict = LegacySessionConflict {
+        session: "rimz-project-a1b2c3".to_owned(),
+        socket: PathBuf::from("/tmp/tmux-1000/default"),
+    };
+
+    // Session-scoped on purpose: `kill-server` here would destroy the user's
+    // own unrelated sessions, which RimZ does not own.
+    assert_eq!(
+        conflict.recovery_command(),
+        "tmux -S /tmp/tmux-1000/default kill-session -t rimz-project-a1b2c3",
+    );
+    assert!(!conflict.recovery_command().contains("kill-server"));
+}
+
 #[test]
 fn default_server_socket_path_uses_tmux_default_layout() {
     assert_eq!(
@@ -240,23 +305,25 @@ fn version_serves_the_memoized_probe() {
 fn list_panes_scopes_session_without_server_wide_flag() {
     let backend = TmuxBackend::default();
 
-    let session_args = backend.list_panes_command(Some("rimz-room")).args;
+    let session_spec = backend.list_panes_command(Some("rimz-room"));
+    let session_args = verb_args(&session_spec);
     assert_eq!(
         &session_args[..5],
         ["list-panes", "-s", "-t", "rimz-room", "-F"]
     );
     assert!(!session_args.iter().any(|arg| arg == "-a"));
 
-    let server_args = backend.list_panes_command(None).args;
-    assert_eq!(&server_args[..3], ["list-panes", "-a", "-F"]);
+    let server_spec = backend.list_panes_command(None);
+    assert_eq!(&verb_args(&server_spec)[..3], ["list-panes", "-a", "-F"]);
 }
 
 #[test]
 fn sidebar_geometry_probe_is_one_session_scoped_command() {
     let backend = TmuxBackend::default();
 
+    let spec = backend.session_pane_geometries_command("rimz-room");
     assert_eq!(
-        backend.session_pane_geometries_command("rimz-room").args,
+        verb_args(&spec),
         [
             "list-panes",
             "-s",

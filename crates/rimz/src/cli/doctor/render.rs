@@ -316,6 +316,17 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
             kv.push("fix", verdict(tally, Health::Warn, fix));
         }
     }
+    if let Some(legacy) = &mux.legacy_session {
+        kv.push(
+            "legacy session",
+            verdict(
+                tally,
+                Health::Warn,
+                format!("{} on {}", legacy.session, legacy.socket),
+            ),
+        );
+        kv.push("fix", verdict(tally, Health::Warn, &legacy.fix));
+    }
     if let Some(room) = &mux.room {
         kv.push("room", room_cell(tally, mux.name, room));
     }

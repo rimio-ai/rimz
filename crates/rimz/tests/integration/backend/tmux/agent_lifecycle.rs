@@ -235,7 +235,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
         1,
         "seeded agent should be recoverable",
     );
-    let server = TmuxServer::new();
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
     server
         .backend
         .ensure_session(&session_opts(
@@ -294,7 +294,7 @@ fn failing_close_pane_agent_drops_to_shell() {
     require_tmux!();
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
-    let server = TmuxServer::new();
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
     server
         .backend
         .ensure_session(&session_opts(

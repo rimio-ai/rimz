@@ -83,13 +83,15 @@ impl ProcessDomain {
             &tmpdir,
             &uid.to_string(),
         );
-        let tmux_tmpdir = path("TMUX_TMPDIR").unwrap_or_else(|| PathBuf::from("/tmp"));
+        // An inherited `$TMUX` names the exact server the process lives in,
+        // ambient or managed. Without it the process is not inside any tmux,
+        // so the endpoint that matters for a RimZ sweep is the managed one —
+        // derived from the same runtime root resolved just above, so socket
+        // identity and state world never disagree.
         let tmux_socket = get("TMUX")
             .as_deref()
             .and_then(crate::mux::tmux::socket_path_from_tmux_var)
-            .unwrap_or_else(|| {
-                crate::mux::tmux::default_server_socket_path_from(&tmux_tmpdir, uid)
-            });
+            .unwrap_or_else(|| crate::mux::tmux::managed_server_socket_path_under(&runtime_home));
         Self {
             state_home,
             runtime_home,
@@ -102,6 +104,7 @@ impl ProcessDomain {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::Path;
 
     use super::*;
 
@@ -165,11 +168,34 @@ mod tests {
     }
 
     #[test]
-    fn explicit_default_tmux_socket_matches_the_fallback() {
-        let explicit = domain(&[("TMUX", "/tmp/tmux-1000/default,123,0")]);
-        let fallback = domain(&[]);
+    fn explicit_managed_tmux_socket_matches_the_fallback() {
+        // A managed pane inherits `$TMUX` naming the managed socket; a RimZ
+        // process outside any tmux falls back to the same endpoint, so the
+        // sweep recognizes both as its own.
+        let managed = crate::mux::tmux::managed_server_socket_path_under(
+            &crate::store::paths::runtime_home_from(Some(Path::new("/run/user/1000")), UID),
+        );
+        let explicit = domain(&[
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+            ("TMUX", &format!("{},123,0", managed.display())),
+        ]);
+        let fallback = domain(&[("XDG_RUNTIME_DIR", "/run/user/1000")]);
 
         assert!(explicit.same_mux_endpoint(&fallback, MuxName::Tmux));
+    }
+
+    #[test]
+    fn the_legacy_default_server_is_a_foreign_tmux_endpoint() {
+        // RimZ owns nothing on the user's default server, so a process living
+        // there must not be swept as if it were managed.
+        let ambient = domain(&[
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+            ("TMUX", "/tmp/tmux-1000/default,123,0"),
+        ]);
+        let managed = domain(&[("XDG_RUNTIME_DIR", "/run/user/1000")]);
+
+        assert!(ambient.same_world(&managed));
+        assert!(!ambient.same_mux_endpoint(&managed, MuxName::Tmux));
     }
 
     #[test]

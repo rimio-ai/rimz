@@ -153,9 +153,11 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
         "stderr should explain skipped rival probe, got: {stderr}",
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // The printed command must name the RimZ socket: a bare `tmux attach -t`
+    // would look for the room on the user's default server and find nothing.
     assert!(
-        stdout.contains("tmux attach"),
-        "start --no-attach should print tmux attach command, got: {stdout}",
+        stdout.contains("tmux -S") && stdout.contains("attach"),
+        "start --no-attach should print a socket-scoped tmux attach command, got: {stdout}",
     );
     assert!(
         elapsed < Duration::from_secs(5),

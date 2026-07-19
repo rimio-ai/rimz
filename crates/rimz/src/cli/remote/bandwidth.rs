@@ -208,7 +208,7 @@ fn session_ssh_conns(mux: MuxName, session: &str, procs: &[ProcInfo]) -> Vec<Ssh
 }
 
 fn tmux_client_pids(session: &str) -> Vec<u32> {
-    let Some(output) = rimz::mux::CommandSpec::new("tmux")
+    let Some(output) = rimz::mux::tmux::managed_cmd()
         .args(["list-clients", "-t", session, "-F", "#{client_pid}"])
         .run()
         .ok()

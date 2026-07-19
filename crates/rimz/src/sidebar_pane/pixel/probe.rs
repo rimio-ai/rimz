@@ -4,7 +4,6 @@ use std::io;
 use std::time::Duration;
 
 use crate::ids::MuxName;
-use crate::mux::CommandSpec;
 
 const MIN_PIXEL_TMUX_VERSION: (u32, u32, u32) = (3, 6, 0);
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
@@ -163,7 +162,7 @@ impl Probe for LiveProbe {
 }
 
 fn run_tmux<const N: usize>(args: [&str; N]) -> io::Result<String> {
-    let output = CommandSpec::new("tmux")
+    let output = crate::mux::tmux::managed_cmd()
         .args(args)
         .run_with_timeout(COMMAND_TIMEOUT)
         .map_err(io::Error::other)?;

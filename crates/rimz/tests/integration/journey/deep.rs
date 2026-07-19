@@ -89,12 +89,12 @@ fn tmux_room_shows_agent_after_hook() {
     }
 
     let server_dir = TempDir::new().expect("tmux socket dir");
-    let socket = server_dir.path().join("tmux.sock");
     let runtime = tempfile::Builder::new()
         .prefix("rz")
         .rand_bytes(6)
         .tempdir()
         .expect("short runtime dir");
+    let socket = managed_socket(runtime.path());
     let _server = TmuxServerGuard::new(socket.clone());
     let fake_codex = fake_codex_bin(server_dir.path());
 
@@ -209,12 +209,12 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     }
 
     let server_dir = TempDir::new().expect("tmux socket dir");
-    let socket = server_dir.path().join("tmux.sock");
     let runtime = tempfile::Builder::new()
         .prefix("rz")
         .rand_bytes(6)
         .tempdir()
         .expect("short runtime dir");
+    let socket = managed_socket(runtime.path());
     let _server = TmuxServerGuard::new(socket.clone());
     let fake_codex = fake_codex_bin(server_dir.path());
 
@@ -513,8 +513,7 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
     let stub_dir = write_hook_firing_agent(&env, "codex");
     let agent_path = path_with_front(&stub_dir);
     trust_codex_agent_path(&env, &agent_path);
-    let server_dir = TempDir::new().expect("tmux socket dir");
-    let socket = server_dir.path().join("tmux.sock");
+    let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
 
     // `rimz agents -p` births the tmux session and run tab cold, launches the
@@ -576,8 +575,7 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
     let stub_dir = write_hook_firing_agent(&env, "codex");
     let agent_path = path_with_front(&stub_dir);
     trust_codex_agent_path(&env, &agent_path);
-    let server_dir = TempDir::new().expect("tmux socket dir");
-    let socket = server_dir.path().join("tmux.sock");
+    let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
 
     let out = env
@@ -680,7 +678,7 @@ fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Du
 
 fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, TmuxServerGuard) {
     let server_dir = TempDir::new().expect("tmux socket dir");
-    let socket = server_dir.path().join("tmux.sock");
+    let socket = managed_socket(&env.runtime_root);
     let agent = server_dir.path().join("codex");
     #[cfg(unix)]
     std::os::unix::fs::symlink("/bin/sh", &agent).expect("symlink steer agent shell");
@@ -818,6 +816,18 @@ fn shell_quote(value: &str) -> String {
 
 fn tmux(socket: &Path, args: &[&str]) {
     tmux_capture(socket, args);
+}
+
+/// The endpoint `rimz` resolves from `runtime_root`.
+///
+/// A pane's `rimz` derives the managed socket from its own `XDG_RUNTIME_DIR`
+/// rather than following `$TMUX`, so the harness server has to listen exactly
+/// where that derivation points.
+fn managed_socket(runtime_root: &Path) -> PathBuf {
+    let socket = rimz::mux::tmux::managed_server_socket_path_under(runtime_root);
+    std::fs::create_dir_all(socket.parent().expect("socket parent"))
+        .expect("mkdir managed socket dir");
+    socket
 }
 
 /// Run a tmux command and return its trimmed stdout (used to read a pane id).

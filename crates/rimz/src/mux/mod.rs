@@ -93,6 +93,18 @@ pub enum MuxErr {
     #[error("session `{session}` is not active")]
     SessionNotFound { session: String },
     #[error(
+        "the RimZ tmux server cannot place panes: session `{session}` was asked for\n    {}\nbut its first pane opened in\n    {}\n\nThe server's own working directory has been deleted, and tmux skips a pane's\nrequested directory whenever it cannot read its own. Restart just the RimZ\nserver — this leaves any other tmux you are running untouched:\n\n    tmux -S {} kill-server\n",
+        requested.display(),
+        actual.display(),
+        socket.display()
+    )]
+    ServerCwdUnusable {
+        session: String,
+        requested: PathBuf,
+        actual: PathBuf,
+        socket: PathBuf,
+    },
+    #[error(
         "multiplexer command `{program} {}` did not finish within {seconds}s; killed",
         args_summary(args)
     )]

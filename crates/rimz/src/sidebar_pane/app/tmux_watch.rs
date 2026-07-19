@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use crate::RuntimePaths;
 use crate::ids::MuxName;
-use crate::mux::tmux::{PresenceWatch, control_socket_from_env};
+use crate::mux::tmux::{PresenceWatch, managed_server_socket_path};
 use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::presence::projector::project_presence;
 use crate::sidebar::presence::tmux::TmuxPresenceState;
@@ -49,13 +49,13 @@ pub(super) fn spawn(
 }
 
 fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerElectionTracker) {
-    let control_socket = control_socket_from_env();
+    let control_socket = managed_server_socket_path();
     loop {
         if !is_producer(election) {
             std::thread::sleep(ELECTION_POLL);
             continue;
         }
-        match PresenceWatch::attach(control_socket.as_deref(), session_name) {
+        match PresenceWatch::attach(&control_socket, session_name) {
             Ok(mut watch) => {
                 crate::sidebar::cache::write_presence_stamp(
                     runtime,

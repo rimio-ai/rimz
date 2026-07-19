@@ -162,7 +162,9 @@ pub(super) struct PaneGeom {
 }
 
 /// Owns an isolated tmux server for the duration of one test. The server
-/// listens on a tempdir socket; Drop tears it down with `kill-server`.
+/// listens on the managed socket derived from a private runtime root, so it is
+/// the endpoint a `rimz` subprocess given the same `XDG_RUNTIME_DIR` resolves
+/// on its own. Drop tears it down with `kill-server`.
 pub(super) struct TmuxServer {
     pub(super) backend: TmuxBackend,
     pub(super) socket: PathBuf,
@@ -170,14 +172,35 @@ pub(super) struct TmuxServer {
 }
 
 impl TmuxServer {
+    /// A server on its own throwaway runtime root, for tests that drive the
+    /// backend directly and spawn no `rimz` subprocess.
     pub(super) fn new() -> Self {
         let tempdir = TempDir::new().expect("tempdir");
-        let socket = tempdir.path().join("tmux.sock");
+        let socket = Self::prepare_socket(tempdir.path());
         Self {
             backend: TmuxBackend::with_socket(&socket),
             socket,
             _tempdir: tempdir,
         }
+    }
+
+    /// A server on `runtime_root`, for tests that pair with [`Env`] and let
+    /// panes run `rimz`. Both sides derive the same endpoint from
+    /// `XDG_RUNTIME_DIR`, which is what production does.
+    pub(super) fn in_runtime_root(runtime_root: &Path) -> Self {
+        let socket = Self::prepare_socket(runtime_root);
+        Self {
+            backend: TmuxBackend::with_socket(&socket),
+            socket,
+            _tempdir: TempDir::new().expect("tempdir"),
+        }
+    }
+
+    fn prepare_socket(runtime_root: &Path) -> PathBuf {
+        let socket = rimz::mux::tmux::managed_server_socket_path_under(runtime_root);
+        let dir = socket.parent().expect("socket has a parent");
+        std::fs::create_dir_all(dir).expect("create managed socket dir");
+        socket
     }
     pub(super) fn ensure_with_shell(&self, session: &str) {
         self.output(&["new-session", "-d", "-s", session, "sh"]);
