@@ -405,7 +405,7 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
 }
 
 fn success_rows(frame: &RecoveryFrame) -> Vec<DisplayRow> {
-    let mut rows = Vec::with_capacity(frame.rows.len() + 3);
+    let mut rows = Vec::with_capacity(frame.rows.len() + 4);
     rows.push(DisplayRow {
         text: format!("⚡ Connected to {}", frame.host),
         color: Color::Green,
@@ -430,6 +430,12 @@ fn success_rows(frame: &RecoveryFrame) -> Vec<DisplayRow> {
         bold: false,
         dim: false,
     }));
+    rows.push(DisplayRow {
+        text: format!("→  {:<12} attaching…", "Multiplexer"),
+        color: Color::Green,
+        bold: false,
+        dim: false,
+    });
     rows
 }
 
@@ -784,6 +790,7 @@ mod tests {
         assert_eq!(text[3], "✓  Internet     cp.cloudflare.com");
         assert_eq!(text[4], "✓  Server       dev-box:22");
         assert_eq!(text[5], "✓  SSH session  connected");
+        assert_eq!(text[6], "→  Multiplexer  attaching…");
         assert!(rows[3..].iter().all(|row| row.color == Color::Green));
         assert_eq!(
             success_detail(&stage(
