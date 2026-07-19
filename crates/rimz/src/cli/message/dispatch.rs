@@ -109,9 +109,9 @@ pub(super) fn send_message(
         }
     };
     rimz::harness::target::require_mention(&target)?;
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    let current_channel = current_channel(&workspace);
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
+    let current_channel = ctx.channel().map(ToOwned::to_owned);
     let sender = send::sender_from_env(current_channel.as_deref(), no_from);
     let steer = matches!(mode, DispatchMode::Steer { .. });
     let wait_started = std::time::Instant::now();
@@ -134,7 +134,7 @@ pub(super) fn send_message(
         mux: globals.mux,
         mode,
     };
-    let result = match rimz::message::dispatch::dispatch(&workspace, &store, request) {
+    let result = match rimz::message::dispatch::dispatch(workspace, store, request) {
         Ok(result) => result,
         Err(DispatchErr::Recipient(err)) => {
             if create {
@@ -171,7 +171,7 @@ pub(super) fn send_message(
     };
     if let Some(reply_wait) = result.reply {
         return reply::wait_for_replies(
-            &store,
+            store,
             &workspace.session_name,
             reply_wait,
             wait,

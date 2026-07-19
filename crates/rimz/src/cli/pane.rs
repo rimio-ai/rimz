@@ -179,15 +179,9 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
             session_name: None,
         }),
         PaneTarget::Address(address) => {
-            let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-            let store = crate::cli::open_store(&workspace)?;
-            let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-            let agent = crate::cli::resolve_agent_one(
-                &snapshot,
-                &address,
-                None,
-                crate::cli::current_channel(&workspace).as_deref(),
-            )?;
+            let ctx = crate::cli::Ctx::open(globals)?;
+            let snapshot = ctx.cached_snapshot()?;
+            let agent = crate::cli::resolve_agent_one(&snapshot, &address, None, ctx.channel())?;
             let pane = agent
                 .pane
                 .as_ref()
@@ -195,7 +189,7 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
                 .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
             Ok(ResolvedPaneTarget {
                 pane,
-                session_name: Some(workspace.session_name),
+                session_name: Some(ctx.workspace.session_name.clone()),
             })
         }
     }

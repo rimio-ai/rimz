@@ -324,17 +324,16 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             return WorktreeSweepStatus::Skipped(WorktreeSkip::NoStore);
         }
     };
-    let snapshot =
-        match super::alive_snapshot(&store, store.runtime_paths(), &workspace.session_name) {
-            Ok(snapshot) => snapshot,
-            Err(err) => {
-                tracing::debug!(
-                    error = %err,
-                    "agent roster unavailable; worktree gc skipped"
-                );
-                return WorktreeSweepStatus::Skipped(WorktreeSkip::RosterUnavailable);
-            }
-        };
+    let snapshot = match super::alive_snapshot(&store, &workspace.session_name) {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                "agent roster unavailable; worktree gc skipped"
+            );
+            return WorktreeSweepStatus::Skipped(WorktreeSkip::RosterUnavailable);
+        }
+    };
     let panes = match rimz::mux::auto_detect_backend(globals.mux) {
         Ok(mux) => rimz::mux::backend_for(mux)
             .list_panes(rimz::mux::PaneListOptions {

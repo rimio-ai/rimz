@@ -5,12 +5,11 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use super::GlobalFlags;
+use super::{Ctx, GlobalFlags};
 use rimz::harness::budget::{
     BudgetLedger, BudgetSpec, BudgetWindow, DayBaseline, read_ledger, total_cost_usd, write_ledger,
 };
 use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
-use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -24,13 +23,12 @@ pub struct BudgetArgs {
 }
 
 pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    let mut snapshot =
-        rimz::sidebar::produce::resolution_snapshot(&workspace, &store, globals.mux)?;
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
+    let mut snapshot = ctx.resolution_snapshot(globals)?;
     snapshot =
         snapshot.with_agent_context(rimz::store::agent_context::read_all(store.runtime_paths()));
-    let current_channel = crate::cli::current_channel(&workspace);
+    let current_channel = crate::cli::current_channel(workspace);
     let agent = crate::cli::resolve_agent_one(
         &snapshot,
         &args.reference,
@@ -108,7 +106,7 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             .clone();
         if !text.trim().is_empty() {
             let message = MessageRecord::new(
-                workspace.workspace_id,
+                workspace.workspace_id.clone(),
                 agent,
                 text,
                 true,

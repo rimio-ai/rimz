@@ -10,9 +10,10 @@ use jiff::Timestamp;
 use serde::Serialize;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+pub(super) use super::Ctx;
+use super::GlobalFlags;
 use super::address;
 use super::send::{self, SendFlags, resolve_message};
-use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
@@ -25,7 +26,6 @@ use rimz::message::{
 };
 use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
 use rimz::store::{EditOutcome, MessageEdit};
-use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 #[derive(Debug, Args)]
 pub struct MessageArgs {
@@ -290,15 +290,6 @@ use dispatch::*;
 use edit::*;
 use list::*;
 use show::*;
-
-fn workspace_store_snapshot(
-    globals: &GlobalFlags,
-) -> Result<(ResolvedWorkspace, rimz::Store, rimz::SidebarSnapshot)> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    Ok((workspace, store, snapshot))
-}
 
 pub(crate) fn parse_gate(raw: &str) -> std::result::Result<DeliveryGate, String> {
     match raw {

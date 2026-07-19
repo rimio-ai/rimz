@@ -4,23 +4,19 @@ use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent};
 use crate::cli::render;
 
 pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let current_channel = crate::cli::current_channel(&workspace);
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
+    let snapshot = ctx.cached_snapshot()?;
+    let current_channel = ctx.channel();
     if all {
-        let agents = rimz::harness::target::resolve_many(
-            &snapshot,
-            &reference,
-            None,
-            current_channel.as_deref(),
-        )?;
+        let agents =
+            rimz::harness::target::resolve_many(&snapshot, &reference, None, current_channel)?;
         let peers: Vec<&AgentState> = snapshot.root_agents().collect();
         let mut failed = false;
         let mut out = render::out();
         for agent in agents {
             let label = rimz::harness::target::agent_handle(agent, &peers, true);
-            match stop_live_agent(&workspace, &store, globals, agent) {
+            match stop_live_agent(workspace, store, globals, agent) {
                 Ok(()) => writeln!(out, "stopped {label}")?,
                 Err(err) => {
                     failed = true;
@@ -34,14 +30,14 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
         return Ok(());
     }
     let live_agent_result =
-        crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel.as_deref());
+        crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel);
     let live_agent = live_agent_result.as_ref().ok().copied();
-    if let Some(run) = newest_run_by_ref(&store, &reference, live_agent)? {
-        supervised::stop_supervised_run(&workspace, &store, globals, &run)?;
+    if let Some(run) = newest_run_by_ref(store, &reference, live_agent)? {
+        supervised::stop_supervised_run(workspace, store, globals, &run)?;
         return Ok(());
     }
     let live_agent = live_agent_result.map_err(|err| stop_resolve_error(err, &reference))?;
-    close_agent_pane(&workspace, live_agent)
+    close_agent_pane(workspace, live_agent)
 }
 
 fn stop_resolve_error(err: anyhow::Error, reference: &str) -> anyhow::Error {

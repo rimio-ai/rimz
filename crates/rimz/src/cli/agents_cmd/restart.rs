@@ -16,19 +16,11 @@ impl FreshReason {
 }
 
 pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .context("resolving current workspace")?;
-    let store = crate::cli::open_store(&workspace)?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    let snapshot = crate::cli::alive_snapshot(&store, &runtime, &workspace.session_name)?;
-    let agent = crate::cli::resolve_agent_one(
-        &snapshot,
-        &reference,
-        None,
-        crate::cli::current_channel(&workspace).as_deref(),
-    )?
-    .clone();
+    let ctx = Ctx::open(globals)?;
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
+    let snapshot = ctx.alive_snapshot()?;
+    let agent = crate::cli::resolve_agent_one(&snapshot, &reference, None, ctx.channel())?.clone();
     let old_pane = agent
         .pane
         .as_ref()
@@ -42,7 +34,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let machine_config = crate::cli::machine_config();
-    let mut cell = restart_cell(&agent, &workspace, &machine_config, adapter)?;
+    let mut cell = restart_cell(&agent, workspace, &machine_config, adapter)?;
     let Cell::Agent(agent_cell) = &mut cell else {
         bail!("restart profile did not resolve to an agent");
     };
@@ -75,7 +67,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let fresh_reason = fresh_reason(resume_support, session_present);
     let fresh_batch = if fresh_reason.is_some() {
         Some(append_fresh_launch(
-            &store, &workspace, &agent, &cwd, cell, mode,
+            store, workspace, &agent, &cwd, cell, mode,
         )?)
     } else {
         None
@@ -127,7 +119,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         },
     };
     let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation)?;
-    let mut env = rimz::room::pane_identity_env(&workspace, agent.channel.as_deref(), false);
+    let mut env = rimz::room::pane_identity_env(workspace, agent.channel.as_deref(), false);
     env.insert(
         rimz::harness::run::ENV_WORKTREE_PATH.to_owned(),
         cwd.display().to_string(),
@@ -137,10 +129,9 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
 
-    let focus_runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
     if let Err(err) = rimz::sidebar::focus_anchor::execute_action(
         backend.as_ref(),
-        &focus_runtime,
+        ctx.runtime(),
         &workspace.session_name,
         old_pane.clone(),
         rimz::sidebar::focus_anchor::FocusOrigin::User,
@@ -148,7 +139,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     )
     .context("focusing the agent pane for restart")
     {
-        mark_fresh_failed(&store, &workspace, fresh_identity, &cwd);
+        mark_fresh_failed(store, workspace, fresh_identity, &cwd);
         return Err(err);
     }
     if let Err(err) = backend
@@ -163,7 +154,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         })
         .context("opening the replacement agent pane")
     {
-        mark_fresh_failed(&store, &workspace, fresh_identity, &cwd);
+        mark_fresh_failed(store, workspace, fresh_identity, &cwd);
         return Err(err);
     }
     backend

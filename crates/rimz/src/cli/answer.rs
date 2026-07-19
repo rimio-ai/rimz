@@ -10,12 +10,11 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde::Deserialize;
 
-use super::{GlobalFlags, current_channel, open_store, resolution_snapshot, resolve_agent_one};
+use super::{Ctx, GlobalFlags, resolve_agent_one};
 use rimz::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use rimz::ids::AskId;
 use rimz::mux::{paste_into_pane, press_pane_key, type_into_pane};
 use rimz::transcript::{AskAnswer, AskQuestion, TranscriptEntry, TranscriptKind};
-use rimz::workspace::WorkspaceResolver;
 
 const DEFAULT_ANSWER_WAIT: Duration = Duration::from_secs(30);
 const CONFIRM_POLL: Duration = Duration::from_millis(100);
@@ -56,12 +55,11 @@ enum JsonPick {
 }
 
 pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let channel = current_channel(&workspace);
+    let ctx = Ctx::open(globals)?;
+    let store = &ctx.store;
+    let snapshot = ctx.cached_snapshot()?;
     let peers = root_peers(&snapshot);
-    let agent = resolve_current_agent(&snapshot, &args.target, channel.as_deref())
+    let agent = resolve_current_agent(&snapshot, &args.target, ctx.channel())
         .unwrap_or_else(|message| answer_exit(2, &message));
     let detail = rimz::agents::read_open_ask(store.paths(), agent)
         .unwrap_or_else(|err| answer_exit(2, &err.to_string()))
@@ -97,7 +95,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         answer_exit(2, &format!("ask `{ask_id}` is no longer current"));
     }
 
-    let live = resolution_snapshot(&workspace, &store, globals)?;
+    let live = ctx.resolution_snapshot(globals)?;
     let target = live
         .agent_panes
         .iter()
@@ -123,7 +121,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     }
 
     let wait = args.wait.unwrap_or(DEFAULT_ANSWER_WAIT);
-    if !wait_for_confirmation(&store, &kind, &agent_id, &ask_id, wait)? {
+    if !wait_for_confirmation(store, &kind, &agent_id, &ask_id, wait)? {
         answer_exit(
             4,
             &format!(
@@ -131,7 +129,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
             ),
         );
     }
-    record_answer_if_missing(&store, agent, &ask_id, &detail.questions, &replies)?;
+    record_answer_if_missing(store, agent, &ask_id, &detail.questions, &replies)?;
     let mut out = super::render::out();
     writeln!(out, "answered {ask_id} for {handle}")?;
     Ok(())

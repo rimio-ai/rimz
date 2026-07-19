@@ -7,14 +7,13 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use jiff::Timestamp;
 
-use super::GlobalFlags;
+use super::{Ctx, GlobalFlags};
 use rimz::config::{DayCap, MachineConfig};
 use rimz::harness::budget::{
     BudgetSpec, BudgetWindow, DailyBudgetScope, read_scope_state, scope_interrupted,
 };
 use rimz::ids::AgentKind;
 use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
-use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -40,12 +39,13 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     if account.is_some() || args.value.is_none() {
         config.accounts.validate_budgets()?;
     }
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
+    let ctx = Ctx::open(globals)?;
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
     let now = Timestamp::now();
     let scope = account.map_or(DailyBudgetScope::Fleet, DailyBudgetScope::Account);
     let fleet_spend = matches!(scope, DailyBudgetScope::Fleet)
-        .then(|| live_fleet_spend(&workspace, &store, globals, &config, now));
+        .then(|| live_fleet_spend(&ctx, globals, &config, now));
     if args.value.is_none() {
         return inspect(store.runtime_paths(), &config, &scope, now, fleet_spend);
     }
@@ -97,14 +97,14 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn live_fleet_spend(
-    workspace: &rimz::ResolvedWorkspace,
-    store: &rimz::Store,
+    ctx: &Ctx,
     globals: &GlobalFlags,
     config: &MachineConfig,
     now: Timestamp,
 ) -> f64 {
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
     let cache = rimz::harness::budget::workspace_day_cache(store.runtime_paths(), config, now);
-    let Ok(mut snapshot) = crate::cli::resolution_snapshot(workspace, store, globals) else {
+    let Ok(mut snapshot) = ctx.resolution_snapshot(globals) else {
         return cache.day.usd;
     };
     snapshot = snapshot.with_project_root(Some(workspace.project_root.clone()));

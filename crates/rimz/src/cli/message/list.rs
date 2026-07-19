@@ -149,9 +149,11 @@ pub(super) fn list_messages(
     target: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (workspace, store, snapshot) = workspace_store_snapshot(globals)?;
-    let mut messages = projected_messages(&store)?;
-    let ambient_channel = current_channel(&workspace);
+    let ctx = Ctx::open(globals)?;
+    let store = &ctx.store;
+    let snapshot = ctx.cached_snapshot()?;
+    let mut messages = projected_messages(store)?;
+    let ambient_channel = ctx.channel().map(ToOwned::to_owned);
     let lane_scope = if all {
         LaneScope::All
     } else if let Some(channel) = channel {

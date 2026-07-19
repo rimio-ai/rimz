@@ -2,15 +2,14 @@
 
 use std::io::Write;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use super::{GlobalFlags, current_channel, open_store, resolve_agent_one};
+use super::{Ctx, GlobalFlags, resolve_agent_one};
 use crate::cli::render;
 use rimz::agents::{AgentState, AskKind, OpenAskDetail, read_open_ask};
 use rimz::ids::AskId;
-use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
 pub struct AsksArgs {
@@ -123,10 +122,10 @@ pub fn run(args: AsksArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let channel = current_channel(&workspace);
+    let ctx = Ctx::open(globals)?;
+    let store = &ctx.store;
+    let snapshot = ctx.cached_snapshot()?;
+    let channel = ctx.channel();
     let peers = root_peers(&snapshot);
     let mut views = snapshot
         .agents
@@ -134,7 +133,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| agent.is_awaiting_input() && agent.open_ask.is_some())
         .filter(|agent| {
-            all || channel.as_deref().is_none_or(|channel| {
+            all || channel.is_none_or(|channel| {
                 rimz::harness::target::agent_channel(agent).as_deref() == Some(channel)
             })
         })
@@ -164,9 +163,9 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let ctx = Ctx::open(globals)?;
+    let store = &ctx.store;
+    let snapshot = ctx.cached_snapshot()?;
     let peers = root_peers(&snapshot);
     let agent = if target.starts_with("ask_") {
         let ask_id = AskId::parse(target)?;
@@ -180,8 +179,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             })
             .ok_or_else(|| anyhow::anyhow!("ask `{ask_id}` is no longer open"))?
     } else {
-        let channel = current_channel(&workspace);
-        resolve_agent_one(&snapshot, target, None, channel.as_deref())?
+        resolve_agent_one(&snapshot, target, None, ctx.channel())?
     };
     if !agent.is_awaiting_input() || agent.open_ask.is_none() {
         bail!(

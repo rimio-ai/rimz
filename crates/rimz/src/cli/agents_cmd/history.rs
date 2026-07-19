@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::cli::render;
+use crate::cli::{Ctx, render};
 use rimz::agents::turns::TurnRecord;
 
 pub(super) fn history_agent(
@@ -9,21 +9,18 @@ pub(super) fn history_agent(
     json: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    let snapshot = crate::cli::alive_snapshot(&store, &runtime, &workspace.session_name)?;
-    let live_result = crate::cli::resolve_agent_one(
-        &snapshot,
-        &reference,
-        None,
-        crate::cli::current_channel(&workspace).as_deref(),
-    );
+    let ctx = Ctx::open(globals)?;
+    let snapshot = ctx.alive_snapshot()?;
+    let live_result = crate::cli::resolve_agent_one(&snapshot, &reference, None, ctx.channel());
     let (agent, resolved_live) = match live_result {
         Ok(agent) => (agent.clone(), true),
         Err(live_error) => {
-            match super::show::resolve_audit_agent(&store, &workspace, &runtime, &reference)? {
+            match super::show::resolve_audit_agent(
+                &ctx.store,
+                &ctx.workspace,
+                ctx.runtime(),
+                &reference,
+            )? {
                 Some(agent) => (agent, false),
                 None => return Err(live_error),
             }
@@ -37,7 +34,7 @@ pub(super) fn history_agent(
     let path = Path::new(transcript);
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
-    let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
+    let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
     let messages = adapter
         .read_transcript_messages(path, Some(&agent.agent_id))
         .with_context(|| format!("reading agent transcript `{}`", path.display()))?;

@@ -15,10 +15,10 @@ pub(super) fn wait_agent(
     if stream_output && references.len() > 1 {
         bail!("--stream tails one target; wait on a single reference");
     }
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let current_channel = crate::cli::current_channel(&workspace);
+    let ctx = Ctx::open(globals)?;
+    let store = &ctx.store;
+    let snapshot = ctx.cached_snapshot()?;
+    let current_channel = ctx.channel();
     if stream_output {
         let options = WaitStreamOptions {
             timeout,
@@ -26,22 +26,22 @@ pub(super) fn wait_agent(
             json,
         };
         return wait_stream_request(
-            &store,
+            store,
             snapshot,
             references.first().context("wait requires a reference")?,
-            current_channel.as_deref(),
+            current_channel,
             options,
         );
     }
 
     wait_non_stream(
-        &store,
+        store,
         &snapshot,
         references,
         any,
         timeout,
         json,
-        current_channel.as_deref(),
+        current_channel,
     )
 }
 

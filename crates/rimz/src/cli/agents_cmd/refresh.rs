@@ -10,9 +10,8 @@ use clap::Args;
 
 use rimz::agents::AgentState;
 use rimz::sidebar::refresh::force_refresh_session_context;
-use rimz::{RuntimePaths, WorkspaceResolver};
 
-use crate::cli::{GlobalFlags, render};
+use crate::cli::{Ctx, GlobalFlags, render};
 
 #[derive(Debug, Args)]
 pub(super) struct RefreshArgs {
@@ -24,23 +23,22 @@ pub(super) struct RefreshArgs {
 }
 
 pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    let snapshot = crate::cli::resolution_snapshot(&workspace, &store, globals)
+    let ctx = Ctx::open(globals)?;
+    let snapshot = ctx
+        .resolution_snapshot(globals)
         .context("reading agent snapshot")?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
+    let runtime = ctx.runtime();
     runtime.ensure_dirs().context("preparing runtime dirs")?;
-    let current_channel = crate::cli::current_channel(&workspace);
+    let current_channel = ctx.channel();
     let targets = match (args.reference.as_deref(), args.all) {
         (Some(reference), _) => vec![crate::cli::resolve_agent_one(
             &snapshot,
             reference,
             None,
-            current_channel.as_deref(),
+            current_channel,
         )?],
         (None, true) => refresh_targets(&snapshot, None),
-        (None, false) => refresh_targets(&snapshot, current_channel.as_deref()),
+        (None, false) => refresh_targets(&snapshot, current_channel),
     };
     if targets.is_empty() {
         writeln!(render::err(), "no matching agents to refresh")?;
@@ -61,7 +59,7 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
         });
         match force_refresh_session_context(
             &snapshot,
-            &runtime,
+            runtime,
             kind,
             agent.agent_id.as_str(),
             model_hint,

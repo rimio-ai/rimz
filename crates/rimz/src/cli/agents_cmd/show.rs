@@ -164,19 +164,24 @@ pub(super) fn show_agent(
     ansi: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    let snapshot = crate::cli::alive_snapshot(&store, &runtime, &workspace.session_name)?
-        .with_agent_context(rimz::store::agent_context::read_all(&runtime));
+    let ctx = Ctx::open(globals)?;
+    let runtime = ctx.runtime();
+    let snapshot = ctx
+        .alive_snapshot()?
+        .with_agent_context(rimz::store::agent_context::read_all(runtime));
     let (report, deferred_error) = collect_show_report(
-        &store, &workspace, &runtime, &snapshot, &reference, capture, ansi,
+        &ctx.store,
+        &ctx.workspace,
+        runtime,
+        &snapshot,
+        &reference,
+        capture,
+        ansi,
     )?;
     if json {
         return render::json_pretty(&report);
     }
-    render_show_report(report, &store, &snapshot, &runtime, deferred_error)
+    render_show_report(report, &ctx.store, &snapshot, runtime, deferred_error)
 }
 
 pub(super) fn resolve_audit_agent(
@@ -580,25 +585,18 @@ fn recent_agent_transcript(
 }
 
 pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let agent = crate::cli::resolve_agent_one(
-        &snapshot,
-        &reference,
-        None,
-        crate::cli::current_channel(&workspace).as_deref(),
-    )?;
+    let ctx = Ctx::open(globals)?;
+    let snapshot = ctx.cached_snapshot()?;
+    let agent = crate::cli::resolve_agent_one(&snapshot, &reference, None, ctx.channel())?;
     let pane = agent
         .pane
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
     let backend = rimz::mux::backend_for(pane.pane_id.mux());
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
     rimz::sidebar::focus_anchor::execute_action(
         backend.as_ref(),
-        &runtime,
-        &workspace.session_name,
+        ctx.runtime(),
+        &ctx.workspace.session_name,
         pane.pane_id.clone(),
         rimz::sidebar::focus_anchor::FocusOrigin::User,
         None,

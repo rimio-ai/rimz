@@ -1,7 +1,7 @@
 //! Provider-native conversation forks launched as fresh RimZ agent rows.
 
 use super::*;
-use crate::cli::{machine_config, open_store};
+use crate::cli::machine_config;
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -36,13 +36,11 @@ struct ForkSeed {
 }
 
 pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .context("resolving the agent fork workspace")?;
-    let store = open_store(&workspace)?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    let snapshot = crate::cli::alive_snapshot(&store, &runtime, &workspace.session_name)?;
-    let source = resolve_fork_source(&store, &workspace, &runtime, &snapshot, &args.reference)?;
+    let ctx = Ctx::open(globals)?;
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
+    let snapshot = ctx.alive_snapshot()?;
+    let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
     let mut seed = validate_fork_source(
         &source,
         rimz::harness::resume::resume_session_present,
@@ -88,8 +86,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         rimz::mux::ambient_pane_id().is_some(),
     )?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let room =
-        RoomContext::from_resolved(&workspace, config.clone(), mux, RoomSizing::OrdinaryTab)?;
+    let room = RoomContext::from_resolved(workspace, config.clone(), mux, RoomSizing::OrdinaryTab)?;
     let backend = room.backend();
     rimz::room::require_live_session(backend, &workspace.session_name)?;
 
@@ -157,7 +154,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     }
     super::placement::execute(
         backend,
-        &store,
+        store,
         &launch_batch,
         PlacementRequest {
             placement,
@@ -166,7 +163,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             title,
             panes,
             sidebar,
-            identity_env: rimz::room::pane_identity_env(&workspace, channel.as_deref(), false),
+            identity_env: rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
             background: args.bg,
             errors: PlacementErrors {
                 new_tab: "opening agent fork tab",

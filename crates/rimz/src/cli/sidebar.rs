@@ -1276,7 +1276,7 @@ fn resolve_sidebar_targets(
     }
 
     let store = open_store(&workspace)?;
-    let snapshot = super::resolution_snapshot(&workspace, &store, globals)?;
+    let snapshot = rimz::sidebar::produce::resolution_snapshot(&workspace, &store, globals.mux)?;
     let rows = resolve_rows(&snapshot, target, worktree, channel.as_deref())?;
     Ok(ResolvedSidebarTargets {
         workspace,

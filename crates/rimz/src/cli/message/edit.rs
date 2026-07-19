@@ -51,8 +51,8 @@ pub(super) fn edit_message(
     flags: EditFlags,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
     let edit = edit_from_flags(flags)?;
     if edit.is_empty() {
         bail!("nothing to edit; pass --text, --file, --on, --schedule, or another edit flag");
@@ -60,7 +60,7 @@ pub(super) fn edit_message(
     let fields = edit.changed_fields();
     match store.edit_message(&message_id, edit, &workspace.session_name)? {
         EditOutcome::Edited(_) => {
-            deliver::register_message_wake(&workspace, &store)?;
+            deliver::register_message_wake(workspace, store)?;
             #[expect(clippy::print_stdout, reason = "command result")]
             {
                 println!("edited {message_id} ({})", fields.join(", "));
@@ -85,8 +85,8 @@ pub(super) fn steer_queued_message(
     force: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
     let messages = store.list_messages()?;
     let Some(record) = messages
         .iter()
@@ -112,14 +112,14 @@ pub(super) fn steer_queued_message(
         }
         status => bail!("{message_id} is {status}; only queued messages can be steered"),
     }
-    let mut snapshot = crate::cli::resolution_snapshot(&workspace, &store, globals)?;
+    let mut snapshot = ctx.resolution_snapshot(globals)?;
     if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone()) {
         snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
     }
     let label = message_target_for_record(record, &snapshot);
     let delivered = deliver::deliver_one(
-        &workspace,
-        &store,
+        workspace,
+        store,
         &message_id,
         Duration::ZERO,
         globals.mux,
@@ -148,8 +148,8 @@ pub(super) fn requeue_message(
     flags: EditFlags,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
     let record = if let Some(record) = store
         .list_message_history()?
         .into_iter()
@@ -162,7 +162,7 @@ pub(super) fn requeue_message(
         .find(|record| record.message_id == message_id)
     {
         record
-    } else if projected_messages(&store)?
+    } else if projected_messages(store)?
         .into_iter()
         .any(|row| row.message_id == message_id)
     {
@@ -190,7 +190,7 @@ pub(super) fn requeue_message(
     edit.apply(&mut copy);
     let new_id = copy.message_id.clone();
     store.queue_message(&copy, &workspace.session_name)?;
-    deliver::register_message_wake(&workspace, &store)?;
+    deliver::register_message_wake(workspace, store)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let label = message_target_for_record(&copy, &snapshot);
     #[expect(clippy::print_stdout, reason = "command result")]
@@ -210,8 +210,8 @@ pub(super) fn message_target_for_record(
 }
 
 pub(super) fn cancel_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
     let mut failed = false;
     for message_id in message_ids {
         if store.cancel_message(&message_id, &workspace.session_name, "cancel")? {
@@ -239,8 +239,10 @@ pub(super) fn clear_messages(
     channel_flag: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (workspace, store, snapshot) = workspace_store_snapshot(globals)?;
-    let channel = current_channel(&workspace);
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
+    let snapshot = ctx.cached_snapshot()?;
+    let channel = ctx.channel().map(ToOwned::to_owned);
     if let Some(target) = target {
         rimz::harness::target::require_mention(&target)?;
         let agent = crate::cli::resolve_agent_one(
@@ -292,11 +294,11 @@ pub(super) fn print_canceled_summary(scope: &str, canceled: &[MessageRecord]) {
 }
 
 pub(super) fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
     deliver::deliver_one(
-        &workspace,
-        &store,
+        workspace,
+        store,
         &message_id,
         rimz::message::settle_duration_from_env(),
         globals.mux,
@@ -306,8 +308,8 @@ pub(super) fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> R
 }
 
 pub(super) fn sweep_messages(globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    deliver::sweep(&workspace, &store, globals.mux)?;
+    let ctx = Ctx::open(globals)?;
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
+    deliver::sweep(workspace, store, globals.mux)?;
     Ok(())
 }

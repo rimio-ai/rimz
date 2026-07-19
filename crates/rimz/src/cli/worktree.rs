@@ -470,9 +470,7 @@ fn runtime_protection_set(
         .unwrap_or_default();
     let agents = match workspace.as_ref().and_then(|workspace| {
         super::open_store(workspace)
-            .and_then(|store| {
-                super::alive_snapshot(&store, store.runtime_paths(), &workspace.session_name)
-            })
+            .and_then(|store| super::alive_snapshot(&store, &workspace.session_name))
             .ok()
     }) {
         Some(snapshot) => snapshot.agents,

@@ -36,6 +36,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 
 use super::GlobalFlags;
+pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
 use rimz::agents::AgentDefinition;
 use rimz::agents::AgentState;

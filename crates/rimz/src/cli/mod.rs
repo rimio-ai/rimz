@@ -11,6 +11,7 @@ mod codex;
 mod complete;
 mod config;
 mod coverage;
+mod ctx;
 mod daemon;
 mod doctor;
 mod first_run;
@@ -54,6 +55,8 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rimz::agents::AgentState;
 use rimz::ids::MuxName;
 use rimz::{RuntimePaths, StatePaths, Store};
+
+pub(crate) use ctx::Ctx;
 
 pub(crate) fn open_browser_best_effort(url: &str) {
     let opener = if cfg!(target_os = "macos") {
@@ -302,25 +305,6 @@ pub(crate) fn resolve_pane_targets<'a>(
         raw,
         rimz::harness::target::resolve_targets(snapshot, raw, worktree_flag, current_channel),
     )
-}
-
-/// The snapshot the `message` command resolves against. Unlike the
-/// rollup-only `snapshot_cached`, this folds a *fresh* live pane frame onto the
-/// rollup without the render spine, so a just-started sessionless pane is
-/// addressable without paying group-root, spending, account, dashboard, or git
-/// enrichment. `min_pane_cache_ms` floors the pane pull at now, bypassing the
-/// producer's pane cache (up to 10s old in event mode). One mux roster read;
-/// falls back to the rollup when there is no mux to enumerate.
-pub(crate) fn resolution_snapshot(
-    workspace: &rimz::ResolvedWorkspace,
-    store: &Store,
-    globals: &GlobalFlags,
-) -> Result<rimz::SidebarSnapshot> {
-    Ok(rimz::sidebar::produce::resolution_snapshot(
-        workspace,
-        store,
-        globals.mux,
-    )?)
 }
 
 /// Turn a clean target miss into the launch-profile/command/layout hint when
@@ -663,14 +647,12 @@ pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
 /// exactly as `rimz agents list` and the sidebar drop them. Best-effort and
 /// fail-safe — an absent daemon-reap cache keeps every session
 /// (see `SidebarSnapshot::reap_runtime`).
-pub(crate) fn alive_snapshot(
-    store: &Store,
-    runtime: &RuntimePaths,
-    session: &str,
-) -> Result<rimz::SidebarSnapshot> {
+pub(crate) fn alive_snapshot(store: &Store, session: &str) -> Result<rimz::SidebarSnapshot> {
     let base = store.snapshot_cached().context("reading agent snapshot")?;
     Ok(rimz::sidebar::consumer::cached_alive_snapshot(
-        base, runtime, session,
+        base,
+        store.runtime_paths(),
+        session,
     ))
 }
 

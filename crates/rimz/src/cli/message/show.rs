@@ -24,19 +24,19 @@ pub(super) struct MessageShowJson {
 }
 
 pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = open_store(&workspace)?;
-    let cached_snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let Some(message) = projected_messages(&store)?
+    let ctx = Ctx::open(globals)?;
+    let store = &ctx.store;
+    let cached_snapshot = ctx.cached_snapshot()?;
+    let Some(message) = projected_messages(store)?
         .into_iter()
         .find(|message| message.message_id == message_id)
     else {
         bail!("message {message_id} not found");
     };
-    let timeline = message_timeline(&store, &message_id)?;
+    let timeline = message_timeline(store, &message_id)?;
     let live_messages = store.list_messages()?;
     let now = Timestamp::now();
-    let delivery = open_delivery(&workspace, &store, &message, &live_messages, globals, now)?;
+    let delivery = open_delivery(&ctx, &message, &live_messages, globals, now)?;
     if json {
         return render::json_pretty(&MessageShowJson {
             message,
@@ -86,8 +86,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
 }
 
 fn open_delivery(
-    workspace: &ResolvedWorkspace,
-    store: &rimz::Store,
+    ctx: &Ctx,
     message: &MessageListRow,
     live_messages: &[MessageRecord],
     globals: &GlobalFlags,
@@ -102,7 +101,7 @@ fn open_delivery(
     else {
         return Ok(None);
     };
-    let mut snapshot = crate::cli::resolution_snapshot(workspace, store, globals)?;
+    let mut snapshot = ctx.resolution_snapshot(globals)?;
     if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone()) {
         snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
     }
