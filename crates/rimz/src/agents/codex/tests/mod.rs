@@ -1,7 +1,9 @@
 use serde_json::json;
 
 use super::*;
-use crate::agents::{HookIngressDecision, HookIngressIgnoreReason, HookIngressOwner};
+use crate::agents::{
+    HookIngressAcceptance, HookIngressDecision, HookIngressIgnoreReason, HookIngressOwner,
+};
 use crate::harness::run::PermissionMode;
 use std::io::Write;
 use std::path::Path;
@@ -19,14 +21,17 @@ fn hook_ingress_ignores_internal_servers_and_normalizes_daemon_owners() {
     );
     assert_eq!(
         hook_ingress_decision(Some(42), false, true),
-        HookIngressDecision::Accept(HookIngressOwner {
-            pid: Some(42),
-            kind: crate::pane::RuntimeOwnerKind::Daemon,
+        HookIngressDecision::Accept(HookIngressAcceptance {
+            owner: HookIngressOwner {
+                pid: Some(42),
+                kind: crate::pane::RuntimeOwnerKind::Daemon,
+            },
+            participant_start: None,
         })
     );
     assert_eq!(
         hook_ingress_decision(Some(42), false, false),
-        HookIngressDecision::Accept(HookIngressOwner::agent(Some(42)))
+        HookIngressDecision::Accept(HookIngressAcceptance::agent(Some(42)))
     );
 }
 
@@ -206,7 +211,8 @@ fn codex_question_summary_reads_request_user_input_questions() {
             }),
         )
         .expect("test hook decodes")
-        .questions();
+        .questions()
+        .to_vec();
 
     assert_eq!(
         questions,
@@ -236,6 +242,7 @@ fn codex_question_summary_reads_request_user_input_questions() {
             )
             .expect("test hook decodes")
             .questions()
+            .to_vec()
             .is_empty()
     );
 }

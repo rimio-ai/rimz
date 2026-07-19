@@ -35,8 +35,8 @@ use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
-    DecodedHook, HookRouting, PriceBook, Result, RootIdentity, SubagentIdentity,
-    resolve_root_identity, resolve_subagent_identity,
+    ContextObservation, DecodedHook, HookRouting, PriceBook, Result, RootIdentity,
+    SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };
 #[cfg(test)]
 use super::{PresetArgMatcher, PresetField};
@@ -113,15 +113,17 @@ impl AgentAdapter for PluginAdapter {
             event_name: event_name.to_owned(),
         });
         decoded.set_policy(event.progress, event.session_ended);
-        decoded.set_routing(HookRouting::new(
-            envelope
-                .agent_id
-                .clone()
-                .or_else(|| envelope.session_id.clone()),
-            envelope.session_id.clone(),
-            envelope.cwd.clone(),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::split(
+                envelope
+                    .agent_id
+                    .clone()
+                    .or_else(|| envelope.session_id.clone())
+                    .map(Into::into),
+                envelope.session_id.clone().map(Into::into),
+            )
+            .with_worktree(envelope.cwd.clone()),
+        );
         decoded.set_ask(event.questions, event.ask_detail);
         decoded.set_turn_error(event.turn_error.map(|label| super::AgentTurnError {
             at: Timestamp::now(),
@@ -130,7 +132,7 @@ impl AgentAdapter for PluginAdapter {
         }));
         decoded.set_final_message(event.final_message);
         if event.context {
-            decoded.set_observed_context(normalize_context(
+            decoded.set_observed_context(normalize_context_observation(
                 self.descriptor.kind,
                 payload,
                 &envelope,
@@ -248,9 +250,9 @@ impl AgentAdapter for PluginAdapter {
         samples
     }
 
-    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<ContextObservation> {
         let envelope = Envelope::parse("context", payload)?;
-        normalize_context(source, payload, &envelope)
+        normalize_context_observation(source, payload, &envelope)
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {
@@ -615,6 +617,25 @@ fn normalize_context(source: &str, payload: &Value, envelope: &Envelope) -> Opti
     Some(context)
 }
 
+fn normalize_context_observation(
+    source: &str,
+    payload: &Value,
+    envelope: &Envelope,
+) -> Option<ContextObservation> {
+    let agent_id = match resolve_root_identity(
+        source,
+        "context",
+        envelope.agent_id.as_deref(),
+        envelope.session_id.as_deref(),
+    ) {
+        RootIdentity::Root {
+            agent_id: Some(agent_id),
+        } => agent_id,
+        RootIdentity::Root { agent_id: None } | RootIdentity::ForeignChild => return None,
+    };
+    ContextObservation::new(agent_id, normalize_context(source, payload, envelope)?)
+}
+
 fn spending_source_for_pattern(
     plugin_dir: &Path,
     pattern: &str,
@@ -887,6 +908,7 @@ globs = ["history/**/*.jsonl"]
             .decode_hook("subagent_start", &child)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap();
         assert_eq!(observed.signal.kind(), LifecycleSignalKind::SubagentStarted);
         assert_eq!(observed.agent_id.as_deref(), Some("child"));
@@ -1085,7 +1107,9 @@ globs = ["history/**/*.jsonl"]
         let adapter = adapter();
         let mut value = payload("context");
         value["total_cost_usd"] = json!(1.25);
-        let context = adapter.observe_context("testbot", &value).unwrap();
+        let observation = adapter.observe_context("testbot", &value).unwrap();
+        assert_eq!(observation.agent_id.as_str(), "root");
+        let context = observation.context;
         assert_eq!(context.source, "testbot");
         assert_eq!(context.model_id.as_deref(), Some("model-1"));
         assert_eq!(

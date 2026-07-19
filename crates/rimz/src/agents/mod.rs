@@ -81,8 +81,8 @@ pub use account::{
 };
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostCoverage, FieldPatch,
-    LocalContextPatch, LocalTokenPatch, ProviderAccountScope, RateLimitWindow,
+    AgentSessionUsage, AgentTokenUsage, AgentTurnError, ContextObservation, CostCoverage,
+    FieldPatch, LocalContextPatch, LocalTokenPatch, ProviderAccountScope, RateLimitWindow,
     RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
@@ -368,10 +368,25 @@ impl HookIngressOwner {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookIngressAcceptance {
+    pub owner: HookIngressOwner,
+    pub participant_start: Option<PathBuf>,
+}
+
+impl HookIngressAcceptance {
+    pub fn agent(pid: Option<u32>) -> Self {
+        Self {
+            owner: HookIngressOwner::agent(pid),
+            participant_start: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HookIngressDecision {
     Ignore(HookIngressIgnoreReason),
-    Accept(HookIngressOwner),
+    Accept(HookIngressAcceptance),
 }
 
 #[cfg(test)]
@@ -751,7 +766,7 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Normalize hook-emitter process ownership before workspace or store I/O.
     fn hook_ingress(&self, pid: Option<u32>) -> HookIngressDecision {
-        HookIngressDecision::Accept(HookIngressOwner::agent(pid))
+        HookIngressDecision::Accept(HookIngressAcceptance::agent(pid))
     }
 
     /// Whether a command already matched by this adapter's launch descriptors
@@ -883,7 +898,7 @@ pub trait AgentAdapter: Send + Sync {
     /// a payload) or the payload is unusable. `source` is the ingest `--source`
     /// tag, stamped onto the record so downstream knows the provenance.
     /// Display-only enrichment — it never reaches the event log or a decision.
-    fn observe_context(&self, _source: &str, _payload: &Value) -> Option<AgentContext> {
+    fn observe_context(&self, _source: &str, _payload: &Value) -> Option<ContextObservation> {
         None
     }
 

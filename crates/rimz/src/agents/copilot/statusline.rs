@@ -18,6 +18,8 @@ use crate::agents::transcript_fs::{
 #[serde(default)]
 pub(super) struct StatuslinePayload {
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub(super) session_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     session_name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     version: Option<String>,

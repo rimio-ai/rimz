@@ -345,7 +345,7 @@ fn prepare_supervised(
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(&process)?;
     let store = crate::cli::open_store(&workspace)?;
-    let kind = AgentKind::new_unchecked(adapter.descriptor().kind);
+    let kind = adapter.descriptor().kind_id();
     if let Some(channel) = request.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(store.paths(), channel)?;
@@ -390,7 +390,7 @@ fn execute_attempt(
     let permission_mode = agent_cell.launch.mode.unwrap_or(prepared.mode);
     let mut record = RunRecord::new(
         prepared.workspace.workspace_id.clone(),
-        AgentKind::new_unchecked(prepared.adapter.descriptor().kind),
+        prepared.adapter.descriptor().kind_id(),
         permission_mode,
         prompt.to_owned(),
         prepared.launch.cwd.clone(),

@@ -439,7 +439,10 @@ fn hook_ingress_decision(
     } else {
         crate::pane::RuntimeOwnerKind::Agent
     };
-    super::HookIngressDecision::Accept(super::HookIngressOwner { pid, kind })
+    super::HookIngressDecision::Accept(super::HookIngressAcceptance {
+        owner: super::HookIngressOwner { pid, kind },
+        participant_start: None,
+    })
 }
 
 impl AgentAdapter for CodexAdapter {
@@ -505,12 +508,14 @@ impl AgentAdapter for CodexAdapter {
             _ => None,
         };
         let mut decoded = decode_catalog_hook(CODEX_HOOKS, event_name, ask_kind);
-        decoded.set_routing(HookRouting::new(
-            optional_payload_string(payload, &["agent_id", "session_id"]),
-            optional_payload_string(payload, &["session_id", "agent_id"]),
-            optional_payload_string(payload, &["worktree_path", "cwd"]),
-            optional_payload_string(payload, &["server_url"]),
-        ));
+        decoded.set_routing(
+            HookRouting::split(
+                optional_payload_string(payload, &["agent_id", "session_id"]).map(Into::into),
+                optional_payload_string(payload, &["session_id", "agent_id"]).map(Into::into),
+            )
+            .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"]))
+            .with_server_url(optional_payload_string(payload, &["server_url"])),
+        );
         decoded.set_native_answers(match event_name {
             "PostToolUse" => parts.post_tool_use.as_ref().and_then(|parsed| {
                 ask::answer_detail(

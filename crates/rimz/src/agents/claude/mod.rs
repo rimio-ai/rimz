@@ -63,8 +63,8 @@ use super::lifecycle::LifecycleSignal;
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, AgentTurnError,
-    DecodedHook, HookRouting, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
+    AgentAdapter, AgentHookClass, AgentLifecycleObservation, AgentTurnError, DecodedHook,
+    HookRouting, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
     SubagentObservation, TranscriptMessage, non_empty_trimmed, optional_payload_string,
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
     stop_payload_errored,
@@ -380,7 +380,7 @@ fn hook_ingress_decision(
     if spawned_by_remote_control {
         super::HookIngressDecision::Ignore(super::HookIngressIgnoreReason::ClaudeRemoteControl)
     } else {
-        super::HookIngressDecision::Accept(super::HookIngressOwner::agent(pid))
+        super::HookIngressDecision::Accept(super::HookIngressAcceptance::agent(pid))
     }
 }
 
@@ -435,12 +435,13 @@ impl AgentAdapter for ClaudeAdapter {
             };
             decode_catalog_hook(CLAUDE_HOOKS, event_name, ask_kind)
         };
-        decoded.set_routing(HookRouting::new(
-            optional_payload_string(payload, &["agent_id", "session_id"]),
-            optional_payload_string(payload, &["session_id", "agent_id"]),
-            optional_payload_string(payload, &["worktree_path", "cwd"]),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::split(
+                optional_payload_string(payload, &["agent_id", "session_id"]).map(Into::into),
+                optional_payload_string(payload, &["session_id", "agent_id"]).map(Into::into),
+            )
+            .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
+        );
         let questions = parts
             .pre_tool_use
             .as_ref()
@@ -605,16 +606,17 @@ impl AgentAdapter for ClaudeAdapter {
         ask::answer_plan(kind, questions, answers)
     }
 
-    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         // Claude's transport is the statusline JSON blob. Tolerant parse: any
         // non-object payload yields `None` rather than an error.
         let parsed: statusline::StatuslinePayload = serde_json::from_value(payload.clone()).ok()?;
+        let agent_id = parsed.session_id.clone()?;
         let mut context = parsed.into_context(source, Timestamp::now());
         if let Some(tail) = transcript_tail_from_payload(payload) {
             context.turn_error = statusline::detect_turn_error(&tail);
             context.turn_interrupted = statusline::detect_turn_interrupted(&tail);
         }
-        Some(context)
+        super::ContextObservation::new(agent_id, context)
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {

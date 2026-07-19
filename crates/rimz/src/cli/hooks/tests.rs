@@ -183,12 +183,12 @@ fn feed_antigravity(
     event_name: &str,
     payload: serde_json::Value,
 ) {
-    let decoded = adapter.decode_hook(event_name, &payload).unwrap();
+    let mut decoded = adapter.decode_hook(event_name, &payload).unwrap();
     handle_lifecycle_hook(
         &hooks_test_workspace(Some("main")),
         store,
         adapter,
-        &decoded,
+        &mut decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
@@ -231,14 +231,14 @@ impl rimz::agents::AgentAdapter for CopilotCorrelationAdapter {
 }
 
 fn feed_copilot(store: &rimz::Store, event_name: &str, payload: serde_json::Value) {
-    let decoded = CopilotCorrelationAdapter
+    let mut decoded = CopilotCorrelationAdapter
         .decode_hook(event_name, &payload)
         .unwrap();
     handle_lifecycle_hook(
         &hooks_test_workspace(Some("main")),
         store,
         &CopilotCorrelationAdapter,
-        &decoded,
+        &mut decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
@@ -274,12 +274,12 @@ fn feed_pi(
     event_name: &str,
     payload: serde_json::Value,
 ) {
-    let decoded = adapter.decode_hook(event_name, &payload).unwrap();
+    let mut decoded = adapter.decode_hook(event_name, &payload).unwrap();
     handle_lifecycle_hook(
         &hooks_test_workspace(Some("main")),
         store,
         adapter,
-        &decoded,
+        &mut decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &hooks_test_globals(),
@@ -396,14 +396,14 @@ fn stop_failure_records_turn_error_transcript_entry() {
         "error": "overloaded",
         "last_assistant_message": "API Error: Response stalled mid-stream. The response above may be incomplete."
     });
-    let decoded = rimz::agents::ClaudeAdapter
+    let mut decoded = rimz::agents::ClaudeAdapter
         .decode_hook("StopFailure", &payload)
         .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
         &rimz::agents::ClaudeAdapter,
-        &decoded,
+        &mut decoded,
         &payload,
         rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
         &globals,
@@ -447,14 +447,14 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
         "transcript_path": path,
         "prompt": "ping"
     });
-    let prompt_decoded = rimz::agents::DroidAdapter
+    let mut prompt_decoded = rimz::agents::DroidAdapter
         .decode_hook("UserPromptSubmit", &prompt_payload)
         .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
         &rimz::agents::DroidAdapter,
-        &prompt_decoded,
+        &mut prompt_decoded,
         &prompt_payload,
         rimz::agents::HookIngressOwner::agent(Some(owner_pid)),
         &globals,
@@ -464,14 +464,14 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
         "session_id": "droid-session",
         "transcript_path": path
     });
-    let stop_decoded = rimz::agents::DroidAdapter
+    let mut stop_decoded = rimz::agents::DroidAdapter
         .decode_hook("Stop", &stop_payload)
         .unwrap();
     handle_lifecycle_hook(
         &workspace,
         &store,
         &rimz::agents::DroidAdapter,
-        &stop_decoded,
+        &mut stop_decoded,
         &stop_payload,
         rimz::agents::HookIngressOwner::agent(Some(owner_pid)),
         &globals,
@@ -1138,30 +1138,6 @@ fn ambiguous_and_cyclic_antigravity_parent_candidates_stay_roots() {
             .unwrap()
             .parent_agent_id,
         None
-    );
-}
-
-#[test]
-fn cursor_participant_start_path_selects_only_a_nonempty_absolute_project_dir() {
-    use std::ffi::OsStr;
-
-    assert_eq!(
-        super::participant_start_path("cursor", Some(OsStr::new("/repo/worktree"))),
-        std::path::PathBuf::from("/repo/worktree"),
-    );
-    for value in [
-        None,
-        Some(OsStr::new("")),
-        Some(OsStr::new("relative/path")),
-    ] {
-        assert_eq!(
-            super::participant_start_path("cursor", value),
-            std::path::PathBuf::from("."),
-        );
-    }
-    assert_eq!(
-        super::participant_start_path("claude", Some(OsStr::new("/repo/worktree"))),
-        std::path::PathBuf::from("."),
     );
 }
 

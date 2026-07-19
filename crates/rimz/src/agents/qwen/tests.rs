@@ -33,7 +33,7 @@ fn classifies_native_asks_and_keeps_neutral_stdout_silent() {
         .expect("test hook decodes");
     assert_eq!(ordinary.class(), AgentHookClass::Lifecycle);
     assert_eq!(ordinary.ask_kind(), None);
-    insta::assert_debug_snapshot!(adapter.decode_hook("PermissionRequest", &Value::Null).expect("test hook decodes").neutral(), @"None");
+    insta::assert_debug_snapshot!(adapter.decode_hook("PermissionRequest", &Value::Null).expect("test hook decodes").neutral().cloned(), @"None");
 }
 
 #[test]
@@ -229,7 +229,8 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
                     &json!({"session_id":"s1","prompt":prompt})
                 )
                 .expect("test hook decodes")
-                .lifecycle(),
+                .lifecycle()
+                .cloned(),
             None
         );
     }
@@ -239,6 +240,7 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
                 .decode_hook("UserPromptSubmit", &payload)
                 .expect("test hook decodes")
                 .lifecycle()
+                .cloned()
                 .unwrap()
                 .signal,
             LifecycleSignal::TurnStarted
@@ -257,6 +259,7 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
                 )
                 .expect("test hook decodes")
                 .lifecycle()
+                .cloned()
                 .unwrap()
                 .signal,
             LifecycleSignal::AwaitingInput {
@@ -275,6 +278,7 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::AwaitingInput {
@@ -299,7 +303,8 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
                 &json!({"session_id":"s1","tool_name":tool_name,"tool_use_id":native_key}),
             )
             .expect("test hook decodes")
-            .lifecycle();
+            .lifecycle()
+            .cloned();
         assert_eq!(
             observed.map(|observation| observation.signal),
             kind.map(|kind| LifecycleSignal::AwaitingInput {
@@ -328,14 +333,16 @@ fn reads_gate_details_from_permission_requests() {
     let questions = adapter
         .decode_hook("PermissionRequest", &question)
         .expect("test hook decodes")
-        .questions();
+        .questions()
+        .to_vec();
     assert_eq!(questions.len(), 1);
     assert_eq!(questions[0].question, "Which path?\nMore context");
     assert_eq!(
         adapter
             .decode_hook("PreToolUse", &question)
             .expect("test hook decodes")
-            .questions()[0]
+            .questions()
+            .to_vec()[0]
             .question,
         "Which path?\nMore context"
     );
@@ -344,6 +351,7 @@ fn reads_gate_details_from_permission_requests() {
             .decode_hook("PermissionRequest", &question)
             .expect("test hook decodes")
             .ask_detail()
+            .map(str::to_owned)
             .as_deref(),
         Some("Which path?")
     );
@@ -357,6 +365,7 @@ fn reads_gate_details_from_permission_requests() {
             .decode_hook("PermissionRequest", &permission)
             .expect("test hook decodes")
             .ask_detail()
+            .map(str::to_owned)
             .as_deref(),
         Some(r#"run_shell_command: {"command":"cargo xtask gate"}"#)
     );
@@ -365,6 +374,7 @@ fn reads_gate_details_from_permission_requests() {
             .decode_hook("PreToolUse", &question)
             .expect("test hook decodes")
             .ask_detail()
+            .map(str::to_owned)
             .as_deref(),
         Some("Which path?")
     );
@@ -380,6 +390,7 @@ fn maps_lifecycle_context_background_and_subagents() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(start.signal, LifecycleSignal::Registered);
     assert_eq!(start.origin, Some(SessionOrigin::Fresh));
@@ -390,6 +401,7 @@ fn maps_lifecycle_context_background_and_subagents() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         tool.signal,
@@ -399,7 +411,7 @@ fn maps_lifecycle_context_background_and_subagents() {
             native_key: Some("write-1".to_owned()),
         }
     );
-    let parked = adapter.decode_hook("Stop", &json!({"session_id":"s1","background_tasks":[{"status":"running"}],"context_usage":1.2,"context_limit":131072})).expect("test hook decodes").lifecycle().unwrap();
+    let parked = adapter.decode_hook("Stop", &json!({"session_id":"s1","background_tasks":[{"status":"running"}],"context_usage":1.2,"context_limit":131072})).expect("test hook decodes").lifecycle().cloned().unwrap();
     assert_eq!(
         parked.signal,
         LifecycleSignal::TurnEnded {
@@ -416,6 +428,7 @@ fn maps_lifecycle_context_background_and_subagents() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(child.signal, LifecycleSignal::SubagentStarted);
     assert_eq!(child.task.as_deref(), Some("review"));
@@ -428,6 +441,7 @@ fn maps_lifecycle_context_background_and_subagents() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::CompactionEnded { auto: None }
@@ -444,6 +458,7 @@ fn transcript_tail_and_statusline_supply_context() {
         .decode_hook("Stop", &json!({"session_id":"s1","transcript_path":path}))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(observation.usage.total_tokens, Some(420));
     assert_eq!(observation.usage.context_window, Some(131072));
@@ -453,19 +468,24 @@ fn transcript_tail_and_statusline_supply_context() {
     );
 
     let context = adapter.observe_context("qwen", &json!({
+        "session_id":"s1",
         "version":"0.19.10",
         "model":{"display_name":"[DeepSeek] deepseek-v4-pro"},
         "context_window":{"context_window_size":1000000,"used_percentage":3.9,"remaining_percentage":96.1,"current_usage":38727,"total_input_tokens":30000,"total_output_tokens":5000},
         "metrics":{"models":{"qwen3":{"tokens":{"prompt":30000,"completion":5000,"cached":10000,"thoughts":2000}}},"files":{"total_lines_added":12,"total_lines_removed":3}},
         "vim":{"mode":"INSERT"}
-    })).unwrap();
+    })).unwrap().context;
     assert_eq!(
         context.model_display_name.as_deref(),
         Some("DeepSeek V4 Pro")
     );
     let malformed_context = adapter
-        .observe_context("qwen", &json!({"model":{"display_name":"[DeepSeek]"}}))
-        .unwrap();
+        .observe_context(
+            "qwen",
+            &json!({"session_id":"s1","model":{"display_name":"[DeepSeek]"}}),
+        )
+        .unwrap()
+        .context;
     assert_eq!(
         malformed_context.model_display_name.as_deref(),
         Some("[DeepSeek]")
@@ -526,6 +546,7 @@ fn subagent_stop_reads_model_and_description_from_meta_sidecar() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(observation.launch.model.as_deref(), Some("deepseek-v4-pro"));
     assert_eq!(
@@ -541,6 +562,7 @@ fn statusline_uses_numeric_string_context_occupancy_without_session_categories()
         .observe_context(
             "qwen",
             &json!({
+                "session_id": "s1",
                 "context_window": {
                     "context_window_size": 1_000_000,
                     "used_percentage": 7.2,
@@ -570,7 +592,8 @@ fn statusline_uses_numeric_string_context_occupancy_without_session_categories()
                 }
             }),
         )
-        .unwrap();
+        .unwrap()
+        .context;
     let tokens = context.tokens.unwrap();
     assert_eq!(tokens.context_window_size, Some(1_000_000));
     assert_eq!(tokens.used_percentage, Some(7));
@@ -585,6 +608,7 @@ fn statusline_context_occupancy_preserves_zero_absence_and_malformed_values() {
         .observe_context(
             "qwen",
             &json!({
+                "session_id": "s1",
                 "context_window": {"context_window_size": 10_000},
                 "metrics": {
                     "models": {
@@ -594,7 +618,8 @@ fn statusline_context_occupancy_preserves_zero_absence_and_malformed_values() {
                 }
             }),
         )
-        .unwrap();
+        .unwrap()
+        .context;
     let tokens = absent.tokens.unwrap();
     assert_eq!(tokens.current_context_tokens, None);
     assert_eq!(tokens.current_usage, None);
@@ -604,23 +629,27 @@ fn statusline_context_occupancy_preserves_zero_absence_and_malformed_values() {
         .observe_context(
             "qwen",
             &json!({
+                "session_id": "s1",
                 "context_window": {"current_usage": 0}
             }),
         )
-        .unwrap();
+        .unwrap()
+        .context;
     assert_eq!(zero.tokens.unwrap().current_context_tokens, Some(0));
 
     let malformed = QwenAdapter
         .observe_context(
             "qwen",
             &json!({
+                "session_id": "s1",
                 "context_window": {
                     "context_window_size": 10_000,
                     "current_usage": "unknown"
                 }
             }),
         )
-        .unwrap();
+        .unwrap()
+        .context;
     let tokens = malformed.tokens.unwrap();
     assert_eq!(tokens.current_context_tokens, None);
     assert_eq!(tokens.session_usage, None);
@@ -700,6 +729,7 @@ fn rewound_transcript_supplies_active_hook_boundary_usage() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap();
         assert_eq!(
             observation.launch.model.as_deref(),
@@ -735,6 +765,7 @@ fn successive_stops_publish_correlated_small_call_splits() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(first.usage.total_tokens, Some(38_812));
     assert_eq!(first.usage.cache_read_input_tokens, Some(38_656));
@@ -751,6 +782,7 @@ fn successive_stops_publish_correlated_small_call_splits() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(second.usage.total_tokens, Some(38_827));
     assert_eq!(second.usage.cache_read_input_tokens, Some(38_656));
@@ -775,6 +807,7 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(cached.usage.cache_read_input_tokens, Some(100));
     assert_eq!(cached.usage.fresh_input_tokens, Some(0));
@@ -788,6 +821,7 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(fresh.usage.total_tokens, Some(0));
     assert_eq!(fresh.usage.cache_read_input_tokens, None);
@@ -806,6 +840,7 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(stopped.usage.total_tokens, Some(200));
     assert_eq!(stopped.launch.model, None);
@@ -818,7 +853,7 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
         .decode_hook(
             "Stop",
             &json!({"session_id":"s2","transcript_path":path,"input_tokens":200,"total_tokens":999}),
-        ).expect("test hook decodes").lifecycle()
+        ).expect("test hook decodes").lifecycle().cloned()
         .unwrap();
     assert_eq!(explicit.usage.total_tokens, Some(999));
 }
@@ -933,6 +968,7 @@ fn stop_failure_maps_retryable_classes() {
             .decode_hook("StopFailure", &json!({"error":"rate_limit"}))
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .unwrap()
             .class,
         TurnErrorClass::PausedRateLimit
@@ -942,6 +978,7 @@ fn stop_failure_maps_retryable_classes() {
             .decode_hook("StopFailure", &json!({"error":"server_error"}))
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .unwrap()
             .class,
         TurnErrorClass::PausedOverloaded

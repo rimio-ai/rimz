@@ -111,10 +111,8 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
 /// on the per-render path.
 fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
     let payload: Value = serde_json::from_slice(stdin).context("parsing statusline payload")?;
-    let session_id =
-        payload_session_id(&payload).context("statusline payload carries no session id")?;
     let agent = adapter_by_kind(source)?;
-    let Some(mut context) = agent.observe_context(source, &payload) else {
+    let Some(mut observation) = agent.observe_context(source, &payload) else {
         // The adapter has no rich-context source (e.g. codex): nothing to store.
         return Ok(());
     };
@@ -123,9 +121,14 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     let prices = pricing::cached_book(&runtime.shared_pricing_cache_path());
-    attach_context_cost(agent, &payload, &prices, &mut context);
-    rimz::store::agent_context::write(&runtime, agent.descriptor().kind, session_id, &context)
-        .context("writing agent-context sidecar")?;
+    attach_context_cost(agent, &payload, &prices, &mut observation.context);
+    rimz::store::agent_context::write(
+        &runtime,
+        agent.descriptor().kind,
+        observation.agent_id.as_str(),
+        &observation.context,
+    )
+    .context("writing agent-context sidecar")?;
     // Push the update so the `$`/token figure repaints within a wakeup rather
     // than waiting for the sidebar's next poll tick. Best-effort, like every
     // other wakeup: a send failure never fails the statusline render.
@@ -178,25 +181,6 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
     // poll tick. Best-effort, like every other wakeup.
     let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     Ok(())
-}
-
-/// Session id from the statusline payload, matching the lifecycle key so the
-/// sidecar files under the same session. Antigravity spells it
-/// `conversation_id`; hook payloads use a distinct camel-case spelling.
-fn payload_session_id(payload: &Value) -> Option<&str> {
-    [
-        "session_id",
-        "agent_id",
-        "conversation_id",
-        "conversationId",
-    ]
-    .into_iter()
-    .find_map(|key| {
-        payload
-            .get(key)
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())
-    })
 }
 
 /// Spawn the wrapped command with the provider's invocation semantics, feed it
@@ -292,23 +276,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn statusline_session_identity_accepts_antigravity_conversations() {
-        assert_eq!(
-            payload_session_id(&json!({"conversation_id": "agy-session"})),
-            Some("agy-session")
-        );
-        assert_eq!(
-            payload_session_id(&json!({"conversationId": "agy-hook-spelling"})),
-            Some("agy-hook-spelling")
-        );
-    }
-
-    #[test]
     fn current_usage_cost_attaches_only_when_the_payload_is_priceable() {
         let prices = PriceBook::from_litellm_json(
             r#"{"gemini-3.5-flash": {"input_cost_per_token": 1.5e-6, "output_cost_per_token": 9e-6, "cache_read_input_token_cost": 0.15e-6}}"#,
         );
         let priced = json!({
+            "conversation_id": "agy-session",
             "model": {"id": "Gemini 3.5 Flash (Medium)"},
             "context_window": {"current_usage": {
                 "input_tokens": 2_971,
@@ -318,7 +291,8 @@ mod tests {
         });
         let mut context = AntigravityAdapter
             .observe_context("antigravity", &priced)
-            .unwrap();
+            .unwrap()
+            .context;
         attach_context_cost(&AntigravityAdapter, &priced, &prices, &mut context);
         let cost = context.cost.unwrap();
         assert_eq!(cost.coverage, rimz::agents::CostCoverage::CurrentUsage);
@@ -333,12 +307,14 @@ mod tests {
         );
 
         let unknown = json!({
+            "conversation_id": "agy-session",
             "model": {"id": "unknown"},
             "context_window": {"current_usage": {"input_tokens": 10}}
         });
         let mut context = AntigravityAdapter
             .observe_context("antigravity", &unknown)
-            .unwrap();
+            .unwrap()
+            .context;
         attach_context_cost(&AntigravityAdapter, &unknown, &prices, &mut context);
         assert!(context.cost.is_none());
     }
@@ -349,6 +325,7 @@ mod tests {
             r#"{"qwen-test-model":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"cache_read_input_token_cost":0.0000001}}"#,
         );
         let priced = json!({
+            "session_id": "qwen-session",
             "metrics": {
                 "models": {
                     "qwen-test-model": {
@@ -364,7 +341,10 @@ mod tests {
                 "files": {"total_lines_added": 12, "total_lines_removed": 3}
             }
         });
-        let mut context = QwenAdapter.observe_context("qwen", &priced).unwrap();
+        let mut context = QwenAdapter
+            .observe_context("qwen", &priced)
+            .unwrap()
+            .context;
         attach_context_cost(&QwenAdapter, &priced, &prices, &mut context);
         let cost = context.cost.unwrap();
         assert!((cost.total_cost_usd.unwrap() - 0.000_104).abs() < 1e-15);
@@ -373,12 +353,16 @@ mod tests {
         assert_eq!(cost.total_lines_removed, Some(3));
 
         let unknown = json!({
+            "session_id": "qwen-session",
             "metrics": {
                 "models": {"unknown": {"tokens": {"prompt": 10}}},
                 "files": {"total_lines_added": 7}
             }
         });
-        let mut context = QwenAdapter.observe_context("qwen", &unknown).unwrap();
+        let mut context = QwenAdapter
+            .observe_context("qwen", &unknown)
+            .unwrap()
+            .context;
         attach_context_cost(&QwenAdapter, &unknown, &prices, &mut context);
         let cost = context.cost.unwrap();
         assert_eq!(cost.total_cost_usd, None);

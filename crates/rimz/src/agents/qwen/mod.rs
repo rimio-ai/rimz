@@ -32,10 +32,10 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, DecodedHook,
-    HookRouting, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
-    TurnErrorClass, non_empty_trimmed, optional_payload_string, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AgentAdapter, AgentLifecycleObservation, AgentTurnError, DecodedHook, HookRouting,
+    ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity, TurnErrorClass,
+    non_empty_trimmed, optional_payload_string, resolve_root_identity, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -383,12 +383,13 @@ impl AgentAdapter for QwenAdapter {
             _ => None,
         };
         let mut decoded = decode_catalog_hook(QWEN_HOOKS, event_name, ask_kind);
-        decoded.set_routing(HookRouting::new(
-            optional_payload_string(payload, &["session_id", "agent_id"]),
-            optional_payload_string(payload, &["session_id"]),
-            optional_payload_string(payload, &["worktree_path", "cwd"]),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::split(
+                optional_payload_string(payload, &["session_id", "agent_id"]).map(Into::into),
+                optional_payload_string(payload, &["session_id"]).map(Into::into),
+            )
+            .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
+        );
         let questions = tool
             .as_ref()
             .and_then(|tool| {
@@ -515,13 +516,14 @@ impl AgentAdapter for QwenAdapter {
         })
     }
 
-    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         if !payload.is_object() {
             return None;
         }
-        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
-            .ok()
-            .map(|value| value.into_context(source, Timestamp::now()))
+        let parsed =
+            serde_json::from_value::<statusline::StatuslinePayload>(payload.clone()).ok()?;
+        let agent_id = parsed.session_id.clone()?;
+        super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now()))
     }
 
     fn context_cost(&self, payload: &Value, prices: &super::PriceBook) -> Option<super::AgentCost> {

@@ -564,7 +564,7 @@ mod tests {
                 )
                 .expect("test hook decodes")
                 .final_message(),
-            Some("completed reply".to_owned())
+            Some("completed reply")
         );
         assert_eq!(
             OpencodeAdapter

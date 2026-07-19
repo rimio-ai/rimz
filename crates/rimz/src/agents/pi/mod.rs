@@ -59,7 +59,6 @@ use super::{
     HookRouting, Result, SubagentIdentity, TranscriptMessage, agent_config_path, non_empty_trimmed,
     optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
-use crate::ids::AgentSessionId;
 use crate::transcript::AskQuestion;
 
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
@@ -286,12 +285,10 @@ impl AgentAdapter for PiAdapter {
         .flatten();
         let mut decoded = decode_catalog_hook(PI_HOOKS, event_name, ask_kind);
         let agent_id = optional_payload_string(payload, &["session_id"]);
-        decoded.set_routing(HookRouting::new(
-            agent_id.clone(),
-            agent_id,
-            optional_payload_string(payload, &["worktree_path", "cwd"]),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::session(agent_id.map(Into::into))
+                .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
+        );
         let questions = if event_name == "tool_call"
             && payload.get("has_ui").and_then(Value::as_bool) != Some(false)
         {
@@ -409,7 +406,7 @@ impl AgentAdapter for PiAdapter {
         let Some(signal) = signal else {
             return Ok(decoded);
         };
-        let agent_id = decoded.routing().event_agent_id().map(AgentSessionId::from);
+        let agent_id = decoded.event_agent_id().cloned();
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
@@ -475,7 +472,7 @@ impl AgentAdapter for PiAdapter {
         ask::answer_plan(kind, questions, answers)
     }
 
-    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         pi_observed_context(source, payload)
     }
 
@@ -517,8 +514,9 @@ impl AgentAdapter for PiAdapter {
     }
 }
 
-fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
+fn pi_observed_context(source: &str, payload: &Value) -> Option<super::ContextObservation> {
     let parsed = payloads::parse_payload(payload);
+    let agent_id = parsed.session_id.clone()?;
     let current_usage = pi_current_usage(&parsed);
     let tokens = {
         let usage = AgentTokenUsage {
@@ -556,7 +554,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
     {
         return None;
     }
-    Some(AgentContext {
+    let context = AgentContext {
         session_name: parsed.session_name,
         model_id: parsed.model,
         effort: parsed.effort,
@@ -564,7 +562,8 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
         tokens,
         rate_limits,
         ..AgentContext::new(source, Timestamp::now())
-    })
+    };
+    super::ContextObservation::new(agent_id, context)
 }
 
 fn pi_current_usage(parsed: &payloads::PiHookPayload) -> Option<AgentCurrentUsage> {

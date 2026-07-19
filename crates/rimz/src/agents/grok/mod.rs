@@ -290,12 +290,10 @@ impl AgentAdapter for GrokAdapter {
             .flatten();
         let mut decoded = decode_catalog_hook(GROK_HOOKS, &canonical, ask_kind);
         let worktree_path = parsed.workspace_root.clone().or_else(|| parsed.cwd.clone());
-        decoded.set_routing(HookRouting::new(
-            parsed.session_id.clone(),
-            parsed.session_id.clone(),
-            worktree_path.clone(),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::session(parsed.session_id.clone().map(Into::into))
+                .with_worktree(worktree_path.clone()),
+        );
         decoded.set_turn_error(
             match canonical.as_str() {
                 "StopFailure" | "PostToolUseFailure" => parsed.error.as_deref(),

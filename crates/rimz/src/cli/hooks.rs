@@ -6,7 +6,6 @@
 //! return the agent-native neutral no-op immediately. The agent's UI stays the
 //! answer surface.
 
-use std::ffi::OsStr;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -20,8 +19,8 @@ use super::{GlobalFlags, open_store};
 use rimz::Store;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
 use rimz::agents::{
-    AgentAdapter, AgentHookClass, AgentLifecycleObservation, DecodedHook, HookIngressDecision,
-    HookIngressOwner, adapter_by_kind,
+    AgentAdapter, AgentHookClass, AgentLifecycleObservation, DecodedHook, HookIngressAcceptance,
+    HookIngressDecision, adapter_by_kind,
 };
 use rimz::ids::{MuxName, PaneId};
 use rimz::store::AgentLifecycleIntent;
@@ -74,12 +73,12 @@ enum HooksSubcmd {
         /// Preview the hook config diff without writing files.
         #[arg(long)]
         dry_run: bool,
-        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `qwen`, `grok`). Omit to install every detected agent.
+        /// Agent kind. Omit to install every detected agent.
         agent: Option<String>,
     },
     /// Remove the adapter's RimZ-managed hook block.
     Uninstall {
-        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `kiro`, `qwen`, `grok`). Omit to remove every RimZ-managed hook set.
+        /// Agent kind. Omit to remove every RimZ-managed hook set.
         agent: Option<String>,
     },
 }
@@ -112,7 +111,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         .as_ref()
         .ok()
         .map(|adapter| adapter.hook_ingress(raw_agent_pid));
-    if let Some(HookIngressDecision::Ignore(reason)) = ingress {
+    if let Some(HookIngressDecision::Ignore(reason)) = ingress.as_ref() {
         debug!(
             source = %source,
             reason = reason.as_str(),
@@ -143,13 +142,15 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         }
         Err(err) => return Err(err.into()),
     };
-    let ingress_owner = match ingress {
-        Some(HookIngressDecision::Accept(owner)) => owner,
+    let acceptance = match ingress {
+        Some(HookIngressDecision::Accept(acceptance)) => acceptance,
         Some(HookIngressDecision::Ignore(_)) => return Ok(()),
-        None => HookIngressOwner::agent(raw_agent_pid),
+        None => HookIngressAcceptance::agent(raw_agent_pid),
     };
-    let participant_start =
-        participant_start_path(&source, std::env::var_os("CURSOR_PROJECT_DIR").as_deref());
+    let ingress_owner = acceptance.owner;
+    let participant_start = acceptance
+        .participant_start
+        .unwrap_or_else(|| PathBuf::from("."));
     let scan = |cwd: &Path| sibling_agent_pins(&source, cwd);
     // A daemon's environment is unattributable: it can carry a valid workspace
     // pin for the unrelated room that launched the shared daemon. Daemon-owned
@@ -178,14 +179,14 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_else(|| "unknown".to_owned());
-    let decoded = agent.decode_hook(&event_name, &payload)?;
+    let mut decoded = agent.decode_hook(&event_name, &payload)?;
 
     if decoded.class() != AgentHookClass::AwaitingUser {
         handle_lifecycle_hook(
             &workspace,
             &store,
             agent,
-            &decoded,
+            &mut decoded,
             &payload,
             ingress_owner,
             globals,
@@ -198,7 +199,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             &workspace,
             &store,
             agent,
-            &decoded,
+            &mut decoded,
             &payload,
             ingress_owner,
             globals,
@@ -207,21 +208,9 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     emit_neutral(&decoded)
 }
 
-fn participant_start_path(source: &str, cursor_project_dir: Option<&OsStr>) -> PathBuf {
-    if source == "cursor"
-        && let Some(project_dir) = cursor_project_dir.filter(|value| !value.is_empty())
-    {
-        let path = PathBuf::from(project_dir);
-        if path.is_absolute() {
-            return path;
-        }
-    }
-    PathBuf::from(".")
-}
-
 fn emit_neutral(decoded: &DecodedHook) -> Result<()> {
     if let Some(payload) = decoded.neutral() {
-        let rendered = serde_json::to_string(&payload)?;
+        let rendered = serde_json::to_string(payload)?;
         #[expect(clippy::print_stdout, reason = "hook stdout is the decision channel")]
         {
             println!("{rendered}");

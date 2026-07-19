@@ -16,6 +16,7 @@ use crate::agents::transcript_fs::deserialize_optional_u64_lossy;
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct StatuslinePayload {
+    pub(crate) session_id: Option<String>,
     version: Option<String>,
     model: Model,
     context_window: ContextWindow,

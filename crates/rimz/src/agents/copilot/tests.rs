@@ -72,6 +72,7 @@ fn classifies_native_asks_and_lifecycle_events() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,
@@ -88,6 +89,7 @@ fn classifies_native_asks_and_lifecycle_events() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Question,
@@ -101,6 +103,7 @@ fn classifies_native_asks_and_lifecycle_events() {
             .decode_hook("preToolUse", &json!({"sessionId":"s","toolName":"bash"}),)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|observation| observation.signal),
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
@@ -127,7 +130,8 @@ fn classifies_native_asks_and_lifecycle_events() {
         CopilotAdapter
             .decode_hook("preToolUse", &batched_question)
             .expect("test hook decodes")
-            .questions()[0]
+            .questions()
+            .to_vec()[0]
             .question,
         "Proceed?"
     );
@@ -274,6 +278,7 @@ fn agent_stop_accepts_a_matching_native_transcript_and_reads_final_text() {
             .decode_hook("agentStop", &payload)
             .expect("test hook decodes")
             .final_message()
+            .map(str::to_owned)
             .as_deref(),
         Some("final text")
     );
@@ -355,6 +360,7 @@ fn tool_mapping_uses_camel_case_names() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|observation| observation.signal);
         let (mutates, edits) = expected.unwrap_or((false, false));
         assert_eq!(
@@ -375,6 +381,7 @@ fn tool_mapping_uses_camel_case_names() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .map(|observation| observation.signal);
     assert_eq!(
         signal,
@@ -390,6 +397,7 @@ fn tool_mapping_uses_camel_case_names() {
             .decode_hook("postToolUseFailure", &json!({"sessionId":"s"}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|observation| observation.signal),
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
@@ -414,6 +422,7 @@ fn error_marker_only_accepts_non_recoverable_errors() {
         )
         .expect("test hook decodes")
         .turn_error()
+        .cloned()
         .expect("marker");
     assert_eq!(marker.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(marker.label.as_deref(), Some("network error"));
@@ -426,6 +435,7 @@ fn error_marker_only_accepts_non_recoverable_errors() {
             )
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .is_none()
     );
     assert!(
@@ -433,6 +443,7 @@ fn error_marker_only_accepts_non_recoverable_errors() {
             .decode_hook("errorOccurred", &json!({"recoverable":false,"error":{}}),)
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .is_none()
     );
 }
@@ -445,13 +456,15 @@ fn ask_details_are_best_effort() {
             &json!({"toolName":"ask_user","toolArgs":"{\"question\":\"Which branch?\"}"}),
         )
         .expect("test hook decodes")
-        .questions();
+        .questions()
+        .to_vec();
     assert_eq!(questions[0].question, "Which branch?");
     assert_eq!(
         CopilotAdapter
             .decode_hook("permissionRequest", &json!({"toolName":"powershell"}),)
             .expect("test hook decodes")
-            .ask_detail(),
+            .ask_detail()
+            .map(str::to_owned),
         Some("powershell".to_owned())
     );
     assert!(
@@ -459,6 +472,7 @@ fn ask_details_are_best_effort() {
             .decode_hook("preToolUse", &json!({"toolName":"ask_user","toolArgs":{}}))
             .expect("test hook decodes")
             .questions()
+            .to_vec()
             .is_empty()
     );
 }
@@ -468,12 +482,14 @@ fn neutral_output_is_empty_for_both_blocking_events() {
     let question = CopilotAdapter
         .decode_hook("preToolUse", &Value::Null)
         .expect("test hook decodes")
-        .neutral();
+        .neutral()
+        .cloned();
     insta::assert_snapshot!(format!("{question:?}"), @"None");
     let permission = CopilotAdapter
         .decode_hook("permissionRequest", &Value::Null)
         .expect("test hook decodes")
-        .neutral();
+        .neutral()
+        .cloned();
     insta::assert_snapshot!(format!("{permission:?}"), @"None");
 }
 
@@ -483,6 +499,7 @@ fn malformed_payloads_degrade_without_inventing_lifecycle_data() {
         .decode_hook("userPromptSubmitted", &json!(null))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("known event still maps");
     assert!(malformed.agent_id.is_none());
     assert!(malformed.prompt.is_none());
@@ -961,5 +978,6 @@ fn observation(event: &str, payload: Value) -> AgentLifecycleObservation {
         .decode_hook(event, &payload)
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation")
 }

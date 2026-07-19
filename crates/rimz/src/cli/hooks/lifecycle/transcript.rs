@@ -18,7 +18,7 @@ pub(super) fn record_assistant_response(
     if message.is_empty() {
         return None;
     }
-    let agent_id = rimz::ids::AgentSessionId::from(decoded.routing().event_agent_id()?);
+    let agent_id = decoded.event_agent_id()?.clone();
     let state = store.snapshot_cached().ok().and_then(|snapshot| {
         snapshot
             .agents
@@ -27,7 +27,7 @@ pub(super) fn record_assistant_response(
     });
     let worktree_path = recorded
         .and_then(|recorded| recorded.observation.worktree_path.as_deref())
-        .or(decoded.routing().worktree_path())
+        .or(decoded.worktree_path())
         .or_else(|| {
             state
                 .as_ref()
@@ -47,7 +47,7 @@ pub(super) fn record_assistant_response(
     });
     let mut entry = rimz::transcript::TranscriptEntry::new(
         jiff::Timestamp::now(),
-        rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        agent.descriptor().kind_id(),
         agent_id.clone(),
         rimz::transcript::TranscriptKind::Assistant,
         message.clone(),
@@ -85,27 +85,27 @@ pub(super) fn record_native_answer(
     let Some(answers) = decoded.native_answers() else {
         return;
     };
-    let answer = rimz::transcript::answers_text(&answers);
+    let answer = rimz::transcript::answers_text(answers);
     if answers.is_empty() || answer.is_empty() {
         return;
     }
-    let Some(agent_id) = decoded.routing().event_agent_id() else {
+    let Some(agent_id) = decoded.event_agent_id() else {
         return;
     };
 
-    let open_ask = latest_open_native_ask(store, agent.descriptor().kind, agent_id);
+    let open_ask = latest_open_native_ask(store, agent.descriptor().kind, agent_id.as_str());
     // `rimz answer` can append its confirmation before Claude's PostToolUse
     // hook reaches this writer. Keep the newest ask identity even when that
     // confirmation already closed it, so the idempotent append suppresses the
     // native duplicate rather than emitting a legacy id-less answer.
-    let ask_id = latest_native_ask_id(store, agent.descriptor().kind, agent_id);
+    let ask_id = latest_native_ask_id(store, agent.descriptor().kind, agent_id.as_str());
     let awaiting = recorded.is_some_and(|recorded| recorded.waiting_cleared)
         || store
             .snapshot_cached()
             .ok()
             .and_then(|snapshot| {
                 snapshot.agents.into_iter().find(|state| {
-                    state.kind == agent.descriptor().kind && state.agent_id == agent_id
+                    state.kind == agent.descriptor().kind && state.agent_id == *agent_id
                 })
             })
             .is_some_and(|state| state.is_awaiting_input())
@@ -115,7 +115,6 @@ pub(super) fn record_native_answer(
     }
 
     let worktree_path = decoded
-        .routing()
         .worktree_path()
         .filter(|path| !path.is_empty())
         .map(Cow::Borrowed)
@@ -126,20 +125,20 @@ pub(super) fn record_native_answer(
     );
     let mut entry = rimz::transcript::TranscriptEntry::new(
         jiff::Timestamp::now(),
-        rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
-        rimz::ids::AgentSessionId::from(agent_id),
+        agent.descriptor().kind_id(),
+        agent_id.clone(),
         rimz::transcript::TranscriptKind::Answer,
         answer,
     );
     entry.channel = channel;
     entry.from = Some("you".to_owned());
-    entry.answers = answers;
+    entry.answers = answers.to_vec();
     entry.id = ask_id;
     if let Err(err) = rimz::transcript::append_answer_if_missing(store.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
             event = %decoded.event_name(),
-            agent_id,
+            agent_id = %agent_id,
             error = %err,
             "lifecycle: failed to record native ask answer",
         );
@@ -196,7 +195,7 @@ pub(super) fn record_conversation(
     let Some(agent_id) = observation.agent_id.clone() else {
         return Ok(());
     };
-    let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+    let kind = agent.descriptor().kind_id();
     let channel = rimz::transcript::entry_channel(
         observation.launch.channel.as_deref(),
         observation.worktree_path.as_deref(),
@@ -347,7 +346,7 @@ pub(super) fn merge_turn_error_marker_and_transcript(
     agent: &dyn AgentAdapter,
     event_name: &str,
     context_agent_id: &str,
-    marker: rimz::agents::AgentTurnError,
+    marker: &rimz::agents::AgentTurnError,
 ) -> bool {
     let updated =
         merge_turn_error_marker(store, agent, event_name, context_agent_id, marker.clone());
@@ -358,7 +357,7 @@ pub(super) fn merge_turn_error_marker_and_transcript(
             agent,
             event_name,
             context_agent_id,
-            &marker,
+            marker,
         );
     }
     updated
@@ -374,7 +373,7 @@ pub(super) fn record_turn_error_entry(
 ) {
     let mut entry = rimz::transcript::TranscriptEntry::new(
         marker.at,
-        rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        agent.descriptor().kind_id(),
         rimz::ids::AgentSessionId::from(context_agent_id),
         rimz::transcript::TranscriptKind::Error,
         marker

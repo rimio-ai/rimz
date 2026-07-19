@@ -398,12 +398,10 @@ impl AgentAdapter for KimiAdapter {
         let ask = kimi_ask_kind(self, event_name, &parsed);
         let questions = kimi_questions(event_name, &parsed);
         let mut decoded = decode_catalog_hook(KIMI_HOOKS, event_name, ask);
-        decoded.set_routing(HookRouting::new(
-            parsed.session_id.clone(),
-            parsed.session_id.clone(),
-            parsed.cwd.clone(),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::session(parsed.session_id.clone().map(Into::into))
+                .with_worktree(parsed.cwd.clone()),
+        );
         let ask_detail = if event_name == "PermissionRequest" {
             parsed.action.as_deref().and_then(non_empty_trimmed)
         } else {

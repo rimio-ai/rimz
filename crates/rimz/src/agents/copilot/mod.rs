@@ -37,7 +37,7 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, AskKind, DecodedHook,
+    AgentAdapter, AgentLifecycleObservation, AgentTurnError, AskKind, DecodedHook,
     HookInstallPreview, HookInstallReport, HookRouting, HookUninstallReport, LocalContextRefresh,
     LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, SpawnedSubagent,
     SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
@@ -329,12 +329,10 @@ impl AgentAdapter for CopilotAdapter {
             None
         };
         let mut decoded = decode_catalog_hook(COPILOT_HOOKS, event_name, ask_kind);
-        decoded.set_routing(HookRouting::new(
-            parsed.session_id.clone(),
-            parsed.session_id.clone(),
-            optional_payload_string(payload, &["worktree_path", "cwd"]),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::session(parsed.session_id.clone().map(Into::into))
+                .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
+        );
         let questions = if event_name == "preToolUse" {
             tool.filter(|tool| tool.name == Some("ask_user"))
                 .and_then(|tool| tool.args?.as_object())
@@ -559,8 +557,10 @@ impl AgentAdapter for CopilotAdapter {
         transcript::parse_messages(lines)
     }
 
-    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
-        statusline::StatuslinePayload::parse(payload)?.into_context(source, Timestamp::now())
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
+        let parsed = statusline::StatuslinePayload::parse(payload)?;
+        let agent_id = parsed.session_id.clone()?;
+        super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now())?)
     }
 
     fn context_cost(&self, payload: &Value, prices: &super::PriceBook) -> Option<super::AgentCost> {

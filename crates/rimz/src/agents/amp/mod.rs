@@ -250,12 +250,7 @@ impl AgentAdapter for AmpAdapter {
             .as_deref()
             .map(str::trim)
             .filter(|session_id| !session_id.is_empty());
-        decoded.set_routing(HookRouting::new(
-            session_id.map(ToOwned::to_owned),
-            session_id.map(ToOwned::to_owned),
-            None,
-            None,
-        ));
+        decoded.set_routing(HookRouting::session(session_id.map(Into::into)));
         decoded.set_final_message(
             (event_name == "agent_end")
                 .then_some(parsed.last_assistant_message.as_deref())

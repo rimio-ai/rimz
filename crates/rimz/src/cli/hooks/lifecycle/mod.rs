@@ -23,15 +23,15 @@ pub(crate) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
-    decoded: &DecodedHook,
+    decoded: &mut DecodedHook,
     payload: &Value,
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let event_name = decoded.event_name();
-    let agent_id = decoded.routing().event_agent_id();
+    let agent_id = decoded.event_agent_id().cloned();
     let recorded =
         record_lifecycle_observation(workspace, store, agent, decoded, ingress_owner, globals);
+    let event_name = decoded.event_name().to_owned();
     if recorded.as_ref().is_some_and(|recorded| {
         recorded.observation.agent_id.is_some() && recorded.observation.parent_agent_id.is_none()
     }) && derive_subagent_lifecycle(workspace, store, agent, ingress_owner, globals)
@@ -72,9 +72,9 @@ pub(crate) fn handle_lifecycle_hook(
         .and_then(|recorded| recorded.observation.transcript_path.as_deref());
     let context_agent_id = recorded
         .as_ref()
-        .and_then(|recorded| recorded.observation.agent_id.as_deref())
-        .or(decoded.routing().context_agent_id())
-        .or(agent_id);
+        .and_then(|recorded| recorded.observation.agent_id.clone())
+        .or_else(|| decoded.context_agent_id().cloned())
+        .or_else(|| agent_id.clone());
     if let Some(agent_id) = context_agent_id {
         let parent_agent_id = recorded
             .as_ref()
@@ -84,10 +84,10 @@ pub(crate) fn handle_lifecycle_hook(
             store,
             agent,
             context: LifecycleEventContext {
-                event_name,
+                event_name: &event_name,
                 decoded,
                 payload,
-                agent_id,
+                agent_id: agent_id.as_str(),
                 parent_agent_id,
                 model_hint,
                 transcript_path,
@@ -98,12 +98,12 @@ pub(crate) fn handle_lifecycle_hook(
     if let Some(recorded) = recorded.as_ref() {
         let assistant_message =
             assistant_message_for_lifecycle(recorded, env_run_id().is_some(), || {
-                decoded.final_message()
+                decoded.final_message().map(ToOwned::to_owned)
             });
         record_run_lifecycle(
             store,
             agent,
-            event_name,
+            &event_name,
             recorded,
             assistant_message.as_deref(),
         );
@@ -119,7 +119,7 @@ pub(crate) fn handle_lifecycle_hook(
         );
         let questions = match &recorded.observation.signal {
             LifecycleSignal::AwaitingInput { .. } => decoded.questions(),
-            _ => Vec::new(),
+            _ => &[],
         };
         if let Err(err) = record_conversation(
             workspace,
@@ -127,7 +127,7 @@ pub(crate) fn handle_lifecycle_hook(
             agent,
             recorded,
             assistant_message.as_deref(),
-            &questions,
+            questions,
             &delivered,
         ) {
             warn!(
@@ -140,23 +140,23 @@ pub(crate) fn handle_lifecycle_hook(
         if recorded.observation.signal == LifecycleSignal::Ended
             && let Some(agent_id) = agent_id
         {
-            let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+            let kind = agent.descriptor().kind_id();
             if let Err(err) = store.archive_messages_watching_card(
                 &kind,
-                &rimz::ids::AgentSessionId::from(agent_id),
+                &agent_id,
                 recorded.observation.agent_name.as_deref(),
                 &workspace.session_name,
             ) {
                 warn!(
                     error = %err,
                     kind = agent.descriptor().kind,
-                    agent_id,
+                    agent_id = %agent_id,
                     "lifecycle: failed to archive messages watching ended agent",
                 );
             }
             if let Err(err) = store.archive_messages_for_card(
                 &kind,
-                &rimz::ids::AgentSessionId::from(agent_id),
+                &agent_id,
                 recorded.observation.agent_name.as_deref(),
                 "receiver ended",
                 &workspace.session_name,
@@ -164,7 +164,7 @@ pub(crate) fn handle_lifecycle_hook(
                 warn!(
                     error = %err,
                     kind = agent.descriptor().kind,
-                    agent_id,
+                    agent_id = %agent_id,
                     "lifecycle: failed to archive receiver messages",
                 );
             }
@@ -300,7 +300,7 @@ struct AgentContextHook<'a> {
 
 struct LifecycleEventContext<'a> {
     event_name: &'a str,
-    decoded: &'a DecodedHook,
+    decoded: &'a mut DecodedHook,
     payload: &'a Value,
     agent_id: &'a str,
     parent_agent_id: Option<&'a str>,
@@ -314,7 +314,7 @@ struct ContextSidecarInput<'a> {
     store: &'a Store,
     agent: &'a dyn AgentAdapter,
     event_name: &'a str,
-    decoded: &'a DecodedHook,
+    decoded: &'a mut DecodedHook,
     payload: &'a Value,
     context_agent_id: &'a str,
     model_hint: Option<&'a str>,
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn native_session_end_removes_context_without_lifecycle_identity() {
         let (_dir, store) = test_store();
-        let decoded = rimz::agents::ClaudeAdapter
+        let mut decoded = rimz::agents::ClaudeAdapter
             .decode_hook(
                 "SessionEnd",
                 &serde_json::json!({
@@ -428,7 +428,14 @@ mod tests {
             .expect("session end decodes");
         assert!(decoded.ends_session());
         assert!(decoded.lifecycle().is_none());
-        assert_eq!(decoded.routing().context_agent_id(), Some("root-session"));
+        assert_eq!(
+            decoded
+                .context_agent_id()
+                .map(rimz::ids::AgentSessionId::as_str),
+            Some("root-session")
+        );
+        let event_name = decoded.event_name().to_owned();
+        let agent_id = decoded.context_agent_id().unwrap().to_string();
 
         let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
         context.model_id = Some("claude-sonnet".to_owned());
@@ -444,10 +451,10 @@ mod tests {
             store: &store,
             agent: &rimz::agents::ClaudeAdapter,
             context: LifecycleEventContext {
-                event_name: decoded.event_name(),
-                decoded: &decoded,
+                event_name: &event_name,
+                decoded: &mut decoded,
                 payload: &serde_json::json!({}),
-                agent_id: decoded.routing().context_agent_id().unwrap(),
+                agent_id: &agent_id,
                 parent_agent_id: None,
                 model_hint: None,
                 transcript_path: None,

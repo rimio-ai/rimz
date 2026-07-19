@@ -16,9 +16,23 @@
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::MessageId;
+use crate::ids::{AgentSessionId, MessageId};
 
 use super::descriptor::AgentDescriptor;
+
+/// One rich-context reading paired with the provider session that owns it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContextObservation {
+    pub agent_id: AgentSessionId,
+    pub context: AgentContext,
+}
+
+impl ContextObservation {
+    pub fn new(agent_id: impl Into<AgentSessionId>, context: AgentContext) -> Option<Self> {
+        let agent_id = agent_id.into();
+        (!agent_id.as_str().trim().is_empty()).then_some(Self { agent_id, context })
+    }
+}
 
 /// Cache identity for account facts exposed by an agent adapter.
 ///

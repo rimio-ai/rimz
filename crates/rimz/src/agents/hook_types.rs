@@ -7,15 +7,16 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::ids::AgentSessionId;
 use crate::transcript::{AskAnswer, AskQuestion};
 
 use super::{
-    AgentContext, AgentHookClass, AgentLifecycleObservation, AgentTurnError, AskKind,
-    ClassifiedHook,
+    AgentHookClass, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
+    ContextObservation,
 };
 
 /// Provider-neutral result of decoding one native hook payload.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct DecodedHook {
     event_name: String,
     class: AgentHookClass,
@@ -30,7 +31,7 @@ pub struct DecodedHook {
     assistant_message: Option<String>,
     final_message: Option<String>,
     turn_error: Option<AgentTurnError>,
-    observed_context: Option<AgentContext>,
+    observed_context: Option<ContextObservation>,
     neutral: Option<Value>,
 }
 
@@ -85,40 +86,69 @@ impl DecodedHook {
         self.session_ended
     }
 
-    pub fn lifecycle(&self) -> Option<AgentLifecycleObservation> {
-        self.lifecycle.clone()
+    pub fn lifecycle(&self) -> Option<&AgentLifecycleObservation> {
+        self.lifecycle.as_ref()
     }
 
-    pub fn questions(&self) -> Vec<AskQuestion> {
-        self.questions.clone()
+    pub fn take_lifecycle(&mut self) -> Option<AgentLifecycleObservation> {
+        self.lifecycle.take()
     }
 
-    pub fn ask_detail(&self) -> Option<String> {
-        self.ask_detail.clone()
+    pub fn questions(&self) -> &[AskQuestion] {
+        &self.questions
     }
 
-    pub fn native_answers(&self) -> Option<Vec<AskAnswer>> {
-        self.native_answers.clone()
+    pub fn ask_detail(&self) -> Option<&str> {
+        self.ask_detail.as_deref()
     }
 
-    pub fn assistant_message(&self) -> Option<String> {
-        self.assistant_message.clone()
+    pub fn native_answers(&self) -> Option<&[AskAnswer]> {
+        self.native_answers.as_deref()
     }
 
-    pub fn final_message(&self) -> Option<String> {
-        self.final_message.clone()
+    pub fn assistant_message(&self) -> Option<&str> {
+        self.assistant_message.as_deref()
     }
 
-    pub fn turn_error(&self) -> Option<AgentTurnError> {
-        self.turn_error.clone()
+    pub fn final_message(&self) -> Option<&str> {
+        self.final_message.as_deref()
     }
 
-    pub fn observed_context(&self) -> Option<AgentContext> {
-        self.observed_context.clone()
+    pub fn turn_error(&self) -> Option<&AgentTurnError> {
+        self.turn_error.as_ref()
     }
 
-    pub fn neutral(&self) -> Option<Value> {
-        self.neutral.clone()
+    pub fn observed_context(&self) -> Option<&ContextObservation> {
+        self.observed_context.as_ref()
+    }
+
+    pub fn take_observed_context(&mut self) -> Option<ContextObservation> {
+        self.observed_context.take()
+    }
+
+    pub fn neutral(&self) -> Option<&Value> {
+        self.neutral.as_ref()
+    }
+
+    pub fn event_agent_id(&self) -> Option<&AgentSessionId> {
+        self.lifecycle
+            .as_ref()
+            .and_then(|observation| observation.agent_id.as_ref())
+            .or_else(|| self.routing.event_agent_id())
+    }
+
+    pub fn context_agent_id(&self) -> Option<&AgentSessionId> {
+        self.observed_context
+            .as_ref()
+            .map(|observation| &observation.agent_id)
+            .or_else(|| self.routing.context_agent_id())
+    }
+
+    pub fn worktree_path(&self) -> Option<&str> {
+        self.lifecycle
+            .as_ref()
+            .and_then(|observation| observation.worktree_path.as_deref())
+            .or_else(|| self.routing.worktree_path())
     }
 
     pub(crate) fn set_routing(&mut self, routing: HookRouting) {
@@ -146,8 +176,12 @@ impl DecodedHook {
         self.turn_error = error;
     }
 
-    pub(crate) fn set_observed_context(&mut self, context: Option<AgentContext>) {
-        self.observed_context = context;
+    pub(crate) fn set_observed_context(&mut self, context: Option<ContextObservation>) {
+        self.observed_context = context.filter(|observation| {
+            self.routing
+                .context_agent_id()
+                .is_none_or(|agent_id| agent_id == &observation.agent_id)
+        });
     }
 
     pub(crate) fn set_neutral(&mut self, neutral: Option<Value>) {
@@ -155,12 +189,6 @@ impl DecodedHook {
     }
 
     pub(crate) fn attach_lifecycle(&mut self, observation: AgentLifecycleObservation) {
-        if let Some(agent_id) = observation.agent_id.as_ref() {
-            self.routing.event_agent_id = Some(agent_id.to_string());
-        }
-        if let Some(worktree_path) = observation.worktree_path.as_ref() {
-            self.routing.worktree_path = Some(worktree_path.clone());
-        }
         self.lifecycle = Some(observation);
     }
 
@@ -179,33 +207,62 @@ impl DecodedHook {
 /// Stable routing stamped before provider lifecycle identity is resolved.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HookRouting {
-    event_agent_id: Option<String>,
-    context_agent_id: Option<String>,
+    root_agent_id: Option<AgentSessionId>,
+    event: EventRouting,
     worktree_path: Option<String>,
     server_url: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum EventRouting {
+    #[default]
+    Root,
+    Override(Option<AgentSessionId>),
+}
+
 impl HookRouting {
-    pub fn new(
-        event_agent_id: Option<String>,
-        context_agent_id: Option<String>,
-        worktree_path: Option<String>,
-        server_url: Option<String>,
-    ) -> Self {
+    pub fn session(agent_id: Option<AgentSessionId>) -> Self {
         Self {
-            event_agent_id,
-            context_agent_id,
-            worktree_path,
-            server_url,
+            root_agent_id: agent_id,
+            ..Self::default()
         }
     }
 
-    pub fn event_agent_id(&self) -> Option<&str> {
-        self.event_agent_id.as_deref()
+    pub fn split(
+        event_agent_id: Option<AgentSessionId>,
+        context_agent_id: Option<AgentSessionId>,
+    ) -> Self {
+        let event = if event_agent_id == context_agent_id {
+            EventRouting::Root
+        } else {
+            EventRouting::Override(event_agent_id)
+        };
+        Self {
+            root_agent_id: context_agent_id,
+            event,
+            ..Self::default()
+        }
     }
 
-    pub fn context_agent_id(&self) -> Option<&str> {
-        self.context_agent_id.as_deref()
+    pub fn with_worktree(mut self, worktree_path: Option<String>) -> Self {
+        self.worktree_path = worktree_path;
+        self
+    }
+
+    pub fn with_server_url(mut self, server_url: Option<String>) -> Self {
+        self.server_url = server_url;
+        self
+    }
+
+    fn event_agent_id(&self) -> Option<&AgentSessionId> {
+        match &self.event {
+            EventRouting::Root => self.root_agent_id.as_ref(),
+            EventRouting::Override(agent_id) => agent_id.as_ref(),
+        }
+    }
+
+    pub fn context_agent_id(&self) -> Option<&AgentSessionId> {
+        self.root_agent_id.as_ref()
     }
 
     pub fn worktree_path(&self) -> Option<&str> {
@@ -522,12 +579,11 @@ mod tests {
             ask_kind: None,
             event_name: "SubagentStop".to_owned(),
         });
-        decoded.set_routing(HookRouting::new(
-            Some("root-event".to_owned()),
-            Some("root-context".to_owned()),
-            Some("/root/worktree".to_owned()),
-            Some("http://localhost".to_owned()),
-        ));
+        decoded.set_routing(
+            HookRouting::split(Some("root-event".into()), Some("root-context".into()))
+                .with_worktree(Some("/root/worktree".to_owned()))
+                .with_server_url(Some("http://localhost".to_owned())),
+        );
         let mut observation = AgentLifecycleObservation::new(
             Some(crate::ids::AgentSessionId::from("child")),
             super::super::LifecycleSignal::SubagentStopped { errored: false },
@@ -536,9 +592,15 @@ mod tests {
         observation.worktree_path = Some("/child/worktree".to_owned());
         decoded.attach_lifecycle(observation);
 
-        assert_eq!(decoded.routing().event_agent_id(), Some("child"));
-        assert_eq!(decoded.routing().context_agent_id(), Some("root-context"));
-        assert_eq!(decoded.routing().worktree_path(), Some("/child/worktree"));
+        assert_eq!(
+            decoded.event_agent_id().map(AgentSessionId::as_str),
+            Some("child")
+        );
+        assert_eq!(
+            decoded.context_agent_id().map(AgentSessionId::as_str),
+            Some("root-context")
+        );
+        assert_eq!(decoded.worktree_path(), Some("/child/worktree"));
         assert_eq!(decoded.routing().server_url(), Some("http://localhost"));
     }
 
@@ -550,15 +612,19 @@ mod tests {
             event_name: "Context".to_owned(),
         };
         let mut decoded = DecodedHook::new(classified.clone());
-        decoded.set_routing(HookRouting::new(
-            Some("root".to_owned()),
-            Some("context".to_owned()),
-            Some("/fallback".to_owned()),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::split(Some("root".into()), Some("context".into()))
+                .with_worktree(Some("/fallback".to_owned())),
+        );
         assert!(decoded.lifecycle().is_none());
-        assert_eq!(decoded.routing().event_agent_id(), Some("root"));
-        assert_eq!(decoded.routing().context_agent_id(), Some("context"));
+        assert_eq!(
+            decoded.event_agent_id().map(AgentSessionId::as_str),
+            Some("root")
+        );
+        assert_eq!(
+            decoded.context_agent_id().map(AgentSessionId::as_str),
+            Some("context")
+        );
 
         let mut attached = DecodedHook::new(classified);
         attached.set_routing(decoded.routing().clone());
@@ -566,7 +632,10 @@ mod tests {
             None,
             super::super::LifecycleSignal::TurnStarted,
         ));
-        assert_eq!(attached.routing().event_agent_id(), Some("root"));
-        assert_eq!(attached.routing().worktree_path(), Some("/fallback"));
+        assert_eq!(
+            attached.event_agent_id().map(AgentSessionId::as_str),
+            Some("root")
+        );
+        assert_eq!(attached.worktree_path(), Some("/fallback"));
     }
 }

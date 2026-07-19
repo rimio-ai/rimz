@@ -9,15 +9,15 @@ pub(super) fn record_lifecycle_observation(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
-    decoded: &DecodedHook,
+    decoded: &mut DecodedHook,
     ingress_owner: HookIngressOwner,
     globals: &GlobalFlags,
 ) -> Option<RecordedLifecycle> {
-    let mut observation = decoded.lifecycle()?;
+    let mut observation = decoded.take_lifecycle()?;
     if let LifecycleSignal::AwaitingInput { ask_id, detail, .. } = &mut observation.signal {
         ask_id.get_or_insert_with(rimz::ids::AskId::new);
         if detail.is_none() {
-            *detail = decoded.ask_detail();
+            *detail = decoded.ask_detail().map(ToOwned::to_owned);
         }
     }
     attach_agent_owner(ingress_owner, &mut observation);

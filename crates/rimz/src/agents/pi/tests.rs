@@ -106,7 +106,8 @@ fn pi_question_detail_normalizes_the_rpiv_schema() {
             }),
         )
         .expect("test hook decodes")
-        .questions();
+        .questions()
+        .to_vec();
     assert_eq!(
         questions,
         vec![AskQuestion {
@@ -144,6 +145,7 @@ fn pi_question_detail_normalizes_the_rpiv_schema() {
                 .decode_hook("tool_call", &payload)
                 .expect("test hook decodes")
                 .questions()
+                .to_vec()
                 .is_empty()
         );
     }
@@ -197,6 +199,7 @@ fn pi_native_answer_detail_maps_rpiv_results_and_ignores_cancellation() {
         )
         .expect("test hook decodes")
         .native_answers()
+        .map(<[_]>::to_vec)
         .expect("answer detail");
     assert_eq!(
         answers,
@@ -241,7 +244,8 @@ fn pi_native_answer_detail_maps_rpiv_results_and_ignores_cancellation() {
                 }),
             )
             .expect("test hook decodes")
-            .native_answers(),
+            .native_answers()
+            .map(<[_]>::to_vec),
         None,
         "cancelling after a partial answer must not record that answer"
     );
@@ -255,7 +259,8 @@ fn pi_native_answer_detail_maps_rpiv_results_and_ignores_cancellation() {
                 }),
             )
             .expect("test hook decodes")
-            .native_answers(),
+            .native_answers()
+            .map(<[_]>::to_vec),
         None
     );
 }
@@ -502,6 +507,7 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation");
     assert_eq!(started.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(started.signal, LifecycleSignal::Registered);
@@ -523,6 +529,7 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation");
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.prompt.as_deref(), Some("add a dark mode toggle"));
@@ -535,6 +542,7 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation");
     assert_eq!(injected.prompt, None);
     assert_eq!(injected.task, None);
@@ -546,7 +554,7 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
                 "session_id": "sess-1",
                 "prompt": "<skill name=\"merge\" Location=\"/home/u/.agents/skills/merge/SKILL.md\">\nmerge the branch\n</skill>"
             }),
-        ).expect("test hook decodes").lifecycle()
+        ).expect("test hook decodes").lifecycle().cloned()
         .expect("observation");
     assert_eq!(skill.prompt, None);
     assert_eq!(skill.task, None);
@@ -567,6 +575,7 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation");
     assert_eq!(
         clean.signal,
@@ -606,6 +615,7 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
             .decode_hook("agent_settled", &payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .expect("observation");
         assert_eq!(observation.signal, expected, "payload {payload}",);
     }
@@ -622,6 +632,7 @@ fn pi_carries_final_assistant_text_through_the_settled_boundary() {
             .decode_hook("agent_settled", &payload)
             .expect("test hook decodes")
             .final_message()
+            .map(str::to_owned)
             .as_deref(),
         Some("Fixed the parser.")
     );
@@ -629,7 +640,8 @@ fn pi_carries_final_assistant_text_through_the_settled_boundary() {
         PiAdapter
             .decode_hook("agent_end", &payload)
             .expect("test hook decodes")
-            .final_message(),
+            .final_message()
+            .map(str::to_owned),
         None,
         "agent_end is enrichment-only and must not complete output early"
     );
@@ -827,20 +839,23 @@ fn model_select_is_enrichment_only() {
             .decode_hook("model_select", &payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .is_none()
     );
     assert_eq!(
         PiAdapter
             .observe_context("pi", &payload)
             .unwrap()
+            .context
             .model_id
             .as_deref(),
         Some("gpt-5.5")
     );
 }
 
-fn normalized_context(payload: serde_json::Value) -> Option<AgentContext> {
-    let mut context = PiAdapter.observe_context("pi", &payload)?;
+fn normalized_context(mut payload: serde_json::Value) -> Option<AgentContext> {
+    payload["session_id"] = json!("sess-1");
+    let mut context = PiAdapter.observe_context("pi", &payload)?.context;
     context.observed_at = jiff::Timestamp::from_second(1_700_000_000).unwrap();
     Some(context)
 }
@@ -866,6 +881,7 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
             .decode_hook("tool_call", &ask_payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Question,
@@ -898,7 +914,8 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
         PiAdapter
             .decode_hook("tool_call", &headless)
             .expect("test hook decodes")
-            .lifecycle(),
+            .lifecycle()
+            .cloned(),
         None
     );
     assert_eq!(
@@ -922,6 +939,7 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|observation| observation.signal),
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
@@ -946,6 +964,7 @@ fn pi_observes_normalized_subagent_lifecycle() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("started observation");
     assert_eq!(started.agent_id.as_deref(), Some("run-7#1"));
     assert_eq!(started.parent_agent_id.as_deref(), Some("parent-1"));
@@ -969,6 +988,7 @@ fn pi_observes_normalized_subagent_lifecycle() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("stopped observation");
     assert_eq!(stopped.agent_id.as_deref(), Some("run-7#1"));
     assert_eq!(stopped.parent_agent_id.as_deref(), Some("parent-1"));
@@ -997,7 +1017,8 @@ fn pi_quarantines_malformed_subagent_identity() {
             PiAdapter
                 .decode_hook("subagent_started", &payload)
                 .expect("test hook decodes")
-                .lifecycle(),
+                .lifecycle()
+                .cloned(),
             None,
             "payload {payload}"
         );
@@ -1035,7 +1056,8 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
                 }),
             )
             .expect("test hook decodes")
-            .lifecycle();
+            .lifecycle()
+            .cloned();
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool_name}");
     }
 
@@ -1051,6 +1073,7 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation");
     assert_eq!(
         step(Some(&running), None, &edit.signal).next.phase,
@@ -1061,6 +1084,7 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         .decode_hook("session_before_compact", &json!({ "session_id": "sess-1" }))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation");
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
     for (reason, expected) in [
@@ -1078,6 +1102,7 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
             .decode_hook("session_compact", &payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .expect("observation");
         assert_eq!(
             compacted.signal,
@@ -1092,7 +1117,8 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
                 &json!({ "session_id": "sess-1", "stop_reason": "error" }),
             )
             .expect("test hook decodes")
-            .lifecycle(),
+            .lifecycle()
+            .cloned(),
         None
     );
     let settled = PiAdapter
@@ -1102,6 +1128,7 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation");
     assert_eq!(
         settled.signal,
@@ -1114,6 +1141,7 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         .decode_hook("session_shutdown", &json!({ "session_id": "sess-1" }))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("observation");
     assert_eq!(ended.signal, LifecycleSignal::Ended);
 
@@ -1121,14 +1149,16 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         PiAdapter
             .decode_hook("tool_call", &json!({ "session_id": "sess-1" }))
             .expect("test hook decodes")
-            .lifecycle(),
+            .lifecycle()
+            .cloned(),
         None
     );
     assert_eq!(
         PiAdapter
             .decode_hook("bogus", &json!({}))
             .expect("test hook decodes")
-            .lifecycle(),
+            .lifecycle()
+            .cloned(),
         None
     );
 
@@ -1152,7 +1182,8 @@ fn neutral_decision_shape_is_pinned() {
     let rendered = PiAdapter
         .decode_hook("agent_end", &Value::Null)
         .expect("test hook decodes")
-        .neutral();
+        .neutral()
+        .cloned();
     insta::assert_snapshot!(format!("{rendered:?}"), @"None");
 }
 

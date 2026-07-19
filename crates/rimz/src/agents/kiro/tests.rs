@@ -48,13 +48,15 @@ fn native_hooks_are_explicitly_unsupported() {
                 .decode_hook(event, &payload)
                 .expect("test hook decodes")
                 .lifecycle()
+                .cloned()
                 .is_none()
         );
         assert_eq!(
             KiroAdapter
                 .decode_hook(event, &Value::Null)
                 .expect("test hook decodes")
-                .neutral(),
+                .neutral()
+                .cloned(),
             None
         );
     }
@@ -64,6 +66,7 @@ fn native_hooks_are_explicitly_unsupported() {
             .decode_hook("Stop", &json!({}))
             .expect("test hook decodes")
             .final_message()
+            .map(str::to_owned)
             .is_none()
     );
 }

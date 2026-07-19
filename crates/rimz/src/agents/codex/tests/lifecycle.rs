@@ -124,6 +124,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             .decode_hook(event, payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|obs| obs.signal);
         assert_eq!(&signal, expected, "{event} {payload}");
     }
@@ -136,6 +137,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(session.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(session.task, None);
@@ -166,6 +168,7 @@ fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
         .decode_hook("Stop", &payload)
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("plan Stop observation");
     assert_eq!(
         observation.signal,
@@ -179,7 +182,8 @@ fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
     let questions = CodexAdapter
         .decode_hook("Stop", &payload)
         .expect("test hook decodes")
-        .questions();
+        .questions()
+        .to_vec();
     assert_eq!(
         questions[0].question,
         "Requesting plan approval:\n\n# Ship\n\nImplement it."
@@ -211,6 +215,7 @@ fn messageless_stop_keeps_raw_turn_error_empty() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .expect("messageless Stop observation");
 
     assert_eq!(
@@ -231,6 +236,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(prompt.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
@@ -247,6 +253,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(start.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(start.signal, LifecycleSignal::SubagentStarted);
@@ -266,6 +273,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(stop.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(
@@ -287,6 +295,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(permission.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(
@@ -313,6 +322,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(question.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(
@@ -378,6 +388,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
             .decode_hook(event, &payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap_or_else(|| panic!("{event} should update the child"));
         assert_eq!(child.agent_id.as_deref(), Some("child-thread-1"), "{event}");
         assert_eq!(
@@ -395,6 +406,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(root.agent_id.as_deref(), Some("sess-parent"));
     assert_eq!(root.parent_agent_id, None);
@@ -447,6 +459,7 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
     });
     assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
@@ -475,6 +488,7 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         stop.signal,
@@ -514,6 +528,7 @@ fn root_identity_events_stamp_codex_session_origin() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap();
         assert_eq!(registered.origin, Some(SessionOrigin::Fresh));
 
@@ -524,6 +539,7 @@ fn root_identity_events_stamp_codex_session_origin() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap();
         assert_eq!(turn_started.origin, Some(SessionOrigin::Forked));
 
@@ -531,6 +547,7 @@ fn root_identity_events_stamp_codex_session_origin() {
             .decode_hook("Stop", &json!({"session_id":"fresh"}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap();
         assert_eq!(stop.origin, None);
     });
@@ -555,6 +572,7 @@ fn root_lifecycle_effort_falls_back_to_rollout_turn_context() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
     });
 
@@ -586,6 +604,7 @@ model_reasoning_effort = "xhigh"
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
     });
 
@@ -616,6 +635,7 @@ fn expiry_predicates_match_observed_root_signals() {
             .expect("test hook decodes");
         let obs = decoded
             .lifecycle()
+            .cloned()
             .unwrap_or_else(|| panic!("{event} should be observed"));
         assert_eq!(
             decoded.ends_session(),

@@ -3,6 +3,7 @@ use crate::agents::{
     AgentStatus, LaunchPreset, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     PriceBook, StatusLineChange, TranscriptRole, TurnPhase,
 };
+use crate::ids::AgentSessionId;
 use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::io::Write as _;
@@ -39,14 +40,16 @@ fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
         AntigravityAdapter
             .decode_hook("PreInvocation", &Value::Null)
             .expect("test hook decodes")
-            .neutral(),
+            .neutral()
+            .cloned(),
         Some(json!({}))
     );
     assert_eq!(
         AntigravityAdapter
             .decode_hook("Stop", &Value::Null)
             .expect("test hook decodes")
-            .neutral(),
+            .neutral()
+            .cloned(),
         Some(json!({"decision": ""}))
     );
     assert_eq!(
@@ -60,7 +63,8 @@ fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
         AntigravityAdapter
             .decode_hook("PreToolUse", &Value::Null)
             .expect("test hook decodes")
-            .neutral(),
+            .neutral()
+            .cloned(),
         None
     );
 }
@@ -83,6 +87,7 @@ fn native_hooks_normalize_lifecycle() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(started.signal, LifecycleSignal::TurnStarted);
     assert_eq!(started.agent_id.as_deref(), Some(SESSION_ID));
@@ -147,6 +152,7 @@ fn native_hooks_normalize_lifecycle() {
             .decode_hook(event, &payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|value| value.signal);
         assert_eq!(signal, expected);
     }
@@ -157,10 +163,16 @@ fn catalog_events_without_lifecycle_signal_keep_context_identity() {
     let camel = AntigravityAdapter
         .decode_hook("PostInvocation", &hook_payload())
         .expect("test hook decodes");
-    assert_eq!(camel.routing().event_agent_id(), Some(SESSION_ID));
-    assert_eq!(camel.routing().context_agent_id(), Some(SESSION_ID));
+    assert_eq!(
+        camel.event_agent_id().map(AgentSessionId::as_str),
+        Some(SESSION_ID)
+    );
+    assert_eq!(
+        camel.context_agent_id().map(AgentSessionId::as_str),
+        Some(SESSION_ID)
+    );
     assert_eq!(camel.routing().worktree_path(), Some("/workspace/project"));
-    assert!(camel.lifecycle().is_none());
+    assert!(camel.lifecycle().cloned().is_none());
 
     let snake = AntigravityAdapter
         .decode_hook(
@@ -172,9 +184,15 @@ fn catalog_events_without_lifecycle_signal_keep_context_identity() {
             }),
         )
         .expect("test hook decodes");
-    assert_eq!(snake.routing().event_agent_id(), Some(SESSION_ID));
-    assert_eq!(snake.routing().context_agent_id(), Some(SESSION_ID));
-    assert!(snake.lifecycle().is_none());
+    assert_eq!(
+        snake.event_agent_id().map(AgentSessionId::as_str),
+        Some(SESSION_ID)
+    );
+    assert_eq!(
+        snake.context_agent_id().map(AgentSessionId::as_str),
+        Some(SESSION_ID)
+    );
+    assert!(snake.lifecycle().cloned().is_none());
 }
 #[test]
 fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
@@ -195,6 +213,7 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
                 .decode_hook("Stop", &payload)
                 .expect("test hook decodes")
                 .turn_error()
+                .cloned()
                 .is_none()
         );
         assert_eq!(
@@ -202,6 +221,7 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
                 .decode_hook("Stop", &payload)
                 .expect("test hook decodes")
                 .lifecycle()
+                .cloned()
                 .unwrap()
                 .signal,
             LifecycleSignal::TurnEnded {
@@ -347,7 +367,8 @@ fn statusline_projects_model_account_and_context_usage() {
             "antigravity",
             &json_value(r#"{"conversation_id":"11111111-1111-4111-8111-111111111111","version":"1.1.2","model":{"id":"Gemini 3.5 Flash (Medium)","display_name":"Gemini 3.5 Flash (Medium)"},"plan_tier":"ultra","email":"user@example.com","tool_confirmation_pending":true,"context_window":{"context_window_size":1048576,"used_percentage":8.4156,"remaining_percentage":91.5844,"current_usage":{"input_tokens":63382,"output_tokens":346,"cache_creation_input_tokens":0,"cache_read_input_tokens":20857}},"future_field":{"ignored":true}}"#),
         )
-        .unwrap();
+        .unwrap()
+        .context;
     assert_eq!(
         context.model_id.as_deref(),
         Some("Gemini 3.5 Flash (Medium)")
@@ -376,8 +397,12 @@ fn statusline_projects_model_account_and_context_usage() {
     );
     assert!(
         AntigravityAdapter
-            .observe_context("antigravity", &json!({"tool_confirmation_pending": false}))
+            .observe_context(
+                "antigravity",
+                &json!({"conversation_id": SESSION_ID, "tool_confirmation_pending": false})
+            )
             .unwrap()
+            .context
             .native_permission_wait
             .is_none()
     );
@@ -401,9 +426,10 @@ fn statusline_normalizes_reasoning_qualifiers_without_changing_model_id() {
         let context = AntigravityAdapter
             .observe_context(
                 "antigravity",
-                &json!({"model": {"id": "  provider/model:id  ", "display_name": display}}),
+                &json!({"conversation_id": SESSION_ID, "model": {"id": "  provider/model:id  ", "display_name": display}}),
             )
-            .unwrap();
+            .unwrap()
+            .context;
         assert_eq!(
             (
                 context.model_id.as_deref(),

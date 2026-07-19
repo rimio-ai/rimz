@@ -74,7 +74,8 @@ fn final_message_fallback_reads_only_at_output_checkpoints() {
                 }),
             )
             .expect("test hook decodes")
-            .final_message(),
+            .final_message()
+            .map(str::to_owned),
         None
     );
     assert_eq!(
@@ -88,6 +89,7 @@ fn final_message_fallback_reads_only_at_output_checkpoints() {
             )
             .expect("test hook decodes")
             .final_message()
+            .map(str::to_owned)
             .as_deref(),
         Some("final answer")
     );
@@ -108,6 +110,7 @@ fn permission_request_does_not_duplicate_native_ask_tools() {
                 .decode_hook("PermissionRequest", &payload)
                 .expect("test hook decodes")
                 .lifecycle()
+                .cloned()
                 .is_none(),
             "{tool}"
         );
@@ -124,6 +127,7 @@ fn permission_request_does_not_duplicate_native_ask_tools() {
             .decode_hook("PermissionRequest", &payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,
@@ -138,6 +142,7 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
         .decode_hook("PreCompact", &json!({ "session_id": "sess-1" }))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(pre.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(pre.signal, LifecycleSignal::Compacting);
@@ -164,6 +169,7 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
             .decode_hook("PostCompact", &payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap();
         assert_eq!(obs.signal, expected, "{payload}");
     }
@@ -184,6 +190,7 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(start.agent_id.as_deref(), Some("child-1"));
     assert_eq!(start.signal, LifecycleSignal::SubagentStarted);
@@ -200,6 +207,7 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
         .decode_hook("SubagentStop", &stop_payload)
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(stop.agent_id.as_deref(), Some("child-1"));
     assert_eq!(
@@ -213,6 +221,7 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
         .decode_hook("UserPromptSubmit", &json!({ "session_id": "sess-root" }))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(root.agent_id.as_deref(), Some("sess-root"));
     assert_eq!(root.parent_agent_id, None);
@@ -225,6 +234,7 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .is_none()
     );
 
@@ -263,6 +273,7 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
                 .decode_hook(event, &payload)
                 .expect("test hook decodes")
                 .lifecycle()
+                .cloned()
                 .is_none(),
             "{event}"
         );
@@ -279,6 +290,7 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(root_with_equal_id.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(root_with_equal_id.parent_agent_id, None);
@@ -293,7 +305,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
                 "session_id": "sess-1",
                 "prompt": "<task-notification><task-id>afdc639e18e7ebdb9</task-id></task-notification>",
             }),
-        ).expect("test hook decodes").lifecycle()
+        ).expect("test hook decodes").lifecycle().cloned()
         .unwrap();
     assert_eq!(control.prompt, None);
     assert_eq!(control.task, None);
@@ -305,6 +317,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(prompt.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
@@ -350,7 +363,8 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
                 &json!({ "session_id": "sess-1", "tool_name": tool }),
             )
             .expect("test hook decodes")
-            .lifecycle();
+            .lifecycle()
+            .cloned();
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool}");
     }
 
@@ -361,6 +375,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         pre_tool.signal,
@@ -400,6 +415,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         assert_eq!(obs.signal, expected_signal, "{source}");
@@ -410,6 +426,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
         .decode_hook("SessionStart", &json!({ "session_id": "sess-1" }))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(absent.signal, LifecycleSignal::Registered);
     assert_eq!(absent.origin, Some(SessionOrigin::Fresh));
@@ -419,6 +436,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             .decode_hook("Notification", &json!({}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .is_none()
     );
 
@@ -497,6 +515,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             .decode_hook("Stop", &payload)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap_or_else(|| panic!("{case} should produce a lifecycle observation"));
         assert_eq!(obs.signal, expected_signal, "{case}");
         assert_eq!(obs.task, None, "{case}");
@@ -507,6 +526,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
         .expect("test hook decodes");
     let ended = decoded
         .lifecycle()
+        .cloned()
         .expect("SessionEnd is a recorded lifecycle observation");
     assert_eq!(ended.agent_id.as_deref(), Some("sess-1"));
     assert!(decoded.ends_session());
@@ -542,6 +562,7 @@ fn expiry_predicates_match_observed_root_signals() {
             .expect("test hook decodes");
         let obs = decoded
             .lifecycle()
+            .cloned()
             .unwrap_or_else(|| panic!("{event} should be observed"));
         assert_eq!(
             decoded.ends_session(),

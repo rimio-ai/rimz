@@ -98,6 +98,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(startup.signal, LifecycleSignal::Registered);
     assert_eq!(startup.origin, Some(SessionOrigin::Fresh));
@@ -111,6 +112,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
@@ -131,6 +133,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
                 )
                 .expect("test hook decodes")
                 .lifecycle()
+                .cloned()
                 .unwrap()
                 .signal,
             LifecycleSignal::ToolUsed {
@@ -145,6 +148,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         .decode_hook("Stop", &json!({"session_id": "sess-1"}))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         stop.signal,
@@ -168,6 +172,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
             .decode_hook("PreCompact", &json!({"session_id": "sess-1"}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::Compacting
@@ -180,6 +185,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::CompactionEnded { auto: None }
@@ -195,6 +201,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
             .decode_hook("SessionEnd", &json!({"session_id": "sess-1"}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::Ended
@@ -256,7 +263,7 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
             }),
         )
         .unwrap();
-    let observation = decoded.lifecycle().unwrap();
+    let observation = decoded.lifecycle().cloned().unwrap();
 
     assert_eq!(
         observation.launch.model.as_deref(),
@@ -269,14 +276,15 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
     assert_eq!(observation.usage.fresh_input_tokens, None);
     assert_eq!(observation.usage.output_tokens, None);
     assert_eq!(
-        decoded.final_message(),
+        decoded.final_message().map(str::to_owned),
         Some("pong\nsecond block".to_owned())
     );
     assert_eq!(
         DroidAdapter
             .decode_hook("SessionEnd", &Value::Null)
             .unwrap()
-            .final_message(),
+            .final_message()
+            .map(str::to_owned),
         None
     );
 
@@ -296,6 +304,7 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         fallback.launch.model.as_deref(),
@@ -502,9 +511,9 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
             .class(),
         AgentHookClass::Lifecycle
     );
-    insta::assert_json_snapshot!(DroidAdapter.decode_hook("Stop", &Value::Null).expect("test hook decodes").neutral(), @"null");
+    insta::assert_json_snapshot!(DroidAdapter.decode_hook("Stop", &Value::Null).expect("test hook decodes").neutral().cloned(), @"null");
     insta::assert_json_snapshot!(
-        DroidAdapter.decode_hook("Stop", &json!([])).expect("test hook decodes").lifecycle().unwrap(),
+        DroidAdapter.decode_hook("Stop", &json!([])).expect("test hook decodes").lifecycle().cloned().unwrap(),
         @r###"
         {
           "signal": {
@@ -616,7 +625,13 @@ fn notification_without_lifecycle_signal_keeps_context_identity() {
         .decode_hook("Notification", &json!({"session_id": "sess-1"}))
         .expect("test hook decodes");
 
-    assert_eq!(decoded.routing().event_agent_id(), Some("sess-1"));
-    assert_eq!(decoded.routing().context_agent_id(), Some("sess-1"));
-    assert!(decoded.lifecycle().is_none());
+    assert_eq!(
+        decoded.event_agent_id().map(AgentSessionId::as_str),
+        Some("sess-1")
+    );
+    assert_eq!(
+        decoded.context_agent_id().map(AgentSessionId::as_str),
+        Some("sess-1")
+    );
+    assert!(decoded.lifecycle().cloned().is_none());
 }

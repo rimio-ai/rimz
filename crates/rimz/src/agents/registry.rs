@@ -259,9 +259,9 @@ mod tests {
     fn ordinary_adapters_accept_default_hook_ingress_ownership() {
         assert_eq!(
             find_adapter("amp").unwrap().hook_ingress(Some(42)),
-            crate::agents::HookIngressDecision::Accept(crate::agents::HookIngressOwner::agent(
-                Some(42)
-            ))
+            crate::agents::HookIngressDecision::Accept(
+                crate::agents::HookIngressAcceptance::agent(Some(42)),
+            )
         );
     }
 

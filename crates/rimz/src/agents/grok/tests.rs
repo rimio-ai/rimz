@@ -117,6 +117,7 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert!(matches!(
         ask.signal,
@@ -129,6 +130,7 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
         .decode_hook("Stop", &json!({"sessionId":"s1","reason":"cancelled"}))
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(interrupted.signal, LifecycleSignal::TurnInterrupted);
     assert!(
@@ -136,6 +138,7 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
             .decode_hook("Stop", &json!({"sessionId":"s1","reason":"shutdown"}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .is_none()
     );
     let child = adapter
@@ -145,6 +148,7 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(child.agent_id.as_deref(), Some("child-1"));
     assert_eq!(child.parent_agent_id.as_deref(), Some("s1"));
@@ -159,6 +163,7 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         failed_child.signal,
@@ -169,6 +174,7 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
             .decode_hook("SubagentStart", &json!({"sessionId":"s1"}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .is_none()
     );
     assert!(matches!(
@@ -176,6 +182,7 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
             .decode_hook("Stop", &json!({"sessionId":"s1","reason":"error"}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::TurnEnded { errored: true, .. }
@@ -207,6 +214,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
             .decode_hook("PostToolUse", &json!({"sessionId":"s1","toolName":tool}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap();
         assert_eq!(
             observation.signal,
@@ -225,6 +233,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::ToolUsed {
@@ -238,6 +247,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
             .decode_hook("PostCompact", &json!({"sessionId":"s1","source":"manual"}))
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::CompactionEnded { auto: Some(false) }
@@ -258,6 +268,7 @@ fn managed_catalog_is_passive_and_excludes_pre_tool_use() {
             .decode_hook("Notification", &Value::Null)
             .expect("test hook decodes")
             .neutral()
+            .cloned()
             .is_none()
     );
 
@@ -360,6 +371,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .is_none()
     );
 }
@@ -372,6 +384,7 @@ fn only_failure_hooks_contribute_turn_errors() {
             .decode_hook("Stop", &json!({"reason":"end_turn"}))
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .is_none()
     );
     assert!(
@@ -382,6 +395,7 @@ fn only_failure_hooks_contribute_turn_errors() {
             )
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .is_none()
     );
     assert_eq!(
@@ -392,6 +406,7 @@ fn only_failure_hooks_contribute_turn_errors() {
             )
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .and_then(|error| error.label),
         Some("provider failed".to_owned())
     );

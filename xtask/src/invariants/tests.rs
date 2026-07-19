@@ -137,6 +137,30 @@ fn generic_process_consumers_require_normalized_adapter_decisions() {
 }
 
 #[test]
+fn adapter_derived_kinds_use_the_typed_descriptor_accessor() {
+    let root = temp_repo_root("typed-adapter-kind");
+    let supervised = root.join("crates/rimz/src/cli/supervised.rs");
+    std::fs::create_dir_all(supervised.parent().expect("test path has parent")).expect("mkdir");
+    std::fs::write(
+        &supervised,
+        "fn f(adapter: &dyn AgentAdapter) { AgentKind::new_unchecked(\n adapter.descriptor().kind\n); }\n",
+    )
+    .expect("write unchecked adapter kind");
+
+    let err = ensure_adapter_kinds_stay_typed(&root, std::slice::from_ref(&supervised))
+        .expect_err("adapter-derived unchecked kind is rejected");
+    assert!(err.to_string().contains("typed kind_id"));
+
+    std::fs::write(
+        &supervised,
+        "fn f(adapter: &dyn AgentAdapter) { let _ = adapter.descriptor().kind_id(); }\n",
+    )
+    .expect("write typed adapter kind");
+    ensure_adapter_kinds_stay_typed(&root, &[supervised]).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn sidebar_event_log_reads_must_route_through_rollup() {
     let root = temp_repo_root("sidebar-event-log-boundary");
     let bad = root.join("crates/rimz/src/sidebar/enrich/bad.rs");

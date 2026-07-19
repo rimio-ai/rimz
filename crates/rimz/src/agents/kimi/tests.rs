@@ -31,6 +31,7 @@ fn native_questions_and_permissions_use_distinct_hooks() {
             .decode_hook("PreToolUse", &plan_pre_tool)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .is_none()
     );
 
@@ -45,6 +46,7 @@ fn native_questions_and_permissions_use_distinct_hooks() {
             .decode_hook("PermissionRequest", &plan_permission)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::AwaitingInput {
@@ -59,6 +61,7 @@ fn native_questions_and_permissions_use_distinct_hooks() {
             .decode_hook("PermissionRequest", &permission)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::AwaitingInput {
@@ -66,7 +69,7 @@ fn native_questions_and_permissions_use_distinct_hooks() {
             ..
         }
     ));
-    insta::assert_snapshot!(format!("{:?}", KimiAdapter.decode_hook("PermissionRequest", &Value::Null).expect("test hook decodes").neutral()), @"None");
+    insta::assert_snapshot!(format!("{:?}", KimiAdapter.decode_hook("PermissionRequest", &Value::Null).expect("test hook decodes").neutral().cloned()), @"None");
 }
 
 #[test]
@@ -78,6 +81,7 @@ fn permission_result_and_interrupt_clear_waiting_state() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         result.signal,
@@ -95,6 +99,7 @@ fn permission_result_and_interrupt_clear_waiting_state() {
             )
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .unwrap()
             .signal,
         LifecycleSignal::TurnEnded { errored: false, .. }
@@ -110,6 +115,7 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         failed.signal,
@@ -137,6 +143,7 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
             .decode_hook("PreToolUse", &background)
             .expect("test hook decodes")
             .lifecycle()
+            .cloned()
             .is_none()
     );
 }
@@ -152,6 +159,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         .decode_hook("UserPromptSubmit", &prompt)
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(observed.prompt.as_deref(), Some("fix\nparser"));
     assert_eq!(
@@ -213,6 +221,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(
         write.signal,

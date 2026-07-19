@@ -37,6 +37,8 @@ impl PiCompactionReason {
 /// The flattened payload the RimZ pi extension posts for every event.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct PiHookPayload {
+    /// Every event: stable session identity supplied by the RimZ extension.
+    pub session_id: Option<String>,
     /// Every event after Pi reports session metadata: the `/name` title.
     pub session_name: Option<String>,
     /// `before_agent_start`: the user's prompt.

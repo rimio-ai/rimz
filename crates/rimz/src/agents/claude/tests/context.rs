@@ -20,6 +20,7 @@ fn transcript_tail_drives_context_window_and_tokens() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(obs.usage.total_tokens, Some(100_500));
     assert_eq!(obs.usage.context_window, None);
@@ -46,6 +47,7 @@ fn transcript_tail_drives_context_window_and_tokens() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(obs.usage.context_window, Some(1_000_000));
     assert_eq!(obs.usage.total_tokens, Some(100_500));
@@ -79,6 +81,7 @@ fn stop_hook_reads_turn_error_from_the_transcript_path() {
         )
         .expect("Stop decodes")
         .turn_error()
+        .cloned()
         .expect("the dead turn is detected");
     assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
@@ -88,6 +91,7 @@ fn stop_hook_reads_turn_error_from_the_transcript_path() {
             .decode_hook("Stop", &json!({ "session_id": "sess-1" }))
             .expect("Stop decodes")
             .turn_error()
+            .cloned()
             .is_none(),
         "no transcript path, no marker"
     );
@@ -102,6 +106,7 @@ fn stop_hook_reads_turn_error_from_the_transcript_path() {
             )
             .expect("Stop decodes")
             .turn_error()
+            .cloned()
             .is_none(),
         "an unreadable transcript degrades to no marker"
     );
@@ -130,13 +135,13 @@ fn turn_interrupted_reads_the_tail_from_the_payload_path() {
                     "transcript_path": transcript.to_str().unwrap(),
                 }),
             )
-            .and_then(|context| context.turn_interrupted),
+            .and_then(|observation| observation.context.turn_interrupted),
         Some("2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap())
     );
     assert!(
         ClaudeAdapter
             .observe_context("claude", &json!({ "session_id": "sess-1" }))
-            .is_some_and(|context| context.turn_interrupted.is_none())
+            .is_some_and(|observation| observation.context.turn_interrupted.is_none())
     );
 }
 
@@ -154,6 +159,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
             )
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .expect("marker")
     };
 
@@ -171,6 +177,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
         )
         .expect("test hook decodes")
         .turn_error()
+        .cloned()
         .expect("marker");
     assert_eq!(transient.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(transient.label.as_deref(), Some("API Error: Server Error"));
@@ -186,6 +193,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
         )
         .expect("test hook decodes")
         .turn_error()
+        .cloned()
         .expect("marker");
     assert_eq!(failed.class, TurnErrorClass::Failed);
     assert_eq!(failed.label.as_deref(), Some("API Error: Bad Request"));
@@ -195,6 +203,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
             .decode_hook("StopFailure", &json!({ "session_id": "sess-1" }))
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .is_none(),
         "missing error has no marker"
     );
@@ -209,6 +218,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
             )
             .expect("test hook decodes")
             .turn_error()
+            .cloned()
             .is_none(),
         "only StopFailure carries this marker"
     );
@@ -234,6 +244,7 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(obs.usage.total_tokens, Some(0));
     assert_eq!(obs.usage.context_window, None);
@@ -246,6 +257,7 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(obs.usage.total_tokens, None);
     assert_eq!(obs.usage.context_window, None);
@@ -266,6 +278,7 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         )
         .expect("test hook decodes")
         .lifecycle()
+        .cloned()
         .unwrap();
     assert_eq!(obs.usage.total_tokens, None);
     assert_eq!(obs.usage.context_window, None);

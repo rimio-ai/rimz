@@ -13,6 +13,7 @@ mod session;
 mod statusline;
 mod transcript;
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -28,10 +29,10 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, catalog_contains, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, DecodedHook, HookInstallPreview,
-    HookInstallReport, HookRouting, HookUninstallReport, LocalSessionObservation,
-    LocallyPricedTurnCost, PriceBook, Result, SubagentIdentity, locate_binary, non_empty_trimmed,
-    resolve_subagent_identity, sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, DecodedHook, HookInstallPreview, HookInstallReport,
+    HookRouting, HookUninstallReport, LocalSessionObservation, LocallyPricedTurnCost, PriceBook,
+    Result, SubagentIdentity, locate_binary, non_empty_trimmed, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -277,6 +278,12 @@ const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
 #[derive(Clone, Debug, Default)]
 pub struct CursorAdapter;
 
+fn cursor_project_dir(value: Option<&OsStr>) -> Option<PathBuf> {
+    let value = value.filter(|value| !value.is_empty())?;
+    let path = PathBuf::from(value);
+    path.is_absolute().then_some(path)
+}
+
 #[cfg(feature = "testkit")]
 #[doc(hidden)]
 pub fn discover_local_sessions_under(
@@ -294,6 +301,15 @@ impl AgentAdapter for CursorAdapter {
         &CURSOR_DESCRIPTOR
     }
 
+    fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
+        super::HookIngressDecision::Accept(super::HookIngressAcceptance {
+            owner: super::HookIngressOwner::agent(pid),
+            participant_start: cursor_project_dir(
+                std::env::var_os("CURSOR_PROJECT_DIR").as_deref(),
+            ),
+        })
+    }
+
     fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
         parse_cursor_version(stdout).or_else(|| parse_cursor_version(stderr))
     }
@@ -308,7 +324,7 @@ impl AgentAdapter for CursorAdapter {
             .map(str::trim)
             .filter(|id| !id.is_empty())
             .map(ToOwned::to_owned);
-        decoded.set_routing(HookRouting::new(agent_id.clone(), agent_id, None, None));
+        decoded.set_routing(HookRouting::session(agent_id.map(Into::into)));
         decoded.set_assistant_message(
             (event_name == "afterAgentResponse")
                 .then_some(parsed.text.clone())
@@ -355,11 +371,9 @@ impl AgentAdapter for CursorAdapter {
             "preCompact" => LifecycleSignal::Compacting,
             _ => return Ok(decoded),
         };
-        let mut observation = AgentLifecycleObservation::new(
-            decoded.routing().event_agent_id().map(AgentSessionId::from),
-            signal,
-        )
-        .with_worktree_from_payload(payload);
+        let mut observation =
+            AgentLifecycleObservation::new(decoded.event_agent_id().cloned(), signal)
+                .with_worktree_from_payload(payload);
         let prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.task = prompt.clone();
         observation.prompt = prompt;
@@ -425,9 +439,10 @@ impl AgentAdapter for CursorAdapter {
         self.derive_subagent_observations_under(&home, workspace)
     }
 
-    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         let payload =
             serde_json::from_value::<statusline::StatuslinePayload>(payload.clone()).ok()?;
+        let agent_id = payload.session_id.clone()?;
         let markers = payload
             .session_id
             .as_deref()
@@ -438,7 +453,7 @@ impl AgentAdapter for CursorAdapter {
             context.turn_interrupted = markers.turn_interrupted;
             context.turn_error = markers.turn_error;
         }
-        Some(context)
+        super::ContextObservation::new(agent_id, context)
     }
 
     fn price_turn_locally(

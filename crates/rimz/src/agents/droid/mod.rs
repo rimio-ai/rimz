@@ -220,7 +220,7 @@ impl AgentAdapter for DroidAdapter {
 
     fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
         let Some(pid) = pid else {
-            return super::HookIngressDecision::Accept(super::HookIngressOwner::agent(None));
+            return super::HookIngressDecision::Accept(super::HookIngressAcceptance::agent(None));
         };
         match process::hook_process_disposition(pid) {
             process::HookProcessDisposition::StockTui => {
@@ -228,7 +228,9 @@ impl AgentAdapter for DroidAdapter {
             }
             process::HookProcessDisposition::InternalWorker { owner_pid }
             | process::HookProcessDisposition::Standalone { owner_pid } => {
-                super::HookIngressDecision::Accept(super::HookIngressOwner::agent(Some(owner_pid)))
+                super::HookIngressDecision::Accept(super::HookIngressAcceptance::agent(Some(
+                    owner_pid,
+                )))
             }
         }
     }
@@ -236,11 +238,8 @@ impl AgentAdapter for DroidAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<DecodedHook> {
         let mut decoded = decode_catalog_hook(DROID_HOOKS, event_name, None);
         let agent_id = optional_payload_string(payload, &["session_id"]);
-        decoded.set_routing(HookRouting::new(
-            agent_id.clone(),
-            agent_id.clone(),
-            None,
-            None,
+        decoded.set_routing(HookRouting::session(
+            agent_id.as_deref().map(AgentSessionId::from),
         ));
         let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let signal = match event_name {

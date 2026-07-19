@@ -12,7 +12,7 @@ use super::probes::{self, ProbeCheck};
 use super::protocol::{CanonicalEvent, Envelope};
 use crate::agents::{
     AgentAdapter, AgentStatus, ConcernCoverage, HookCoverage, LifecycleSignal, LifecycleState,
-    RootIdentity, TurnPhase, resolve_root_identity, step,
+    TurnPhase, step,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -295,29 +295,8 @@ fn replay(adapter: &PluginAdapter, path: &Path) -> Result<ReplayCheckReport, Str
             .map_err(|error| error.to_string())?;
 
         if matches!(envelope.event, CanonicalEvent::Context) {
-            let context_agent_id = match resolve_root_identity(
-                adapter.descriptor.kind,
-                event_name,
-                envelope.agent_id.as_deref(),
-                envelope.session_id.as_deref(),
-            ) {
-                RootIdentity::Root {
-                    agent_id: Some(agent_id),
-                } => agent_id,
-                RootIdentity::Root { agent_id: None } | RootIdentity::ForeignChild => {
-                    rejected += 1;
-                    rows.push(rejected_row(
-                        line_number,
-                        event_name,
-                        "context observation has no root agent identity".into(),
-                    ));
-                    continue;
-                }
-            };
-            if adapter
-                .observe_context(adapter.descriptor.kind, &payload)
-                .is_none()
-            {
+            let Some(observation) = adapter.observe_context(adapter.descriptor.kind, &payload)
+            else {
                 rejected += 1;
                 rows.push(rejected_row(
                     line_number,
@@ -325,9 +304,9 @@ fn replay(adapter: &PluginAdapter, path: &Path) -> Result<ReplayCheckReport, Str
                     "context observation rejected".into(),
                 ));
                 continue;
-            }
+            };
             let state = states
-                .get(context_agent_id.as_str())
+                .get(observation.agent_id.as_str())
                 .map(state_label)
                 .unwrap_or_else(|| "unchanged".into());
             rows.push(ReplayRow {

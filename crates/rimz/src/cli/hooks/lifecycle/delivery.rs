@@ -16,7 +16,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
         return Vec::new();
     };
-    let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+    let kind = agent.descriptor().kind_id();
     match store.confirm_delivered_for_card(
         &kind,
         agent_id,
@@ -53,7 +53,7 @@ pub(super) fn record_user_input_for_lifecycle(
     }
     let record = rimz::agents::spending::user_input::UserInputRecord {
         at: jiff::Timestamp::now(),
-        kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        kind: agent.descriptor().kind_id(),
         origin: Some(
             recorded
                 .observation
@@ -106,7 +106,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
             return;
         }
     };
-    let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+    let kind = agent.descriptor().kind_id();
     let agent_name = recorded.observation.agent_name.as_deref();
     let card = rimz::agents::AgentCardRef::new(&kind, agent_id, agent_name);
     if pending.iter().any(|message| {

@@ -27,11 +27,10 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, decode_catalog_entry, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, DecodedHook, HookInstallPreview,
-    HookInstallReport, HookRouting, HookUninstallReport, LocalSessionObservation, Result,
-    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity,
-    SubagentSpawnInput, TranscriptMessage, non_empty_trimmed, resolve_subagent_identity,
-    sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, DecodedHook, HookInstallPreview, HookInstallReport,
+    HookRouting, HookUninstallReport, LocalSessionObservation, Result, SpawnedSubagent,
+    SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
+    TranscriptMessage, non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -373,12 +372,10 @@ impl AgentAdapter for AntigravityAdapter {
             _ => None,
         });
         let fields = decode_lifecycle_fields(event_name, payload, session::latest_prompt);
-        decoded.set_routing(HookRouting::new(
-            fields.agent_id.clone(),
-            fields.agent_id,
-            fields.worktree_path,
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::session(fields.agent_id.map(Into::into))
+                .with_worktree(fields.worktree_path),
+        );
         if event_name == "Stop"
             && let Some(observation) = fields.lifecycle.as_ref()
         {
@@ -465,13 +462,14 @@ impl AgentAdapter for AntigravityAdapter {
         )
     }
 
-    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         if !payload.is_object() {
             return None;
         }
-        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
-            .ok()
-            .map(|payload| payload.into_context(source, Timestamp::now()))
+        let parsed =
+            serde_json::from_value::<statusline::StatuslinePayload>(payload.clone()).ok()?;
+        let agent_id = parsed.conversation_id.clone()?;
+        super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now()))
     }
 
     fn context_cost(&self, payload: &Value, prices: &super::PriceBook) -> Option<super::AgentCost> {

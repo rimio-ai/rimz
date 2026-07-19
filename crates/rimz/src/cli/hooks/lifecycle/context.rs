@@ -55,7 +55,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     if parent_agent_id.is_some() {
         return;
     }
-    if let Some(context_agent_id) = decoded.routing().context_agent_id() {
+    if let Some(context_agent_id) = decoded.context_agent_id().cloned() {
         merge_agent_context_sidecars(ContextSidecarInput {
             workspace,
             store,
@@ -63,7 +63,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
             event_name,
             decoded,
             payload,
-            context_agent_id,
+            context_agent_id: context_agent_id.as_str(),
             model_hint,
             transcript_path,
             turn_ended,
@@ -113,13 +113,13 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
     }
 
-    if let Some(context) = decoded.observed_context() {
+    if let Some(context) = decoded.take_observed_context() {
         let kind = agent.descriptor().kind;
         match rimz::store::agent_context::merge_observed(
             store.runtime_paths(),
             kind,
-            context_agent_id,
-            context,
+            context.agent_id.as_str(),
+            context.context,
         ) {
             Ok(true) => {
                 let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
@@ -372,10 +372,12 @@ mod tests {
             "sessionId": "root-session",
             "cwd": "/tmp/hooks-test"
         });
-        let decoded = adapter
+        let mut decoded = adapter
             .decode_hook("SessionEnd", &payload)
             .expect("session end decodes");
         assert!(decoded.ends_session());
+        let event_name = decoded.event_name().to_owned();
+        let agent_id = decoded.context_agent_id().unwrap().to_string();
 
         let mut context = rimz::agents::AgentContext::new("grok", jiff::Timestamp::now());
         context.model_id = Some("stale-model".to_owned());
@@ -391,10 +393,10 @@ mod tests {
             store: &store,
             agent: &adapter,
             context: LifecycleEventContext {
-                event_name: decoded.event_name(),
-                decoded: &decoded,
+                event_name: &event_name,
+                decoded: &mut decoded,
                 payload: &payload,
-                agent_id: decoded.routing().context_agent_id().unwrap(),
+                agent_id: &agent_id,
                 parent_agent_id: None,
                 model_hint: None,
                 transcript_path: None,

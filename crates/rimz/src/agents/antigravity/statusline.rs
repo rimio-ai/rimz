@@ -13,6 +13,8 @@ use crate::agents::pricing::PriceBook;
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct StatuslinePayload {
+    #[serde(alias = "conversationId")]
+    pub(crate) conversation_id: Option<String>,
     version: Option<String>,
     model: Model,
     context_window: ContextWindow,

@@ -39,6 +39,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_banned_imports(root, &files)?;
     ensure_hook_stdio(root, &files)?;
     ensure_normalized_agent_process_decisions(root, &files)?;
+    ensure_adapter_kinds_stay_typed(root, &files)?;
     ensure_sidebar_renderer_boundaries(root, &files)?;
     ensure_spend_parser_boundaries(root, &files)?;
     ensure_spending_walker_ownership(root, &files)?;
@@ -63,6 +64,42 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_inline_tests_stay_small(&files)?;
+    Ok(())
+}
+
+fn ensure_adapter_kinds_stay_typed(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let cli_root = root.join("crates/rimz/src/cli");
+    let mut offenders = Vec::new();
+    for path in files.iter().filter(|path| {
+        *path == &cli_root.join("supervised.rs")
+            || *path == &cli_root.join("supervised/run.rs")
+            || path.starts_with(cli_root.join("hooks/lifecycle"))
+    }) {
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("read invariant source {}", path.display()))?;
+        let compact = code_without_comments(&source)
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        let mut remainder = compact.as_str();
+        let needle = concat!("AgentKind", "::new_unchecked(");
+        while let Some((_, suffix)) = remainder.split_once(needle) {
+            let statement = suffix
+                .split_once(';')
+                .map_or(suffix, |(statement, _)| statement);
+            if statement.contains(".descriptor().kind") {
+                offenders.push(path.display().to_string());
+                break;
+            }
+            remainder = suffix;
+        }
+    }
+    if !offenders.is_empty() {
+        bail!(
+            "adapter descriptors expose typed kind_id(); keep unchecked kinds at open-set wire boundaries\n{}",
+            offenders.join("\n")
+        );
+    }
     Ok(())
 }
 

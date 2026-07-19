@@ -137,7 +137,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     let argv = rimz::harness::launch::exec_argv(
         &rimz_bin,
         &rimz::harness::launch::ExecRequest {
-            kind: rimz::ids::AgentKind::new_unchecked(args.adapter.descriptor().kind),
+            kind: args.adapter.descriptor().kind_id(),
             action: rimz::harness::launch::ExecAction::Launch {
                 prompt: Some(args.prompt.to_owned()),
                 extra_args: args.permission_args.to_vec(),

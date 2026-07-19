@@ -308,12 +308,10 @@ impl AgentAdapter for OpencodeAdapter {
             _ => None,
         };
         let mut decoded = decode_catalog_hook(OPENCODE_HOOKS, event_name, ask_kind);
-        decoded.set_routing(HookRouting::new(
-            parsed.session_id.clone(),
-            parsed.session_id.clone(),
-            optional_payload_string(payload, &["worktree_path", "cwd"]),
-            None,
-        ));
+        decoded.set_routing(
+            HookRouting::session(parsed.session_id.clone().map(Into::into))
+                .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
+        );
         let questions = if event_name == "question_ask" {
             parsed
                 .questions
