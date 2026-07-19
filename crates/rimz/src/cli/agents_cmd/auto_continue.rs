@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
-use rimz::message::{DeliveryGate, MessageRecord, MessageSender, deliver};
+use rimz::message::{DeliveryGate, deliver};
 use rimz::store::workspace_record;
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimePaths, StatePaths, Store};
@@ -106,15 +106,15 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         } else {
             DeliveryGate::Resume
         };
-        let message = MessageRecord::new(workspace_id, agent, text.to_owned(), true, gate)
-            .with_channel(rimz::harness::target::agent_channel(agent))
-            .with_sender(MessageSender::Human)
-            .with_pane_id(pane_id.clone());
-        let message_id = message.message_id.clone();
-        store
-            .queue_message(&message, &workspace.session_name)
-            .context("queueing auto-continue resume message")?;
-        message_id
+        deliver::queue_nudge(
+            &workspace,
+            &store,
+            agent,
+            text.to_owned(),
+            gate,
+            Some(&pane_id),
+        )
+        .context("queueing auto-continue resume message")?
     };
     let delivered = deliver::deliver_one(
         &workspace,

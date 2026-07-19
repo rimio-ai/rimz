@@ -32,16 +32,16 @@ pub(crate) enum Receipt {
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
 /// state.
-pub struct LiveSend {
+pub(crate) struct LiveSend {
     pub force: bool,
     pub steer: bool,
     pub pacer: Pacer,
 }
 
-pub struct MessageDraft {
-    pub text: String,
+/// Everything one dispatch decides once and every recipient in the fan-out
+/// shares. Text and address vary per recipient and arrive at [`Self::record`].
+pub(crate) struct MessageDraft {
     pub body: MessageBody,
-    pub address: Option<String>,
     pub enter: bool,
     pub gate: DeliveryGate,
     pub sender: MessageSender,
@@ -53,7 +53,7 @@ pub struct MessageDraft {
     pub when: Vec<WhenCondition>,
 }
 
-pub enum Recipient<'a> {
+pub(crate) enum Recipient<'a> {
     Agent {
         agent: &'a AgentState,
         pane: Option<&'a PaneAgent>,
@@ -103,11 +103,14 @@ impl Recipient<'_> {
 }
 
 impl MessageDraft {
-    pub fn into_record(
-        self,
+    /// Stamp this dispatch's decisions onto one recipient's durable record.
+    pub(crate) fn record(
+        &self,
         workspace_id: WorkspaceId,
         recipient: Recipient<'_>,
         scope_channel: Option<&str>,
+        text: &str,
+        address: Option<&str>,
     ) -> MessageRecord {
         let recipient = recipient.into_identity(scope_channel);
         let record = MessageRecord::new_for_card(
@@ -115,20 +118,20 @@ impl MessageDraft {
             recipient.kind,
             recipient.agent_id,
             recipient.agent_name,
-            self.text,
+            text.to_owned(),
             self.enter,
             self.gate,
         )
         .with_body(self.body)
         .with_force(self.force)
-        .with_address(self.address)
+        .with_address(address.map(ToOwned::to_owned))
         .with_channel(recipient.channel)
-        .with_sender(self.sender)
+        .with_sender(self.sender.clone())
         .with_automated(self.automated)
         .with_auto_compact(self.auto_compact)
         .with_not_before(self.not_before)
-        .with_after(self.after)
-        .with_when(self.when);
+        .with_after(self.after.clone())
+        .with_when(self.when.clone());
         match recipient.pane_id {
             Some(pane_id) => record.with_pane_id(pane_id),
             None => record,
@@ -323,9 +326,7 @@ pub fn compact_message_for_target(
         return None;
     }
     let mut record = MessageDraft {
-        text: command.to_owned(),
         body: MessageBody::Command,
-        address: prompt.address.clone(),
         enter: true,
         gate: prompt.gate,
         sender: MessageSender::System,
@@ -336,13 +337,15 @@ pub fn compact_message_for_target(
         after: Vec::new(),
         when: Vec::new(),
     }
-    .into_record(
+    .record(
         prompt.workspace_id.clone(),
         Recipient::Pane {
             pane: target,
             bound,
         },
         prompt.channel.as_deref(),
+        command,
+        prompt.address.as_deref(),
     );
     record.compacted_context_tokens = occupied;
     Some(record)
@@ -380,9 +383,7 @@ mod tests {
 
     fn draft(not_before: Option<jiff::Timestamp>) -> MessageDraft {
         MessageDraft {
-            text: "hello".to_owned(),
             body: MessageBody::Prompt,
-            address: Some("@claude".to_owned()),
             enter: true,
             gate: DeliveryGate::Done,
             sender: MessageSender::Human,
@@ -415,21 +416,25 @@ mod tests {
         let workspace_id = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
         let not_before = jiff::Timestamp::now();
 
-        let live = draft(Some(not_before)).into_record(
+        let live = draft(Some(not_before)).record(
             workspace_id.clone(),
             Recipient::Agent {
                 agent: &agent,
                 pane: Some(&pane),
             },
             None,
+            "hello",
+            Some("@claude"),
         );
-        let parked = draft(Some(not_before)).into_record(
+        let parked = draft(Some(not_before)).record(
             workspace_id,
             Recipient::Agent {
                 agent: &agent,
                 pane: None,
             },
             None,
+            "hello",
+            Some("@claude"),
         );
 
         assert_eq!(live.agent_id, agent.agent_id);
@@ -453,13 +458,15 @@ mod tests {
             Some("/repo/pane-worktree"),
             "terminal_1",
         );
-        let record = draft(None).into_record(
+        let record = draft(None).record(
             workspace_id.clone(),
             Recipient::Pane {
                 pane: &bound_pane,
                 bound: Some(&bound),
             },
             Some("scope"),
+            "hello",
+            Some("@claude"),
         );
         assert_eq!(record.agent_id, bound.agent_id);
         assert_eq!(record.agent_name, bound.name);
@@ -477,26 +484,30 @@ mod tests {
             None,
             "terminal_2",
         );
-        let record = draft(None).into_record(
+        let record = draft(None).record(
             workspace_id.clone(),
             Recipient::Agent {
                 agent: &provisional,
                 pane: Some(&provisional_pane),
             },
             Some("scope"),
+            "hello",
+            Some("@claude"),
         );
         assert_eq!(record.agent_id.as_str(), "launch_pending");
         assert_eq!(record.channel.as_deref(), Some("provisional-channel"));
         assert_eq!(record.pane_id.as_ref(), Some(&provisional_pane.pane_id));
 
         let lazy = pane("codex", None, None, None, Some("/repo/lazy"), "terminal_3");
-        let record = draft(None).into_record(
+        let record = draft(None).record(
             workspace_id.clone(),
             Recipient::Pane {
                 pane: &lazy,
                 bound: None,
             },
             Some("scope"),
+            "hello",
+            Some("@claude"),
         );
         assert_eq!(record.agent_id, synthetic_session_for_pane(&lazy.pane_id));
         assert_eq!(record.channel.as_deref(), Some("lazy"));
@@ -509,26 +520,30 @@ mod tests {
             None,
             "terminal_4",
         );
-        let record = draft(None).into_record(
+        let record = draft(None).record(
             workspace_id.clone(),
             Recipient::Pane {
                 pane: &pane_only,
                 bound: None,
             },
             Some("scope"),
+            "hello",
+            Some("@claude"),
         );
         assert_eq!(record.agent_id.as_str(), "pane-session");
         assert_eq!(record.agent_name.as_deref(), Some("pane-name"));
         assert_eq!(record.channel.as_deref(), Some("scope"));
 
         let fresh = pane("codex", None, None, None, None, "terminal_5");
-        let record = draft(None).into_record(
+        let record = draft(None).record(
             workspace_id,
             Recipient::Pane {
                 pane: &fresh,
                 bound: None,
             },
             Some("explicit"),
+            "hello",
+            Some("@claude"),
         );
         assert_eq!(record.channel.as_deref(), Some("explicit"));
     }

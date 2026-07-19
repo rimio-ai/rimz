@@ -47,26 +47,8 @@ pub(super) fn send_message(
         json,
         any,
     } = flags;
-    let agent_caller = send::agent_caller();
-    if let SendKind::Boundary {
-        schedule,
-        after,
-        when,
-        ..
-    } = &mode
-    {
-        if schedule.is_some() && create {
-            bail!("--schedule needs an existing agent; remove --create");
-        }
-        if !after.is_empty() && create {
-            bail!("--after needs an existing recipient; remove --create");
-        }
-        if !when.is_empty() && create {
-            bail!("--when needs an existing recipient; remove --create");
-        }
-    }
     let wait = send::WaitSpec {
-        mode: send::reply_wait(wait, agent_caller),
+        mode: send::reply_wait(wait, send::agent_caller()),
         any,
         json,
     };
@@ -78,36 +60,8 @@ pub(super) fn send_message(
         }
     );
     send::validate_reply_wait(wait, !no_enter, create, scheduled)?;
-    let machine_config = crate::cli::machine_config();
-    let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
-    let mode = match mode {
-        SendKind::Steer => DispatchMode::Steer {
-            enter: !no_enter,
-            force,
-            auto_compact,
-        },
-        SendKind::Boundary {
-            gate,
-            schedule,
-            after,
-            when,
-        } => {
-            let now = Timestamp::now().to_zoned(machine_config.time_zone());
-            DispatchMode::Boundary {
-                enter: !no_enter,
-                gate,
-                force,
-                auto_compact,
-                not_before: schedule
-                    .as_deref()
-                    .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
-                    .transpose()?,
-                after,
-                when,
-            }
-        }
-    };
+    let mode = dispatch_mode(mode, !no_enter, force, create, smart_compact)?;
     rimz::harness::target::require_mention(&target)?;
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
@@ -137,35 +91,20 @@ pub(super) fn send_message(
     let result = match rimz::message::dispatch::dispatch(workspace, store, request) {
         Ok(result) => result,
         Err(DispatchErr::Recipient(err)) => {
-            if create {
-                return crate::cli::agents_cmd::create_on_miss(
-                    &target,
-                    worktree.as_deref(),
-                    channel_flag.as_deref(),
-                    current_channel.as_deref(),
-                    &text,
-                    globals,
-                );
-            }
-            if matches!(
-                err,
-                TargetErr::NoMatch { .. }
-                    | TargetErr::NoMatchInChannel { .. }
-                    | TargetErr::PaneUnbound { .. }
-            ) {
-                store.record_unresolved_message(rimz::store::UnresolvedMessage {
-                    workspace_id: workspace.workspace_id.clone(),
-                    session_name: &workspace.session_name,
-                    address: &target,
-                    channel: current_channel.as_deref(),
+            return recipient_miss(
+                &ctx,
+                RecipientMiss {
+                    target: &target,
+                    text: &text,
                     sender: &sender,
-                    text_len: text.len(),
-                    reason: "receiver not found",
-                })?;
-            }
-            let snapshot = store.snapshot_cached()?;
-            let mapped = map_queue_target_err(&target, err);
-            return message_miss(&snapshot, current_channel.as_deref(), &mapped);
+                    worktree: worktree.as_deref(),
+                    channel_flag: channel_flag.as_deref(),
+                    current_channel: current_channel.as_deref(),
+                    create,
+                },
+                err,
+                globals,
+            );
         }
         Err(err) => return Err(map_dispatch_err(err)),
     };
@@ -188,6 +127,107 @@ pub(super) fn send_message(
         &result.outcomes,
         &result.compacted,
     )
+}
+
+/// Validate the flag combinations a send mode forbids, then resolve it into the
+/// domain dispatch mode.
+fn dispatch_mode(
+    mode: SendKind,
+    enter: bool,
+    force: bool,
+    create: bool,
+    smart_compact: Option<AutoCompact>,
+) -> Result<DispatchMode> {
+    let machine_config = crate::cli::machine_config();
+    let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
+    let SendKind::Boundary {
+        gate,
+        schedule,
+        after,
+        when,
+    } = mode
+    else {
+        return Ok(DispatchMode::Steer {
+            enter,
+            force,
+            auto_compact,
+        });
+    };
+    if create {
+        if schedule.is_some() {
+            bail!("--schedule needs an existing agent; remove --create");
+        }
+        if !after.is_empty() {
+            bail!("--after needs an existing recipient; remove --create");
+        }
+        if !when.is_empty() {
+            bail!("--when needs an existing recipient; remove --create");
+        }
+    }
+    let now = Timestamp::now().to_zoned(machine_config.time_zone());
+    Ok(DispatchMode::Boundary {
+        enter,
+        gate,
+        force,
+        auto_compact,
+        not_before: schedule
+            .as_deref()
+            .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
+            .transpose()?,
+        after,
+        when,
+    })
+}
+
+/// The addressing context a recipient miss needs to recover or explain itself.
+struct RecipientMiss<'a> {
+    target: &'a str,
+    text: &'a str,
+    sender: &'a MessageSender,
+    worktree: Option<&'a str>,
+    channel_flag: Option<&'a str>,
+    current_channel: Option<&'a str>,
+    create: bool,
+}
+
+/// Recover from an address that matched no recipient: create the agent on
+/// demand, record the bounce, then present the miss with the available agents.
+fn recipient_miss(
+    ctx: &Ctx,
+    miss: RecipientMiss<'_>,
+    err: TargetErr,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let (workspace, store) = (&ctx.workspace, &ctx.store);
+    if miss.create {
+        return crate::cli::agents_cmd::create_on_miss(
+            miss.target,
+            miss.worktree,
+            miss.channel_flag,
+            miss.current_channel,
+            miss.text,
+            globals,
+        );
+    }
+    if matches!(
+        err,
+        TargetErr::NoMatch { .. }
+            | TargetErr::NoMatchInChannel { .. }
+            | TargetErr::PaneUnbound { .. }
+    ) {
+        store.record_unresolved_message(rimz::store::UnresolvedMessage {
+            workspace_id: workspace.workspace_id.clone(),
+            session_name: &workspace.session_name,
+            address: miss.target,
+            channel: miss.current_channel,
+            sender: miss.sender,
+            text_len: miss.text.len(),
+            reason: "receiver not found",
+        })?;
+    }
+    let snapshot = store.snapshot_cached()?;
+    let mapped = map_queue_target_err(miss.target, err);
+    message_miss(&snapshot, miss.current_channel, &mapped)
 }
 
 fn map_dispatch_err(err: DispatchErr) -> anyhow::Error {

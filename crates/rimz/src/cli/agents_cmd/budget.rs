@@ -9,7 +9,7 @@ use super::{Ctx, GlobalFlags};
 use rimz::harness::budget::{
     BudgetLedger, BudgetSpec, BudgetWindow, DayBaseline, read_ledger, total_cost_usd, write_ledger,
 };
-use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
+use rimz::message::DeliveryGate;
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -105,18 +105,15 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             .auto_continue_text
             .clone();
         if !text.trim().is_empty() {
-            let message = MessageRecord::new(
-                workspace.workspace_id.clone(),
+            rimz::message::deliver::queue_nudge(
+                workspace,
+                store,
                 agent,
                 text,
-                true,
                 DeliveryGate::Done,
+                None,
             )
-            .with_channel(rimz::harness::target::agent_channel(agent))
-            .with_sender(MessageSender::Human);
-            store
-                .queue_message(&message, &workspace.session_name)
-                .context("queueing budget continue prompt")?;
+            .context("queueing budget continue prompt")?;
         }
     }
     render_budget(agent, Some(&ledger), launched)

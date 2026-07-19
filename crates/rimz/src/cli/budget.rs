@@ -13,7 +13,7 @@ use rimz::harness::budget::{
     BudgetSpec, BudgetWindow, DailyBudgetScope, read_scope_state, scope_interrupted,
 };
 use rimz::ids::AgentKind;
-use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
+use rimz::message::DeliveryGate;
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -78,18 +78,15 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             && !args.no_continue
             && !continue_text.is_empty()
         {
-            let message = MessageRecord::new(
-                workspace.workspace_id.clone(),
+            rimz::message::deliver::queue_nudge(
+                workspace,
+                store,
                 agent,
                 continue_text.to_owned(),
-                true,
                 DeliveryGate::Done,
+                None,
             )
-            .with_channel(rimz::harness::target::agent_channel(agent))
-            .with_sender(MessageSender::Human);
-            store
-                .queue_message(&message, &workspace.session_name)
-                .context("queueing budget continue prompt")?;
+            .context("queueing budget continue prompt")?;
         }
     }
 

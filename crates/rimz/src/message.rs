@@ -874,29 +874,25 @@ pub fn delivery_checkpoint(signal: &LifecycleSignal) -> bool {
     )
 }
 
-pub fn settle_duration_from_env() -> Duration {
-    std::env::var(SETTLE_ENV)
+fn env_ms(key: &str) -> Option<Duration> {
+    std::env::var(key)
+        .ok()?
+        .parse::<u64>()
         .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
         .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_SETTLE)
+}
+
+pub fn settle_duration_from_env() -> Duration {
+    env_ms(SETTLE_ENV).unwrap_or(DEFAULT_SETTLE)
 }
 
 /// Spacing between discrete message pane writes.
 pub fn message_interval_from_env() -> Duration {
-    std::env::var(MESSAGE_INTERVAL_ENV)
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_MESSAGE_INTERVAL)
+    env_ms(MESSAGE_INTERVAL_ENV).unwrap_or(DEFAULT_MESSAGE_INTERVAL)
 }
 
 pub fn delivery_window_from_env() -> Duration {
-    std::env::var(DELIVERY_WINDOW_ENV)
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_DELIVERY_WINDOW)
+    env_ms(DELIVERY_WINDOW_ENV).unwrap_or(DEFAULT_DELIVERY_WINDOW)
 }
 
 pub fn max_delivery_attempts_from_env() -> u32 {

@@ -276,7 +276,14 @@ pub fn dispatch(
         channel: request.current_channel.as_deref(),
         rollup_only,
     };
-    let mode = prepare_mode(request.mode, resolution, &targets, &pending)?;
+    let mode = prepare_mode(
+        request.mode,
+        resolution,
+        &targets,
+        &pending,
+        &request.sender,
+        request.automated,
+    )?;
     let reply_join = request.reply.as_ref().map(|reply| reply.join);
     let reply_preparation = request
         .reply
@@ -305,8 +312,6 @@ pub fn dispatch(
         pending: &mut pending,
         track_pending: boundary,
         scope_channel: request.current_channel.as_deref(),
-        sender: &request.sender,
-        automated: request.automated,
         reply_wait: reply_preparation.is_some(),
         in_reply_to: &in_reply_to,
     };
@@ -488,13 +493,7 @@ fn agent_needs_live_resolution(
 
 struct PreparedMode {
     steer: bool,
-    enter: bool,
-    force: bool,
-    auto_compact: Option<AutoCompact>,
-    gate: DeliveryGate,
-    not_before: Option<Timestamp>,
-    after: Vec<AfterCondition>,
-    when: Vec<WhenCondition>,
+    draft: send::MessageDraft,
 }
 
 #[derive(Clone, Copy)]
@@ -511,6 +510,8 @@ fn prepare_mode(
     resolution: ResolutionView<'_>,
     recipients: &[ResolvedTarget],
     pending: &[MessageRecord],
+    sender: &MessageSender,
+    automated: bool,
 ) -> Result<PreparedMode> {
     match mode {
         DispatchMode::Steer {
@@ -519,13 +520,18 @@ fn prepare_mode(
             auto_compact,
         } => Ok(PreparedMode {
             steer: true,
-            enter,
-            force,
-            auto_compact,
-            gate: DeliveryGate::Any,
-            not_before: None,
-            after: Vec::new(),
-            when: Vec::new(),
+            draft: send::MessageDraft {
+                body: MessageBody::Prompt,
+                enter,
+                gate: DeliveryGate::Any,
+                sender: sender.clone(),
+                automated,
+                force,
+                auto_compact,
+                not_before: None,
+                after: Vec::new(),
+                when: Vec::new(),
+            },
         }),
         DispatchMode::Boundary {
             enter,
@@ -537,13 +543,18 @@ fn prepare_mode(
             when,
         } => Ok(PreparedMode {
             steer: false,
-            enter,
-            force,
-            auto_compact,
-            gate,
-            not_before,
-            after: resolve_after(resolution, recipients, &after, gate, pending)?,
-            when: resolve_when(resolution, &when)?,
+            draft: send::MessageDraft {
+                body: MessageBody::Prompt,
+                enter,
+                gate,
+                sender: sender.clone(),
+                automated,
+                force,
+                auto_compact,
+                not_before,
+                after: resolve_after(resolution, recipients, &after, gate, pending)?,
+                when: resolve_when(resolution, &when)?,
+            },
         }),
     }
 }
@@ -697,8 +708,6 @@ struct DispatchState<'a> {
     pending: &'a mut Vec<MessageRecord>,
     track_pending: bool,
     scope_channel: Option<&'a str>,
-    sender: &'a MessageSender,
-    automated: bool,
     reply_wait: bool,
     in_reply_to: &'a [MessageId],
 }
@@ -724,11 +733,14 @@ impl DispatchState<'_> {
                 });
             }
         };
-        let message = draft(self, text, mode, handle)
-            .into_record(
+        let message = mode
+            .draft
+            .record(
                 self.workspace.workspace_id.clone(),
                 recipient,
                 self.scope_channel,
+                text,
+                Some(handle),
             )
             .with_reply_wait(self.reply_wait)
             .with_in_reply_to(self.in_reply_to.to_vec());
@@ -750,7 +762,7 @@ fn dispatch_targets(
         .map(|target| should_park(state, target, mode, now))
         .collect::<Vec<_>>();
     let mut live_send = send::LiveSend {
-        force: mode.force,
+        force: mode.draft.force,
         steer: mode.steer,
         pacer: send::Pacer::new(message_interval_from_env()),
     };
@@ -792,12 +804,17 @@ fn should_park(
     if mode.steer {
         return target.pane.is_none();
     }
-    mode.not_before.is_some()
+    mode.draft.not_before.is_some()
         || !mode
+            .draft
             .after
             .iter()
             .all(|condition| condition.met_at.is_some())
-        || !mode.when.iter().all(|condition| condition.met_at.is_some())
+        || !mode
+            .draft
+            .when
+            .iter()
+            .all(|condition| condition.met_at.is_some())
         || !target_receivable_now(state, target, mode, now)
 }
 
@@ -809,7 +826,8 @@ fn target_receivable_now(
 ) -> bool {
     if target.pane.is_none()
         || target.bound(state.snapshot).is_some_and(|agent| {
-            !deliver::receiver_readiness(agent, mode.gate, mode.force, now).accepts_prompt()
+            !deliver::receiver_readiness(agent, mode.draft.gate, mode.draft.force, now)
+                .accepts_prompt()
         })
     {
         return false;
@@ -846,7 +864,9 @@ fn dispatch_one(
     let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
     let message_id = message.message_id.clone();
     let policy = if mode.steer {
-        deliver::DeliveryPolicy::Steer { force: mode.force }
+        deliver::DeliveryPolicy::Steer {
+            force: mode.draft.force,
+        }
     } else {
         deliver::DeliveryPolicy::Boundary
     };
@@ -911,28 +931,6 @@ fn dispatch_parked(
         label: handle,
         message_id,
     })
-}
-
-fn draft(
-    state: &DispatchState<'_>,
-    text: &str,
-    mode: &PreparedMode,
-    handle: &str,
-) -> send::MessageDraft {
-    send::MessageDraft {
-        text: text.to_owned(),
-        body: MessageBody::Prompt,
-        address: Some(handle.to_owned()),
-        enter: mode.enter,
-        gate: mode.gate,
-        sender: state.sender.clone(),
-        automated: state.automated,
-        force: mode.force,
-        auto_compact: mode.auto_compact,
-        not_before: mode.not_before,
-        after: mode.after.clone(),
-        when: mode.when.clone(),
-    }
 }
 
 fn push_pending(state: &mut DispatchState<'_>, message: MessageRecord) {

@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 
 use rimz::harness::run::RunRecord;
 use rimz::harness::schedule::runner::{CheckEcho, CheckOutcome, run_check};
-use rimz::message::{DeliveryGate, MessageRecord, MessageSender, deliver};
+use rimz::message::{DeliveryGate, deliver};
 
 use super::pane;
 
@@ -35,27 +35,13 @@ pub(crate) fn deliver_reprompt(
         .iter()
         .find(|agent| agent.kind == record.kind && &agent.agent_id == agent_id)
         .context("verify re-prompt target agent is no longer in the rollup")?;
-    let message = MessageRecord::new(
-        workspace.workspace_id.clone(),
-        agent,
-        text,
-        true,
-        DeliveryGate::Any,
-    )
-    .with_channel(rimz::harness::target::agent_channel(agent))
-    .with_sender(MessageSender::Human)
-    .with_pane_id(pane.pane_id.clone());
-    let message_id = message.message_id.clone();
-    store
-        .queue_message(&message, &workspace.session_name)
-        .context("queueing verify re-prompt")?;
-    let delivered = deliver::deliver_one(
+    let (_, delivered) = deliver::nudge_now(
         workspace,
         store,
-        &message_id,
-        Duration::ZERO,
-        Some(pane.pane_id.mux()),
-        deliver::DeliveryPolicy::Boundary,
+        agent,
+        text,
+        DeliveryGate::Any,
+        &pane.pane_id,
     )
     .context("delivering verify re-prompt")?;
     if !delivered {

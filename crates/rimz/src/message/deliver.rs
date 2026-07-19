@@ -134,6 +134,62 @@ pub enum DeliveryVerdict {
     Ready,
 }
 
+/// The record a system-initiated nudge queues against an agent card: budget
+/// continues, auto-continue resumes, and supervised verify re-prompts. A nudge
+/// carries the agent's channel, always submits, and rides a human sender so the
+/// receiver treats the text as ordinary input; its gate marks the automation.
+fn nudge_record(
+    workspace_id: crate::ids::WorkspaceId,
+    agent: &crate::agents::AgentState,
+    text: String,
+    gate: DeliveryGate,
+    pane_id: Option<&PaneId>,
+) -> MessageRecord {
+    let record = MessageRecord::new(workspace_id, agent, text, true, gate)
+        .with_channel(crate::harness::target::agent_channel(agent))
+        .with_sender(crate::message::MessageSender::Human);
+    match pane_id {
+        Some(pane_id) => record.with_pane_id(pane_id.clone()),
+        None => record,
+    }
+}
+
+/// Queue a system-initiated nudge against an agent card.
+pub fn queue_nudge(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &crate::agents::AgentState,
+    text: String,
+    gate: DeliveryGate,
+    pane_id: Option<&PaneId>,
+) -> Result<MessageId> {
+    let message = nudge_record(workspace.workspace_id.clone(), agent, text, gate, pane_id);
+    store.queue_message(&message, &workspace.session_name)?;
+    Ok(message.message_id)
+}
+
+/// Queue a nudge against a known pane and attempt boundary delivery in the same
+/// pass. Returns the record id and whether the attempt delivered.
+pub fn nudge_now(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &crate::agents::AgentState,
+    text: String,
+    gate: DeliveryGate,
+    pane_id: &PaneId,
+) -> Result<(MessageId, bool)> {
+    let message_id = queue_nudge(workspace, store, agent, text, gate, Some(pane_id))?;
+    let delivered = deliver_one(
+        workspace,
+        store,
+        &message_id,
+        Duration::ZERO,
+        Some(pane_id.mux()),
+        DeliveryPolicy::Boundary,
+    )?;
+    Ok((message_id, delivered))
+}
+
 pub fn deliver_one(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -440,15 +496,9 @@ impl DeliveryCheck {
         self.gate.open && self.gate.resume_recovered != Some(false)
     }
 
+    /// Derived from [`Self::verdict`] so the gate ordering has one home.
     pub fn passes(&self) -> bool {
-        self.schedule.ready
-            && self.after.iter().all(|condition| condition.met)
-            && self.when.iter().all(|condition| condition.met)
-            && self.fifo.head
-            && self.agent.present
-            && self.gate_ready()
-            && !self.ask.waiting
-            && self.pane.present
+        self.verdict() == DeliveryVerdict::Ready
     }
 
     pub fn verdict(&self) -> DeliveryVerdict {
@@ -893,6 +943,41 @@ mod tests {
         waiting.waiting_since = Some(waiting.last_activity);
         assert!(!receiver_readiness(&waiting, DeliveryGate::Done, false, now).accepts_prompt());
         assert!(receiver_readiness(&waiting, DeliveryGate::Done, true, now).accepts_prompt());
+    }
+
+    #[test]
+    fn nudge_record_rides_a_human_sender_and_carries_the_agents_channel() {
+        let mut agent = agent("sess-parked", AgentStatus::Paused);
+        agent.channel = Some("auth".to_owned());
+        let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_4");
+
+        let resume = nudge_record(
+            workspace_id(),
+            &agent,
+            "continue".to_owned(),
+            DeliveryGate::Resume,
+            Some(&pane_id),
+        );
+        // A resume nudge is system-initiated but must reach the agent as
+        // ordinary input, so it rides a human sender while its gate keeps it
+        // out of `is_user_input`.
+        assert_eq!(resume.sender, crate::message::MessageSender::Human);
+        assert!(!resume.is_user_input());
+        assert!(resume.enter, "a nudge always submits");
+        assert_eq!(resume.gate, DeliveryGate::Resume);
+        assert_eq!(resume.channel.as_deref(), Some("auth"));
+        assert_eq!(resume.pane_id.as_ref(), Some(&pane_id));
+        assert_eq!(resume.status, MessageStatus::Queued);
+
+        let parked = nudge_record(
+            workspace_id(),
+            &agent,
+            "continue".to_owned(),
+            DeliveryGate::Done,
+            None,
+        );
+        assert_eq!(parked.pane_id, None);
+        assert_eq!(parked.gate, DeliveryGate::Done);
     }
 
     #[test]
