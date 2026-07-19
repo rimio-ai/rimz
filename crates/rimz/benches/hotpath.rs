@@ -155,6 +155,23 @@ fn fuse_fixture() -> FuseFixture {
     }
 }
 
+fn owned_fuse_fixture() -> FuseFixture {
+    let SnapshotFixture {
+        _workspace,
+        snapshot,
+    } = snapshot_fixture();
+    let now_ms = snapshot
+        .panes_produced_at_ms
+        .unwrap_or_else(rimz::sidebar::timing::unix_now_ms)
+        .saturating_add(1);
+    FuseFixture {
+        _workspace,
+        snapshot,
+        events: rimz::sidebar::events::EventStore::default(),
+        now_ms,
+    }
+}
+
 fn enrich_fixture() -> EnrichFixture {
     let workspace = BenchWorkspace::new();
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
@@ -379,6 +396,20 @@ fn fuse(bencher: Bencher) {
 }
 
 #[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
+fn fuse_owned_no_overlay(bencher: Bencher) {
+    bencher
+        .with_inputs(owned_fuse_fixture)
+        .bench_local_values(|fixture| {
+            divan::black_box(rimz::sidebar::fuse::fuse_owned(
+                fixture.snapshot,
+                &fixture.events,
+                None,
+                fixture.now_ms,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
 fn rollup_fold_warm(bencher: Bencher) {
     bencher
         .with_inputs(fold_fixture)
@@ -543,6 +574,19 @@ fn spending_live_scale_warm_discovery_inclusive(bencher: Bencher) {
                 &fixture.cache_path,
                 &req,
                 &mut rimz::agents::spending::SilentWalk,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 10, sample_size = 1, skip_ext_time)]
+fn spending_live_scale_warm_discovery_only(bencher: Bencher) {
+    bencher
+        .with_inputs(|| spending_discovery_fixture(true))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(fixture.walker.discover_declared_spending_files(
+                &rimz::agents::ClaudeAdapter,
+                fixture.sources,
+                SPENDING_NOW_SECS,
             ));
         });
 }
