@@ -659,9 +659,28 @@ pub struct LayoutColumn {
     pub stacked: bool,
 }
 
+impl LayoutColumn {
+    fn split_leading(&self, program: &str) -> Result<(&PaneCmd, &[PaneCmd])> {
+        self.panes.split_first().ok_or_else(|| MuxErr::Output {
+            program: program.to_owned(),
+            reason: "tab layout has an empty column".to_owned(),
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutPanes {
     pub columns: Vec<LayoutColumn>,
+}
+
+impl LayoutPanes {
+    fn leading_pane(&self, program: &str) -> Result<&PaneCmd> {
+        let (column, _) = self.columns.split_first().ok_or_else(|| MuxErr::Output {
+            program: program.to_owned(),
+            reason: "tab layout has no columns".to_owned(),
+        })?;
+        column.split_leading(program).map(|(pane, _)| pane)
+    }
 }
 
 #[derive(Clone, Debug)]

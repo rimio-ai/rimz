@@ -766,18 +766,7 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {
-        let Some((first_column, _)) = opts.panes.columns.split_first() else {
-            return Err(MuxErr::Output {
-                program: "tmux".to_owned(),
-                reason: "tab layout has no columns".to_owned(),
-            });
-        };
-        let Some((first, _)) = first_column.panes.split_first() else {
-            return Err(MuxErr::Output {
-                program: "tmux".to_owned(),
-                reason: "tab layout has an empty column".to_owned(),
-            });
-        };
+        let first = opts.panes.leading_pane("tmux")?;
         let opened = self.open_named_window(
             &opts.sidebar.session_name,
             &opts.title,
@@ -869,12 +858,7 @@ impl TmuxBackend {
         let Some((first_column, rest_columns)) = panes.columns.split_first() else {
             return Ok(());
         };
-        let Some((_, first_column_rest)) = first_column.panes.split_first() else {
-            return Err(MuxErr::Output {
-                program: "tmux".to_owned(),
-                reason: "tab layout has an empty column".to_owned(),
-            });
-        };
+        let (_, first_column_rest) = first_column.split_leading("tmux")?;
         let mut column_anchors = vec![first_pane.to_owned()];
         let mut previous_in_column = first_pane.to_owned();
         for pane in first_column_rest {
@@ -883,12 +867,7 @@ impl TmuxBackend {
         }
         for column in rest_columns {
             // tmux has no native stack, so stacked columns use tiled rows.
-            let Some((top, rows)) = column.panes.split_first() else {
-                return Err(MuxErr::Output {
-                    program: "tmux".to_owned(),
-                    reason: "tab layout has an empty column".to_owned(),
-                });
-            };
+            let (top, rows) = column.split_leading("tmux")?;
             let target = column_anchors
                 .last()
                 .cloned()

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ids::MuxName;
 use crate::mux::{
-    BackgroundViewOptions, DaemonView, HostPane, MuxErr, PaneCmd, Result, ResumeTab,
+    BackgroundViewOptions, DaemonView, HostPane, LayoutColumn, MuxErr, Result, ResumeTab,
     SidebarPaneOptions, TabOptions, sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
@@ -159,13 +159,7 @@ pub(super) fn render_session_layout(
             let mut focused = false;
             let mut columns = String::new();
             for column in &tab.layout.columns {
-                columns.push_str(&render_tab_column(
-                    &column.panes,
-                    column.stacked,
-                    &tab.cwd,
-                    &mut focused,
-                    16,
-                )?);
+                columns.push_str(&render_tab_column(column, &tab.cwd, &mut focused, 16)?);
             }
             columns
         };
@@ -255,12 +249,7 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
 /// pane shares `opts.sidebar.cwd`. The sidebar uses the percentage derived from the
 /// current live target because Zellij resize-pins fixed-size layout panes.
 pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Result<String> {
-    if opts.panes.columns.is_empty() {
-        return Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: "tab layout has no columns".to_owned(),
-        });
-    }
+    opts.panes.leading_pane("zellij")?;
     if !opts.dock_sidebar {
         return render_undocked_tab_layout(opts);
     }
@@ -269,8 +258,7 @@ pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Resu
     let mut columns = String::new();
     for column in &opts.panes.columns {
         columns.push_str(&render_tab_column(
-            &column.panes,
-            column.stacked,
+            column,
             &opts.sidebar.cwd,
             &mut focused,
             12,
@@ -291,8 +279,7 @@ fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
     let mut columns = String::new();
     for column in &opts.panes.columns {
         columns.push_str(&render_tab_column(
-            &column.panes,
-            column.stacked,
+            column,
             &opts.sidebar.cwd,
             &mut focused,
             8,
@@ -418,48 +405,40 @@ fn render_plain_terminal_pane(indent: usize) -> String {
 }
 
 fn render_tab_column(
-    column: &[PaneCmd],
-    stacked: bool,
+    column: &LayoutColumn,
     cwd: &Path,
     focused: &mut bool,
     indent: usize,
 ) -> Result<String> {
-    match column {
-        [] => Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: "tab layout has an empty column".to_owned(),
-        }),
-        [pane] => {
-            let focus = !*focused;
-            *focused = true;
-            render_command_pane(&pane.argv, cwd, focus, indent, None)
-        }
-        rows => {
-            let mut rendered = String::new();
-            for pane in rows {
-                let focus = !*focused;
-                *focused = true;
-                rendered.push_str(&render_command_pane(
-                    &pane.argv,
-                    cwd,
-                    focus,
-                    indent + 4,
-                    None,
-                )?);
-            }
-            let base = " ".repeat(indent);
-            let container = if stacked {
-                r#"pane stacked=true"#
-            } else {
-                r#"pane split_direction="horizontal""#
-            };
-            Ok(format!(
-                r#"{base}{container} {{
+    let (first, rows) = column.split_leading("zellij")?;
+    if rows.is_empty() {
+        let focus = !*focused;
+        *focused = true;
+        return render_command_pane(&first.argv, cwd, focus, indent, None);
+    }
+    let mut rendered = String::new();
+    for pane in std::iter::once(first).chain(rows) {
+        let focus = !*focused;
+        *focused = true;
+        rendered.push_str(&render_command_pane(
+            &pane.argv,
+            cwd,
+            focus,
+            indent + 4,
+            None,
+        )?);
+    }
+    let base = " ".repeat(indent);
+    let container = if column.stacked {
+        r#"pane stacked=true"#
+    } else {
+        r#"pane split_direction="horizontal""#
+    };
+    Ok(format!(
+        r#"{base}{container} {{
 {rendered}{base}}}
 "#,
-            ))
-        }
-    }
+    ))
 }
 
 /// One command pane in a tab's right side (`argv` run in `cwd`), indented to

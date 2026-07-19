@@ -1,6 +1,6 @@
 use super::*;
 use crate::ids::WorkspaceId;
-use crate::mux::SidebarWidth;
+use crate::mux::{PaneCmd, SidebarWidth};
 
 fn sidebar_opts(
     session_name: &str,
