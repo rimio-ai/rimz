@@ -47,9 +47,7 @@ impl FromStr for PortForward {
             return Err(PortForwardError::Empty);
         }
         let mut parts = spec.split(':');
-        let Some(first) = parts.next() else {
-            return Err(PortForwardError::Empty);
-        };
+        let first = parts.next().unwrap_or(spec);
         let second = parts.next();
         if parts.next().is_some() {
             return Err(PortForwardError::TooManySegments(spec.to_owned()));
