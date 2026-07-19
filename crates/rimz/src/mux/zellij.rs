@@ -696,4 +696,4 @@ impl ZellijBackend {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

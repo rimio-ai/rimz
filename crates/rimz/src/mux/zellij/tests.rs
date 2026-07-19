@@ -2,6 +2,10 @@ use super::*;
 
 #[cfg(unix)]
 use super::backend::reconcile_pane;
+pub(crate) mod support;
+
+#[cfg(unix)]
+use self::support::{command_count, shim_log, zellij_shim};
 
 #[cfg(unix)]
 use crate::config::MultiplexerConfig;
@@ -146,30 +150,6 @@ fn reconcile_mapping_classifies_native_sidebar_daemon_and_work_panes() {
     assert_eq!(mapped[2].role, ReconcilePaneRole::DaemonHost);
     assert_eq!(mapped[3].role, ReconcilePaneRole::Working);
     assert!(reconcile_pane(&plugin).is_none());
-}
-
-#[cfg(unix)]
-fn zellij_shim(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::TempDir::new().expect("tempdir");
-    let shim = temp.path().join("zellij");
-    let mut file = std::fs::File::create(&shim).expect("create shim");
-    file.write_all(script.as_bytes()).expect("write shim");
-    let mut perms = file.metadata().expect("shim metadata").permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&shim, perms).expect("chmod shim");
-    (temp, shim)
-}
-
-#[cfg(unix)]
-fn shim_log(temp: &tempfile::TempDir) -> String {
-    std::fs::read_to_string(temp.path().join("zellij.log")).unwrap_or_default()
-}
-
-fn command_count(log: &str, command: &str) -> usize {
-    log.lines().filter(|line| line.contains(command)).count()
 }
 
 fn option_map(args: &[String]) -> std::collections::BTreeMap<&str, &str> {

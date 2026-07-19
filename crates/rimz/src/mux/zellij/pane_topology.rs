@@ -407,222 +407,116 @@ mod tests {
         );
     }
 
+    /// The topology cache is a wire format shared with the
+    /// `rimz-presence-zellij` wasm plugin, which keeps its own deployment
+    /// lifetime: a running older plugin writes payloads this host must read, and
+    /// a newer plugin writes fields an older host must tolerate. Each row parses
+    /// a payload, re-serializes it, and checks every pointer survives the trip —
+    /// `None` meaning the key must not be emitted at all.
     #[test]
-    fn topology_without_focus_resolution_parses() {
-        let cache: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "panes": []
-            }"#,
-        )
-        .expect("topology parses");
+    fn topology_wire_format_survives_plugin_generation_skew() {
+        use serde_json::{Value, json};
 
-        assert_eq!(cache.focused_pane, None);
-        assert_eq!(cache.writer, None);
-        assert_eq!(cache.clients, None);
-    }
+        /// Pointers into the re-serialized payload, each with the value it must
+        /// carry — `None` when the key must not be emitted at all.
+        type Pointers<'a> = &'a [(&'a str, Option<Value>)];
 
-    #[test]
-    fn topology_focus_resolution_round_trips() {
-        let cache: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "focused_pane": 7,
-                "panes": []
-            }"#,
-        )
-        .expect("topology parses");
-
-        assert_eq!(cache.focused_pane, Some(7));
-        let encoded = serde_json::to_value(&cache).expect("topology serializes");
-        assert_eq!(encoded["focused_pane"], 7);
-    }
-
-    #[test]
-    fn topology_writer_round_trips_and_legacy_payloads_parse() {
-        let cache: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "writer": { "plugin_id": 9, "loaded_at_ms": 1000 },
-                "panes": []
-            }"#,
-        )
-        .expect("topology parses");
-
-        assert_eq!(
-            cache.writer,
-            Some(TopologyWriter {
-                plugin_id: 9,
-                loaded_at_ms: 1000,
-                build: None,
-                config: None,
-            }),
-        );
-        let encoded = serde_json::to_value(&cache).expect("topology serializes");
-        assert_eq!(encoded["writer"]["plugin_id"], 9);
-        assert_eq!(encoded["writer"]["loaded_at_ms"], 1000);
-        assert!(encoded["writer"].get("build").is_none());
-        assert!(encoded["writer"].get("config").is_none());
-
-        let mut current = cache;
-        let writer = current.writer.as_mut().unwrap();
-        writer.build = Some("wasm-build".to_owned());
-        writer.config = Some("config-hash".to_owned());
-        let encoded = serde_json::to_value(current).expect("current topology serializes");
-        assert_eq!(encoded["writer"]["build"], "wasm-build");
-        assert_eq!(encoded["writer"]["config"], "config-hash");
-    }
-
-    #[test]
-    fn topology_clients_round_trip_and_legacy_payloads_parse() {
-        let cache: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "clients": {
-                    "human_clients": 2,
-                    "viewed_panes": [7],
-                    "views": [
-                        { "client_id": 3, "pane_id": { "kind": "terminal", "id": 7 } },
-                        { "client_id": 4, "pane_id": { "kind": "plugin", "id": 9 } }
-                    ]
-                },
-                "panes": []
-            }"#,
-        )
-        .expect("topology parses");
-
-        assert_eq!(
-            cache.clients,
-            Some(TopologyClients {
-                human_clients: Some(2),
-                viewed_panes: Some(vec![7]),
-                views: vec![
-                    TopologyClientView {
-                        client_id: 3,
-                        pane_id: ZellijPaneId::Terminal(7),
-                    },
-                    TopologyClientView {
-                        client_id: 4,
-                        pane_id: ZellijPaneId::Plugin(9),
-                    },
+        let cases: &[(&str, &str, Pointers)] = &[
+            (
+                "a legacy payload leaves every optional absent",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"panes":[{"id":7,"tab_position":0}]}"#,
+                &[
+                    ("/focused_pane", None),
+                    ("/writer", None),
+                    ("/clients", None),
+                    ("/panes/0/pane_pid", None),
+                    ("/panes/0/pane_cwd", None),
                 ],
-            }),
-        );
-        let encoded = serde_json::to_value(&cache).expect("topology serializes");
-        assert_eq!(encoded["clients"]["human_clients"], 2);
-        assert_eq!(encoded["clients"]["viewed_panes"], serde_json::json!([7]));
-        assert_eq!(encoded["clients"]["views"][1]["pane_id"]["kind"], "plugin");
+            ),
+            (
+                "the focused pane round-trips",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"focused_pane":7,"panes":[]}"#,
+                &[("/focused_pane", Some(json!(7)))],
+            ),
+            (
+                "a writer without identity fields omits them",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"writer":{"plugin_id":9,"loaded_at_ms":1000},"panes":[]}"#,
+                &[
+                    ("/writer/plugin_id", Some(json!(9))),
+                    ("/writer/loaded_at_ms", Some(json!(1000))),
+                    ("/writer/build", None),
+                    ("/writer/config", None),
+                ],
+            ),
+            (
+                "a writer carrying build and config round-trips both",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"writer":{"plugin_id":9,"loaded_at_ms":1000,"build":"wasm-build","config":"config-hash"},"panes":[]}"#,
+                &[
+                    ("/writer/build", Some(json!("wasm-build"))),
+                    ("/writer/config", Some(json!("config-hash"))),
+                ],
+            ),
+            (
+                "clients round-trip, tagging each pane id with its namespace",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"clients":{"human_clients":2,"viewed_panes":[7],"views":[{"client_id":3,"pane_id":{"kind":"terminal","id":7}},{"client_id":4,"pane_id":{"kind":"plugin","id":9}}]},"panes":[]}"#,
+                &[
+                    ("/clients/human_clients", Some(json!(2))),
+                    ("/clients/viewed_panes", Some(json!([7]))),
+                    ("/clients/views/0/pane_id/kind", Some(json!("terminal"))),
+                    ("/clients/views/1/pane_id/kind", Some(json!("plugin"))),
+                    ("/clients/views/1/pane_id/id", Some(json!(9))),
+                ],
+            ),
+            (
+                "a pane pid round-trips",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"panes":[{"id":7,"tab_position":0,"pane_pid":707}]}"#,
+                &[("/panes/0/pane_pid", Some(json!(707)))],
+            ),
+            (
+                "a pane cwd round-trips",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"panes":[{"id":7,"tab_position":0,"pane_command":"zsh","pane_cwd":"/repo/main"}]}"#,
+                &[("/panes/0/pane_cwd", Some(json!("/repo/main")))],
+            ),
+            (
+                "a retired focus-resolution field is dropped rather than echoed",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"active_panes":{"0":7,"1":11},"panes":[]}"#,
+                &[("/active_panes", None)],
+            ),
+        ];
 
-        let views_only: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "clients": {
-                    "views": [
-                        { "client_id": 3, "pane_id": { "kind": "terminal", "id": 7 } },
-                        { "client_id": 3, "pane_id": { "kind": "terminal", "id": 7 } },
-                        { "client_id": 4, "pane_id": { "kind": "plugin", "id": 9 } }
-                    ]
-                },
-                "panes": []
-            }"#,
+        for (skew, payload, pointers) in cases {
+            let cache: PaneTopologyCache =
+                serde_json::from_str(payload).unwrap_or_else(|err| panic!("{skew}: {err}"));
+            let encoded = serde_json::to_value(&cache).expect("topology serializes");
+            for (pointer, expected) in *pointers {
+                assert_eq!(
+                    encoded.pointer(pointer),
+                    expected.as_ref(),
+                    "{skew}: {pointer}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn client_view_derives_presence_from_distinct_views() {
+        // Neither `human_clients` nor `viewed_panes` is published, so both
+        // derive from `views` — and the repeated client_id counts once.
+        let cache: PaneTopologyCache = serde_json::from_str(
+            r#"{"session_name":"rimz-test","produced_at_ms":42,"clients":{"views":[
+                {"client_id":3,"pane_id":{"kind":"terminal","id":7}},
+                {"client_id":3,"pane_id":{"kind":"terminal","id":7}},
+                {"client_id":4,"pane_id":{"kind":"plugin","id":9}}
+            ]},"panes":[]}"#,
         )
         .expect("views-only topology parses");
-        let view = views_only
-            .clients
-            .expect("client sample")
-            .into_client_view();
+
+        let view = cache.clients.expect("client sample").into_client_view();
+
         assert_eq!(view.presence.human_clients, 2);
         assert_eq!(
             view.viewed_panes,
             vec![PaneId::from(ZellijPaneId::Terminal(7))]
         );
-
-        let legacy: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "panes": []
-            }"#,
-        )
-        .expect("legacy topology parses");
-        assert_eq!(legacy.clients, None);
-    }
-
-    #[test]
-    fn topology_pane_pid_round_trips_and_legacy_panes_parse() {
-        let current: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "panes": [{ "id": 7, "tab_position": 0, "pane_pid": 707 }]
-            }"#,
-        )
-        .expect("current topology parses");
-        assert_eq!(current.panes[0].pane_pid, Some(707));
-        let encoded = serde_json::to_value(current).expect("current topology serializes");
-        assert_eq!(encoded["panes"][0]["pane_pid"], 707);
-
-        let legacy: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "panes": [{ "id": 7, "tab_position": 0 }]
-            }"#,
-        )
-        .expect("legacy topology parses");
-        assert_eq!(legacy.panes[0].pane_pid, None);
-    }
-
-    #[test]
-    fn legacy_focus_resolution_field_is_ignored() {
-        let field = ["active", "panes"].join("_");
-        let raw = format!(
-            r#"{{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "{field}": {{ "0": 7, "1": 11 }},
-                "panes": []
-            }}"#
-        );
-        let cache: PaneTopologyCache = serde_json::from_str(&raw).expect("legacy topology parses");
-
-        let encoded = serde_json::to_value(&cache).expect("topology serializes");
-        assert!(encoded.get(field.as_str()).is_none());
-    }
-
-    #[test]
-    fn pane_cwd_round_trips_and_legacy_payloads_parse() {
-        let cache: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "panes": [{
-                    "id": 7,
-                    "tab_position": 0,
-                    "pane_command": "zsh",
-                    "pane_cwd": "/repo/main"
-                }]
-            }"#,
-        )
-        .expect("topology with cwd parses");
-
-        assert_eq!(cache.panes[0].pane_cwd.as_deref(), Some("/repo/main"));
-        let encoded = serde_json::to_value(&cache).expect("topology serializes");
-        assert_eq!(encoded["panes"][0]["pane_cwd"], "/repo/main");
-
-        let legacy: PaneTopologyCache = serde_json::from_str(
-            r#"{
-                "session_name": "rimz-test",
-                "produced_at_ms": 42,
-                "panes": [{ "id": 8, "tab_position": 0, "pane_command": "zsh" }]
-            }"#,
-        )
-        .expect("legacy topology parses");
-        assert_eq!(legacy.panes[0].pane_cwd, None);
     }
 }

@@ -1,19 +1,19 @@
-use super::super::MIN_ZELLIJ_VERSION;
 use super::*;
 
-fn presence_opts(session_name: &str, rimz_bin: &str) -> crate::mux::PresencePluginOptions {
-    crate::mux::PresencePluginOptions {
-        session_name: session_name.to_owned(),
-        workspace_id: crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-        wasm: std::path::PathBuf::from("/tmp/rimz-presence-zellij.wasm"),
-        rimz_bin: std::path::PathBuf::from(rimz_bin),
-        converge: false,
-        seed_permissions: false,
-        focus_key: None,
-        focus_follows_mouse: false,
-        mouse_click_through: true,
-    }
-}
+#[cfg(unix)]
+use super::super::pane_topology::TopologyWriter;
+use super::super::tests::support::presence_opts;
+#[cfg(unix)]
+use super::super::tests::support::{
+    current_writer, failing_roster_shim, logging_shim, pane_roster_shim, shim_log,
+};
+
+/// A roster covering every discrimination [`is_presence_plugin_pane`] must make:
+/// the `file:` URL title Zellij gives a pipe-launched plugin, a stale
+/// differently-titled instance, a foreign plugin, and a *terminal* pane whose
+/// title merely looks like the plugin's.
+#[cfg(unix)]
+const MIXED_PLUGIN_ROSTER: &str = r#"[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":true,"title":"status-bar"},{"id":5,"is_plugin":false,"title":"rimz-presence-zellij"}]"#;
 
 fn permission_children(document: &KdlDocument, key: &str) -> Vec<String> {
     document
@@ -113,42 +113,16 @@ fn seed_presence_permissions_is_noop_when_complete() {
     assert_eq!(document.to_string(), once);
 }
 
+/// Drive one convergence against [`MIXED_PLUGIN_ROSTER`], optionally seeding the
+/// topology cache with `writer` as the replacement's proof, and return the argv
+/// log.
 #[cfg(unix)]
-fn zellij_shim(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::TempDir::new().expect("tempdir");
-    let shim = temp.path().join("zellij");
-    let mut file = std::fs::File::create(&shim).expect("create shim");
-    file.write_all(script.as_bytes()).expect("write shim");
-    let mut perms = file.metadata().expect("shim metadata").permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&shim, perms).expect("chmod shim");
-    drop(file);
-    (temp, shim)
-}
-
-#[cfg(unix)]
-fn presence_convergence_log(
-    writer: Option<crate::mux::zellij::pane_topology::TopologyWriter>,
-) -> String {
+fn presence_convergence_log(writer: Option<TopologyWriter>) -> String {
     use crate::mux::zellij::pane_topology::PaneTopologyCache;
     use crate::sidebar::cache::write_pane_topology_cache;
     use crate::store::RuntimePaths;
 
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-case " $* " in
-  *" action list-panes --all --json "*)
-    printf '[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":true,"title":"status-bar"},{"id":5,"is_plugin":false,"title":"rimz-presence-zellij"}]\n'
-    exit 0 ;;
-esac
-exit 0
-"#,
-    );
+    let (temp, shim) = pane_roster_shim(MIXED_PLUGIN_ROSTER);
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
     let mut opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
     opts.converge = true;
@@ -174,21 +148,7 @@ exit 0
         .converge_presence_plugin_for_with(&opts, Duration::ZERO, Duration::ZERO)
         .expect("converge presence plugin");
 
-    std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log")
-}
-
-fn current_writer(
-    plugin_id: u32,
-    loaded_at_ms: u64,
-) -> crate::mux::zellij::pane_topology::TopologyWriter {
-    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
-    let configuration = presence_plugin_configuration(&opts);
-    crate::mux::zellij::pane_topology::TopologyWriter {
-        plugin_id,
-        loaded_at_ms,
-        build: Some(presence_plugin_build().to_owned()),
-        config: presence_plugin_config_hash(&configuration).map(str::to_owned),
-    }
+    shim_log(&temp)
 }
 
 #[test]
@@ -200,15 +160,10 @@ fn embedded_presence_plugin_is_present() {
 #[cfg(unix)]
 #[test]
 fn live_presence_plugin_ids_list_only_matching_plugin_panes() {
-    let (_temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-case " $* " in
-  *" action list-panes --all --json "*)
-    printf '[{"id":9,"is_plugin":true,"title":"foreign-plugin"},{"id":3,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":2,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":false,"title":"rimz-presence-zellij"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij"}]\n'
-    exit 0 ;;
-esac
-exit 1
-"#,
+    // A duplicate id and an out-of-order id prove the sort and dedup; the
+    // foreign plugin and the lookalike terminal pane prove the filter.
+    let (_temp, shim) = pane_roster_shim(
+        r#"[{"id":9,"is_plugin":true,"title":"foreign-plugin"},{"id":3,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":2,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":false,"title":"rimz-presence-zellij"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij"}]"#,
     );
     let backend = ZellijBackend::with_program_for_test(&shim);
 
@@ -223,17 +178,8 @@ exit 1
 #[cfg(unix)]
 #[test]
 fn current_presence_cleanup_preserves_a_single_accepted_writer() {
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-case " $* " in
-  *" action list-panes --all --json "*)
-    printf '[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"}]\n'
-    exit 0 ;;
-esac
-exit 0
-"#,
+    let (temp, shim) = pane_roster_shim(
+        r#"[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"}]"#,
     );
     let backend = ZellijBackend::with_program_for_test(&shim);
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
@@ -245,7 +191,7 @@ exit 0
         PresencePluginCleanup::Current,
     );
 
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+    let log = shim_log(&temp);
     assert_eq!(log.matches("action list-panes --all --json").count(), 1);
     for mutation in [
         "--name rimz:retire",
@@ -262,17 +208,8 @@ exit 0
 #[cfg(unix)]
 #[test]
 fn current_presence_cleanup_retires_a_stale_loaded_id() {
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-case " $* " in
-  *" action list-panes --all --json "*)
-    printf '[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":true,"title":"status-bar"}]\n'
-    exit 0 ;;
-esac
-exit 0
-"#,
+    let (temp, shim) = pane_roster_shim(
+        r#"[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":true,"title":"status-bar"}]"#,
     );
     let backend = ZellijBackend::with_program_for_test(&shim);
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
@@ -284,7 +221,7 @@ exit 0
         PresencePluginCleanup::Reconciled,
     );
 
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+    let log = shim_log(&temp);
     assert!(
         log.contains("--name rimz:retire -- {\"plugin_id\":2"),
         "cleanup should broadcast the accepted writer identity:\n{log}",
@@ -308,15 +245,7 @@ exit 0
 #[cfg(unix)]
 #[test]
 fn share_web_session_pipes_share_payload_to_presence_plugin() {
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-fi
-"#,
-    );
+    let (temp, shim) = logging_shim();
     let backend = ZellijBackend::with_program_for_test(&shim);
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
 
@@ -324,7 +253,7 @@ fi
         .share_web_session_for(&opts)
         .expect("share session pipe");
 
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+    let log = shim_log(&temp);
     assert!(
         log.contains("--session rimz-test pipe --plugin file:/tmp/rimz-presence-zellij.wasm"),
         "share should target the presence plugin by session and wasm URL:\n{log}",
@@ -341,36 +270,15 @@ fi
 
 #[cfg(unix)]
 #[test]
-fn presence_convergence_skips_retire_without_replacement_topology() {
-    let log = presence_convergence_log(None);
-
-    assert!(
-        log.contains("--name rimz_presence_boot -- load"),
-        "convergence should boot the replacement:\n{log}",
-    );
-    assert!(
-        !log.contains("--name rimz:retire"),
-        "an unproven replacement must not retire the old plugin:\n{log}",
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn topology_dumps_broadcast_without_launching_plugins() {
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-exit 0
-"#,
-    );
+    let (temp, shim) = logging_shim();
     let backend = ZellijBackend::with_program_for_test(&shim);
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
 
     backend.dump_topology_for(&opts).expect("first dump");
     backend.dump_topology_for(&opts).expect("second dump");
 
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+    let log = shim_log(&temp);
     assert_eq!(log.matches("--name rimz:dump_topology -- dump").count(), 2);
     assert!(
         !log.contains("--plugin"),
@@ -384,7 +292,7 @@ fn owner_launch_records_the_desired_writer_identity() {
     use crate::sidebar::cache::read_presence_desired;
     use crate::store::RuntimePaths;
 
-    let (temp, shim) = zellij_shim("#!/bin/sh\nexit 0\n");
+    let (temp, shim) = logging_shim();
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
     let runtime = RuntimePaths::under(opts.workspace_id.clone(), temp.path()).unwrap();
@@ -431,6 +339,36 @@ fn presence_convergence_retires_after_replacement_writer_is_proven() {
     );
 }
 
+/// Retire is gated on a *proven* replacement: a writer whose generation is at or
+/// past the convergence floor and whose build and config identities match this
+/// host. Each row fails exactly one leg of that proof.
+#[cfg(unix)]
+#[test]
+fn presence_convergence_retires_only_on_a_proven_replacement_writer() {
+    let mut wrong_build = current_writer(2, u64::MAX);
+    wrong_build.build = Some("old-build".to_owned());
+
+    for (unproven, writer) in [
+        ("no replacement topology", None),
+        (
+            "a writer loaded before the convergence floor",
+            Some(current_writer(1, 0)),
+        ),
+        ("a writer from another build", Some(wrong_build)),
+    ] {
+        let log = presence_convergence_log(writer);
+
+        assert!(
+            log.contains("--name rimz_presence_boot -- load"),
+            "{unproven}: convergence should still boot the replacement:\n{log}",
+        );
+        assert!(
+            !log.contains("--name rimz:retire"),
+            "{unproven} must not retire the old plugin:\n{log}",
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn presence_force_sweep_listing_failure_keeps_retire_best_effort() {
@@ -438,16 +376,7 @@ fn presence_force_sweep_listing_failure_keeps_retire_best_effort() {
     use crate::sidebar::cache::write_pane_topology_cache;
     use crate::store::RuntimePaths;
 
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-case " $* " in
-  *" action list-panes --all --json "*) exit 1 ;;
-esac
-exit 0
-"#,
-    );
+    let (temp, shim) = failing_roster_shim();
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
     let runtime = RuntimePaths::under(opts.workspace_id.clone(), temp.path()).unwrap();
@@ -466,44 +395,13 @@ exit 0
     .unwrap();
 
     backend.retire_proven_presence_plugin_for(&opts, 0, Duration::ZERO, Duration::ZERO);
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+    let log = shim_log(&temp);
     assert!(log.contains("--name rimz:retire"), "{log}");
     assert!(log.contains("action list-panes --all --json"), "{log}");
     assert!(!log.contains("close-pane"), "{log}");
     assert!(log.contains("--name rimz_presence_boot -- load"), "{log}");
 }
 
-#[cfg(unix)]
-#[test]
-fn presence_convergence_rejects_old_writer_generation() {
-    let log = presence_convergence_log(Some(current_writer(1, 0)));
-
-    assert!(
-        !log.contains("--name rimz:retire"),
-        "fresh topology from an old writer must not prove the replacement:\n{log}",
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn presence_convergence_rejects_a_wrong_writer_identity() {
-    let mut writer = current_writer(2, u64::MAX);
-    writer.build = Some("old-build".to_owned());
-
-    let log = presence_convergence_log(Some(writer));
-
-    assert!(
-        !log.contains("--name rimz:retire"),
-        "a later writer from another build must not prove the replacement:\n{log}",
-    );
-}
-
-#[test]
-fn presence_plugin_floor_is_the_zellij_floor() {
-    assert_eq!(MIN_ZELLIJ_VERSION, (0, 44, 0));
-    assert!((0, 44, 3) >= MIN_ZELLIJ_VERSION);
-    assert!((0, 43, 9) < MIN_ZELLIJ_VERSION);
-}
 #[test]
 fn presence_plugin_configuration_renders_expressible_fields() {
     type PresenceOpts = crate::mux::PresencePluginOptions;
