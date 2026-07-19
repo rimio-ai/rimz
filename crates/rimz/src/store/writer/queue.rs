@@ -951,7 +951,7 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn remove_message(
+    pub fn cancel_message(
         &self,
         message_id: &MessageId,
         session_name: &str,
@@ -960,7 +960,7 @@ impl Store {
         Ok(self
             .settle_message(
                 message_id,
-                MessageStatus::Removed,
+                MessageStatus::Canceled,
                 session_name,
                 Some(reason),
             )?
@@ -978,7 +978,7 @@ impl Store {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
         self.commit_queue(|queue| {
             let cleared = queue.finalize_matching(
-                MessageStatus::Removed,
+                MessageStatus::Canceled,
                 session_name,
                 "clear",
                 |message| message.status.is_open() && message.same_card(card),
@@ -996,7 +996,7 @@ impl Store {
     ) -> Result<Vec<MessageRecord>> {
         self.commit_queue(|queue| {
             let cleared = queue.finalize_matching(
-                MessageStatus::Removed,
+                MessageStatus::Canceled,
                 session_name,
                 "clear",
                 |message| message.status.is_open() && message.channel.as_deref() == Some(channel),

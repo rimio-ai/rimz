@@ -116,7 +116,7 @@ pub enum MessageEventMethod {
     Delivered,
     TimedOut,
     Errored,
-    Removed,
+    Canceled,
     Abandoned,
     Archived,
 }
@@ -132,7 +132,7 @@ impl MessageEventMethod {
             Self::Delivered => "message.delivered",
             Self::TimedOut => "message.timed_out",
             Self::Errored => "message.errored",
-            Self::Removed => "message.removed",
+            Self::Canceled => "message.canceled",
             Self::Abandoned => "message.abandoned",
             Self::Archived => "message.archived",
         }
@@ -146,7 +146,7 @@ impl MessageEventMethod {
             MessageStatus::Delivered => Some(Self::Delivered),
             MessageStatus::TimedOut => Some(Self::TimedOut),
             MessageStatus::Errored => Some(Self::Errored),
-            MessageStatus::Removed => Some(Self::Removed),
+            MessageStatus::Canceled => Some(Self::Canceled),
             MessageStatus::Abandoned => Some(Self::Abandoned),
             MessageStatus::Archived => Some(Self::Archived),
         }
@@ -162,7 +162,7 @@ impl MessageEventMethod {
             "message.delivered" => Some(Self::Delivered),
             "message.timed_out" => Some(Self::TimedOut),
             "message.errored" => Some(Self::Errored),
-            "message.removed" => Some(Self::Removed),
+            "message.canceled" | "message.removed" => Some(Self::Canceled),
             "message.abandoned" => Some(Self::Abandoned),
             "message.archived" => Some(Self::Archived),
             _ => None,

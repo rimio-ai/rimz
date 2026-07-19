@@ -218,7 +218,7 @@ fn message_status_classifies_queue_and_terminal_lifecycle() {
         MessageStatus::Delivered,
         MessageStatus::TimedOut,
         MessageStatus::Errored,
-        MessageStatus::Removed,
+        MessageStatus::Canceled,
         MessageStatus::Abandoned,
         MessageStatus::Archived,
     ] {
@@ -226,6 +226,8 @@ fn message_status_classifies_queue_and_terminal_lifecycle() {
     }
     let legacy: MessageStatus = serde_json::from_str("\"pending\"").unwrap();
     assert_eq!(legacy, MessageStatus::Queued);
+    let legacy: MessageStatus = serde_json::from_str("\"removed\"").unwrap();
+    assert_eq!(legacy, MessageStatus::Canceled);
 }
 
 #[test]

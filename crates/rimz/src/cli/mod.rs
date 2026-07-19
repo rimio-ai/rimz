@@ -519,7 +519,7 @@ enum Subcmd {
     Reset(reset::ResetArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
-    /// Message agents; list, edit, steer, requeue, remove.
+    /// Message agents; list, edit, steer, requeue, cancel.
     ///
     /// Bare send routes now with `--steer`, or at the next safe turn boundary.
     #[command(visible_alias = "msg")]

@@ -18,7 +18,7 @@ use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, Me
 use crate::common::Env;
 
 #[test]
-fn message_remove_and_clear_respect_ids_targets_and_channel_lanes() {
+fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-queue", "feature-q", &[]);
@@ -27,25 +27,38 @@ fn message_remove_and_clear_respect_ids_targets_and_channel_lanes() {
     let second = queue_add(&env, "@claude", "second task");
     let third = queue_add(&env, "@claude", "third task");
     let missing = "msg_0000000000009999";
-    let removed = env
+    let canceled = env
         .rimz()
-        .args(["message", "remove", &first, missing, &second])
+        .args(["message", "cancel", &first, missing, &second])
         .output()
-        .expect("mixed remove");
-    assert!(!removed.status.success(), "missing ID reports failure");
-    let stdout = String::from_utf8_lossy(&removed.stdout);
-    assert!(stdout.contains(&format!("removed {first}")));
-    assert!(stdout.contains(&format!("{missing} is not queued or claimed")));
-    assert!(stdout.contains(&format!("removed {second}")));
+        .expect("mixed cancel");
+    assert!(!canceled.status.success(), "missing ID reports failure");
+    let stdout = String::from_utf8_lossy(&canceled.stdout);
+    assert!(stdout.contains(&format!("canceled {first}")));
+    assert!(stdout.contains(&format!("{missing} is not open")));
+    assert!(stdout.contains(&format!("canceled {second}")));
+
+    let alias = queue_add(&env, "@claude", "alias task");
+    let alias_output = run_success(
+        env.rimz().args(["message", "remove", &alias]),
+        "remove alias",
+    );
+    assert!(String::from_utf8_lossy(&alias_output.stdout).contains(&format!("canceled {alias}")));
 
     let cleared = run_success(
         env.rimz().args(["message", "clear", "@claude"]),
         "queue clear",
     );
     let cleared_stdout = String::from_utf8_lossy(&cleared.stdout);
-    assert!(cleared_stdout.contains("removed 1 message(s) for @claude"));
+    assert!(cleared_stdout.contains("canceled 1 message(s) for @claude"));
     assert!(cleared_stdout.contains(&third));
     assert!(env.store().list_pending_messages().unwrap().is_empty());
+    let canceled_ids = list_message_ids(
+        &env,
+        &["message", "list", "--all", "--status", "canceled", "--json"],
+        None,
+    );
+    assert!(canceled_ids.contains(&first));
 
     let methods: Vec<String> = env
         .read_events()
@@ -54,7 +67,7 @@ fn message_remove_and_clear_respect_ids_targets_and_channel_lanes() {
         .filter(|method| method.starts_with("message."))
         .collect();
     assert!(methods.iter().any(|method| method == "message.queued"));
-    assert!(methods.iter().any(|method| method == "message.removed"));
+    assert!(methods.iter().any(|method| method == "message.canceled"));
 
     let docs = queue_direct_channel_message(&env, "docs", "docs");
     let docs_team = queue_direct_channel_message(&env, "docs/forge", "forge");
@@ -66,7 +79,7 @@ fn message_remove_and_clear_respect_ids_targets_and_channel_lanes() {
         "clear lane",
     );
     let stdout = String::from_utf8_lossy(&cleared.stdout);
-    assert!(stdout.contains("removed 1 message(s) in #docs"));
+    assert!(stdout.contains("canceled 1 message(s) in #docs"));
     assert!(stdout.contains(&docs));
     assert!(!stdout.contains(&docs_team));
     let pending = env.store().list_pending_messages().unwrap();

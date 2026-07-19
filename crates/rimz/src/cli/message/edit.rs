@@ -209,21 +209,21 @@ pub(super) fn message_target_for_record(
     scoped_handle(message_target(&row, &agents), row.channel.as_deref())
 }
 
-pub(super) fn remove_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn cancel_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let store = open_store(&workspace)?;
     let mut failed = false;
     for message_id in message_ids {
-        if store.remove_message(&message_id, &workspace.session_name, "remove")? {
+        if store.cancel_message(&message_id, &workspace.session_name, "cancel")? {
             #[expect(clippy::print_stdout, reason = "command result")]
             {
-                println!("removed {message_id}");
+                println!("canceled {message_id}");
             }
         } else {
             failed = true;
             #[expect(clippy::print_stdout, reason = "command result")]
             {
-                println!("{message_id} is not queued or claimed");
+                println!("{message_id} is not open");
             }
         }
     }
@@ -249,13 +249,13 @@ pub(super) fn clear_messages(
             worktree.as_deref().or(channel_flag.as_deref()),
             channel.as_deref(),
         )?;
-        let removed = store.clear_messages_for(
+        let canceled = store.clear_messages_for(
             &agent.kind,
             &agent.agent_id,
             agent.name.as_deref(),
             &workspace.session_name,
         )?;
-        print_removed_summary(&format!("for {target}"), &removed);
+        print_canceled_summary(&format!("for {target}"), &canceled);
         return Ok(());
     }
     let lane = worktree
@@ -267,23 +267,23 @@ pub(super) fn clear_messages(
                 "message clear needs an @agent target or scoped channel; pass --channel NAME or run from a RimZ channel"
             )
         })?;
-    let removed = store.clear_channel_messages(lane, &workspace.session_name)?;
-    print_removed_summary(&format!("in #{lane}"), &removed);
+    let canceled = store.clear_channel_messages(lane, &workspace.session_name)?;
+    print_canceled_summary(&format!("in #{lane}"), &canceled);
     Ok(())
 }
 
-pub(super) fn print_removed_summary(scope: &str, removed: &[MessageRecord]) {
-    let ids: Vec<String> = removed
+pub(super) fn print_canceled_summary(scope: &str, canceled: &[MessageRecord]) {
+    let ids: Vec<String> = canceled
         .iter()
         .map(|message| message.message_id.to_string())
         .collect();
     #[expect(clippy::print_stdout, reason = "final user-facing message")]
     {
         if ids.is_empty() {
-            println!("removed 0 message(s) {scope}");
+            println!("canceled 0 message(s) {scope}");
         } else {
             println!(
-                "removed {} message(s) {scope}: {}",
+                "canceled {} message(s) {scope}: {}",
                 ids.len(),
                 ids.join(", ")
             );

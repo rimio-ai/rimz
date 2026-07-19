@@ -355,7 +355,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
                 MessageStatus::Sent
                 | MessageStatus::TimedOut
                 | MessageStatus::Errored
-                | MessageStatus::Removed
+                | MessageStatus::Canceled
                 | MessageStatus::Abandoned
                 | MessageStatus::Archived => None,
             }

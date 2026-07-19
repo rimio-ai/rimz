@@ -192,7 +192,7 @@ fn terminal_delivery_failures_win_over_missing_card() {
     for status in [
         MessageStatus::TimedOut,
         MessageStatus::Errored,
-        MessageStatus::Removed,
+        MessageStatus::Canceled,
         MessageStatus::Abandoned,
         MessageStatus::Archived,
     ] {

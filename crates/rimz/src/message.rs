@@ -190,7 +190,8 @@ pub enum MessageStatus {
     Delivered,
     TimedOut,
     Errored,
-    Removed,
+    #[serde(alias = "removed")]
+    Canceled,
     Abandoned,
     Archived,
 }
@@ -202,7 +203,7 @@ impl MessageStatus {
             Self::Delivered
                 | Self::TimedOut
                 | Self::Errored
-                | Self::Removed
+                | Self::Canceled
                 | Self::Abandoned
                 | Self::Archived
         )
@@ -220,7 +221,7 @@ impl MessageStatus {
             Self::Delivered => "delivered",
             Self::TimedOut => "timed_out",
             Self::Errored => "errored",
-            Self::Removed => "removed",
+            Self::Canceled => "canceled",
             Self::Abandoned => "abandoned",
             Self::Archived => "archived",
         }

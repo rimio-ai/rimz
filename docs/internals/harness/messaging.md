@@ -96,7 +96,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
    │          ├──► (revert to Queued on pre-send failure)
    │          └──► Abandoned   (pre-send retry cap)
    │
-   ├──► Removed    (user)
+   ├──► Canceled   (user)
    ├──► Archived   (receiver ended, channel teardown)
    └──► Errored    (unresolved receiver bounce)
 ```
@@ -105,7 +105,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
 - `Queued` and `Claimed` are open (`is_open`): the message is live in the queue.
 - `Sent` means bytes were written to the pane; the record stays live in the queue until confirmation or reconciliation makes a terminal decision.
 - `Delivered` means the agent acknowledged the text: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`.
-- Terminal states (`Delivered`, `TimedOut`, `Errored`, `Removed`, `Abandoned`, `Archived`) are final; the final record is appended to `messages/history.jsonl`, then removed from `messages/messages.jsonl`, and the event log records the outcome without message content.
+- Terminal states (`Delivered`, `TimedOut`, `Errored`, `Canceled`, `Abandoned`, `Archived`) are final; the final record is appended to `messages/history.jsonl`, then removed from `messages/messages.jsonl`, and the event log records the outcome without message content.
 
 ## Gates and delivery conditions
 
@@ -132,7 +132,7 @@ Enqueue likewise evaluates every `when` condition and writes `met_at` immediatel
 
 `queue_message` upserts the record in `messages/messages.jsonl`, appends a `message.queued` audit event, and wakes sidebars. The file is created lazily so an empty workspace costs the hook path one missing-file stat. Each write holds the workspace lock and uses temp-file-plus-rename.
 
-`edit_message` is the single compare-and-swap path for queued-record mutation. It accepts only `Queued`, refuses `Claimed` as in-flight, reports terminal records from `history.jsonl`, rewrites the live record with the requested delivery deltas, clears `retry_after` so the next sweep sees the change, and appends `message.edited` with the changed field names in `reason`. Receiver identity, channel, card, sender attribution, and pane affinity stay outside edit; retargeting is remove plus send.
+`edit_message` is the single compare-and-swap path for queued-record mutation. It accepts only `Queued`, refuses `Claimed` as in-flight, reports terminal records from `history.jsonl`, rewrites the live record with the requested delivery deltas, clears `retry_after` so the next sweep sees the change, and appends `message.edited` with the changed field names in `reason`. Receiver identity, channel, card, sender attribution, and pane affinity stay outside edit; retargeting is cancel plus send.
 
 `requeue` reads a terminal record from `history.jsonl`, builds a fresh `Queued` record with a new id from the retained text, receiver card, channel, sender, body, and delivery settings, then applies any edit-style overrides before `queue_message`. Event-only terminal rows cannot requeue because message text is intentionally absent from the event log.
 
@@ -182,11 +182,11 @@ One cannot confirm the other. Batched prompt records carry a shared `batch_id`, 
 | Agent's next lifecycle hook confirms the body | `Delivered` |
 | Unconfirmed `Sent` record reaches the unconfirmed-send cap | `TimedOut` |
 | Genuine unresolved receiver after audit fallback | `Errored` |
-| User runs `message remove` | `Removed` |
+| User runs `message cancel` | `Canceled` |
 | Pre-send retry cap exceeded | `Abandoned` |
 | Receiver session `Ended`, unmet `when` session `Ended`, or channel teardown | `Archived` |
 
-Lifecycle `Ended` archives receiver messages in realtime. Channel teardown archives too: recreating, explicitly removing, or sweeping a worktree channel through cleanup or `rimz gc` moves that channel's open records to `Archived`, and `message list` hides them by default while `message list --all` and `message show <id>` keep the audit trail visible. The message sweep is the primary reconciler for unconfirmed `Sent` records, and `rimz gc` is the durable backstop. `Archived` is distinct from retry exhaustion (`Abandoned`) and explicit user removal (`Removed`).
+Lifecycle `Ended` archives receiver messages in realtime. Channel teardown archives too: recreating, explicitly removing, or sweeping a worktree channel through cleanup or `rimz gc` moves that channel's open records to `Archived`, and `message list` hides them by default while `message list --all` and `message show <id>` keep the audit trail visible. The message sweep is the primary reconciler for unconfirmed `Sent` records, and `rimz gc` is the durable backstop. `Archived` is distinct from retry exhaustion (`Abandoned`) and explicit user cancellation (`Canceled`).
 
 ## Scheduling
 
@@ -330,9 +330,9 @@ Domain types: [`transcript.rs`](../../../crates/rimz/src/transcript.rs) for the 
 
 Every status transition appends a typed event to `events.log.jsonl`. The event methods are:
 
-`message.queued` · `message.edited` · `message.sent` · `message.delivered` · `message.timed_out` · `message.errored` · `message.removed` · `message.abandoned` · `message.archived`
+`message.queued` · `message.edited` · `message.sent` · `message.delivered` · `message.timed_out` · `message.errored` · `message.canceled` · `message.abandoned` · `message.archived`
 
-The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, `unconfirmed_sends`, timestamps, compaction baseline, and `reason` (on error or abandon). For resolved records, `address` is the enqueue-time receiver handle the terminal list and show views render when no live card remains; unresolved bounces carry the raw target that failed. Message content stays in the live message record, never in the event.
+The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, `unconfirmed_sends`, timestamps, compaction baseline, and `reason` (on error or abandon). For resolved records, `address` is the enqueue-time receiver handle the terminal list and show views render when no live card remains; unresolved bounces carry the raw target that failed. Message content stays in the live message record, never in the event. The event parser keeps reading legacy `message.removed` records as cancellations.
 
 ## Subcommands
 
@@ -342,7 +342,7 @@ The user-facing surface — flags, synopses, examples, and the `message list` di
 - `message edit <msg_id>` updates only `Queued` records and adds a `message.edited` timeline row.
 - `message steer <msg_id>` sends a queued record now through the normal delivery sender while bypassing schedule, FIFO, and gate checks.
 - `message requeue <msg_id>` copies a terminal history record into a new queued record; open records stay with `edit` or `steer`.
-- `message remove <msg_id>...` settles each named live record to `Removed`; `message clear <target>` settles every open record for one card, and targetless `message clear` settles every open record in the scoped channel lane.
+- `message cancel <msg_id>...` settles each named live record to `Canceled`; `message clear <target>` settles every open record for one card, and targetless `message clear` settles every open record in the scoped channel lane.
 
 Two hidden helpers are the pipeline's execution arms, spawned detached with nulled stdio, never run by humans:
 

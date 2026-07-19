@@ -71,7 +71,7 @@ pub(crate) fn message(status: MessageStatus) -> anstyle::Style {
         MessageStatus::TimedOut | MessageStatus::Errored | MessageStatus::Abandoned => {
             role(StateRole::Waiting)
         }
-        MessageStatus::Removed | MessageStatus::Archived => role(StateRole::Neutral),
+        MessageStatus::Canceled | MessageStatus::Archived => role(StateRole::Neutral),
     }
 }
 

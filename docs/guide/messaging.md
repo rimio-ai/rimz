@@ -140,21 +140,6 @@ The gathered join exits 0 only when every leg completes and otherwise uses the f
 
 Every resolved target must be an existing lifecycle-bound agent with installed and trusted hooks. `--wait` conflicts with `--create`, `--schedule`, and `--no-enter`; `--json` and `--any` require `--wait`. Steering mid-turn treats the rest of that interrupted turn as the reply.
 
-Every message is a record you can read back and steer after the fact:
-
-```sh
-rimz message list                       # the current channel's inbox, newest first
-rimz message list --all                 # every channel, grouped by #channel
-rimz message show msg_01k…              # full text, event timeline, and the first delivery blocker
-rimz message edit msg_01k… --text "…"   # revise a still-queued message before it lands
-rimz message steer msg_01k…             # push a queued record through now, skipping its schedule and gate
-rimz message requeue msg_01k…           # send a terminal message again as a fresh record
-rimz message remove msg_01k…            # drop a queued message
-rimz message clear @codex               # drop every open message for one agent; targetless clears the channel
-```
-
-Statuses read straight across: `queued` and `claimed` are still live, `sent` means the bytes reached the pane, `delivered` means the prompt's turn started, and `archived` means the receiver or its channel ended. Use `message show` to diagnose a record that has not delivered. A durable file is the source of truth, so a missed notification or a crash between claim and send loses nothing.
-
 Deliver a file's contents verbatim — a prompt with real newlines, no escaping — with `--file`:
 
 ```sh
@@ -166,6 +151,24 @@ rimz message @claude --file review-notes.md
 ```sh
 git diff main | rimz message @reviewer --stdin "review this"
 ```
+
+## Inspect the queue
+
+Bare `rimz message` opens the current lane's inbox. Every message is a durable record you can read back and steer after the fact:
+
+```sh
+rimz message                            # the current lane's inbox, newest first
+rimz message list                       # the current channel's inbox, newest first
+rimz message list --all                 # every channel, grouped by #channel
+rimz message show msg_01k…              # full text, event timeline, and the first delivery blocker
+rimz message edit msg_01k… --text "…"   # revise a still-queued message before it lands
+rimz message steer msg_01k…             # push a queued record through now, skipping its schedule and gate
+rimz message requeue msg_01k…           # send a terminal message again as a fresh record
+rimz message cancel msg_01k…            # cancel a queued message — the record stays, requeue revives it
+rimz message clear @codex               # cancel every open message for one agent; targetless clears the channel
+```
+
+Statuses read straight across: `queued` and `claimed` are still live, `sent` means the bytes reached the pane, `delivered` means the prompt's turn started, `canceled` means the user stopped delivery, and `archived` means the receiver or its channel ended. Use `message show` to diagnose a record that has not delivered. A durable file is the source of truth, so a missed notification or a crash between claim and send loses nothing.
 
 ## Agents message each other
 

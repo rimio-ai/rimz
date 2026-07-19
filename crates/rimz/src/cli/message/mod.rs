@@ -131,8 +131,9 @@ enum MessageSubcmd {
         #[command(flatten)]
         edit: EditFlags,
     },
-    /// Remove queued messages.
-    Remove {
+    /// Cancel queued messages; the record is kept.
+    #[command(alias = "remove")]
+    Cancel {
         #[arg(
             value_name = "MESSAGE_ID",
             num_args = 1..,
@@ -140,21 +141,21 @@ enum MessageSubcmd {
         )]
         message_ids: Vec<MessageId>,
     },
-    /// Remove queued messages for an agent, or in the scoped channel.
+    /// Cancel open messages for an agent, or in the scoped channel.
     Clear {
-        /// Optional agent address whose queued messages are removed.
+        /// Optional agent address whose open messages are canceled.
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::message_targets
         ))]
         target: Option<String>,
-        /// Remove queued messages in this worktree or lane.
+        /// Cancel open messages in this worktree or lane.
         #[arg(
             long,
             conflicts_with = "channel",
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
         )]
         worktree: Option<String>,
-        /// Remove queued messages in this channel.
+        /// Cancel open messages in this channel.
         #[arg(
             long,
             value_name = "NAME",
@@ -229,7 +230,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
         Some(MessageSubcmd::Requeue { message_id, edit }) => {
             requeue_message(message_id, edit, globals)
         }
-        Some(MessageSubcmd::Remove { message_ids }) => remove_messages(message_ids, globals),
+        Some(MessageSubcmd::Cancel { message_ids }) => cancel_messages(message_ids, globals),
         Some(MessageSubcmd::Clear {
             target,
             worktree,
@@ -246,7 +247,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                     bail!("did you mean `rimz message show {target}`?");
                 }
                 bail!(
-                    "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, requeue <id>, remove <id>..., clear [target], or an @agent target"
+                    "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, requeue <id>, cancel <id>..., clear [target], or an @agent target"
                 );
             }
             let piped = if args.send.stdin {
@@ -333,7 +334,7 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
         "delivered" => Ok(MessageStatus::Delivered),
         "timed_out" => Ok(MessageStatus::TimedOut),
         "errored" => Ok(MessageStatus::Errored),
-        "removed" => Ok(MessageStatus::Removed),
+        "canceled" | "cancelled" | "removed" => Ok(MessageStatus::Canceled),
         "abandoned" => Ok(MessageStatus::Abandoned),
         "archived" => Ok(MessageStatus::Archived),
         other => Err(format!("unknown message status `{other}`")),

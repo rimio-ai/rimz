@@ -1,6 +1,6 @@
 # Message CLI
 
-`rimz message` routes text to a running agent through the same path a keystroke takes: it types into the agent's own pane, exactly as if you typed there, and records the message durably so delivery is auditable and reversible. `rimz msg` is a visible alias for the whole command, including its subcommands. The default parks text for the next safe turn boundary, sending immediately only when the agent is already open to receive; `--steer` interrupts the live pane now; `--schedule` sets the earliest delivery time before the usual `--on` gate opens. A parked message is a `queued` record you can inspect, edit, or remove before it lands. Addresses, park-vs-steer, channels, and agent-to-agent chat as a concept are the [messaging guide](../../guide/messaging.md).
+`rimz message` routes text to a running agent through the same path a keystroke takes: it types into the agent's own pane, exactly as if you typed there, and records the message durably so delivery is auditable and reversible. `rimz msg` is a visible alias for the whole command, including its subcommands. The default parks text for the next safe turn boundary, sending immediately only when the agent is already open to receive; `--steer` interrupts the live pane now; `--schedule` sets the earliest delivery time before the usual `--on` gate opens. A parked message is a `queued` record you can inspect, edit, or cancel before it lands. Addresses, park-vs-steer, channels, and agent-to-agent chat as a concept are the [messaging guide](../../guide/messaging.md).
 
 ```sh
 rimz message @swift-otter "Add focused tests for the parser."                   # park or send now if open
@@ -24,7 +24,7 @@ rimz message edit msg_01k… --text "Use the cache key from config."
 rimz message edit msg_01k… --no-schedule                                      # clear an earliest-delivery floor
 rimz message steer msg_01k…                                                   # force a queued record now
 rimz message requeue msg_01k… --text "Retry with this narrower ask."
-rimz message remove msg_01k… msg_01k…
+rimz message cancel msg_01k… msg_01k…
 rimz message clear                                                            # clear open messages in the current lane
 rimz message clear @claude-2#cli-docs
 ```
@@ -70,9 +70,9 @@ The flags worth knowing tune delivery (run `rimz message --help` for the full su
 
 ## The message record
 
-Every send is a durable record, which is what makes delivery inspectable and reversible: target, channel, receiver card, and sender attribution are record identity, so you retarget by removing and resending. `message edit <id>` changes only delivery fields on a `queued` record: text, `--on`, schedule or `--no-schedule`, `--force` or `--no-force`, `--enter` or `--no-enter`, and smart-compaction settings.
+Every send is a durable record, which is what makes delivery inspectable and reversible: target, channel, receiver card, and sender attribution are record identity, so you retarget by canceling and resending. `message edit <id>` changes only delivery fields on a `queued` record: text, `--on`, schedule or `--no-schedule`, `--force` or `--no-force`, `--enter` or `--no-enter`, and smart-compaction settings.
 
-Message statuses are `queued`, `claimed`, `sent`, `delivered`, `timed_out`, `errored`, `removed`, `abandoned`, and `archived`. `sent` means RimZ wrote the bytes to the pane; `delivered` means the agent acknowledged a prompt through `TurnStarted` or a command through `Compacting`; `archived` means the receiver or channel context ended.
+Message statuses are `queued`, `claimed`, `sent`, `delivered`, `timed_out`, `errored`, `canceled`, `abandoned`, and `archived`. `sent` means RimZ wrote the bytes to the pane; `delivered` means the agent acknowledged a prompt through `TurnStarted` or a command through `Compacting`; `archived` means the receiver or channel context ended.
 
 The `message.sent` audit event records message id, receiver, pane, force flag, sender, body, and text length; message content stays in the message record. Terminal records keep their text in `messages/history.jsonl`.
 
@@ -88,6 +88,6 @@ Bare `rimz message` renders the inbox for the current lane; in the main checkout
 
 `message requeue <id>` creates a new queued record from a terminal record whose text is still in `messages/history.jsonl`; it preserves receiver identity and delivery settings unless edit flags override them, and re-arms every `--after` and `--when` condition.
 
-`message remove` accepts one or more ids and keeps processing after misses, then exits non-zero if any id was not open. `message clear` with a target removes that agent's open messages; without a target it removes open messages in the scoped lane from `--channel`, `--worktree`, or the ambient room channel, and prints the ids it removed. Removing a `queued` record cancels delivery before it lands.
+`message cancel` accepts one or more ids and keeps processing after misses, then exits non-zero if any id was not open. The `remove` alias stays available. A canceled record keeps its text in `messages/history.jsonl`, so `message show` can inspect it and `message requeue` can revive it. `message clear` with a target cancels that agent's open messages; without a target it cancels open messages in the scoped lane from `--channel`, `--worktree`, or the ambient room channel, and prints the ids it canceled.
 
 Parked delivery needs installed and trusted hooks, because turn-end hooks trigger delivery of parked records; scheduled wakeups need an open room so an elder keeps time. The record layout, gates, and delivery walk are in [messaging.md](../../internals/harness/messaging.md).

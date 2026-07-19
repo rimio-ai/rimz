@@ -416,7 +416,7 @@ fn message_method_wire_contract() {
             Some(Status::TimedOut),
         ),
         (Method::Errored, "message.errored", Some(Status::Errored)),
-        (Method::Removed, "message.removed", Some(Status::Removed)),
+        (Method::Canceled, "message.canceled", Some(Status::Canceled)),
         (
             Method::Abandoned,
             "message.abandoned",
@@ -432,6 +432,7 @@ fn message_method_wire_contract() {
             assert_eq!(Method::for_terminal_status(status), Some(method));
         }
     }
+    assert_eq!(Method::parse("message.removed"), Some(Method::Canceled));
     for status in [Status::Queued, Status::Claimed, Status::Sent] {
         assert_eq!(Method::for_terminal_status(status), None);
     }
