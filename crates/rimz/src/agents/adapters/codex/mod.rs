@@ -89,7 +89,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
@@ -341,65 +341,56 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 /// tool call; they keep the sidebar's enrichment current, with their payload
 /// content gated by `[privacy] payload_mode`.
 const CODEX_HOOKS: &[HookEventSpec] = &[
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SessionStart",
-        r#"{"session_id":"sess-1","source":"startup"}"#
+        r#"{"session_id":"sess-1","source":"startup"}"#,
     )
     .with_matcher("startup|resume|clear|compact")
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "UserPromptSubmit",
-        r#"{"session_id":"sess-1","prompt":"fix auth"}"#
+        r#"{"session_id":"sess-1","prompt":"fix auth"}"#,
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SubagentStart",
-        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#
+        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#,
     )
     .with_matcher(".*")
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SubagentStop",
-        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#
+        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#,
     )
     .with_matcher(".*")
     .progress(),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(
-        blocking,
+    HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::blocking(
         "PermissionRequest",
         r#"{"session_id":"sess-1","tool_name":"shell"}"#,
-        AskKind::Permission
+        AskKind::Permission,
     )
     .with_matcher(".*")
     .synchronous(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PreToolUse",
-        r#"{"session_id":"sess-1","tool_name":"shell"}"#
+        r#"{"session_id":"sess-1","tool_name":"shell"}"#,
     )
     .with_matcher(".*"),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PostToolUse",
-        r#"{"session_id":"sess-1","tool_name":"apply_patch"}"#
+        r#"{"session_id":"sess-1","tool_name":"apply_patch"}"#,
     )
     .with_matcher(".*")
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PreCompact",
-        r#"{"session_id":"sess-1","trigger":"manual"}"#
+        r#"{"session_id":"sess-1","trigger":"manual"}"#,
     )
     .with_matcher(".*"),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PostCompact",
-        r#"{"session_id":"sess-1","trigger":"manual"}"#
+        r#"{"session_id":"sess-1","trigger":"manual"}"#,
     )
     .with_matcher(".*"),
 ];

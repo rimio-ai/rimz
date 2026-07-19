@@ -58,9 +58,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{
-    BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook, hook_record,
-};
+use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
@@ -258,68 +256,59 @@ const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
 /// field stays explicit because the reclaim path still reasons about
 /// on-disk matchers left by users or older builds.
 const CLAUDE_HOOKS: &[HookEventSpec] = &[
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SessionStart",
-        r#"{"session_id":"sess-1","source":"startup"}"#
+        r#"{"session_id":"sess-1","source":"startup"}"#,
     )
     .progress(),
-    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
+    HookEventSpec::lifecycle(
         "UserPromptSubmit",
-        r#"{"session_id":"sess-1","prompt":"fix auth"}"#
+        r#"{"session_id":"sess-1","prompt":"fix auth"}"#,
     )
     .progress(),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle(
         "StopFailure",
-        r#"{"session_id":"sess-1","error":"api_error"}"#
+        r#"{"session_id":"sess-1","error":"api_error"}"#,
     ),
-    hook_record!(lifecycle, "Notification", r#"{"session_id":"sess-1"}"#),
-    hook_record!(
-        blocking,
+    HookEventSpec::lifecycle("Notification", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::blocking(
         "PermissionRequest",
         r#"{"session_id":"sess-1","tool_name":"Bash"}"#,
-        AskKind::Permission
+        AskKind::Permission,
     )
     .synchronous()
     .with_lifecycle_fallback(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PreToolUse",
-        r#"{"session_id":"sess-1","tool_name":"Bash"}"#
+        r#"{"session_id":"sess-1","tool_name":"Bash"}"#,
     ),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PostToolUse",
-        r#"{"session_id":"sess-1","tool_name":"Edit"}"#
+        r#"{"session_id":"sess-1","tool_name":"Edit"}"#,
     )
     .progress(),
     // Subagent lifecycle (Claude Code's Task-tool children, parity with Codex's
     // threads): `SubagentStart` registers a child row keyed by its `agent_id`,
     // `SubagentStop` returns it to idle. Both carry the parent root `session_id`.
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SubagentStart",
-        r#"{"session_id":"sess-parent","agent_id":"child-1","subagent_type":"Explore"}"#
+        r#"{"session_id":"sess-parent","agent_id":"child-1","subagent_type":"Explore"}"#,
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SubagentStop",
-        r#"{"session_id":"sess-parent","agent_id":"child-1","agent_type":"Explore"}"#
+        r#"{"session_id":"sess-parent","agent_id":"child-1","agent_type":"Explore"}"#,
     )
     .progress(),
     // Fires around context compaction (manual `/compact` or auto). Pre opens
     // the transient compacting head; Post carries the trigger bit when present,
     // while SessionStart(source=compact) is the reliable triggerless closer.
-    hook_record!(lifecycle, "PreCompact", r#"{"session_id":"sess-1"}"#),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("PreCompact", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle(
         "PostCompact",
-        r#"{"session_id":"sess-1","trigger":"manual"}"#
+        r#"{"session_id":"sess-1","trigger":"manual"}"#,
     ),
 ];
 

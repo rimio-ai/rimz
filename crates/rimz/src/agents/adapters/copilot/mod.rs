@@ -34,7 +34,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
@@ -211,65 +211,49 @@ const COPILOT_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 };
 
 pub(super) const COPILOT_HOOKS: &[HookEventSpec] = &[
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "sessionStart",
-        r#"{"sessionId":"sess-1","source":"startup"}"#
+        r#"{"sessionId":"sess-1","source":"startup"}"#,
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "userPromptSubmitted",
-        r#"{"sessionId":"sess-1","prompt":"fix auth"}"#
+        r#"{"sessionId":"sess-1","prompt":"fix auth"}"#,
     )
     .progress(),
-    hook_record!(
-        blocking,
+    HookEventSpec::blocking(
         "preToolUse",
         r#"{"sessionId":"sess-1","toolName":"ask_user","toolArgs":{"question":"Proceed?"}}"#,
-        AskKind::Question
+        AskKind::Question,
     )
     .synchronous()
     .with_lifecycle_fallback(),
-    hook_record!(
-        lifecycle,
-        "postToolUse",
-        r#"{"sessionId":"sess-1","toolName":"edit"}"#
-    )
-    .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("postToolUse", r#"{"sessionId":"sess-1","toolName":"edit"}"#)
+        .progress(),
+    HookEventSpec::lifecycle(
         "postToolUseFailure",
-        r#"{"sessionId":"sess-1","toolName":"bash","error":"failed"}"#
+        r#"{"sessionId":"sess-1","toolName":"bash","error":"failed"}"#,
     )
     .progress(),
-    hook_record!(
-        blocking,
+    HookEventSpec::blocking(
         "permissionRequest",
         r#"{"sessionId":"sess-1","toolName":"bash"}"#,
-        AskKind::Permission
+        AskKind::Permission,
     )
     .synchronous(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "agentStop",
-        r#"{"sessionId":"sess-1","stopReason":"end_turn"}"#
+        r#"{"sessionId":"sess-1","stopReason":"end_turn"}"#,
     )
     .progress(),
-    hook_record!(
-        lifecycle,
-        "preCompact",
-        r#"{"sessionId":"sess-1","trigger":"auto"}"#
-    ),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("preCompact", r#"{"sessionId":"sess-1","trigger":"auto"}"#),
+    HookEventSpec::lifecycle(
         "errorOccurred",
-        r#"{"sessionId":"sess-1","recoverable":true,"error":{"message":"retry"}}"#
+        r#"{"sessionId":"sess-1","recoverable":true,"error":{"message":"retry"}}"#,
     ),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "sessionEnd",
-        r#"{"sessionId":"sess-1","reason":"user_exit"}"#
+        r#"{"sessionId":"sess-1","reason":"user_exit"}"#,
     )
     .session_ended(),
 ];

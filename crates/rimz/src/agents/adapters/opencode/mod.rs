@@ -36,7 +36,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
@@ -212,74 +212,60 @@ const OPENCODE_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 };
 
 const OPENCODE_HOOKS: &[HookEventSpec] = &[
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "session_created",
-        r#"{"session_id":"ses_1","cwd":"/tmp/repo"}"#
+        r#"{"session_id":"ses_1","cwd":"/tmp/repo"}"#,
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "chat_message",
-        r#"{"session_id":"ses_1","prompt":"fix auth"}"#
+        r#"{"session_id":"ses_1","prompt":"fix auth"}"#,
     )
     .progress(),
-    hook_record!(lifecycle, "session_idle", r#"{"session_id":"ses_1"}"#).progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("session_idle", r#"{"session_id":"ses_1"}"#).progress(),
+    HookEventSpec::lifecycle(
         "session_error",
-        r#"{"session_id":"ses_1","error_message":"boom"}"#
+        r#"{"session_id":"ses_1","error_message":"boom"}"#,
     )
     .progress(),
-    hook_record!(
-        lifecycle,
-        "tool_after",
-        r#"{"session_id":"ses_1","tool_name":"bash"}"#
-    )
-    .progress(),
-    hook_record!(lifecycle, "session_compacting", r#"{"session_id":"ses_1"}"#),
-    hook_record!(lifecycle, "session_compacted", r#"{"session_id":"ses_1"}"#),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("tool_after", r#"{"session_id":"ses_1","tool_name":"bash"}"#)
+        .progress(),
+    HookEventSpec::lifecycle("session_compacting", r#"{"session_id":"ses_1"}"#),
+    HookEventSpec::lifecycle("session_compacted", r#"{"session_id":"ses_1"}"#),
+    HookEventSpec::lifecycle(
         "SubagentStart",
-        r#"{"session_id":"ses_child","parent_session_id":"ses_parent","prompt":"review auth"}"#
+        r#"{"session_id":"ses_child","parent_session_id":"ses_parent","prompt":"review auth"}"#,
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SubagentStop",
-        r#"{"session_id":"ses_child","parent_session_id":"ses_parent"}"#
+        r#"{"session_id":"ses_child","parent_session_id":"ses_parent"}"#,
     )
     .progress(),
-    hook_record!(
-        blocking,
+    HookEventSpec::blocking(
         "permission_ask",
         r#"{"session_id":"ses_1","tool_name":"bash"}"#,
-        AskKind::Permission
+        AskKind::Permission,
     )
     .synchronous(),
-    hook_record!(
-        blocking,
+    HookEventSpec::blocking(
         "question_ask",
         r#"{"session_id":"ses_1","title":"Which database?"}"#,
-        AskKind::Question
+        AskKind::Question,
     )
     .synchronous(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "permission_replied",
-        r#"{"session_id":"ses_1","reply":"once"}"#
+        r#"{"session_id":"ses_1","reply":"once"}"#,
     ),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "question_replied",
-        r#"{"session_id":"ses_1","answers":[["Postgres"]]}"#
+        r#"{"session_id":"ses_1","answers":[["Postgres"]]}"#,
     ),
-    hook_record!(lifecycle, "question_rejected", r#"{"session_id":"ses_1"}"#),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("question_rejected", r#"{"session_id":"ses_1"}"#),
+    HookEventSpec::lifecycle(
         "session_ended",
-        r#"{"session_id":"ses_1","reason":"deleted"}"#
+        r#"{"session_id":"ses_1","reason":"deleted"}"#,
     )
     .session_ended(),
 ];

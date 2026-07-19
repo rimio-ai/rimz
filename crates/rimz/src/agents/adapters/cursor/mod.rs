@@ -28,7 +28,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation,
@@ -198,61 +198,51 @@ const CURSOR_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 };
 
 pub(super) const CURSOR_HOOKS: &[HookEventSpec] = &[
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "sessionStart",
         r#"{"conversation_id":"c1","session_id":"c1","cursor_version":"1.7"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "beforeSubmitPrompt",
         r#"{"conversation_id":"c1","prompt":"fix it","cursor_version":"1.7"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "postToolUse",
         r#"{"conversation_id":"c1","tool_name":"Write","cwd":"/tmp","cursor_version":"1.7"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "postToolUseFailure",
         r#"{"conversation_id":"c1","tool_name":"Shell","failure_type":"error","cursor_version":"1.7"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "afterAgentResponse",
         r#"{"conversation_id":"c1","text":"done","cursor_version":"1.7"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "stop",
         r#"{"conversation_id":"c1","status":"completed","cursor_version":"1.7"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "sessionEnd",
         r#"{"conversation_id":"c1","reason":"quit","cursor_version":"1.7"}"#
     )
     .session_ended(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "preCompact",
         r#"{"conversation_id":"c1","trigger":"manual","context_usage_percent":83.2,"context_window_size":200000,"cursor_version":"1.7"}"#
     ),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "subagentStart",
         r#"{"subagent_id":"child-1","parent_conversation_id":"c1","subagent_type":"generalPurpose","task":"inspect hooks","cursor_version":"1.7"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "subagentStop",
         r#"{"subagent_id":"child-1","parent_conversation_id":"c1","subagent_type":"generalPurpose","status":"completed","cursor_version":"1.7"}"#
     )

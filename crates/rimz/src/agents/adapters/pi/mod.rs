@@ -51,7 +51,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
@@ -234,23 +234,23 @@ const PI_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 /// Everything the extension wires, in `pi.on(...)` registration order. Selector
 /// and context-update records remain lifecycle-classified enrichment markers.
 const PI_HOOKS: &[HookEventSpec] = &[
-    hook_record!(lifecycle, "session_start", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "before_agent_start", r#"{"session_id":"sess-1","prompt":"fix auth"}"#).progress(),
-    hook_record!(lifecycle, "agent_end", r#"{"session_id":"sess-1","stop_reason":"stop"}"#).progress(),
-    hook_record!(lifecycle, "agent_settled", r#"{"session_id":"sess-1","stop_reason":"stop"}"#),
-    hook_record!(lifecycle, "turn_end", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "after_provider_response", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "message_update", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "session_info_changed", r#"{"session_id":"sess-1","session_name":"Parser cleanup"}"#),
-    hook_record!(lifecycle, "tool_execution_end", r#"{"session_id":"sess-1","tool_call_id":"sibling-call","tool_name":"bash"}"#).progress(),
-    hook_record!(lifecycle, "model_select", r#"{"session_id":"sess-1","model":"gpt-5.5"}"#),
-    hook_record!(lifecycle, "thinking_level_select", r#"{"session_id":"sess-1","effort":"high"}"#),
-    hook_record!(lifecycle, "session_before_compact", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "session_compact", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "session_shutdown", r#"{"session_id":"sess-1"}"#).session_ended(),
-    hook_record!(lifecycle, "subagent_started", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session"}"#),
-    hook_record!(lifecycle, "subagent_stopped", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session","errored":true,"total_tokens":1200}"#),
-    hook_record!(blocking, "tool_call", r#"{"session_id":"sess-1","tool_call_id":"ask-call","tool_name":"ask_user_question","tool_input":{"questions":[{"question":"Which route?","header":"Route","options":[{"label":"Safe","description":"Stage it"},{"label":"Fast","description":"Ship it"}]}]}}"#, AskKind::Question)
+    HookEventSpec::lifecycle( "session_start", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle( "before_agent_start", r#"{"session_id":"sess-1","prompt":"fix auth"}"#).progress(),
+    HookEventSpec::lifecycle( "agent_end", r#"{"session_id":"sess-1","stop_reason":"stop"}"#).progress(),
+    HookEventSpec::lifecycle( "agent_settled", r#"{"session_id":"sess-1","stop_reason":"stop"}"#),
+    HookEventSpec::lifecycle( "turn_end", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle( "after_provider_response", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle( "message_update", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle( "session_info_changed", r#"{"session_id":"sess-1","session_name":"Parser cleanup"}"#),
+    HookEventSpec::lifecycle( "tool_execution_end", r#"{"session_id":"sess-1","tool_call_id":"sibling-call","tool_name":"bash"}"#).progress(),
+    HookEventSpec::lifecycle( "model_select", r#"{"session_id":"sess-1","model":"gpt-5.5"}"#),
+    HookEventSpec::lifecycle( "thinking_level_select", r#"{"session_id":"sess-1","effort":"high"}"#),
+    HookEventSpec::lifecycle( "session_before_compact", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle( "session_compact", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle( "session_shutdown", r#"{"session_id":"sess-1"}"#).session_ended(),
+    HookEventSpec::lifecycle( "subagent_started", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session"}"#),
+    HookEventSpec::lifecycle( "subagent_stopped", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session","errored":true,"total_tokens":1200}"#),
+    HookEventSpec::blocking( "tool_call", r#"{"session_id":"sess-1","tool_call_id":"ask-call","tool_name":"ask_user_question","tool_input":{"questions":[{"question":"Which route?","header":"Route","options":[{"label":"Safe","description":"Stage it"},{"label":"Fast","description":"Ship it"}]}]}}"#, AskKind::Question)
         .synchronous(),
 ];
 

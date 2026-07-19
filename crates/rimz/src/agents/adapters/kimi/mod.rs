@@ -23,7 +23,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, AgentTurnError, FieldPatch, HookOutput, HookRouting,
@@ -37,34 +37,34 @@ use crate::ids::AgentSessionId;
 use crate::transcript::AskQuestion;
 
 pub(super) const KIMI_HOOKS: &[HookEventSpec] = &[
-    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"s"}"#).progress(),
-    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"s","prompt":[{"type":"text","text":"fix"}]}"#).progress(),
-    hook_record!(blocking, "PreToolUse", r#"{"session_id":"s","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Continue?"}]}}"#, super::AskKind::Question)
+    HookEventSpec::lifecycle( "SessionStart", r#"{"session_id":"s"}"#).progress(),
+    HookEventSpec::lifecycle( "UserPromptSubmit", r#"{"session_id":"s","prompt":[{"type":"text","text":"fix"}]}"#).progress(),
+    HookEventSpec::blocking( "PreToolUse", r#"{"session_id":"s","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Continue?"}]}}"#, super::AskKind::Question)
         .with_matcher(".*")
         .synchronous()
         .with_lifecycle_fallback(),
-    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"s","tool_name":"Write"}"#)
+    HookEventSpec::lifecycle( "PostToolUse", r#"{"session_id":"s","tool_name":"Write"}"#)
         .with_matcher(".*")
         .progress(),
-    hook_record!(lifecycle, "PostToolUseFailure", r#"{"session_id":"s","tool_name":"Bash"}"#)
+    HookEventSpec::lifecycle( "PostToolUseFailure", r#"{"session_id":"s","tool_name":"Bash"}"#)
         .with_matcher(".*")
         .progress(),
-    hook_record!(blocking, "PermissionRequest", r#"{"session_id":"s","tool_call_id":"r","tool_name":"Bash","action":"Run shell"}"#, super::AskKind::Permission)
+    HookEventSpec::blocking( "PermissionRequest", r#"{"session_id":"s","tool_call_id":"r","tool_name":"Bash","action":"Run shell"}"#, super::AskKind::Permission)
         .with_matcher(".*")
         .synchronous()
         .with_lifecycle_fallback(),
-    hook_record!(lifecycle, "PermissionResult", r#"{"session_id":"s","tool_call_id":"r","tool_name":"Bash","decision":"approved"}"#)
+    HookEventSpec::lifecycle( "PermissionResult", r#"{"session_id":"s","tool_call_id":"r","tool_name":"Bash","decision":"approved"}"#)
         .with_matcher(".*")
         .progress(),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"s"}"#).progress(),
-    hook_record!(lifecycle, "StopFailure", r#"{"session_id":"s","error_type":"RuntimeError"}"#),
-    hook_record!(lifecycle, "Interrupt", r#"{"session_id":"s","turn_id":"t","reason":"cancelled"}"#).progress(),
-    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"s"}"#).session_ended(),
-    hook_record!(lifecycle, "SubagentStart", r#"{"session_id":"s","agent_name":"coder","prompt":"inspect the parser"}"#).progress(),
-    hook_record!(lifecycle, "SubagentStop", r#"{"session_id":"s","agent_name":"coder","response":"done"}"#).progress(),
-    hook_record!(lifecycle, "PreCompact", r#"{"session_id":"s","trigger":"manual"}"#),
-    hook_record!(lifecycle, "PostCompact", r#"{"session_id":"s","trigger":"auto"}"#),
-    hook_record!(lifecycle, "Notification", r#"{"session_id":"s","notification_type":"task.completed"}"#).progress(),
+    HookEventSpec::lifecycle( "Stop", r#"{"session_id":"s"}"#).progress(),
+    HookEventSpec::lifecycle( "StopFailure", r#"{"session_id":"s","error_type":"RuntimeError"}"#),
+    HookEventSpec::lifecycle( "Interrupt", r#"{"session_id":"s","turn_id":"t","reason":"cancelled"}"#).progress(),
+    HookEventSpec::lifecycle( "SessionEnd", r#"{"session_id":"s"}"#).session_ended(),
+    HookEventSpec::lifecycle( "SubagentStart", r#"{"session_id":"s","agent_name":"coder","prompt":"inspect the parser"}"#).progress(),
+    HookEventSpec::lifecycle( "SubagentStop", r#"{"session_id":"s","agent_name":"coder","response":"done"}"#).progress(),
+    HookEventSpec::lifecycle( "PreCompact", r#"{"session_id":"s","trigger":"manual"}"#),
+    HookEventSpec::lifecycle( "PostCompact", r#"{"session_id":"s","trigger":"auto"}"#),
+    HookEventSpec::lifecycle( "Notification", r#"{"session_id":"s","notification_type":"task.completed"}"#).progress(),
 ];
 
 static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {

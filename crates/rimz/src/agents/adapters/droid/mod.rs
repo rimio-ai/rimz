@@ -27,7 +27,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, AgentTokenUsage, FieldPatch, HookOutput, HookRouting,
@@ -202,13 +202,13 @@ const DROID_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 
 const DROID_HOOK_TIMEOUT_SECS: u64 = 10;
 const DROID_HOOKS: &[HookEventSpec] = &[
-    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "Notification", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "PreCompact", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
+    HookEventSpec::lifecycle("SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("UserPromptSubmit", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("PostToolUse", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("Notification", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("PreCompact", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle("SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
 ];
 const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source droid";
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source droid";

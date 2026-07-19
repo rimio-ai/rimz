@@ -507,16 +507,6 @@ impl HookEventSpec {
     }
 }
 
-macro_rules! hook_record {
-    (lifecycle, $event:literal, $payload:literal) => {
-        $crate::agents::hook_types::HookEventSpec::lifecycle($event, $payload)
-    };
-    (blocking, $event:literal, $payload:literal, $ask:expr) => {
-        $crate::agents::hook_types::HookEventSpec::blocking($event, $payload, $ask)
-    };
-}
-pub(crate) use hook_record;
-
 pub(crate) fn catalog_contains(hooks: &[HookEventSpec], event_name: &str) -> bool {
     hooks.iter().any(|hook| hook.event == event_name)
 }
@@ -677,13 +667,13 @@ mod tests {
     #[test]
     fn hook_catalog_records_derive_policy_and_event_names() {
         const HOOKS: [HookEventSpec; 4] = [
-            hook_record!(lifecycle, "Start", r#"{}"#).progress(),
-            hook_record!(blocking, "Ask", r#"{}"#, AskKind::Question).synchronous(),
-            hook_record!(blocking, "Permission", r#"{}"#, AskKind::Permission)
+            HookEventSpec::lifecycle("Start", r#"{}"#).progress(),
+            HookEventSpec::blocking("Ask", r#"{}"#, AskKind::Question).synchronous(),
+            HookEventSpec::blocking("Permission", r#"{}"#, AskKind::Permission)
                 .with_matcher("shell")
                 .synchronous()
                 .with_lifecycle_fallback(),
-            hook_record!(lifecycle, "Stop", r#"{}"#)
+            HookEventSpec::lifecycle("Stop", r#"{}"#)
                 .with_matcher("done")
                 .session_ended(),
         ];

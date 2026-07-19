@@ -23,7 +23,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
@@ -193,32 +193,27 @@ const AMP_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 };
 
 const AMP_HOOKS: &[HookEventSpec] = &[
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "session_start",
         r#"{"session_id":"T-abc123","cwd":"/tmp/repo"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "agent_start",
         r#"{"session_id":"T-abc123","prompt":"fix auth"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "tool_result",
         r#"{"session_id":"T-abc123","tool_name":"apply_patch","status":"done","files_modified":true}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "agent_end",
         r#"{"session_id":"T-abc123","status":"done"}"#
     )
     .progress(),
-    hook_record!(
-        blocking,
+    HookEventSpec::blocking(
         "permission_ask",
         r#"{"session_id":"T-abc123"}"#,
         AskKind::Permission

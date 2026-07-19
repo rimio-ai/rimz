@@ -26,9 +26,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{
-    BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook, hook_record,
-};
+use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
@@ -209,50 +207,41 @@ const QWEN_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 
 const QWEN_HOOK_TIMEOUT_MS: u64 = 10_000;
 const QWEN_HOOKS: &[HookEventSpec] = &[
-    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
-    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(lifecycle, "StopFailure", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "Notification", r#"{"session_id":"sess-1"}"#),
-    hook_record!(
-        blocking,
+    HookEventSpec::lifecycle("SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
+    HookEventSpec::lifecycle("UserPromptSubmit", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("StopFailure", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle("Notification", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::blocking(
         "PreToolUse",
         r#"{"tool_name":"ask_user_question","tool_use_id":"ask-1"}"#,
-        AskKind::Question
+        AskKind::Question,
     )
     .with_matcher("ask_user_question|exit_plan_mode")
     .synchronous()
     .with_lifecycle_fallback(),
-    hook_record!(
-        blocking,
+    HookEventSpec::blocking(
         "PermissionRequest",
         r#"{"tool_name":"run_shell_command"}"#,
-        AskKind::Permission
+        AskKind::Permission,
     )
     .synchronous()
     .with_lifecycle_fallback(),
-    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"sess-1"}"#).progress(),
-    hook_record!(
-        lifecycle,
-        "PostToolUseFailure",
-        r#"{"session_id":"sess-1"}"#
-    )
-    .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle("PostToolUse", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("PostToolUseFailure", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle(
         "SubagentStart",
-        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#
+        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#,
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SubagentStop",
-        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#
+        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#,
     )
     .progress(),
-    hook_record!(lifecycle, "PreCompact", r#"{"session_id":"sess-1"}"#),
-    hook_record!(lifecycle, "PostCompact", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle("PreCompact", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle("PostCompact", r#"{"session_id":"sess-1"}"#),
 ];
 const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source qwen";
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source qwen";

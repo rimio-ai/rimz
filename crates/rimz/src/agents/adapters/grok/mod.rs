@@ -19,7 +19,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
     SamePaneSessionPolicy, ThreadKey, ToolClassification,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_hook, hook_record};
+use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
     AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError, FieldPatch,
@@ -200,67 +200,57 @@ pub(super) const RIMZ_HOOK_COMMAND: &str = "rimz hooks feed --source grok";
 pub(super) const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source grok";
 
 pub(super) const GROK_HOOKS: &[HookEventSpec] = &[
-    hook_record!(lifecycle, "SessionStart", r#"{"sessionId":"s1"}"#).progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle( "SessionStart", r#"{"sessionId":"s1"}"#).progress(),
+    HookEventSpec::lifecycle(
         "UserPromptSubmit",
         r#"{"sessionId":"s1","prompt":"hello"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PostToolUse",
         r#"{"sessionId":"s1","toolName":"apply_patch"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PostToolUseFailure",
         r#"{"sessionId":"s1","toolName":"apply_patch","error":"failed"}"#
     )
     .progress(),
-    hook_record!(
-        blocking,
+    HookEventSpec::blocking(
         "Notification",
         r#"{"sessionId":"s1","notificationType":"permission_prompt","message":"Tool permission requested"}"#,
         AskKind::Permission
     )
     .with_lifecycle_fallback(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "StopFailure",
         r#"{"sessionId":"s1","error":"failed"}"#
     ),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "Stop",
         r#"{"sessionId":"s1","reason":"end_turn"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SubagentStart",
         r#"{"sessionId":"s1","subagentId":"child"}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "SubagentStop",
         r#"{"sessionId":"s1","subagentId":"child","exitCode":0}"#
     )
     .progress(),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PreCompact",
         r#"{"sessionId":"s1","source":"auto"}"#
     ),
-    hook_record!(
-        lifecycle,
+    HookEventSpec::lifecycle(
         "PostCompact",
         r#"{"sessionId":"s1","source":"auto"}"#
     )
     .progress(),
-    hook_record!(lifecycle, "SessionEnd", r#"{"sessionId":"s1"}"#).session_ended(),
+    HookEventSpec::lifecycle( "SessionEnd", r#"{"sessionId":"s1"}"#).session_ended(),
 ];
 
 const KNOWN_EVENTS: &[&str] = &[

@@ -26,7 +26,7 @@ use super::definition::{
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
     SamePaneSessionPolicy, ThreadKey, ToolClassification,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_entry, hook_record};
+use super::hook_types::{HookEventSpec, decode_catalog_entry};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation, Result,
@@ -63,8 +63,7 @@ pub(super) struct AntigravityHook {
 
 pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
     AntigravityHook {
-        hook: hook_record!(
-            lifecycle,
+        hook: HookEventSpec::lifecycle(
             "PreInvocation",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl","invocationNum":0}"#
         )
@@ -74,8 +73,7 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PreInvocation",
     },
     AntigravityHook {
-        hook: hook_record!(
-            lifecycle,
+        hook: HookEventSpec::lifecycle(
             "PostToolUse:edit",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
         )
@@ -85,8 +83,7 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:edit",
     },
     AntigravityHook {
-        hook: hook_record!(
-            lifecycle,
+        hook: HookEventSpec::lifecycle(
             "PostToolUse:mutating",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
         )
@@ -96,8 +93,7 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:mutating",
     },
     AntigravityHook {
-        hook: hook_record!(
-            lifecycle,
+        hook: HookEventSpec::lifecycle(
             "PostToolUse:observed",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
         )
@@ -109,8 +105,7 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:observed",
     },
     AntigravityHook {
-        hook: hook_record!(
-            lifecycle,
+        hook: HookEventSpec::lifecycle(
             "PostInvocation",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
         )
@@ -120,8 +115,7 @@ pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostInvocation",
     },
     AntigravityHook {
-        hook: hook_record!(
-            lifecycle,
+        hook: HookEventSpec::lifecycle(
             "Stop",
             r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl","fullyIdle":true,"terminationReason":"model_stop"}"#
         )
