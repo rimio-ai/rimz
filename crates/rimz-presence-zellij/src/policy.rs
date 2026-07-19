@@ -103,8 +103,6 @@ pub struct TopologyPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub writer: Option<TopologyWriter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub focused_pane: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clients: Option<ClientSample>,
     pub panes: Vec<PaneFields>,
 }
@@ -141,7 +139,6 @@ pub fn published_topology_payload(
     session_name: impl Into<String>,
     produced_at_ms: u64,
     writer: Option<TopologyWriter>,
-    focused_pane: Option<u32>,
     clients: Option<ClientSample>,
     panes: &[PaneFields],
 ) -> Option<TopologyPayload> {
@@ -152,7 +149,6 @@ pub fn published_topology_payload(
         session_name: session_name.into(),
         produced_at_ms,
         writer,
-        focused_pane,
         clients,
         panes: panes.to_vec(),
     })

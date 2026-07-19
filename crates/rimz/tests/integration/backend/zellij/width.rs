@@ -65,9 +65,7 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     let tab_name = "explicit width";
     backend
         .open_tab(&TabOptions {
-            session_name: name.clone(),
             title: tab_name.to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],

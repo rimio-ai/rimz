@@ -54,13 +54,20 @@ fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
 }
 
 #[test]
-fn published_topology_payload_carries_session_focus_without_pane_marks() {
+fn published_topology_payload_carries_clients_without_focus_verdict() {
     let manifest = vec![pane(1), pane(2)];
-    let payload = published_topology_payload("rimz-test", 42, None, Some(2), None, &manifest)
+    let clients = ClientSample {
+        views: vec![ClientViewEntry {
+            client_id: 1,
+            pane_id: ClientPaneId::Terminal(2),
+        }],
+    };
+    let payload = published_topology_payload("rimz-test", 42, None, Some(clients), &manifest)
         .expect("topology payload publishes");
 
-    assert_eq!(payload.focused_pane, Some(2));
     let json = serde_json::to_value(payload).expect("topology serializes");
+    assert!(json.get("focused_pane").is_none());
+    assert_eq!(json["clients"]["views"][0]["pane_id"]["id"], 2);
     assert!(json["panes"].as_array().unwrap().iter().all(|pane| {
         pane.as_object()
             .is_some_and(|pane| !pane.contains_key("is_focused"))
@@ -78,7 +85,6 @@ fn published_topology_payload_carries_writer() {
             build: Some("wasm-build".to_owned()),
             config: Some("config-hash".to_owned()),
         }),
-        None,
         None,
         &[pane(1)],
     )
@@ -104,7 +110,7 @@ fn published_topology_payload_carries_event_enrichment() {
         ..pane(1)
     };
     let manifest = vec![enriched];
-    let payload = published_topology_payload("rimz-test", 42, None, Some(1), None, &manifest)
+    let payload = published_topology_payload("rimz-test", 42, None, None, &manifest)
         .expect("topology payload publishes");
     let encoded = serde_json::to_value(payload).expect("payload serializes");
 

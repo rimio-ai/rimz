@@ -245,7 +245,6 @@ pub(super) fn launch_layout(
         PlacementRequest {
             placement,
             mux,
-            session_name: workspace.session_name.clone(),
             cwd,
             title,
             panes,
@@ -396,7 +395,6 @@ fn launch_resume_layout(
         PlacementRequest {
             placement,
             mux,
-            session_name: workspace.session_name.clone(),
             cwd,
             title,
             panes,

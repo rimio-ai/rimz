@@ -480,31 +480,12 @@ pub(crate) fn resolve_session_focus(
     }
 
     if client_view_fresh {
-        if !client_views.is_empty() {
-            let live_viewed = client_views
-                .iter()
-                .map(|view| &view.pane_id)
-                .filter(|pane| live.contains(*pane))
-                .cloned()
-                .collect::<HashSet<_>>();
-            if live_viewed.len() != 1
-                || client_views
-                    .iter()
-                    .any(|view| !live_viewed.contains(&view.pane_id))
-            {
-                return None;
-            }
-            return live_viewed.into_iter().next();
+        return crate::mux::ClientView {
+            clients: client_views.to_vec(),
+            viewed_panes: client_viewed.to_vec(),
+            presence: crate::mux::ClientPresence::default(),
         }
-        let live_viewed = client_viewed
-            .iter()
-            .filter(|pane| live.contains(*pane))
-            .cloned()
-            .collect::<HashSet<_>>();
-        return match live_viewed.into_iter().collect::<Vec<_>>().as_slice() {
-            [pane] => Some(pane.clone()),
-            _ => None,
-        };
+        .unique_live_focus(live);
     }
 
     prior.filter(|prior| live.contains(*prior)).cloned()

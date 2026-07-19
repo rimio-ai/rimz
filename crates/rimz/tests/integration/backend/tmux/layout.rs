@@ -368,9 +368,7 @@ fn open_tab_builds_multi_column_layout() {
     server
         .backend
         .open_tab(&TabOptions {
-            session_name: "rimz-tab".to_owned(),
             title: "work".to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![
                     // Column 0: two tiled rows — the `new-window` pane plus a
@@ -441,9 +439,7 @@ fn open_tab_builds_multi_column_layout() {
     server
         .backend
         .open_tab(&TabOptions {
-            session_name: "rimz-tab".to_owned(),
             title: "solo".to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![work_pane()])],
             },
@@ -512,9 +508,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
     server
         .backend
         .open_tab(&TabOptions {
-            session_name: "rimz-gallery".to_owned(),
             title: "gallery".to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![work_pane()])],
             },
@@ -608,9 +602,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
     server
         .backend
         .open_tab(&TabOptions {
-            session_name: "rimz-narrow-tab".to_owned(),
             title: "float".to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![
                     tiled_column(vec![work_pane()]),

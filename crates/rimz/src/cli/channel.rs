@@ -234,9 +234,7 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
     }
     let sidebar = room.sidebar_options(&workspace.worktree_root, Vec::new(), None);
     let _ = backend.open_tab(&TabOptions {
-        session_name: workspace.session_name.clone(),
         title: format!("#{channel}"),
-        cwd: workspace.worktree_root.clone(),
         panes: LayoutPanes {
             columns: vec![LayoutColumn {
                 panes: vec![PaneCmd {

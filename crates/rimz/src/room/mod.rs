@@ -305,7 +305,6 @@ impl RoomContext {
             detected_view_size: detected_size,
             width_override,
             rimz_bin: self.rimz_bin.clone(),
-            replace_existing: false,
             pristine_birth: false,
             config: self.mux_config.clone(),
             resume_tabs,

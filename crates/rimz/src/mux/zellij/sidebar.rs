@@ -4,15 +4,15 @@ use std::collections::{BTreeSet, HashSet};
 use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
-use super::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
 use super::parse::{
     SessionState, classify_session_not_found, is_session_not_found,
     parse_focused_terminal_client_ids, strip_ansi,
 };
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
-    nested_work_pane_ids, parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids,
-    sidebar_dock_verdict, tab_view_cols, wrong_tab_mounted_sidebar_pane,
+    nested_work_pane_ids, parse_new_pane_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
+    tab_view_cols, wrong_tab_mounted_sidebar_pane,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -274,8 +274,7 @@ impl ZellijBackend {
                         reason: format!("tab {tab_position} has no stable work pane to target"),
                     }
                 })?;
-            let target_pane =
-                PaneId::from_parts(MuxName::Zellij, format!("terminal_{target_pane}"));
+            let target_pane = PaneId::from(ZellijPaneId::Terminal(target_pane));
             let tab_id = self.tab_id_for_pane(&opts.session_name, &target_pane)?;
             // A `new-pane` failure is remembered, not fatal yet: concurrent
             // action clients can cross-talk responses, so the command can
@@ -290,13 +289,13 @@ impl ZellijBackend {
                 &opts.session_name,
                 tab_position,
                 &before,
-                hint.as_deref(),
+                hint.as_ref(),
                 floor_ms,
                 &opts.workspace_id,
             ) else {
                 if let Some(raw_id) = fallback_misdocked {
                     return Ok(AddedSidebar {
-                        pane: PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw_id}")),
+                        pane: PaneId::from(ZellijPaneId::Terminal(raw_id)),
                         dock: DockOutcome::Misdocked,
                     });
                 }
@@ -318,7 +317,7 @@ impl ZellijBackend {
                     });
                 }
             };
-            let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw_id}"));
+            let pane = PaneId::from(ZellijPaneId::Terminal(raw_id));
             if let Some(previous) = fallback_misdocked.take() {
                 self.cleanup_failed_add(opts, previous);
             }
@@ -343,7 +342,7 @@ impl ZellijBackend {
                     fallback_misdocked = Some(raw_id);
                 }
                 DockOutcome::Misdocked => {
-                    let pane_id = format!("terminal_{raw_id}");
+                    let pane_id = ZellijPaneId::Terminal(raw_id).action_target();
                     tracing::warn!(
                         session = %opts.session_name,
                         tab = tab_position,
@@ -371,11 +370,11 @@ impl ZellijBackend {
         session: &str,
         tab_position: u64,
         before: &HashSet<u64>,
-        hint: Option<&str>,
+        hint: Option<&ZellijPaneId>,
         floor_ms: u64,
         workspace_id: &WorkspaceId,
     ) -> Option<MountOutcome> {
-        let hint_raw = hint.and_then(parse_terminal_id);
+        let hint_raw = hint.copied().and_then(ZellijPaneId::terminal_id);
         let deadline = Instant::now() + MOUNT_POLL_TIMEOUT;
         loop {
             if let Ok(panes) = self.topology_panes_for_workspace(
@@ -444,7 +443,10 @@ impl ZellijBackend {
         let [viewed] = view.viewed_panes.as_slice() else {
             return;
         };
-        let Some(viewed) = viewed.creation_ordinal() else {
+        let Some(viewed) = ZellijPaneId::try_from(viewed)
+            .ok()
+            .and_then(ZellijPaneId::terminal_id)
+        else {
             return;
         };
         let Ok(panes) =
@@ -469,7 +471,7 @@ impl ZellijBackend {
             self,
             &runtime,
             session,
-            super::raw_pane::zellij_pane_id(work),
+            PaneId::from(ZellijPaneId::Terminal(work)),
             crate::sidebar::focus_anchor::FocusOrigin::User,
             None,
             crate::sidebar::focus_anchor::FocusDispatchRetries {
@@ -512,7 +514,7 @@ impl ZellijBackend {
         raw_id: u64,
         stack_multicolumn_work: bool,
     ) -> Option<u64> {
-        let pane_raw = format!("terminal_{raw_id}");
+        let pane_raw = ZellijPaneId::Terminal(raw_id).action_target();
         let mut floor = None;
         let Ok(mut listing) =
             self.structural_geometry_listing(&opts.session_name, &opts.workspace_id, floor)
@@ -733,7 +735,10 @@ impl ZellijBackend {
             std::thread::sleep(MOUNT_POLL_STEP);
         };
         let mut args = vec!["stack-panes".to_owned(), "--".to_owned()];
-        args.extend(work.iter().map(|id| format!("terminal_{id}")));
+        args.extend(
+            work.iter()
+                .map(|id| ZellijPaneId::Terminal(*id).action_target()),
+        );
         let action_floor = unix_now_ms();
         match self.zellij_action(&opts.session_name).args(args).run() {
             Ok(_) => Some(action_floor),
@@ -755,7 +760,7 @@ impl ZellijBackend {
     /// the spawned serve pair attributed to that pane. A stdout-only
     /// `new-pane` hint never reaches this path.
     pub(super) fn cleanup_failed_add(&self, opts: &SidebarPaneOptions, raw_id: u64) {
-        let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw_id}"));
+        let pane = PaneId::from(ZellijPaneId::Terminal(raw_id));
         let _ = self.close_pane(&opts.session_name, &pane);
         let killed = super::super::recovery::kill_sidebar_serve_for_pane(
             opts.workspace_id.as_str(),
@@ -813,7 +818,7 @@ impl ZellijBackend {
         &self,
         opts: &SidebarPaneOptions,
         tab_id: u64,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ZellijPaneId>> {
         let mut args = vec![
             "new-pane".to_owned(),
             "--tab-id".to_owned(),
@@ -932,7 +937,7 @@ impl ZellijBackend {
             if self
                 .resize_sidebar_step(
                     &opts.session_name,
-                    &format!("terminal_{raw_id}"),
+                    &ZellijPaneId::Terminal(raw_id).action_target(),
                     if grow { "increase" } else { "decrease" },
                 )
                 .is_err()

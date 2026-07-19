@@ -44,12 +44,6 @@ fn sidebar_launch_opens_once_without_heartbeat() {
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert_eq!(backend.open_calls(), 1);
     assert_eq!(backend.reconcile_calls(), 0);
-    assert_eq!(
-        backend.replace_existing_values(),
-        vec![true],
-        "missing/stale heartbeat means any existing sidebar pane may be stale \
-         and must be replaced"
-    );
 }
 
 #[test]
@@ -63,7 +57,6 @@ fn sidebar_launch_replaces_old_protocol_heartbeat() {
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert_eq!(backend.open_calls(), 1);
     assert_eq!(backend.reconcile_calls(), 0);
-    assert_eq!(backend.replace_existing_values(), vec![true]);
 }
 
 #[test]
@@ -131,7 +124,6 @@ impl SidebarHarness {
             detected_view_size: None,
             width_override: None,
             rimz_bin: std::env::current_exe().expect("test executable"),
-            replace_existing: false,
             pristine_birth: false,
             config: rimz::config::MultiplexerConfig::default(),
             resume_tabs: Vec::new(),
@@ -166,7 +158,6 @@ impl SidebarHarness {
 struct FakeBackend {
     open_calls: Mutex<usize>,
     reconcile_calls: Mutex<usize>,
-    replace_existing_values: Mutex<Vec<bool>>,
     fail_open: bool,
 }
 
@@ -175,7 +166,6 @@ impl FakeBackend {
         Self {
             open_calls: Mutex::new(0),
             reconcile_calls: Mutex::new(0),
-            replace_existing_values: Mutex::new(Vec::new()),
             fail_open: true,
         }
     }
@@ -186,13 +176,6 @@ impl FakeBackend {
 
     fn reconcile_calls(&self) -> usize {
         *self.reconcile_calls.lock().expect("reconcile calls")
-    }
-
-    fn replace_existing_values(&self) -> Vec<bool> {
-        self.replace_existing_values
-            .lock()
-            .expect("replace existing values")
-            .clone()
     }
 }
 
@@ -310,14 +293,10 @@ impl MuxBackend for FakeBackend {
 
     fn open_sidebar(
         &self,
-        opts: &SidebarPaneOptions,
+        _opts: &SidebarPaneOptions,
         _daemon: Option<&DaemonView>,
     ) -> rimz::mux::Result<()> {
         *self.open_calls.lock().expect("open calls") += 1;
-        self.replace_existing_values
-            .lock()
-            .expect("replace existing values")
-            .push(opts.replace_existing);
         if self.fail_open {
             return Err(MuxErr::Command {
                 program: "fake".to_owned(),

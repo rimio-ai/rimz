@@ -33,7 +33,6 @@ fn open_tab_unfocused_routes_input_back_to_source() {
         detected_view_size: None,
         width_override: None,
         rimz_bin: stub,
-        replace_existing: false,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
@@ -51,9 +50,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     let input_log = cwd.path().join("source-input.log");
     backend
         .open_tab(&TabOptions {
-            session_name: name.clone(),
             title: source_tab.to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec![
@@ -90,9 +87,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     let background_tab = "background run";
     backend
         .open_tab(&TabOptions {
-            session_name: name.clone(),
             title: background_tab.to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
@@ -149,7 +144,6 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
         detected_view_size: None,
         width_override: None,
         rimz_bin: stub,
-        replace_existing: false,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
@@ -168,9 +162,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     };
     backend
         .open_tab(&TabOptions {
-            session_name: name.clone(),
             title: tab_name.to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![work_pane()])],
             },
@@ -221,7 +213,6 @@ fn native_focused_split_preserves_docked_sidebar() {
         detected_view_size: None,
         width_override: None,
         rimz_bin: stub,
-        replace_existing: false,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
@@ -245,9 +236,7 @@ fn native_focused_split_preserves_docked_sidebar() {
     let split_tab = "backend focused split";
     backend
         .open_tab(&TabOptions {
-            session_name: name.clone(),
             title: split_tab.to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![
                     tiled_column(vec![work_pane()]),

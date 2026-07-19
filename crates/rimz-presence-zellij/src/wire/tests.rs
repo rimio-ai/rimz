@@ -32,7 +32,7 @@ fn pane(id: u32) -> PaneFields {
     }
 }
 #[test]
-fn topology_json_carries_focused_pane() {
+fn topology_json_carries_writer_without_focus_verdict() {
     let panes = vec![pane(7)];
     let json = topology_json(
         Some("session-1"),
@@ -43,14 +43,13 @@ fn topology_json_carries_focused_pane() {
             build: Some("wasm-build".to_owned()),
             config: Some("config-hash".to_owned()),
         }),
-        Some(7),
         None,
         &panes,
     )
     .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
-    assert_eq!(payload["focused_pane"], 7);
+    assert!(payload.get("focused_pane").is_none());
     assert_eq!(payload["writer"]["plugin_id"], 9);
     assert_eq!(payload["writer"]["loaded_at_ms"], 1000);
     assert_eq!(payload["writer"]["build"], "wasm-build");
@@ -65,8 +64,8 @@ fn topology_json_carries_present_pid_and_omits_absent_pid() {
         ..pane(7)
     };
     let panes = vec![enriched, pane(8)];
-    let json = topology_json(Some("session-1"), 42, None, Some(7), None, &panes)
-        .expect("topology serializes");
+    let json =
+        topology_json(Some("session-1"), 42, None, None, &panes).expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
     assert_eq!(payload["panes"][0]["pane_command"], "zsh");
@@ -84,7 +83,7 @@ fn topology_json_carries_clients_when_sampled() {
             pane_id: policy::ClientPaneId::Terminal(7),
         }],
     };
-    let json = topology_json(Some("session-1"), 42, None, Some(7), Some(&clients), &panes)
+    let json = topology_json(Some("session-1"), 42, None, Some(&clients), &panes)
         .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
@@ -92,8 +91,8 @@ fn topology_json_carries_clients_when_sampled() {
     assert!(payload["clients"].get("viewed_panes").is_none());
     assert_eq!(payload["clients"]["views"][0]["client_id"], 1);
 
-    let json = topology_json(Some("session-1"), 42, None, Some(7), None, &panes)
-        .expect("topology serializes");
+    let json =
+        topology_json(Some("session-1"), 42, None, None, &panes).expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
     assert!(payload.get("clients").is_none());
 }

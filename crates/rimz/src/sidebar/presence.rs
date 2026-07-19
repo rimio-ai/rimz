@@ -5,6 +5,7 @@
 //! fencing and publication, presence stamping, plugin telemetry, and event
 //! mapping. A stale writer returns before any accepted-wake side effect.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -15,8 +16,9 @@ use crate::diag::plugin_presence::{PluginPresenceSample, WASM_PAGE_BYTES};
 use crate::diag::record::DiagEvent;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{
-    PaneTopologyCache, TopologyWriter, classify_switch_settled,
+    PaneTopologyCache, PaneTopologyPane, TopologyWriter, ZellijPaneId,
 };
+use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::cache::{
     PresenceDesired, pane_topology_cache_is_fresh, read_pane_topology_cache, read_presence_desired,
     write_pane_topology_cache, write_presence_stamp,
@@ -25,9 +27,10 @@ use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, StatePaths};
 
-mod diff;
+pub(crate) mod projector;
+pub(crate) mod tmux;
 
-use diff::derive_sidebar_events;
+use projector::{PaneObservation, PresencePaneRole, PresenceTransition, project_presence};
 
 const TOPOLOGY_CONFLICT_DIAG_MS: u64 = 60_000;
 /// Private `rimz sidebar wake` status consumed by the Zellij plugin. Three
@@ -101,7 +104,7 @@ pub fn ingest_zellij_wake(
     runtime: &RuntimePaths,
     wake: &ZellijWake,
 ) -> Result<ZellijWakeOutcome, ZellijWakeError> {
-    let mut events = Vec::new();
+    let mut transitions = Vec::new();
     let mut accepted_topology = None;
     if let Some(incoming) = wake.topology.as_ref() {
         let _guard = crate::store::lock::WorkspaceLock::acquire_with_timeout(
@@ -125,7 +128,7 @@ pub fn ingest_zellij_wake(
             .is_none_or(|existing| incoming.writer != existing.writer);
         let mut cache = incoming.clone();
         sanitize_topology_cache(&mut cache);
-        events = derive_sidebar_events(
+        transitions = derive_zellij_transitions(
             existing.as_ref(),
             &cache,
             wake.reason == ZellijWakeReason::Announced,
@@ -152,13 +155,20 @@ pub fn ingest_zellij_wake(
         write_plugin_presence_sample(state, wake.session_name.clone(), telemetry);
     }
     if wake.topology.is_none() && wake.reason == ZellijWakeReason::Announced {
-        events.push(SidebarEvent::PanesChanged);
+        transitions.push(PresenceTransition::Nudge);
     }
     if wake.reason == ZellijWakeReason::FocusStranded
         && let (Some(pane_id), Some(generation)) = (&wake.pane_id, wake.focus_generation)
     {
-        events.push(SidebarEvent::FocusStranded {
-            pane_id: pane_id.clone(),
+        transitions.push(PresenceTransition::ViewSwitched {
+            focused: Some(PaneObservation {
+                pane_id: pane_id.clone(),
+                view: String::new(),
+                command: None,
+                role: PresencePaneRole::Sidebar,
+            }),
+            prior: None,
+            has_working: true,
             generation,
             clients: wake.focus_clients.clone(),
         });
@@ -173,18 +183,172 @@ pub fn ingest_zellij_wake(
         let topology = accepted_topology
             .filter(|topology| topology.session_name == session_name)
             .or_else(|| read_pane_topology_cache(runtime, session_name));
-        let repair_owner = topology.as_ref().and_then(|topology| {
-            classify_switch_settled(topology, active_tab, &wake.focus_clients)
-        });
-        if let Some(pane_id) = repair_owner {
-            events.push(SidebarEvent::FocusStranded {
-                pane_id,
-                generation,
-                clients: wake.focus_clients.clone(),
+        if let Some(transition) = topology.as_ref().and_then(|topology| {
+            switch_settled_transition(topology, active_tab, generation, &wake.focus_clients)
+        }) {
+            transitions.push(transition);
+        }
+    }
+    Ok(ZellijWakeOutcome::Accepted(project_presence(transitions)))
+}
+
+fn derive_zellij_transitions(
+    existing: Option<&PaneTopologyCache>,
+    incoming: &PaneTopologyCache,
+    announced: bool,
+) -> Vec<PresenceTransition> {
+    if !announced {
+        return Vec::new();
+    }
+    let Some(existing) = existing.filter(|cache| cache.writer == incoming.writer) else {
+        return vec![PresenceTransition::Nudge];
+    };
+    let old = panes_by_native_id(existing);
+    let new = panes_by_native_id(incoming);
+    let mut transitions = Vec::new();
+
+    for (id, pane) in &old {
+        if id.terminal_id().is_some() && !new.contains_key(id) {
+            transitions.push(PresenceTransition::PaneRemoved(pane_observation(pane)));
+        }
+    }
+    for (id, pane) in &new {
+        if !old.contains_key(id) && id.terminal_id().is_some() && pane.is_live_terminal() {
+            let mut current = pane_observation(pane);
+            current.command = pane
+                .pane_command
+                .as_deref()
+                .or(pane.terminal_command.as_deref())
+                .filter(|command| !command.is_empty() && !command_is_launch_chrome(command))
+                .map(str::to_owned);
+            transitions.push(PresenceTransition::PaneObserved {
+                current,
+                previous: None,
             });
         }
     }
-    Ok(ZellijWakeOutcome::Accepted(events))
+    for (id, pane) in &new {
+        let Some(previous) = old.get(id) else {
+            continue;
+        };
+        if id.terminal_id().is_some()
+            && previous.is_live_terminal()
+            && pane.is_live_terminal()
+            && previous.pane_command != pane.pane_command
+        {
+            transitions.push(PresenceTransition::PaneObserved {
+                current: pane_observation(pane),
+                previous: Some(pane_observation(previous)),
+            });
+        }
+    }
+    let prior_focus = existing.projected_session_focus();
+    let current_focus = incoming.projected_session_focus();
+    if prior_focus != current_focus {
+        transitions.push(PresenceTransition::PaneFocused {
+            focused: current_focus
+                .as_ref()
+                .and_then(|pane| observation_for_id(incoming, pane)),
+            prior: prior_focus
+                .as_ref()
+                .and_then(|pane| observation_for_id(existing, pane)),
+        });
+    }
+    transitions.push(PresenceTransition::Nudge);
+    transitions
+}
+
+fn panes_by_native_id(cache: &PaneTopologyCache) -> BTreeMap<ZellijPaneId, &PaneTopologyPane> {
+    cache
+        .panes
+        .iter()
+        .map(|pane| (pane.native_id(), pane))
+        .collect()
+}
+
+fn pane_observation(pane: &PaneTopologyPane) -> PaneObservation {
+    let role = if topology_pane_is_sidebar(pane) {
+        PresencePaneRole::Sidebar
+    } else if pane
+        .pane_command
+        .as_deref()
+        .or(pane.terminal_command.as_deref())
+        .is_some_and(command_is_launch_chrome)
+    {
+        PresencePaneRole::LaunchChrome
+    } else {
+        PresencePaneRole::Working
+    };
+    PaneObservation {
+        pane_id: PaneId::from(pane.native_id()),
+        view: pane.tab_position.to_string(),
+        command: pane
+            .pane_command
+            .as_deref()
+            .filter(|command| !command.is_empty())
+            .map(str::to_owned),
+        role,
+    }
+}
+
+fn observation_for_id(cache: &PaneTopologyCache, pane_id: &PaneId) -> Option<PaneObservation> {
+    let native = ZellijPaneId::try_from(pane_id).ok()?;
+    cache
+        .panes
+        .iter()
+        .find(|pane| pane.native_id() == native)
+        .map(pane_observation)
+}
+
+fn switch_settled_transition(
+    topology: &PaneTopologyCache,
+    active_tab: u64,
+    generation: u64,
+    clients: &[crate::mux::ClientPaneView],
+) -> Option<PresenceTransition> {
+    let mut viewed = clients.iter().map(|client| &client.pane_id);
+    let first = viewed.next()?;
+    if viewed.any(|pane| pane != first) {
+        return None;
+    }
+    match ZellijPaneId::try_from(first).ok()? {
+        ZellijPaneId::Terminal(id) => {
+            let pane = topology
+                .panes
+                .iter()
+                .find(|pane| pane.native_id() == ZellijPaneId::Terminal(id))?;
+            if !pane.is_live_terminal()
+                || pane.tab_position == active_tab && !topology_pane_is_sidebar(pane)
+            {
+                return None;
+            }
+        }
+        ZellijPaneId::Plugin(_) => {}
+    }
+    let mut sidebars = topology.panes.iter().filter(|pane| {
+        pane.tab_position == active_tab && pane.is_live_terminal() && topology_pane_is_sidebar(pane)
+    });
+    let sidebar = sidebars.next()?;
+    if sidebars.next().is_some()
+        || !topology.panes.iter().any(|pane| {
+            pane.tab_position == active_tab
+                && pane.is_live_terminal()
+                && !topology_pane_is_sidebar(pane)
+        })
+    {
+        return None;
+    }
+    Some(PresenceTransition::ViewSwitched {
+        focused: Some(pane_observation(sidebar)),
+        prior: None,
+        has_working: true,
+        generation,
+        clients: clients.to_vec(),
+    })
+}
+
+fn topology_pane_is_sidebar(pane: &PaneTopologyPane) -> bool {
+    !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_CHROME_TITLE)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

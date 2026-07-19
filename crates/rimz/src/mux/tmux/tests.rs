@@ -182,16 +182,13 @@ fn open_tab_rejects_an_empty_layout() {
         detected_view_size: None,
         width_override: None,
         rimz_bin: PathBuf::from("/bin/true"),
-        replace_existing: false,
         pristine_birth: false,
         config: crate::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
     let tab = |columns: Vec<Vec<PaneCmd>>| TabOptions {
-        session_name: "rimz-empty".to_owned(),
         title: "work".to_owned(),
-        cwd: PathBuf::from("/tmp/rimz-empty"),
         panes: LayoutPanes {
             columns: columns
                 .into_iter()

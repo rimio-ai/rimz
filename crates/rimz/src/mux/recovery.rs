@@ -704,7 +704,6 @@ mod tests {
             detected_view_size: None,
             width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
-            replace_existing: false,
             pristine_birth: false,
             config: crate::config::MultiplexerConfig::default(),
             resume_tabs: Vec::new(),

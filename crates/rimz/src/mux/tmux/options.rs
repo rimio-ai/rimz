@@ -1,13 +1,12 @@
 //! tmux room options and sidebar-pane classification.
 
-use std::collections::HashMap;
 use std::num::NonZeroU16;
 use std::path::Path;
 
 use crate::config::{TmuxConfig, TmuxExtendedKeysFormat};
 use crate::ids::MuxName;
-use crate::mux::{SidebarPaneOptions, ViewSidebars, sidebar_serve_args};
-use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
+use crate::mux::{SidebarPaneOptions, sidebar_serve_args};
+use crate::pane::SIDEBAR_CHROME_TITLE;
 
 pub(super) const SIDEBAR_WIDTH_OPTION: &str = "@rimz_sidebar_cols";
 
@@ -111,47 +110,6 @@ pub(super) fn birth_shell_cleanup_hook_set_cmd(session: &str, work_pane: &str) -
         "client-attached".to_owned(),
         body,
     ]
-}
-
-pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
-    pane.command.as_deref() == Some(SIDEBAR_CHROME_TITLE)
-}
-
-/// Group a pane list into per-window [`ViewSidebars`] for the reconcile planner:
-/// each window's sidebar panes and whether it holds a user-working pane. Daemon
-/// dashboard panes in `rimzd` are not work. Panes with no window id are skipped.
-/// First-seen window order.
-///
-/// Session-scoped pane reads should already contain only this room; the guard
-/// keeps reconcile safe against fixture leaks and backend regressions.
-pub(super) fn tmux_views_with_sidebars(panes: &[PaneRef], session: &str) -> Vec<ViewSidebars> {
-    let mut views: Vec<ViewSidebars> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
-    for pane in panes {
-        if pane.session_name != session {
-            continue;
-        }
-        let Some(view) = pane.view_id.as_deref() else {
-            continue;
-        };
-        let slot = *index.entry(view.to_owned()).or_insert_with(|| {
-            views.push(ViewSidebars {
-                view: view.to_owned(),
-                sidebar_panes: Vec::new(),
-                has_working: false,
-                has_daemon_host: false,
-            });
-            views.len() - 1
-        });
-        if is_tmux_sidebar(pane) {
-            views[slot].sidebar_panes.push(pane.pane_id.clone());
-        } else if crate::daemon_view::pane_is_host(pane) {
-            views[slot].has_daemon_host = true;
-        } else {
-            views[slot].has_working = true;
-        }
-    }
-    views
 }
 
 pub(super) fn tmux_bool(value: bool) -> String {
@@ -266,9 +224,8 @@ mod tests {
 
     use super::*;
     use crate::config::MultiplexerConfig;
-    use crate::ids::{MuxName, PaneId, WorkspaceId};
+    use crate::ids::WorkspaceId;
     use crate::mux::{SidebarPaneOptions, SidebarWidth};
-    use crate::pane::PaneRef;
 
     fn sidebar_opts(refresh_ms: Option<u16>) -> SidebarPaneOptions {
         let width = SidebarWidth::default();
@@ -283,34 +240,10 @@ mod tests {
             detected_view_size: None,
             width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
-            replace_existing: false,
             pristine_birth: false,
             config: MultiplexerConfig::default(),
             resume_tabs: Vec::new(),
             refresh_ms,
-        }
-    }
-
-    fn tmux_pane(id: &str, view: &str, command: &str) -> PaneRef {
-        PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Tmux, id),
-            session_name: "room".to_owned(),
-            view_id: Some(view.to_owned()),
-            view_kind: None,
-            view_name: None,
-            title: None,
-            is_floating: false,
-            command: Some(command.to_owned()),
-            foreground_cmdline: None,
-            spawn_command: None,
-            cwd: None,
-            pane_pid: None,
-            pane_process_start: None,
-            hosted_agent_kind: None,
-            hosted_agent_process_start: None,
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
         }
     }
 
@@ -450,65 +383,6 @@ mod tests {
                     .to_owned(),
             ],
         );
-    }
-
-    #[test]
-    fn views_with_sidebars_classifies_working_orphan_and_daemon_windows() {
-        let mut host = tmux_pane("%5", "@2", "rimz");
-        host.view_name = Some(crate::daemon_view::VIEW_NAME.to_owned());
-        let mut foreign = tmux_pane("%6", "@9", SIDEBAR_CHROME_TITLE);
-        foreign.session_name = "other-room".to_owned();
-        let panes = vec![
-            tmux_pane("%1", "@0", "sh"),                 // working pane
-            tmux_pane("%2", "@0", SIDEBAR_CHROME_TITLE), // its sidebar
-            tmux_pane("%3", "@0", SIDEBAR_CHROME_TITLE), // a duplicate sidebar
-            tmux_pane("%4", "@1", SIDEBAR_CHROME_TITLE), // a sidebar-only window
-            host,                                        // managed daemon host
-            foreign,                                     // another tmux session on the server
-        ];
-        let views = tmux_views_with_sidebars(&panes, "room");
-        assert_eq!(views.len(), 3, "windows stay in first-seen order");
-        assert!(
-            views.iter().all(|view| view.view != "@9"),
-            "foreign-session windows are excluded before planning",
-        );
-        assert!(
-            views.iter().all(|view| {
-                !view
-                    .sidebar_panes
-                    .contains(&PaneId::from_parts(MuxName::Tmux, "%6"))
-            }),
-            "foreign-session sidebars are excluded before planning",
-        );
-
-        assert_eq!(views[0].view, "@0");
-        assert!(views[0].has_working);
-        assert_eq!(
-            views[0].sidebar_panes,
-            vec![
-                PaneId::from_parts(MuxName::Tmux, "%2"),
-                PaneId::from_parts(MuxName::Tmux, "%3"),
-            ],
-            "both sidebar panes, in order",
-        );
-
-        // window @1 is a sidebar-only orphan: no working pane and no daemon
-        // infrastructure.
-        assert_eq!(views[1].view, "@1");
-        assert!(
-            !views[1].has_working,
-            "a sidebar-only window holds no working pane",
-        );
-        assert!(!views[1].has_daemon_host);
-        assert_eq!(views[1].sidebar_panes.len(), 1);
-
-        assert_eq!(views[2].view, "@2");
-        assert!(!views[2].has_working);
-        assert!(
-            views[2].has_daemon_host,
-            "daemon infrastructure marks the view so reload never collapses it as an orphan",
-        );
-        assert!(views[2].sidebar_panes.is_empty());
     }
 
     #[test]

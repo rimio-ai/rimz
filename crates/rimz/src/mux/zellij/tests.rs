@@ -83,7 +83,6 @@ impl TestRoom {
             detected_view_size: None,
             width_override: None,
             rimz_bin: "rimz".into(),
-            replace_existing: false,
             pristine_birth: false,
             config: MultiplexerConfig::default(),
             resume_tabs: Vec::new(),
@@ -926,9 +925,7 @@ exit 0
     );
     room.backend(&shim)
         .open_tab(&TabOptions {
-            session_name: "rimz-test".to_owned(),
             title: "work".to_owned(),
-            cwd: room.project_root.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![LayoutColumn {
                     panes: vec![PaneCmd {

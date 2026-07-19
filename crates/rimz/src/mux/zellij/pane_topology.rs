@@ -9,15 +9,13 @@
 //! `pane_cwd` follows Zellij's cwd events and `pane_pid` identifies each pane's
 //! root process; targeted `/proc` reads supply cwd and resource enrichment.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{ClientPaneView, ClientView, MuxClientId, PaneListing};
 use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
-
-use super::raw_pane::is_sidebar_pane;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneTopologyCache {
@@ -34,6 +32,22 @@ pub struct PaneTopologyCache {
 }
 
 impl PaneTopologyCache {
+    pub(crate) fn projected_session_focus(&self) -> Option<PaneId> {
+        let live = self
+            .panes
+            .iter()
+            .filter(|pane| pane.is_listed_pane())
+            .map(|pane| PaneId::from(pane.native_id()))
+            .collect::<HashSet<_>>();
+        match self.clients.clone().map(TopologyClients::into_client_view) {
+            Some(clients) => clients.unique_live_focus(&live),
+            None => self
+                .focused_pane
+                .map(|id| PaneId::from(ZellijPaneId::Terminal(id)))
+                .filter(|pane| live.contains(pane)),
+        }
+    }
+
     pub(super) fn into_pane_listing(self, session_name: String) -> PaneListing {
         let Self {
             produced_at_ms,
@@ -42,6 +56,18 @@ impl PaneTopologyCache {
             panes,
             ..
         } = self;
+        let client_view = clients.map(TopologyClients::into_client_view);
+        let live = panes
+            .iter()
+            .filter(|pane| pane.is_listed_pane())
+            .map(|pane| PaneId::from(pane.native_id()))
+            .collect::<HashSet<_>>();
+        let session_focus = match client_view.as_ref() {
+            Some(clients) => clients.unique_live_focus(&live),
+            None => focused_pane
+                .map(|id| PaneId::from(ZellijPaneId::Terminal(id)))
+                .filter(|pane| live.contains(pane)),
+        };
         PaneListing {
             panes: panes
                 .into_iter()
@@ -51,7 +77,7 @@ impl PaneTopologyCache {
                     }
                     let command = pane.display_command();
                     Some(PaneRef {
-                        pane_id: zellij_pane_id(pane.id),
+                        pane_id: PaneId::from(pane.native_id()),
                         session_name: session_name.clone(),
                         view_id: Some(format!("tab_{}", pane.view_position())),
                         view_kind: Some(crate::mux::view_kind(MuxName::Zellij)),
@@ -73,8 +99,8 @@ impl PaneTopologyCache {
                 })
                 .collect(),
             observed_at_ms: produced_at_ms,
-            session_focus: focused_pane.map(zellij_pane_id),
-            client_view: clients.map(TopologyClients::into_client_view),
+            session_focus,
+            client_view,
         }
     }
 }
@@ -104,10 +130,7 @@ impl TopologyClients {
         let viewed_panes = self.viewed_panes.unwrap_or_else(|| {
             self.views
                 .iter()
-                .filter_map(|view| match &view.pane_id {
-                    TopologyClientPane::Terminal(id) => Some(*id),
-                    TopologyClientPane::Plugin(_) => None,
-                })
+                .filter_map(|view| view.pane_id.terminal_id())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect()
@@ -118,86 +141,91 @@ impl TopologyClients {
                 .into_iter()
                 .map(|view| ClientPaneView {
                     client_id: MuxClientId::Zellij(view.client_id),
-                    pane_id: match view.pane_id {
-                        TopologyClientPane::Terminal(id) => zellij_pane_id(id),
-                        TopologyClientPane::Plugin(id) => {
-                            PaneId::from_parts(MuxName::Zellij, format!("plugin_{id}"))
-                        }
-                    },
+                    pane_id: PaneId::from(view.pane_id),
                 })
                 .collect(),
             presence: crate::mux::ClientPresence {
                 human_clients,
                 last_input_ms: None,
             },
-            viewed_panes: viewed_panes.into_iter().map(zellij_pane_id).collect(),
+            viewed_panes: viewed_panes
+                .into_iter()
+                .map(|id| PaneId::from(ZellijPaneId::Terminal(id)))
+                .collect(),
         }
-    }
-}
-
-fn zellij_pane_id(raw: u64) -> PaneId {
-    PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw}"))
-}
-
-/// Classify one settled post-tab-switch client observation against the
-/// accepted topology and return the sidebar that owns any required repair.
-/// Pane roles stay host-side; the plugin reports only the active tab and raw
-/// client views.
-pub(crate) fn classify_switch_settled(
-    topology: &PaneTopologyCache,
-    active_tab: u64,
-    clients: &[ClientPaneView],
-) -> Option<PaneId> {
-    let mut views = clients.iter().map(|client| &client.pane_id);
-    let viewed = views.next()?;
-    if views.any(|pane_id| pane_id != viewed) {
-        return None;
-    }
-
-    if let Some(raw_id) = viewed.raw().strip_prefix("terminal_") {
-        let id = raw_id.parse::<u64>().ok()?;
-        let pane = topology
-            .panes
-            .iter()
-            .find(|pane| !pane.is_plugin && pane.id == id)?;
-        if !pane.is_live_terminal() {
-            return None;
-        }
-        if pane.tab_position != active_tab || is_sidebar_pane(pane) {
-            // A live pane outside the active tab or its sidebar is stranded.
-        } else {
-            return None;
-        }
-    } else if viewed.raw().strip_prefix("plugin_").is_none() {
-        return None;
-    }
-    let sidebars = topology
-        .panes
-        .iter()
-        .filter(|pane| {
-            pane.tab_position == active_tab && pane.is_live_terminal() && is_sidebar_pane(pane)
-        })
-        .collect::<Vec<_>>();
-    let has_card = topology.panes.iter().any(|pane| {
-        pane.tab_position == active_tab && pane.is_live_terminal() && !is_sidebar_pane(pane)
-    });
-    match sidebars.as_slice() {
-        [sidebar] if has_card => Some(zellij_pane_id(sidebar.id)),
-        _ => None,
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopologyClientView {
     pub client_id: u32,
-    pub pane_id: TopologyClientPane,
+    pub pane_id: ZellijPaneId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One native Zellij pane identity. Terminal and plugin ordinals occupy
+/// separate namespaces even when their numeric values match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
-pub enum TopologyClientPane {
+pub enum ZellijPaneId {
     Terminal(u64),
     Plugin(u64),
+}
+
+impl ZellijPaneId {
+    pub const fn terminal_id(self) -> Option<u64> {
+        match self {
+            Self::Terminal(id) => Some(id),
+            Self::Plugin(_) => None,
+        }
+    }
+
+    pub const fn plugin_id(self) -> Option<u64> {
+        match self {
+            Self::Plugin(id) => Some(id),
+            Self::Terminal(_) => None,
+        }
+    }
+
+    /// Native target syntax accepted by Zellij actions.
+    pub fn action_target(self) -> String {
+        match self {
+            Self::Terminal(id) => format!("terminal_{id}"),
+            Self::Plugin(id) => format!("plugin_{id}"),
+        }
+    }
+}
+
+impl From<ZellijPaneId> for PaneId {
+    fn from(value: ZellijPaneId) -> Self {
+        Self::from_parts(MuxName::Zellij, value.action_target())
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("pane `{0}` is not an exact Zellij terminal_<id> or plugin_<id>")]
+pub struct InvalidZellijPaneId(PaneId);
+
+impl TryFrom<&PaneId> for ZellijPaneId {
+    type Error = InvalidZellijPaneId;
+
+    fn try_from(value: &PaneId) -> Result<Self, Self::Error> {
+        if value.mux() != MuxName::Zellij {
+            return Err(InvalidZellijPaneId(value.clone()));
+        }
+        let parsed = value
+            .raw()
+            .strip_prefix("terminal_")
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .map(Self::Terminal)
+            .or_else(|| {
+                value
+                    .raw()
+                    .strip_prefix("plugin_")
+                    .and_then(|raw| raw.parse::<u64>().ok())
+                    .map(Self::Plugin)
+            });
+        parsed.ok_or_else(|| InvalidZellijPaneId(value.clone()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,6 +278,14 @@ pub struct PaneTopologyPane {
 }
 
 impl PaneTopologyPane {
+    pub fn native_id(&self) -> ZellijPaneId {
+        if self.is_plugin {
+            ZellijPaneId::Plugin(self.id)
+        } else {
+            ZellijPaneId::Terminal(self.id)
+        }
+    }
+
     /// A tiled terminal pane for geometry and sidebar reconcile: not plugin
     /// chrome, not suppressed, and not a floating overlay. Held and exited panes
     /// still occupy layout cells until Zellij closes them.
@@ -322,96 +358,53 @@ mod tests {
         }
     }
 
-    fn switch_topology() -> PaneTopologyCache {
-        PaneTopologyCache {
+    #[test]
+    fn native_identity_enforces_exact_namespace_grammar() {
+        let terminal = ZellijPaneId::Terminal(7);
+        let plugin = ZellijPaneId::Plugin(7);
+        assert_ne!(terminal, plugin);
+        assert_eq!(PaneId::from(terminal).as_str(), "zellij:terminal_7");
+        assert_eq!(PaneId::from(plugin).as_str(), "zellij:plugin_7");
+        assert_eq!(terminal.action_target(), "terminal_7");
+        assert_eq!(plugin.action_target(), "plugin_7");
+
+        for invalid in [
+            PaneId::from_parts(MuxName::Tmux, "%7"),
+            PaneId::from_parts(MuxName::Zellij, "terminal_"),
+            PaneId::from_parts(MuxName::Zellij, "terminal_7x"),
+            PaneId::from_parts(MuxName::Zellij, "plugin_-1"),
+            PaneId::from_parts(MuxName::Zellij, "terminal_18446744073709551616"),
+        ] {
+            assert!(ZellijPaneId::try_from(&invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn current_clients_override_conflicting_legacy_focus() {
+        let mut cache = PaneTopologyCache {
             session_name: "rimz-test".to_owned(),
             produced_at_ms: 42,
             writer: None,
             focused_pane: Some(1),
-            clients: None,
-            panes: vec![
-                test_pane(1, 0, "work-0"),
-                test_pane(10, 1, SIDEBAR_CHROME_TITLE),
-                test_pane(11, 1, "work-1"),
-            ],
-        }
-    }
-
-    fn view(client_id: u32, raw: &str) -> ClientPaneView {
-        ClientPaneView {
-            client_id: MuxClientId::Zellij(client_id),
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-        }
-    }
-
-    #[test]
-    fn settled_switch_classifies_work_and_repairable_views() {
-        let mut topology = switch_topology();
-        topology.panes.insert(
-            0,
-            PaneTopologyPane {
-                is_plugin: true,
-                ..test_pane(10, 0, "plugin")
-            },
-        );
+            clients: Some(TopologyClients {
+                human_clients: None,
+                viewed_panes: None,
+                views: vec![TopologyClientView {
+                    client_id: 3,
+                    pane_id: ZellijPaneId::Terminal(2),
+                }],
+            }),
+            panes: vec![test_pane(1, 0, "one"), test_pane(2, 0, "two")],
+        };
         assert_eq!(
-            classify_switch_settled(&topology, 1, &[view(1, "terminal_11")]),
-            None,
-            "healthy work needs no repair",
-        );
-        for viewed in ["terminal_10", "terminal_1", "plugin_99"] {
-            assert_eq!(
-                classify_switch_settled(&topology, 1, &[view(1, viewed)]),
-                Some(zellij_pane_id(10)),
-            );
-        }
-    }
-
-    #[test]
-    fn settled_switch_abstains_from_ambiguous_detached_and_unknown_views() {
-        let topology = switch_topology();
-        assert_eq!(classify_switch_settled(&topology, 1, &[]), None);
-        assert_eq!(
-            classify_switch_settled(
-                &topology,
-                1,
-                &[view(1, "terminal_10"), view(2, "terminal_11")],
-            ),
-            None,
-        );
-        assert_eq!(
-            classify_switch_settled(&topology, 1, &[view(1, "terminal_999")]),
-            None,
-        );
-        let mut exited = topology;
-        exited
-            .panes
-            .iter_mut()
-            .find(|pane| !pane.is_plugin && pane.id == 1)
-            .expect("foreign-tab pane")
-            .exited = true;
-        assert_eq!(
-            classify_switch_settled(&exited, 1, &[view(1, "terminal_1")]),
-            None,
-        );
-    }
-
-    #[test]
-    fn settled_switch_requires_one_repair_owner_with_a_card_pane() {
-        let mut no_card = switch_topology();
-        no_card.panes.retain(|pane| pane.id != 11);
-        assert_eq!(
-            classify_switch_settled(&no_card, 1, &[view(1, "terminal_10")]),
-            None,
+            cache.projected_session_focus(),
+            Some(PaneId::from(ZellijPaneId::Terminal(2)))
         );
 
-        let mut two_sidebars = switch_topology();
-        two_sidebars
-            .panes
-            .push(test_pane(12, 1, SIDEBAR_CHROME_TITLE));
+        cache.clients = None;
         assert_eq!(
-            classify_switch_settled(&two_sidebars, 1, &[view(1, "plugin_99")]),
-            None,
+            cache.projected_session_focus(),
+            Some(PaneId::from(ZellijPaneId::Terminal(1)))
         );
     }
 
@@ -511,11 +504,11 @@ mod tests {
                 views: vec![
                     TopologyClientView {
                         client_id: 3,
-                        pane_id: TopologyClientPane::Terminal(7),
+                        pane_id: ZellijPaneId::Terminal(7),
                     },
                     TopologyClientView {
                         client_id: 4,
-                        pane_id: TopologyClientPane::Plugin(9),
+                        pane_id: ZellijPaneId::Plugin(9),
                     },
                 ],
             }),
@@ -545,7 +538,10 @@ mod tests {
             .expect("client sample")
             .into_client_view();
         assert_eq!(view.presence.human_clients, 2);
-        assert_eq!(view.viewed_panes, vec![zellij_pane_id(7)]);
+        assert_eq!(
+            view.viewed_panes,
+            vec![PaneId::from(ZellijPaneId::Terminal(7))]
+        );
 
         let legacy: PaneTopologyCache = serde_json::from_str(
             r#"{

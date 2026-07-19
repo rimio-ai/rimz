@@ -14,7 +14,6 @@ mod parse;
 mod presence;
 mod window;
 
-pub(crate) use presence::PresenceRoster;
 pub use presence::{ControlLine, PresenceWatch, control_socket_from_env};
 
 use std::path::{Path, PathBuf};

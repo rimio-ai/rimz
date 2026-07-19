@@ -3,7 +3,7 @@
 //! and provides native add and close effects; policy and accounting stay pure
 //! and backend-neutral.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::ids::{MuxName, PaneId};
@@ -41,6 +41,46 @@ pub(crate) struct ViewSidebars {
     pub sidebar_panes: Vec<PaneId>,
     pub has_working: bool,
     pub has_daemon_host: bool,
+}
+
+/// Backend-neutral structural pane used to group native listings for repair.
+pub(crate) struct ReconcilePane {
+    pub view: String,
+    pub pane_id: PaneId,
+    pub role: ReconcilePaneRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReconcilePaneRole {
+    Sidebar,
+    Working,
+    DaemonHost,
+}
+
+/// Group participating panes by stable first-seen view order while preserving
+/// native sidebar order within each view.
+pub(crate) fn group_reconcile_panes(
+    panes: impl IntoIterator<Item = ReconcilePane>,
+) -> Vec<ViewSidebars> {
+    let mut views = Vec::new();
+    let mut index = HashMap::new();
+    for pane in panes {
+        let slot = *index.entry(pane.view.clone()).or_insert_with(|| {
+            views.push(ViewSidebars {
+                view: pane.view,
+                sidebar_panes: Vec::new(),
+                has_working: false,
+                has_daemon_host: false,
+            });
+            views.len() - 1
+        });
+        match pane.role {
+            ReconcilePaneRole::Sidebar => views[slot].sidebar_panes.push(pane.pane_id),
+            ReconcilePaneRole::Working => views[slot].has_working = true,
+            ReconcilePaneRole::DaemonHost => views[slot].has_daemon_host = true,
+        }
+    }
+    views
 }
 
 /// One serialized repair transaction. Replacement keeps existing panes alive
@@ -286,6 +326,35 @@ pub(crate) fn wait_for_sidebar_heartbeat(
     }
 }
 
+pub(crate) fn sidebar_build_identity(opts: &SidebarPaneOptions) -> crate::mux::Result<String> {
+    crate::build_id::of_file(&opts.rimz_bin).map_err(|err| crate::mux::MuxErr::Output {
+        program: opts.rimz_bin.display().to_string(),
+        reason: format!("cannot verify sidebar repair build: {err}"),
+    })
+}
+
+/// Prove a newly-added pane belongs to the current build. Failed proof invokes
+/// backend-native best-effort cleanup before the caller constructs its exact
+/// transport error.
+pub(crate) fn prove_sidebar_mount(
+    opts: &SidebarPaneOptions,
+    mux: MuxName,
+    pane: &PaneId,
+    build: &str,
+    cleanup: impl FnOnce(),
+) -> bool {
+    finish_mount_proof(wait_for_sidebar_heartbeat(opts, mux, pane, build), cleanup)
+}
+
+fn finish_mount_proof(verified: bool, cleanup: impl FnOnce()) -> bool {
+    if verified {
+        true
+    } else {
+        cleanup();
+        false
+    }
+}
+
 /// Plan repair one view at a time. Claimed renderers win, then young panes.
 /// An unlocated fresh heartbeat conservatively protects one physical pane per
 /// occupied view. A wholly unclaimed occupied view uses add-before-close;
@@ -414,6 +483,48 @@ mod tests {
             program: "test".to_owned(),
             reason: reason.to_owned(),
         }
+    }
+
+    #[test]
+    fn grouping_preserves_first_seen_views_and_classifies_all_roles() {
+        let panes = [
+            ("second", "terminal_1", ReconcilePaneRole::Working),
+            ("first", "terminal_2", ReconcilePaneRole::Sidebar),
+            ("second", "terminal_3", ReconcilePaneRole::Sidebar),
+            ("first", "terminal_4", ReconcilePaneRole::DaemonHost),
+            ("first", "terminal_5", ReconcilePaneRole::Sidebar),
+        ]
+        .into_iter()
+        .map(|(view, raw, role)| ReconcilePane {
+            view: view.to_owned(),
+            pane_id: pane(raw),
+            role,
+        });
+        let views = group_reconcile_panes(panes);
+
+        assert_eq!(
+            views
+                .iter()
+                .map(|view| view.view.as_str())
+                .collect::<Vec<_>>(),
+            ["second", "first"]
+        );
+        assert!(views[0].has_working);
+        assert_eq!(views[0].sidebar_panes, [pane("terminal_3")]);
+        assert!(views[1].has_daemon_host);
+        assert_eq!(
+            views[1].sidebar_panes,
+            [pane("terminal_2"), pane("terminal_5")]
+        );
+    }
+
+    #[test]
+    fn failed_mount_proof_cleans_up_only_after_failure() {
+        let cleaned = std::cell::Cell::new(0);
+        assert!(finish_mount_proof(true, || cleaned.set(cleaned.get() + 1)));
+        assert_eq!(cleaned.get(), 0);
+        assert!(!finish_mount_proof(false, || cleaned.set(cleaned.get() + 1)));
+        assert_eq!(cleaned.get(), 1);
     }
 
     #[test]

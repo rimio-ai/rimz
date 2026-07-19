@@ -19,7 +19,6 @@ fn sidebar_opts(
         detected_view_size: None,
         width_override: None,
         rimz_bin: PathBuf::from("/usr/bin/rimz"),
-        replace_existing: false,
         pristine_birth: false,
         config: crate::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
@@ -336,9 +335,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
 fn tab_layout_derives_percent_from_an_explicit_live_width() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
-        session_name: sidebar.session_name.clone(),
         title: "review".to_owned(),
-        cwd: PathBuf::from("/proj/worktree"),
         panes: crate::mux::LayoutPanes {
             columns: vec![
                 layout_column(&[&["/bin/sh"]], false),
@@ -375,9 +372,7 @@ fn tab_layout_derives_percent_from_an_explicit_live_width() {
 fn tab_layout_renders_tiled_and_stacked_columns() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
-        session_name: sidebar.session_name.clone(),
         title: "review".to_owned(),
-        cwd: PathBuf::from("/proj/worktree"),
         panes: crate::mux::LayoutPanes {
             columns: vec![
                 layout_column(&[&["planner"], &["logs"]], false),
@@ -409,9 +404,7 @@ fn tab_layout_renders_tiled_and_stacked_columns() {
 fn undocked_tab_layout_renders_stacked_columns() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
-        session_name: sidebar.session_name.clone(),
         title: "review".to_owned(),
-        cwd: PathBuf::from("/proj/worktree"),
         panes: crate::mux::LayoutPanes {
             columns: vec![layout_column(&[&["coder"], &["reviewer"]], true)],
         },
@@ -435,9 +428,7 @@ fn undocked_tab_layout_renders_stacked_columns() {
 fn tab_layout_can_omit_sidebar_for_gallery_columns() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
-        session_name: sidebar.session_name.clone(),
         title: "sidebar gallery".to_owned(),
-        cwd: PathBuf::from("/proj/worktree"),
         panes: crate::mux::LayoutPanes {
             columns: vec![layout_column(&[&["rimz", "sidebar"]], false)],
         },

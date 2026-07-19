@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::TmuxBackend;
 use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
-    sidebar_serve_command, sidebar_width_option_set_cmd, tmux_views_with_sidebars,
+    sidebar_serve_command, sidebar_width_option_set_cmd,
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
 use super::window::TmuxPaneGeometry;
@@ -17,10 +17,11 @@ use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
     ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey,
-    PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, Result, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
-    SplitPlacement, SplitTarget, TabOptions, WidthStep, WidthSyncOptions, ensure_pane_backend,
-    execute_reconcile_plan, memoized_version, wait_for_sidebar_heartbeat,
+    PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, ReconcilePane,
+    ReconcilePaneRole, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
+    SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
+    WidthStep, WidthSyncOptions, ensure_pane_backend, execute_reconcile_plan,
+    group_reconcile_panes, memoized_version, prove_sidebar_mount, sidebar_build_identity,
 };
 
 /// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
@@ -572,15 +573,29 @@ impl MuxBackend for TmuxBackend {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()
         })?;
-        let views = tmux_views_with_sidebars(&panes.panes, &opts.session_name);
+        let views = group_reconcile_panes(panes.panes.iter().filter_map(|pane| {
+            if pane.session_name != opts.session_name {
+                return None;
+            }
+            let view = pane.view_id.clone()?;
+            let role = if pane.is_rimz_sidebar() {
+                ReconcilePaneRole::Sidebar
+            } else if crate::daemon_view::pane_is_host(pane) {
+                ReconcilePaneRole::DaemonHost
+            } else {
+                ReconcilePaneRole::Working
+            };
+            Some(ReconcilePane {
+                view,
+                pane_id: pane.pane_id.clone(),
+                role,
+            })
+        }));
         let plan = super::super::plan_reconcile(&views, live);
         let planned_closes = plan.close_panes();
         let mutated_views = plan.add_views();
         let mut report = SidebarRecovery::default();
-        let build = crate::build_id::of_file(&opts.rimz_bin).map_err(|err| MuxErr::Output {
-            program: opts.rimz_bin.display().to_string(),
-            reason: format!("cannot verify sidebar repair build: {err}"),
-        })?;
+        let build = sidebar_build_identity(opts)?;
         let failure = execute_reconcile_plan(
             plan,
             &mut report,
@@ -594,10 +609,11 @@ impl MuxBackend for TmuxBackend {
                         live_cols_u16(opts.width, opts.width_override, window_cols);
                 }
                 let pane = self.add_sidebar_to_window(&add_opts, window)?;
-                if wait_for_sidebar_heartbeat(opts, MuxName::Tmux, &pane, &build) {
+                if prove_sidebar_mount(opts, MuxName::Tmux, &pane, &build, || {
+                    let _ = self.kill_pane(&pane);
+                }) {
                     Ok(ReconcileAddOutcome::Verified)
                 } else {
-                    let _ = self.kill_pane(&pane);
                     Err(MuxErr::Output {
                         program: "tmux".to_owned(),
                         reason: format!(
@@ -762,8 +778,12 @@ impl MuxBackend for TmuxBackend {
                 reason: "tab layout has an empty column".to_owned(),
             });
         };
-        let opened =
-            self.open_named_window(&opts.session_name, &opts.title, &opts.cwd, &first.argv)?;
+        let opened = self.open_named_window(
+            &opts.sidebar.session_name,
+            &opts.title,
+            &opts.sidebar.cwd,
+            &first.argv,
+        )?;
         let window_id = opened.window_id;
         let first_pane = opened.first_pane;
 
@@ -777,7 +797,7 @@ impl MuxBackend for TmuxBackend {
         let normalized = self.normalize_tab_birth_width(&window_id, &first_pane, &opts.sidebar);
 
         let split_result =
-            self.split_layout_columns(&window_id, &first_pane, &opts.cwd, &opts.panes);
+            self.split_layout_columns(&window_id, &first_pane, &opts.sidebar.cwd, &opts.panes);
         if normalized {
             // `resize-window` pins `window-size=manual`; undo it so the tab
             // tracks client size again like every other tab.

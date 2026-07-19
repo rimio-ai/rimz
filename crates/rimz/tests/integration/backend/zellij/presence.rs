@@ -509,9 +509,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let input_log = cwd.path().join("routed-input.log");
     backend
         .open_tab(&TabOptions {
-            session_name: name.clone(),
             title: target_tab.to_owned(),
-            cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec![

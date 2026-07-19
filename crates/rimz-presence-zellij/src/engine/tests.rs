@@ -671,11 +671,9 @@ fn tab_switch_emits_one_settled_observation_at_the_deadline() {
         arg_after(run_commands(&settled)[0], "--focus-clients"),
         Some(r#"[{"client_id":1,"pane_id":{"kind":"terminal","id":10}}]"#)
     );
-    assert_eq!(
-        topology_json(run_commands(&settled)[0])["focused_pane"],
-        10,
-        "settled observation applies the general focus rule before publication",
-    );
+    let topology = topology_json(run_commands(&settled)[0]);
+    assert!(topology.get("focused_pane").is_none());
+    assert_eq!(topology["clients"]["views"][0]["pane_id"]["id"], 10);
     assert_eq!(
         run_commands(&settled)[0][1..4],
         ["sidebar", "wake", "--reason"],
@@ -684,7 +682,7 @@ fn tab_switch_emits_one_settled_observation_at_the_deadline() {
 }
 
 #[test]
-fn rapid_switch_supersedes_the_old_query_and_preserves_the_prior_register() {
+fn rapid_switch_supersedes_the_old_query() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
@@ -721,7 +719,7 @@ fn rapid_switch_supersedes_the_old_query_and_preserves_the_prior_register() {
 }
 
 #[test]
-fn same_pane_clients_agree_while_distinct_views_clear_session_focus() {
+fn same_and_distinct_client_views_publish_without_a_focus_verdict() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
@@ -740,7 +738,9 @@ fn same_pane_clients_agree_while_distinct_views_clear_session_focus() {
     assert!(run_commands(&effects).is_empty());
     let effects = engine.on_timer(30 + POKE_FLOOR_MS, &host);
     assert_eq!(reasons(&effects), vec!["panes-changed"]);
-    assert_eq!(topology_json(run_commands(&effects)[0])["focused_pane"], 1);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert!(topology.get("focused_pane").is_none());
+    assert_eq!(topology["clients"]["views"].as_array().unwrap().len(), 2);
 
     let effects = engine.on_list_clients(
         vec![

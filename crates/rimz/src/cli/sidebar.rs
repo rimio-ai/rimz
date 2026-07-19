@@ -889,9 +889,7 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
     let gallery_pane = rimz::mux::PaneCmd { argv };
     room.backend()
         .open_tab(&rimz::mux::TabOptions {
-            session_name: workspace.session_name.clone(),
             title: "gallery".to_owned(),
-            cwd: workspace.worktree_root.clone(),
             panes: rimz::mux::LayoutPanes {
                 columns: vec![rimz::mux::LayoutColumn {
                     panes: vec![gallery_pane],

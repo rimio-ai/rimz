@@ -16,7 +16,7 @@ use super::{
     PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_RETIRE_PROOF_TIMEOUT,
     PRESENCE_SHARE_PIPE, PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
-use crate::ids::{MuxName, PaneId};
+use crate::ids::PaneId;
 use crate::mux::{MuxErr, Result};
 use crate::sidebar::cache::{PresenceDesired, read_pane_topology_cache, write_presence_desired};
 use crate::sidebar::timing::unix_now_ms;
@@ -416,7 +416,9 @@ impl ZellijBackend {
         for pane in listed.into_iter().filter(|pane| {
             pane.id != u64::from(accepted_plugin_id) && is_presence_plugin_pane(pane)
         }) {
-            let pane_id = PaneId::from_parts(MuxName::Zellij, format!("plugin_{}", pane.id));
+            let pane_id = PaneId::from(crate::mux::zellij::pane_topology::ZellijPaneId::Plugin(
+                pane.id,
+            ));
             if let Err(err) = self.close_pane(session_name, &pane_id) {
                 tracing::debug!(
                     session = %session_name,

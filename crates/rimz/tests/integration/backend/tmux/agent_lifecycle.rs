@@ -253,9 +253,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
     server
         .backend
         .open_tab(&TabOptions {
-            session_name: workspace.session_name.clone(),
             title: "#rimz-clean".to_owned(),
-            cwd: worktree.clone(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
             },
@@ -314,9 +312,7 @@ fn failing_close_pane_agent_drops_to_shell() {
     server
         .backend
         .open_tab(&TabOptions {
-            session_name: workspace.session_name.clone(),
             title: "#rimz-fail".to_owned(),
-            cwd: workspace.worktree_root.clone(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
             },

@@ -16,7 +16,6 @@ use rimz::store::AgentLaunchBatch;
 pub(super) struct PlacementRequest {
     pub placement: Placement,
     pub mux: MuxName,
-    pub session_name: String,
     pub cwd: PathBuf,
     pub title: String,
     pub panes: LayoutPanes,
@@ -87,7 +86,6 @@ fn prepare_resolved(
         .unwrap_or_default();
     let PlacementRequest {
         placement,
-        session_name,
         cwd,
         title,
         panes,
@@ -98,9 +96,7 @@ fn prepare_resolved(
     } = request;
     Ok(match placement {
         Placement::NewTab => PreparedPlacement::NewTab(TabOptions {
-            session_name,
             title,
-            cwd,
             panes,
             focus: !background,
             dock_sidebar: true,
@@ -170,7 +166,6 @@ mod tests {
         PlacementRequest {
             placement,
             mux: MuxName::Tmux,
-            session_name: "room".to_owned(),
             cwd: PathBuf::from("/work"),
             title: "#lane".to_owned(),
             panes: LayoutPanes {
@@ -192,7 +187,6 @@ mod tests {
                 detected_view_size: None,
                 width_override: None,
                 rimz_bin: PathBuf::from("/bin/rimz"),
-                replace_existing: false,
                 pristine_birth: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_tabs: Vec::new(),
@@ -215,9 +209,9 @@ mod tests {
         else {
             panic!("new tab placement");
         };
-        assert_eq!(options.session_name, "room");
+        assert_eq!(options.sidebar.session_name, "room");
         assert_eq!(options.title, "#lane");
-        assert_eq!(options.cwd, Path::new("/work"));
+        assert_eq!(options.sidebar.cwd, Path::new("/work"));
         assert_eq!(options.panes.columns[0].panes[0].argv, ["rimz", "agents"]);
         assert!(!options.focus);
         assert!(options.dock_sidebar);

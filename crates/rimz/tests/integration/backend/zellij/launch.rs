@@ -200,17 +200,7 @@ fn open_sidebar_births_native_layout_and_template() {
         |line| client.send_line(line),
     );
 
-    let before_reopen = wait_for_pane_count(xdg.path(), &name, 4);
-    backend
-        .open_sidebar(&opts, None)
-        .expect("second open_sidebar");
-    let second = wait_for_pane_count(xdg.path(), &name, before_reopen.len());
-    assert_eq!(
-        second.len(),
-        before_reopen.len(),
-        "re-opening a live session must not add or drop panes: {second:?}",
-    );
-    assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
+    wait_for_pane_count(xdg.path(), &name, 4);
 }
 /// The pre-attach health gate: an absent room is born clean and RUNNING
 /// (`Reborn`), a probe of the resulting live room reports `Healthy`, and a second
@@ -239,7 +229,6 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         detected_view_size: None,
         width_override: None,
         rimz_bin: stub,
-        replace_existing: false,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),

@@ -108,57 +108,6 @@ fn raw_pane_splits_foreground_spawn_and_sidebar_title() {
 }
 
 #[test]
-fn views_with_sidebars_classifies_working_orphan_and_daemon_tabs() {
-    let json = r#"[
-          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh"},
-          {"id": 2, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
-          {"id": 3, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
-          {"id": 9, "is_plugin": true,  "tab_id": 0, "title": "zellij:status"},
-          {"id": 4, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"},
-          {
-            "id": 5, "is_plugin": false, "tab_id": 2,
-            "title": "/home/me/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name room",
-            "pane_command": "/home/me/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name room"
-          },
-          {
-            "id": 6, "is_plugin": false, "tab_id": 3, "tab_name": "rimzd",
-            "title": "claude"
-          },
-          {
-            "id": 7, "is_plugin": false, "tab_id": 4, "tab_name": "Tab #5",
-            "title": "zsh"
-          }
-        ]"#;
-    let panes: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
-    let views = views_with_sidebars(&panes);
-    assert_eq!(views.len(), 5);
-
-    assert_eq!(views[0].view, "0");
-    assert!(views[0].has_working);
-    assert!(!views[0].has_daemon_host);
-    assert_eq!(
-        views[0].sidebar_panes,
-        vec![
-            PaneId::from_parts(MuxName::Zellij, "terminal_2"),
-            PaneId::from_parts(MuxName::Zellij, "terminal_3"),
-        ],
-    );
-
-    assert_eq!(views[1].view, "1");
-    assert!(!views[1].has_working);
-    assert!(!views[1].has_daemon_host);
-    assert_eq!(views[1].sidebar_panes.len(), 1);
-
-    for daemon in [&views[2], &views[3]] {
-        assert!(!daemon.has_working, "daemon view is not user work");
-        assert!(daemon.has_daemon_host, "daemon view must be retained");
-        assert!(daemon.sidebar_panes.is_empty(), "daemon host is not chrome");
-    }
-    assert!(views[4].has_working);
-    assert!(!views[4].has_daemon_host);
-}
-
-#[test]
 fn listed_pane_includes_live_floating_but_live_terminal_does_not() {
     let json = r#"[
           {"id": 0, "is_plugin": false, "is_suppressed": false, "tab_id": 0},
@@ -562,7 +511,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
 fn new_pane_stdout_parses_only_a_bare_terminal_id() {
     assert_eq!(
         parse_new_pane_id(" terminal_58\n"),
-        Some("terminal_58".to_owned()),
+        Some(ZellijPaneId::Terminal(58)),
     );
     // Cross-talked responses from concurrent action clients: an empty
     // body, another command's JSON, a plugin id, or trailing garbage are

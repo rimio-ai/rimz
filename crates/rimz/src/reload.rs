@@ -591,7 +591,6 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
         detected_view_size: None,
         width_override: crate::sidebar::width_override::load(runtime),
         rimz_bin,
-        replace_existing: false,
         pristine_birth: false,
         config: mux_config,
         resume_tabs: Vec::new(),

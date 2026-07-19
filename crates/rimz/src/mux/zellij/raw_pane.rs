@@ -1,11 +1,11 @@
 //! Zellij topology projection and sidebar classification.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use crate::ids::{MuxName, PaneId};
+use crate::ids::PaneId;
+use crate::mux::SidebarWidth;
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
-use crate::mux::zellij::pane_topology::PaneTopologyPane;
-use crate::mux::{SidebarWidth, ViewSidebars};
+use crate::mux::zellij::pane_topology::{PaneTopologyPane, ZellijPaneId};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
 /// Cleanliness of a live room after a successful pane inspection.
@@ -25,37 +25,6 @@ pub(super) fn is_sidebar_pane(pane: &PaneTopologyPane) -> bool {
     !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_CHROME_TITLE)
 }
 
-/// Group a pane list into per-tab [`ViewSidebars`] for the reconcile planner:
-/// each tab's sidebar panes (as normalized [`PaneId`]s) and whether it holds a
-/// user-working terminal pane. Daemon dashboard panes in `rimzd` are not work.
-/// First-seen tab order; pane order within a tab preserved.
-pub(super) fn views_with_sidebars(panes: &[PaneTopologyPane]) -> Vec<ViewSidebars> {
-    let mut views: Vec<ViewSidebars> = Vec::new();
-    let mut index: HashMap<u64, usize> = HashMap::new();
-    for pane in panes.iter().filter(|pane| pane.is_terminal()) {
-        let slot = *index.entry(pane.tab_position).or_insert_with(|| {
-            views.push(ViewSidebars {
-                view: pane.tab_position.to_string(),
-                sidebar_panes: Vec::new(),
-                has_working: false,
-                has_daemon_host: false,
-            });
-            views.len() - 1
-        });
-        if is_sidebar_pane(pane) {
-            views[slot].sidebar_panes.push(PaneId::from_parts(
-                MuxName::Zellij,
-                format!("terminal_{}", pane.id),
-            ));
-        } else if is_daemon_host_pane(pane) {
-            views[slot].has_daemon_host = true;
-        } else {
-            views[slot].has_working = true;
-        }
-    }
-    views
-}
-
 pub(super) fn leftmost_live_work_pane(
     panes: &[PaneTopologyPane],
     tab_position: u64,
@@ -72,7 +41,7 @@ pub(super) fn leftmost_live_work_pane(
 /// A daemon dashboard pane: any pane in the `rimzd` tab, or one whose spawn or
 /// foreground command carries a host marker. The spawn command is the
 /// authoritative Zellij signal for hosts that re-exec after launch.
-fn is_daemon_host_pane(pane: &PaneTopologyPane) -> bool {
+pub(super) fn is_daemon_host_pane(pane: &PaneTopologyPane) -> bool {
     pane.tab_name.as_deref() == Some(crate::daemon_view::VIEW_NAME)
         || pane
             .spawn_command()
@@ -117,19 +86,14 @@ fn is_session_health_command_pane(pane: &PaneTopologyPane) -> bool {
     !pane.is_plugin && !pane.is_suppressed && !is_sidebar_pane(pane)
 }
 
-pub(super) fn parse_terminal_id(pane_id: &str) -> Option<u64> {
-    pane_id.strip_prefix("terminal_")?.parse().ok()
-}
-
-pub(super) fn zellij_pane_id(raw: u64) -> PaneId {
-    PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw}"))
-}
-
 pub(super) fn floating_panes_in_anchor_view(
     panes: &[PaneTopologyPane],
     anchor: &PaneId,
 ) -> Vec<PaneId> {
-    let Some(anchor_raw) = parse_terminal_id(anchor.raw()) else {
+    let Some(anchor_raw) = ZellijPaneId::try_from(anchor)
+        .ok()
+        .and_then(ZellijPaneId::terminal_id)
+    else {
         return Vec::new();
     };
     let Some(anchor_tab) = panes
@@ -142,7 +106,7 @@ pub(super) fn floating_panes_in_anchor_view(
     panes
         .iter()
         .filter(|pane| pane.tab_position == anchor_tab && pane.is_floating && !pane.is_plugin)
-        .map(|pane| zellij_pane_id(pane.id))
+        .map(|pane| PaneId::from(pane.native_id()))
         .collect()
 }
 
@@ -150,10 +114,11 @@ pub(super) fn floating_panes_in_anchor_view(
 /// `terminal_<digits>` after trimming, else `None`. Concurrent `zellij action`
 /// clients can receive each other's responses, so anything looser would take
 /// another command's output (an empty body, a JSON blob) for a pane id.
-pub(super) fn parse_new_pane_id(stdout: &str) -> Option<String> {
+pub(super) fn parse_new_pane_id(stdout: &str) -> Option<ZellijPaneId> {
     let trimmed = stdout.trim();
-    parse_terminal_id(trimmed)?;
-    Some(trimmed.to_owned())
+    let pane = PaneId::from_parts(crate::ids::MuxName::Zellij, trimmed);
+    let id = ZellijPaneId::try_from(&pane).ok()?;
+    id.terminal_id().map(ZellijPaneId::Terminal)
 }
 
 /// The tiled width of `tab_position`, derived from the rightmost pane extent.

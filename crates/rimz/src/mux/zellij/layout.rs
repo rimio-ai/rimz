@@ -252,7 +252,7 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
 /// A user-opened tab born with the global sidebar docked on the left and the
 /// caller's columns to the right. Columns split vertically; rows inside a
 /// column either tile horizontally or render as a Zellij stack. Every command
-/// pane shares `opts.cwd`. The sidebar uses the percentage derived from the
+/// pane shares `opts.sidebar.cwd`. The sidebar uses the percentage derived from the
 /// current live target because Zellij resize-pins fixed-size layout panes.
 pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Result<String> {
     if opts.panes.columns.is_empty() {
@@ -271,7 +271,7 @@ pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Resu
         columns.push_str(&render_tab_column(
             &column.panes,
             column.stacked,
-            &opts.cwd,
+            &opts.sidebar.cwd,
             &mut focused,
             12,
         )?);
@@ -293,7 +293,7 @@ fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
         columns.push_str(&render_tab_column(
             &column.panes,
             column.stacked,
-            &opts.cwd,
+            &opts.sidebar.cwd,
             &mut focused,
             8,
         )?);

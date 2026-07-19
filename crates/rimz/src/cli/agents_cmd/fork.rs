@@ -162,7 +162,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         PlacementRequest {
             placement,
             mux,
-            session_name: workspace.session_name.clone(),
             cwd: seed.cwd.clone(),
             title,
             panes,

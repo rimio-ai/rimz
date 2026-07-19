@@ -25,8 +25,8 @@ pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use focus_key::{FocusChord, FocusKeyBinding};
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub(crate) use reconcile::{
-    ReconcileAddOutcome, ViewSidebars, execute_reconcile_plan, plan_reconcile,
-    wait_for_sidebar_heartbeat,
+    ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
+    group_reconcile_panes, plan_reconcile, prove_sidebar_mount, sidebar_build_identity,
 };
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub use selection::auto_detect_backend;
@@ -291,6 +291,26 @@ pub struct ClientView {
     pub presence: ClientPresence,
 }
 
+impl ClientView {
+    /// Resolve fresh attached-client evidence only when every observation names
+    /// the same live pane. Detailed client rows outrank summarized pane ids.
+    pub fn unique_live_focus(&self, live: &std::collections::HashSet<PaneId>) -> Option<PaneId> {
+        let viewed = if self.clients.is_empty() {
+            self.viewed_panes.iter().collect::<Vec<_>>()
+        } else {
+            self.clients
+                .iter()
+                .map(|client| &client.pane_id)
+                .collect::<Vec<_>>()
+        };
+        let first = (*viewed.first()?).clone();
+        viewed
+            .iter()
+            .all(|pane| **pane == first && live.contains(*pane))
+            .then_some(first)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
     pub session_name: String,
@@ -326,11 +346,14 @@ pub struct SessionOptions {
 /// full raw id (`%<n>`) in `TMUX_PANE`. The one place the env→id mapping lives —
 /// the renderer and reload both resolve through here.
 pub fn pane_from_env_value(mux: MuxName, raw_env: &str) -> PaneId {
-    let raw = match mux {
-        MuxName::Zellij => format!("terminal_{raw_env}"),
-        MuxName::Tmux => raw_env.to_owned(),
-    };
-    PaneId::from_parts(mux, raw)
+    match mux {
+        MuxName::Zellij => raw_env
+            .parse::<u64>()
+            .map(crate::mux::zellij::pane_topology::ZellijPaneId::Terminal)
+            .map(PaneId::from)
+            .unwrap_or_else(|_| PaneId::from_parts(mux, format!("terminal_{raw_env}"))),
+        MuxName::Tmux => PaneId::from_parts(mux, raw_env),
+    }
 }
 
 /// The multiplexer's per-pane env var — the one place the key mapping lives.
@@ -387,7 +410,6 @@ pub struct SidebarPaneOptions {
     /// view and outranks the live percentage/cap policy.
     pub width_override: Option<std::num::NonZeroU16>,
     pub rimz_bin: PathBuf,
-    pub replace_existing: bool,
     /// True only for a fresh room birth whose session was absent before
     /// `ensure_session`, letting tmux repurpose the pristine first pane into the
     /// sidebar and split the work shell at its final width. Reattach and
@@ -629,9 +651,7 @@ pub struct LayoutPanes {
 
 #[derive(Clone, Debug)]
 pub struct TabOptions {
-    pub session_name: String,
     pub title: String,
-    pub cwd: PathBuf,
     pub panes: LayoutPanes,
     pub focus: bool,
     pub dock_sidebar: bool,

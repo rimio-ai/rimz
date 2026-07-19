@@ -161,7 +161,7 @@ pub(super) fn resume_lane(
             let tabs = plan.materialize(&store, &workspace.session_name)?;
             let count = tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
             for tab in tabs {
-                open_resume_tab(&workspace, &room, tab, bg)?;
+                open_resume_tab(&room, tab, bg)?;
             }
             writeln!(
                 std::io::stdout().lock(),
@@ -216,18 +216,11 @@ fn discover_lane_sessions(path: &Path) -> Vec<LocalSessionObservation> {
         .collect()
 }
 
-fn open_resume_tab(
-    workspace: &rimz::ResolvedWorkspace,
-    room: &RoomContext,
-    tab: ResumeTab,
-    bg: bool,
-) -> Result<()> {
+fn open_resume_tab(room: &RoomContext, tab: ResumeTab, bg: bool) -> Result<()> {
     let sidebar = room.sidebar_options(&tab.cwd, Vec::new(), None);
     room.backend()
         .open_tab(&TabOptions {
-            session_name: workspace.session_name.clone(),
             title: tab.label,
-            cwd: tab.cwd,
             panes: tab.layout,
             focus: !bg,
             dock_sidebar: true,

@@ -1,11 +1,7 @@
 //! tmux control-mode presence watcher.
 
-mod roster;
-
 use std::io::{BufRead as _, Write as _};
 use std::path::PathBuf;
-
-pub(crate) use roster::PresenceRoster;
 
 // ── Control-mode presence stream ──────────────────────────────────────────────
 

@@ -333,7 +333,6 @@ pub fn topology_json(
     session_name: Option<&str>,
     produced_at_ms: u64,
     writer: Option<policy::TopologyWriter>,
-    focused_pane: Option<u32>,
     clients: Option<&policy::ClientSample>,
     panes: &[PaneFields],
 ) -> Option<String> {
@@ -341,7 +340,6 @@ pub fn topology_json(
         session_name?,
         produced_at_ms,
         writer,
-        focused_pane,
         clients.cloned(),
         panes,
     )?;

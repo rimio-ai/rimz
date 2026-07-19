@@ -226,9 +226,7 @@ fn open_attempt_pane(
         let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
         room.backend()
             .open_tab(&TabOptions {
-                session_name: prepared.workspace.session_name.clone(),
                 title: format!("run {}", prepared.adapter.descriptor().kind),
-                cwd: prepared.launch.cwd.clone(),
                 panes: LayoutPanes {
                     columns: vec![LayoutColumn {
                         panes: vec![pane.clone()],

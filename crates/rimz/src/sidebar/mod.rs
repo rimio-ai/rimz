@@ -535,9 +535,7 @@ pub fn launch_sidebar_if_needed(
             Coalesced::Produce(guard) => Some(guard),
             Coalesced::ProduceLocal => None,
         };
-    let mut opts = opts.clone();
-    opts.replace_existing = true;
-    match backend.open_sidebar(&opts, daemon) {
+    match backend.open_sidebar(opts, daemon) {
         Ok(()) => {
             // Hold the election lock (`_guard`) until the new daemon publishes
             // its heartbeat, so an attach polling behind us reads it and skips.

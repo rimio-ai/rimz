@@ -1,9 +1,10 @@
 //! tmux presence fast path: forward control-mode overlays to sidebars.
 //!
-//! The elected producer holds one read-only [`PresenceWatch`]
+//! The elected producer holds one [`PresenceWatch`]
 //! (`crate::mux::tmux`) on the session, subscribes to tmux's per-pane format
-//! stream, and broadcasts the same typed overlays Zellij's presence plugin
-//! emits. Identity-free topology lines stay as [`PanesChanged`] nudges. Latency
+//! stream. tmux state and Zellij observations both flow through the host
+//! projector that emits typed overlays. Identity-free topology lines stay as
+//! [`PanesChanged`] nudges. Latency
 //! only, never truth: the poll remains the presence backstop
 //! (docs/internals/multiplexers.md), a dead watcher degrades to the
 //! poll, and this thread respawns the client with backoff.
@@ -20,8 +21,10 @@ use std::time::{Duration, Instant};
 
 use crate::RuntimePaths;
 use crate::ids::MuxName;
-use crate::mux::tmux::{PresenceRoster, PresenceWatch, control_socket_from_env};
+use crate::mux::tmux::{PresenceWatch, control_socket_from_env};
 use crate::sidebar::ProducerElectionTracker;
+use crate::sidebar::presence::projector::project_presence;
+use crate::sidebar::presence::tmux::TmuxPresenceState;
 use tracing::debug;
 
 /// Idle cadence for the producer-election re-check while not attached.
@@ -59,7 +62,7 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
                     MuxName::Tmux,
                     Some(session_name),
                 );
-                let mut roster = PresenceRoster::default();
+                let mut state = TmuxPresenceState::default();
                 let mut seed_deadline = None;
                 while let Some(line) = watch.next_line() {
                     // Demotion check per nudge: a demoted instance stops
@@ -70,7 +73,7 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
                     let now = Instant::now();
                     let deadline = seed_deadline.get_or_insert(now + SEED_WINDOW);
                     let seeding = now < *deadline;
-                    for event in roster.apply(line, seeding) {
+                    for event in project_presence(state.apply(line, seeding)) {
                         let _ = crate::store::wakeup::broadcast_sidebar_event(
                             runtime,
                             Some(session_name),

@@ -1,13 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ids::{MuxName, PaneId};
+use crate::mux::tmux::ControlLine;
 use crate::pane::SIDEBAR_CHROME_TITLE;
-use crate::sidebar::events::SidebarEvent;
-
-use super::ControlLine;
+use crate::sidebar::presence::projector::{PaneObservation, PresencePaneRole, PresenceTransition};
 
 #[derive(Default)]
-pub(crate) struct PresenceRoster {
+pub(crate) struct TmuxPresenceState {
     panes: BTreeMap<String, PaneEntry>,
     current_window: BTreeMap<String, String>,
     pending_unfocused: BTreeMap<String, String>,
@@ -32,8 +31,8 @@ struct SubscriptionUpdate {
     floating: bool,
 }
 
-impl PresenceRoster {
-    pub(crate) fn apply(&mut self, line: ControlLine, seeding: bool) -> Vec<SidebarEvent> {
+impl TmuxPresenceState {
+    pub(crate) fn apply(&mut self, line: ControlLine, seeding: bool) -> Vec<PresenceTransition> {
         match line {
             ControlLine::Subscription {
                 pane,
@@ -61,7 +60,7 @@ impl PresenceRoster {
             ControlLine::SessionWindowChanged { session, window } => {
                 self.switch_window(session, window, seeding)
             }
-            ControlLine::Nudge => vec![SidebarEvent::PanesChanged],
+            ControlLine::Nudge => vec![PresenceTransition::Nudge],
             ControlLine::Ignore => Vec::new(),
         }
     }
@@ -70,7 +69,7 @@ impl PresenceRoster {
         &mut self,
         update: SubscriptionUpdate,
         seeding: bool,
-    ) -> Vec<SidebarEvent> {
+    ) -> Vec<PresenceTransition> {
         let SubscriptionUpdate {
             pane,
             window,
@@ -84,24 +83,19 @@ impl PresenceRoster {
             .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE);
         let suppress_overlay = is_sidebar || title.is_none() && command.as_deref() == Some("rimz");
         let old = self.panes.get(&pane).cloned();
+        let current = PaneObservation {
+            pane_id: pane_id(&pane),
+            view: window.clone(),
+            command: command.clone(),
+            role: pane_role(suppress_overlay, is_sidebar),
+        };
         let mut events = Vec::new();
 
-        if !seeding && !suppress_overlay {
-            match old.as_ref() {
-                None => events.push(SidebarEvent::PaneOpened {
-                    pane_id: pane_id(&pane),
-                    command: command.clone(),
-                }),
-                Some(entry) if entry.command != command => {
-                    if let Some(command) = command.clone() {
-                        events.push(SidebarEvent::CommandChanged {
-                            pane_id: pane_id(&pane),
-                            command,
-                        });
-                    }
-                }
-                Some(_) => {}
-            }
+        if !seeding {
+            events.push(PresenceTransition::PaneObserved {
+                current: current.clone(),
+                previous: old.as_ref().map(|entry| pane_observation(&pane, entry)),
+            });
         }
 
         if !seeding
@@ -117,14 +111,7 @@ impl PresenceRoster {
         let became_active = active && old.as_ref().is_none_or(|entry| !entry.active);
         if became_active {
             let pending = self.pending_unfocused.remove(&window);
-            events.extend(self.focus_became_active(
-                &window,
-                &pane,
-                suppress_overlay,
-                is_sidebar,
-                seeding,
-                pending,
-            ));
+            events.extend(self.focus_became_active(&window, &pane, current, seeding, pending));
         }
 
         self.panes.insert(
@@ -146,19 +133,17 @@ impl PresenceRoster {
         window: String,
         pane: String,
         seeding: bool,
-    ) -> Vec<SidebarEvent> {
+    ) -> Vec<PresenceTransition> {
         let Some(entry) = self.panes.get(&pane) else {
             // The active pane can win the race before its first subscription
             // line. Nudge now; the subscription names it shortly.
-            return vec![SidebarEvent::PanesChanged];
+            return vec![PresenceTransition::IncompleteLayout];
         };
         if entry.active {
             return Vec::new();
         }
-        let suppress_overlay = entry.overlay_suppressed;
-        let is_sidebar = entry.is_sidebar;
-        let events =
-            self.focus_became_active(&window, &pane, suppress_overlay, is_sidebar, seeding, None);
+        let focused = pane_observation(&pane, entry);
+        let events = self.focus_became_active(&window, &pane, focused, seeding, None);
         if let Some(entry) = self.panes.get_mut(&pane) {
             entry.active = true;
         }
@@ -169,50 +154,47 @@ impl PresenceRoster {
         &mut self,
         window: &str,
         pane: &str,
-        suppress_overlay: bool,
-        is_sidebar: bool,
+        focused: PaneObservation,
         seeding: bool,
         pending: Option<String>,
-    ) -> Vec<SidebarEvent> {
+    ) -> Vec<PresenceTransition> {
         let mut events = Vec::new();
-        if !seeding && (!suppress_overlay || is_sidebar) {
-            let unfocused = self
+        if !seeding {
+            let prior = self
                 .prior_active_working_pane(window, pane)
                 .or(pending)
                 .filter(|raw| raw != pane)
-                .map(|raw| pane_id(raw.as_str()))
-                .into_iter()
-                .collect();
-            events.push(SidebarEvent::FocusChanged {
-                focused: vec![pane_id(pane)],
-                unfocused,
+                .and_then(|raw| {
+                    self.panes
+                        .get(&raw)
+                        .map(|entry| pane_observation(&raw, entry))
+                });
+            events.push(PresenceTransition::PaneFocused {
+                focused: Some(focused),
+                prior,
             });
         }
         self.clear_active_in_window(window, pane);
         events
     }
 
-    fn close_window(&mut self, window: &str) -> Vec<SidebarEvent> {
+    fn close_window(&mut self, window: &str) -> Vec<PresenceTransition> {
         let closed = self
             .panes
             .iter()
             .filter(|(_, entry)| entry.window == window)
-            .map(|(pane, entry)| (pane.clone(), entry.overlay_suppressed))
+            .map(|(pane, entry)| (pane.clone(), pane_observation(pane, entry)))
             .collect::<Vec<_>>();
         for (pane, _) in &closed {
             self.panes.remove(pane);
         }
         closed
             .into_iter()
-            .filter_map(|(pane, overlay_suppressed)| {
-                (!overlay_suppressed).then(|| SidebarEvent::PaneClosed {
-                    pane_id: pane_id(&pane),
-                })
-            })
+            .map(|(_, pane)| PresenceTransition::PaneRemoved(pane))
             .collect()
     }
 
-    fn apply_layout(&mut self, window: &str, panes: Vec<String>) -> Vec<SidebarEvent> {
+    fn apply_layout(&mut self, window: &str, panes: Vec<String>) -> Vec<PresenceTransition> {
         let present = panes.into_iter().collect::<BTreeSet<_>>();
         let has_floating = self
             .panes
@@ -229,21 +211,17 @@ impl PresenceRoster {
                     && !entry.floating
                     && !present.contains(pane.as_str())
             })
-            .map(|(pane, entry)| (pane.clone(), entry.overlay_suppressed))
+            .map(|(pane, entry)| (pane.clone(), pane_observation(pane, entry)))
             .collect::<Vec<_>>();
         for (pane, _) in &closed {
             self.panes.remove(pane);
         }
         let mut events = closed
             .into_iter()
-            .filter_map(|(pane, overlay_suppressed)| {
-                (!overlay_suppressed).then(|| SidebarEvent::PaneClosed {
-                    pane_id: pane_id(&pane),
-                })
-            })
+            .map(|(_, pane)| PresenceTransition::PaneRemoved(pane))
             .collect::<Vec<_>>();
         if has_floating {
-            events.push(SidebarEvent::PanesChanged);
+            events.push(PresenceTransition::IncompleteLayout);
         }
         events
     }
@@ -253,31 +231,30 @@ impl PresenceRoster {
         session: String,
         window: String,
         seeding: bool,
-    ) -> Vec<SidebarEvent> {
+    ) -> Vec<PresenceTransition> {
         let previous = self.current_window.insert(session, window.clone());
         if seeding || previous.as_deref() == Some(window.as_str()) {
             return Vec::new();
         }
-        let Some(focused) = self.active_pane_in_window(&window) else {
-            return vec![SidebarEvent::PanesChanged];
-        };
-        if self.pane_is_sidebar(&focused) && self.window_has_working_pane(&window) {
-            return vec![SidebarEvent::FocusStranded {
-                pane_id: pane_id(&focused),
-                generation: 0,
-                clients: Vec::new(),
-            }];
-        }
-        let unfocused = previous
+        let focused = self.active_pane_in_window(&window).and_then(|raw| {
+            self.panes
+                .get(&raw)
+                .map(|entry| pane_observation(&raw, entry))
+        });
+        let prior = previous
             .as_deref()
             .and_then(|prev| self.active_pane_in_window(prev))
-            .filter(|prev_active| prev_active != &focused)
-            .map(|raw| pane_id(&raw))
-            .into_iter()
-            .collect();
-        vec![SidebarEvent::FocusChanged {
-            focused: vec![pane_id(&focused)],
-            unfocused,
+            .and_then(|raw| {
+                self.panes
+                    .get(&raw)
+                    .map(|entry| pane_observation(&raw, entry))
+            });
+        vec![PresenceTransition::ViewSwitched {
+            focused,
+            prior,
+            has_working: self.window_has_working_pane(&window),
+            generation: 0,
+            clients: Vec::new(),
         }]
     }
 
@@ -286,10 +263,6 @@ impl PresenceRoster {
             .iter()
             .find(|(_, entry)| entry.window == window && entry.active)
             .map(|(pane, _)| pane.clone())
-    }
-
-    fn pane_is_sidebar(&self, pane: &str) -> bool {
-        self.panes.get(pane).is_some_and(|entry| entry.is_sidebar)
     }
 
     fn window_has_working_pane(&self, window: &str) -> bool {
@@ -323,9 +296,38 @@ fn pane_id(raw: &str) -> PaneId {
     PaneId::from_parts(MuxName::Tmux, raw)
 }
 
+fn pane_role(overlay_suppressed: bool, is_sidebar: bool) -> PresencePaneRole {
+    if is_sidebar {
+        PresencePaneRole::Sidebar
+    } else if overlay_suppressed {
+        PresencePaneRole::LaunchChrome
+    } else {
+        PresencePaneRole::Working
+    }
+}
+
+fn pane_observation(raw: &str, entry: &PaneEntry) -> PaneObservation {
+    PaneObservation {
+        pane_id: pane_id(raw),
+        view: entry.window.clone(),
+        command: entry.command.clone(),
+        role: pane_role(entry.overlay_suppressed, entry.is_sidebar),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sidebar::events::SidebarEvent;
+    use crate::sidebar::presence::projector::project_presence;
+
+    fn project_apply(
+        state: &mut TmuxPresenceState,
+        line: ControlLine,
+        seeding: bool,
+    ) -> Vec<SidebarEvent> {
+        project_presence(state.apply(line, seeding))
+    }
 
     fn sub(pane: &str, window: &str, command: Option<&str>, active: bool) -> ControlLine {
         ControlLine::Subscription {
@@ -387,14 +389,14 @@ mod tests {
 
     #[test]
     fn seed_updates_roster_without_events() {
-        let mut roster = PresenceRoster::default();
+        let mut roster = TmuxPresenceState::default();
         assert!(
             roster
                 .apply(sub("%1", "@1", Some("zsh"), true), true)
                 .is_empty()
         );
         assert_eq!(
-            roster.apply(sub("%1", "@1", Some("claude"), true), false),
+            project_apply(&mut roster, sub("%1", "@1", Some("claude"), true), false),
             vec![SidebarEvent::CommandChanged {
                 pane_id: pane_id("%1"),
                 command: "claude".to_owned(),
@@ -404,9 +406,9 @@ mod tests {
 
     #[test]
     fn new_pane_emits_open_and_focus_when_active() {
-        let mut roster = PresenceRoster::default();
+        let mut roster = TmuxPresenceState::default();
         assert_eq!(
-            roster.apply(sub("%1", "@1", Some("zsh"), true), false),
+            project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), false),
             vec![
                 SidebarEvent::PaneOpened {
                     pane_id: pane_id("%1"),
@@ -422,30 +424,30 @@ mod tests {
 
     #[test]
     fn existing_pane_command_change_emits_command_event() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), false), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), false), true);
         assert_eq!(
-            roster.apply(sub("%1", "@1", Some("codex"), false), false),
+            project_apply(&mut roster, sub("%1", "@1", Some("codex"), false), false),
             vec![SidebarEvent::CommandChanged {
                 pane_id: pane_id("%1"),
                 command: "codex".to_owned(),
             }]
         );
-        assert!(roster.apply(sub("%1", "@1", None, false), false).is_empty());
+        assert!(project_apply(&mut roster, sub("%1", "@1", None, false), false).is_empty());
     }
 
     #[test]
     fn seed_window_switch_records_current_window_without_events() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sub("%2", "@2", Some("claude"), true), true);
-        assert!(roster.apply(swin("$1", "@1"), true).is_empty());
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sub("%2", "@2", Some("claude"), true), true);
+        assert!(project_apply(&mut roster, swin("$1", "@1"), true).is_empty());
         assert_eq!(
             roster.current_window.get("$1").map(String::as_str),
             Some("@1")
         );
         assert_eq!(
-            roster.apply(swin("$1", "@2"), false),
+            project_apply(&mut roster, swin("$1", "@2"), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%2")],
                 unfocused: vec![pane_id("%1")],
@@ -455,14 +457,14 @@ mod tests {
 
     #[test]
     fn window_switch_can_focus_sidebar_pane() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sidebar_sub("%9", "@2", true), true);
-        roster.apply(swin("$1", "@1"), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sidebar_sub("%9", "@2", true), true);
+        project_apply(&mut roster, swin("$1", "@1"), true);
         // A sidebar-only window has no working sibling to refocus, so the
         // switch remains a plain focus overlay.
         assert_eq!(
-            roster.apply(swin("$1", "@2"), false),
+            project_apply(&mut roster, swin("$1", "@2"), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%9")],
                 unfocused: vec![pane_id("%1")],
@@ -472,13 +474,13 @@ mod tests {
 
     #[test]
     fn window_switch_onto_sidebar_with_work_sibling_strands() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sub("%2", "@2", Some("claude"), false), true);
-        roster.apply(sidebar_sub("%9", "@2", true), true);
-        roster.apply(swin("$1", "@1"), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sub("%2", "@2", Some("claude"), false), true);
+        project_apply(&mut roster, sidebar_sub("%9", "@2", true), true);
+        project_apply(&mut roster, swin("$1", "@1"), true);
         assert_eq!(
-            roster.apply(swin("$1", "@2"), false),
+            project_apply(&mut roster, swin("$1", "@2"), false),
             vec![SidebarEvent::FocusStranded {
                 pane_id: pane_id("%9"),
                 generation: 0,
@@ -489,31 +491,31 @@ mod tests {
 
     #[test]
     fn window_switch_with_unknown_active_pane_falls_back_to_panes_changed() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sub("%2", "@2", Some("claude"), false), true);
-        roster.apply(swin("$1", "@1"), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sub("%2", "@2", Some("claude"), false), true);
+        project_apply(&mut roster, swin("$1", "@1"), true);
         assert_eq!(
-            roster.apply(swin("$1", "@2"), false),
+            project_apply(&mut roster, swin("$1", "@2"), false),
             vec![SidebarEvent::PanesChanged]
         );
     }
 
     #[test]
     fn window_switch_to_current_window_emits_nothing() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(swin("$1", "@1"), true);
-        assert!(roster.apply(swin("$1", "@1"), false).is_empty());
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, swin("$1", "@1"), true);
+        assert!(project_apply(&mut roster, swin("$1", "@1"), false).is_empty());
     }
 
     #[test]
     fn focus_change_unfocuses_prior_active_working_pane() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sub("%2", "@1", Some("claude"), false), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
         assert_eq!(
-            roster.apply(sub("%2", "@1", Some("claude"), true), false),
+            project_apply(&mut roster, sub("%2", "@1", Some("claude"), true), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%2")],
                 unfocused: vec![pane_id("%1")],
@@ -523,16 +525,12 @@ mod tests {
 
     #[test]
     fn focus_change_keeps_unfocused_when_inactive_line_arrives_first() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sub("%2", "@1", Some("claude"), false), true);
-        assert!(
-            roster
-                .apply(sub("%1", "@1", Some("zsh"), false), false)
-                .is_empty()
-        );
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
+        assert!(project_apply(&mut roster, sub("%1", "@1", Some("zsh"), false), false).is_empty());
         assert_eq!(
-            roster.apply(sub("%2", "@1", Some("claude"), true), false),
+            project_apply(&mut roster, sub("%2", "@1", Some("claude"), true), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%2")],
                 unfocused: vec![pane_id("%1")],
@@ -542,11 +540,11 @@ mod tests {
 
     #[test]
     fn window_pane_change_focuses_new_active_working_pane() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sub("%2", "@1", Some("claude"), false), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
         assert_eq!(
-            roster.apply(wpane("@1", "%2"), false),
+            project_apply(&mut roster, wpane("@1", "%2"), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%2")],
                 unfocused: vec![pane_id("%1")],
@@ -558,28 +556,28 @@ mod tests {
 
     #[test]
     fn window_pane_change_for_already_active_pane_emits_nothing() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        assert!(roster.apply(wpane("@1", "%1"), false).is_empty());
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        assert!(project_apply(&mut roster, wpane("@1", "%1"), false).is_empty());
         assert!(roster.panes.get("%1").is_some_and(|entry| entry.active));
     }
 
     #[test]
     fn window_pane_change_for_unknown_pane_falls_back_to_panes_changed() {
-        let mut roster = PresenceRoster::default();
+        let mut roster = TmuxPresenceState::default();
         assert_eq!(
-            roster.apply(wpane("@1", "%2"), false),
+            project_apply(&mut roster, wpane("@1", "%2"), false),
             vec![SidebarEvent::PanesChanged]
         );
     }
 
     #[test]
     fn window_pane_change_can_focus_sidebar_pane() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sidebar_sub("%9", "@1", false), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sidebar_sub("%9", "@1", false), true);
         assert_eq!(
-            roster.apply(wpane("@1", "%9"), false),
+            project_apply(&mut roster, wpane("@1", "%9"), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%9")],
                 unfocused: vec![pane_id("%1")],
@@ -591,53 +589,53 @@ mod tests {
 
     #[test]
     fn window_pane_change_suppresses_untitled_rimz_overlay() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(untitled_rimz_sub("%9", "@1", false), true);
-        assert!(roster.apply(wpane("@1", "%9"), false).is_empty());
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, untitled_rimz_sub("%9", "@1", false), true);
+        assert!(project_apply(&mut roster, wpane("@1", "%9"), false).is_empty());
         assert!(!roster.panes.get("%1").is_some_and(|entry| entry.active));
         assert!(roster.panes.get("%9").is_some_and(|entry| entry.active));
     }
 
     #[test]
     fn window_pane_change_seeds_state_without_events() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sub("%2", "@1", Some("claude"), false), true);
-        assert!(roster.apply(wpane("@1", "%2"), true).is_empty());
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
+        assert!(project_apply(&mut roster, wpane("@1", "%2"), true).is_empty());
         assert!(!roster.panes.get("%1").is_some_and(|entry| entry.active));
         assert!(roster.panes.get("%2").is_some_and(|entry| entry.active));
     }
 
     #[test]
     fn sidebar_pane_focus_names_sidebar_pane() {
-        let mut roster = PresenceRoster::default();
+        let mut roster = TmuxPresenceState::default();
         assert_eq!(
-            roster.apply(sidebar_sub("%9", "@1", true), false),
+            project_apply(&mut roster, sidebar_sub("%9", "@1", true), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%9")],
                 unfocused: Vec::new(),
             }]
         );
         assert!(
-            roster
-                .apply(
-                    ControlLine::WindowClosed {
-                        window: "@1".to_owned()
-                    },
-                    false
-                )
-                .is_empty()
+            project_apply(
+                &mut roster,
+                ControlLine::WindowClosed {
+                    window: "@1".to_owned()
+                },
+                false
+            )
+            .is_empty()
         );
         assert!(!roster.panes.contains_key("%9"));
     }
 
     #[test]
     fn sidebar_pane_focus_unfocuses_prior_active_working_pane() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
         assert_eq!(
-            roster.apply(sidebar_sub("%9", "@1", true), false),
+            project_apply(&mut roster, sidebar_sub("%9", "@1", true), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%9")],
                 unfocused: vec![pane_id("%1")],
@@ -647,21 +645,18 @@ mod tests {
 
     #[test]
     fn untitled_rimz_panes_are_suppressed_until_proven_work() {
-        let mut roster = PresenceRoster::default();
-        assert!(
-            roster
-                .apply(untitled_rimz_sub("%9", "@1", true), false)
-                .is_empty()
-        );
+        let mut roster = TmuxPresenceState::default();
+        assert!(project_apply(&mut roster, untitled_rimz_sub("%9", "@1", true), false).is_empty());
         assert_eq!(
-            roster.apply(sub("%9", "@1", Some("claude"), true), false),
+            project_apply(&mut roster, sub("%9", "@1", Some("claude"), true), false),
             vec![SidebarEvent::CommandChanged {
                 pane_id: pane_id("%9"),
                 command: "claude".to_owned(),
             }]
         );
         assert_eq!(
-            roster.apply(
+            project_apply(
+                &mut roster,
                 ControlLine::WindowClosed {
                     window: "@1".to_owned()
                 },
@@ -675,12 +670,13 @@ mod tests {
 
     #[test]
     fn window_close_drains_working_panes() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), false), true);
-        roster.apply(sub("%2", "@1", Some("claude"), false), true);
-        roster.apply(sub("%3", "@2", Some("codex"), false), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), false), true);
+        project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
+        project_apply(&mut roster, sub("%3", "@2", Some("codex"), false), true);
         assert_eq!(
-            roster.apply(
+            project_apply(
+                &mut roster,
                 ControlLine::WindowClosed {
                     window: "@1".to_owned()
                 },
@@ -702,12 +698,13 @@ mod tests {
 
     #[test]
     fn layout_change_closes_roster_panes_missing_from_window() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), false), true);
-        roster.apply(sub("%2", "@1", Some("claude"), false), true);
-        roster.apply(sub("%3", "@2", Some("codex"), false), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), false), true);
+        project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
+        project_apply(&mut roster, sub("%3", "@2", Some("codex"), false), true);
         assert_eq!(
-            roster.apply(
+            project_apply(
+                &mut roster,
                 ControlLine::LayoutChange {
                     window: "@1".to_owned(),
                     panes: vec!["%1".to_owned()],
@@ -725,11 +722,12 @@ mod tests {
 
     #[test]
     fn layout_change_preserves_floating_panes_omitted_from_tmux_layout() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), false), true);
-        roster.apply(floating_sub("%2", "@1", Some("codex")), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), false), true);
+        project_apply(&mut roster, floating_sub("%2", "@1", Some("codex")), true);
         assert_eq!(
-            roster.apply(
+            project_apply(
+                &mut roster,
                 ControlLine::LayoutChange {
                     window: "@1".to_owned(),
                     panes: vec!["%1".to_owned()],
@@ -744,15 +742,16 @@ mod tests {
 
     #[test]
     fn layout_change_closes_tiled_pane_while_preserving_floating_sibling() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), false), true);
-        roster.apply(sub("%2", "@1", Some("claude"), false), true);
-        roster.apply(floating_sub("%3", "@1", Some("codex")), true);
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), false), true);
+        project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
+        project_apply(&mut roster, floating_sub("%3", "@1", Some("codex")), true);
         // The tiled `%2` drops out of the layout and closes; the floating `%3`
         // is absent from the layout string too but must survive, so the event
         // names only `%2` and appends a nudge for the floating-pane poll.
         assert_eq!(
-            roster.apply(
+            project_apply(
+                &mut roster,
                 ControlLine::LayoutChange {
                     window: "@1".to_owned(),
                     panes: vec!["%1".to_owned()],
@@ -773,9 +772,9 @@ mod tests {
 
     #[test]
     fn nudge_falls_back_to_panes_changed() {
-        let mut roster = PresenceRoster::default();
+        let mut roster = TmuxPresenceState::default();
         assert_eq!(
-            roster.apply(ControlLine::Nudge, false),
+            project_apply(&mut roster, ControlLine::Nudge, false),
             vec![SidebarEvent::PanesChanged]
         );
     }

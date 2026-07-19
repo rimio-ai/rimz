@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CommandSpec, MuxBackend, Result};
+use super::{CommandSpec, MuxBackend, MuxErr, Result};
 use crate::config::ZellijConfig;
 use crate::ids::PaneId;
 
@@ -562,12 +562,14 @@ impl ZellijBackend {
     }
 
     pub(super) fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {
+        let target = pane_topology::ZellijPaneId::try_from(pane)
+            .map_err(|err| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: err.to_string(),
+            })?
+            .action_target();
         self.zellij_action(session)
-            .args([
-                "close-pane".to_owned(),
-                "--pane-id".to_owned(),
-                pane.raw().to_owned(),
-            ])
+            .args(["close-pane".to_owned(), "--pane-id".to_owned(), target])
             .run()
             .map(|_| ())
     }

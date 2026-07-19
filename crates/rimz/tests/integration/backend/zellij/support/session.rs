@@ -50,7 +50,6 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         detected_view_size: None,
         width_override: None,
         rimz_bin: stub,
-        replace_existing: false,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
