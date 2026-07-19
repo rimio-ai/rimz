@@ -266,7 +266,9 @@ fn walk_fleet_spending_context(
 ) -> crate::agents::spending::SpendingCaches {
     let now_secs = crate::agents::spending::unix_secs_now();
     let files = walker.discover_spending_files(now_secs);
-    walk_fleet_spending_files(walker, runtime, context, publish, progress, &files, now_secs)
+    walk_fleet_spending_files(
+        walker, runtime, context, publish, progress, &files, now_secs,
+    )
 }
 
 #[cfg(test)]
