@@ -122,22 +122,13 @@ impl From<ProjectedPaneId> for PaneKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PaneState {
-    tab: Option<usize>,
-    is_suppressed: bool,
-    is_floating: bool,
-    exited: bool,
-    is_held: bool,
-    tab_name: Option<String>,
-    pane_x: Option<u64>,
-    pane_columns: Option<u64>,
-    title: String,
+    manifest: Option<PaneFields>,
     foreground: Option<String>,
     shell: Option<String>,
     cwd: Option<String>,
     pid: PanePid,
-    terminal_command: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -170,16 +161,16 @@ impl RoomState {
                 })
                 .collect::<BTreeSet<_>>();
             self.panes
-                .retain(|key, state| state.tab != Some(tab) || reported.contains(key));
+                .retain(|key, state| state.tab() != Some(tab) || reported.contains(key));
             for pane in panes {
                 let key = PaneKey {
                     is_plugin: pane.is_plugin,
                     id: pane.id,
                 };
                 match self.panes.get_mut(&key) {
-                    Some(state) => state.apply_manifest(tab, pane),
+                    Some(state) => state.apply_manifest(pane),
                     None => {
-                        self.panes.insert(key, PaneState::from_manifest(tab, pane));
+                        self.panes.insert(key, PaneState::from_manifest(pane));
                     }
                 }
             }
@@ -261,7 +252,7 @@ impl RoomState {
     fn pane_location(&self, id: u32) -> Option<(usize, &PaneState)> {
         self.panes
             .get(&PaneKey::terminal(id))
-            .and_then(|pane| pane.tab.map(|tab| (tab, pane)))
+            .and_then(|pane| pane.tab().map(|tab| (tab, pane)))
     }
 
     fn live_terminal(&self, id: u32) -> Option<&PaneState> {
@@ -277,12 +268,12 @@ impl RoomState {
         let mut panes = self
             .panes
             .iter()
-            .filter_map(|(key, state)| state.tab.map(|tab| (tab, key, state)))
+            .filter_map(|(key, state)| state.tab().map(|tab| (tab, key, state)))
             .collect::<Vec<_>>();
         panes.sort_unstable_by_key(|(tab, key, _)| (*tab, **key));
         panes
             .into_iter()
-            .map(|(tab, key, state)| state.published(*key, tab))
+            .filter_map(|(_, _, state)| state.published())
             .collect()
     }
 }
@@ -297,88 +288,52 @@ impl PaneKey {
 }
 
 impl PaneState {
-    fn from_manifest(tab: usize, pane: PaneFields) -> Self {
-        let pid = pane.pane_pid.map_or(PanePid::Unprobed, PanePid::Known);
+    fn from_manifest(mut pane: PaneFields) -> Self {
+        let foreground = pane.pane_command.take();
+        let cwd = pane.pane_cwd.take();
+        let pid = pane
+            .pane_pid
+            .take()
+            .map_or(PanePid::Unprobed, PanePid::Known);
         Self {
-            tab: Some(tab),
-            is_suppressed: pane.is_suppressed,
-            is_floating: pane.is_floating,
-            exited: pane.exited,
-            is_held: pane.is_held,
-            tab_name: pane.tab_name,
-            pane_x: pane.pane_x,
-            pane_columns: pane.pane_columns,
-            title: pane.title,
-            foreground: pane.pane_command,
+            manifest: Some(pane),
+            foreground,
             shell: None,
-            cwd: pane.pane_cwd,
+            cwd,
             pid,
-            terminal_command: pane.terminal_command,
         }
     }
 
     fn pending() -> Self {
-        Self {
-            tab: None,
-            is_suppressed: false,
-            is_floating: false,
-            exited: false,
-            is_held: false,
-            tab_name: None,
-            pane_x: None,
-            pane_columns: None,
-            title: String::new(),
-            foreground: None,
-            shell: None,
-            cwd: None,
-            pid: PanePid::Unprobed,
-            terminal_command: None,
-        }
+        Self::default()
     }
 
-    fn apply_manifest(&mut self, tab: usize, pane: PaneFields) {
-        self.tab = Some(tab);
-        self.is_suppressed = pane.is_suppressed;
-        self.is_floating = pane.is_floating;
-        self.exited = pane.exited;
-        self.is_held = pane.is_held;
-        self.tab_name = pane.tab_name;
-        self.pane_x = pane.pane_x;
-        self.pane_columns = pane.pane_columns;
-        self.title = pane.title;
-        self.terminal_command = pane.terminal_command;
+    fn apply_manifest(&mut self, pane: PaneFields) {
+        self.manifest = Some(pane);
+    }
+
+    fn tab(&self) -> Option<usize> {
+        self.manifest
+            .as_ref()
+            .and_then(|pane| pane.tab_position.try_into().ok())
     }
 
     fn is_live_terminal(&self, key: PaneKey) -> bool {
-        self.tab.is_some()
-            && !key.is_plugin
-            && !self.is_suppressed
-            && !self.is_floating
-            && !self.exited
-            && !self.is_held
+        !key.is_plugin
+            && self.manifest.as_ref().is_some_and(|pane| {
+                !pane.is_suppressed && !pane.is_floating && !pane.exited && !pane.is_held
+            })
     }
 
-    fn published(&self, key: PaneKey, tab: usize) -> PaneFields {
-        PaneFields {
-            id: key.id,
-            is_plugin: key.is_plugin,
-            is_suppressed: self.is_suppressed,
-            is_floating: self.is_floating,
-            exited: self.exited,
-            is_held: self.is_held,
-            tab_position: tab as u64,
-            tab_name: self.tab_name.clone(),
-            pane_x: self.pane_x,
-            pane_columns: self.pane_columns,
-            title: self.title.clone(),
-            pane_command: self.foreground.as_ref().or(self.shell.as_ref()).cloned(),
-            pane_cwd: self.cwd.clone(),
-            pane_pid: match self.pid {
-                PanePid::Known(pid) => Some(pid),
-                PanePid::Unprobed | PanePid::Missing => None,
-            },
-            terminal_command: self.terminal_command.clone(),
-        }
+    fn published(&self) -> Option<PaneFields> {
+        let mut pane = self.manifest.clone()?;
+        pane.pane_command = self.foreground.as_ref().or(self.shell.as_ref()).cloned();
+        pane.pane_cwd.clone_from(&self.cwd);
+        pane.pane_pid = match self.pid {
+            PanePid::Known(pid) => Some(pid),
+            PanePid::Unprobed | PanePid::Missing => None,
+        };
+        Some(pane)
     }
 }
 
@@ -632,20 +587,12 @@ pub struct EngineConfig {
 }
 
 pub struct Engine {
+    config: EngineConfig,
     policy: PokePolicy,
     room: RoomState,
     last_raw_stable_hash: Option<u64>,
     tab_names: BTreeMap<usize, String>,
     focus: FocusSync,
-    workspace_id: Option<String>,
-    session_name: Option<String>,
-    rimz_bin: Option<String>,
-    plugin_id: Option<u32>,
-    plugin_build: Option<String>,
-    plugin_config: Option<String>,
-    focus_key: Option<String>,
-    focus_follows_mouse: Option<bool>,
-    mouse_click_through: Option<bool>,
     granted: bool,
     pending_pregrant_change: bool,
     share_requested: bool,
@@ -661,20 +608,12 @@ const STALE_WRITER_RETIRE_THRESHOLD: u32 = 3;
 impl Engine {
     pub fn new(now: u64, config: EngineConfig) -> Self {
         Self {
+            config,
             policy: PokePolicy::new(now),
             room: RoomState::default(),
             last_raw_stable_hash: None,
             tab_names: BTreeMap::new(),
             focus: FocusSync::default(),
-            workspace_id: config.workspace_id,
-            session_name: config.session_name,
-            rimz_bin: config.rimz_bin,
-            plugin_id: config.plugin_id,
-            plugin_build: config.plugin_build,
-            plugin_config: config.plugin_config,
-            focus_key: config.focus_key,
-            focus_follows_mouse: config.focus_follows_mouse,
-            mouse_click_through: config.mouse_click_through,
             granted: false,
             pending_pregrant_change: false,
             share_requested: false,
@@ -691,7 +630,7 @@ impl Engine {
     }
 
     pub fn session_name(&self) -> Option<&str> {
-        self.session_name.as_deref()
+        self.config.session_name.as_deref()
     }
 
     pub fn on_load(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
@@ -980,10 +919,11 @@ impl Engine {
             return Vec::new();
         }
         self.wake_fork_failures = self.wake_fork_failures.saturating_add(1);
-        if self.wake_fork_failures < WAKE_FORK_FALLBACK_THRESHOLD || self.rimz_bin.is_none() {
+        if self.wake_fork_failures < WAKE_FORK_FALLBACK_THRESHOLD || self.config.rimz_bin.is_none()
+        {
             return Vec::new();
         }
-        self.rimz_bin = None;
+        self.config.rimz_bin = None;
         self.wake_fork_failures = 0;
         let mut effects = Vec::new();
         self.poke(Poke::Alive, now, host, &mut effects);
@@ -1077,8 +1017,8 @@ impl Engine {
             Poke::Changed => wire::WakeRequest::Changed,
             Poke::Alive => {
                 let mut telemetry = host.telemetry();
-                telemetry.plugin_id = self.plugin_id;
-                telemetry.plugin_build = self.plugin_build.clone();
+                telemetry.plugin_id = self.config.plugin_id;
+                telemetry.plugin_build = self.config.plugin_build.clone();
                 telemetry.loaded_at_ms = self.loaded_at_ms;
                 telemetry.uptime_ms = now.saturating_sub(self.loaded_at_ms);
                 wire::WakeRequest::Alive(telemetry)
@@ -1089,9 +1029,9 @@ impl Engine {
 
     fn wake_context(&self) -> wire::WakeContext<'_> {
         wire::WakeContext {
-            rimz_bin: self.rimz_bin.as_deref(),
-            workspace_id: self.workspace_id.as_deref(),
-            session_name: self.session_name.as_deref(),
+            rimz_bin: self.config.rimz_bin.as_deref(),
+            workspace_id: self.config.workspace_id.as_deref(),
+            session_name: self.config.session_name.as_deref(),
         }
     }
 
@@ -1099,15 +1039,18 @@ impl Engine {
         if !self.granted {
             return false;
         }
-        let writer = self.plugin_id.map(|plugin_id| policy::TopologyWriter {
-            plugin_id,
-            loaded_at_ms: self.loaded_at_ms,
-            build: self.plugin_build.clone(),
-            config: self.plugin_config.clone(),
-        });
+        let writer = self
+            .config
+            .plugin_id
+            .map(|plugin_id| policy::TopologyWriter {
+                plugin_id,
+                loaded_at_ms: self.loaded_at_ms,
+                build: self.config.plugin_build.clone(),
+                config: self.config.plugin_config.clone(),
+            });
         let panes = self.room.published_panes();
         let topology = wire::topology_json(
-            self.session_name.as_deref(),
+            self.config.session_name.as_deref(),
             now,
             writer,
             self.focus.session_focus(),
@@ -1123,20 +1066,20 @@ impl Engine {
 
     fn writer(&self) -> policy::TopologyWriter {
         policy::TopologyWriter {
-            plugin_id: self.plugin_id.unwrap_or_default(),
+            plugin_id: self.config.plugin_id.unwrap_or_default(),
             loaded_at_ms: self.loaded_at_ms,
-            build: self.plugin_build.clone(),
-            config: self.plugin_config.clone(),
+            build: self.config.plugin_build.clone(),
+            config: self.config.plugin_config.clone(),
         }
     }
 
     /// Apply rimz-owned runtime config in one `reconfigure(..., false)`.
     fn apply_runtime_reconfigure(&self, effects: &mut Vec<Effect>) {
         let config = wire::RuntimeReconfigure {
-            plugin_id: self.plugin_id,
-            focus_key: self.focus_key.as_deref(),
-            focus_follows_mouse: self.focus_follows_mouse,
-            mouse_click_through: self.mouse_click_through,
+            plugin_id: self.config.plugin_id,
+            focus_key: self.config.focus_key.as_deref(),
+            focus_follows_mouse: self.config.focus_follows_mouse,
+            mouse_click_through: self.config.mouse_click_through,
         };
         if let Some(kdl) = wire::runtime_reconfigure_kdl(&config) {
             effects.push(Effect::Reconfigure(kdl));
