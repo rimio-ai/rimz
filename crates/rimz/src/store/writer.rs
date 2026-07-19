@@ -27,7 +27,10 @@ mod queue;
 mod reap;
 mod reset;
 
-pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_LOG_ROTATE_BYTES};
+pub use lifecycle::{
+    AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES,
+    DerivedLifecycleKind, DerivedLifecycleOutcome, LifecycleAppendOutcome,
+};
 pub(crate) use queue::DeliverySweepUpdate;
 pub use queue::{DeliveryFailureDisposition, EditOutcome, MessageEdit};
 
@@ -41,6 +44,12 @@ impl Txn<'_> {
     pub(super) fn append(&mut self, event: &EventEnvelope) -> Result<()> {
         event_log::append(&self.paths.events_log, event)?;
         self.events.push(event.clone());
+        Ok(())
+    }
+
+    pub(super) fn append_batch(&mut self, events: &[EventEnvelope]) -> Result<()> {
+        event_log::append_batch(&self.paths.events_log, events)?;
+        self.events.extend_from_slice(events);
         Ok(())
     }
 

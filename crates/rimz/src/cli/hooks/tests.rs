@@ -342,7 +342,7 @@ fn seed_subagent_candidate(store: &rimz::Store, agent_id: &str, parent_id: &str)
             agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
             event_name: "seed-candidate",
             observation: &candidate,
-            transition: None,
+            spawned_subagents: &[],
         })
         .unwrap();
 }
@@ -921,7 +921,7 @@ fn pi_bridge_adoption_preserves_parented_and_foreign_pane_roots() {
             agent_kind: rimz::ids::AgentKind::new_unchecked("pi"),
             event_name: "seed-parented",
             observation: &parented,
-            transition: None,
+            spawned_subagents: &[],
         })
         .unwrap();
     feed_pi(
@@ -1069,7 +1069,7 @@ fn antigravity_parent_stop_rematerializes_a_reaped_child() {
             agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
             event_name: "ReapedSuperseded",
             observation: &ended,
-            transition: None,
+            spawned_subagents: &[],
         })
         .unwrap();
     assert!(

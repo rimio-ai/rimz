@@ -84,6 +84,22 @@ pub fn append<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
+/// Append one ordered group with a single filesystem write.
+#[must_use = "durability barrier; check the result"]
+pub fn append_batch(path: &Path, events: &[EventEnvelope]) -> Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    let mut bytes = Vec::new();
+    for event in events {
+        let payload = serde_json::to_vec(event).map_err(atomic::AtomicErr::Json)?;
+        bytes.extend_from_slice(&frame::encode_frame(&payload));
+    }
+    atomic::append_record_bytes(path, &bytes)?;
+    testkit::count_bytes_written(bytes.len() as u64);
+    Ok(())
+}
+
 #[must_use = "durability barrier; check the result"]
 pub fn replace_all(path: &Path, events: &[EventEnvelope]) -> Result<()> {
     let mut bytes = Vec::new();

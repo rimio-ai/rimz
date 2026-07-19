@@ -98,319 +98,53 @@ fn record_mapped_lifecycle_observation(
         &mut observation,
     );
     let model_hint = observation.launch.model.clone();
-    // Validate the transition this event drives against the prior rollup
-    // and log any anomaly once, here at ingestion. Replay re-derives the
-    // same state silently.
-    let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
-    if transition.is_some_and(|transition| {
-        transition.compaction_closed
-            && !matches!(observation.signal, LifecycleSignal::CompactionEnded { .. })
-    }) {
-        debug!(
-            target: "rimz::agent::lifecycle",
-            kind = agent.descriptor().kind,
-            agent_id = observation.agent_id.as_deref().unwrap_or(""),
-            signal = ?observation.signal,
-            "closed compaction bracket on a non-compaction signal",
-        );
-    }
-    let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
-    // Capture child rows before the triggering event changes their shape. A
-    // parent Stop can make a resting provisional root look superseded, while
-    // keyed child evidence can update a self-registered root before the
-    // guarded adoption append below reparents it.
-    let pre_adoption_snapshot = ((observation.parent_agent_id.is_none()
+    let spawned_subagents = if observation.parent_agent_id.is_none()
         && matches!(
             observation.signal,
             LifecycleSignal::ToolUsed { .. } | LifecycleSignal::TurnEnded { .. }
-        ))
-        || (observation.parent_agent_id.is_some()
-            && matches!(
-                observation.signal,
-                LifecycleSignal::SubagentStarted | LifecycleSignal::SubagentStopped { .. }
-            )))
-    .then(|| store.snapshot_cached().ok())
-    .flatten();
-    let (rotation_due, observation_recorded) =
-        match store.append_agent_lifecycle(AgentLifecycleIntent {
-            session_name: &workspace.session_name,
-            agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
-            event_name,
-            observation: &observation,
-            transition,
-        }) {
-            Ok(AgentLifecycleOutcome::RotationDue) => (true, true),
-            Ok(AgentLifecycleOutcome::Suppressed | AgentLifecycleOutcome::Appended) => {
-                (false, true)
-            }
-            Err(err) => {
-                warn!(
-                    agent = agent.descriptor().kind,
-                    event = %event_name,
-                    error = %err,
-                    "lifecycle: failed to record the agent.lifecycle event",
-                );
-                (false, false)
-            }
-        };
-    if observation_recorded {
-        adopt_observed_subagent(
-            workspace,
-            store,
-            agent,
-            &observation,
-            pre_adoption_snapshot.as_ref(),
-        );
-        reconcile_spawned_subagents(
-            workspace,
-            store,
-            agent,
-            &observation,
-            pre_adoption_snapshot.as_ref(),
-        );
-    }
+        ) {
+        observation
+            .agent_id
+            .as_ref()
+            .map_or_else(Vec::new, |parent_id| {
+                agent.spawned_subagents(SubagentSpawnInput {
+                    parent_agent_id: parent_id,
+                    parent_transcript_path: observation.transcript_path.as_deref().map(Path::new),
+                    parent_workspace: observation.worktree_path.as_deref().map(Path::new),
+                })
+            })
+    } else {
+        Vec::new()
+    };
+    let receipt = match store.append_agent_lifecycle(AgentLifecycleIntent {
+        session_name: &workspace.session_name,
+        agent_kind: agent.descriptor().kind_id(),
+        event_name,
+        observation: &observation,
+        spawned_subagents: &spawned_subagents,
+    }) {
+        Ok(receipt) => receipt,
+        Err(err) => {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to record the agent.lifecycle event",
+            );
+            return RecordedLifecycle {
+                model_hint,
+                observation,
+                rotation_due: false,
+                waiting_cleared: false,
+            };
+        }
+    };
+    log_lifecycle_receipt(agent.descriptor().kind, &observation, &receipt);
     RecordedLifecycle {
         model_hint,
         observation,
-        rotation_due,
-        waiting_cleared,
-    }
-}
-
-fn adopt_observed_subagent(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    agent: &dyn AgentAdapter,
-    observation: &AgentLifecycleObservation,
-    pre_adoption_snapshot: Option<&rimz::store::snapshot::SidebarSnapshot>,
-) {
-    if !matches!(
-        observation.signal,
-        LifecycleSignal::SubagentStarted | LifecycleSignal::SubagentStopped { .. }
-    ) {
-        return;
-    }
-    let (Some(child_id), Some(parent_id), Some(snapshot)) = (
-        observation.agent_id.as_ref(),
-        observation.parent_agent_id.as_ref(),
-        pre_adoption_snapshot,
-    ) else {
-        return;
-    };
-    let child_is_unparented_root = snapshot.agents.iter().any(|state| {
-        state.kind.as_str() == agent.descriptor().kind
-            && state.agent_id == *child_id
-            && state.parent_agent_id.is_none()
-    });
-    if !child_is_unparented_root {
-        return;
-    }
-    append_subagent_adoption(
-        workspace,
-        store,
-        agent,
-        snapshot,
-        parent_id,
-        observation.clone(),
-        observation.signal.clone(),
-    );
-}
-
-fn reconcile_spawned_subagents(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    agent: &dyn AgentAdapter,
-    parent_observation: &AgentLifecycleObservation,
-    pre_adoption_snapshot: Option<&rimz::store::snapshot::SidebarSnapshot>,
-) {
-    if parent_observation.parent_agent_id.is_some()
-        || !matches!(
-            parent_observation.signal,
-            LifecycleSignal::ToolUsed { .. } | LifecycleSignal::TurnEnded { .. }
-        )
-    {
-        return;
-    }
-    let Some(parent_id) = parent_observation.agent_id.as_ref() else {
-        return;
-    };
-    let spawned = agent.spawned_subagents(SubagentSpawnInput {
-        parent_agent_id: parent_id,
-        parent_transcript_path: parent_observation.transcript_path.as_deref().map(Path::new),
-        parent_workspace: parent_observation.worktree_path.as_deref().map(Path::new),
-    });
-    if spawned.is_empty() {
-        return;
-    }
-    let Some(snapshot) = pre_adoption_snapshot else {
-        debug!(
-            kind = agent.descriptor().kind,
-            parent_id = parent_id.as_str(),
-            "lifecycle: skipped subagent adoption because the prior rollup was unreadable",
-        );
-        return;
-    };
-    for child in spawned {
-        let child_state = snapshot.agents.iter().find(|state| {
-            state.kind.as_str() == agent.descriptor().kind && state.agent_id == child.child_agent_id
-        });
-        let errored =
-            child_state.is_some_and(|state| state.status == rimz::agents::AgentStatus::Failed);
-        let mut observation = AgentLifecycleObservation::new(
-            Some(child.child_agent_id),
-            LifecycleSignal::SubagentStopped { errored },
-        );
-        observation.agent_name = child.agent_name;
-        observation.launch.role = child.role.clone();
-        observation.launch.model = child.model.clone();
-        observation.task = child.role.or_else(|| child.prompt.clone());
-        observation.prompt = child.prompt;
-        observation.usage.total_tokens = child.total_tokens;
-        observation.pane_id = parent_observation.pane_id.clone();
-        if child_state.is_some_and(|state| state.parent_agent_id.is_some()) {
-            append_subagent_reconciliation(
-                workspace,
-                store,
-                agent,
-                snapshot,
-                parent_id,
-                observation,
-            );
-        } else {
-            append_subagent_adoption(
-                workspace,
-                store,
-                agent,
-                snapshot,
-                parent_id,
-                observation,
-                LifecycleSignal::SubagentStopped { errored },
-            );
-        }
-    }
-}
-
-fn append_subagent_reconciliation(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    agent: &dyn AgentAdapter,
-    snapshot: &rimz::store::snapshot::SidebarSnapshot,
-    parent_id: &rimz::ids::AgentSessionId,
-    mut observation: AgentLifecycleObservation,
-) {
-    let Some(child_id) = observation.agent_id.as_ref() else {
-        return;
-    };
-    let root_parent_id = snapshot
-        .agents
-        .iter()
-        .find(|state| {
-            state.kind.as_str() == agent.descriptor().kind && state.agent_id == *parent_id
-        })
-        .and_then(|state| state.parent_agent_id.clone())
-        .unwrap_or_else(|| parent_id.clone());
-    let Some(child_state) = snapshot.agents.iter().find(|state| {
-        state.kind.as_str() == agent.descriptor().kind && state.agent_id == *child_id
-    }) else {
-        return;
-    };
-    if child_state.parent_agent_id.as_ref() != Some(&root_parent_id)
-        || child_state
-            .pane
-            .as_ref()
-            .is_some_and(|pane| observation.pane_id.as_ref() != Some(&pane.pane_id))
-    {
-        return;
-    }
-    let model_changed = observation
-        .launch
-        .model
-        .as_ref()
-        .is_some_and(|model| child_state.model.as_ref() != Some(model));
-    let tokens_changed = observation
-        .usage
-        .total_tokens
-        .is_some_and(|tokens| child_state.usage.total_tokens != Some(tokens));
-    if !model_changed && !tokens_changed {
-        return;
-    }
-    observation.agent_name = None;
-    observation.launch.role = None;
-    observation.task = None;
-    observation.prompt = None;
-    observation.parent_agent_id = Some(root_parent_id);
-    let errored = child_state.status == rimz::agents::AgentStatus::Failed;
-    observation.signal = LifecycleSignal::SubagentStopped { errored };
-    let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
-    if let Err(err) = store.append_agent_lifecycle(AgentLifecycleIntent {
-        session_name: &workspace.session_name,
-        agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
-        event_name: "SubagentReconciled",
-        observation: &observation,
-        transition,
-    }) {
-        warn!(
-            agent = agent.descriptor().kind,
-            event = "SubagentReconciled",
-            child_id = observation.agent_id.as_deref().unwrap_or(""),
-            error = %err,
-            "lifecycle: failed to record subagent metadata reconciliation",
-        );
-    }
-}
-
-fn append_subagent_adoption(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    agent: &dyn AgentAdapter,
-    snapshot: &rimz::store::snapshot::SidebarSnapshot,
-    parent_id: &rimz::ids::AgentSessionId,
-    mut observation: AgentLifecycleObservation,
-    signal: LifecycleSignal,
-) {
-    let Some(child_id) = observation.agent_id.as_ref() else {
-        return;
-    };
-    if child_id == parent_id {
-        return;
-    }
-    let child_state = snapshot.agents.iter().find(|state| {
-        state.kind.as_str() == agent.descriptor().kind && state.agent_id == *child_id
-    });
-    if child_state.is_some_and(|state| state.parent_agent_id.is_some()) {
-        return;
-    }
-    if child_state
-        .and_then(|state| state.pane.as_ref())
-        .is_some_and(|pane| observation.pane_id.as_ref() != Some(&pane.pane_id))
-    {
-        return;
-    }
-    let root_parent_id = snapshot
-        .agents
-        .iter()
-        .find(|state| {
-            state.kind.as_str() == agent.descriptor().kind && state.agent_id == *parent_id
-        })
-        .and_then(|state| state.parent_agent_id.clone())
-        .unwrap_or_else(|| parent_id.clone());
-    observation.signal = signal;
-    observation.parent_agent_id = Some(root_parent_id);
-    let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
-    if let Err(err) = store.append_agent_lifecycle(AgentLifecycleIntent {
-        session_name: &workspace.session_name,
-        agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
-        event_name: "SubagentAdopted",
-        observation: &observation,
-        transition,
-    }) {
-        warn!(
-            agent = agent.descriptor().kind,
-            event = "SubagentAdopted",
-            child_id = observation.agent_id.as_deref().unwrap_or(""),
-            error = %err,
-            "lifecycle: failed to record retroactive subagent adoption",
-        );
+        rotation_due: receipt.rotation_due,
+        waiting_cleared: receipt.waiting_cleared,
     }
 }
 
@@ -548,60 +282,21 @@ fn normalize_correlated_subagent_signal(observation: &mut AgentLifecycleObservat
     };
 }
 
-/// Fold this observation's signal onto the prior rollup state through the shared
-/// `lifecycle::step` table and log any anomaly once, under the
-/// `rimz::agent::lifecycle` target (stderr — never stdout, the hook decision
-/// channel). Best-effort: a missing cached snapshot just skips the check. The
-/// reducer re-derives the same state on replay, silently — this call exists only
-/// to surface a reconciled or ignored transition while we still have the event
-/// in hand to attribute it.
-pub(super) fn log_lifecycle_transition(
-    store: &Store,
+fn log_lifecycle_receipt(
     kind: &str,
     observation: &AgentLifecycleObservation,
-) -> Option<agent_lifecycle::Transition> {
+    receipt: &rimz::store::AgentLifecycleReceipt,
+) {
     let Some(agent_id) = observation.agent_id.as_deref() else {
-        // The reducer quarantines a session-less event (no rollup entry) and
-        // stays quiet on replay — this is the once-per-fresh-event warning.
         warn!(
             target: "rimz::agent::lifecycle",
             kind,
             signal = ?observation.signal,
             "session-less agent.lifecycle event — the reducer will quarantine it",
         );
-        return None;
+        return;
     };
-    // The prior state for this one agent, from the lock-free cached snapshot —
-    // the projection of every event before this one, exactly the `prev` the
-    // reducer folds this event onto.
-    let snapshot = match store.snapshot_cached() {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                kind,
-                agent_id,
-                error = %err,
-                "skipped lifecycle transition check because the prior rollup was unreadable",
-            );
-            return None;
-        }
-    };
-    let prior = snapshot
-        .agents
-        .into_iter()
-        .find(|agent| agent.kind == kind && agent.agent_id == agent_id);
-    let prev = prior.as_ref().map(|agent| agent.lifecycle());
-    if prev.is_none() && !observation.signal.establishes_identity() {
-        // Create-on-miss: a non-start event for an agent with no prior rollup
-        // entry usually materializes the session. Compaction signals are the
-        // exception: the reducer quarantines unknown compaction ids because
-        // some providers rotate ids before the replacement session is real.
-        // The authoritative reducer logs this same condition at debug! (see
-        // `snapshot/project.rs`), and the cached snapshot read here can lag a
-        // just-appended start, so a warn! is a per-event false positive that
-        // floods the off-box channel. Keep it at debug! for local binding
-        // diagnosis, matching the reducer; it never reaches Sentry.
+    if receipt.prior_status.is_none() && !observation.signal.establishes_identity() {
         debug!(
             target: "rimz::agent::binding",
             kind,
@@ -610,23 +305,54 @@ pub(super) fn log_lifecycle_transition(
             "non-start lifecycle event observed for an unseen session",
         );
     }
-    let transition = agent_lifecycle::step(
-        prev.as_ref(),
-        prior
-            .as_ref()
-            .and_then(|agent| agent.open_ask.as_ref())
-            .and_then(|ask| ask.native_key.as_deref()),
-        &observation.signal,
-    );
+    if let Some(transition) = receipt.transition {
+        log_transition(
+            kind,
+            agent_id,
+            observation.parent_agent_id.as_deref(),
+            &observation.signal,
+            transition,
+        );
+        if transition.compaction_closed
+            && !matches!(observation.signal, LifecycleSignal::CompactionEnded { .. })
+        {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                kind,
+                agent_id,
+                signal = ?observation.signal,
+                "closed compaction bracket on a non-compaction signal",
+            );
+        }
+    }
+
+    for derived in &receipt.derived {
+        log_transition(
+            kind,
+            derived.agent_id.as_str(),
+            derived.parent_agent_id.as_deref(),
+            &derived.signal,
+            derived.transition,
+        );
+    }
+}
+
+fn log_transition(
+    kind: &str,
+    agent_id: &str,
+    parent_agent_id: Option<&str>,
+    signal: &LifecycleSignal,
+    transition: agent_lifecycle::Transition,
+) {
     match transition.kind {
         TransitionKind::Reconciled { from, reason } => warn!(
             target: "rimz::agent::lifecycle",
             kind,
             agent_id,
-            parent_agent_id = observation.parent_agent_id.as_deref().unwrap_or(""),
+            parent_agent_id = parent_agent_id.unwrap_or(""),
             from = ?from,
             to = ?transition.next.status,
-            signal = ?observation.signal,
+            signal = ?signal,
             reason,
             "reconciled lifecycle transition",
         ),
@@ -634,11 +360,10 @@ pub(super) fn log_lifecycle_transition(
             target: "rimz::agent::lifecycle",
             kind,
             agent_id,
-            signal = ?observation.signal,
+            signal = ?signal,
             reason,
             "ignored lifecycle signal",
         ),
         TransitionKind::Normal => {}
     }
-    Some(transition)
 }

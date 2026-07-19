@@ -24,7 +24,7 @@ use rimz::agents::{
     HookIngressOwner, adapter_by_kind,
 };
 use rimz::ids::{MuxName, PaneId};
-use rimz::store::{AgentLifecycleIntent, AgentLifecycleOutcome};
+use rimz::store::AgentLifecycleIntent;
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
 mod binding;
