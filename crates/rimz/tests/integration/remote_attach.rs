@@ -435,10 +435,36 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
 
     let env = Env::new();
     let dir = env.project_root.to_string_lossy().into_owned();
+    let proc_net = env.project_root.join("proc-net");
+    std::fs::create_dir_all(&proc_net).expect("create proc net fixture");
+    let uid = nix::unistd::getuid().as_raw();
+    let row = |local: &str, state: &str, row_uid: u32| {
+        format!(
+            "0: {local} 00000000:0000 {state} 00000000:00000000 00:00000000 00000000 {row_uid} 0 1"
+        )
+    };
+    std::fs::write(
+        proc_net.join("tcp"),
+        [
+            row("0100007F:0BB8", "0A", uid),
+            row("0100007F:0050", "0A", uid),
+            row("0100007F:0FA0", "0A", uid.saturating_add(1)),
+            row("0200000A:1388", "0A", uid),
+        ]
+        .join("\n"),
+    )
+    .expect("write tcp fixture");
+    std::fs::write(
+        proc_net.join("tcp6"),
+        row("00000000000000000000000000000000:1F90", "0A", uid),
+    )
+    .expect("write tcp6 fixture");
     let mut child = env
         .rimz()
         .args(["remote", "link-stats", "ingest", "--dir", &dir])
         .env("SSH_CONNECTION", "client-port server-port")
+        .env("RIMZ_PROC_NET_DIR", &proc_net)
+        .env("RIMZ_PORTS_SWEEP_MS", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -463,6 +489,7 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
     let ack: serde_json::Value = serde_json::from_str(&ack).expect("ack json");
     assert_eq!(ack["v"], "rimz.link.v1");
     assert_eq!(ack["seq"], 7);
+    assert_eq!(ack["ports"], serde_json::json!([3000, 8080]));
 
     let runtime = rimz::RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root)
         .expect("runtime paths");
@@ -520,6 +547,38 @@ fn link_stats_ingest_keeps_a_newer_publishers_sidecar() {
         serde_json::from_slice(&std::fs::read(path).expect("read seeded stats"))
             .expect("parse seeded stats");
     assert_eq!(remaining, seeded);
+}
+
+#[test]
+fn supervised_connect_opens_new_remote_listener_forwards() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let port = reserve_local_port();
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_REMOTE_PROBE_MS", "10")
+        .env("RIMZ_TEST_PROBE_PORT", port.to_string())
+        .env("RIMZ_TEST_WAIT_FOR_PROBE_MS", "500")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "500")
+        .bounded_output()
+        .expect("run auto-forward connect");
+    assert!(
+        out.status.success(),
+        "auto-forward connect succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let invocations = shim_invocations(&log);
+    let forwarding = format!("127.0.0.1:{port}:localhost:{port}");
+    assert!(
+        invocations.iter().any(|argv| {
+            argv.windows(2)
+                .any(|args| args[0] == "-O" && args[1] == "forward")
+                && argv
+                    .windows(2)
+                    .any(|args| args[0] == "-L" && args[1] == forwarding)
+        }),
+        "forward control call missing from {invocations:?}"
+    );
 }
 
 #[test]

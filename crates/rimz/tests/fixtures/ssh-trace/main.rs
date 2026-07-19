@@ -38,6 +38,10 @@ fn main() {
         exit_control_check();
     }
 
+    if is_forward_control(&argv) {
+        return;
+    }
+
     if argv
         .iter()
         .any(|arg| arg.contains("remote link-stats ingest"))
@@ -236,6 +240,11 @@ fn is_control_check(argv: &[String]) -> bool {
         .any(|args| args[0] == "-O" && args[1] == "check")
 }
 
+fn is_forward_control(argv: &[String]) -> bool {
+    argv.windows(2)
+        .any(|args| args[0] == "-O" && matches!(args[1].as_str(), "forward" | "cancel"))
+}
+
 fn exit_control_check() -> ! {
     let ready = env::var_os("RIMZ_TEST_CONTROL_MASTER_READY")
         .map(|path| std::path::PathBuf::from(path).exists())
@@ -297,6 +306,9 @@ fn ack_probe_stream() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok());
     let mut ack_count = 0u64;
+    let reported_port = env::var("RIMZ_TEST_PROBE_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok());
     for line in stdin.lock().lines().map_while(Result::ok) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
@@ -307,7 +319,22 @@ fn ack_probe_stream() {
         if silent_after_acks.is_some_and(|limit| ack_count >= limit) {
             continue;
         }
-        writeln!(stdout, r#"{{"v":"rimz.link.v1","seq":{seq}}}"#).expect("write ack");
+        match reported_port {
+            Some(port) if ack_count > 0 => {
+                writeln!(
+                    stdout,
+                    r#"{{"v":"rimz.link.v1","seq":{seq},"ports":[{port}]}}"#
+                )
+                .expect("write ack");
+            }
+            Some(_) => {
+                writeln!(stdout, r#"{{"v":"rimz.link.v1","seq":{seq},"ports":[]}}"#)
+                    .expect("write ack");
+            }
+            None => {
+                writeln!(stdout, r#"{{"v":"rimz.link.v1","seq":{seq}}}"#).expect("write ack");
+            }
+        }
         stdout.flush().expect("flush ack");
         ack_count = ack_count.saturating_add(1);
         if exit_after_acks.is_some_and(|limit| ack_count >= limit) {

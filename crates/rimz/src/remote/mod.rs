@@ -291,7 +291,6 @@ pub fn infocmp_program() -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshAttachOptions {
     pub target: RemoteTarget,
-    pub forwards: Vec<forward::PortForward>,
     pub lineage: String,
     pub force_version: bool,
     pub no_resume: bool,
@@ -435,7 +434,6 @@ impl SshAttachAttempt<'_> {
                 "Compression=yes",
             ])
             .args(control_path.into_iter().flat_map(link::control_options))
-            .args(forward::ssh_args(&options.forwards))
             .args(["-t", "--"])
             .arg(options.target.ssh_destination().as_str())
             .arg(guarded_snippet(options, self.phase))

@@ -9,7 +9,7 @@
 //! reconnect = true
 //! no_resume = false
 //! mux = "tmux"
-//! forward = ["3000", "8080:3000"]
+//! auto_forward = false
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::ids::MuxName;
-use crate::remote::forward::{self, PortForward, PortForwardError};
 use crate::remote::{RemoteTarget, RemoteTargetError};
 use crate::store::atomic;
 use crate::store::paths::config_home;
@@ -56,12 +55,6 @@ pub enum AliasErr {
     InvalidName(String),
     #[error(transparent)]
     InvalidTarget(#[from] RemoteTargetError),
-    #[error("remote alias `{name}` has an invalid forward: {source}")]
-    InvalidForward {
-        name: String,
-        #[source]
-        source: PortForwardError,
-    },
 }
 
 pub type Result<T> = std::result::Result<T, AliasErr>;
@@ -79,8 +72,11 @@ pub struct RemoteAlias {
     pub no_resume: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mux: Option<MuxName>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub forward: Vec<String>,
+    #[serde(
+        default = "default_auto_forward",
+        skip_serializing_if = "is_auto_forward"
+    )]
+    pub auto_forward: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,10 +152,9 @@ impl RemoteAliases {
         self.entries.iter().find(|entry| entry.name == name)
     }
 
-    pub fn add(&mut self, mut entry: RemoteAlias) -> Result<()> {
+    pub fn add(&mut self, entry: RemoteAlias) -> Result<()> {
         validate_name(&entry.name)?;
         RemoteTarget::parse(&entry.target)?;
-        validate_forwards(&mut entry)?;
         if self.contains(&entry.name) {
             return Err(AliasErr::DuplicateName(entry.name));
         }
@@ -168,10 +163,9 @@ impl RemoteAliases {
         Ok(())
     }
 
-    pub fn update(&mut self, mut entry: RemoteAlias) -> Result<()> {
+    pub fn update(&mut self, entry: RemoteAlias) -> Result<()> {
         validate_name(&entry.name)?;
         RemoteTarget::parse(&entry.target)?;
-        validate_forwards(&mut entry)?;
         let slot = self
             .entries
             .iter_mut()
@@ -210,31 +204,12 @@ impl RemoteAliases {
         self
     }
 
-    fn validated(mut self) -> Result<Self> {
-        for entry in &mut self.entries {
+    fn validated(self) -> Result<Self> {
+        for entry in &self.entries {
             validate_name(&entry.name)?;
-            validate_forwards(entry)?;
         }
         Ok(self)
     }
-}
-
-fn validate_forwards(entry: &mut RemoteAlias) -> Result<()> {
-    let parsed = entry
-        .forward
-        .iter()
-        .map(|spec| spec.parse::<PortForward>())
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .and_then(|parsed| forward::merged(&[], &parsed))
-        .map_err(|source| AliasErr::InvalidForward {
-            name: entry.name.clone(),
-            source,
-        })?;
-    entry.forward = parsed
-        .into_iter()
-        .map(|forward| forward.to_string())
-        .collect();
-    Ok(())
 }
 
 fn validate_name(name: &str) -> Result<()> {
@@ -270,6 +245,14 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn default_auto_forward() -> bool {
+    true
+}
+
+fn is_auto_forward(value: &bool) -> bool {
+    *value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,7 +265,7 @@ mod tests {
             reconnect: true,
             no_resume: false,
             mux: None,
-            forward: Vec::new(),
+            auto_forward: true,
         }
     }
 
@@ -325,7 +308,7 @@ mod tests {
         assert!(entry.reconnect);
         assert!(!entry.no_resume);
         assert_eq!(entry.mux, Some(MuxName::Tmux));
-        assert_eq!(entry.forward, ["3000", "8080:3000"]);
+        assert!(!entry.auto_forward);
     }
 
     #[test]
@@ -334,13 +317,15 @@ mod tests {
         let path = dir.path().join("remote.toml");
         let mut list = RemoteAliases::default();
         list.add(alias("prod", "prod-box:query-engine")).unwrap();
-        list.add(alias("dev", "dev-box:query-engine")).unwrap();
+        let mut dev = alias("dev", "dev-box:query-engine");
+        dev.auto_forward = false;
+        list.add(dev).unwrap();
         list.save_to(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("reconnect = true"), "{text}");
         assert!(!text.contains("no_resume = false"), "{text}");
         assert!(!text.contains("mux ="), "{text}");
-        assert!(!text.contains("forward ="), "{text}");
+        assert!(text.contains("auto_forward = false"), "{text}");
 
         let reloaded = RemoteAliases::load_from(&path).unwrap();
         let names: Vec<&str> = reloaded
@@ -362,7 +347,7 @@ mod tests {
         assert!(entry.reconnect);
         assert!(!entry.no_resume);
         assert_eq!(entry.mux, None);
-        assert!(entry.forward.is_empty());
+        assert!(entry.auto_forward);
     }
 
     #[test]
@@ -447,33 +432,5 @@ mod tests {
         let err = RemoteAliases::load_from(&path).unwrap_err();
 
         assert!(matches!(err, AliasErr::InvalidName(_)));
-    }
-
-    #[test]
-    fn forwards_round_trip_canonically_and_invalid_specs_name_the_alias() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("remote.toml");
-        let mut entry = alias("dev", "dev-box:query-engine");
-        entry.forward = vec!["03000".to_owned(), "8080:3000".to_owned()];
-        let mut aliases = RemoteAliases::default();
-        aliases.add(entry).unwrap();
-        aliases.save_to(&path).unwrap();
-
-        let loaded = RemoteAliases::load_from(&path).unwrap();
-        assert_eq!(loaded.get("dev").unwrap().forward, ["3000", "8080:3000"]);
-
-        std::fs::write(
-            &path,
-            r#"
-            [[remote]]
-            name = "dev"
-            target = "dev-box:query-engine"
-            forward = ["nope"]
-            "#,
-        )
-        .unwrap();
-        let error = RemoteAliases::load_from(&path).unwrap_err().to_string();
-        assert!(error.contains("remote alias `dev`"), "{error}");
-        assert!(error.contains("invalid port"), "{error}");
     }
 }

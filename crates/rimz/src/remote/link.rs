@@ -76,6 +76,8 @@ impl LinkProbe {
 pub struct LinkAck {
     pub v: String,
     pub seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<u16>>,
 }
 
 impl LinkAck {
@@ -83,6 +85,15 @@ impl LinkAck {
         Self {
             v: LINK_SCHEMA_VERSION.to_owned(),
             seq,
+            ports: None,
+        }
+    }
+
+    pub fn with_ports(seq: u64, ports: Vec<u16>) -> Self {
+        Self {
+            v: LINK_SCHEMA_VERSION.to_owned(),
+            seq,
+            ports: Some(ports),
         }
     }
 
@@ -1065,11 +1076,30 @@ mod tests {
         assert_eq!(parsed, probe);
 
         let ack = LinkAck::new(42);
-        assert!(
-            serde_json::from_str::<LinkAck>(&serde_json::to_string(&ack).unwrap())
+        let ack_text = serde_json::to_string(&ack).unwrap();
+        let parsed_ack = serde_json::from_str::<LinkAck>(&ack_text).unwrap();
+        assert!(parsed_ack.version_ok());
+        assert_eq!(parsed_ack.ports, None);
+        assert_eq!(
+            serde_json::from_str::<LinkAck>(r#"{"v":"rimz.link.v1","seq":42}"#)
                 .unwrap()
-                .version_ok()
+                .ports,
+            None
         );
+
+        let ack = LinkAck::with_ports(43, vec![3000, 8080]);
+        assert_eq!(
+            serde_json::from_str::<LinkAck>(&serde_json::to_string(&ack).unwrap()).unwrap(),
+            ack
+        );
+        #[derive(Deserialize)]
+        struct OldLinkAck {
+            v: String,
+            seq: u64,
+        }
+        let old: OldLinkAck = serde_json::from_str(&serde_json::to_string(&ack).unwrap()).unwrap();
+        assert_eq!(old.v, LINK_SCHEMA_VERSION);
+        assert_eq!(old.seq, 43);
 
         let file = LinkStatsFile::new(2_000, "client-port server-port".to_owned(), probe.stats);
         let parsed: LinkStatsFile = serde_json::from_str(&serde_json::to_string(&file).unwrap())

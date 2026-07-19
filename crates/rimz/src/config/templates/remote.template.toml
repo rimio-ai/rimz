@@ -13,4 +13,4 @@
 ## reconnect = true
 ## no_resume = false
 ## mux = "tmux"
-## forward = ["3000", "8080:3000"]
+## auto_forward = false

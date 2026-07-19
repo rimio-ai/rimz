@@ -1,14 +1,15 @@
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
+use rimz::remote::forward::{PortAction, PortSync, cancel_spec, open_spec};
 use rimz::remote::link::{
     LinkAck, LinkEvent, LinkMonitor, LinkProbe, SessionLinkAction, SessionLinkState,
     blackout_after_from_env, control_check_spec, probe_interval_from_env, probe_stream_spec,
@@ -31,6 +32,7 @@ const PROBE_STREAM_BLACKOUT_FAILURES: u32 = 3;
 const PROBE_RESPAWN_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+const AUTO_FORWARD_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct OutageState {
     connect_stage: ConnectStage,
@@ -76,6 +78,7 @@ pub(super) fn supervise_remote(
     plan: &SshAttachPlan,
     control_path: &Path,
     setup_hint: &str,
+    auto_forward: bool,
 ) -> Result<()> {
     use rimz::remote::{ReconnectPolicy, ReconnectState, Verdict};
 
@@ -90,6 +93,7 @@ pub(super) fn supervise_remote(
     let mut first_attempt = true;
     let guard = super::tty::TtyGuard::acquire();
     let mut initial_ui = OutageUi::auto(ConnectStage::Initial, host);
+    let port_sync = auto_forward.then(|| Arc::new(Mutex::new(PortSync::default())));
     initial_ui.report_connecting();
     let mut initial_outage = OutageState::new(
         ConnectStage::Initial,
@@ -115,9 +119,19 @@ pub(super) fn supervise_remote(
         let (events_tx, events_rx) = mpsc::channel();
         let confirmed_master = ready_master.is_some();
         let probe = if confirmed_master {
-            ProbeHandle::start_preestablished(target.clone(), control_path.to_path_buf(), events_tx)
+            ProbeHandle::start_preestablished(
+                target.clone(),
+                control_path.to_path_buf(),
+                events_tx,
+                port_sync.clone(),
+            )
         } else {
-            ProbeHandle::start(target.clone(), control_path.to_path_buf(), events_tx)
+            ProbeHandle::start(
+                target.clone(),
+                control_path.to_path_buf(),
+                events_tx,
+                port_sync.clone(),
+            )
         };
         let attempt = if first_attempt {
             plan.initial()
@@ -1192,7 +1206,12 @@ struct ProbeHandle {
 }
 
 impl ProbeHandle {
-    fn start(target: RemoteTarget, control_path: PathBuf, events: mpsc::Sender<LinkEvent>) -> Self {
+    fn start(
+        target: RemoteTarget,
+        control_path: PathBuf,
+        events: mpsc::Sender<LinkEvent>,
+        port_sync: Option<Arc<Mutex<PortSync>>>,
+    ) -> Self {
         if let Err(err) = prepare_control_path(&control_path) {
             tracing::debug!(
                 path = %control_path.display(),
@@ -1201,15 +1220,16 @@ impl ProbeHandle {
             );
             return Self::disabled();
         }
-        spawn_probe_loop(target, control_path, events, false, true)
+        spawn_probe_loop(target, control_path, events, port_sync, false, true)
     }
 
     fn start_preestablished(
         target: RemoteTarget,
         control_path: PathBuf,
         events: mpsc::Sender<LinkEvent>,
+        port_sync: Option<Arc<Mutex<PortSync>>>,
     ) -> Self {
-        spawn_probe_loop(target, control_path, events, true, false)
+        spawn_probe_loop(target, control_path, events, port_sync, true, false)
     }
 
     fn disabled() -> Self {
@@ -1251,6 +1271,7 @@ fn spawn_probe_loop(
     target: RemoteTarget,
     control_path: PathBuf,
     events: mpsc::Sender<LinkEvent>,
+    port_sync: Option<Arc<Mutex<PortSync>>>,
     control_confirmed: bool,
     remove_control_path: bool,
 ) -> ProbeHandle {
@@ -1272,6 +1293,7 @@ fn spawn_probe_loop(
             interval,
             events,
             thread_stop,
+            port_sync,
             control_confirmed,
         );
     });
@@ -1302,16 +1324,24 @@ fn probe_loop(
     interval: Duration,
     events: mpsc::Sender<LinkEvent>,
     stop: Arc<AtomicBool>,
+    port_sync: Option<Arc<Mutex<PortSync>>>,
     mut control_confirmed: bool,
 ) {
     let mut monitor =
         LinkMonitor::with_timeout(probe_timeout_from_env(), blackout_after_from_env());
     let mut failures = 0u32;
+    let mut reopened = false;
     while !stop.load(Ordering::Relaxed) {
         if !control_confirmed && !wait_for_control_master(&target, &control_path, &stop) {
             return;
         }
         control_confirmed = false;
+        if !reopened {
+            if let Some(sync) = port_sync.as_ref() {
+                reopen_port_forwards(sync, &target, &control_path);
+            }
+            reopened = true;
+        }
         match run_probe_stream(
             &target,
             &control_path,
@@ -1319,6 +1349,7 @@ fn probe_loop(
             &events,
             &stop,
             &mut monitor,
+            port_sync.as_ref(),
         ) {
             ProbeStreamExit::Stopped | ProbeStreamExit::VersionSkew => return,
             ProbeStreamExit::Ended { acked } => {
@@ -1356,7 +1387,7 @@ enum ProbeStreamExit {
 struct ProbeChild {
     child: Child,
     stdin: ChildStdin,
-    acknowledgements: mpsc::Receiver<u64>,
+    acknowledgements: mpsc::Receiver<LinkAck>,
     reader: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -1388,7 +1419,7 @@ impl ProbeChild {
                     continue;
                 };
                 if ack.version_ok() {
-                    let _ = ack_tx.send(ack.seq);
+                    let _ = ack_tx.send(ack);
                 }
             }
         });
@@ -1404,12 +1435,20 @@ impl ProbeChild {
         &self,
         monitor: &mut LinkMonitor,
         events: &mpsc::Sender<LinkEvent>,
+        target: &RemoteTarget,
+        control_path: &Path,
+        port_sync: Option<&Arc<Mutex<PortSync>>>,
     ) -> ProbeAckDrain {
         let mut drain = ProbeAckDrain::default();
-        for seq in self.acknowledgements.try_iter() {
-            let outcome = monitor.record_ack(seq, rimz::sidebar::timing::unix_now_ms());
+        for ack in self.acknowledgements.try_iter() {
+            let outcome = monitor.record_ack(ack.seq, rimz::sidebar::timing::unix_now_ms());
             drain.acked |= outcome.accepted;
             drain.reported_rtt_changed |= outcome.reported_rtt_changed;
+            if outcome.accepted
+                && let (Some(sync), Some(ports)) = (port_sync, ack.ports)
+            {
+                apply_port_report(sync, &ports, target, control_path);
+            }
             for event in outcome.events {
                 let _ = events.send(event);
             }
@@ -1446,6 +1485,7 @@ fn run_probe_stream(
     events: &mpsc::Sender<LinkEvent>,
     stop: &AtomicBool,
     monitor: &mut LinkMonitor,
+    port_sync: Option<&Arc<Mutex<PortSync>>>,
 ) -> ProbeStreamExit {
     let mut child = match ProbeChild::spawn(target, control_path) {
         Ok(spawned) => spawned,
@@ -1478,7 +1518,7 @@ fn run_probe_stream(
             }
         }
 
-        let drain = child.drain_acknowledgements(monitor, events);
+        let drain = child.drain_acknowledgements(monitor, events, target, control_path, port_sync);
         acked |= drain.acked;
         if drain.reported_rtt_changed {
             let probe = monitor.stats_refresh_probe(rimz::sidebar::timing::unix_now_ms());
@@ -1505,9 +1545,81 @@ fn run_probe_stream(
         ProbeStreamStop::Stopped => ProbeStreamExit::Stopped,
         ProbeStreamStop::VersionSkew => ProbeStreamExit::VersionSkew,
         ProbeStreamStop::Ended => {
-            acked |= child.drain_acknowledgements(monitor, events).acked;
+            acked |= child
+                .drain_acknowledgements(monitor, events, target, control_path, port_sync)
+                .acked;
             ProbeStreamExit::Ended { acked }
         }
+    }
+}
+
+fn apply_port_report(
+    sync: &Mutex<PortSync>,
+    ports: &[u16],
+    target: &RemoteTarget,
+    control_path: &Path,
+) {
+    let actions = match sync.lock() {
+        Ok(mut sync) => sync.observe(ports),
+        Err(poisoned) => poisoned.into_inner().observe(ports),
+    };
+    apply_port_actions(sync, actions, target, control_path);
+}
+
+fn reopen_port_forwards(sync: &Mutex<PortSync>, target: &RemoteTarget, control_path: &Path) {
+    let actions = match sync.lock() {
+        Ok(sync) => sync.reopen_active(),
+        Err(poisoned) => poisoned.into_inner().reopen_active(),
+    };
+    apply_port_actions(sync, actions, target, control_path);
+}
+
+fn apply_port_actions(
+    sync: &Mutex<PortSync>,
+    actions: Vec<PortAction>,
+    target: &RemoteTarget,
+    control_path: &Path,
+) {
+    for action in actions {
+        match action {
+            PortAction::Open(port) => {
+                let listener = match TcpListener::bind(("127.0.0.1", port)) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        mark_port_open_failed(sync, port);
+                        tracing::info!(port, %error, "remote port auto-forward parked; local port unavailable");
+                        continue;
+                    }
+                };
+                drop(listener);
+                match open_spec(target, control_path, port)
+                    .run_with_timeout(AUTO_FORWARD_CONTROL_TIMEOUT)
+                {
+                    Ok(_) => tracing::info!(port, "remote port auto-forward opened"),
+                    Err(error) => {
+                        mark_port_open_failed(sync, port);
+                        tracing::warn!(port, %error, "remote port auto-forward open refused");
+                    }
+                }
+            }
+            PortAction::Close(port) => {
+                match cancel_spec(target, control_path, port)
+                    .run_with_timeout(AUTO_FORWARD_CONTROL_TIMEOUT)
+                {
+                    Ok(_) => tracing::info!(port, "remote port auto-forward closed"),
+                    Err(error) => {
+                        tracing::warn!(port, %error, "remote port auto-forward close refused")
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn mark_port_open_failed(sync: &Mutex<PortSync>, port: u16) {
+    match sync.lock() {
+        Ok(mut sync) => sync.mark_open_failed(port),
+        Err(poisoned) => poisoned.into_inner().mark_open_failed(port),
     }
 }
 

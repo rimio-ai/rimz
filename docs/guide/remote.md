@@ -53,18 +53,6 @@ rimz remote connect dev --reset          # attach a fresh room (passes --no-resu
 
 `rimz remote reset dev` is the shorthand for that last one. The link supervisor and its reconnect policy are in [the internals](../internals/remote.md).
 
-## Forward ports
-
-Carry a remote dev server back to your local browser by declaring a loopback-only forward on the connection. For example, start `python3 -m http.server 3000` in a room pane on the host, then connect with a forward and browse `http://localhost:3000` locally:
-
-```sh
-rimz remote connect dev --forward 3000
-```
-
-The grammar is `--forward <[LOCAL:]REMOTE>` (short `-L`) and the flag repeats: `3000` maps local port 3000 to remote port 3000, while `8080:3000` makes the same server available on local port 8080. Both ends bind to `127.0.0.1`.
-
-Save project defaults with `rimz remote add dev dev-box:~/code/query-engine --forward 3000` or replace them with `remote update`; forwards passed to `remote connect` add to the saved set. RimZ refuses before connecting when a requested local port is busy. The forwards ride the attach link, reopen on every supervised recovery, and close when you detach.
-
 ## Reading the link badge
 
 A supervised connection carries a health probe alongside your session: a small ping travels the same SSH link every couple of seconds, and its round trip drives a badge in the sidebar footer. The probe rides the real connection rather than ICMP, so the badge reflects what your session actually feels. A `--no-reconnect` run skips the probe and shows no badge.
@@ -74,6 +62,16 @@ A supervised connection carries a health probe alongside your session: a small p
 - `⇄ remote ?` means the reading went stale with no fresh sample for a while, usually a struggling link or a reconnect in flight.
 
 The badge always shows the worse of latency and loss, so a fast but lossy link still reads red.
+
+## Ports forward themselves
+
+Attach normally, then start `python3 -m http.server 3000`, `pnpm serve`, or another dev server in a room pane on the host. Within seconds `http://localhost:3000` opens on your local machine without another flag or SSH command.
+
+RimZ forwards a listener when it starts after you attach, belongs to your remote user, uses port 1024 or above, and binds to loopback or a wildcard address. Wildcard detection includes containerized servers exposed through docker-proxy. The local side binds only `127.0.0.1`, so the forwarded service stays on your machine.
+
+The forward closes after the server stops and reopens with the room after a link recovery; every forward closes when you detach. Use `rimz remote connect dev --no-auto-forward` for one connection, or save the switch with `rimz remote add dev dev-box:~/code/query-engine --no-auto-forward`.
+
+Automatic forwarding rides the supervised link probe and ControlMaster, so it is unavailable with `--no-reconnect` and `--web`. Listener discovery supports Linux hosts today; other hosts keep the normal remote connection without automatic forwards.
 
 ## What crosses the link
 

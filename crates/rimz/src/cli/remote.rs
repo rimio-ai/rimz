@@ -11,7 +11,6 @@ use super::{AttachFlags, GlobalFlags};
 use crate::cli::room::{AttachAction, AttachMode, attach_action, exec_attach_command};
 use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
-use rimz::remote::forward::{self, PortForward};
 use rimz::remote::{
     RemoteTarget, RemoteTargetError, SshAttachOptions, SshAttachPlan, SshDestination, TermPlan,
     infocmp_program, remote_lineage, term_plan_from,
@@ -36,7 +35,7 @@ pub struct RemoteArgs {
 enum RemoteSubcmd {
     /// Save a named remote target.
     #[command(
-        after_help = "With `remote add`, --mux <name> and every --forward value persist on the saved alias."
+        after_help = "With `remote add`, --mux <name> pins the saved alias. --no-auto-forward disables listener forwarding for it."
     )]
     Add {
         name: String,
@@ -47,13 +46,13 @@ enum RemoteSubcmd {
         /// Come up empty when this alias births a remote room.
         #[arg(long)]
         no_resume: bool,
-        /// Forward a loopback-only local port to the remote host.
-        #[arg(long, short = 'L', value_name = "[LOCAL:]REMOTE")]
-        forward: Vec<String>,
+        /// Disable automatic forwarding of new remote listeners.
+        #[arg(long)]
+        no_auto_forward: bool,
     },
     /// Replace a saved remote target.
     #[command(
-        after_help = "Like `remote add`, --mux <name> pins the saved alias. Flags not passed, including --forward, reset to their defaults."
+        after_help = "Like `remote add`, --mux <name> pins the saved alias. Flags not passed reset to their defaults."
     )]
     Update {
         #[arg(add = clap_complete::ArgValueCandidates::new(
@@ -67,9 +66,9 @@ enum RemoteSubcmd {
         /// Come up empty when this alias births a remote room.
         #[arg(long)]
         no_resume: bool,
-        /// Forward a loopback-only local port to the remote host.
-        #[arg(long, short = 'L', value_name = "[LOCAL:]REMOTE")]
-        forward: Vec<String>,
+        /// Disable automatic forwarding of new remote listeners.
+        #[arg(long)]
+        no_auto_forward: bool,
     },
     /// Connect to a remote alias or raw `[user@]host:<session-or-path>` target.
     Connect {
@@ -92,9 +91,9 @@ enum RemoteSubcmd {
         /// Local tunnel port for `--web`.
         #[arg(long, requires = "web")]
         web_port: Option<u16>,
-        /// Forward a loopback-only local port to the remote host.
-        #[arg(long, short = 'L', value_name = "[LOCAL:]REMOTE")]
-        forward: Vec<PortForward>,
+        /// Disable automatic forwarding of new remote listeners.
+        #[arg(long)]
+        no_auto_forward: bool,
         #[command(flatten)]
         attach: AttachFlags,
     },
@@ -123,9 +122,9 @@ enum RemoteSubcmd {
         /// Local tunnel port for `--web`.
         #[arg(long, requires = "web")]
         web_port: Option<u16>,
-        /// Forward a loopback-only local port to the remote host.
-        #[arg(long, short = 'L', value_name = "[LOCAL:]REMOTE")]
-        forward: Vec<PortForward>,
+        /// Disable automatic forwarding of new remote listeners.
+        #[arg(long)]
+        no_auto_forward: bool,
         #[command(flatten)]
         attach: AttachFlags,
     },
@@ -177,25 +176,17 @@ fn build_alias(
     target: String,
     no_reconnect: bool,
     no_resume: bool,
-    forward: Vec<String>,
+    no_auto_forward: bool,
     globals: &GlobalFlags,
-) -> Result<RemoteAlias> {
-    let parsed = forward
-        .iter()
-        .map(|spec| spec.parse::<PortForward>())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let forward = forward::merged(&[], &parsed)?
-        .into_iter()
-        .map(|forward| forward.to_string())
-        .collect();
-    Ok(RemoteAlias {
+) -> RemoteAlias {
+    RemoteAlias {
         name,
         target,
         reconnect: !no_reconnect,
         no_resume,
         mux: globals.mux,
-        forward,
-    })
+        auto_forward: !no_auto_forward,
+    }
 }
 
 impl RemoteArgs {
@@ -223,10 +214,17 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             target,
             no_reconnect,
             no_resume,
-            forward,
+            no_auto_forward,
         } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
-            let entry = build_alias(name, target, no_reconnect, no_resume, forward, globals)?;
+            let entry = build_alias(
+                name,
+                target,
+                no_reconnect,
+                no_resume,
+                no_auto_forward,
+                globals,
+            );
             if aliases.contains(&entry.name)
                 && std::io::stdin().is_terminal()
                 && super::confirm(&format!(
@@ -246,7 +244,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             target,
             no_reconnect,
             no_resume,
-            forward,
+            no_auto_forward,
         } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
             aliases.update(build_alias(
@@ -254,9 +252,9 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
                 target,
                 no_reconnect,
                 no_resume,
-                forward,
+                no_auto_forward,
                 globals,
-            )?)?;
+            ))?;
             aliases.save().context("saving remote aliases")?;
             Ok(())
         }
@@ -267,7 +265,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             force_version,
             web,
             web_port,
-            forward,
+            no_auto_forward,
             attach,
         } => connect(
             alias_or_target,
@@ -279,7 +277,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
                     enabled: web,
                     port: web_port,
                 },
-                forwards: forward,
+                no_auto_forward,
             },
             attach,
             globals,
@@ -291,7 +289,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             force_version,
             web,
             web_port,
-            forward,
+            no_auto_forward,
             attach,
         } => connect(
             alias_or_target,
@@ -303,7 +301,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
                     enabled: web,
                     port: web_port,
                 },
-                forwards: forward,
+                no_auto_forward,
             },
             attach,
             globals,
@@ -341,7 +339,7 @@ struct RemoteConnect {
     force_version: bool,
     mux: Option<MuxName>,
     web: web::RemoteWebOptions,
-    forwards: Vec<PortForward>,
+    auto_forward: bool,
 }
 
 struct ConnectOptions {
@@ -349,15 +347,15 @@ struct ConnectOptions {
     no_reconnect: bool,
     force_version: bool,
     web: web::RemoteWebOptions,
-    forwards: Vec<PortForward>,
+    no_auto_forward: bool,
 }
 
 fn resolve_connect(
     input: &str,
     reset: bool,
     no_reconnect: bool,
+    no_auto_forward: bool,
     cli_mux: Option<MuxName>,
-    cli_forwards: &[PortForward],
     aliases: &RemoteAliases,
 ) -> Result<RemoteConnect> {
     if input.contains(':') {
@@ -369,17 +367,12 @@ fn resolve_connect(
             force_version: false,
             mux: cli_mux,
             web: web::RemoteWebOptions::default(),
-            forwards: forward::merged(&[], cli_forwards)?,
+            auto_forward: !no_auto_forward,
         });
     }
     let Some(alias) = aliases.get(input) else {
         bail!("no such remote alias `{input}`; run `rimz remote list`");
     };
-    let alias_forwards = alias
-        .forward
-        .iter()
-        .map(|spec| spec.parse::<PortForward>())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(RemoteConnect {
         origin: input.to_owned(),
         target: RemoteTarget::parse(&alias.target)?,
@@ -388,7 +381,7 @@ fn resolve_connect(
         force_version: false,
         mux: cli_mux.or(alias.mux),
         web: web::RemoteWebOptions::default(),
-        forwards: forward::merged(&alias_forwards, cli_forwards)?,
+        auto_forward: alias.auto_forward && !no_auto_forward,
     })
 }
 
@@ -416,8 +409,8 @@ fn connect(
         &alias_or_target,
         options.reset,
         options.no_reconnect,
+        options.no_auto_forward,
         globals.mux,
-        &options.forwards,
         &aliases,
     )?;
     remote.force_version = options.force_version;
@@ -447,7 +440,6 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             let lineage = local_remote_lineage(&remote.target)?;
             let plan = SshAttachPlan::new(SshAttachOptions {
                 target: remote.target,
-                forwards: remote.forwards,
                 lineage,
                 force_version: remote.force_version,
                 no_resume: remote.no_resume,
@@ -461,7 +453,6 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             Ok(())
         }
         AttachAction::Exec => {
-            preflight_forwards(&remote.forwards)?;
             let program = rimz::remote::ssh_program();
             which::which(&program).map_err(|_| {
                 anyhow::anyhow!(
@@ -476,7 +467,6 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             let lineage = local_remote_lineage(&remote.target)?;
             let plan = SshAttachPlan::new(SshAttachOptions {
                 target: remote.target,
-                forwards: remote.forwards,
                 lineage,
                 force_version: remote.force_version,
                 no_resume: remote.no_resume,
@@ -488,7 +478,12 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             if remote.reconnect {
                 let control = rimz::remote::link::validated_control_path()
                     .context("checking SSH ControlMaster socket path")?;
-                supervisor::supervise_remote(&plan, &control, remote.origin.as_str())
+                supervisor::supervise_remote(
+                    &plan,
+                    &control,
+                    remote.origin.as_str(),
+                    remote.auto_forward,
+                )
             } else {
                 let plain_spec = plan.initial().plain();
                 tty::sanitize_local_tty();
@@ -496,18 +491,6 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             }
         }
     }
-}
-
-fn preflight_forwards(forwards: &[PortForward]) -> Result<()> {
-    for forward in forwards {
-        std::net::TcpListener::bind(("127.0.0.1", forward.local)).map_err(|_| {
-            anyhow::anyhow!(
-                "local forward port {} is already in use; free it or pick another with --forward LOCAL:REMOTE",
-                forward.local
-            )
-        })?;
-    }
-    Ok(())
 }
 
 fn local_remote_lineage(target: &RemoteTarget) -> Result<String> {
@@ -571,7 +554,7 @@ mod tests {
             reconnect,
             no_resume,
             mux,
-            forward: Vec::new(),
+            auto_forward: true,
         }
     }
 
@@ -590,17 +573,16 @@ mod tests {
             "prod-box:query-engine".to_owned(),
             false,
             false,
-            vec!["3000".to_owned()],
+            true,
             &globals,
-        )
-        .unwrap();
+        );
 
         assert_eq!(built_alias.mux, Some(MuxName::Tmux));
-        assert_eq!(built_alias.forward, ["3000"]);
+        assert!(!built_alias.auto_forward);
 
         let mut aliases = RemoteAliases::default();
         let mut prod = alias("prod", "prod-box:query-engine", true, false, None);
-        prod.forward = vec!["3000".to_owned()];
+        prod.auto_forward = false;
         aliases.add(prod).unwrap();
         aliases
             .add(alias("fresh", "fresh-box:query-engine", true, true, None))
@@ -615,53 +597,46 @@ mod tests {
             ))
             .unwrap();
 
-        let raw = resolve_connect("prod:raw-session", false, false, None, &[], &aliases).unwrap();
+        let raw = resolve_connect("prod:raw-session", false, false, false, None, &aliases).unwrap();
         assert_eq!(raw.target.ssh_destination().as_str(), "prod");
         assert_eq!(raw.origin, "prod:raw-session");
         assert!(raw.reconnect);
         assert!(!raw.no_resume);
+        assert!(raw.auto_forward);
 
-        let named = resolve_connect(
-            "prod",
-            false,
-            false,
-            None,
-            &["3000".parse().unwrap(), "8080:3001".parse().unwrap()],
-            &aliases,
-        )
-        .unwrap();
+        let named = resolve_connect("prod", false, false, false, None, &aliases).unwrap();
         assert_eq!(named.target.ssh_destination().as_str(), "prod-box");
         assert_eq!(named.origin, "prod");
         assert!(named.reconnect);
         assert!(!named.no_resume);
-        assert_eq!(named.forwards.len(), 2);
+        assert!(!named.auto_forward);
 
-        let fresh = resolve_connect("fresh", false, false, None, &[], &aliases).unwrap();
+        let fresh = resolve_connect("fresh", false, false, false, None, &aliases).unwrap();
         assert!(fresh.no_resume);
+        assert!(fresh.auto_forward);
 
-        let reset = resolve_connect("prod", true, false, None, &[], &aliases).unwrap();
+        let reset = resolve_connect("prod", true, false, false, None, &aliases).unwrap();
         assert!(reset.no_resume);
 
-        let remote = resolve_connect("prod", false, true, None, &[], &aliases).unwrap();
+        let remote = resolve_connect("prod", false, true, false, None, &aliases).unwrap();
         assert!(!remote.reconnect);
 
-        let alias_mux = resolve_connect("tmuxed", false, false, None, &[], &aliases).unwrap();
+        let alias_mux = resolve_connect("tmuxed", false, false, false, None, &aliases).unwrap();
         assert_eq!(alias_mux.mux, Some(MuxName::Tmux));
 
-        let cli_mux =
-            resolve_connect("tmuxed", false, false, Some(MuxName::Zellij), &[], &aliases).unwrap();
-        assert_eq!(cli_mux.mux, Some(MuxName::Zellij));
-
-        let conflict = resolve_connect(
-            "prod",
+        let cli_mux = resolve_connect(
+            "tmuxed",
             false,
             false,
-            None,
-            &["3000:4000".parse().unwrap()],
+            false,
+            Some(MuxName::Zellij),
             &aliases,
         )
-        .unwrap_err();
-        assert!(conflict.to_string().contains("local forward port 3000"));
+        .unwrap();
+        assert_eq!(cli_mux.mux, Some(MuxName::Zellij));
+
+        let disabled = resolve_connect("fresh", false, false, true, None, &aliases).unwrap();
+        assert!(!disabled.auto_forward);
     }
 
     #[test]
@@ -687,20 +662,5 @@ mod tests {
         let ipv6 = resolve_setup_destination("user@[::1]", &aliases).unwrap();
         assert_eq!(ipv6.as_str(), "user@[::1]");
         assert_eq!(ipv6.host_display(), "::1");
-    }
-
-    #[test]
-    fn forward_preflight_refuses_a_busy_loopback_port() {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let local = listener.local_addr().unwrap().port();
-        let forward = PortForward {
-            local,
-            remote: 3000,
-        };
-
-        let error = preflight_forwards(&[forward]).unwrap_err().to_string();
-        assert!(error.contains(&format!("local forward port {local} is already in use")));
-        drop(listener);
-        preflight_forwards(&[forward]).unwrap();
     }
 }

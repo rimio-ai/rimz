@@ -1,5 +1,6 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -8,6 +9,9 @@ use rimz::remote::link::{LinkAck, LinkProbe, LinkStatsFile};
 use rimz::room::session::workspace_record_for_session;
 
 const LINK_SCHEMA_MISMATCH_EXIT: i32 = 2;
+const PORTS_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const PORTS_SWEEP_ENV: &str = "RIMZ_PORTS_SWEEP_MS";
+const PROC_NET_DIR_ENV: &str = "RIMZ_PROC_NET_DIR";
 
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
@@ -34,6 +38,7 @@ pub(super) fn ingest(args: LinkStatsIngestArgs) -> Result<()> {
 fn ingest_probes(path: &Path, client: &str) -> Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
+    let mut ports = PortReporter::new();
     for line in stdin.lock().lines() {
         let line = line.context("reading link probe")?;
         if line.trim().is_empty() {
@@ -53,11 +58,60 @@ fn ingest_probes(path: &Path, client: &str) -> Result<()> {
         );
         rimz::store::atomic::write_temp_then_rename_cache(path, &file)
             .with_context(|| format!("writing {}", path.display()))?;
-        serde_json::to_writer(&mut stdout, &LinkAck::new(probe.seq)).context("writing link ack")?;
+        let ack = match ports.report() {
+            Some(ports) => LinkAck::with_ports(probe.seq, ports),
+            None => LinkAck::new(probe.seq),
+        };
+        serde_json::to_writer(&mut stdout, &ack).context("writing link ack")?;
         writeln!(stdout).context("writing link ack newline")?;
         stdout.flush().context("flushing link ack")?;
     }
     Ok(())
+}
+
+struct PortReporter {
+    interval: Duration,
+    last_sweep: Option<Instant>,
+    ports: Option<Vec<u16>>,
+}
+
+impl PortReporter {
+    fn new() -> Self {
+        let interval = std::env::var(PORTS_SWEEP_ENV)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(PORTS_SWEEP_INTERVAL);
+        Self {
+            interval,
+            last_sweep: None,
+            ports: None,
+        }
+    }
+
+    fn report(&mut self) -> Option<Vec<u16>> {
+        if self
+            .last_sweep
+            .is_none_or(|last| last.elapsed() >= self.interval)
+        {
+            self.ports = read_candidate_ports();
+            self.last_sweep = Some(Instant::now());
+        }
+        self.ports.clone()
+    }
+}
+
+fn read_candidate_ports() -> Option<Vec<u16>> {
+    let root = std::env::var_os(PROC_NET_DIR_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/proc/net"));
+    let tcp = std::fs::read_to_string(root.join("tcp")).ok()?;
+    let tcp6 = std::fs::read_to_string(root.join("tcp6")).ok()?;
+    Some(rimz::remote::forward::candidate_ports(
+        &tcp,
+        &tcp6,
+        nix::unistd::getuid().as_raw(),
+    ))
 }
 
 fn remove_stats_if_owned(path: &Path, client: &str) {
