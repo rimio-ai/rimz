@@ -475,6 +475,10 @@ fn auto_rotation_due_at(log_len: u64, threshold: u64, stamp_age: Option<Duration
 }
 
 #[cfg(test)]
+#[path = "lifecycle/rotation_tests.rs"]
+mod rotation_tests;
+
+#[cfg(test)]
 mod tests {
     use std::fs::{FileTimes, OpenOptions};
     use std::time::SystemTime;
@@ -500,7 +504,7 @@ mod tests {
         }
     }
 
-    fn test_store() -> (tempfile::TempDir, Store) {
+    pub(super) fn test_store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().expect("tempdir");
         let workspace_id = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
@@ -509,7 +513,7 @@ mod tests {
         (dir, store)
     }
 
-    fn observation(signal: LifecycleSignal) -> AgentLifecycleObservation {
+    pub(super) fn observation(signal: LifecycleSignal) -> AgentLifecycleObservation {
         AgentLifecycleObservation::new(Some(AgentSessionId::from("sess-1")), signal)
     }
 
@@ -912,72 +916,6 @@ mod tests {
             .expect("set future stamp time");
         assert!(debounce::stamp_due(&future, AUTO_ROTATE_DEBOUNCE));
         assert!(auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES, None));
-    }
-
-    #[test]
-    fn rotation_due_touches_stamp_and_fresh_stamp_debounces() {
-        let (_dir, store) = test_store();
-        let second = Store::open(store.paths().clone(), store.runtime_paths().clone())
-            .expect("second store handle");
-        let registered = observation(LifecycleSignal::Registered);
-        let intent = || AgentLifecycleIntent {
-            session_name: "rimz-test",
-            agent_kind: AgentKind::new_unchecked("claude"),
-            event_name: "SessionStart",
-            observation: &registered,
-            spawned_subagents: &[],
-        };
-
-        assert_eq!(
-            second
-                .append_agent_lifecycle_with_threshold(intent(), 0)
-                .expect("rotation due")
-                .rotation_due,
-            true
-        );
-        let stamp = store.paths().locks_dir.join(AUTO_ROTATE_STAMP);
-        assert!(stamp.exists());
-        assert_eq!(
-            store
-                .append_agent_lifecycle_with_threshold(intent(), 0)
-                .expect("fresh stamp debounces")
-                .rotation_due,
-            false
-        );
-        OpenOptions::new()
-            .write(true)
-            .open(&stamp)
-            .expect("open rotation stamp")
-            .set_times(
-                FileTimes::new().set_modified(
-                    SystemTime::now() - AUTO_ROTATE_DEBOUNCE - Duration::from_secs(1),
-                ),
-            )
-            .expect("age rotation stamp");
-        assert!(
-            debounce::stamp_due(&stamp, AUTO_ROTATE_DEBOUNCE),
-            "aged stamp must pass debounce"
-        );
-        assert_eq!(
-            store
-                .append_agent_lifecycle_with_threshold(intent(), 0)
-                .expect("aged stamp is due")
-                .rotation_due,
-            true
-        );
-        OpenOptions::new()
-            .write(true)
-            .open(&stamp)
-            .expect("open rotation stamp")
-            .set_times(FileTimes::new().set_modified(SystemTime::now() + Duration::from_secs(60)))
-            .expect("future-date rotation stamp");
-        assert_eq!(
-            store
-                .append_agent_lifecycle_with_threshold(intent(), 0)
-                .expect("future stamp is due")
-                .rotation_due,
-            true
-        );
     }
 
     #[test]
