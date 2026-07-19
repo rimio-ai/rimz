@@ -75,7 +75,10 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     launch: super::LaunchSpec {
         program: Some("amp"),
         fixed_args: &[],
-        prompt: super::PromptStyle::None,
+        prompt: super::PromptStyle::FlagWithSuffix {
+            flag: "-x",
+            suffix: &["--plugin-ready-timeout", "30"],
+        },
         resume: Some(super::SessionCommand {
             before_id: &["amp", "threads", "continue"],
             after_id: &[],
@@ -418,20 +421,6 @@ impl AgentAdapter for AmpAdapter {
         prices: &super::PriceBook,
     ) -> super::spending::SpendParse {
         spend::parse(path, prices)
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        let mut argv = vec!["amp".to_owned()];
-        argv.extend(extra_args.iter().cloned());
-        if let Some(prompt) = prompt.filter(|prompt| !prompt.is_empty()) {
-            argv.extend([
-                "-x".to_owned(),
-                prompt.to_owned(),
-                "--plugin-ready-timeout".to_owned(),
-                "30".to_owned(),
-            ]);
-        }
-        Some(argv)
     }
 
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {

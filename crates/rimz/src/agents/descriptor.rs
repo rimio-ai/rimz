@@ -171,6 +171,10 @@ impl LaunchSpec {
                 PromptStyle::Flag(flag) => {
                     argv.extend([flag.to_owned(), prompt.to_owned()]);
                 }
+                PromptStyle::FlagWithSuffix { flag, suffix } => {
+                    argv.extend([flag.to_owned(), prompt.to_owned()]);
+                    argv.extend(suffix.iter().map(|arg| (*arg).to_owned()));
+                }
             }
         }
         Some(argv)
@@ -200,6 +204,10 @@ pub enum PromptStyle {
     None,
     PositionalAfterDoubleDash,
     Flag(&'static str),
+    FlagWithSuffix {
+        flag: &'static str,
+        suffix: &'static [&'static str],
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -787,7 +795,7 @@ impl AgentDescriptor {
 mod tests {
     use serde_json::json;
 
-    use super::program_names_kind;
+    use super::{LaunchSpec, PromptStyle, program_names_kind};
     use crate::agents::AskKind;
     use crate::agents::registry::ADAPTERS;
 
@@ -802,6 +810,46 @@ mod tests {
                     descriptor.kind,
                 );
             }
+        }
+    }
+
+    #[test]
+    fn prompt_flag_suffix_is_conditional_on_nonempty_prompt() {
+        let launch = LaunchSpec {
+            program: Some("agent"),
+            fixed_args: &["--fixed"],
+            prompt: PromptStyle::FlagWithSuffix {
+                flag: "--prompt",
+                suffix: &["--format", "jsonl"],
+            },
+            ..LaunchSpec::EMPTY
+        };
+        let extra = ["--verbose".to_owned()];
+        assert_eq!(
+            launch.launch_command(&extra, Some("review")),
+            Some(
+                [
+                    "agent",
+                    "--fixed",
+                    "--verbose",
+                    "--prompt",
+                    "review",
+                    "--format",
+                    "jsonl",
+                ]
+                .map(ToOwned::to_owned)
+                .to_vec()
+            )
+        );
+        for prompt in [None, Some("")] {
+            assert_eq!(
+                launch.launch_command(&extra, prompt),
+                Some(
+                    ["agent", "--fixed", "--verbose"]
+                        .map(ToOwned::to_owned)
+                        .to_vec()
+                )
+            );
         }
     }
 

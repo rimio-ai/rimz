@@ -78,6 +78,10 @@ fn launch_keeps_streaming_flags_out_of_interactive_sessions() {
         Some(vec!["grok".to_owned()])
     );
     assert_eq!(
+        adapter.launch_command(&[], Some("")),
+        Some(vec!["grok".to_owned()])
+    );
+    assert_eq!(
         adapter.launch_command(&["--max-turns".to_owned(), "3".to_owned()], Some("ping")),
         Some(vec![
             "grok".to_owned(),

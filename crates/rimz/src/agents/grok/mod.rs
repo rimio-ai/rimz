@@ -77,7 +77,10 @@ static GROK_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     launch: super::LaunchSpec {
         program: Some("grok"),
         fixed_args: &[],
-        prompt: super::PromptStyle::None,
+        prompt: super::PromptStyle::FlagWithSuffix {
+            flag: "-p",
+            suffix: &["--output-format", "streaming-json"],
+        },
         resume: Some(super::SessionCommand {
             before_id: &["grok", "--resume"],
             after_id: &[],
@@ -456,20 +459,6 @@ impl AgentAdapter for GrokAdapter {
         prices: &super::PriceBook,
     ) -> super::spending::SpendParse {
         spend::parse(path, resume, prices)
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        let mut argv = vec!["grok".to_owned()];
-        argv.extend(extra_args.iter().cloned());
-        if let Some(prompt) = prompt.filter(|prompt| !prompt.is_empty()) {
-            argv.extend([
-                "-p".to_owned(),
-                prompt.to_owned(),
-                "--output-format".to_owned(),
-                "streaming-json".to_owned(),
-            ]);
-        }
-        Some(argv)
     }
 
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
