@@ -25,6 +25,7 @@ Provider modules own native protocol and process interpretation. Code outside `a
 
 - **Adapters return provider-neutral intent.** [`cli/hooks.rs`](../cli/hooks.rs) binds runtime identity, emits only `HookReply` on stdout, and submits lifecycle write intent to Store.
 - **Local context policy stays in adapters.** Local refreshes emit explicit `FieldPatch` and `LocalTokenPatch` operations; Store applies them under the record lock without branching on provider kind.
+- **One command runs every provider's out-of-band refresh.** An adapter's `context_refresh_spawn` returns argv for the shared `rimz agents refresh-context` helper, and `refresh_session_context` returns that pass's write intent. The adapter reads only its own provider source; the CLI owns every durable write and the sidebar wakeup.
 - **Emit only the normalized outputs generic flows consume** — lifecycle observations, blocking-ask classifications, hook ingress ownership, interactive process identity, and supervised-run final messages. Keep provider-only capabilities in deep provider modules until a second generic consumer proves an adapter seam.
 
 ## Hook discipline

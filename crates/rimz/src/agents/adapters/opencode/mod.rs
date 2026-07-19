@@ -26,6 +26,7 @@ pub(crate) use crate::agents::capabilities::*;
 
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
@@ -41,9 +42,10 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
-    AgentErr, AgentLifecycleObservation, HookOutput, HookRouting, LifecycleRefreshCtx,
-    RefreshSpawn, RefreshTrigger, Result, SubagentIdentity, optional_payload_string,
-    resolve_subagent_identity, sanitize_user_prompt,
+    AgentContext, AgentErr, AgentLifecycleObservation, HookOutput, HookRouting,
+    LifecycleRefreshCtx, RefreshSpawn, RefreshTrigger, Result, SessionContextInput,
+    SessionContextRefresh, SubagentIdentity, optional_payload_string, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -538,20 +540,45 @@ impl crate::agents::capabilities::ContextCapability for OpencodeAdapter {
             return None;
         }
         let server_url = ctx.server_url.filter(|url| !url.is_empty())?;
-        let mut args = vec![
-            "opencode".to_owned(),
-            "refresh-context".to_owned(),
-            "--session-id".to_owned(),
-            ctx.agent_id.to_owned(),
-            "--workspace-id".to_owned(),
-            ctx.workspace_id.to_owned(),
-            "--server-url".to_owned(),
-            server_url.to_owned(),
-        ];
+        let mut args = crate::agents::refresh_context_argv(self.spec().kind, ctx);
+        args.extend(["--server-url".to_owned(), server_url.to_owned()]);
         if let Some(model) = ctx.model_hint {
             args.extend(["--model".to_owned(), model.to_owned()]);
         }
         Some(RefreshSpawn { args })
+    }
+
+    /// OpenCode's embedded server owns session name, model display name, and
+    /// version; the plugin envelope owns everything else. The server read is
+    /// throttled on the record's own rich stamp.
+    fn refresh_session_context(
+        &self,
+        input: &SessionContextInput<'_>,
+    ) -> Option<SessionContextRefresh> {
+        let observed = server::refresh_rich_context(
+            input.server_url?,
+            input.session_id,
+            input.model,
+            input.prior.map(|record| &record.context),
+            input.prior.and_then(|record| record.rich_observed_at),
+            Timestamp::now(),
+        )?;
+        Some(SessionContextRefresh {
+            observed: Some(observed),
+            ..SessionContextRefresh::default()
+        })
+    }
+
+    fn merge_session_context(
+        &self,
+        record: &mut crate::store::agent_context::AgentContextRecord,
+        observed: &AgentContext,
+    ) -> bool {
+        if !server::merge_rich_context(&mut record.context, observed) {
+            return false;
+        }
+        record.rich_observed_at = Some(observed.observed_at);
+        true
     }
 }
 

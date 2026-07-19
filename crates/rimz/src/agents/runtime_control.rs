@@ -105,3 +105,22 @@ pub fn updater_advisory(kind: &str) -> Option<String> {
 pub fn wiring_input_path(kind: &str) -> Option<PathBuf> {
     super::find_definition(kind)?.runtime_control_wiring_input_path()
 }
+
+/// Ceiling on one realtime provider account-usage read. A stale socket costs
+/// little before the caller falls back to its cached reading.
+#[cfg(test)]
+pub const MAX_REALTIME_ACCOUNT_USAGE_DURATION: std::time::Duration =
+    std::time::Duration::from_secs(10);
+
+/// Host one session's provider broker on `socket_path` until the pane closes.
+/// Codex is the only provider with a warm app-server to hold; the entry stays
+/// neutral so `cli/` never reaches past the private-adapter boundary.
+pub fn serve_broker(
+    session_name: Option<&str>,
+    socket_path: &std::path::Path,
+) -> std::io::Result<()> {
+    super::adapters::codex::broker::serve(super::adapters::codex::broker::BrokerInfo {
+        session: session_name,
+        socket_path,
+    })
+}

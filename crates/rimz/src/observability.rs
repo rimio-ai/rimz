@@ -23,7 +23,7 @@ pub const SIDEBAR_HEALTH_TARGET: &str = "rimz::sidebar::health";
 /// Values stay free of arguments and free-form text so they make stable Sentry
 /// facets.
 pub struct ScopeFacts<'a> {
-    /// The resolved command, e.g. `"sidebar serve"` or `"codex refresh-context"`.
+    /// The resolved command, e.g. `"sidebar serve"` or `"agents refresh-context"`.
     pub command: &'a str,
     /// The agent session the process acts on, when exactly one is known.
     pub session: Option<&'a str>,

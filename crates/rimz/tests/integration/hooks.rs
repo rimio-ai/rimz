@@ -2616,7 +2616,7 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
 
 /// Build the `rimz hooks feed --source codex` command with `RIMZ_CODEX_BIN`
 /// pointed at `codex_bin`, mirroring an installed hook. The detached
-/// `rimz codex refresh-context` child inherits this env, so it spawns
+/// `rimz agents refresh-context` child inherits this env, so it spawns
 /// `codex_bin app-server` for its read-only enrichment.
 fn codex_hook_with_app_server(env: &Env, codex_bin: &std::path::Path) -> Command {
     let mut cmd = env.rimz();

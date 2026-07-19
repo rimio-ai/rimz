@@ -12,7 +12,6 @@ pub mod capabilities;
 #[cfg(test)]
 pub(crate) mod conformance;
 pub mod context;
-pub mod context_runtime;
 pub mod credits;
 pub mod definition;
 pub(crate) mod delegated_account;
@@ -68,8 +67,8 @@ pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentSessionUsage, AgentTokenUsage, AgentTurnError, ContextObservation, CostCoverage,
     FieldPatch, LocalContextPatch, LocalTokenPatch, ProviderAccountScope, RateLimitWindow,
-    RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass, TurnSettle,
-    TurnSettleOutcome,
+    RateLimitWindowScope, SessionContextInput, SessionContextRefresh, SubagentContext,
+    SubagentObservation, TurnErrorClass, TurnSettle, TurnSettleOutcome,
 };
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
@@ -558,6 +557,22 @@ pub struct LifecycleRefreshCtx<'a> {
     pub workspace_id: &'a str,
     pub model_hint: Option<&'a str>,
     pub server_url: Option<&'a str>,
+}
+
+/// The leading argv of the detached `rimz agents refresh-context` helper: the
+/// one command that runs [`AgentDefinition::refresh_session_context`] for any
+/// provider. An adapter appends its own flags.
+pub fn refresh_context_argv(kind: &str, ctx: &LifecycleRefreshCtx<'_>) -> Vec<String> {
+    vec![
+        "agents".to_owned(),
+        "refresh-context".to_owned(),
+        "--kind".to_owned(),
+        kind.to_owned(),
+        "--session-id".to_owned(),
+        ctx.agent_id.to_owned(),
+        "--workspace-id".to_owned(),
+        ctx.workspace_id.to_owned(),
+    ]
 }
 
 /// File identity for a bounded transcript, rollout, or telemetry tail read. Producers persist it

@@ -659,8 +659,10 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     assert_eq!(
         spawn.args,
         [
-            "codex",
+            "agents",
             "refresh-context",
+            "--kind",
+            "codex",
             "--session-id",
             "sess-1",
             "--workspace-id",

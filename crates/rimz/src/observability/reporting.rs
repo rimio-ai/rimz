@@ -628,7 +628,7 @@ mod tests {
         });
 
         set_command_scope(ScopeFacts {
-            command: "codex refresh-context",
+            command: "agents refresh-context",
             session: Some("ses_x"),
             agent: Some("codex"),
         });
@@ -656,7 +656,7 @@ mod tests {
         // Scope tag for the command; `tags.`-prefixed field promoted to a tag.
         assert_eq!(
             event.tags.get("command").map(String::as_str),
-            Some("codex refresh-context")
+            Some("agents refresh-context")
         );
         assert_eq!(
             event.tags.get("operation").map(String::as_str),

@@ -607,7 +607,7 @@ fn app_server_merge_preserves_transcript_owned_fields() {
     let (_dir, runtime) = runtime();
     let app_at = Timestamp::from_second(1_700_000_050).unwrap();
     let observation = app_server_context(app_at);
-    merge_app_server_context(&runtime, "sess-1", observation.clone()).unwrap();
+    write_app_server_context(&runtime, "sess-1", observation.clone());
     seed_transcript_context(&runtime);
     crate::store::agent_context::merge_turn_opened_by(
         &runtime,
@@ -616,7 +616,7 @@ fn app_server_merge_preserves_transcript_owned_fields() {
         vec![crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap()],
     )
     .unwrap();
-    merge_app_server_context(&runtime, "sess-1", observation).unwrap();
+    write_app_server_context(&runtime, "sess-1", observation);
     assert_merged_context(&runtime, app_at);
 }
 
@@ -624,10 +624,10 @@ fn app_server_merge_preserves_transcript_owned_fields() {
 fn app_server_merge_preserves_optional_identity_and_clears_authoritative_fields() {
     let (_dir, runtime) = runtime();
     let first_at = Timestamp::from_second(1_700_000_050).unwrap();
-    merge_app_server_context(&runtime, "sess-1", app_server_context(first_at)).unwrap();
+    write_app_server_context(&runtime, "sess-1", app_server_context(first_at));
 
     let cleared_at = Timestamp::from_second(1_700_000_100).unwrap();
-    merge_app_server_context(&runtime, "sess-1", AgentContext::new("codex", cleared_at)).unwrap();
+    write_app_server_context(&runtime, "sess-1", AgentContext::new("codex", cleared_at));
 
     let merged = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.source, "codex");
@@ -647,6 +647,20 @@ fn app_server_merge_preserves_optional_identity_and_clears_authoritative_fields(
     assert_eq!(merged.context.observed_at, cleared_at);
     assert_eq!(merged.rate_limits_observed_at, Some(cleared_at));
     assert_eq!(merged.rich_observed_at, None);
+}
+
+/// Apply the pure app-server merge under the record lock, the way
+/// `rimz agents refresh-context` does.
+fn write_app_server_context(runtime: &RuntimePaths, session_id: &str, context: AgentContext) {
+    let observed_at = context.observed_at;
+    crate::store::agent_context::update_record(
+        runtime,
+        "codex",
+        session_id,
+        observed_at,
+        |record, _| merge_app_server_context(record, &context),
+    )
+    .unwrap();
 }
 
 fn runtime() -> (tempfile::TempDir, RuntimePaths) {

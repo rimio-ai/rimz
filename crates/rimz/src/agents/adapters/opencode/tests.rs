@@ -493,8 +493,10 @@ fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
         assert_eq!(
             spawn.args,
             [
-                "opencode",
+                "agents",
                 "refresh-context",
+                "--kind",
+                "opencode",
                 "--session-id",
                 "sess-1",
                 "--workspace-id",

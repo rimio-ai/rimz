@@ -23,7 +23,6 @@ mod list_pets;
 mod list_themes;
 mod loop_cmd;
 mod message;
-mod opencode;
 mod pane;
 mod providers;
 mod reload;
@@ -128,7 +127,6 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
-        Some(Subcmd::Opencode(args)) => opencode::run(args, &globals),
         Some(Subcmd::Daemon(args)) => daemon::run(args, &globals),
         Some(Subcmd::Config(args)) => config::run(args, &globals),
         Some(Subcmd::Coverage(args)) => coverage::run(args, &globals),
@@ -222,10 +220,7 @@ fn scope_facts<'a>(
             let (command, session) = args.scope();
             (command, session, Some("codex"))
         }
-        Some(Subcmd::Opencode(args)) => {
-            let (command, session) = args.scope();
-            (command, session, Some("opencode"))
-        }
+        Some(Subcmd::Agents(args)) => args.scope(),
         _ => (canonical_command, None, None),
     };
     rimz::observability::ScopeFacts {
@@ -524,7 +519,6 @@ enum Subcmd {
     Codex(codex::CodexArgs),
     /// OpenCode helper API. The OpenCode hook calls these; humans usually do not.
     #[command(hide = true)]
-    Opencode(opencode::OpencodeArgs),
     /// Daemon dashboard helper API. The rimzd content panes call this; humans do not.
     #[command(hide = true)]
     Daemon(daemon::DaemonArgs),
@@ -792,20 +786,24 @@ mod tests {
             (
                 vec![
                     "rimz",
-                    "codex",
+                    "agents",
                     "refresh-context",
+                    "--kind",
+                    "codex",
                     "--session-id",
                     "sess-codex",
                     "--workspace-id",
                     "ws-test",
                 ],
-                ("codex refresh-context", Some("sess-codex"), Some("codex")),
+                ("agents refresh-context", Some("sess-codex"), Some("codex")),
             ),
             (
                 vec![
                     "rimz",
-                    "opencode",
+                    "agents",
                     "refresh-context",
+                    "--kind",
+                    "opencode",
                     "--session-id",
                     "sess-opencode",
                     "--workspace-id",
@@ -814,7 +812,7 @@ mod tests {
                     "http://127.0.0.1:1",
                 ],
                 (
-                    "opencode refresh-context",
+                    "agents refresh-context",
                     Some("sess-opencode"),
                     Some("opencode"),
                 ),

@@ -13,11 +13,14 @@
 //! fold-in stay transport-agnostic; provider-specific wire fields normalize
 //! into these shared slots before either layer sees them.
 
+use std::path::Path;
+
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentSessionId, MessageId};
 
+use super::LocalContextRefresh;
 use super::definition::AgentSpec;
 
 /// One rich-context reading paired with the provider session that owns it.
@@ -223,6 +226,40 @@ impl AgentContext {
             ..Self::default()
         }
     }
+}
+
+/// What an out-of-band context refresh is handed to work from. The caller has
+/// already resolved the runtime and read the prior sidecar, so the adapter only
+/// reads its own provider source.
+pub struct SessionContextInput<'a> {
+    /// The provider's own session id, the key the sidecar is filed under.
+    pub session_id: &'a str,
+    /// The session's current model id, when the launcher knows one.
+    pub model: Option<&'a str>,
+    /// An embedded provider server's base URL, for adapters whose plugin
+    /// reports one on its lifecycle envelope.
+    pub server_url: Option<&'a str>,
+    /// The sidecar as last written, so an adapter can throttle its expensive
+    /// read and diff against what is already stored.
+    pub prior: Option<&'a crate::store::agent_context::AgentContextRecord>,
+    /// The shared price book, for adapters that fold cost while refreshing.
+    pub pricing_cache_path: &'a Path,
+    /// This session's warm broker socket, for adapters that host one.
+    pub broker_socket: Option<&'a Path>,
+}
+
+/// The write intent one out-of-band refresh produced. Read-only: the adapter
+/// performs no store I/O, and the caller owns every write and the sidebar
+/// wakeup.
+#[derive(Default)]
+pub struct SessionContextRefresh {
+    /// Local-source intent, applied through `merge_local_context`.
+    pub local: Option<LocalContextRefresh>,
+    /// A rich out-of-band reading, folded onto the record through
+    /// [`ContextCapability::merge_session_context`](super::capabilities::ContextCapability::merge_session_context).
+    pub observed: Option<AgentContext>,
+    /// Provider account usage read during the same pass.
+    pub realtime_usage: Option<crate::AccountUsageSnapshot>,
 }
 
 /// Explicit update for one optional local-context field.

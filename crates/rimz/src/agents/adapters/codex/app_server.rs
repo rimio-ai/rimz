@@ -7,7 +7,7 @@
 //! `account/rateLimits/read`, `model/list`, `thread/read`, `thread/list`, and
 //! `thread/loaded/list` — and never `thread/resume` or `turn/start` (which would
 //! rejoin/own the user's live Codex thread). It is the out-of-band producer
-//! behind `rimz codex refresh-context` and the daemon-mode liveness probe behind
+//! behind `rimz agents refresh-context` and the daemon-mode liveness probe behind
 //! the sidebar cache refresher's TTL-gated ghost-session reap;
 //! disk_usage
 //! ([`crate::store::agent_context`]) and the snapshot fold-in are
@@ -37,7 +37,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Context;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -86,52 +85,43 @@ pub fn app_server_due(
         .is_none_or(|observed_at| now - observed_at.as_second() >= within)
 }
 
-/// Merge app-server-owned fields while preserving transcript-owned context.
+/// Merge app-server-owned fields onto the record while preserving
+/// transcript-owned context. Pure over the record value: the caller owns the
+/// lock and the durable write.
 pub fn merge_app_server_context(
-    runtime: &crate::RuntimePaths,
-    session_id: &str,
-    context: AgentContext,
-) -> anyhow::Result<()> {
+    record: &mut crate::store::agent_context::AgentContextRecord,
+    context: &AgentContext,
+) -> bool {
     let observed_at = context.observed_at;
-    crate::store::agent_context::update_record(
-        runtime,
-        "codex",
-        session_id,
-        observed_at,
-        |record, _| {
-            record.context.source.clone_from(&context.source);
-            if context.session_name.is_some() {
-                record
-                    .context
-                    .session_name
-                    .clone_from(&context.session_name);
-            }
-            if context.session_preview.is_some() {
-                record
-                    .context
-                    .session_preview
-                    .clone_from(&context.session_preview);
-            }
-            if context.model_id.is_some() {
-                record.context.model_id.clone_from(&context.model_id);
-            }
-            record
-                .context
-                .model_display_name
-                .clone_from(&context.model_display_name);
-            record
-                .context
-                .agent_version
-                .clone_from(&context.agent_version);
-            record.context.rate_limits.clone_from(&context.rate_limits);
-            record.context.account.clone_from(&context.account);
-            record.context.observed_at = observed_at;
-            record.rate_limits_observed_at = Some(observed_at);
-            true
-        },
-    )
-    .map(|_| ())
-    .context("writing merged app-server context")
+    record.context.source.clone_from(&context.source);
+    if context.session_name.is_some() {
+        record
+            .context
+            .session_name
+            .clone_from(&context.session_name);
+    }
+    if context.session_preview.is_some() {
+        record
+            .context
+            .session_preview
+            .clone_from(&context.session_preview);
+    }
+    if context.model_id.is_some() {
+        record.context.model_id.clone_from(&context.model_id);
+    }
+    record
+        .context
+        .model_display_name
+        .clone_from(&context.model_display_name);
+    record
+        .context
+        .agent_version
+        .clone_from(&context.agent_version);
+    record.context.rate_limits.clone_from(&context.rate_limits);
+    record.context.account.clone_from(&context.account);
+    record.context.observed_at = observed_at;
+    record.rate_limits_observed_at = Some(observed_at);
+    true
 }
 
 /// Short budget for warm unix-socket probes. A stale broker or daemon socket

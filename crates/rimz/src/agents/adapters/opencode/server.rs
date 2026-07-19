@@ -2,7 +2,7 @@
 //!
 //! The in-process plugin owns the only discovery handle for a TUI launch's
 //! random-port server: `PluginInput.serverUrl`. The hook envelope carries that
-//! URL to `rimz opencode refresh-context`, and this module owns the throttled,
+//! URL to `rimz agents refresh-context`, and this module owns the throttled,
 //! best-effort rich-context observation and merge policy. Failures omit fields;
 //! they never fail the hook helper. CLI code owns sidecar persistence and wakeups.
 

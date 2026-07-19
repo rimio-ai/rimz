@@ -637,7 +637,7 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
 
 #[test]
 fn account_usage_segments_fit_strictly_inside_the_renewed_lease() {
-    let realtime_segment = crate::agents::context_runtime::MAX_REALTIME_ACCOUNT_USAGE_DURATION
+    let realtime_segment = crate::agents::runtime_control::MAX_REALTIME_ACCOUNT_USAGE_DURATION
         + crate::store::lock::LOCK_TIMEOUT;
     let direct_segment =
         crate::agents::credits::OAUTH_HTTP_MAX_DURATION * 2 + crate::store::lock::LOCK_TIMEOUT;

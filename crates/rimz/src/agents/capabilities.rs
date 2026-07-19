@@ -475,6 +475,32 @@ pub trait ContextCapability: CoreCapability {
         None
     }
 
+    /// Read this provider's out-of-band context source and return the write
+    /// intent for one session's sidecar — the body of the detached helper
+    /// [`context_refresh_spawn`](Self::context_refresh_spawn) launches.
+    /// Read-only: the adapter performs no store I/O, and the caller owns every
+    /// write and the sidebar wakeup. Defaults to no intent for an agent whose
+    /// enrichment arrives entirely through hooks.
+    fn refresh_session_context(
+        &self,
+        _input: &SessionContextInput<'_>,
+    ) -> Option<SessionContextRefresh> {
+        None
+    }
+
+    /// Fold one rich out-of-band reading onto the stored record, returning
+    /// whether anything changed. Field ownership between the provider's rich
+    /// channel and its transcript is provider policy, so it lives here; the
+    /// caller owns the record lock and the durable write. Only an adapter that
+    /// returns [`SessionContextRefresh::observed`] implements this.
+    fn merge_session_context(
+        &self,
+        _record: &mut crate::store::agent_context::AgentContextRecord,
+        _observed: &AgentContext,
+    ) -> bool {
+        false
+    }
+
     /// A cheap, synchronous local enrichment read to run inline after a
     /// progress-proving hook event. This is for bounded file reads that are
     /// lighter than the store write already performed by the hook or cheap

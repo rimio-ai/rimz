@@ -14,6 +14,7 @@ mod logs;
 mod placement;
 mod reconcile;
 mod refresh;
+mod refresh_context;
 mod refresh_usage;
 mod register;
 mod restart;
@@ -69,6 +70,7 @@ use list::list_agents;
 pub(crate) use list::render_agents_table;
 use logs::logs_agent;
 use refresh::{RefreshArgs, run_refresh};
+use refresh_context::RefreshContextArgs;
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
@@ -246,6 +248,21 @@ pub(super) enum InputFormat {
     StreamJson,
 }
 
+impl AgentsArgs {
+    /// The low-cardinality command label and, for a session-scoped helper, its
+    /// session id and agent kind — for the Sentry command scope.
+    pub(crate) fn scope(&self) -> (&'static str, Option<&str>, Option<&str>) {
+        match &self.command {
+            Some(AgentsSubcmd::RefreshContext(args)) => (
+                "agents refresh-context",
+                Some(args.session_id()),
+                Some(args.kind()),
+            ),
+            _ => ("agents", None, None),
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum AgentsSubcmd {
     /// Validate one third-party plugin's manifest, probes, and envelopes.
@@ -407,6 +424,10 @@ enum AgentsSubcmd {
     /// (rate-limit windows + paid credits) into the shared cache.
     #[command(hide = true)]
     RefreshUsage(RefreshUsageArgs),
+    /// Hidden helper an installed hook spawns to refresh one session's context
+    /// sidecar from its provider's out-of-band source.
+    #[command(hide = true)]
+    RefreshContext(RefreshContextArgs),
 }
 
 #[derive(Debug, Args)]
@@ -427,6 +448,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),
+        Some(AgentsSubcmd::RefreshContext(args)) => return refresh_context::run(args),
         Some(AgentsSubcmd::Budget(args)) => return run_budget(args, globals),
         Some(AgentsSubcmd::List {
             scope,

@@ -1,7 +1,7 @@
 //! `codex app-server`-shaped JSON-RPC stub for the hooks integration tests.
 //!
 //! Reads newline-delimited JSON-RPC requests on stdin and replies with canned
-//! results so the Codex context refresh (`rimz codex refresh-context`) can be
+//! results so the Codex context refresh (`rimz agents refresh-context`) can be
 //! exercised without the real `codex` binary. Tests point `RIMZ_CODEX_BIN` at
 //! this binary; the client spawns it as `<bin> app-server` (argv ignored).
 //! Notifications (no `id`) get no reply; the process exits on stdin EOF.
