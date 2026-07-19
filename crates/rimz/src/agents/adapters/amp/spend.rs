@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use crate::agents::pricing::PriceBook;
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, record_unknown_model};
+use crate::agents::pricing::{PriceBook, TokenSplit};
+use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, price_split};
 use crate::agents::transcript_fs::{expand_tilde, home_dir};
 
 use super::thread::{AmpThread, AmpUsage};
@@ -69,38 +69,17 @@ fn entry_from_usage(
     unknown_models: &mut BTreeMap<String, u64>,
 ) -> CachedEntry {
     let ts_secs = usage.at.as_second().max(0) as u64;
-    let cost_usd = match prices.price(&usage.model) {
-        Some(price) => price.cost(
-            usage.input,
-            usage.output,
-            usage.cache_write,
-            0,
-            usage.cache_read,
-            false,
-        ),
-        None => {
-            record_unknown_model(unknown_models, &usage.model, ts_secs);
-            0.0
-        }
-    };
+    let split =
+        TokenSplit::new(usage.input, usage.output).cached(usage.cache_write, usage.cache_read);
+    let cost_usd = price_split(prices, &usage.model, split, ts_secs, unknown_models).unwrap_or(0.0);
     CachedEntry {
-        ts_secs,
-        cost_usd,
-        input: usage.input,
-        output: usage.output,
-        cache_write: usage.cache_write,
-        cache_read: usage.cache_read,
-        message_id: None,
-        request_id: None,
         dedup_key: usage
             .native_id
             .as_ref()
             .map(|id| format!("amp:{thread_id}:{id}")),
         thread_id: Some(thread_id.to_owned()),
-        is_sidechain: false,
-        has_speed: false,
         model: Some(usage.model.clone()),
-        rolled: false,
+        ..CachedEntry::new(ts_secs, cost_usd, &split)
     }
 }
 

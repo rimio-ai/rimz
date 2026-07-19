@@ -102,7 +102,7 @@ pub(crate) use payload::{
     CONTROL_TAG_PREFIXES, non_empty_trimmed, optional_payload_string, sanitize_user_prompt,
     stop_payload_errored,
 };
-pub use pricing::{PriceBook, Pricing};
+pub use pricing::{PriceBook, Pricing, TokenSplit};
 pub use registry::{
     all_definitions, definition_by_kind, find_definition, known_kinds, resumed_session_id_for_root,
     resumed_session_id_from_cmdline, spec_by_kind,

@@ -20,7 +20,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 
 use super::database::{MessageTime, open_readonly};
-use crate::agents::pricing::PriceBook;
+use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, origin_path, record_unknown_model,
 };
@@ -206,17 +206,10 @@ fn parse_message_entry(
         .and_then(|time| time.created)
         .map(|millis| millis / 1000)
         .unwrap_or(0);
+    let split = TokenSplit::new(input, output).cached(cache_write, cache_read);
     let mut cost = message.cost.unwrap_or(0.0);
     if cost <= 0.0 {
-        cost = match price_tokens(
-            prices,
-            model,
-            provider,
-            input,
-            output,
-            cache_read,
-            cache_write,
-        ) {
+        cost = match price_tokens(prices, model, provider, split) {
             Some(cost) => cost,
             None => {
                 record_unknown_model(unknown_models, model, ts_secs);
@@ -232,20 +225,9 @@ fn parse_message_entry(
 
     Some((
         CachedEntry {
-            ts_secs,
-            cost_usd: cost,
-            input,
-            output,
-            cache_write,
-            cache_read,
-            message_id: None,
-            request_id: None,
-            dedup_key: None,
             thread_id,
-            is_sidechain: false,
-            has_speed: false,
             model: Some(model.to_owned()),
-            rolled: false,
+            ..CachedEntry::new(ts_secs, cost, &split)
         },
         origin,
     ))
@@ -255,23 +237,11 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-fn price_tokens(
-    prices: &PriceBook,
-    model: &str,
-    provider: &str,
-    input: u64,
-    output: u64,
-    cache_read: u64,
-    cache_write: u64,
-) -> Option<f64> {
-    for candidate in model_candidates(model, provider) {
-        let Some(price) = prices.price(&candidate) else {
-            continue;
-        };
-        let cost = price.cost(input, output, cache_write, 0, cache_read, false);
-        return Some(cost);
-    }
-    None
+fn price_tokens(prices: &PriceBook, model: &str, provider: &str, split: TokenSplit) -> Option<f64> {
+    model_candidates(model, provider)
+        .into_iter()
+        .find_map(|candidate| prices.price(&candidate))
+        .map(|price| price.cost_of(split))
 }
 
 fn model_candidates(model: &str, provider: &str) -> Vec<String> {

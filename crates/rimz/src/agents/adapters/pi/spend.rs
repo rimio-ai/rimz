@@ -33,10 +33,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::pricing::PriceBook;
-use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, origin_path, record_unknown_model,
-};
+use crate::agents::pricing::{PriceBook, TokenSplit};
+use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path, price_split};
 
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
@@ -237,38 +235,25 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
             .as_ref()
             .and_then(|cost| cost.total)
             .filter(|cost| *cost >= 0.0);
+        let split = TokenSplit::new(input, output).cached(cache_write, cache_read);
         let cost = match direct_cost {
             Some(cost) => cost,
-            None => match msg.model.as_deref().and_then(|model| prices.price(model)) {
-                Some(price) => price.cost(input, output, cache_write, 0, cache_read, false),
-                None => {
-                    if let Some(model) = msg.model.as_deref()
-                        && token_total > 0
-                    {
-                        record_unknown_model(&mut unknown_models, model, ts_secs);
-                    }
-                    0.0
+            // A model that consumed no tokens is not evidence the price book is
+            // missing an entry, so an empty turn never joins the unknown chase —
+            // and prices to zero either way.
+            None => match msg.model.as_deref() {
+                Some(model) if token_total > 0 => {
+                    price_split(prices, model, split, ts_secs, &mut unknown_models).unwrap_or(0.0)
                 }
+                _ => 0.0,
             },
         };
         if token_total == 0 && cost <= 0.0 {
             continue;
         }
         out.push(CachedEntry {
-            ts_secs,
-            cost_usd: cost,
-            input,
-            output,
-            cache_write,
-            cache_read,
-            message_id: None,
-            request_id: None,
-            dedup_key: None,
-            thread_id: None,
-            is_sidechain: false,
-            has_speed: false,
             model: msg.model.clone(),
-            rolled: false,
+            ..CachedEntry::new(ts_secs, cost, &split)
         });
     }
     SpendParse {

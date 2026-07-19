@@ -73,8 +73,8 @@ pub use publish::{
     write_workspace_spending_cache,
 };
 pub(crate) use refresh::{
-    RefreshCallbacks, is_priceable_model_name, record_unknown_model, recorded_unknown_models,
-    refresh_spending_cache,
+    RefreshCallbacks, is_priceable_model_name, price_split, record_unknown_model,
+    recorded_unknown_models, refresh_spending_cache,
 };
 pub(crate) use time::iso_to_unix_secs;
 pub use time::{unix_secs_now, utc_date};

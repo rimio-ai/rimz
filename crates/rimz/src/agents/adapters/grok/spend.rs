@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path};
-use crate::agents::{PriceBook, read_transcript_lines};
+use crate::agents::{PriceBook, TokenSplit, read_transcript_lines};
 
 use super::transcript::{self, ModelUsage, TurnCompletion};
 
@@ -234,21 +234,19 @@ fn entry(
     totals: Totals,
 ) -> CachedEntry {
     let model_key = model.unwrap_or("aggregate");
+    // Grok reports `input_tokens` inclusive of the cached slice, and bills in
+    // exact ticks — the price book is never consulted.
+    let split = TokenSplit::new(
+        totals.input.saturating_sub(totals.cache_read),
+        totals.output,
+    )
+    .cached(0, totals.cache_read);
+    let cost_usd = totals.cost_ticks as f64 / USD_TICKS_PER_USD;
     CachedEntry {
-        ts_secs,
-        cost_usd: totals.cost_ticks as f64 / USD_TICKS_PER_USD,
-        input: totals.input.saturating_sub(totals.cache_read),
-        output: totals.output,
-        cache_write: 0,
-        cache_read: totals.cache_read,
-        message_id: None,
-        request_id: None,
         dedup_key: Some(format!("grok:{session_id}:{prompt_id}:{model_key}")),
         thread_id: Some(session_id.to_owned()),
-        is_sidechain: false,
-        has_speed: false,
         model: model.map(ToOwned::to_owned),
-        rolled: false,
+        ..CachedEntry::new(ts_secs, cost_usd, &split)
     }
 }
 

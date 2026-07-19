@@ -5,8 +5,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::pricing::PriceBook;
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, record_unknown_model};
+use crate::agents::pricing::{PriceBook, TokenSplit};
+use crate::agents::spending::{
+    CachedEntry, SpendCursor, SpendParse, price_split, record_unknown_model,
+};
 
 use super::wire;
 
@@ -101,23 +103,19 @@ fn fold_records(
         let cache_write = usage.input_cache_creation.unwrap_or(0);
         let output = usage.output.unwrap_or(0);
         let ts_secs = (timestamp / 1_000.0) as u64;
-        let cost_usd = match model.as_deref().and_then(|model| prices.price(model)) {
-            Some(price) => price.cost(fresh, output, cache_write, 0, cache_read, false),
+        let split = TokenSplit::new(fresh, output).cached(cache_write, cache_read);
+        // `model` is already filtered to a name the book prices; an unresolved
+        // one reports under the alias label the wire showed, not the id.
+        let cost_usd = match model.as_deref() {
+            Some(model) => {
+                price_split(prices, model, split, ts_secs, &mut unknown_models).unwrap_or(0.0)
+            }
             None => {
                 record_unknown_model(&mut unknown_models, &model_label, ts_secs);
                 0.0
             }
         };
         entries.push(CachedEntry {
-            ts_secs,
-            cost_usd,
-            input: fresh,
-            output,
-            cache_write,
-            cache_read,
-            message_id: None,
-            request_id: None,
-            dedup_key: None,
             thread_id: path
                 .parent()
                 .and_then(Path::parent)
@@ -125,10 +123,8 @@ fn fold_records(
                 .and_then(Path::file_name)
                 .and_then(|name| name.to_str())
                 .map(ToOwned::to_owned),
-            is_sidechain: false,
-            has_speed: false,
             model: Some(model_label),
-            rolled: false,
+            ..CachedEntry::new(ts_secs, cost_usd, &split)
         });
     }
     SpendParse {

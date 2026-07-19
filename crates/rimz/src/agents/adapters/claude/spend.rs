@@ -31,10 +31,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::agents::pricing::PriceBook;
+use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, is_priceable_model_name, iso_to_unix_secs, origin_path,
-    record_unknown_model,
+    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, price_split,
 };
 
 use crate::agents::transcript_fs::{bytes_contains, expand_tilde, home_dir, read_spend_lines};
@@ -410,8 +409,6 @@ fn usage_entry(
     prices: &PriceBook,
     unknown_models: &mut BTreeMap<String, u64>,
 ) -> Option<CachedEntry> {
-    let input = usage.input_tokens.unwrap_or(0);
-    let output = usage.output_tokens.unwrap_or(0);
     let (cache_5m, cache_1h) = usage
         .cache_creation
         .as_ref()
@@ -422,9 +419,18 @@ fn usage_entry(
             )
         })
         .unwrap_or((usage.cache_creation_input_tokens.unwrap_or(0), 0));
-    let cache_write = cache_5m + cache_1h;
-    let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
-    if input == 0 && output == 0 && cache_write == 0 && cache_read == 0 {
+    // Claude reports the four token components separately, and prices the two
+    // cache-creation tiers at different rates; `input_tokens` is already the
+    // fresh (uncached) slice. The stored entry carries the tiers summed.
+    let split = TokenSplit {
+        input: usage.input_tokens.unwrap_or(0),
+        output: usage.output_tokens.unwrap_or(0),
+        cache_write: cache_5m,
+        cache_write_1h: cache_1h,
+        cache_read: usage.cache_read_input_tokens.unwrap_or(0),
+        fast: usage.speed.as_deref() == Some("fast"),
+    };
+    if split.is_empty() {
         return None;
     }
 
@@ -433,49 +439,20 @@ fn usage_entry(
     // usage through the model table, since current transcripts omit it. An
     // entry that has usage but no known model price still contributes tokens
     // and sessions with zero dollars while the unknown-model chase refreshes
-    // pricing for the next producer pass.
+    // pricing for the next producer pass; a name that is no model at all drops
+    // the entry outright.
     let cost_usd = match logged_cost {
         Some(cost) if cost > 0.0 => cost,
-        _ => {
-            let model = model?;
-            match prices.price(model) {
-                Some(price) => price.cost(
-                    input,
-                    output,
-                    cache_5m,
-                    cache_1h,
-                    cache_read,
-                    usage.speed.as_deref() == Some("fast"),
-                ),
-                None => {
-                    if !is_priceable_model_name(model) {
-                        return None;
-                    }
-                    record_unknown_model(unknown_models, model, meta.ts_secs);
-                    0.0
-                }
-            }
-        }
+        _ => price_split(prices, model?, split, meta.ts_secs, unknown_models)?,
     };
 
-    // Claude reports the four token components separately; `input_tokens` is
-    // already the fresh (uncached) slice. Window aggregation folds cache
-    // creation into input/total, while cache reads ride their own field.
     Some(CachedEntry {
-        ts_secs: meta.ts_secs,
-        cost_usd,
-        input,
-        output,
-        cache_write,
-        cache_read,
         message_id: meta.message_id,
         request_id: meta.request_id,
-        dedup_key: None,
-        thread_id: None,
         is_sidechain: meta.is_sidechain,
         has_speed: usage.speed.is_some(),
         model: model.map(str::to_owned),
-        rolled: false,
+        ..CachedEntry::new(meta.ts_secs, cost_usd, &split)
     })
 }
 

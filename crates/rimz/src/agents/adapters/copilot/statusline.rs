@@ -357,6 +357,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::agents::pricing::TokenSplit;
 
     fn context(value: Value) -> Option<AgentContext> {
         StatuslinePayload::parse(&value)?
@@ -429,7 +430,7 @@ mod tests {
             .total_cost_usd
             .unwrap();
         let expected = price.session_cost(200_000, 1_000, 0, 300_000);
-        let old_cumulative = price.cost(200_000, 1_000, 0, 0, 300_000, false);
+        let old_cumulative = price.cost_of(TokenSplit::new(200_000, 1_000).cached(0, 300_000));
 
         assert!((actual - expected).abs() < f64::EPSILON);
         assert!(actual < old_cumulative);

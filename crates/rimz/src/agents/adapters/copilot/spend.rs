@@ -12,13 +12,13 @@ use serde_json::Value;
 
 use super::paths;
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, record_unknown_model,
+    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, price_split,
 };
 use crate::agents::transcript_fs::{
     deserialize_optional_object_lossy, deserialize_optional_string_lossy,
     deserialize_optional_u64_lossy,
 };
-use crate::agents::{PriceBook, read_transcript_lines};
+use crate::agents::{PriceBook, TokenSplit, read_transcript_lines};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -268,29 +268,15 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
                     if delta.total() == 0 {
                         continue;
                     }
-                    let cost_usd = match prices.price(&model) {
-                        Some(price) => price.cost(
-                            delta.input.unwrap_or(0),
-                            delta.output.unwrap_or(0),
-                            delta.cache_write.unwrap_or(0),
-                            0,
-                            delta.cache_read.unwrap_or(0),
-                            false,
-                        ),
-                        None => {
-                            record_unknown_model(&mut unknown_models, &model, ts_secs);
-                            0.0
-                        }
-                    };
+                    let split =
+                        TokenSplit::new(delta.input.unwrap_or(0), delta.output.unwrap_or(0))
+                            .cached(
+                                delta.cache_write.unwrap_or(0),
+                                delta.cache_read.unwrap_or(0),
+                            );
+                    let cost_usd = price_split(prices, &model, split, ts_secs, &mut unknown_models)
+                        .unwrap_or(0.0);
                     entries.push(CachedEntry {
-                        ts_secs,
-                        cost_usd,
-                        input: delta.input.unwrap_or(0),
-                        output: delta.output.unwrap_or(0),
-                        cache_write: delta.cache_write.unwrap_or(0),
-                        cache_read: delta.cache_read.unwrap_or(0),
-                        message_id: None,
-                        request_id: None,
                         dedup_key: Some(dedup_key(
                             &session_id,
                             id.as_deref(),
@@ -299,10 +285,8 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
                             current,
                         )),
                         thread_id: Some(session_id.clone()),
-                        is_sidechain: false,
-                        has_speed: false,
                         model: Some(model),
-                        rolled: false,
+                        ..CachedEntry::new(ts_secs, cost_usd, &split)
                     });
                 }
             }

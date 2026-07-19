@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::agents::pricing::PriceBook;
+use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, record_unknown_model,
+    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, price_split,
 };
 use crate::agents::transcript_fs::home_dir;
 
@@ -84,28 +84,14 @@ fn priced_entry(
     let input = usage.uncached_prompt();
     let output = usage.output();
     let cached = usage.cache_read();
-    let cost_usd = match prices.price(model) {
-        Some(price) => price.cost(input, output, 0, 0, cached, false),
-        None => {
-            record_unknown_model(unknown_models, model, timestamp);
-            0.0
-        }
-    };
+    let split = TokenSplit::new(input, output).cached(0, cached);
+    let cost_usd = price_split(prices, model, split, timestamp, unknown_models).unwrap_or(0.0);
     Some(CachedEntry {
-        ts_secs: timestamp,
-        cost_usd,
-        input,
-        output,
-        cache_write: 0,
-        cache_read: cached,
         message_id: record.uuid.clone(),
-        request_id: None,
-        dedup_key: None,
         thread_id: record.session_id.clone(),
         is_sidechain: record.is_sidechain == Some(true) || record.agent_id.is_some(),
-        has_speed: false,
         model: Some(model.to_owned()),
-        rolled: false,
+        ..CachedEntry::new(timestamp, cost_usd, &split)
     })
 }
 

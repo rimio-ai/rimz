@@ -7,7 +7,7 @@ use std::sync::{
     mpsc,
 };
 
-use crate::agents::pricing::PriceBook;
+use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::{AgentDefinition, TranscriptStat};
 
 use super::aggregate::stamp_file_origin;
@@ -286,6 +286,32 @@ pub(crate) fn record_unknown_model(
         .entry(model.to_owned())
         .and_modify(|seen| *seen = (*seen).max(ts_secs))
         .or_insert(ts_secs);
+}
+
+/// Price one token split for `model`, folding the unknown-model policy every
+/// adapter shares.
+///
+/// An unpriced but plausible model name records into `unknowns` and costs zero,
+/// so the entry still carries its token counts while the unknown-model chase
+/// refreshes pricing for the next producer pass. `None` says `model` is not a
+/// model name at all (empty, or a `<…>` placeholder), leaving the caller its
+/// own policy: `?` to drop the entry, `.unwrap_or(0.0)` to keep its tokens at
+/// zero cost.
+pub(crate) fn price_split(
+    prices: &PriceBook,
+    model: &str,
+    split: TokenSplit,
+    ts_secs: u64,
+    unknowns: &mut BTreeMap<String, u64>,
+) -> Option<f64> {
+    if let Some(price) = prices.price(model) {
+        return Some(price.cost_of(split));
+    }
+    if !is_priceable_model_name(model) {
+        return None;
+    }
+    record_unknown_model(unknowns, model, ts_secs);
+    Some(0.0)
 }
 
 /// Unknown models recorded by files still discovered in this spending pass.

@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::agents::pricing::TokenSplit;
 use crate::agents::{AgentDefinition, TranscriptStat};
 
 use super::aggregate::{
@@ -155,7 +156,7 @@ pub struct SpendParse {
 /// no message ID. `thread_id` is present when the provider's durable transcript
 /// store exposes a native session id. `is_sidechain` drives the sidechain-replay
 /// suppression logic in the spending walk.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
     /// `timestamp` via [`iso_to_unix_secs`]. Drives the trailing-window bucketing
@@ -213,6 +214,25 @@ pub struct CachedEntry {
     /// counts exact.
     #[serde(default, rename = "d", skip_serializing_if = "is_false")]
     pub rolled: bool,
+}
+
+impl CachedEntry {
+    /// One priced entry from a token split. Cache-creation tokens are stored
+    /// summed: the 5-minute/1-hour distinction is a pricing input, never a
+    /// stored fact. Provider-specific identity — model, dedup keys, thread id,
+    /// sidechain and speed flags — is filled by the adapter through struct
+    /// update.
+    pub fn new(ts_secs: u64, cost_usd: f64, split: &TokenSplit) -> Self {
+        Self {
+            ts_secs,
+            cost_usd,
+            input: split.input,
+            output: split.output,
+            cache_write: split.cache_write.saturating_add(split.cache_write_1h),
+            cache_read: split.cache_read,
+            ..Self::default()
+        }
+    }
 }
 
 fn is_false(value: &bool) -> bool {

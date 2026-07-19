@@ -32,8 +32,8 @@ use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation,
-    LocallyPricedTurnCost, PriceBook, Result, SubagentIdentity, locate_binary, non_empty_trimmed,
-    resolve_subagent_identity, sanitize_user_prompt,
+    LocallyPricedTurnCost, PriceBook, Result, SubagentIdentity, TokenSplit, locate_binary,
+    non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -526,13 +526,13 @@ impl crate::agents::capabilities::ContextCapability for CursorAdapter {
         };
         let price = prices.price(price_key)?;
         // Each generation id identifies one turn, so one-request pricing applies.
-        let cost_usd = price.cost(
-            usage.fresh_input.unwrap_or(0),
-            usage.output.unwrap_or(0),
-            usage.cache_write.unwrap_or(0),
-            0,
-            usage.cache_read.unwrap_or(0),
-            model.to_ascii_lowercase().ends_with("-fast"),
+        let cost_usd = price.cost_of(
+            TokenSplit::new(usage.fresh_input.unwrap_or(0), usage.output.unwrap_or(0))
+                .cached(
+                    usage.cache_write.unwrap_or(0),
+                    usage.cache_read.unwrap_or(0),
+                )
+                .fast(model.to_ascii_lowercase().ends_with("-fast")),
         );
         (cost_usd.is_finite() && cost_usd > 0.0)
             .then_some(LocallyPricedTurnCost { turn_id, cost_usd })

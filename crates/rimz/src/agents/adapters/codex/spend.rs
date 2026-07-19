@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::LocalSpendFold;
-use crate::agents::pricing::{PriceBook, Pricing};
+use crate::agents::pricing::{PriceBook, Pricing, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, record_unknown_model,
 };
@@ -113,36 +113,22 @@ pub(crate) fn parse_codex_spend(
         let Some(ts_secs) = iso_to_unix_secs(&event.timestamp) else {
             continue;
         };
+        // Codex has no cache-creation concept: its cached slice is a read. The `◇`
+        // total is fresh input + output, so `input` is the uncached slice and the
+        // cached slice rides `cache_read`.
+        let split = TokenSplit::new(uncached_input, event.output_tokens)
+            .cached(0, event.cached_input_tokens);
         let cost = match prices.price(model) {
-            Some(price) => codex_event_cost(
-                price,
-                uncached_input,
-                event.cached_input_tokens,
-                event.output_tokens,
-            ),
+            Some(price) => price.cost_of(codex_billed_split(price, split)),
             None => {
                 record_unknown_model(&mut unknown_models, model, ts_secs);
                 0.0
             }
         };
-        // Codex has no cache-creation concept: its cached slice is a read. The `◇`
-        // total is fresh input + output, so `input` is the uncached slice and the
-        // cached slice rides `cache_read`.
         out.push(CachedEntry {
-            ts_secs,
-            cost_usd: cost,
-            input: uncached_input,
-            output: event.output_tokens,
-            cache_write: 0,
-            cache_read: event.cached_input_tokens,
-            message_id: None,
-            request_id: None,
             dedup_key: Some(codex_event_dedup_key(&event.timestamp, model, &event)),
-            thread_id: None,
-            is_sidechain: false,
-            has_speed: false,
             model: Some(model.to_owned()),
-            rolled: false,
+            ..CachedEntry::new(ts_secs, cost, &split)
         });
     }
     SpendParse {
@@ -183,26 +169,19 @@ pub(crate) fn resume_live_fold(
     fold
 }
 
-/// Price one Codex token event. Codex bills cached input at the model's
-/// cache-read rate only when that rate is explicit in the pricing entry;
-/// otherwise the cached slice is billed at the full input rate, matching
-/// ccusage's Codex cost path (a Codex model without a discounted cache-read
-/// rate does not discount cached tokens). rimz's shared [`Pricing::cost`] always
+/// Reshape a stored Codex split into the one Codex actually bills. Codex bills
+/// cached input at the model's cache-read rate only when that rate is explicit
+/// in the pricing entry; otherwise the cached slice is billed at the full input
+/// rate, matching ccusage's Codex cost path (a Codex model without a discounted
+/// cache-read rate does not discount cached tokens). [`Pricing::cost_of`] always
 /// applies `cache_read`, so an implicit rate folds the cached slice into the
-/// input argument to price it at the input rate — the long-context threshold
-/// still sees the same total request size either way.
-fn codex_event_cost(price: Pricing, uncached_input: u64, cached_input: u64, output: u64) -> f64 {
+/// input field to price it at the input rate — the long-context threshold still
+/// sees the same total request size either way.
+fn codex_billed_split(price: Pricing, split: TokenSplit) -> TokenSplit {
     if price.cache_read_explicit {
-        price.cost(uncached_input, output, 0, 0, cached_input, false)
+        split
     } else {
-        price.cost(
-            uncached_input.saturating_add(cached_input),
-            output,
-            0,
-            0,
-            0,
-            false,
-        )
+        TokenSplit::new(split.input.saturating_add(split.cache_read), split.output)
     }
 }
 

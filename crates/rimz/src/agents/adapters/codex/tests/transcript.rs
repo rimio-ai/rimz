@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{PriceBook, SessionOrigin, TranscriptStat};
+use crate::agents::{PriceBook, SessionOrigin, TokenSplit, TranscriptStat};
 
 #[test]
 fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
@@ -1189,8 +1189,8 @@ fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
         .total_cost_usd
         .unwrap();
     let price = PriceBook::embedded().price("gpt-5.6-sol").unwrap();
-    let per_request = price.cost(50_000, 1_000, 0, 0, 150_000, false);
-    let old_cumulative = price.cost(100_000, 2_000, 0, 0, 300_000, false);
+    let per_request = price.cost_of(TokenSplit::new(50_000, 1_000).cached(0, 150_000));
+    let old_cumulative = price.cost_of(TokenSplit::new(100_000, 2_000).cached(0, 300_000));
 
     assert!((actual - per_request * 2.0).abs() < 1e-12);
     assert!(actual < old_cumulative);

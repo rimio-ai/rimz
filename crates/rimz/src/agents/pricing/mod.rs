@@ -44,6 +44,61 @@ pub(crate) const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
 const DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 200_000;
 const OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 272_000;
 
+/// The token counts one priced request consumed. Providers fill the fields
+/// their wire exposes and leave the rest at zero; `cache_write_1h` and `fast`
+/// carry Claude's cache-tier and priority-turn distinctions, which every other
+/// provider leaves at the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TokenSplit {
+    /// Fresh (uncached) input tokens.
+    pub input: u64,
+    /// Output tokens, already including reasoning tokens.
+    pub output: u64,
+    /// Cache-creation tokens billed at the 5-minute rate.
+    pub cache_write: u64,
+    /// Cache-creation tokens billed at the 1-hour rate.
+    pub cache_write_1h: u64,
+    /// Cache-read (prompt-cache-hit) input tokens.
+    pub cache_read: u64,
+    /// The provider recorded a fast/priority turn.
+    pub fast: bool,
+}
+
+impl TokenSplit {
+    /// The uncached case: fresh input and output only.
+    pub fn new(input: u64, output: u64) -> Self {
+        Self {
+            input,
+            output,
+            ..Self::default()
+        }
+    }
+
+    /// Add 5-minute cache-creation and cache-read counts.
+    pub fn cached(self, cache_write: u64, cache_read: u64) -> Self {
+        Self {
+            cache_write,
+            cache_read,
+            ..self
+        }
+    }
+
+    /// Mark the turn as fast/priority, applying the model's fast multiplier.
+    pub fn fast(self, fast: bool) -> Self {
+        Self { fast, ..self }
+    }
+
+    /// The request consumed no tokens at all. The tier flags are not counts, so
+    /// a `fast` turn with empty usage is still empty.
+    pub fn is_empty(&self) -> bool {
+        self.input == 0
+            && self.output == 0
+            && self.cache_write == 0
+            && self.cache_write_1h == 0
+            && self.cache_read == 0
+    }
+}
+
 /// Per-token costs in USD for one model.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pricing {
@@ -126,15 +181,15 @@ impl Pricing {
         }
     }
 
-    pub(crate) fn cost(
-        self,
-        input: u64,
-        output: u64,
-        cache_5m: u64,
-        cache_1h: u64,
-        cache_read: u64,
-        fast: bool,
-    ) -> f64 {
+    pub(crate) fn cost_of(self, split: TokenSplit) -> f64 {
+        let TokenSplit {
+            input,
+            output,
+            cache_write: cache_5m,
+            cache_write_1h: cache_1h,
+            cache_read,
+            fast,
+        } = split;
         let cache_1h_cost = self.input * CACHE_CREATE_1H_INPUT_MULTIPLIER;
         let cache_1h_above = self
             .input_above_200k
@@ -761,10 +816,10 @@ mod tests {
             Some(OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS)
         );
 
-        let short = price.cost(100_000, 1_000, 0, 0, 100, false);
+        let short = price.cost_of(TokenSplit::new(100_000, 1_000).cached(0, 100));
         assert!((short - 0.53005).abs() < 1e-9, "short cost was {short}");
 
-        let long = price.cost(300_000, 1_000, 0, 0, 100, false);
+        let long = price.cost_of(TokenSplit::new(300_000, 1_000).cached(0, 100));
         assert!((long - 3.0451).abs() < 1e-9, "long cost was {long}");
     }
 
@@ -777,7 +832,8 @@ mod tests {
             + 20_000.0 * price.cache_create
             + 400_000.0 * price.cache_read;
         assert!((cost - expected).abs() < f64::EPSILON);
-        assert_ne!(cost, price.cost(500_000, 10_000, 20_000, 0, 400_000, true));
+        let split = TokenSplit::new(500_000, 10_000).cached(20_000, 400_000);
+        assert_ne!(cost, price.cost_of(split.fast(true)));
     }
 
     #[test]

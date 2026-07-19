@@ -8,7 +8,7 @@ use crate::agents::context::{
     clamp_pct,
 };
 use crate::agents::payload::non_empty_trimmed;
-use crate::agents::pricing::PriceBook;
+use crate::agents::pricing::{PriceBook, TokenSplit};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -124,13 +124,15 @@ impl StatuslinePayload {
                 .find_map(|key| prices.exact_price(&key))
         })?;
         // This wire reports current context occupancy, so one-request pricing applies.
-        let total_cost_usd = price.cost(
-            usage.input_tokens.unwrap_or(0),
-            usage.output_tokens.unwrap_or(0),
-            usage.cache_creation_input_tokens.unwrap_or(0),
-            0,
-            usage.cache_read_input_tokens.unwrap_or(0),
-            false,
+        let total_cost_usd = price.cost_of(
+            TokenSplit::new(
+                usage.input_tokens.unwrap_or(0),
+                usage.output_tokens.unwrap_or(0),
+            )
+            .cached(
+                usage.cache_creation_input_tokens.unwrap_or(0),
+                usage.cache_read_input_tokens.unwrap_or(0),
+            ),
         );
         (total_cost_usd.is_finite() && total_cost_usd > 0.0).then(|| AgentCost {
             total_cost_usd: Some(total_cost_usd),

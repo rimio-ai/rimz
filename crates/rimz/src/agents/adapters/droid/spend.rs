@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::agents::pricing::PriceBook;
+use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse};
 use crate::agents::{AgentCost, AgentSessionUsage};
 
@@ -44,7 +44,7 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
     let Some(usage) = snapshot.telemetry.session_usage else {
         return SpendParse::default();
     };
-    let Some(priced) = price_exact_model(&canonical, &usage, prices) else {
+    let Some((split, cost_usd)) = price_exact_model(&canonical, &usage, prices) else {
         return SpendParse::default();
     };
     let Some(session_id) = session_id(&snapshot.settings_path) else {
@@ -52,20 +52,10 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
     };
     let ts_secs = snapshot.stat.mtime_secs.max(0) as u64;
     let entry = CachedEntry {
-        ts_secs,
-        cost_usd: priced.cost_usd,
-        input: priced.input,
-        output: priced.output,
-        cache_write: priced.cache_write,
-        cache_read: priced.cache_read,
-        message_id: None,
-        request_id: None,
         dedup_key: Some(format!("droid-settings:{session_id}")),
         thread_id: Some(session_id),
-        is_sidechain: false,
-        has_speed: false,
         model: Some(canonical),
-        rolled: false,
+        ..CachedEntry::new(ts_secs, cost_usd, &split)
     };
     SpendParse {
         entries: vec![entry],
@@ -76,38 +66,30 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct PricedUsage {
-    input: u64,
-    output: u64,
-    cache_write: u64,
-    cache_read: u64,
-    cost_usd: f64,
-}
-
+/// Droid's settings snapshot carries session-cumulative totals against an
+/// exactly-named model; an unknown name yields no entry at all rather than a
+/// zero-cost one, so the cumulative row never lands unpriced.
 fn price_exact_model(
     model: &str,
     usage: &AgentSessionUsage,
     prices: &PriceBook,
-) -> Option<PricedUsage> {
+) -> Option<(TokenSplit, f64)> {
     let price = prices.exact_price(model)?;
-    let input = usage.input_tokens.unwrap_or(0);
-    let output = usage
-        .output_tokens
-        .unwrap_or(0)
-        .saturating_add(usage.thinking_tokens.unwrap_or(0));
-    let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
-    let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
-    if input == 0 && output == 0 && cache_write == 0 && cache_read == 0 {
+    let split = TokenSplit::new(
+        usage.input_tokens.unwrap_or(0),
+        usage
+            .output_tokens
+            .unwrap_or(0)
+            .saturating_add(usage.thinking_tokens.unwrap_or(0)),
+    )
+    .cached(
+        usage.cache_creation_input_tokens.unwrap_or(0),
+        usage.cache_read_input_tokens.unwrap_or(0),
+    );
+    if split == TokenSplit::default() {
         return None;
     }
-    Some(PricedUsage {
-        input,
-        output,
-        cache_write,
-        cache_read,
-        cost_usd: price.cost(input, output, cache_write, 0, cache_read, false),
-    })
+    Some((split, price.cost_of(split)))
 }
 
 pub(super) fn live_cost(
@@ -115,9 +97,9 @@ pub(super) fn live_cost(
     usage: Option<&AgentSessionUsage>,
     prices: &PriceBook,
 ) -> Option<AgentCost> {
-    let priced = price_exact_model(model?, usage?, prices)?;
+    let (_, cost_usd) = price_exact_model(model?, usage?, prices)?;
     Some(AgentCost {
-        total_cost_usd: Some(priced.cost_usd),
+        total_cost_usd: Some(cost_usd),
         ..AgentCost::default()
     })
 }
