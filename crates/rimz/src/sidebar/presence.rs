@@ -14,7 +14,9 @@ use crate::diag::DiagSink;
 use crate::diag::plugin_presence::{PluginPresenceSample, WASM_PAGE_BYTES};
 use crate::diag::record::DiagEvent;
 use crate::ids::{MuxName, PaneId};
-use crate::mux::zellij::pane_topology::{PaneTopologyCache, TopologyWriter};
+use crate::mux::zellij::pane_topology::{
+    PaneTopologyCache, SwitchVerdict, TopologyWriter, classify_switch_settled,
+};
 use crate::sidebar::cache::{
     PresenceDesired, pane_topology_cache_is_fresh, read_pane_topology_cache, read_presence_desired,
     write_pane_topology_cache, write_presence_stamp,
@@ -37,6 +39,7 @@ pub enum ZellijWakeReason {
     Announced,
     Alive,
     FocusStranded,
+    SwitchSettled,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,6 +63,7 @@ pub struct ZellijWake {
     pub reason: ZellijWakeReason,
     pub session_name: Option<String>,
     pub pane_id: Option<PaneId>,
+    pub active_tab: Option<u64>,
     pub focus_generation: Option<u64>,
     pub focus_clients: Vec<crate::mux::ClientPaneView>,
     pub topology: Option<PaneTopologyCache>,
@@ -95,6 +99,7 @@ pub fn ingest_zellij_wake(
     wake: &ZellijWake,
 ) -> Result<ZellijWakeOutcome, ZellijWakeError> {
     let mut events = Vec::new();
+    let mut accepted_topology = None;
     if let Some(incoming) = wake.topology.as_ref() {
         let _guard = crate::store::lock::WorkspaceLock::acquire_with_timeout(
             &runtime.topology_writer_lock(),
@@ -123,6 +128,7 @@ pub fn ingest_zellij_wake(
             wake.reason == ZellijWakeReason::Announced,
         );
         write_pane_topology_cache(runtime, &cache).map_err(ZellijWakeError::TopologyWrite)?;
+        accepted_topology = Some(cache);
         if let Some(existing) = existing.as_ref()
             && incoming.writer != existing.writer
         {
@@ -153,6 +159,27 @@ pub fn ingest_zellij_wake(
             generation,
             clients: wake.focus_clients.clone(),
         });
+    }
+    if wake.reason == ZellijWakeReason::SwitchSettled
+        && let (Some(active_tab), Some(generation), Some(session_name)) = (
+            wake.active_tab,
+            wake.focus_generation,
+            wake.session_name.as_deref(),
+        )
+    {
+        let topology = accepted_topology
+            .filter(|topology| topology.session_name == session_name)
+            .or_else(|| read_pane_topology_cache(runtime, session_name));
+        if let Some(SwitchVerdict::Stranded { pane_id }) = topology
+            .as_ref()
+            .and_then(|topology| classify_switch_settled(topology, active_tab, &wake.focus_clients))
+        {
+            events.push(SidebarEvent::FocusStranded {
+                pane_id,
+                generation,
+                clients: wake.focus_clients.clone(),
+            });
+        }
     }
     Ok(ZellijWakeOutcome::Accepted(events))
 }
@@ -424,11 +451,36 @@ mod tests {
         }
     }
 
+    fn topology_pane(
+        id: u64,
+        tab_position: u64,
+        title: &str,
+    ) -> crate::mux::zellij::pane_topology::PaneTopologyPane {
+        crate::mux::zellij::pane_topology::PaneTopologyPane {
+            id,
+            is_plugin: false,
+            is_held: false,
+            exited: false,
+            is_suppressed: false,
+            is_floating: false,
+            tab_position,
+            tab_name: None,
+            pane_columns: None,
+            pane_x: None,
+            title: Some(title.to_owned()),
+            pane_command: None,
+            pane_cwd: None,
+            pane_pid: None,
+            terminal_command: None,
+        }
+    }
+
     fn wake(reason: ZellijWakeReason) -> ZellijWake {
         ZellijWake {
             reason,
             session_name: Some("rimz-test".to_owned()),
             pane_id: None,
+            active_tab: None,
             focus_generation: None,
             focus_clients: Vec::new(),
             topology: None,
@@ -664,6 +716,33 @@ mod tests {
                 pane_id: zellij_pane("terminal_7"),
                 generation: 8,
                 clients: Vec::new(),
+            }]),
+        );
+    }
+
+    #[test]
+    fn settled_switch_classifies_against_the_accepted_topology() {
+        let (_dir, state, runtime) = paths();
+        let mut incoming = wake(ZellijWakeReason::SwitchSettled);
+        incoming.active_tab = Some(1);
+        incoming.focus_generation = Some(8);
+        incoming.focus_clients = vec![crate::mux::ClientPaneView {
+            client_id: crate::mux::MuxClientId::Zellij(1),
+            pane_id: zellij_pane("terminal_10"),
+        }];
+        let mut accepted = topology(unix_now_ms(), Some(writer(2, 200)));
+        accepted.panes = vec![
+            topology_pane(10, 1, crate::pane::SIDEBAR_CHROME_TITLE),
+            topology_pane(11, 1, "work"),
+        ];
+        incoming.topology = Some(accepted);
+
+        assert_eq!(
+            ingest_zellij_wake(&state, &runtime, &incoming).unwrap(),
+            ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusStranded {
+                pane_id: zellij_pane("terminal_10"),
+                generation: 8,
+                clients: incoming.focus_clients,
             }]),
         );
     }

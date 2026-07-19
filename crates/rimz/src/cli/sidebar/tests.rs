@@ -76,6 +76,28 @@ fn plugin_wake_argv_accepts_repeated_topology_chunks() {
 }
 
 #[test]
+fn settled_switch_wake_argv_parses() {
+    use clap::Parser;
+
+    crate::cli::Cli::try_parse_from([
+        "rimz",
+        "sidebar",
+        "wake",
+        "--reason",
+        "switch-settled",
+        "--session-name",
+        "rimz-test",
+        "--active-tab",
+        "1",
+        "--focus-generation",
+        "8",
+        "--focus-clients",
+        r#"[{"client_id":1,"pane_id":{"kind":"terminal","id":10}}]"#,
+    ])
+    .expect("settled switch wake parses");
+}
+
+#[test]
 fn gallery_argv_parses_pets_flag() {
     use clap::Parser;
 

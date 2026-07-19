@@ -185,6 +185,8 @@ struct WakeArgs {
     #[arg(long)]
     pane_id: Option<String>,
     #[arg(long, hide = true)]
+    active_tab: Option<u64>,
+    #[arg(long, hide = true)]
     focus_generation: Option<u64>,
     #[arg(long, hide = true)]
     focus_clients: Option<String>,
@@ -236,6 +238,7 @@ enum WakeReason {
     PaneOpened,
     PaneClosed,
     FocusStranded,
+    SwitchSettled,
     CommandChanged,
     FocusChanged,
     Alive,
@@ -250,6 +253,7 @@ impl From<WakeReason> for ZellijWakeReason {
             | WakeReason::CommandChanged
             | WakeReason::FocusChanged => Self::Announced,
             WakeReason::FocusStranded => Self::FocusStranded,
+            WakeReason::SwitchSettled => Self::SwitchSettled,
             WakeReason::Alive => Self::Alive,
         }
     }
@@ -378,6 +382,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 reason,
                 session_name,
                 pane_id,
+                active_tab,
                 focus_generation,
                 focus_clients,
                 _command_args: _,
@@ -404,6 +409,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     reason: reason.into(),
                     session_name,
                     pane_id: pane_id.map(|raw| PaneId::from_parts(MuxName::Zellij, raw)),
+                    active_tab,
                     focus_generation,
                     focus_clients: focus_clients
                         .as_deref()
