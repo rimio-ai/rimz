@@ -253,12 +253,9 @@ pub(crate) fn sweep_orphan_processes(
         let Some(process) = procs.iter().find(|process| process.pid == *pid) else {
             return false;
         };
-        let Some(candidate) = ProcessDomain::of_process(*pid) else {
-            return false;
-        };
         match required_domain_check(&process.cmdline) {
-            RequiredDomainCheck::World => own_domain.same_world(&candidate),
-            RequiredDomainCheck::Mux(mux) => own_domain.same_mux_endpoint(&candidate, mux),
+            RequiredDomainCheck::World => own_domain.same_world_as_process(*pid),
+            RequiredDomainCheck::Mux(mux) => own_domain.same_mux_endpoint_as_process(*pid, mux),
         }
     })
     .collect::<Vec<_>>();
@@ -298,10 +295,7 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
         .filter(|proc| proc.real_uid == my_uid)
         .filter(|proc| !protected.contains(&proc.pid))
         .filter(|proc| is_stats_refresh(&proc.cmdline))
-        .filter(|proc| {
-            ProcessDomain::of_process(proc.pid)
-                .is_some_and(|candidate| own_domain.same_world(&candidate))
-        })
+        .filter(|proc| own_domain.same_world_as_process(proc.pid))
         .map(|proc| proc.pid)
         .collect();
     for &pid in &targets {
@@ -382,10 +376,7 @@ pub(crate) fn kill_sidebar_serve_for_pane(
         .filter(|proc| !protected.contains(&proc.pid))
         .filter(|proc| is_sidebar_serve(&proc.cmdline, workspace_id, session_name))
         .filter(|proc| attributed_pane(proc.pid, mux).as_ref() == Some(pane))
-        .filter(|proc| {
-            ProcessDomain::of_process(proc.pid)
-                .is_some_and(|candidate| own_domain.same_mux_endpoint(&candidate, mux))
-        })
+        .filter(|proc| own_domain.same_mux_endpoint_as_process(proc.pid, mux))
         .map(|proc| proc.pid)
         .collect();
     kill_pids(&targets, SWEEP_GRACE).signalled.len()

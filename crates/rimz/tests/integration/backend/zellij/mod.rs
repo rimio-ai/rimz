@@ -21,7 +21,6 @@ macro_rules! require_zellij {
 }
 
 mod daemon;
-mod domain;
 mod launch;
 mod pane_io;
 mod presence;

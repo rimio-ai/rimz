@@ -54,15 +54,37 @@ mod linux {
             .env("TMPDIR", sandbox.path().join("tmp"));
         let sandboxed = ChildGuard::new(sandbox_command.spawn().expect("spawn sandboxed child"));
 
-        let current = rimz::mux::domain::ProcessDomain::current();
-        let inherited_domain = rimz::mux::domain::ProcessDomain::of_process(inherited.id())
-            .expect("read inherited child environment");
-        let sandboxed_domain = rimz::mux::domain::ProcessDomain::of_process(sandboxed.id())
-            .expect("read sandboxed child environment");
+        let alternate_zellij = tempfile::tempdir().expect("alternate zellij socket tempdir");
+        let mut alternate_zellij_command = sleep_command();
+        alternate_zellij_command.env("ZELLIJ_SOCKET_DIR", alternate_zellij.path());
+        let alternate_zellij_child = ChildGuard::new(
+            alternate_zellij_command
+                .spawn()
+                .expect("spawn same-world child with alternate Zellij endpoint"),
+        );
 
-        assert!(current.same_world(&inherited_domain));
-        assert!(!current.same_world(&sandboxed_domain));
-        assert_eq!(rimz::mux::domain::ProcessDomain::of_process(u32::MAX), None,);
+        let current = rimz::mux::domain::ProcessDomain::current();
+
+        assert!(current.same_world_as_process(inherited.id()));
+        assert!(current.same_mux_endpoint_as_process(inherited.id(), rimz::MuxName::Tmux));
+        assert!(current.same_mux_endpoint_as_process(inherited.id(), rimz::MuxName::Zellij));
+
+        assert!(!current.same_world_as_process(sandboxed.id()));
+        assert!(!current.same_mux_endpoint_as_process(sandboxed.id(), rimz::MuxName::Tmux));
+        assert!(!current.same_mux_endpoint_as_process(sandboxed.id(), rimz::MuxName::Zellij));
+
+        assert!(current.same_world_as_process(alternate_zellij_child.id()));
+        assert!(
+            current.same_mux_endpoint_as_process(alternate_zellij_child.id(), rimz::MuxName::Tmux,)
+        );
+        assert!(
+            !current
+                .same_mux_endpoint_as_process(alternate_zellij_child.id(), rimz::MuxName::Zellij,)
+        );
+
+        assert!(!current.same_world_as_process(u32::MAX));
+        assert!(!current.same_mux_endpoint_as_process(u32::MAX, rimz::MuxName::Tmux));
+        assert!(!current.same_mux_endpoint_as_process(u32::MAX, rimz::MuxName::Zellij));
     }
 
     fn spawn_sleep() -> std::io::Result<Child> {

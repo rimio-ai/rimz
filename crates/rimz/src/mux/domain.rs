@@ -46,6 +46,12 @@ impl ProcessDomain {
         self.state_home == other.state_home && self.runtime_home == other.runtime_home
     }
 
+    /// Whether `pid` shares RimZ's persistent and runtime state world.
+    /// Unreadable or vanished processes fail closed and are spared.
+    pub fn same_world_as_process(&self, pid: u32) -> bool {
+        Self::of_process(pid).is_some_and(|other| self.same_world(&other))
+    }
+
     /// Whether two processes share the state world and selected mux endpoint.
     pub fn same_mux_endpoint(&self, other: &Self, mux: MuxName) -> bool {
         self.same_world(other)
@@ -53,6 +59,12 @@ impl ProcessDomain {
                 MuxName::Zellij => self.zellij_socket_base == other.zellij_socket_base,
                 MuxName::Tmux => self.tmux_socket == other.tmux_socket,
             }
+    }
+
+    /// Whether `pid` shares the state world and selected mux endpoint.
+    /// Unreadable or vanished processes fail closed and are spared.
+    pub fn same_mux_endpoint_as_process(&self, pid: u32, mux: MuxName) -> bool {
+        Self::of_process(pid).is_some_and(|other| self.same_mux_endpoint(&other, mux))
     }
 
     fn from_env(get: impl Fn(&str) -> Option<String>, uid: u32) -> Self {

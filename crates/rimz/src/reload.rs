@@ -1002,10 +1002,7 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         },
         crate::proc::process_start,
         recovery::attributed_pane,
-        |pid| {
-            crate::mux::domain::ProcessDomain::of_process(pid)
-                .is_some_and(|candidate| own_domain.same_mux_endpoint(&candidate, mux))
-        },
+        |pid| own_domain.same_mux_endpoint_as_process(pid, mux),
     );
     if candidates.is_empty() {
         return 0;
