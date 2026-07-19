@@ -547,6 +547,51 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
 }
 
 #[test]
+fn wake_switch_settled_classifies_and_broadcasts_focus_repair() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let recv = env.bind_socket("sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    let mut topology = env.topology_cache(unix_now_ms());
+    topology.focused_pane = Some(6);
+    let topology_json = serde_json::to_string(&topology).expect("serialize topology");
+    let clients = r#"[{"client_id":1,"pane_id":{"kind":"terminal","id":6}}]"#;
+
+    let output = env.wake_with(
+        "switch-settled",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--active-tab",
+            "0",
+            "--focus-generation",
+            "3",
+            "--focus-clients",
+            clients,
+            "--topology",
+            &topology_json,
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let event = recv_sidebar_event(&recv, "eldest");
+    assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+    assert_eq!(event["event"]["kind"], "focus_stranded");
+    assert_eq!(event["event"]["pane_id"], "zellij:terminal_6");
+    assert_eq!(event["event"]["generation"], 3);
+    assert_eq!(event["event"]["clients"][0]["pane_id"], "zellij:terminal_6");
+    env.assert_no_mux_fork();
+}
+
+#[test]
 fn wake_alive_stamps_without_a_datagram() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {

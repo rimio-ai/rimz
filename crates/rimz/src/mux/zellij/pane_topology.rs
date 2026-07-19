@@ -9,6 +9,8 @@
 //! `pane_cwd` follows Zellij's cwd events and `pane_pid` identifies each pane's
 //! root process; targeted `/proc` reads supply cwd and resource enrichment.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{MuxName, PaneId};
@@ -79,15 +81,37 @@ impl PaneTopologyCache {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopologyClients {
-    pub human_clients: u32,
-    #[serde(default)]
-    pub viewed_panes: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_clients: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewed_panes: Option<Vec<u64>>,
     #[serde(default)]
     pub views: Vec<TopologyClientView>,
 }
 
 impl TopologyClients {
     fn into_client_view(self) -> ClientView {
+        let human_clients = self.human_clients.map_or_else(
+            || {
+                self.views
+                    .iter()
+                    .map(|view| view.client_id)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+            },
+            |count| count as usize,
+        );
+        let viewed_panes = self.viewed_panes.unwrap_or_else(|| {
+            self.views
+                .iter()
+                .filter_map(|view| match &view.pane_id {
+                    TopologyClientPane::Terminal(id) => Some(*id),
+                    TopologyClientPane::Plugin(_) => None,
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        });
         ClientView {
             clients: self
                 .views
@@ -103,10 +127,10 @@ impl TopologyClients {
                 })
                 .collect(),
             presence: crate::mux::ClientPresence {
-                human_clients: self.human_clients as usize,
+                human_clients,
                 last_input_ms: None,
             },
-            viewed_panes: self.viewed_panes.into_iter().map(zellij_pane_id).collect(),
+            viewed_panes: viewed_panes.into_iter().map(zellij_pane_id).collect(),
         }
     }
 }
@@ -145,7 +169,10 @@ pub(crate) fn classify_switch_settled(
             .strip_prefix("terminal_")?
             .parse::<u64>()
             .ok()?;
-        let pane = topology.panes.iter().find(|pane| pane.id == id)?;
+        let pane = topology
+            .panes
+            .iter()
+            .find(|pane| !pane.is_plugin && pane.id == id)?;
         if !pane.is_live_terminal() {
             return None;
         }
@@ -332,7 +359,14 @@ mod tests {
 
     #[test]
     fn settled_switch_classifies_work_and_repairable_views() {
-        let topology = switch_topology();
+        let mut topology = switch_topology();
+        topology.panes.insert(
+            0,
+            PaneTopologyPane {
+                is_plugin: true,
+                ..test_pane(10, 0, "plugin")
+            },
+        );
         assert_eq!(
             classify_switch_settled(&topology, 1, &[view(1, "terminal_11")]),
             Some(SwitchVerdict::Healthy),
@@ -475,8 +509,8 @@ mod tests {
         assert_eq!(
             cache.clients,
             Some(TopologyClients {
-                human_clients: 2,
-                viewed_panes: vec![7],
+                human_clients: Some(2),
+                viewed_panes: Some(vec![7]),
                 views: vec![
                     TopologyClientView {
                         client_id: 3,
@@ -493,6 +527,28 @@ mod tests {
         assert_eq!(encoded["clients"]["human_clients"], 2);
         assert_eq!(encoded["clients"]["viewed_panes"], serde_json::json!([7]));
         assert_eq!(encoded["clients"]["views"][1]["pane_id"]["kind"], "plugin");
+
+        let views_only: PaneTopologyCache = serde_json::from_str(
+            r#"{
+                "session_name": "rimz-test",
+                "produced_at_ms": 42,
+                "clients": {
+                    "views": [
+                        { "client_id": 3, "pane_id": { "kind": "terminal", "id": 7 } },
+                        { "client_id": 3, "pane_id": { "kind": "terminal", "id": 7 } },
+                        { "client_id": 4, "pane_id": { "kind": "plugin", "id": 9 } }
+                    ]
+                },
+                "panes": []
+            }"#,
+        )
+        .expect("views-only topology parses");
+        let view = views_only
+            .clients
+            .expect("client sample")
+            .into_client_view();
+        assert_eq!(view.presence.human_clients, 2);
+        assert_eq!(view.viewed_panes, vec![zellij_pane_id(7)]);
 
         let legacy: PaneTopologyCache = serde_json::from_str(
             r#"{

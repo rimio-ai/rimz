@@ -170,10 +170,10 @@ pub fn ingest_zellij_wake(
         let topology = accepted_topology
             .filter(|topology| topology.session_name == session_name)
             .or_else(|| read_pane_topology_cache(runtime, session_name));
-        if let Some(SwitchVerdict::Stranded { pane_id }) = topology
-            .as_ref()
-            .and_then(|topology| classify_switch_settled(topology, active_tab, &wake.focus_clients))
-        {
+        let verdict = topology.as_ref().and_then(|topology| {
+            classify_switch_settled(topology, active_tab, &wake.focus_clients)
+        });
+        if let Some(SwitchVerdict::Stranded { pane_id }) = verdict {
             events.push(SidebarEvent::FocusStranded {
                 pane_id,
                 generation,

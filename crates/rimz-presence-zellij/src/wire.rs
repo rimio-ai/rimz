@@ -228,8 +228,8 @@ pub struct WakeContext<'a> {
 pub enum WakeRequest {
     Changed,
     Alive(PluginTelemetry),
-    FocusStranded {
-        pane_id: u32,
+    SwitchSettled {
+        tab: u64,
         generation: u64,
         clients: Vec<policy::ClientViewEntry>,
     },
@@ -246,7 +246,7 @@ pub fn wake_argv(
     let reason = match &request {
         WakeRequest::Changed => "panes-changed",
         WakeRequest::Alive(_) => "alive",
-        WakeRequest::FocusStranded { .. } => "focus-stranded",
+        WakeRequest::SwitchSettled { .. } => "switch-settled",
     };
     let mut argv = vec![
         ctx.rimz_bin.unwrap_or("rimz").to_owned(),
@@ -295,13 +295,14 @@ pub fn wake_argv(
                 argv.push(session_name.to_owned());
             }
         }
-        WakeRequest::FocusStranded {
-            pane_id,
+        WakeRequest::SwitchSettled {
+            tab,
             generation,
             clients,
         } => {
             push_session(ctx, &mut argv)?;
-            push_pane_id(&mut argv, pane_id);
+            argv.push("--active-tab".to_owned());
+            argv.push(tab.to_string());
             argv.push("--focus-generation".to_owned());
             argv.push(generation.to_string());
             argv.push("--focus-clients".to_owned());
@@ -336,11 +337,6 @@ fn push_session(ctx: &WakeContext<'_>, argv: &mut Vec<String>) -> Option<()> {
     argv.push("--session-name".to_owned());
     argv.push(session_name.to_owned());
     Some(())
-}
-
-fn push_pane_id(argv: &mut Vec<String>, pane_id: u32) {
-    argv.push("--pane-id".to_owned());
-    argv.push(format!("terminal_{pane_id}"));
 }
 
 pub fn focus_sidebar_argv(ctx: &WakeContext<'_>) -> Vec<String> {

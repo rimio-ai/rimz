@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::policy::{self, KEEPALIVE_MS, POKE_FLOOR_MS, SETTLE_POKE_MS, SIDEBAR_PANE_TITLE};
+use crate::policy::{self, KEEPALIVE_MS, POKE_FLOOR_MS, SETTLE_POKE_MS};
 
 #[derive(Clone)]
 struct FakeHost {
@@ -96,13 +96,6 @@ fn pane_in_tab(id: u32, tab: usize) -> PaneFields {
     PaneFields {
         tab_position: tab as u64,
         tab_name: Some(format!("tab-{tab}")),
-        ..pane(id)
-    }
-}
-
-fn sidebar_pane(id: u32) -> PaneFields {
-    PaneFields {
-        title: SIDEBAR_PANE_TITLE.to_owned(),
         ..pane(id)
     }
 }
@@ -572,11 +565,9 @@ fn list_clients_publish_presence_and_unique_session_focus() {
     let effects = engine.on_list_clients(sample.clone(), 30, &host);
     assert_eq!(reasons(&effects), vec!["panes-changed"]);
     let topology = topology_json(run_commands(&effects)[0]);
-    assert_eq!(topology["clients"]["human_clients"], 2);
-    assert_eq!(
-        topology["clients"]["viewed_panes"],
-        serde_json::json!([1, 2])
-    );
+    assert!(topology["clients"].get("human_clients").is_none());
+    assert!(topology["clients"].get("viewed_panes").is_none());
+    assert_eq!(topology["clients"]["views"].as_array().unwrap().len(), 2);
 
     let effects = engine.on_list_clients(sample, 40, &host);
     assert!(
@@ -608,7 +599,7 @@ fn seed_switch_room(engine: &mut Engine, host: &FakeHost) -> BTreeMap<usize, Str
         engine,
         tabs_by_index(vec![
             (0, vec![pane_in_tab(1, 0)]),
-            (1, vec![sidebar_pane(10), pane_in_tab(11, 1)]),
+            (1, vec![pane_in_tab(10, 1), pane_in_tab(11, 1)]),
         ]),
         30,
         host,
@@ -646,87 +637,50 @@ fn stable_pane_update_refreshes_clients_without_republishing_topology() {
 }
 
 #[test]
-fn switched_sidebar_emits_renderer_action_only_after_matching_client_confirmation() {
+fn tab_switch_emits_one_settled_observation_at_the_deadline() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
     let names = seed_switch_room(&mut engine, &host);
 
     let effects = engine.on_tab_update(Some(1), names, 100, &host);
-    assert!(effects.contains(&Effect::ListClients));
-    let observed =
-        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(10))], 110, &host);
-    assert!(!reasons(&observed).contains(&"focus-stranded"));
+    assert!(!effects.contains(&Effect::ListClients));
+    assert!(
+        !engine
+            .on_timer(100 + policy::FOCUS_SETTLE_MS - 1, &host)
+            .contains(&Effect::ListClients)
+    );
 
     let effects = engine.on_timer(100 + policy::FOCUS_SETTLE_MS, &host);
     assert!(effects.contains(&Effect::ListClients));
-    let confirmed = engine.on_list_clients(
+    let settled = engine.on_list_clients(
         vec![client(1, ProjectedPaneId::Terminal(10))],
         100 + policy::FOCUS_SETTLE_MS + 1,
         &host,
     );
-    assert_eq!(reasons(&confirmed), vec!["focus-stranded"]);
+    assert!(reasons(&settled).contains(&"switch-settled"));
     assert_eq!(
-        arg_after(run_commands(&confirmed)[0], "--pane-id"),
-        Some("terminal_10")
-    );
-    assert_eq!(
-        arg_after(run_commands(&confirmed)[0], "--focus-generation"),
+        arg_after(run_commands(&settled)[0], "--active-tab"),
         Some("1")
     );
     assert_eq!(
-        arg_after(run_commands(&confirmed)[0], "--focus-clients"),
+        arg_after(run_commands(&settled)[0], "--focus-generation"),
+        Some("1")
+    );
+    assert_eq!(
+        arg_after(run_commands(&settled)[0], "--focus-clients"),
         Some(r#"[{"client_id":1,"pane_id":{"kind":"terminal","id":10}}]"#)
     );
     assert_eq!(
-        run_commands(&confirmed)[0][1..4],
+        topology_json(run_commands(&settled)[0])["focused_pane"],
+        10,
+        "settled observation applies the general focus rule before publication",
+    );
+    assert_eq!(
+        run_commands(&settled)[0][1..4],
         ["sidebar", "wake", "--reason"],
-        "the plugin reports evidence and leaves actuation to the renderer",
+        "plugin reports evidence and leaves classification to the host",
     );
-}
-
-#[test]
-fn explicit_cross_tab_work_view_cancels_repair_and_publishes_transition() {
-    let host = FakeHost::default();
-    let mut engine = Engine::new(0, config());
-    grant(&mut engine, 10, &host);
-    let names = seed_switch_room(&mut engine, &host);
-    let _ = engine.on_tab_update(Some(1), names, 100, &host);
-
-    let effects =
-        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(11))], 110, &host);
-    assert!(run_commands(&effects).is_empty());
-    let effects = engine.on_timer(40 + POKE_FLOOR_MS, &host);
-    assert_eq!(reasons(&effects), vec!["panes-changed"]);
-    let topology = topology_json(run_commands(&effects)[0]);
-    assert_eq!(topology["focused_pane"], 11);
-    assert!(!engine
-        .on_timer(100 + policy::FOCUS_SETTLE_MS, &host)
-        .iter()
-        .any(|effect| matches!(effect, Effect::RunCommand(argv) if argv.iter().any(|arg| arg == "focus-stranded"))));
-}
-
-#[test]
-fn unchanged_previous_tab_view_repairs_after_confirmation() {
-    let host = FakeHost::default();
-    let mut engine = Engine::new(0, config());
-    grant(&mut engine, 10, &host);
-    let names = seed_switch_room(&mut engine, &host);
-
-    let effects = engine.on_tab_update(Some(1), names, 100, &host);
-    assert!(effects.contains(&Effect::ListClients));
-    let observed =
-        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(1))], 110, &host);
-    assert!(!reasons(&observed).contains(&"focus-stranded"));
-
-    let effects = engine.on_timer(100 + policy::FOCUS_SETTLE_MS, &host);
-    assert!(effects.contains(&Effect::ListClients));
-    let confirmed = engine.on_list_clients(
-        vec![client(1, ProjectedPaneId::Terminal(1))],
-        100 + policy::FOCUS_SETTLE_MS + 1,
-        &host,
-    );
-    assert_eq!(reasons(&confirmed), vec!["focus-stranded"]);
 }
 
 #[test]
@@ -737,20 +691,32 @@ fn rapid_switch_supersedes_the_old_query_and_preserves_the_prior_register() {
     let names = seed_switch_room(&mut engine, &host);
 
     let first = engine.on_tab_update(Some(1), names.clone(), 100, &host);
-    assert!(first.contains(&Effect::ListClients));
-    let second = engine.on_tab_update(Some(0), names, 110, &host);
+    assert!(!first.contains(&Effect::ListClients));
+    assert!(
+        engine
+            .on_timer(100 + policy::FOCUS_SETTLE_MS, &host)
+            .contains(&Effect::ListClients)
+    );
+    let second = engine.on_tab_update(Some(0), names, 360, &host);
     assert!(!second.contains(&Effect::ListClients));
 
-    let stale = engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(11))], 120, &host);
-    assert!(stale.contains(&Effect::ListClients));
-    assert!(!reasons(&stale).contains(&"panes-changed"));
+    let stale = engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(11))], 370, &host);
+    assert!(!reasons(&stale).contains(&"switch-settled"));
 
-    let latest = engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(1))], 130, &host);
-    assert!(!reasons(&latest).contains(&"panes-changed"));
     assert!(
-        !engine
-            .on_timer(110 + policy::FOCUS_SETTLE_MS, &host)
+        engine
+            .on_timer(360 + policy::FOCUS_SETTLE_MS, &host)
             .contains(&Effect::ListClients)
+    );
+    let latest = engine.on_list_clients(
+        vec![client(1, ProjectedPaneId::Terminal(1))],
+        360 + policy::FOCUS_SETTLE_MS + 1,
+        &host,
+    );
+    assert!(reasons(&latest).contains(&"switch-settled"));
+    assert_eq!(
+        arg_after(run_commands(&latest)[0], "--focus-generation"),
+        Some("2")
     );
 }
 
@@ -795,112 +761,54 @@ fn same_pane_clients_agree_while_distinct_views_clear_session_focus() {
 }
 
 #[test]
-fn detached_and_missing_switch_views_wait_then_abstain() {
-    for missing in [Vec::new(), vec![client(1, ProjectedPaneId::Terminal(999))]] {
-        let host = FakeHost::default();
-        let mut engine = Engine::new(0, config());
-        grant(&mut engine, 10, &host);
-        let names = seed_switch_room(&mut engine, &host);
-        let _ = engine.on_tab_update(Some(1), names, 100, &host);
-
-        let observed = engine.on_list_clients(missing.clone(), 110, &host);
-        assert!(!reasons(&observed).contains(&"focus-stranded"));
-        assert!(
-            engine
-                .on_timer(100 + policy::FOCUS_SETTLE_MS, &host)
-                .contains(&Effect::ListClients)
-        );
-        let confirmed = engine.on_list_clients(missing, 100 + policy::FOCUS_SETTLE_MS + 1, &host);
-        assert!(!reasons(&confirmed).contains(&"focus-stranded"));
-    }
-}
-
-#[test]
-fn closing_the_destination_before_confirmation_abstains() {
+fn detached_switch_still_emits_the_settled_observation() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
     let names = seed_switch_room(&mut engine, &host);
     let _ = engine.on_tab_update(Some(1), names, 100, &host);
-    let _ = engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(10))], 110, &host);
-
-    let _ = engine.on_pane_closed(ProjectedPaneId::Terminal(10), 120, &host);
-    let _ = engine.on_pane_closed(ProjectedPaneId::Terminal(11), 130, &host);
     assert!(
         engine
             .on_timer(100 + policy::FOCUS_SETTLE_MS, &host)
             .contains(&Effect::ListClients)
     );
-    let confirmed = engine.on_list_clients(
-        vec![client(1, ProjectedPaneId::Terminal(10))],
-        100 + policy::FOCUS_SETTLE_MS + 1,
-        &host,
+    let settled = engine.on_list_clients(Vec::new(), 100 + policy::FOCUS_SETTLE_MS + 1, &host);
+    assert!(reasons(&settled).contains(&"switch-settled"));
+    assert_eq!(
+        arg_after(run_commands(&settled)[0], "--focus-clients"),
+        Some("[]")
     );
-    assert!(!reasons(&confirmed).contains(&"focus-stranded"));
 }
 
 #[test]
-fn plugin_switch_view_repairs_but_distinct_clients_abstain() {
-    let host = FakeHost::default();
-    let mut plugin_engine = Engine::new(0, config());
-    grant(&mut plugin_engine, 10, &host);
-    let names = seed_switch_room(&mut plugin_engine, &host);
-    let _ = plugin_engine.on_tab_update(Some(1), names, 100, &host);
-    let _ = plugin_engine.on_list_clients(vec![client(1, ProjectedPaneId::Plugin(99))], 110, &host);
-    let _ = plugin_engine.on_timer(100 + policy::FOCUS_SETTLE_MS, &host);
-    let confirmed = plugin_engine.on_list_clients(
-        vec![client(1, ProjectedPaneId::Plugin(99))],
-        100 + policy::FOCUS_SETTLE_MS + 1,
-        &host,
-    );
-    assert_eq!(reasons(&confirmed), vec!["focus-stranded"]);
-
-    let mut ambiguous_engine = Engine::new(0, config());
-    grant(&mut ambiguous_engine, 10, &host);
-    let names = seed_switch_room(&mut ambiguous_engine, &host);
-    let _ = ambiguous_engine.on_tab_update(Some(1), names, 200, &host);
-    let _ = ambiguous_engine.on_list_clients(
-        vec![
-            client(1, ProjectedPaneId::Terminal(10)),
-            client(2, ProjectedPaneId::Terminal(11)),
-        ],
-        210,
-        &host,
-    );
-    let settled = ambiguous_engine.on_timer(200 + policy::FOCUS_SETTLE_MS, &host);
-    assert!(!settled.contains(&Effect::ListClients));
-    assert!(!reasons(&settled).contains(&"focus-stranded"));
-}
-
-#[test]
-fn expired_untagged_reply_is_general_and_rearms_switch_confirmation() {
+fn expired_untagged_reply_is_general_and_rearms_settled_query() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
     let names = seed_switch_room(&mut engine, &host);
     let _ = engine.on_tab_update(Some(1), names, 100, &host);
 
-    let expired = engine.on_timer(100 + KEEPALIVE_MS, &host);
+    let expired = engine.on_timer(100 + policy::FOCUS_SETTLE_MS, &host);
     assert!(expired.contains(&Effect::ListClients));
 
     let stale = engine.on_list_clients(
         vec![client(1, ProjectedPaneId::Terminal(10))],
-        100 + KEEPALIVE_MS + 1,
+        100 + policy::FOCUS_SETTLE_MS + KEEPALIVE_MS + 1,
         &host,
     );
-    assert!(!reasons(&stale).contains(&"focus-stranded"));
+    assert!(!reasons(&stale).contains(&"switch-settled"));
     assert!(stale.contains(&Effect::ListClients));
 
-    let confirmed = engine.on_list_clients(
+    let settled = engine.on_list_clients(
         vec![client(1, ProjectedPaneId::Terminal(10))],
-        100 + KEEPALIVE_MS + 2,
+        100 + policy::FOCUS_SETTLE_MS + KEEPALIVE_MS + 2,
         &host,
     );
-    assert_eq!(reasons(&confirmed), vec!["focus-stranded"]);
+    assert!(reasons(&settled).contains(&"switch-settled"));
 }
 
 #[test]
-fn plugin_clients_count_for_presence_but_never_publish_as_viewed_terminals() {
+fn plugin_client_views_publish_without_derived_presence_fields() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
@@ -908,8 +816,9 @@ fn plugin_clients_count_for_presence_but_never_publish_as_viewed_terminals() {
 
     let effects = engine.on_list_clients(vec![client(7, ProjectedPaneId::Plugin(99))], 30, &host);
     let topology = topology_json(run_commands(&effects)[0]);
-    assert_eq!(topology["clients"]["human_clients"], 1);
-    assert_eq!(topology["clients"]["viewed_panes"], serde_json::json!([]));
+    assert!(topology["clients"].get("human_clients").is_none());
+    assert!(topology["clients"].get("viewed_panes").is_none());
+    assert_eq!(topology["clients"]["views"][0]["client_id"], 7);
     assert!(topology.get("focused_pane").is_none());
 }
 
@@ -932,7 +841,7 @@ fn session_update_and_keepalive_request_client_sample() {
 }
 
 #[test]
-fn active_tab_switch_requests_client_sample() {
+fn repeated_active_tab_update_keeps_the_original_settle_deadline() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
@@ -942,7 +851,7 @@ fn active_tab_switch_requests_client_sample() {
         &mut engine,
         tabs_by_index(vec![
             (0, vec![pane_in_tab(1, 0)]),
-            (1, vec![sidebar_pane(10), pane_in_tab(11, 1)]),
+            (1, vec![pane_in_tab(10, 1), pane_in_tab(11, 1)]),
         ]),
         30,
         &host,
@@ -951,10 +860,38 @@ fn active_tab_switch_requests_client_sample() {
     let _ = engine.on_list_clients(Vec::new(), 50, &host);
 
     let effects = engine.on_tab_update(Some(1), names.clone(), 100, &host);
-    assert!(effects.contains(&Effect::ListClients));
+    assert!(!effects.contains(&Effect::ListClients));
 
     let effects = engine.on_tab_update(Some(1), names, 110, &host);
     assert!(!effects.contains(&Effect::ListClients));
+    assert!(
+        engine
+            .on_timer(100 + policy::FOCUS_SETTLE_MS, &host)
+            .contains(&Effect::ListClients)
+    );
+}
+
+#[test]
+fn client_query_merge_prefers_switches_and_newer_generations() {
+    let older = ClientQueryPurpose::SwitchSettled {
+        generation: 1,
+        tab: 1,
+    };
+    let newer = ClientQueryPurpose::SwitchSettled {
+        generation: 2,
+        tab: 0,
+    };
+
+    assert_eq!(
+        latest_client_query(ClientQueryPurpose::General, older),
+        older
+    );
+    assert_eq!(
+        latest_client_query(older, ClientQueryPurpose::General),
+        older
+    );
+    assert_eq!(latest_client_query(older, newer), newer);
+    assert_eq!(latest_client_query(newer, older), newer);
 }
 
 #[test]

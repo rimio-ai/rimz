@@ -243,8 +243,8 @@ fn list_panes_uses_fresh_topology_and_honors_explicit_floor() {
         floor.saturating_sub(1),
         Some(7),
         Some(TopologyClients {
-            human_clients: 2,
-            viewed_panes: vec![7],
+            human_clients: Some(2),
+            viewed_panes: Some(vec![7]),
             views: Vec::new(),
         }),
         vec![PaneTopologyPane {

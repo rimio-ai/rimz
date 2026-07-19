@@ -28,9 +28,6 @@ pub const FOCUS_SETTLE_MS: u64 = 250;
 /// `PRESENCE_STAMP_FRESH` (150s) allows two missed keepalives of slack.
 pub const KEEPALIVE_MS: u64 = 60_000;
 
-/// Pane title the Zellij layouts assign to RimZ's native sidebar.
-pub const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
-
 /// The pane fields the plugin projects. The raw manifest hash folds only the
 /// stable subset whose change means the reducer should run. `title` and
 /// `pane_command` are carried for topology publication but excluded from the
@@ -114,8 +111,6 @@ pub struct TopologyPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ClientSample {
-    pub human_clients: u32,
-    pub viewed_panes: Vec<u32>,
     pub views: Vec<ClientViewEntry>,
 }
 
@@ -182,18 +177,6 @@ impl PaneFields {
             pane_pid: None,
             terminal_command: stable.terminal_command.map(str::to_owned),
         }
-    }
-
-    pub fn is_live_terminal(&self) -> bool {
-        !self.is_plugin && !self.is_suppressed && !self.is_floating && !self.exited && !self.is_held
-    }
-
-    pub fn is_sidebar(&self) -> bool {
-        self.is_live_terminal() && self.title == SIDEBAR_PANE_TITLE
-    }
-
-    pub fn is_card_pane(&self) -> bool {
-        self.is_live_terminal() && !self.is_sidebar()
     }
 }
 

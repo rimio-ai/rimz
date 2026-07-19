@@ -255,19 +255,19 @@ fn wait_for_reload_baseline(log: &Path, prior_lines: usize, pane: &PaneId) -> Ve
     }
 }
 
-fn wait_for_focus_stranded(log: &Path, prior_lines: usize) -> Vec<String> {
+fn wait_for_switch_settled(log: &Path, prior_lines: usize) -> Vec<String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let lines = poke_lines(log);
         if lines[prior_lines..]
             .iter()
-            .any(|line| line.contains("sidebar wake --reason focus-stranded"))
+            .any(|line| line.contains("sidebar wake --reason switch-settled"))
         {
             return lines;
         }
         assert!(
             Instant::now() < deadline,
-            "presence plugin emitted no focus-stranded wake; pokes: {lines:?}",
+            "presence plugin emitted no switch-settled wake; pokes: {lines:?}",
         );
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -547,12 +547,14 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let actions_before = focus_action_count(&trace_log);
     let assists_before = accepted_focus_repairs(xdg.path(), &target_work);
     client.go_to_tab(2);
-    let stranded = wait_for_focus_stranded(&poke_log, pokes_before);
+    let settled = wait_for_switch_settled(&poke_log, pokes_before);
     assert!(
-        stranded[pokes_before..].iter().any(|line| {
-            line.contains("--focus-generation") && line.contains("--focus-clients")
+        settled[pokes_before..].iter().any(|line| {
+            line.contains("--active-tab")
+                && line.contains("--focus-generation")
+                && line.contains("--focus-clients")
         }),
-        "repair wake lacks generation/client evidence: {stranded:?}",
+        "settled wake lacks tab/generation/client evidence: {settled:?}",
     );
     wait_for_focus_action(&trace_log, &focus_exec_log, &target_work, actions_before);
     let assists = wait_for_accepted_focus_repair(xdg.path(), &target_work, assists_before);
@@ -602,7 +604,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let actions_before = focus_action_count(&trace_log);
     let assists_before = accepted_focus_repairs(xdg.path(), &target_work);
     client.go_to_tab(2);
-    wait_for_focus_stranded(&poke_log, pokes_before);
+    wait_for_switch_settled(&poke_log, pokes_before);
     wait_for_focus_action(&trace_log, &focus_exec_log, &target_work, actions_before);
     wait_for_accepted_focus_repair(xdg.path(), &target_work, assists_before);
     client.send_line("rimz-routed-after-reload");
@@ -631,7 +633,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     assert_eq!(
         focus_action_count(&trace_log),
         actions_before,
-        "a switch confirmation acted after the client detached; trace: {}",
+        "a settled switch observation acted after the client detached; trace: {}",
         std::fs::read_to_string(&trace_log).unwrap_or_default(),
     );
 }

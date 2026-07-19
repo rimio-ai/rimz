@@ -45,8 +45,7 @@ pub enum Effect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClientQueryPurpose {
     General,
-    SwitchObserve { generation: u64, tab: usize },
-    SwitchConfirm { generation: u64, tab: usize },
+    SwitchSettled { generation: u64, tab: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,13 +60,6 @@ struct PendingSwitch {
     tab: usize,
     previous: Option<u32>,
     settle_at: u64,
-    phase: SwitchPhase,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SwitchPhase {
-    Observing,
-    Confirming,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -84,29 +76,15 @@ enum ClientObservation {
     Ambiguous,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SwitchObservation {
-    Work(u32),
-    Repairable,
-    Pending,
-    Abstain,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum FocusOutcome {
-    Transition {
-        previous: Option<u32>,
-        current: Option<u32>,
-    },
-    Stranded {
-        pane_id: u32,
-        generation: u64,
-        clients: Vec<ProjectedClientFocus>,
-    },
+struct SettledSwitch {
+    tab: usize,
+    generation: u64,
+    clients: Vec<ProjectedClientFocus>,
 }
 
 struct FocusUpdate {
-    outcome: Option<FocusOutcome>,
+    transition: Option<(Option<u32>, Option<u32>)>,
+    settled: Option<SettledSwitch>,
     sample_changed: bool,
 }
 
@@ -295,20 +273,6 @@ impl RoomState {
         })
     }
 
-    fn repair_owner(&self, tab: usize) -> Option<u32> {
-        let sidebars = self
-            .panes
-            .iter()
-            .filter(|(key, pane)| pane.tab == Some(tab) && pane.is_sidebar(**key))
-            .map(|(key, _)| key.id)
-            .collect::<Vec<_>>();
-        let has_work = self
-            .panes
-            .iter()
-            .any(|(key, pane)| pane.tab == Some(tab) && pane.is_card_pane(*key));
-        matches!(sidebars.as_slice(), [sidebar] if has_work).then(|| sidebars[0])
-    }
-
     fn published_panes(&self) -> Vec<PaneFields> {
         let mut panes = self
             .panes
@@ -394,14 +358,6 @@ impl PaneState {
             && !self.is_held
     }
 
-    fn is_sidebar(&self, key: PaneKey) -> bool {
-        self.is_live_terminal(key) && self.title == policy::SIDEBAR_PANE_TITLE
-    }
-
-    fn is_card_pane(&self, key: PaneKey) -> bool {
-        self.is_live_terminal(key) && !self.is_sidebar(key)
-    }
-
     fn published(&self, key: PaneKey, tab: usize) -> PaneFields {
         PaneFields {
             id: key.id,
@@ -460,13 +416,8 @@ impl FocusSync {
                     tab: next,
                     previous,
                     settle_at: now.saturating_add(policy::FOCUS_SETTLE_MS),
-                    phase: SwitchPhase::Observing,
                 };
                 self.mode = FocusMode::Switching(pending);
-                self.queue(ClientQueryPurpose::SwitchObserve {
-                    generation: pending.generation,
-                    tab: next,
-                });
             }
             (_, None) => {
                 self.mode = FocusMode::Stable;
@@ -505,26 +456,31 @@ impl FocusSync {
         let sample = client_sample(&clients);
         let sample_changed = self.client_sample.as_ref() != Some(&sample);
         self.client_sample = Some(sample);
-        let outcome = self.apply_observation(room, purpose, &clients);
+        let (transition, settled) = self.apply_observation(room, purpose, &clients);
         FocusUpdate {
-            outcome,
+            transition,
+            settled: settled.map(|(generation, tab)| SettledSwitch {
+                tab,
+                generation,
+                clients,
+            }),
             sample_changed,
         }
     }
 
     fn drive_due_query(&mut self, now: u64) -> Option<FocusWork> {
         self.expire_query(now);
-        if let FocusMode::Switching(mut pending) = self.mode
+        if let FocusMode::Switching(pending) = self.mode
             && self.active_tab == Some(pending.tab)
             && now >= pending.settle_at
-            && pending.phase == SwitchPhase::Observing
         {
-            pending.phase = SwitchPhase::Confirming;
-            self.mode = FocusMode::Switching(pending);
-            self.queue(ClientQueryPurpose::SwitchConfirm {
+            let purpose = ClientQueryPurpose::SwitchSettled {
                 generation: pending.generation,
                 tab: pending.tab,
-            });
+            };
+            if !self.has_query(purpose) {
+                self.queue(purpose);
+            }
         }
         if self.in_flight.is_some() {
             return None;
@@ -541,7 +497,15 @@ impl FocusSync {
         [
             match self.mode {
                 FocusMode::Stable => None,
-                FocusMode::Switching(pending) => Some(pending.settle_at),
+                FocusMode::Switching(pending)
+                    if !self.has_query(ClientQueryPurpose::SwitchSettled {
+                        generation: pending.generation,
+                        tab: pending.tab,
+                    }) =>
+                {
+                    Some(pending.settle_at)
+                }
+                FocusMode::Switching(_) => None,
             },
             self.in_flight.map(|query| query.deadline),
         ]
@@ -563,6 +527,10 @@ impl FocusSync {
             None => purpose,
             Some(existing) => latest_client_query(existing, purpose),
         });
+    }
+
+    fn has_query(&self, purpose: ClientQueryPurpose) -> bool {
+        self.queued == Some(purpose) || self.in_flight.is_some_and(|query| query.purpose == purpose)
     }
 
     fn expire_query(&mut self, now: u64) {
@@ -594,117 +562,59 @@ impl FocusSync {
         room: &RoomState,
         purpose: ClientQueryPurpose,
         clients: &[ProjectedClientFocus],
-    ) -> Option<FocusOutcome> {
+    ) -> (Option<(Option<u32>, Option<u32>)>, Option<(u64, usize)>) {
         match purpose {
             ClientQueryPurpose::General => {
                 if matches!(self.mode, FocusMode::Switching(_)) {
-                    return None;
+                    return (None, None);
                 }
-                let current = match unique_client_observation(clients) {
-                    ClientObservation::Unique(ProjectedPaneId::Terminal(id))
-                        if room.live_terminal(id).is_some() =>
-                    {
-                        Some(id)
-                    }
-                    ClientObservation::Detached
-                    | ClientObservation::Unique(_)
-                    | ClientObservation::Ambiguous => None,
-                };
-                self.transition(current)
+                (self.transition(observed_focus(room, clients)), None)
             }
-            ClientQueryPurpose::SwitchObserve { generation, tab }
-            | ClientQueryPurpose::SwitchConfirm { generation, tab } => {
+            ClientQueryPurpose::SwitchSettled { generation, tab } => {
                 let FocusMode::Switching(pending) = self.mode else {
-                    return None;
+                    return (None, None);
                 };
                 if pending.generation != generation
                     || pending.tab != tab
                     || self.active_tab != Some(tab)
                 {
-                    return None;
+                    return (None, None);
                 }
-                let observation = classify_switch_observation(room, tab, clients);
-                match (purpose, observation) {
-                    (_, SwitchObservation::Work(pane_id)) => {
-                        self.mode = FocusMode::Stable;
-                        self.session_focused_pane = Some(pane_id);
-                        transition_outcome(pending.previous, Some(pane_id))
-                    }
-                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Repairable)
-                    | (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Pending) => {
-                        None
-                    }
-                    (ClientQueryPurpose::SwitchObserve { .. }, SwitchObservation::Abstain)
-                    | (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Pending)
-                    | (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Abstain) => {
-                        self.mode = FocusMode::Stable;
-                        None
-                    }
-                    (ClientQueryPurpose::SwitchConfirm { .. }, SwitchObservation::Repairable) => {
-                        self.mode = FocusMode::Stable;
-                        room.repair_owner(tab)
-                            .map(|pane_id| FocusOutcome::Stranded {
-                                pane_id,
-                                generation,
-                                clients: clients.to_vec(),
-                            })
-                    }
-                    (ClientQueryPurpose::General, _) => None,
-                }
+                let current = observed_focus(room, clients);
+                self.mode = FocusMode::Stable;
+                self.session_focused_pane = current;
+                (
+                    transition_outcome(pending.previous, current),
+                    Some((generation, tab)),
+                )
             }
         }
     }
 
-    fn transition(&mut self, current: Option<u32>) -> Option<FocusOutcome> {
+    fn transition(&mut self, current: Option<u32>) -> Option<(Option<u32>, Option<u32>)> {
         let previous = self.session_focused_pane;
         self.session_focused_pane = current;
         transition_outcome(previous, current)
     }
 }
 
-fn transition_outcome(previous: Option<u32>, current: Option<u32>) -> Option<FocusOutcome> {
-    (previous != current).then_some(FocusOutcome::Transition { previous, current })
+fn transition_outcome(
+    previous: Option<u32>,
+    current: Option<u32>,
+) -> Option<(Option<u32>, Option<u32>)> {
+    (previous != current).then_some((previous, current))
 }
 
-fn classify_switch_observation(
-    room: &RoomState,
-    tab: usize,
-    clients: &[ProjectedClientFocus],
-) -> SwitchObservation {
+fn observed_focus(room: &RoomState, clients: &[ProjectedClientFocus]) -> Option<u32> {
     match unique_client_observation(clients) {
-        ClientObservation::Detached => SwitchObservation::Pending,
-        ClientObservation::Ambiguous => SwitchObservation::Abstain,
-        ClientObservation::Unique(ProjectedPaneId::Plugin(_)) => SwitchObservation::Repairable,
-        ClientObservation::Unique(ProjectedPaneId::Terminal(id)) => match room.pane_location(id) {
-            Some((pane_tab, pane))
-                if pane_tab == tab
-                    && pane.is_card_pane(PaneKey {
-                        is_plugin: false,
-                        id,
-                    }) =>
-            {
-                SwitchObservation::Work(id)
-            }
-            Some((pane_tab, pane))
-                if pane_tab != tab
-                    && pane.is_live_terminal(PaneKey {
-                        is_plugin: false,
-                        id,
-                    }) =>
-            {
-                SwitchObservation::Repairable
-            }
-            Some((pane_tab, pane))
-                if pane_tab == tab
-                    && pane.is_sidebar(PaneKey {
-                        is_plugin: false,
-                        id,
-                    }) =>
-            {
-                SwitchObservation::Repairable
-            }
-            Some(_) | None => SwitchObservation::Pending,
-        },
+        ClientObservation::Unique(ProjectedPaneId::Terminal(id))
+            if room.live_terminal(id).is_some() =>
+        {
+            Some(id)
+        }
+        ClientObservation::Detached
+        | ClientObservation::Unique(_)
+        | ClientObservation::Ambiguous => None,
     }
 }
 
@@ -964,26 +874,17 @@ impl Engine {
         }
         let mut effects = Vec::new();
         let update = self.focus.accept_client_sample(&self.room, clients, now);
-        let mut changed = update.sample_changed;
-        if let Some(outcome) = update.outcome {
-            match outcome {
-                FocusOutcome::Transition { .. } => changed = true,
-                FocusOutcome::Stranded {
-                    pane_id,
-                    generation,
-                    clients,
-                } => {
-                    self.run_wake(
-                        wire::WakeRequest::FocusStranded {
-                            pane_id,
-                            generation,
-                            clients,
-                        },
-                        now,
-                        &mut effects,
-                    );
-                }
-            }
+        let changed = update.sample_changed || update.transition.is_some();
+        if let Some(settled) = update.settled {
+            self.run_wake(
+                wire::WakeRequest::SwitchSettled {
+                    tab: settled.tab as u64,
+                    generation: settled.generation,
+                    clients: settled.clients,
+                },
+                now,
+                &mut effects,
+            );
         }
         if changed {
             self.signal_change(now);
@@ -1261,49 +1162,21 @@ fn latest_client_query(
         (current, ClientQueryPurpose::General) => current,
         (ClientQueryPurpose::General, next) => next,
         (
-            current @ (ClientQueryPurpose::SwitchObserve {
+            current @ ClientQueryPurpose::SwitchSettled {
                 generation: current_generation,
                 ..
-            }
-            | ClientQueryPurpose::SwitchConfirm {
-                generation: current_generation,
-                ..
-            }),
-            ClientQueryPurpose::SwitchObserve {
-                generation: next_generation,
-                ..
-            }
-            | ClientQueryPurpose::SwitchConfirm {
+            },
+            ClientQueryPurpose::SwitchSettled {
                 generation: next_generation,
                 ..
             },
         ) if current_generation > next_generation => current,
-        (
-            current @ ClientQueryPurpose::SwitchConfirm {
-                generation: current_generation,
-                ..
-            },
-            ClientQueryPurpose::SwitchObserve {
-                generation: next_generation,
-                ..
-            },
-        ) if current_generation == next_generation => current,
         (_, next) => next,
     }
 }
 
 fn client_sample(clients: &[ProjectedClientFocus]) -> policy::ClientSample {
-    let mut client_ids = BTreeSet::new();
-    let mut viewed_panes = BTreeSet::new();
-    for client in clients {
-        client_ids.insert(client.client_id);
-        if let ProjectedPaneId::Terminal(pane_id) = client.pane_id {
-            viewed_panes.insert(pane_id);
-        }
-    }
     policy::ClientSample {
-        human_clients: client_ids.len().try_into().unwrap_or(u32::MAX),
-        viewed_panes: viewed_panes.into_iter().collect(),
         views: clients
             .iter()
             .copied()

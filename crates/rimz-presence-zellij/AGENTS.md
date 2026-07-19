@@ -4,10 +4,11 @@ Local contract for `crates/rimz-presence-zellij/` — the headless wasm bridge b
 
 ## Boundary
 
-- Publish Zellij facts: merged topology snapshots, attached-client observations, focus-repair requests, telemetry, and timing required by Zellij's event model.
+- Ship observations, never verdicts. Publish Zellij facts — merged topology snapshots, attached-client observations (including the settled sample after a tab switch), telemetry, and the timing Zellij's event model requires — and let the host turn them into meaning.
+- Carry only facts that originate in Zellij's server state. A fact derivable from the OS routes host-side through `pane_pid`: the host owns `/proc`; the plugin owns the event stream.
 - Keep capabilities that require plugin-only Zellij APIs here: the runtime focus keybind, mouse reconfiguration, web-session sharing, and hiding or closing the plugin instance.
-- Derive meaning on the host. `SidebarEvent` taxonomy, launch-chrome filtering, topology-writer authority, and durable cache publication live in the `rimz` crate.
-- Add event taxonomy host-side. Add a wake shape only for a fact that cannot be derived from an accepted snapshot diff.
+- Derive meaning on the host. Pane roles (sidebar, card pane), focus-repair decisions, `SidebarEvent` taxonomy, launch-chrome filtering, topology-writer authority, and durable cache publication live in the `rimz` crate, so a product-policy change never requires a plugin release.
+- Add a wake shape only for a fact that cannot be derived from an accepted snapshot diff.
 - Keep one session plugin. Splitting control features across plugins multiplies lifecycle, permission, and writer-coordination complexity.
 
 ## Shape

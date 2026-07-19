@@ -174,8 +174,8 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
             writer: None,
             focused_pane: Some(7),
             clients: Some(crate::mux::zellij::pane_topology::TopologyClients {
-                human_clients: 1,
-                viewed_panes: vec![7],
+                human_clients: Some(1),
+                viewed_panes: Some(vec![7]),
                 views: Vec::new(),
             }),
             panes: vec![crate::mux::zellij::pane_topology::PaneTopologyPane {

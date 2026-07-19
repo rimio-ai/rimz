@@ -79,8 +79,6 @@ fn topology_json_carries_present_pid_and_omits_absent_pid() {
 fn topology_json_carries_clients_when_sampled() {
     let panes = vec![pane(7)];
     let clients = policy::ClientSample {
-        human_clients: 2,
-        viewed_panes: vec![7, 9],
         views: vec![policy::ClientViewEntry {
             client_id: 1,
             pane_id: policy::ClientPaneId::Terminal(7),
@@ -90,11 +88,9 @@ fn topology_json_carries_clients_when_sampled() {
         .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
-    assert_eq!(payload["clients"]["human_clients"], 2);
-    assert_eq!(
-        payload["clients"]["viewed_panes"],
-        serde_json::json!([7, 9])
-    );
+    assert!(payload["clients"].get("human_clients").is_none());
+    assert!(payload["clients"].get("viewed_panes").is_none());
+    assert_eq!(payload["clients"]["views"][0]["client_id"], 1);
 
     let json = topology_json(Some("session-1"), 42, None, Some(7), None, &panes)
         .expect("topology serializes");
@@ -240,12 +236,12 @@ fn command_counters_split_every_exit_bucket() {
 }
 
 #[test]
-fn focus_stranded_wake_argv_names_terminal_pane() {
+fn switch_settled_wake_argv_carries_observation() {
     assert_eq!(
         wake_argv(
             &ctx(),
-            WakeRequest::FocusStranded {
-                pane_id: 9,
+            WakeRequest::SwitchSettled {
+                tab: 1,
                 generation: 3,
                 clients: vec![policy::ClientViewEntry {
                     client_id: 1,
@@ -259,11 +255,11 @@ fn focus_stranded_wake_argv_names_terminal_pane() {
             "sidebar",
             "wake",
             "--reason",
-            "focus-stranded",
+            "switch-settled",
             "--session-name",
             "session-1",
-            "--pane-id",
-            "terminal_9",
+            "--active-tab",
+            "1",
             "--focus-generation",
             "3",
             "--focus-clients",
