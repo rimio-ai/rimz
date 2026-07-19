@@ -210,6 +210,9 @@ pub struct ReloadOutcome {
     pub plugin_current: usize,
     /// Zellij sessions whose plugin convergence completed this pass.
     pub plugin_upgraded: usize,
+    /// Zellij sessions whose matching writer was retained while stale loaded
+    /// plugin ids were retired.
+    pub plugin_reconciled: usize,
     /// Located sidebars already publishing the on-disk build before reload.
     pub already_current: usize,
     /// Located sidebars that published the on-disk build after the reload signal.
@@ -247,6 +250,7 @@ impl ReloadOutcome {
             presence_dead,
             plugin_current,
             plugin_upgraded,
+            plugin_reconciled,
             already_current,
             reexeced,
             unconverged,
@@ -265,6 +269,7 @@ impl ReloadOutcome {
         self.presence_dead += presence_dead;
         self.plugin_current += plugin_current;
         self.plugin_upgraded += plugin_upgraded;
+        self.plugin_reconciled += plugin_reconciled;
         self.already_current += already_current;
         self.reexeced += reexeced;
         self.unconverged += unconverged;
@@ -482,14 +487,36 @@ fn upgrade_live(
         let desired_config =
             crate::mux::zellij::presence_plugin_config_hash(&configuration).unwrap_or_default();
         let cache = crate::sidebar::cache::read_pane_topology_cache(runtime, &ws.session_name);
-        if presence_plugin_is_current(
+        let current_writer = current_presence_plugin_writer(
             cache.as_ref(),
             unix_now_ms(),
             crate::mux::zellij::presence_plugin_build(),
             desired_config,
-        ) {
-            outcome.plugin_current += 1;
-        } else {
+        );
+        let needs_convergence = match current_writer {
+            Some(writer) => match crate::mux::ZellijBackend::new()
+                .cleanup_current_presence_plugin_for(&presence, writer)
+            {
+                Ok(crate::mux::zellij::PresencePluginCleanup::Current) => {
+                    outcome.plugin_current += 1;
+                    false
+                }
+                Ok(crate::mux::zellij::PresencePluginCleanup::Reconciled) => {
+                    outcome.plugin_reconciled += 1;
+                    false
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        session = %ws.session_name,
+                        error = &err as &dyn std::error::Error,
+                        "presence live-id inspection failed; falling back to full convergence",
+                    );
+                    true
+                }
+            },
+            None => true,
+        };
+        if needs_convergence {
             match backend.ensure_presence_plugin(&presence) {
                 Ok(()) => outcome.plugin_upgraded += 1,
                 Err(err) => {
@@ -626,18 +653,17 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
     outcome
 }
 
-fn presence_plugin_is_current(
-    cache: Option<&crate::mux::zellij::pane_topology::PaneTopologyCache>,
+fn current_presence_plugin_writer<'a>(
+    cache: Option<&'a crate::mux::zellij::pane_topology::PaneTopologyCache>,
     now_ms: u64,
     desired_build: &str,
     desired_config: &str,
-) -> bool {
-    cache.is_some_and(|cache| {
-        crate::sidebar::cache::pane_topology_cache_is_fresh(cache, now_ms, None)
-            && cache.writer.as_ref().is_some_and(|writer| {
-                writer.build.as_deref() == Some(desired_build)
-                    && writer.config.as_deref() == Some(desired_config)
-            })
+) -> Option<&'a crate::mux::zellij::pane_topology::TopologyWriter> {
+    let cache = cache
+        .filter(|cache| crate::sidebar::cache::pane_topology_cache_is_fresh(cache, now_ms, None))?;
+    cache.writer.as_ref().filter(|writer| {
+        writer.build.as_deref() == Some(desired_build)
+            && writer.config.as_deref() == Some(desired_config)
     })
 }
 
@@ -1240,6 +1266,7 @@ mod tests {
             presence_dead: 2,
             plugin_current: 3,
             plugin_upgraded: 4,
+            plugin_reconciled: 18,
             already_current: 5,
             reexeced: 6,
             unconverged: 7,
@@ -1259,6 +1286,7 @@ mod tests {
             presence_dead: 19,
             plugin_current: 20,
             plugin_upgraded: 21,
+            plugin_reconciled: 35,
             already_current: 22,
             reexeced: 23,
             unconverged: 24,
@@ -1281,6 +1309,7 @@ mod tests {
                 presence_dead: 21,
                 plugin_current: 23,
                 plugin_upgraded: 25,
+                plugin_reconciled: 53,
                 already_current: 27,
                 reexeced: 29,
                 unconverged: 31,
@@ -1316,36 +1345,43 @@ mod tests {
             panes: Vec::new(),
         };
         let current = cache(1_000, Some("wasm"), Some("config"));
-        assert!(presence_plugin_is_current(
-            Some(&current),
-            1_000,
-            "wasm",
-            "config"
-        ));
-        assert!(!presence_plugin_is_current(
-            Some(&cache(1_000, None, None)),
-            1_000,
-            "wasm",
-            "config"
-        ));
-        assert!(!presence_plugin_is_current(
-            Some(&cache(1_000, Some("old"), Some("config"))),
-            1_000,
-            "wasm",
-            "config"
-        ));
-        assert!(!presence_plugin_is_current(
-            Some(&cache(1_000, Some("wasm"), Some("old"))),
-            1_000,
-            "wasm",
-            "config"
-        ));
-        assert!(!presence_plugin_is_current(
-            Some(&current),
-            1_000 + crate::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1,
-            "wasm",
-            "config"
-        ));
+        assert!(current_presence_plugin_writer(Some(&current), 1_000, "wasm", "config").is_some());
+        assert!(
+            current_presence_plugin_writer(
+                Some(&cache(1_000, None, None)),
+                1_000,
+                "wasm",
+                "config"
+            )
+            .is_none()
+        );
+        assert!(
+            current_presence_plugin_writer(
+                Some(&cache(1_000, Some("old"), Some("config"))),
+                1_000,
+                "wasm",
+                "config"
+            )
+            .is_none()
+        );
+        assert!(
+            current_presence_plugin_writer(
+                Some(&cache(1_000, Some("wasm"), Some("old"))),
+                1_000,
+                "wasm",
+                "config"
+            )
+            .is_none()
+        );
+        assert!(
+            current_presence_plugin_writer(
+                Some(&current),
+                1_000 + crate::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1,
+                "wasm",
+                "config"
+            )
+            .is_none()
+        );
     }
 
     fn heartbeat(raw: &str, build: Option<&str>) -> SidebarHeartbeat {

@@ -31,6 +31,12 @@ const PRESENCE_PLUGIN_WEB_PERMISSION: &str = "StartWebServer";
 static PRESENCE_PLUGIN_BUILD: LazyLock<String> =
     LazyLock::new(|| crate::build_id::of_bytes(EMBEDDED_PRESENCE_PLUGIN));
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PresencePluginCleanup {
+    Current,
+    Reconciled,
+}
+
 /// Digest of the embedded wasm generation this host loads.
 pub fn presence_plugin_build() -> &'static str {
     &PRESENCE_PLUGIN_BUILD
@@ -367,7 +373,31 @@ impl ZellijBackend {
             );
             return;
         };
-        if let Err(err) = self.broadcast_presence_retire_for(&opts.session_name, &writer) {
+        self.retire_accepted_presence_plugin_for(opts, &writer);
+    }
+
+    /// Reconcile stale loaded ids around a fresh, identity-matching writer
+    /// without reloading that accepted writer. The live roster closes the gap
+    /// between "the writer is current" and "only the writer is loaded".
+    pub(crate) fn cleanup_current_presence_plugin_for(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+        writer: &crate::mux::zellij::pane_topology::TopologyWriter,
+    ) -> Result<PresencePluginCleanup> {
+        let live_ids = self.live_presence_plugin_ids(&opts.session_name)?;
+        if live_ids.as_slice() == [writer.plugin_id] {
+            return Ok(PresencePluginCleanup::Current);
+        }
+        self.retire_accepted_presence_plugin_for(opts, writer);
+        Ok(PresencePluginCleanup::Reconciled)
+    }
+
+    fn retire_accepted_presence_plugin_for(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+        writer: &crate::mux::zellij::pane_topology::TopologyWriter,
+    ) {
+        if let Err(err) = self.broadcast_presence_retire_for(&opts.session_name, writer) {
             tracing::debug!(
                 session = %opts.session_name,
                 error = %err,

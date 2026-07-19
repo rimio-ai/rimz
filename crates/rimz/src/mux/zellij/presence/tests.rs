@@ -222,6 +222,91 @@ exit 1
 
 #[cfg(unix)]
 #[test]
+fn current_presence_cleanup_preserves_a_single_accepted_writer() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-panes --all --json "*)
+    printf '[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"}]\n'
+    exit 0 ;;
+esac
+exit 0
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+
+    assert_eq!(
+        backend
+            .cleanup_current_presence_plugin_for(&opts, &current_writer(2, u64::MAX))
+            .expect("inspect current presence plugin"),
+        PresencePluginCleanup::Current,
+    );
+
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+    assert_eq!(log.matches("action list-panes --all --json").count(), 1);
+    for mutation in [
+        "--name rimz:retire",
+        "action close-pane",
+        "--name rimz_presence_boot",
+    ] {
+        assert!(
+            !log.contains(mutation),
+            "a singleton accepted writer must stay untouched:\n{log}",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn current_presence_cleanup_retires_a_stale_loaded_id() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-panes --all --json "*)
+    printf '[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":true,"title":"status-bar"}]\n'
+    exit 0 ;;
+esac
+exit 0
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+
+    assert_eq!(
+        backend
+            .cleanup_current_presence_plugin_for(&opts, &current_writer(2, u64::MAX))
+            .expect("clean up stale presence plugin"),
+        PresencePluginCleanup::Reconciled,
+    );
+
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+    assert!(
+        log.contains("--name rimz:retire -- {\"plugin_id\":2"),
+        "cleanup should broadcast the accepted writer identity:\n{log}",
+    );
+    assert!(
+        log.contains("action close-pane --pane-id plugin_3"),
+        "cleanup should force-close the stale loaded id:\n{log}",
+    );
+    for untouched in ["plugin_2", "plugin_4"] {
+        assert!(
+            !log.contains(&format!("close-pane --pane-id {untouched}")),
+            "cleanup must preserve the accepted writer and unrelated plugins:\n{log}",
+        );
+    }
+    assert!(
+        log.contains("--name rimz_presence_boot -- load"),
+        "cleanup should heal any accepted writer closed with a same-id clone:\n{log}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn share_web_session_pipes_share_payload_to_presence_plugin() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh

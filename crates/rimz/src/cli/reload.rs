@@ -67,6 +67,13 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             n(outcome.plugin_upgraded, "presence plugin")
         )?;
     }
+    if outcome.plugin_reconciled > 0 {
+        writeln!(
+            out,
+            "Reconciled {}.",
+            n(outcome.plugin_reconciled, "presence plugin")
+        )?;
+    }
     if outcome.plugin_current > 0 {
         writeln!(
             out,

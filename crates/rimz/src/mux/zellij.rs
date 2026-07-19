@@ -23,8 +23,10 @@ pub mod socket;
 
 #[doc(hidden)]
 pub use pane_pid::ZellijPaneResolver;
+pub(crate) use presence::{
+    PresencePluginCleanup, presence_plugin_config_hash, presence_plugin_configuration,
+};
 pub use presence::{ensure_presence_plugin_artifact, presence_plugin_build, presence_plugin_path};
-pub(crate) use presence::{presence_plugin_config_hash, presence_plugin_configuration};
 pub use reap::{ReapOutcome, reap_lineage_clients};
 pub use socket::{socket_headroom, socket_preflight};
 
