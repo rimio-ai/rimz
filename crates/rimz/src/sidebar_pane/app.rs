@@ -512,6 +512,14 @@ fn focus_stranded_target(
         .cloned()
 }
 
+/// Whether a strand the renderer could not yet act on is still worth retrying.
+/// The window is the strand event's own TTL — the same bound
+/// `focus_stranded_target` applies — so a repair is retried for exactly as long
+/// as its evidence is allowed to authorize one.
+fn focus_repair_still_viable(sent_at_ms: u64, now_ms: u64) -> bool {
+    now_ms.saturating_sub(sent_at_ms) <= duration_millis(FOCUS_STRANDED_EVENT_TTL)
+}
+
 #[cfg(test)]
 pub(crate) static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

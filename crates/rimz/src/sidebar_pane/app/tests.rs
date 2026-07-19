@@ -762,6 +762,21 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
     );
 }
 
+/// A deferred repair is retried for exactly as long as its evidence can still
+/// authorize one: the retry window and `focus_stranded_target`'s freshness
+/// bound are the same TTL, so a repair is never dropped while it would still be
+/// honored, nor retried once it would be refused.
+#[test]
+fn focus_repair_retry_window_matches_the_strand_event_ttl() {
+    let ttl = duration_millis(FOCUS_STRANDED_EVENT_TTL);
+    assert!(focus_repair_still_viable(1_000, 1_000));
+    assert!(focus_repair_still_viable(1_000, 1_000 + ttl));
+    assert!(!focus_repair_still_viable(1_000, 1_000 + ttl + 1));
+    // A clock that steps backwards leaves the repair viable rather than
+    // abandoning it on a negative age.
+    assert!(focus_repair_still_viable(1_000, 0));
+}
+
 #[test]
 fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
     let (snapshot, sidebar, first_work, _second_work) = focus_fixture();

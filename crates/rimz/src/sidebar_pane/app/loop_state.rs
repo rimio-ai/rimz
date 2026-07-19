@@ -620,7 +620,13 @@ impl LoopState {
                     sent_at_ms,
                 };
                 if !self.handle_focus_stranded(config, &repair) {
-                    self.pending_focus_repair = Some(repair);
+                    if let Some(replaced) = self.pending_focus_repair.replace(repair) {
+                        self.record_abandoned_focus_repair(
+                            config,
+                            &replaced,
+                            "superseded by a newer strand",
+                        );
+                    }
                     fetch.request(FetchRequest::producer_fresh_panes(), true);
                 }
             }
@@ -714,14 +720,69 @@ impl LoopState {
             );
             return true;
         }
+        debug!(
+            pane = %repair.pane_id,
+            generation = repair.generation,
+            evidence = ?repair.clients,
+            client_views = ?self.current.client_views,
+            viewed_panes = ?self.current.viewed_panes,
+            age_ms = now_ms.saturating_sub(repair.sent_at_ms),
+            "sidebar focus repair deferred: snapshot disagrees with strand evidence",
+        );
         false
     }
 
+    /// Re-attempt a strand the last fold could not yet act on. The first
+    /// snapshot after a strand routinely predates the client sample the plugin
+    /// took, so a single miss says nothing about whether focus is healthy — the
+    /// repair stays viable for the event's whole TTL and retries on each fold
+    /// until the evidence agrees. Past the TTL it is abandoned with a record.
     fn retry_pending_focus_repair(&mut self, config: &ServeConfig) {
         let Some(repair) = self.pending_focus_repair.take() else {
             return;
         };
-        self.handle_focus_stranded(config, &repair);
+        if self.handle_focus_stranded(config, &repair) {
+            return;
+        }
+        let now_ms = crate::sidebar::timing::unix_now_ms();
+        if focus_repair_still_viable(repair.sent_at_ms, now_ms) {
+            self.pending_focus_repair = Some(repair);
+        } else {
+            self.record_abandoned_focus_repair(config, &repair, "client evidence never converged");
+        }
+    }
+
+    /// A strand RimZ decided not to act on is still a system-initiated
+    /// intervention: record why it lapsed so `rimz stats` accounts for it.
+    fn record_abandoned_focus_repair(
+        &self,
+        config: &ServeConfig,
+        repair: &PendingFocusRepair,
+        reason: &str,
+    ) {
+        use crate::harness::assist_log::{Assist, AssistRecord, FocusRepairOutcome};
+        debug!(
+            pane = %repair.pane_id,
+            generation = repair.generation,
+            reason,
+            "sidebar focus repair abandoned",
+        );
+        crate::harness::assist_log::spawn_focus_repair_append(
+            self.read_marks.runtime(),
+            &AssistRecord {
+                at: jiff::Timestamp::now(),
+                assist: Assist::FocusRepair {
+                    nonce: None,
+                    workspace_id: self.read_marks.runtime().workspace_id.clone(),
+                    session_name: config.session_name.clone(),
+                    generation: repair.generation,
+                    evidence: repair.clients.clone(),
+                    target: repair.pane_id.clone(),
+                    outcome: FocusRepairOutcome::Failed,
+                    error: Some(reason.to_owned()),
+                },
+            },
+        );
     }
 
     fn handle_overlay_event(
