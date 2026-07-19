@@ -14,6 +14,7 @@ use crate::agents::account::AccountProbe;
 use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse};
 use crate::agents::{
     AccountUsageProbe, AccountUsageSnapshot, AgentAccount, AgentRateLimits, RateLimitWindow,
+    TokenSplit,
 };
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -94,21 +95,20 @@ pub(super) fn spend(
                 .cost_usd
                 .filter(|cost| cost.is_finite())
                 .unwrap_or(0.0);
+            // A plugin reports its own dollars; the canonical wire carries no
+            // cache tier or priority signal, so the split stays flat.
+            let split = TokenSplit::new(
+                entry.input_tokens.unwrap_or(0),
+                entry.output_tokens.unwrap_or(0),
+            )
+            .cached(
+                entry.cache_write.unwrap_or(0),
+                entry.cache_read.unwrap_or(0),
+            );
             Some(CachedEntry {
-                ts_secs,
-                cost_usd,
-                input: entry.input_tokens.unwrap_or(0),
-                output: entry.output_tokens.unwrap_or(0),
-                cache_write: entry.cache_write.unwrap_or(0),
-                cache_read: entry.cache_read.unwrap_or(0),
-                message_id: None,
-                request_id: None,
-                dedup_key: None,
                 thread_id: entry.thread_id,
-                is_sidechain: false,
-                has_speed: false,
                 model: entry.model,
-                rolled: false,
+                ..CachedEntry::new(ts_secs, cost_usd, &split)
             })
         })
         .collect();
