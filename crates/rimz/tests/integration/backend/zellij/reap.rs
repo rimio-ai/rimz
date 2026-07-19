@@ -15,9 +15,11 @@ fn remote_lineage_reap_kills_only_the_matching_attached_client() {
         name: name.clone(),
         xdg: xdg.path().to_path_buf(),
     };
-    let _client =
+    let client =
         AttachedClient::attach_with_lineage(xdg.path(), &name, "0123456789abcdef", 120, 40);
     wait_for_client_count(xdg.path(), &name, 1);
+    let client_pid = client.pid();
+    wait_for_attached_lineage_client(client_pid, &name, "0123456789abcdef");
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
 
     let other = zellij::reap_lineage_clients(&backend, &name, "fedcba9876543210")
@@ -28,11 +30,42 @@ fn remote_lineage_reap_kills_only_the_matching_attached_client() {
 
     let same = zellij::reap_lineage_clients(&backend, &name, "0123456789abcdef")
         .expect("same-lineage reap");
-    assert_eq!(same.killed_pids.len(), 1, "same lineage: {same:?}");
+    assert_eq!(same.killed_pids, vec![client_pid], "same lineage: {same:?}");
     assert_eq!(same.pre_clients, Some(1), "same lineage: {same:?}");
     assert_eq!(same.post_clients, Some(0), "same lineage: {same:?}");
     assert!(same.settled, "same lineage settles before return: {same:?}");
     assert!(!same.timed_out, "same lineage: {same:?}");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn wait_for_attached_lineage_client(pid: u32, session: &str, lineage: &str) {
+    poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            Ok((
+                rimz::proc::list_processes()
+                    .iter()
+                    .any(|process| process.pid == pid),
+                rimz::proc::comm(pid),
+                rimz::proc::argv(pid),
+                rimz::proc::env_var(pid, rimz::remote::REMOTE_LINEAGE_ENV),
+                rimz::proc::process_start_token(pid),
+            ))
+        },
+        |(listed, comm, argv, observed_lineage, start_token)| {
+            *listed
+                && comm.as_deref() == Some("zellij")
+                && argv.as_ref().is_some_and(|argv| {
+                    argv.len() == 4
+                        && argv[1].to_str() == Some("attach")
+                        && argv[2].to_str() == Some("--create")
+                        && argv[3].to_str() == Some(session)
+                })
+                && observed_lineage.as_deref() == Some(lineage)
+                && start_token.is_some()
+        },
+        &format!("attached lineage client pid {pid} to enter the process snapshot"),
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

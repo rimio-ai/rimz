@@ -177,13 +177,6 @@ impl PaneSnapshot {
         ids.into_iter().collect()
     }
 
-    pub(in crate::backend::zellij) fn live_work_count(&self) -> usize {
-        self.panes
-            .iter()
-            .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
-            .count()
-    }
-
     pub(in crate::backend::zellij) fn terminal_titles_in_tab(&self, tab_id: u64) -> Vec<String> {
         self.panes
             .iter()

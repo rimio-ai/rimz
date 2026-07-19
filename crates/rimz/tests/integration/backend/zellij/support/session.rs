@@ -19,9 +19,6 @@ pub(in crate::backend::zellij) const LIST_PANES_JSON_TIMEOUT: Duration =
 pub(in crate::backend::zellij) const LIST_PANES_JSON_ATTEMPTS: u32 = 5;
 pub(in crate::backend::zellij) const LIST_PANES_JSON_RETRY_DELAY: Duration =
     Duration::from_millis(50);
-pub(in crate::backend::zellij) const ACTION_ATTEMPTS: u32 = 3;
-pub(in crate::backend::zellij) const ACTION_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
-pub(in crate::backend::zellij) const ACTION_CONFIRM_STEP: Duration = Duration::from_millis(50);
 pub(in crate::backend::zellij) const DUMP_LAYOUT_ATTEMPTS: u32 = 10;
 pub(in crate::backend::zellij) const DUMP_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
@@ -339,6 +336,10 @@ impl AttachedClient {
             .write_all(&[0x1b, key as u8])
             .expect("write alt key");
         self.writer.flush().expect("flush alt key");
+    }
+
+    pub(in crate::backend::zellij) fn pid(&self) -> u32 {
+        self.child.process_id().expect("attached client process id")
     }
 
     pub(in crate::backend::zellij) fn go_to_tab(&mut self, tab: u8) {

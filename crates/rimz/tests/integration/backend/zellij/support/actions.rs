@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -7,10 +8,7 @@ use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarRecovery
 use crate::common::CommandTimeoutExt;
 
 use super::panes::{PaneSnapshot, list_panes};
-use super::session::{
-    ACTION_ATTEMPTS, ACTION_CONFIRM_STEP, ACTION_CONFIRM_WINDOW, DUMP_LAYOUT_ATTEMPTS,
-    DUMP_LAYOUT_RETRY_DELAY, scoped_zellij,
-};
+use super::session::{DUMP_LAYOUT_ATTEMPTS, DUMP_LAYOUT_RETRY_DELAY, SPAWN_TIMEOUT, scoped_zellij};
 
 pub(in crate::backend::zellij) fn poll_until<T: Debug>(
     timeout: Duration,
@@ -36,75 +34,59 @@ pub(in crate::backend::zellij) fn poll_until<T: Debug>(
     }
 }
 
-pub(in crate::backend::zellij) fn action_until(
-    xdg: &Path,
-    session: &str,
-    args: &[String],
-    label: &str,
-    mut confirm: impl FnMut() -> Result<(), String>,
-) {
-    let mut last_observation = "post-condition was not checked".to_owned();
-    for attempt in 0..ACTION_ATTEMPTS {
-        if attempt > 0 && confirm().is_ok() {
-            return;
-        }
-        let output = scoped_zellij(xdg)
-            .args(["--session", session])
-            .args(args.iter().map(String::as_str))
-            .bounded_output()
-            .unwrap_or_else(|err| panic!("{label} failed to run for {session}: {err}"));
-        assert!(
-            output.status.success(),
-            "{label} failed for {session}: {}",
-            String::from_utf8_lossy(&output.stderr),
-        );
-        let deadline = Instant::now() + ACTION_CONFIRM_WINDOW;
-        loop {
-            match confirm() {
-                Ok(()) => return,
-                Err(observation) => last_observation = observation,
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(ACTION_CONFIRM_STEP);
-        }
-    }
-    panic!(
-        "{label} did not materialize after {ACTION_ATTEMPTS} attempts in {session}; last observation: {last_observation}"
+pub(in crate::backend::zellij) fn open_new_tab(xdg: &Path, session: &str) {
+    let before = PaneSnapshot::expect(xdg, session).tab_ids();
+    let output = scoped_zellij(xdg)
+        .args(["--session", session, "action", "new-tab"])
+        .bounded_output()
+        .unwrap_or_else(|err| panic!("new-tab failed to run for {session}: {err}"));
+    assert!(
+        output.status.success(),
+        "new-tab failed for {session}: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    poll_until(
+        SPAWN_TIMEOUT,
+        || list_panes(xdg, session).map(|snapshot| snapshot.tab_ids()),
+        |after| after.iter().filter(|id| !before.contains(id)).count() == 1,
+        &format!("one fresh tab after {before:?} in {session}"),
     );
 }
 
-pub(in crate::backend::zellij) fn open_new_tab(xdg: &Path, session: &str) {
-    let before = PaneSnapshot::expect(xdg, session).tab_ids();
-    let args = ["action".to_owned(), "new-tab".to_owned()];
-    action_until(xdg, session, &args, "new-tab", || {
-        let after = list_panes(xdg, session)?.tab_ids();
-        if after.iter().any(|id| !before.contains(id)) {
-            Ok(())
-        } else {
-            Err(format!("tabs still {after:?}; before tabs were {before:?}"))
-        }
-    });
-}
-
 pub(in crate::backend::zellij) fn spawn_sleep_pane(xdg: &Path, session: &str, cwd: &Path) {
-    let before = PaneSnapshot::expect(xdg, session).live_work_count();
-    let args = [
-        "action".to_owned(),
-        "new-pane".to_owned(),
-        "--cwd".to_owned(),
-        cwd.to_string_lossy().into_owned(),
-        "--".to_owned(),
-        "sleep".to_owned(),
-        "600".to_owned(),
-    ];
-    action_until(xdg, session, &args, "new-pane", || {
-        let after = list_panes(xdg, session)?.live_work_count();
-        (after > before)
-            .then_some(())
-            .ok_or_else(|| format!("live work panes still {after}; before was {before}"))
-    });
+    let before: BTreeSet<_> = PaneSnapshot::expect(xdg, session)
+        .panes
+        .iter()
+        .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+        .map(|pane| pane.id)
+        .collect();
+    let output = scoped_zellij(xdg)
+        .args(["--session", session, "action", "new-pane", "--cwd"])
+        .arg(cwd)
+        .args(["--", "sleep", "600"])
+        .bounded_output()
+        .unwrap_or_else(|err| panic!("new-pane failed to run for {session}: {err}"));
+    assert!(
+        output.status.success(),
+        "new-pane failed for {session}: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            list_panes(xdg, session).map(|snapshot| {
+                snapshot
+                    .panes
+                    .iter()
+                    .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+                    .map(|pane| pane.id)
+                    .filter(|id| !before.contains(id))
+                    .collect::<Vec<_>>()
+            })
+        },
+        |fresh| fresh.len() == 1,
+        &format!("one fresh work pane after {before:?} in {session}"),
+    );
 }
 
 pub(in crate::backend::zellij) fn new_tab_template_dump(xdg: &Path, session: &str) -> String {

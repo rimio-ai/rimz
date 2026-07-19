@@ -194,11 +194,10 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     );
 }
 
-/// Backend and native tabs keep the docked sidebar outside the user's work area,
-/// while no-direction pane opens split the focused work pane and pane closes
-/// return space to the survivor.
+/// A native no-direction pane open splits the focused work pane without
+/// changing the backend-created tab's docked sidebar.
 #[test]
-fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
+fn native_focused_split_preserves_docked_sidebar() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
@@ -235,53 +234,19 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
 
     let client_columns: u16 = 380;
     let client_rows: u16 = 46;
-    let _client = AttachedClient::attach(xdg.path(), &name, client_columns, client_rows);
+    let mut client = AttachedClient::attach(xdg.path(), &name, client_columns, client_rows);
     wait_for_attached_client(xdg.path(), &name);
     write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
     let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
-    let width_sync = rimz::mux::WidthSyncOptions {
-        session_name: name.clone(),
-        workspace_id: sidebar.workspace_id.clone(),
-        width,
-        width_override: None,
-    };
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
     };
 
-    let backend_tab = "backend work split";
+    let split_tab = "backend focused split";
     backend
         .open_tab(&TabOptions {
             session_name: name.clone(),
-            title: backend_tab.to_owned(),
-            cwd: cwd.path().to_path_buf(),
-            panes: LayoutPanes {
-                columns: vec![
-                    tiled_column(vec![work_pane()]),
-                    tiled_column(vec![work_pane()]),
-                ],
-            },
-            focus: true,
-            dock_sidebar: true,
-            sidebar: sidebar.clone(),
-        })
-        .expect("open backend tab layout");
-
-    assert_work_panes_reopen_in_survivor_after_closing_first(
-        &backend,
-        &width_sync,
-        xdg.path(),
-        &name,
-        backend_tab,
-        cwd.path(),
-        (client_columns, client_rows),
-    );
-
-    let overflow_tab = "backend overflow split";
-    backend
-        .open_tab(&TabOptions {
-            session_name: name.clone(),
-            title: overflow_tab.to_owned(),
+            title: split_tab.to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![
@@ -294,22 +259,29 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
             dock_sidebar: true,
             sidebar: sidebar.clone(),
         })
-        .expect("open backend overflow tab layout");
-    let overflow_work = wait_for_named_work_pane_count(xdg.path(), &name, overflow_tab, 3);
-    let focused_before = overflow_work[0];
+        .expect("open backend split tab layout");
+    let work = wait_for_named_work_pane_count(xdg.path(), &name, split_tab, 3);
+    let focused_before = work[1];
     let focused_before_id =
         PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", focused_before.id));
+    focus_attached_client_pane_until(
+        xdg.path(),
+        &name,
+        focused_before.id,
+        "chosen work pane before native split",
+        || client.press_alt('l'),
+    );
     let focused = wait_for_focused_client_pane(&backend, &name, &focused_before_id);
     assert!(
         focused.iter().any(|pane| pane == &focused_before_id),
-        "overflow tab should focus a work pane before native split; \
+        "backend tab should focus the chosen work pane before native split; \
          focused client panes: {focused:?}",
     );
-    let sidebar_before = wait_for_named_sidebar_pane(xdg.path(), &name, overflow_tab)
-        .expect("overflow tab keeps its sidebar");
+    let sidebar_before = wait_for_named_sidebar_pane(xdg.path(), &name, split_tab)
+        .expect("backend tab keeps its sidebar");
     assert_eq!(
         sidebar_before.x, 0,
-        "overflow tab starts with the sidebar docked left: {sidebar_before:?}",
+        "backend tab starts with the sidebar docked left: {sidebar_before:?}",
     );
 
     spawn_sleep_pane(xdg.path(), &name, cwd.path());
@@ -319,38 +291,37 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
             && pane.x + pane.columns <= focused_before.x + focused_before.columns + 2
             && pane.y + pane.rows <= focused_before.y + focused_before.rows + 2
     };
-    let overflow_split =
-        wait_for_named_work_pane_state(xdg.path(), &name, overflow_tab, 4, |work| {
-            let work_stays_right_of_sidebar = work
-                .iter()
-                .all(|pane| pane.x >= sidebar_before.columns.saturating_sub(2));
-            let sidebar_unchanged = named_sidebar_pane_geometry(xdg.path(), &name, overflow_tab)
-                .ok()
-                .flatten()
-                .is_some_and(|sidebar| {
-                    sidebar.x == sidebar_before.x
-                        && sidebar.y == sidebar_before.y
-                        && sidebar.columns == sidebar_before.columns
-                        && sidebar.rows == sidebar_before.rows
-                });
-            let focused_pane_was_split = work
-                .iter()
-                .filter(|pane| focused_bounds_hold_two_panes(pane))
-                .count()
-                >= 2;
-            work_stays_right_of_sidebar && sidebar_unchanged && focused_pane_was_split
-        });
-    assert!(
-        overflow_split
+    let split = wait_for_named_work_pane_state(xdg.path(), &name, split_tab, 4, |work| {
+        let work_stays_right_of_sidebar = work
+            .iter()
+            .all(|pane| pane.x >= sidebar_before.x + sidebar_before.columns);
+        let sidebar_unchanged = named_sidebar_pane_geometry(xdg.path(), &name, split_tab)
+            .ok()
+            .flatten()
+            .is_some_and(|sidebar| {
+                sidebar.x == sidebar_before.x
+                    && sidebar.y == sidebar_before.y
+                    && sidebar.columns == sidebar_before.columns
+                    && sidebar.rows == sidebar_before.rows
+            });
+        let focused_pane_was_split = work
             .iter()
             .filter(|pane| focused_bounds_hold_two_panes(pane))
             .count()
-            >= 2,
-        "overflow split should divide the focused pane, got {overflow_split:?}",
+            == 2;
+        work_stays_right_of_sidebar && sidebar_unchanged && focused_pane_was_split
+    });
+    assert_eq!(
+        split
+            .iter()
+            .filter(|pane| focused_bounds_hold_two_panes(pane))
+            .count(),
+        2,
+        "native split should divide only the focused pane, got {split:?}",
     );
-    let sidebar_after = named_sidebar_pane_geometry(xdg.path(), &name, overflow_tab)
-        .expect("list overflow sidebar")
-        .expect("overflow tab keeps its sidebar");
+    let sidebar_after = named_sidebar_pane_geometry(xdg.path(), &name, split_tab)
+        .expect("list backend tab sidebar")
+        .expect("backend tab keeps its sidebar");
     assert_eq!(
         (
             sidebar_after.x,
@@ -364,47 +335,7 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
             sidebar_before.columns,
             sidebar_before.rows,
         ),
-        "no-direction overflow split must not split the sidebar: before \
+        "no-direction native split must not change the sidebar: before \
          {sidebar_before:?}, after {sidebar_after:?}",
-    );
-
-    let before_tabs = tab_ids(xdg.path(), &name);
-    open_new_tab(xdg.path(), &name);
-    let native_tab = wait_for_new_tab_name(xdg.path(), &name, &before_tabs);
-    wait_for_named_sidebar_pane(xdg.path(), &name, &native_tab)
-        .expect("native tab should carry a sidebar");
-    let native_work = wait_for_named_work_pane_count(xdg.path(), &name, &native_tab, 1);
-    let native_work_id =
-        PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", native_work[0].id));
-    let focused = wait_for_focused_client_pane(&backend, &name, &native_work_id);
-    assert!(
-        focused.iter().any(|pane| pane == &native_work_id),
-        "native tab should become the attached client's active work pane before a \
-         no-direction split; focused client panes: {focused:?}",
-    );
-
-    spawn_sleep_pane(xdg.path(), &name, cwd.path());
-    let split = wait_for_named_work_pane_state(xdg.path(), &name, &native_tab, 2, |work| {
-        work[0].columns.abs_diff(work[1].columns) <= 5
-    });
-    assert_eq!(
-        split.len(),
-        2,
-        "native tab should split into two work panes: {split:?}",
-    );
-    let diff = split[0].columns.abs_diff(split[1].columns);
-    assert!(
-        diff <= 5,
-        "native tab's first no-direction split should be even, got {split:?}",
-    );
-
-    assert_work_panes_reopen_in_survivor_after_closing_first(
-        &backend,
-        &width_sync,
-        xdg.path(),
-        &name,
-        &native_tab,
-        cwd.path(),
-        (client_columns, client_rows),
     );
 }

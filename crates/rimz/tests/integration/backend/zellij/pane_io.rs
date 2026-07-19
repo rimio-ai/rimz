@@ -3,8 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use rimz::mux::{
-    MuxBackend, NamedKey, PaneListOptions, PaneReadConsistency, SplitPaneOptions, SplitPlacement,
-    SplitTarget, ZellijBackend,
+    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, MuxBackend, NamedKey, PaneListOptions,
+    PaneReadConsistency, SplitPaneOptions, SplitPlacement, SplitTarget, ZellijBackend,
 };
 use tempfile::TempDir;
 
@@ -310,37 +310,83 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
 }
 
 /// `paste_text` writes one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
-/// the payload as a raw decimal byte list — the message delivery path. A
-/// bare shell renders the markers literally, so the inner text still lands in
-/// the pane; assert it arrives byte-for-byte. A leading dash is the regression
-/// guard: the byte-write path must never re-read the payload as a flag or key.
+/// the payload as a raw decimal byte list — the message delivery path. A raw
+/// reader captures the exact PTY bytes. A leading dash is the regression guard:
+/// the byte-write path must never re-read the payload as a flag or key.
 #[test]
 fn paste_text_delivers_the_literal_payload() {
     require_zellij!();
 
-    let session = ZellijSession::spawn(unique_session_name("paste"));
+    let xdg = scoped_runtime_dir();
+    std::fs::write(xdg.path().join(".zshrc"), "# hermetic test shell\n")
+        .expect("write test shell profile");
+    let session = ZellijSession::attach_pty(xdg, unique_session_name("paste"), true);
     let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
     let panes = wait_for_pane_count(session.xdg.path(), &session.name, 1);
     let pane_id = panes[0].pane_id.clone();
+    let marker_dir = TempDir::new().expect("paste marker tempdir");
+    let shell_ready = marker_dir.path().join("shell-ready");
+    let shell_release = marker_dir.path().join("shell-release");
+    let reader_ready = marker_dir.path().join("reader-ready");
+    let pasted_bytes = marker_dir.path().join("pasted-bytes");
 
     let payload = "-rf rimz-paste-marker";
-    backend.paste_text(&pane_id, payload).expect("paste_text");
+    let expected = format!("{BRACKET_PASTE_OPEN}{payload}{BRACKET_PASTE_CLOSE}").into_bytes();
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let captured = loop {
-        let text = backend
-            .capture_pane(&pane_id, None, false)
-            .map(|capture| capture.raw_text)
-            .unwrap_or_default();
-        if text.contains(payload) || Instant::now() >= deadline {
-            break text;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    assert!(
-        captured.contains(payload),
-        "the pasted payload should arrive contiguous and byte-safe, got: {captured:?}",
+    let shell_marker_command = format!(
+        "printf ready > {}; while [ ! -e {} ]; do sleep 0.05; done",
+        shell_ready.display(),
+        shell_release.display(),
     );
+    poll_until(
+        Duration::from_secs(10),
+        || {
+            if let Ok(bytes) = std::fs::read(&shell_ready)
+                && bytes == b"ready"
+            {
+                return Ok(bytes);
+            }
+            backend
+                .send_keys(&pane_id, &shell_marker_command)
+                .map_err(|err| err.to_string())?;
+            backend
+                .send_key(&pane_id, NamedKey::Enter)
+                .map_err(|err| err.to_string())?;
+            std::fs::read(&shell_ready).map_err(|err| err.to_string())
+        },
+        |bytes| bytes == b"ready",
+        "default shell readiness marker",
+    );
+    backend
+        .send_keys(
+            &pane_id,
+            &format!(
+                "stty raw -echo; printf ready > {}; dd bs=1 count={} of={} 2>/dev/null; stty sane",
+                reader_ready.display(),
+                expected.len(),
+                pasted_bytes.display(),
+            ),
+        )
+        .expect("type raw paste reader");
+    backend
+        .send_key(&pane_id, NamedKey::Enter)
+        .expect("start raw paste reader");
+    std::fs::write(&shell_release, b"release").expect("release synchronized shell");
+    poll_until(
+        Duration::from_secs(10),
+        || std::fs::read(&reader_ready).map_err(|err| err.to_string()),
+        |bytes| bytes == b"ready",
+        "raw paste reader readiness marker",
+    );
+
+    backend.paste_text(&pane_id, payload).expect("paste_text");
+    let actual = poll_until(
+        Duration::from_secs(10),
+        || std::fs::read(&pasted_bytes).map_err(|err| err.to_string()),
+        |bytes| bytes.len() == expected.len(),
+        "exact bracketed-paste bytes",
+    );
+    assert_eq!(actual, expected);
 }
 
 #[test]
