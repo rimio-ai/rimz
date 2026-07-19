@@ -1054,6 +1054,41 @@ fn log_classifier_matches_zellij_levels() {
 }
 
 #[test]
+fn log_diagnosis_names_a_wrapped_error_by_its_cause() {
+    use crate::mux::logtail::{LogImpact, LogState, LogicalRecord, RecordLine};
+
+    // Zellij prints the same wrapper above every recoverable failure, so two
+    // unrelated failures share a header and differ only underneath it.
+    let record = |causes: &str| {
+        let line = "ERROR  |???                      | 2026-07-17 12:23:34.169 [unnamed] zellij-client/src/lib.rs:975: a non-fatal error occured";
+        let RecordLine::Start(start) = parse_log_line(line) else {
+            panic!("record start");
+        };
+        LogicalRecord {
+            start,
+            text: format!("{line}\n\nCaused by:\n{causes}"),
+            truncated: false,
+        }
+    };
+    let mouse = record("    0: failed to set the cursor shape\n    1: I/O error (os error 5)");
+    let write = record("    0: failed to write to the pty\n    1: I/O error (os error 5)");
+
+    let mouse = diagnose_log_record(None, &mouse, None).unwrap();
+    let write = diagnose_log_record(None, &write, None).unwrap();
+
+    assert_eq!(
+        mouse.summary,
+        "failed to set the cursor shape: I/O error (os error 5)"
+    );
+    assert_eq!(mouse.state, LogState::Investigate);
+    assert_eq!(mouse.impact, LogImpact::Alarm);
+    assert_ne!(
+        mouse.key, write.key,
+        "two failures under one wrapper stay two issues"
+    );
+}
+
+#[test]
 fn log_diagnosis_requires_complete_known_lifecycle_evidence() {
     use crate::mux::logtail::{LogImpact, LogState, LogicalRecord};
 
@@ -1066,9 +1101,9 @@ fn log_diagnosis_requires_complete_known_lifecycle_evidence() {
         unknown_start.target.as_deref(),
         Some("zellij_server::route")
     );
-    assert_eq!(
-        unknown_start.timestamp.as_deref(),
-        Some("2026-07-17 12:23:34.169")
+    assert!(
+        unknown_start.at.is_some(),
+        "the structured header carries a readable time"
     );
     assert_eq!(unknown_start.thread.as_deref(), Some("server_router"));
     assert_eq!(
@@ -1100,7 +1135,12 @@ fn log_diagnosis_requires_complete_known_lifecycle_evidence() {
     assert!(diagnose_log_record(Some(&unknown), &broken_pipe, None).is_none());
     let investigate = diagnose_log_record(None, &unknown, None).unwrap();
     assert_eq!(investigate.state, LogState::Investigate);
-    assert_eq!(investigate.impact, LogImpact::Alarm);
+    assert_eq!(investigate.impact, LogImpact::Warn);
+    assert!(
+        investigate.summary.contains("version mismatch"),
+        "an unpaired unknown message names what it usually means: {}",
+        investigate.summary
+    );
 
     let cli_pipe = match parse_log_line(
         "ERROR  |zellij_server::route| 2026-07-17 12:23:44.875 [server_router] zellij-server/src/route.rs:75: Action CliPipe did not complete within 1s timeout",
@@ -1138,9 +1178,17 @@ fn logical_log_scan_groups_complete_0443_artifacts_conservatively() {
     )
     .unwrap();
 
-    let scan =
-        crate::mux::logtail::scan_tail(&path, 64 * 1024, 10, parse_log_line, diagnose_log_record)
-            .unwrap();
+    let scan = crate::mux::logtail::scan_tail(
+        &path,
+        crate::mux::logtail::LogWindow {
+            bytes: 64 * 1024,
+            issue_cap: 10,
+            since: None,
+        },
+        parse_log_line,
+        diagnose_log_record,
+    )
+    .unwrap();
 
     assert_eq!(scan.logical_records, 7);
     assert_eq!(scan.problem_records, 5);

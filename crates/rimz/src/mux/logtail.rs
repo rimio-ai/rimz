@@ -5,8 +5,10 @@ use std::fs::File;
 use std::io::{self, Read as _, Seek as _, SeekFrom};
 use std::path::Path;
 
+use jiff::Timestamp;
+
 const RECORD_TEXT_LIMIT: usize = 8 * 1024;
-const SAMPLE_CAP: usize = 2;
+const SAMPLE_CAP: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogSeverity {
@@ -31,7 +33,9 @@ pub enum LogImpact {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LogRecordStart {
     pub severity: Option<LogSeverity>,
-    pub timestamp: Option<String>,
+    /// When the multiplexer wrote this record, once the backend's line format
+    /// yields one. Records that carry no readable time survive every cutoff.
+    pub at: Option<Timestamp>,
     pub target: Option<String>,
     pub thread: Option<String>,
     pub source: Option<String>,
@@ -67,10 +71,22 @@ pub struct LogIssue {
     pub impact: LogImpact,
     pub summary: String,
     pub occurrences: usize,
-    pub first_occurrence: Option<String>,
-    pub last_occurrence: Option<String>,
+    pub first_occurrence: Option<Timestamp>,
+    pub last_occurrence: Option<Timestamp>,
     pub samples: Vec<String>,
     pub evidence_truncated: bool,
+}
+
+/// How much of the tail to read and which records count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogWindow {
+    /// Bytes of the tail to read.
+    pub bytes: u64,
+    /// Most-recent issue groups to keep; older groups are counted and dropped.
+    pub issue_cap: usize,
+    /// Ignore records written at or before this moment, so a cleared report
+    /// only judges what happened since.
+    pub since: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +94,8 @@ pub struct LogScan {
     pub size_bytes: u64,
     pub scanned_bytes: u64,
     pub logical_records: usize,
+    /// Records the cutoff excluded from diagnosis.
+    pub records_before_cutoff: usize,
     pub problem_records: usize,
     pub omitted_issue_groups: usize,
     pub issues: Vec<LogIssue>,
@@ -85,8 +103,7 @@ pub struct LogScan {
 
 pub fn scan_tail(
     path: &Path,
-    window: u64,
-    cap: usize,
+    window: LogWindow,
     parse_line: impl Fn(&str) -> RecordLine,
     diagnose: impl Fn(
         Option<&LogicalRecord>,
@@ -94,9 +111,14 @@ pub fn scan_tail(
         Option<&LogicalRecord>,
     ) -> Option<LogDiagnosis>,
 ) -> io::Result<LogScan> {
+    let LogWindow {
+        bytes: window_bytes,
+        issue_cap: cap,
+        since,
+    } = window;
     let mut file = File::open(path)?;
     let size_bytes = file.metadata()?.len();
-    let start = size_bytes.saturating_sub(window);
+    let start = size_bytes.saturating_sub(window_bytes);
     let starts_mid_line = if start > 0 {
         file.seek(SeekFrom::Start(start - 1))?;
         let mut previous = [0_u8; 1];
@@ -143,6 +165,16 @@ pub fn scan_tail(
     }
 
     let logical_records = records.len();
+    // A record the cutoff excludes leaves the pool entirely, so neighbour-aware
+    // diagnosis never pairs a fresh record with a dismissed one.
+    records.retain(|record| {
+        record
+            .start
+            .at
+            .zip(since)
+            .is_none_or(|(at, since)| at > since)
+    });
+    let records_before_cutoff = logical_records - records.len();
     let mut problem_records = 0usize;
     let mut groups = Vec::<(String, usize, LogIssue)>::new();
     let mut by_key = HashMap::<String, usize>::new();
@@ -169,10 +201,10 @@ pub fn scan_tail(
             let issue = &mut groups[group_index].2;
             issue.occurrences = issue.occurrences.saturating_add(1);
             if issue.first_occurrence.is_none() {
-                issue.first_occurrence.clone_from(&record.start.timestamp);
+                issue.first_occurrence = record.start.at;
             }
-            if record.start.timestamp.is_some() {
-                issue.last_occurrence.clone_from(&record.start.timestamp);
+            if record.start.at.is_some() {
+                issue.last_occurrence = record.start.at;
             }
             issue.evidence_truncated |= record.truncated;
             let sample = diagnosis.sample.unwrap_or_else(|| record.text.clone());
@@ -192,8 +224,8 @@ pub fn scan_tail(
                 impact: diagnosis.impact,
                 summary: diagnosis.summary,
                 occurrences: 1,
-                first_occurrence: record.start.timestamp.clone(),
-                last_occurrence: record.start.timestamp.clone(),
+                first_occurrence: record.start.at,
+                last_occurrence: record.start.at,
                 samples: vec![diagnosis.sample.unwrap_or_else(|| record.text.clone())],
                 evidence_truncated: record.truncated,
             },
@@ -215,6 +247,7 @@ pub fn scan_tail(
         size_bytes,
         scanned_bytes,
         logical_records,
+        records_before_cutoff,
         problem_records,
         omitted_issue_groups,
         issues,
@@ -303,18 +336,38 @@ pub fn normalized_issue_key(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn window(bytes: u64, issue_cap: usize) -> LogWindow {
+        LogWindow {
+            bytes,
+            issue_cap,
+            since: None,
+        }
+    }
+
+    /// `WARN@5 text` stamps the record at second 5 of the epoch.
     fn parse(line: &str) -> RecordLine {
-        let (severity, message) = if let Some(message) = line.strip_prefix("INFO ") {
-            (None, message)
-        } else if let Some(message) = line.strip_prefix("WARN ") {
-            (Some(LogSeverity::Warn), message)
-        } else if let Some(message) = line.strip_prefix("ERROR ") {
-            (Some(LogSeverity::Error), message)
+        let (severity, rest) = if let Some(rest) = line.strip_prefix("INFO") {
+            (None, rest)
+        } else if let Some(rest) = line.strip_prefix("WARN") {
+            (Some(LogSeverity::Warn), rest)
+        } else if let Some(rest) = line.strip_prefix("ERROR") {
+            (Some(LogSeverity::Error), rest)
         } else {
             return RecordLine::Continuation;
         };
+        let (at, message) = match rest.strip_prefix('@') {
+            Some(rest) => {
+                let (secs, message) = rest.split_once(' ').unwrap();
+                (
+                    Some(Timestamp::from_second(secs.parse().unwrap()).unwrap()),
+                    message,
+                )
+            }
+            None => (None, rest.strip_prefix(' ').unwrap_or(rest)),
+        };
         RecordLine::Start(LogRecordStart {
             severity,
+            at,
             message: message.to_owned(),
             ..LogRecordStart::default()
         })
@@ -344,14 +397,14 @@ mod tests {
         )
         .unwrap();
 
-        let scan = scan_tail(&path, 1024, 10, parse, diagnose).unwrap();
+        let scan = scan_tail(&path, window(1024, 10), parse, diagnose).unwrap();
         assert_eq!(scan.logical_records, 3);
         assert_eq!(scan.problem_records, 2);
         assert_eq!(scan.issues[0].samples[0], "WARN first\nCaused by: detail\n");
     }
 
     #[test]
-    fn groups_before_cap_and_keeps_two_samples() {
+    fn groups_before_cap_and_keeps_one_sample() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mux.log");
         std::fs::write(
@@ -360,10 +413,43 @@ mod tests {
         )
         .unwrap();
 
-        let scan = scan_tail(&path, 1024, 1, parse, diagnose).unwrap();
+        let scan = scan_tail(&path, window(1024, 1), parse, diagnose).unwrap();
         assert_eq!(scan.problem_records, 4);
         assert_eq!(scan.omitted_issue_groups, 1);
         assert_eq!(scan.issues.len(), 1);
+    }
+
+    #[test]
+    fn cutoff_judges_only_records_written_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mux.log");
+        std::fs::write(&path, "WARN@10 dismissed\nWARN@20 kept\nWARN undated\n").unwrap();
+
+        let scan = scan_tail(
+            &path,
+            LogWindow {
+                bytes: 1024,
+                issue_cap: 10,
+                since: Some(Timestamp::from_second(15).unwrap()),
+            },
+            parse,
+            diagnose,
+        )
+        .unwrap();
+
+        assert_eq!(scan.logical_records, 3);
+        assert_eq!(scan.records_before_cutoff, 1);
+        assert_eq!(scan.problem_records, 2, "undated records survive a cutoff");
+        let summaries: Vec<_> = scan
+            .issues
+            .iter()
+            .map(|issue| issue.summary.as_str())
+            .collect();
+        assert_eq!(summaries, ["kept", "undated"]);
+        assert_eq!(
+            scan.issues[0].first_occurrence,
+            Some(Timestamp::from_second(20).unwrap())
+        );
     }
 
     #[test]
@@ -372,7 +458,7 @@ mod tests {
         let path = dir.path().join("mux.log");
         std::fs::write(&path, "WARN too old\ndetail\nINFO boundary\nERROR recent\n").unwrap();
 
-        let scan = scan_tail(&path, 27, 10, parse, diagnose).unwrap();
+        let scan = scan_tail(&path, window(27, 10), parse, diagnose).unwrap();
         assert_eq!(scan.problem_records, 1);
         assert_eq!(scan.issues[0].summary, "recent");
     }
@@ -384,7 +470,7 @@ mod tests {
         let recent = "ERROR recent\n";
         std::fs::write(&path, format!("WARN old\n{recent}")).unwrap();
 
-        let scan = scan_tail(&path, recent.len() as u64, 10, parse, diagnose).unwrap();
+        let scan = scan_tail(&path, window(recent.len() as u64, 10), parse, diagnose).unwrap();
 
         assert_eq!(scan.problem_records, 1);
         assert_eq!(scan.issues[0].summary, "recent");
@@ -396,7 +482,7 @@ mod tests {
         let path = dir.path().join("mux.log");
         std::fs::write(&path, format!("ERROR {}\n", "é".repeat(RECORD_TEXT_LIMIT))).unwrap();
 
-        let scan = scan_tail(&path, 32 * 1024, 10, parse, diagnose).unwrap();
+        let scan = scan_tail(&path, window(32 * 1024, 10), parse, diagnose).unwrap();
         assert!(scan.issues[0].evidence_truncated);
         assert!(scan.issues[0].samples[0].is_char_boundary(scan.issues[0].samples[0].len()));
     }

@@ -44,20 +44,39 @@ fn parts(health: Health) -> (&'static str, anstyle::Style) {
     crate::cli::render::verdict(role)
 }
 
+/// Running count of what the report found, kept per section so the closing
+/// line can point at where to look rather than just how much there is.
 #[derive(Default)]
 struct Tally {
-    warns: usize,
-    alarms: usize,
+    section: &'static str,
+    warns: Vec<&'static str>,
+    alarms: Vec<&'static str>,
 }
 
 impl Tally {
+    fn enter(&mut self, section: &'static str) {
+        self.section = section;
+    }
+
     fn record(&mut self, health: Health) {
-        match health {
-            Health::Warn => self.warns += 1,
-            Health::Alarm => self.alarms += 1,
-            Health::Ok | Health::Info | Health::Neutral => {}
+        let bucket = match health {
+            Health::Warn => &mut self.warns,
+            Health::Alarm => &mut self.alarms,
+            Health::Ok | Health::Info | Health::Neutral => return,
+        };
+        bucket.push(self.section);
+    }
+}
+
+/// The sections a bucket touched, in report order and named once each.
+fn sections(hits: &[&'static str]) -> String {
+    let mut seen = Vec::new();
+    for hit in hits {
+        if !seen.contains(hit) {
+            seen.push(*hit);
         }
     }
+    seen.join(", ")
 }
 
 /// A glyph-only cell for a table's status column.
@@ -100,7 +119,9 @@ fn style_of(health: Health) -> anstyle::Style {
 }
 
 /// Open a titled section: a blank line then the heading in the accent tone.
-fn section(w: &mut impl Write, title: &str) -> io::Result<()> {
+/// Entering also aims the tally, so every finding below is attributed here.
+fn section(w: &mut impl Write, tally: &mut Tally, title: &'static str) -> io::Result<()> {
+    tally.enter(title);
     writeln!(w)?;
     writeln!(w, "{}", paint(palette::header(), title))
 }
@@ -149,7 +170,7 @@ fn render_machine_config(
     config: &MachineConfigHealth,
     tally: &mut Tally,
 ) -> io::Result<()> {
-    section(w, "MACHINE CONFIG")?;
+    section(w, tally, "MACHINE CONFIG")?;
     if config.broken_files.is_empty() {
         let mut kv = KeyVals::new().indent(2);
         kv.push(
@@ -190,7 +211,7 @@ fn render_identity(w: &mut impl Write, version: &str, host: &Host) -> io::Result
 }
 
 fn render_terminal(w: &mut impl Write, terminal: &Terminal, tally: &mut Tally) -> io::Result<()> {
-    section(w, "TERMINAL")?;
+    section(w, tally, "TERMINAL")?;
     let mut kv = KeyVals::new().indent(2);
     let depth_health = if terminal.resolved_depth == "truecolor" {
         Health::Ok
@@ -239,7 +260,7 @@ fn render_workspace(
     workspace: &Probe<Workspace>,
     tally: &mut Tally,
 ) -> io::Result<()> {
-    section(w, "WORKSPACE")?;
+    section(w, tally, "WORKSPACE")?;
     let mut kv = KeyVals::new().indent(2);
     match workspace {
         Probe::Unavailable { error } => {
@@ -285,7 +306,7 @@ fn render_workspace(
 }
 
 fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Result<()> {
-    section(w, "MULTIPLEXER")?;
+    section(w, tally, "MULTIPLEXER")?;
     let mux = match mux {
         Probe::Unavailable { error } => {
             let mut kv = KeyVals::new().indent(2);
@@ -303,7 +324,7 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
         Some(active) => kv.push("binary", cell(binary_label(active)).fg(palette::body())),
         None => kv.push("binary", verdict(tally, Health::Warn, "not found on PATH")),
     }
-    kv.push("log", mux_log_cell(tally, &mux.log));
+    push_mux_log(&mut kv, tally, &mux.log);
     if let Some(socket) = &mux.socket {
         kv.push("socket", cell(socket.as_str()).fg(palette::body()));
     }
@@ -452,15 +473,58 @@ fn push_capabilities(kv: &mut KeyVals, tally: &mut Tally, capabilities: &Capabil
     }
 }
 
-fn mux_log_cell(tally: &mut Tally, log: &MuxLog) -> Cell {
-    match log {
-        MuxLog::Ready {
-            path, size_bytes, ..
-        } => cell(format!("{path} ({})", fmt_bytes(*size_bytes))).fg(palette::body()),
-        MuxLog::Missing { path } => cell(format!("none yet ({path})")).fg(palette::faint()),
-        MuxLog::Disabled { hint } => cell(hint.as_str()).fg(palette::faint()),
-        MuxLog::Unavailable { error } => unavailable(tally, Health::Warn, error),
+/// Where the log verdict below comes from: the file, how far back the scan
+/// reached, and which sessions can write into it. Provenance rather than a
+/// verdict, so the issue lines under the section carry the health alone.
+fn push_mux_log(kv: &mut KeyVals, tally: &mut Tally, log: &MuxLog) {
+    let MuxLog::Ready {
+        path,
+        scope,
+        size_bytes,
+        scanned_bytes,
+        records_before_cutoff,
+        since,
+        ..
+    } = log
+    else {
+        let value = match log {
+            MuxLog::Missing { path } => cell(format!("none yet ({path})")).fg(palette::faint()),
+            MuxLog::Disabled { hint } => cell(hint.as_str()).fg(palette::faint()),
+            MuxLog::Unavailable { error } => unavailable(tally, Health::Warn, error),
+            MuxLog::Ready { .. } => unreachable!("matched above"),
+        };
+        kv.push("log", value);
+        return;
+    };
+    let mut reach = format!(
+        "last {} of {}",
+        fmt_bytes(*scanned_bytes),
+        fmt_bytes(*size_bytes)
+    );
+    if let Some(since) = since {
+        reach.push_str(&format!(
+            ", since you cleared {}",
+            age_short(Timestamp::now(), *since)
+        ));
+        if *records_before_cutoff > 0 {
+            reach.push_str(&format!(
+                " ({records_before_cutoff} older records dismissed)"
+            ));
+        }
     }
+    let scope = match scope {
+        LogScope::HostUser { uid } => {
+            format!("written by every zellij server running as uid {uid}")
+        }
+        LogScope::Server => "written by this room's tmux server".to_owned(),
+    };
+    kv.push_lines(
+        "log",
+        vec![
+            vec![cell(home_relative(path)).fg(palette::body())],
+            vec![cell(format!("read {reach} · {scope}")).fg(palette::faint())],
+        ],
+    );
 }
 
 fn session_health_cell(tally: &mut Tally, health: &Probe<SessionHealth>) -> Cell {
@@ -875,11 +939,16 @@ fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> 
     Ok(())
 }
 
+/// The log's verdict: one line per issue worth a human's time, then a single
+/// line accounting for the lifecycle records the room provokes by running.
+///
+/// Expected records outnumber real ones by orders of magnitude in a busy room,
+/// so they earn a count and a naming, never a line each. An issue under
+/// investigation leads with what it means, and only an alarm carries its raw
+/// record, because that is the only case where the reader needs the forensics.
 fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> io::Result<()> {
     let MuxLog::Ready {
-        scope,
         problem_records,
-        scanned_bytes,
         omitted_issue_groups,
         issues,
         ..
@@ -887,46 +956,44 @@ fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> 
     else {
         return Ok(());
     };
-    match scope {
-        LogScope::HostUser { uid } => note(
-            tally,
-            w,
-            Health::Info,
-            &format!("log scope: host user uid {uid}; records may come from other Zellij sessions"),
-        )?,
-        LogScope::Server => note(tally, w, Health::Info, "log scope: active tmux server")?,
-    }
     if *problem_records == 0 {
-        return note(tally, w, Health::Ok, "log: no recent warnings or errors");
+        return note(tally, w, Health::Ok, "log: nothing to report");
     }
-    for issue in issues {
+    let (expected, investigate): (Vec<_>, Vec<_>) = issues
+        .iter()
+        .partition(|issue| issue.state != DoctorState::Investigate);
+
+    if investigate.is_empty() {
+        note(tally, w, Health::Ok, "log: nothing needing attention")?;
+    }
+    for issue in investigate {
         let health = doctor_health(issue.state, issue.impact);
-        let range = match (&issue.first_occurrence, &issue.last_occurrence) {
-            (Some(first), Some(last)) if first != last => format!(" · {first} to {last}"),
-            (Some(at), _) | (_, Some(at)) => format!(" · at {at}"),
-            (None, None) => String::new(),
-        };
         note(
             tally,
             w,
             health,
+            &format!("{} ({})", issue.summary, issue_span(issue)),
+        )?;
+        if issue.impact == DoctorImpact::Alarm {
+            for sample in &issue.samples {
+                detail(w, palette::muted(), sample.trim_end())?;
+            }
+            if issue.evidence_truncated {
+                detail(w, palette::muted(), "evidence truncated at 8 KiB")?;
+            }
+        }
+    }
+    if !expected.is_empty() {
+        let occurrences: usize = expected.iter().map(|issue| issue.occurrences).sum();
+        note(
+            tally,
+            w,
+            Health::Info,
             &format!(
-                "{} {:?}/{:?} · {} occurrences{} in {} · {}",
-                issue.source_severity,
-                issue.state,
-                issue.impact,
-                issue.occurrences,
-                range,
-                fmt_bytes(*scanned_bytes),
-                issue.summary
+                "{occurrences} records are routine room lifecycle: {}",
+                naming(expected.iter().map(|issue| issue.summary.as_str()))
             ),
         )?;
-        for sample in &issue.samples {
-            detail(w, style_of(health), sample)?;
-        }
-        if issue.evidence_truncated {
-            detail(w, palette::muted(), "evidence truncated at 8 KiB")?;
-        }
     }
     if *omitted_issue_groups > 0 {
         detail(
@@ -936,6 +1003,46 @@ fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> 
         )?;
     }
     Ok(())
+}
+
+/// How often an issue fired and how recently, in the reader's own terms.
+fn issue_span(issue: &super::model::MuxLogIssue) -> String {
+    let count = match issue.occurrences {
+        1 => "once".to_owned(),
+        count => format!("{count}×"),
+    };
+    let now = Timestamp::now();
+    match (issue.first_occurrence, issue.last_occurrence) {
+        (Some(first), Some(last)) if first != last => format!(
+            "{count} over {}, last {}",
+            age_label(
+                last.duration_since(first)
+                    .as_secs()
+                    .try_into()
+                    .unwrap_or_default()
+            ),
+            age_short(now, last)
+        ),
+        (Some(at), _) | (_, Some(at)) => format!("{count}, {}", age_short(now, at)),
+        (None, None) => count,
+    }
+}
+
+/// Name the first few of a set and count the rest, so a fold still says what it
+/// swallowed.
+fn naming<'a>(summaries: impl Iterator<Item = &'a str>) -> String {
+    const NAMED: usize = 3;
+    let all: Vec<_> = summaries.collect();
+    let named = all
+        .iter()
+        .take(NAMED)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" · ");
+    match all.len().saturating_sub(NAMED) {
+        0 => named,
+        rest => format!("{named} · and {rest} more"),
+    }
 }
 
 fn floor_cell(tally: &mut Tally, meets: bool, min: (u32, u32, u32)) -> Cell {
@@ -952,59 +1059,102 @@ fn floor_cell(tally: &mut Tally, meets: bool, min: (u32, u32, u32)) -> Cell {
     )
 }
 
+/// Hook wiring, sorted by what the reader can act on.
+///
+/// A working agent is worth one word, so the installed set collapses to a
+/// single roll-up and the table holds only the agents asking for a command.
+/// Agents absent from the machine stay in a closing aside: they are the
+/// section's largest group and its least interesting one. Names render plain
+/// here — provider color marks agents at work, and a wiring audit is not that.
 fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -> io::Result<()> {
-    section(w, "HOOKS")?;
-    let (mut not_detected, table_rows): (Vec<_>, Vec<_>) = report.hooks.iter().partition(|row| {
-        !row.detected
-            && matches!(
-                &row.status,
-                HookStatus::NotDetected | HookStatus::Unsupported { .. }
-            )
-    });
-    let has_table_rows = !table_rows.is_empty();
-    let mut table = Table::new(["", "AGENT", "STATUS", "FIX"]);
-    for row in table_rows {
-        let (health, fix) = match &row.status {
-            HookStatus::Installed => (Health::Ok, String::new()),
-            HookStatus::InstalledUntrusted { events, fix } => (
-                Health::Warn,
-                format!(
-                    "silently skips untrusted hooks ({}) — {fix}",
-                    events.join(", ")
-                ),
-            ),
-            HookStatus::NotInstalled { fix } => (Health::Alarm, fix.clone()),
-            HookStatus::NotDetected => (Health::Neutral, String::new()),
-            HookStatus::Unsupported { reason } => (Health::Neutral, reason.clone()),
-        };
-        let fix = if fix.is_empty() { "-".to_owned() } else { fix };
-        table.row([
-            badge(tally, health),
-            cell(row.kind.as_str()).fg(palette::identity(&row.kind)),
-            cell(row.status.label()).fg(style_of(health)),
-            cell(fix).dash(),
-        ]);
+    section(w, tally, "HOOKS")?;
+    let mut installed = Vec::new();
+    let mut needs_action = Vec::new();
+    let mut unsupported = Vec::new();
+    let mut absent = Vec::new();
+    for row in &report.hooks {
+        match &row.status {
+            HookStatus::Installed => installed.push(row.kind.as_str()),
+            HookStatus::InstalledUntrusted { .. } | HookStatus::NotInstalled { .. } => {
+                needs_action.push(row);
+            }
+            HookStatus::Unsupported { reason } if row.detected => {
+                unsupported.push((row.kind.as_str(), reason.as_str()));
+            }
+            HookStatus::NotDetected | HookStatus::Unsupported { .. } => {
+                absent.push(row.kind.as_str());
+            }
+        }
     }
-    if has_table_rows {
+
+    if installed.is_empty() {
+        writeln!(
+            w,
+            "  {}",
+            paint(palette::faint(), "no agent reports to RimZ yet")
+        )?;
+    } else {
+        installed.sort_unstable();
+        writeln!(
+            w,
+            "  {}",
+            paint(
+                palette::muted(),
+                &format!(
+                    "{} reporting to RimZ: {}",
+                    installed.len(),
+                    installed.join(", ")
+                )
+            )
+        )?;
+    }
+
+    if !needs_action.is_empty() {
+        let mut table = Table::new(["", "AGENT", "STATUS", "FIX"]);
+        for row in needs_action {
+            let (health, fix) = match &row.status {
+                HookStatus::InstalledUntrusted { events, fix } => (
+                    Health::Warn,
+                    format!(
+                        "silently skips untrusted hooks ({}) — {fix}",
+                        events.join(", ")
+                    ),
+                ),
+                HookStatus::NotInstalled { fix } => (Health::Alarm, fix.clone()),
+                _ => unreachable!("only actionable statuses reach the table"),
+            };
+            table.row([
+                badge(tally, health),
+                cell(row.kind.as_str()),
+                cell(row.status.label()).fg(style_of(health)),
+                cell(fix).dash(),
+            ]);
+        }
         table.render(w)?;
     }
-    if !not_detected.is_empty() {
-        not_detected.sort_by(|left, right| left.kind.cmp(&right.kind));
-        let kinds = not_detected
-            .iter()
-            .map(|row| row.kind.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
+
+    for (kind, reason) in unsupported {
         note(
             tally,
             w,
             Health::Neutral,
-            &format!("not detected on this machine: {kinds}"),
+            &format!("{kind} is installed but cannot carry RimZ hooks"),
+        )?;
+        detail(w, palette::faint(), reason)?;
+    }
+
+    if !absent.is_empty() {
+        absent.sort_unstable();
+        note(
+            tally,
+            w,
+            Health::Neutral,
+            &format!("not found on this machine: {}", absent.join(", ")),
         )?;
         detail(
             w,
             palette::faint(),
-            "hooks are offered automatically once an agent is installed",
+            "RimZ offers their hooks as soon as one appears",
         )?;
     }
     Ok(())
@@ -1014,7 +1164,7 @@ fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) 
     if report.plugins.is_empty() {
         return Ok(());
     }
-    section(w, "AGENT PLUGINS")?;
+    section(w, tally, "AGENT PLUGINS")?;
     let mut table = Table::new(["", "AGENT", "STATUS", "MANIFEST", "DETAIL"]);
     for plugin in &report.plugins {
         let (health, status, detail) = plugin_verdict(plugin);
@@ -1088,7 +1238,7 @@ fn push_probe_rows(table: &mut Table, tally: &mut Tally, plugin: &PluginRow) {
 }
 
 fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) -> io::Result<()> {
-    section(w, "LOOP TASKS")?;
+    section(w, tally, "LOOP TASKS")?;
     if loop_tasks.tasks.is_empty() {
         return writeln!(w, "  {}", paint(palette::faint(), "none configured"));
     }
@@ -1121,7 +1271,7 @@ fn render_remote_control(
     remote: &RemoteControl,
     tally: &mut Tally,
 ) -> io::Result<()> {
-    section(w, "REMOTE CONTROL")?;
+    section(w, tally, "REMOTE CONTROL")?;
     match remote {
         RemoteControl::Unavailable { error } => {
             let mut kv = KeyVals::new().indent(2);
@@ -1199,7 +1349,7 @@ fn render_remote_on(
 }
 
 fn render_storage(w: &mut impl Write, disk_usage: &Storage, tally: &mut Tally) -> io::Result<()> {
-    section(w, "STORAGE")?;
+    section(w, tally, "STORAGE")?;
     writeln!(
         w,
         "  {}",
@@ -1234,7 +1384,7 @@ fn render_protocols(
     protocols: &Protocols,
     tally: &mut Tally,
 ) -> io::Result<()> {
-    section(w, "PROTOCOLS")?;
+    section(w, tally, "PROTOCOLS")?;
     let mut kv = KeyVals::new().indent(2);
     kv.push("event", cell(protocols.event));
     kv.push("sidebar", cell(protocols.sidebar));
@@ -1280,7 +1430,7 @@ fn render_protocols(
 }
 
 fn render_trust(w: &mut impl Write, trust: &Probe<Trust>, tally: &mut Tally) -> io::Result<()> {
-    section(w, "TRUST")?;
+    section(w, tally, "TRUST")?;
     let mut kv = KeyVals::new().indent(2);
     let value = match trust {
         Probe::Unavailable { error } => unavailable(tally, Health::Alarm, error),
@@ -1314,7 +1464,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
     let Some(rollup) = &report.agents else {
         return Ok(());
     };
-    section(w, "AGENTS")?;
+    section(w, tally, "AGENTS")?;
     match rollup {
         AgentRollup::Unavailable { error } => {
             note(tally, w, Health::Alarm, &unavailable_text(error))
@@ -1373,7 +1523,7 @@ fn render_messages(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally)
     let Some(messages) = &report.messages else {
         return Ok(());
     };
-    section(w, "MESSAGES")?;
+    section(w, tally, "MESSAGES")?;
     let messages = match messages {
         Probe::Unavailable { error } => {
             return note(tally, w, Health::Alarm, &unavailable_text(error));
@@ -1461,7 +1611,7 @@ fn render_diagnostics(
     let Some(diagnostics) = &report.diagnostics else {
         return Ok(());
     };
-    section(w, "DIAGNOSTICS")?;
+    section(w, tally, "DIAGNOSTICS")?;
     if let Some(cleared_at) = report.history_cleared_at {
         writeln!(
             w,
@@ -1482,7 +1632,13 @@ fn render_diagnostics(
             "  {}",
             paint(palette::faint(), &format!("no recent records ({path})"))
         ),
+        // An incident RimZ already understood — expected, contained, or
+        // recovered — is evidence that the machinery worked. Those earn a
+        // counted line by kind; the table is for what is still open.
         Diagnostics::Ready { path, incidents } => {
+            let (settled, open): (Vec<_>, Vec<_>) = incidents
+                .iter()
+                .partition(|incident| incident.state != DoctorState::Investigate);
             writeln!(
                 w,
                 "  {}",
@@ -1492,43 +1648,66 @@ fn render_diagnostics(
                 )
             )?;
             let now_ms = rimz::sidebar::timing::unix_now_ms();
-            let mut table =
-                Table::new(["", "STATE", "IMPACT", "KIND", "SEEN", "SUMMARY"]).right(&[4]);
-            for incident in incidents {
+            let mut table = Table::new(["", "KIND", "SEEN", "SUMMARY"]).right(&[2]);
+            for incident in &open {
                 let health = doctor_health(incident.state, incident.impact);
-                let seen = if incident.first_at_ms == incident.last_at_ms {
-                    age_ms_short(now_ms, incident.last_at_ms)
-                } else {
-                    format!(
-                        "{} to {}",
-                        age_ms_short(now_ms, incident.first_at_ms),
-                        age_ms_short(now_ms, incident.last_at_ms)
-                    )
-                };
-                let mut summary = format!(
-                    "{} · {} observers · {} records",
-                    incident.summary, incident.distinct_observer_count, incident.record_count
-                );
-                if incident.stale_build
-                    && let Some(build) = &incident.build
-                {
-                    // ponytail: SUMMARY is the unpadded final column; add styled Cell spans
-                    // before giving this table a max width.
-                    summary.push_str(&paint(palette::muted(), &format!(" · old build {build}")));
-                }
                 table.row([
                     badge(tally, health),
-                    cell(format!("{:?}", incident.state).to_ascii_lowercase()).fg(style_of(health)),
-                    cell(format!("{:?}", incident.impact).to_ascii_lowercase())
-                        .fg(style_of(health)),
-                    cell(incident.kind.as_str()),
-                    cell(seen),
-                    cell(summary).fg(palette::body()),
+                    cell(incident.kind.as_str()).fg(style_of(health)),
+                    cell(incident_seen(now_ms, incident)),
+                    cell(incident_summary(incident)).fg(palette::body()),
                 ]);
             }
-            table.render(w)
+            if !open.is_empty() {
+                table.render(w)?;
+            }
+            if !settled.is_empty() {
+                let mut kinds: Vec<_> = settled
+                    .iter()
+                    .map(|incident| incident.kind.as_str())
+                    .collect();
+                kinds.sort_unstable();
+                kinds.dedup();
+                note(
+                    tally,
+                    w,
+                    Health::Info,
+                    &format!(
+                        "{} handled and closed themselves: {}",
+                        settled.len(),
+                        naming(kinds.into_iter())
+                    ),
+                )?;
+            }
+            Ok(())
         }
     }
+}
+
+fn incident_seen(now_ms: u64, incident: &super::model::DiagIncident) -> String {
+    if incident.first_at_ms == incident.last_at_ms {
+        return age_ms_short(now_ms, incident.last_at_ms);
+    }
+    format!(
+        "{} to {}",
+        age_ms_short(now_ms, incident.first_at_ms),
+        age_ms_short(now_ms, incident.last_at_ms)
+    )
+}
+
+fn incident_summary(incident: &super::model::DiagIncident) -> String {
+    let mut summary = incident.summary.clone();
+    if incident.record_count > 1 {
+        summary.push_str(&format!(" · {} records", incident.record_count));
+    }
+    if incident.stale_build
+        && let Some(build) = &incident.build
+    {
+        // ponytail: SUMMARY is the unpadded final column; add styled Cell spans
+        // before giving this table a max width.
+        summary.push_str(&paint(palette::muted(), &format!(" · old build {build}")));
+    }
+    summary
 }
 
 fn doctor_health(state: DoctorState, impact: DoctorImpact) -> Health {
@@ -1550,7 +1729,7 @@ fn render_last_incident(
     let Some(incident) = &report.last_incident else {
         return Ok(());
     };
-    section(w, "LAST INCIDENT")?;
+    section(w, tally, "LAST INCIDENT")?;
     let now = Timestamp::now();
     note(
         tally,
@@ -1592,33 +1771,46 @@ fn render_last_incident(
     Ok(())
 }
 
+/// The closing line: how many findings, which sections hold them, and what the
+/// two glyphs mean, so the count is a place to go rather than a number.
 fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
     writeln!(w)?;
-    if tally.alarms > 0 {
-        writeln!(
+    if tally.alarms.is_empty() && tally.warns.is_empty() {
+        return writeln!(
             w,
             "{}",
-            paint(
-                palette::alarm(),
-                &format!(
-                    "✗ {}, ! {}",
-                    plural(tally.alarms, "problem"),
-                    plural(tally.warns, "warning")
-                )
-            )
-        )
-    } else if tally.warns > 0 {
-        writeln!(
-            w,
-            "{}",
-            paint(
-                palette::warn(),
-                &format!("! {}", plural(tally.warns, "warning"))
-            )
-        )
-    } else {
-        writeln!(w, "{}", paint(palette::good(), "✓ no problems found"))
+            paint(palette::good(), "✓ everything checked is healthy")
+        );
     }
+    let mut parts = Vec::new();
+    if !tally.alarms.is_empty() {
+        parts.push(format!(
+            "✗ {} in {}",
+            plural(tally.alarms.len(), "problem"),
+            sections(&tally.alarms)
+        ));
+    }
+    if !tally.warns.is_empty() {
+        parts.push(format!(
+            "! {} in {}",
+            plural(tally.warns.len(), "warning"),
+            sections(&tally.warns)
+        ));
+    }
+    let headline = if tally.alarms.is_empty() {
+        palette::warn()
+    } else {
+        palette::alarm()
+    };
+    writeln!(w, "{}", paint(headline, &parts.join("  ·  ")))?;
+    writeln!(
+        w,
+        "{}",
+        paint(
+            palette::muted(),
+            "  ✗ marks something broken, with the command that fixes it beside it; ! marks something degraded that still works",
+        )
+    )
 }
 
 fn plural(count: usize, noun: &str) -> String {

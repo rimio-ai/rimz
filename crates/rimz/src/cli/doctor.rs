@@ -72,7 +72,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
                 error: err.to_string(),
             },
         },
-        mux: runtime::collect_mux(globals.mux, ws),
+        mux: runtime::collect_mux(globals.mux, ws, history_cleared_at),
         terminal: runtime::collect_terminal(),
         machine_config: collect_machine_config(),
         hooks: agents::collect_hooks(),

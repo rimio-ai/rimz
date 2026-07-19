@@ -16,7 +16,9 @@ use rimz::{RuntimePaths, StatePaths};
 use super::model;
 
 const MUX_LOG_WINDOW_BYTES: u64 = 256 * 1024;
-const MUX_LOG_ENTRY_CAP: usize = 10;
+/// Issue groups to keep from the tail. Routine lifecycle groups share one
+/// rendered line, so the budget buys real findings rather than repetition.
+const MUX_LOG_ENTRY_CAP: usize = 24;
 const TOPOLOGY_CONFLICT_FRESH_MS: u64 = 10 * 60 * 1000;
 
 pub(super) fn collect_terminal() -> model::Terminal {
@@ -118,6 +120,7 @@ fn newest_crash_archive(crashes_dir: &Path) -> Option<PathBuf> {
 pub(super) fn collect_mux(
     mux_hint: Option<MuxName>,
     ws: Option<&rimz::ResolvedWorkspace>,
+    history_cleared_at: Option<jiff::Timestamp>,
 ) -> model::Probe<model::Mux> {
     let mux = match rimz::mux::auto_detect_backend(mux_hint) {
         Ok(mux) => mux,
@@ -140,7 +143,7 @@ pub(super) fn collect_mux(
         MuxName::Tmux => model::Capabilities::Tmux(collect_tmux_capabilities()),
     };
     let binaries = collect_mux_binaries(mux);
-    let log = collect_mux_log(mux);
+    let log = collect_mux_log(mux, history_cleared_at);
     let mut report = model::Mux {
         name: mux,
         version,
@@ -265,7 +268,12 @@ fn binary_row(install: binaries::BinaryInstall) -> model::MuxBinaryRow {
     }
 }
 
-fn collect_mux_log(mux: MuxName) -> model::MuxLog {
+fn collect_mux_log(mux: MuxName, since: Option<jiff::Timestamp>) -> model::MuxLog {
+    let window = logtail::LogWindow {
+        bytes: MUX_LOG_WINDOW_BYTES,
+        issue_cap: MUX_LOG_ENTRY_CAP,
+        since,
+    };
     match mux {
         MuxName::Zellij => {
             let path = zellij_mod::log_file();
@@ -275,6 +283,7 @@ fn collect_mux_log(mux: MuxName) -> model::MuxLog {
                     model::LogScope::HostUser {
                         uid: nix::unistd::Uid::current().as_raw(),
                     },
+                    window,
                     zellij_mod::parse_log_line,
                     zellij_mod::diagnose_log_record,
                 ),
@@ -290,6 +299,7 @@ fn collect_mux_log(mux: MuxName) -> model::MuxLog {
             Some(path) => scan_mux_log(
                 path,
                 model::LogScope::Server,
+                window,
                 tmux_mod::parse_log_line,
                 tmux_mod::diagnose_log_record,
             ),
@@ -303,6 +313,7 @@ fn collect_mux_log(mux: MuxName) -> model::MuxLog {
 fn scan_mux_log(
     path: std::path::PathBuf,
     scope: model::LogScope,
+    window: logtail::LogWindow,
     parse_line: fn(&str) -> logtail::RecordLine,
     diagnose: fn(
         Option<&logtail::LogicalRecord>,
@@ -310,19 +321,15 @@ fn scan_mux_log(
         Option<&logtail::LogicalRecord>,
     ) -> Option<logtail::LogDiagnosis>,
 ) -> model::MuxLog {
-    match logtail::scan_tail(
-        &path,
-        MUX_LOG_WINDOW_BYTES,
-        MUX_LOG_ENTRY_CAP,
-        parse_line,
-        diagnose,
-    ) {
+    match logtail::scan_tail(&path, window, parse_line, diagnose) {
         Ok(scan) => model::MuxLog::Ready {
             path: path.display().to_string(),
             scope,
             size_bytes: scan.size_bytes,
             scanned_bytes: scan.scanned_bytes,
             logical_records: scan.logical_records,
+            records_before_cutoff: scan.records_before_cutoff,
+            since: window.since,
             problem_records: scan.problem_records,
             omitted_issue_groups: scan.omitted_issue_groups,
             issues: scan

@@ -81,17 +81,19 @@ pub fn parse_log_line(line: &str) -> super::logtail::RecordLine {
     } else {
         None
     };
-    let timestamp = line
-        .split_whitespace()
-        .next()
-        .filter(|token| token.chars().any(|ch| ch.is_ascii_digit()))
-        .map(str::to_owned);
     RecordLine::Start(LogRecordStart {
         severity,
-        timestamp,
+        at: line.split_whitespace().next().and_then(parse_log_timestamp),
         message: line.to_owned(),
         ..LogRecordStart::default()
     })
+}
+
+/// tmux opens every log line with `<seconds>.<microseconds>` since the epoch.
+fn parse_log_timestamp(token: &str) -> Option<jiff::Timestamp> {
+    let (seconds, micros) = token.split_once('.')?;
+    let micros: i64 = format!("{micros:0<6}").get(..6)?.parse().ok()?;
+    jiff::Timestamp::new(seconds.parse().ok()?, i32::try_from(micros).ok()? * 1_000).ok()
 }
 
 pub fn diagnose_log_record(

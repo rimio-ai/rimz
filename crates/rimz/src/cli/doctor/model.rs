@@ -222,6 +222,10 @@ pub(super) enum MuxLog {
         size_bytes: u64,
         scanned_bytes: u64,
         logical_records: usize,
+        /// Records the `rimz doctor --clear` watermark held out of the verdict.
+        records_before_cutoff: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        since: Option<Timestamp>,
         problem_records: usize,
         omitted_issue_groups: usize,
         issues: Vec<MuxLogIssue>,
@@ -252,9 +256,9 @@ pub(super) struct MuxLogIssue {
     pub(super) summary: String,
     pub(super) occurrences: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) first_occurrence: Option<String>,
+    pub(super) first_occurrence: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) last_occurrence: Option<String>,
+    pub(super) last_occurrence: Option<Timestamp>,
     pub(super) samples: Vec<String>,
     pub(super) evidence_truncated: bool,
 }

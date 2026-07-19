@@ -140,6 +140,24 @@ fn log_classifier_matches_error_and_fatal_mentions() {
 }
 
 #[test]
+fn log_lines_carry_the_epoch_stamp_tmux_opens_them_with() {
+    use crate::mux::logtail::RecordLine;
+
+    let stamped = |line: &str| match parse_log_line(line) {
+        RecordLine::Start(start) => start.at,
+        RecordLine::Continuation => panic!("record start"),
+    };
+
+    assert_eq!(
+        stamped("1784493802.501234 server error: client lost"),
+        Some(jiff::Timestamp::new(1_784_493_802, 501_234_000).unwrap())
+    );
+    // A line tmux did not stamp survives every `--clear` cutoff rather than
+    // being dismissed on a guess.
+    assert_eq!(stamped("server error: no stamp here"), None);
+}
+
+#[test]
 fn tmux_extended_key_bindings_follow_extended_key_format() {
     let csi_u = crate::config::TmuxConfig {
         extended_keys_format: crate::config::TmuxExtendedKeysFormat::CsiU,

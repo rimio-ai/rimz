@@ -278,7 +278,7 @@ fn doctor_human_report_renders_titled_sections() {
     );
     let not_detected = stdout
         .lines()
-        .find(|line| line.contains("not detected on this machine:"))
+        .find(|line| line.contains("not found on this machine:"))
         .expect("absent-agent footer");
     assert!(not_detected.contains("grok"), "{not_detected}");
     assert!(
@@ -661,6 +661,75 @@ fn doctor_clear_dismisses_recorded_history() {
         1,
         "post-clear records remain visible: {fresh}"
     );
+}
+
+/// `--clear` covers the multiplexer's own log too: a server log spans days of
+/// unrelated sessions, so a report that ignores the watermark keeps re-raising
+/// history the operator already dismissed.
+#[test]
+fn doctor_clear_cuts_the_multiplexer_log_at_the_watermark() {
+    let env = Env::new();
+    let stub_dir = stub_mux_version(&env, "mux-bin", "zellij", "--version", "zellij 0.44.3");
+    let tmp = env.home_root.join("tmp");
+    let uid = nix::unistd::Uid::current().as_raw();
+    let log_path = tmp
+        .join(format!("zellij-{uid}"))
+        .join("zellij-log")
+        .join("zellij.log");
+    std::fs::create_dir_all(log_path.parent().expect("log parent")).expect("mkdir log dir");
+
+    // Zellij stamps records in local wall-clock time with no offset.
+    let stamp = |offset: jiff::Span| {
+        jiff::Zoned::now()
+            .checked_add(offset)
+            .expect("shifted time")
+            .strftime("%Y-%m-%d %H:%M:%S%.3f")
+            .to_string()
+    };
+    let record = |at: &str, message: &str| {
+        format!(
+            "ERROR  |zellij_server::pty       | {at} [pty] zellij-server/src/pty.rs:9: {message}\n"
+        )
+    };
+    std::fs::write(
+        &log_path,
+        record(&stamp(jiff::Span::new().hours(-2)), "old trouble"),
+    )
+    .expect("write zellij log");
+
+    let cleared = env
+        .rimz()
+        .args(["doctor", "--clear", "--json"])
+        .env("PATH", path_with_only(std::slice::from_ref(&stub_dir)))
+        .env("TMPDIR", &tmp)
+        .output()
+        .expect("spawn clear doctor");
+    let cleared = doctor_json(&cleared);
+    let log = &cleared["mux"]["ready"]["log"];
+    assert_eq!(log["records_before_cutoff"], 1);
+    assert_eq!(
+        log["problem_records"], 0,
+        "the dismissed record stops counting: {log}"
+    );
+
+    let mut appended = std::fs::read_to_string(&log_path).expect("read log");
+    appended.push_str(&record(&stamp(jiff::Span::new().minutes(5)), "new trouble"));
+    std::fs::write(&log_path, appended).expect("append zellij log");
+
+    let after = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", path_with_only(&[stub_dir]))
+            .env("TMPDIR", &tmp)
+            .output()
+            .expect("spawn doctor after clear"),
+    );
+    let log = &after["mux"]["ready"]["log"];
+    assert_eq!(log["records_before_cutoff"], 1);
+    assert_eq!(log["problem_records"], 1);
+    let issues = log["issues"].as_array().expect("issues");
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0]["summary"], "new trouble");
 }
 
 #[test]

@@ -1,8 +1,8 @@
 use super::*;
 use crate::cli::doctor::model::{
     HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow, MessageProblemRow,
-    MuxBinaries, OpenCounts, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
-    PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps,
+    MuxBinaries, MuxLogIssue, OpenCounts, PresencePluginRow, PresencePluginStatus,
+    PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps,
 };
 use rimz::ids::MuxName;
 
@@ -178,18 +178,22 @@ fn hooks_section_renders_glyph_status_and_fix() {
     });
     for expected in [
         "HOOKS",
-        "✓",
+        "1 reporting to RimZ: claude",
         "✗",
-        "installed",
         "not installed",
         "rimz hooks install codex",
-        "not detected on this machine: grok, kiro",
-        "hooks are offered automatically once an agent is installed",
-        "✗ 1 problem, ! 0 warnings",
+        "not found on this machine: grok, kiro",
+        "RimZ offers their hooks as soon as one appears",
+        "✗ 1 problem in HOOKS",
     ] {
         assert!(out.contains(expected), "missing {expected}:\n{out}");
     }
     assert!(!out.contains("unsupported"), "{out}");
+    assert!(
+        !out.lines()
+            .any(|line| line.contains("claude") && line.contains('│')),
+        "a working agent never spends a table row:\n{out}"
+    );
 }
 
 #[test]
@@ -266,6 +270,125 @@ fn mux_section_names_a_stranded_legacy_session_with_its_fix() {
     // Session-scoped: the user's other sessions on that server survive.
     assert!(out.contains("kill-session -t rimz-project-a1b2c3"), "{out}");
     assert!(!out.contains("kill-server"), "{out}");
+}
+
+fn log_issue(
+    summary: &str,
+    state: DoctorState,
+    impact: DoctorImpact,
+    occurrences: usize,
+) -> MuxLogIssue {
+    MuxLogIssue {
+        source_severity: "error".to_owned(),
+        state,
+        impact,
+        summary: summary.to_owned(),
+        occurrences,
+        first_occurrence: None,
+        last_occurrence: None,
+        samples: vec!["ERROR raw record text".to_owned()],
+        evidence_truncated: false,
+    }
+}
+
+#[test]
+fn mux_log_spends_lines_on_issues_and_counts_the_lifecycle_noise() {
+    let mux = Mux {
+        log: MuxLog::Ready {
+            path: "/tmp/zellij-log/zellij.log".to_owned(),
+            scope: LogScope::HostUser { uid: 1001 },
+            size_bytes: 3_500_000,
+            scanned_bytes: 262_144,
+            logical_records: 900,
+            records_before_cutoff: 812,
+            since: Some(Timestamp::now() - std::time::Duration::from_secs(300)),
+            problem_records: 1_190,
+            omitted_issue_groups: 0,
+            issues: vec![
+                log_issue(
+                    "a client left the session",
+                    DoctorState::Expected,
+                    DoctorImpact::Info,
+                    1_000,
+                ),
+                log_issue(
+                    "zellij acknowledged CliPipe late (the action still ran)",
+                    DoctorState::Expected,
+                    DoctorImpact::Info,
+                    180,
+                ),
+                log_issue(
+                    "plugin pane queries timed out",
+                    DoctorState::Investigate,
+                    DoctorImpact::Warn,
+                    10,
+                ),
+            ],
+        },
+        ..mux_fixture()
+    };
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)
+    });
+
+    assert!(
+        out.contains("plugin pane queries timed out (10×)"),
+        "an open issue leads with what it means and how often:\n{out}"
+    );
+    assert!(
+        out.contains("1180 records are routine room lifecycle"),
+        "expected records are counted, never listed one line each:\n{out}"
+    );
+    assert!(
+        out.lines()
+            .filter(|line| line.contains("a client left the session"))
+            .count()
+            == 1,
+        "the fold names an expected group once:\n{out}"
+    );
+    assert!(
+        !out.contains("ERROR raw record text"),
+        "raw evidence is for alarms alone:\n{out}"
+    );
+    assert!(
+        out.contains("read last 256 KB of 3.3 MB") && out.contains("812 older records dismissed"),
+        "the log line says how far back the verdict reaches:\n{out}"
+    );
+}
+
+#[test]
+fn mux_log_carries_raw_evidence_for_an_alarm() {
+    let mux = Mux {
+        log: MuxLog::Ready {
+            path: "/tmp/zellij-log/zellij.log".to_owned(),
+            scope: LogScope::Server,
+            size_bytes: 1_000,
+            scanned_bytes: 1_000,
+            logical_records: 4,
+            records_before_cutoff: 0,
+            since: None,
+            problem_records: 1,
+            omitted_issue_groups: 0,
+            issues: vec![log_issue(
+                "Panic occurred",
+                DoctorState::Investigate,
+                DoctorImpact::Alarm,
+                1,
+            )],
+        },
+        ..mux_fixture()
+    };
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)
+    });
+
+    assert!(out.contains("Panic occurred (once)"), "{out}");
+    assert!(
+        out.contains("ERROR raw record text"),
+        "an alarm keeps the record a reader needs to act on it:\n{out}"
+    );
 }
 
 fn presence_telemetry_fixture() -> PresencePluginTelemetry {
@@ -526,7 +649,7 @@ fn mux_section_tallies_poll_presence_by_expectedness() {
         render_tally(w, &tally)
     });
     assert!(out.contains("✓ polling — no sidebar running"), "{out}");
-    assert!(out.contains("✓ no problems found"), "{out}");
+    assert!(out.contains("✓ everything checked is healthy"), "{out}");
 
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -568,7 +691,7 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
         "{out}"
     );
     assert!(!out.contains("tmux absent"), "{out}");
-    assert!(out.contains("✓ no problems found"), "{out}");
+    assert!(out.contains("✓ everything checked is healthy"), "{out}");
 
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -589,7 +712,7 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
     });
     assert!(out.contains("absent here; live on zellij"), "{out}");
     assert!(out.contains("not applicable"), "{out}");
-    assert!(out.contains("✓ no problems found"), "{out}");
+    assert!(out.contains("✓ everything checked is healthy"), "{out}");
 
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -691,8 +814,8 @@ fn messages_section_renders_stuck_and_failure_rows() {
         "{out}"
     );
     assert!(
-        out.contains("✗ 1 problem, ! 1 warning"),
-        "mixed verdict counts message rows:\n{out}"
+        out.contains("✗ 1 problem in MESSAGES") && out.contains("! 1 warning in MESSAGES"),
+        "a mixed verdict counts message rows and names where they are:\n{out}"
     );
 }
 
@@ -766,7 +889,7 @@ fn last_incident_section_renders_cause_agents_and_forensics() {
     assert!(out.contains("recovered: 2 of 2"), "{out}");
     assert!(out.contains("forensics:"), "{out}");
     assert!(
-        out.contains("✓ no problems found"),
+        out.contains("✓ everything checked is healthy"),
         "info incident does not affect tally:\n{out}"
     );
 }
@@ -785,7 +908,7 @@ fn last_incident_section_is_absent_without_marker() {
 #[test]
 fn tally_renders_clean_verdict() {
     let out = strip(|w| render_tally(w, &Tally::default()));
-    assert!(out.contains("✓ no problems found"), "{out}");
+    assert!(out.contains("✓ everything checked is healthy"), "{out}");
 }
 
 #[test]

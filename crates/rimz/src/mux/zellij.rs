@@ -198,7 +198,7 @@ pub fn parse_log_line(line: &str) -> super::logtail::RecordLine {
         }
         return RecordLine::Start(LogRecordStart {
             severity,
-            timestamp: Some(header.timestamp),
+            at: parse_log_timestamp(&header.timestamp),
             target: Some(header.target),
             thread: Some(header.thread),
             source: Some(header.source),
@@ -211,6 +211,17 @@ pub fn parse_log_line(line: &str) -> super::logtail::RecordLine {
         message,
         ..LogRecordStart::default()
     })
+}
+
+/// Zellij stamps each record with local wall-clock time and no offset
+/// (`2026-07-19 13:37:49.089`), so the machine's own zone resolves it.
+fn parse_log_timestamp(raw: &str) -> Option<jiff::Timestamp> {
+    raw.replace(' ', "T")
+        .parse::<jiff::civil::DateTime>()
+        .ok()?
+        .to_zoned(jiff::tz::TimeZone::system())
+        .ok()
+        .map(|zoned| zoned.timestamp())
 }
 
 struct ZellijLogHeader {
@@ -243,6 +254,10 @@ fn parse_zellij_structured_header(rest: &str) -> Option<ZellijLogHeader> {
     })
 }
 
+/// The wrapper zellij prints above every recoverable failure; it names nothing
+/// on its own, so the `Caused by:` chain underneath is the real subject.
+const NON_FATAL_HEADER: &str = "a non-fatal error occured";
+
 pub fn diagnose_log_record(
     previous: Option<&super::logtail::LogicalRecord>,
     record: &super::logtail::LogicalRecord,
@@ -251,74 +266,178 @@ pub fn diagnose_log_record(
     use super::logtail::{LogDiagnosis, LogImpact, LogSeverity, LogState, normalized_issue_key};
 
     let severity = record.start.severity?;
-    let lower = record.text.to_ascii_lowercase();
-    let closed_client_start = record.start.message == "Received unknown message from client.";
-    let paired_broken_pipe = next.filter(|next| {
-        next.start.message == "a non-fatal error occured"
-            && next.text.contains("Caused by:")
-            && next.text.contains("failed to send message to client")
-            && next.text.contains("Broken pipe (os error 32)")
-    });
-    let follows_closed_client = previous.is_some_and(|previous| {
-        previous.start.message == "Received unknown message from client."
-            && record.start.message == "a non-fatal error occured"
-            && record.text.contains("Caused by:")
-            && record.text.contains("failed to send message to client")
-            && record.text.contains("Broken pipe (os error 32)")
-    });
-    if follows_closed_client {
+    // A disconnect writes two records; the second rides with the first.
+    if previous.is_some_and(is_unknown_client_message) && is_client_send_failure(record) {
         return None;
     }
-    let expected = if closed_client_start {
-        paired_broken_pipe.map(|next| LogDiagnosis {
-            key: "closed_client_unknown_message".to_owned(),
-            state: LogState::Expected,
-            impact: LogImpact::Info,
-            summary: "closed Zellij client lifecycle".to_owned(),
-            sample: Some(format!("{}\n{}", record.text, next.text)),
-        })
-    } else if lower.contains("closed terminal")
-        && lower.contains("resize")
-        && lower.contains("caused by")
-    {
-        Some(LogDiagnosis {
-            key: "closed_terminal_resize".to_owned(),
-            state: LogState::Expected,
-            impact: LogImpact::Info,
-            summary: "closed-terminal resize lifecycle".to_owned(),
-            sample: None,
-        })
-    } else if record.start.target.as_deref() == Some("zellij_server::route")
-        && record.start.message == "Action CliPipe did not complete within 1s timeout"
-    {
-        Some(LogDiagnosis {
-            key: "cli_pipe_completion_timeout".to_owned(),
-            state: LogState::Expected,
-            impact: LogImpact::Info,
-            summary: "completed CliPipe timeout artifact".to_owned(),
-            sample: None,
-        })
-    } else {
-        None
+    let paired_send_failure =
+        next.filter(|next| is_unknown_client_message(record) && is_client_send_failure(next));
+
+    let target = record.start.target.as_deref().unwrap_or_default();
+    let message = record.start.message.trim();
+    let causes = record_causes(&record.text);
+    let subject = match (message.starts_with(NON_FATAL_HEADER), causes.first()) {
+        (true, Some(cause)) => cause.as_str(),
+        _ => message,
     };
-    if let Some(expected) = expected {
+
+    if let Some(expected) = expected_lifecycle(record, subject, paired_send_failure) {
         return Some(expected);
     }
+
+    // The sidebar reads panes through these plugin calls, so a timeout here is
+    // the log's own account of pane discovery falling behind.
+    if subject.contains("timed out") && subject.contains("for plugin") {
+        return Some(LogDiagnosis {
+            key: "plugin_pane_query_timeout".to_owned(),
+            state: LogState::Investigate,
+            impact: LogImpact::Warn,
+            summary: "plugin pane queries timed out — pane discovery lags behind the room"
+                .to_owned(),
+            sample: None,
+        });
+    }
+    // An unknown client message with no disconnect behind it, and the logout
+    // zellij escalates to, are the same event stream: a client speaking a
+    // protocol this server does not know.
+    if is_unknown_client_message(record)
+        || (message.starts_with("Client sent over") && message.contains("unknown messages"))
+    {
+        return Some(LogDiagnosis {
+            key: "client_protocol_mismatch".to_owned(),
+            state: LogState::Investigate,
+            impact: LogImpact::Warn,
+            summary: "a client sent messages zellij could not read — usually a client/server version mismatch"
+                .to_owned(),
+            sample: None,
+        });
+    }
+
     let impact = match severity {
         LogSeverity::Warn => LogImpact::Warn,
         LogSeverity::Error | LogSeverity::Panic => LogImpact::Alarm,
     };
-    let summary = record.start.message.trim().to_owned();
+    // Naming the whole cause chain keeps unrelated failures in separate groups;
+    // keyed on the wrapper alone they collapse into one meaningless bucket.
+    let summary = if causes.is_empty() || !message.starts_with(NON_FATAL_HEADER) {
+        message.to_owned()
+    } else {
+        causes.join(": ")
+    };
     Some(LogDiagnosis {
-        key: normalized_issue_key(&format!(
-            "{}:{summary}",
-            record.start.target.as_deref().unwrap_or_default()
-        )),
+        key: normalized_issue_key(&format!("{target}:{summary}")),
         state: LogState::Investigate,
         impact,
         summary,
         sample: None,
     })
+}
+
+/// Log traffic the room provokes by living its normal life: clients attaching
+/// and leaving, panes closing, a busy server acknowledging late. Each one reads
+/// as an ERROR in zellij's log and means nothing to the operator.
+fn expected_lifecycle(
+    record: &super::logtail::LogicalRecord,
+    subject: &str,
+    paired_send_failure: Option<&super::logtail::LogicalRecord>,
+) -> Option<super::logtail::LogDiagnosis> {
+    use super::logtail::{LogDiagnosis, LogImpact, LogState};
+
+    let expected = |key: &str, summary: &str, sample: Option<String>| LogDiagnosis {
+        key: key.to_owned(),
+        state: LogState::Expected,
+        impact: LogImpact::Info,
+        summary: summary.to_owned(),
+        sample,
+    };
+
+    // Only the proven pair reads as a departure: an unknown client message on
+    // its own is evidence of something else, and gets to keep saying so.
+    if paired_send_failure.is_some() || is_client_send_failure(record) {
+        return Some(expected(
+            "client_disconnect",
+            "a client left the session",
+            paired_send_failure.map(|next| format!("{}\n{}", record.text, next.text)),
+        ));
+    }
+    if let Some(action) = action_ack_timeout(subject) {
+        return Some(expected(
+            &format!("action_ack_timeout:{action}"),
+            &format!("zellij acknowledged {action} late (the action still ran)"),
+            None,
+        ));
+    }
+    // Zellij truncates the target column, so the untruncated source path is the
+    // reliable way to place a record in the server's pty reader.
+    let source = record.start.source.as_deref().unwrap_or_default();
+    if source.contains("terminal_bytes.rs") && subject.contains("I/O error (os error 5)") {
+        return Some(expected(
+            "closed_pane_pty",
+            "read from a closed pane's terminal",
+            None,
+        ));
+    }
+    if subject.starts_with("failed to disable mouse mode") {
+        return Some(expected(
+            "client_teardown_mouse_mode",
+            "a client tore down mouse mode on a terminal already gone",
+            None,
+        ));
+    }
+    let lower = record.text.to_ascii_lowercase();
+    if lower.contains("closed terminal") && lower.contains("resize") && lower.contains("caused by")
+    {
+        return Some(expected(
+            "closed_terminal_resize",
+            "resized a pane whose terminal had closed",
+            None,
+        ));
+    }
+    None
+}
+
+/// The action zellij took too long to acknowledge, from
+/// `Action CliPipe did not complete within 1s timeout`.
+fn action_ack_timeout(subject: &str) -> Option<&str> {
+    subject
+        .strip_prefix("Action ")?
+        .split_once(" did not complete within")
+        .map(|(action, _)| action)
+}
+
+fn is_unknown_client_message(record: &super::logtail::LogicalRecord) -> bool {
+    record.start.message == "Received unknown message from client."
+}
+
+fn is_client_send_failure(record: &super::logtail::LogicalRecord) -> bool {
+    record.start.message.starts_with(NON_FATAL_HEADER)
+        && record.text.contains("failed to send message to client")
+        && record.text.contains("Broken pipe (os error 32)")
+}
+
+/// The `Caused by:` chain under an error record, outermost cause first. Anyhow
+/// numbers the entries once there is more than one; a lone cause is bare.
+fn record_causes(text: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|line| line.trim() != "Caused by:")
+        .skip(1)
+        .map(str::trim)
+        .take_while(|line| !line.is_empty())
+        .map(|line| strip_cause_index(line).trim().to_owned())
+        .collect()
+}
+
+/// Drop anyhow's `0: ` ordinal, keeping the cause text itself.
+fn strip_cause_index(line: &str) -> &str {
+    line.split_once(' ')
+        .filter(|(ordinal, _)| {
+            ordinal.ends_with(':')
+                && ordinal
+                    .trim_end_matches(':')
+                    .chars()
+                    .all(|ch| ch.is_ascii_digit())
+        })
+        .map_or(line, |(_, rest)| rest)
 }
 
 /// Parse `"zellij 0.41.2"` (and tolerant of leading/trailing whitespace).
