@@ -120,6 +120,7 @@ fn exact_qwen_cache_does_not_arm_session_resume_controls() {
                         windows: vec![window(20, 9_000)],
                     },
                     pending: Vec::new(),
+                    unknown_since_ms: None,
                 },
             )]
             .into_iter()

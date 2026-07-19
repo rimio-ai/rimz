@@ -82,10 +82,16 @@ pub fn merge_account_rate_limits(
     // official reading settles the question the debounce was waiting on.
     let observed_at = Timestamp::now();
     let mut windows = windows.stamped_at(observed_at);
-    let prior = cache
+    let prior_entry = cache
         .entries
         .get(kind)
-        .filter(|entry| entry.scope == identity.scope && entry.account_key == identity.account_key)
+        .filter(|entry| entry.scope == identity.scope && entry.account_key == identity.account_key);
+    // Carry the open unknown episode rather than closing it here. This write
+    // proves an authoritative attempt landed, not that it carried usable windows;
+    // the producer clears the marker once a real value paints, so a provider that
+    // answers with nothing forces one fetch instead of one per frame.
+    let unknown_since_ms = prior_entry.and_then(|entry| entry.unknown_since_ms);
+    let prior = prior_entry
         .map(|entry| entry.limits.windows.as_slice())
         .unwrap_or_default();
     complete_omitted_duration_windows(prior, &mut windows);
@@ -96,6 +102,7 @@ pub fn merge_account_rate_limits(
             account_key: identity.account_key,
             limits: windows,
             pending: Vec::new(),
+            unknown_since_ms,
         },
     );
     write_rate_limits_cache(&path, &cache);
@@ -332,7 +339,7 @@ fn apply_rate_limit_cache_with(
         refreshed_at_ms: unix_now_ms(),
         ..Default::default()
     };
-    let mut reset_kinds = BTreeSet::new();
+    let mut refresh_kinds = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
         if !panel.metered {
@@ -409,31 +416,7 @@ fn apply_rate_limit_cache_with(
         }
         let cache_unknown = live.is_empty() && longest_cached_window_expired(&truth, now);
         if persist && !cache_unknown && kind_reset_advanced {
-            reset_kinds.insert(panel.kind.clone());
-        }
-
-        // Persist fused truth, including authoritative lifted rows, and any
-        // in-flight refill. Display-only reset projections and unknown windows
-        // below are recomputed each frame.
-        if persist && (!truth.is_empty() || !pending.is_empty()) {
-            if let Some(prior) = prior_entry.filter(|entry| entry.account_key.is_some()) {
-                // A provider panel carries display scope but no credential
-                // identity. Keep exact-account control truth owned by the
-                // authoritative account probe while still fusing it for paint.
-                next.entries.insert(panel.kind.clone(), prior.clone());
-            } else {
-                next.entries.insert(
-                    panel.kind.clone(),
-                    RateLimitCacheEntry {
-                        scope: panel.account_scope.clone(),
-                        account_key: None,
-                        limits: AgentRateLimits {
-                            windows: truth.values().cloned().collect(),
-                        },
-                        pending,
-                    },
-                );
-            }
+            refresh_kinds.insert(panel.kind.clone());
         }
 
         // Display: roll every fused window's reset-to-max projection forward to
@@ -442,7 +425,8 @@ fn apply_rate_limit_cache_with(
         // `0h00m`. Once the account freshness ceiling has aged out with no live
         // reading, the cache shows unknown bars. Sorted for stable paint order.
         let mut display: Vec<RateLimitWindow> = truth
-            .into_values()
+            .values()
+            .cloned()
             .map(|window| {
                 let expired_named_quota = window.scope.is_some()
                     && window.duration_mins.is_none()
@@ -455,10 +439,55 @@ fn apply_rate_limit_cache_with(
             })
             .collect();
         crate::store::snapshot::sort_windows(&mut display);
+
+        // A dashboard with no usable value is a refresh trigger, not only a paint
+        // state: RimZ no longer knows this account's budget, so the authoritative
+        // probe runs now rather than waiting out the OAuth read's cadence. It
+        // covers every route to a blank panel — an aged-out cache, expired named
+        // quotas, and a cold start whose cache was never written. The marker
+        // carries the open episode so the force fires on the transition alone;
+        // the durable claim keeps the fetch itself single-flight, and completion
+        // restamps the read on success and failure alike, so a provider that
+        // stays unreachable falls back to ordinary throttling.
+        let display_unknown = persist
+            && display
+                .iter()
+                .all(|window| window.used_percentage.is_none());
+        let unknown_since_ms = match prior_entry.and_then(|entry| entry.unknown_since_ms) {
+            _ if !display_unknown => None,
+            Some(since) => Some(since),
+            None => {
+                refresh_kinds.insert(panel.kind.clone());
+                Some(unix_now_ms())
+            }
+        };
         panel.windows = display;
+
+        // Persist fused truth, including authoritative lifted rows, any in-flight
+        // refill, and the open unknown episode's marker. Display-only reset
+        // projections and unknown windows are recomputed each frame.
+        if persist && (!truth.is_empty() || !pending.is_empty() || unknown_since_ms.is_some()) {
+            let mut entry = match prior_entry.filter(|entry| entry.account_key.is_some()) {
+                // A provider panel carries display scope but no credential
+                // identity. Keep exact-account control truth owned by the
+                // authoritative account probe while still fusing it for paint.
+                Some(prior) => prior.clone(),
+                None => RateLimitCacheEntry {
+                    scope: panel.account_scope.clone(),
+                    account_key: None,
+                    limits: AgentRateLimits {
+                        windows: truth.values().cloned().collect(),
+                    },
+                    pending,
+                    unknown_since_ms: None,
+                },
+            };
+            entry.unknown_since_ms = unknown_since_ms;
+            next.entries.insert(panel.kind.clone(), entry);
+        }
     }
 
-    (persist.then_some(next), reset_kinds.into_iter().collect())
+    (persist.then_some(next), refresh_kinds.into_iter().collect())
 }
 
 /// Fuse one stable window identity's prior truth with this frame's live reading

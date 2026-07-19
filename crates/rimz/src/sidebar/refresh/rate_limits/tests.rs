@@ -32,6 +32,7 @@ fn kind_wide_cache(
             account_key: None,
             limits,
             pending: pending.remove(&kind).unwrap_or_default(),
+            unknown_since_ms: None,
         };
         entries.insert(kind, entry);
     }
@@ -196,6 +197,7 @@ fn account_scope_isolates_cached_windows() {
                         ],
                     },
                     pending: Vec::new(),
+                    unknown_since_ms: None,
                 },
             )]),
             ..Default::default()
@@ -287,6 +289,137 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
     assert_eq!(credits.entries["codex"].oauth_read_at_ms, 0);
     assert_eq!(credits.entries["codex"].direct_query_claim, None);
 }
+
+/// A settled OAuth read inside its one-hour ceiling — the state that holds the
+/// account probe off until the unknown display forces it.
+fn seed_settled_credits(runtime: &RuntimePaths, kind: &str, oauth_read_at_ms: u64) {
+    crate::sidebar::refresh::credits::merge_provider_credits_entry(
+        runtime,
+        kind,
+        crate::sidebar::refresh::credits::ProviderCreditsEntry {
+            scope: Default::default(),
+            observed_at_ms: oauth_read_at_ms,
+            oauth_read_at_ms,
+            auth_settled: true,
+            credentials_stamp: None,
+            account_key: None,
+            plan: None,
+            ok: true,
+            extra_credits: None,
+            reset_credits: None,
+            direct_query_claim: None,
+        },
+    );
+}
+
+fn oauth_read_at_ms(runtime: &RuntimePaths, kind: &str) -> u64 {
+    crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path()).entries
+        [kind]
+        .oauth_read_at_ms
+}
+
+fn unknown_since_ms(runtime: &RuntimePaths, kind: &str) -> Option<u64> {
+    read_rate_limits_cache(&runtime.shared_rate_limits_path())
+        .entries
+        .get(kind)
+        .and_then(|entry| entry.unknown_since_ms)
+}
+
+#[test]
+fn unknown_display_forces_immediate_account_refresh() {
+    let (_dir, workspace, runtime) = runtime();
+    let past = Timestamp::from_second(1_000_000_000).unwrap();
+    write_claude_windows(&runtime, vec![rl_window_mins(90, Some(past), 300)]);
+    seed_settled_credits(&runtime, "claude", 1_700_000_000_000);
+
+    let mut frame = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_rate_limit_cache(&mut frame, &runtime, true);
+
+    // The display went unknown, so the settled read is dropped and the next
+    // claim is due immediately rather than an hour from now.
+    assert!(
+        frame.providers[0]
+            .windows
+            .iter()
+            .all(|window| window.used_percentage.is_none())
+    );
+    assert_eq!(oauth_read_at_ms(&runtime, "claude"), 0);
+    assert!(unknown_since_ms(&runtime, "claude").is_some());
+}
+
+#[test]
+fn unknown_display_forces_refresh_once_per_episode() {
+    let (_dir, workspace, runtime) = runtime();
+    let past = Timestamp::from_second(1_000_000_000).unwrap();
+    write_claude_windows(&runtime, vec![rl_window_mins(90, Some(past), 300)]);
+    seed_settled_credits(&runtime, "claude", 1_700_000_000_000);
+
+    let mut first = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel("claude", Vec::new())],
+    );
+    apply_rate_limit_cache(&mut first, &runtime, true);
+    assert_eq!(oauth_read_at_ms(&runtime, "claude"), 0);
+    let forced_at = unknown_since_ms(&runtime, "claude").expect("episode marker");
+
+    // Stand in for the forced probe completing: it restamps the read whatever
+    // the outcome. A second unknown frame leaves that stamp alone, so a provider
+    // with nothing to report costs one fetch rather than one per frame.
+    seed_settled_credits(&runtime, "claude", 1_700_000_500_000);
+    let mut second = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_rate_limit_cache(&mut second, &runtime, true);
+
+    assert_eq!(oauth_read_at_ms(&runtime, "claude"), 1_700_000_500_000);
+    assert_eq!(unknown_since_ms(&runtime, "claude"), Some(forced_at));
+}
+
+#[test]
+fn usable_window_rearms_the_unknown_refresh() {
+    let (_dir, workspace, runtime) = runtime();
+    let past = Timestamp::from_second(1_000_000_000).unwrap();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+    write_claude_windows(&runtime, vec![rl_window_mins(90, Some(past), 300)]);
+    seed_settled_credits(&runtime, "claude", 1_700_000_000_000);
+
+    let mut unknown = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel("claude", Vec::new())],
+    );
+    apply_rate_limit_cache(&mut unknown, &runtime, true);
+    assert!(unknown_since_ms(&runtime, "claude").is_some());
+
+    // A live reading paints a real value again, closing the episode so the next
+    // one forces its own fetch. This frame also advances the reset epoch, which
+    // invalidates the read on its own account — the marker is what this asserts.
+    seed_settled_credits(&runtime, "claude", 1_700_000_500_000);
+    let mut known = snapshot_with_panels(
+        workspace,
+        vec![provider_panel(
+            "claude",
+            vec![rl_window_mins(35, Some(future), 300)],
+        )],
+    );
+    apply_rate_limit_cache(&mut known, &runtime, true);
+
+    assert_eq!(known.providers[0].windows[0].used_percentage, Some(35));
+    assert_eq!(unknown_since_ms(&runtime, "claude"), None);
+}
+
+#[test]
+fn cold_start_without_cached_windows_forces_refresh() {
+    let (_dir, workspace, runtime) = runtime();
+    seed_settled_credits(&runtime, "claude", 1_700_000_000_000);
+
+    // No rate-limit cache at all: nothing expires, so the aged-out path never
+    // trips, yet the dashboard is just as blank.
+    let mut frame = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_rate_limit_cache(&mut frame, &runtime, true);
+
+    assert!(frame.providers[0].windows.is_empty());
+    assert_eq!(oauth_read_at_ms(&runtime, "claude"), 0);
+    assert!(unknown_since_ms(&runtime, "claude").is_some());
+}
+
 #[test]
 fn elapsed_short_idle_window_shows_full_without_persisting_projection() {
     let (_dir, workspace, runtime) = runtime();
@@ -639,6 +772,7 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
                         ],
                     },
                     pending: Vec::new(),
+                    unknown_since_ms: None,
                 },
             )]),
             ..Default::default()

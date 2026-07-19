@@ -75,6 +75,7 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
                         }],
                     },
                     pending: Vec::new(),
+                    unknown_since_ms: None,
                 },
             )]
             .into_iter()

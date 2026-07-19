@@ -690,6 +690,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
                         ],
                     },
                     pending: Vec::new(),
+                    unknown_since_ms: None,
                 },
             )]
             .into_iter()

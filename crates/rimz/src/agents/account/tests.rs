@@ -51,6 +51,7 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
                     ],
                 },
                 pending: Vec::new(),
+                unknown_since_ms: None,
             },
         )]),
         ..Default::default()

@@ -457,6 +457,12 @@ pub struct RateLimitCacheEntry {
     pub limits: AgentRateLimits,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<PendingRefill>,
+    /// When this kind's display first went unknown, marking the open episode so
+    /// the authoritative refresh it forces runs once rather than every frame.
+    /// Cleared the moment a usable window paints again, re-arming the next
+    /// episode. Absent in caches written before the marker existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_since_ms: Option<u64>,
 }
 
 impl std::fmt::Debug for RateLimitCacheEntry {
@@ -469,6 +475,7 @@ impl std::fmt::Debug for RateLimitCacheEntry {
             )
             .field("limits", &self.limits)
             .field("pending", &self.pending)
+            .field("unknown_since_ms", &self.unknown_since_ms)
             .finish()
     }
 }
