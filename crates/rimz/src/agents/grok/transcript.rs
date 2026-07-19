@@ -71,6 +71,35 @@ enum BranchEvent {
     TokenSample(TokenSample),
 }
 
+#[derive(Debug)]
+enum DecodedRow {
+    UserMessage {
+        text: Option<String>,
+        prompt_index: Option<usize>,
+        at: Option<Timestamp>,
+    },
+    AssistantMessage {
+        text: Option<String>,
+        at: Option<Timestamp>,
+        streaming: bool,
+        token_sample: Option<TokenSample>,
+    },
+    Thought {
+        streaming: bool,
+        token_sample: Option<TokenSample>,
+    },
+    Rewind {
+        target: Option<usize>,
+    },
+    TurnCompletion {
+        completion: Option<TurnCompletion>,
+        token_sample: Option<TokenSample>,
+    },
+    TokenSample(TokenSample),
+    Other,
+    Ignored,
+}
+
 #[derive(Default)]
 struct PendingUser {
     text: String,
@@ -218,23 +247,23 @@ impl FoldedSession {
 pub(super) fn fold(lines: &str) -> FoldedSession {
     let mut folded = FoldedSession::default();
     for line in lines.lines().filter(|line| !line.trim().is_empty()) {
-        let Ok(row) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        apply_row(&mut folded, &row);
+        apply_row(&mut folded, decode_row(line));
     }
     folded.flush_user();
     folded
 }
 
-fn apply_row(folded: &mut FoldedSession, row: &Value) {
+fn decode_row(line: &str) -> DecodedRow {
+    let Ok(row) = serde_json::from_str::<Value>(line) else {
+        return DecodedRow::Ignored;
+    };
     let Some(method) = row.get("method").and_then(Value::as_str) else {
-        return;
+        return DecodedRow::Ignored;
     };
     if !matches!(method, SESSION_UPDATE_METHOD | XAI_SESSION_UPDATE_METHOD) {
-        return;
+        return DecodedRow::Ignored;
     }
-    let params = row.get("params").unwrap_or(row);
+    let params = row.get("params").unwrap_or(&row);
     let update = params.get("update").unwrap_or(params);
     let tag = update.get("sessionUpdate").and_then(Value::as_str);
     let at_secs = row.get("timestamp").and_then(Value::as_u64).unwrap_or(0);
@@ -242,17 +271,60 @@ fn apply_row(folded: &mut FoldedSession, row: &Value) {
         .ok()
         .and_then(|seconds| Timestamp::from_second(seconds).ok());
 
-    if tag == Some("user_message_chunk") {
-        let Some(text) = visible_text(update) else {
+    let token_sample = token_sample(params, update);
+    match tag {
+        Some("user_message_chunk") => DecodedRow::UserMessage {
+            text: visible_text(update).map(ToOwned::to_owned),
+            prompt_index: update
+                .get("_meta")
+                .and_then(|meta| meta.get("promptIndex"))
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok()),
+            at,
+        },
+        Some("rewind_marker") if method == XAI_SESSION_UPDATE_METHOD => DecodedRow::Rewind {
+            target: update
+                .get("target_prompt_index")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok()),
+        },
+        Some("agent_message_chunk") if !is_sidechain(params, update) => {
+            DecodedRow::AssistantMessage {
+                text: visible_text(update).map(ToOwned::to_owned),
+                at,
+                streaming: method == SESSION_UPDATE_METHOD,
+                token_sample,
+            }
+        }
+        Some("agent_thought_chunk") => DecodedRow::Thought {
+            streaming: method == SESSION_UPDATE_METHOD,
+            token_sample,
+        },
+        Some("turn_completed") => DecodedRow::TurnCompletion {
+            completion: (method == XAI_SESSION_UPDATE_METHOD)
+                .then(|| completion_from_update(&row, params, update))
+                .flatten(),
+            token_sample,
+        },
+        _ => token_sample.map_or(DecodedRow::Other, DecodedRow::TokenSample),
+    }
+}
+
+fn apply_row(folded: &mut FoldedSession, row: DecodedRow) {
+    if matches!(row, DecodedRow::Ignored) {
+        return;
+    }
+    if let DecodedRow::UserMessage {
+        text,
+        prompt_index,
+        at,
+    } = row
+    {
+        let Some(text) = text else {
             folded.flush_user();
             folded.last_assistant_event = None;
             return;
         };
-        let prompt_index = update
-            .get("_meta")
-            .and_then(|meta| meta.get("promptIndex"))
-            .and_then(Value::as_u64)
-            .and_then(|value| usize::try_from(value).ok());
         if folded
             .pending_user
             .as_ref()
@@ -265,67 +337,63 @@ fn apply_row(folded: &mut FoldedSession, row: &Value) {
             at,
             ..PendingUser::default()
         });
-        pending.text.push_str(text);
+        pending.text.push_str(&text);
         pending.at = at.or(pending.at);
         return;
     }
 
     folded.flush_user();
-    if method == XAI_SESSION_UPDATE_METHOD && tag == Some("rewind_marker") {
-        if let Some(target) = update
-            .get("target_prompt_index")
-            .and_then(Value::as_u64)
-            .and_then(|value| usize::try_from(value).ok())
-        {
-            folded.rewind(target);
+    let (completion, token_sample) = match row {
+        DecodedRow::AssistantMessage {
+            text,
+            at,
+            token_sample,
+            ..
+        } => {
+            if let Some(text) = text {
+                folded.push_assistant(&text, at);
+            }
+            (None, token_sample)
         }
-        return;
-    }
-
-    if tag == Some("agent_message_chunk") && !is_sidechain(params, update) {
-        if let Some(text) = visible_text(update) {
-            folded.push_assistant(text, at);
+        DecodedRow::Thought { token_sample, .. } => (None, token_sample),
+        DecodedRow::Rewind { target } => {
+            if let Some(target) = target {
+                folded.rewind(target);
+            }
+            return;
         }
-    } else if tag != Some("agent_thought_chunk") {
-        folded.last_assistant_event = None;
-    }
+        DecodedRow::TurnCompletion {
+            completion,
+            token_sample,
+        } => {
+            folded.last_assistant_event = None;
+            (completion, token_sample)
+        }
+        DecodedRow::TokenSample(token_sample) => {
+            folded.last_assistant_event = None;
+            (None, Some(token_sample))
+        }
+        DecodedRow::Other => {
+            folded.last_assistant_event = None;
+            (None, None)
+        }
+        DecodedRow::Ignored => unreachable!("ignored rows return above"),
+        DecodedRow::UserMessage { .. } => unreachable!("user rows return above"),
+    };
 
     if folded.active_prompt
-        && tag == Some("turn_completed")
-        && let Some(completion) = completion_from_row(row)
+        && let Some(completion) = completion
     {
         folded.events.push(BranchEvent::Completion(completion));
     }
-
     if folded.active_prompt
-        && let Some(total_tokens) = params
-            .get("_meta")
-            .or_else(|| update.get("_meta"))
-            .and_then(|meta| meta.get("totalTokens"))
-            .and_then(Value::as_u64)
+        && let Some(token_sample) = token_sample
     {
-        let context_window_tokens = params
-            .get("_meta")
-            .or_else(|| update.get("_meta"))
-            .and_then(|meta| meta.get("contextWindowTokens"))
-            .and_then(Value::as_u64)
-            .filter(|value| *value > 0);
-        folded.events.push(BranchEvent::TokenSample(TokenSample {
-            total_tokens,
-            context_window_tokens,
-        }));
+        folded.events.push(BranchEvent::TokenSample(token_sample));
     }
 }
 
-fn completion_from_row(row: &Value) -> Option<TurnCompletion> {
-    if row.get("method").and_then(Value::as_str) != Some(XAI_SESSION_UPDATE_METHOD) {
-        return None;
-    }
-    let params = row.get("params").unwrap_or(row);
-    let update = params.get("update").unwrap_or(params);
-    if update.get("sessionUpdate").and_then(Value::as_str) != Some("turn_completed") {
-        return None;
-    }
+fn completion_from_update(row: &Value, params: &Value, update: &Value) -> Option<TurnCompletion> {
     Some(TurnCompletion {
         at_secs: row.get("timestamp").and_then(Value::as_u64).unwrap_or(0),
         session_id: params
@@ -345,25 +413,35 @@ fn completion_from_row(row: &Value) -> Option<TurnCompletion> {
     })
 }
 
+fn token_sample(params: &Value, update: &Value) -> Option<TokenSample> {
+    let meta = params.get("_meta").or_else(|| update.get("_meta"))?;
+    Some(TokenSample {
+        total_tokens: meta.get("totalTokens")?.as_u64()?,
+        context_window_tokens: meta
+            .get("contextWindowTokens")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0),
+    })
+}
+
+fn completion_from_row(line: &str) -> Option<TurnCompletion> {
+    match decode_row(line) {
+        DecodedRow::TurnCompletion {
+            completion: Some(completion),
+            ..
+        } => Some(completion),
+        _ => None,
+    }
+}
+
 pub(super) fn physical_completions(lines: &str) -> Vec<TurnCompletion> {
-    lines
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter_map(|row| completion_from_row(&row))
-        .collect()
+    lines.lines().filter_map(completion_from_row).collect()
 }
 
 pub(super) fn contains_rewind(lines: &str) -> bool {
-    lines.lines().any(|line| {
-        serde_json::from_str::<Value>(line).ok().is_some_and(|row| {
-            if row.get("method").and_then(Value::as_str) != Some(XAI_SESSION_UPDATE_METHOD) {
-                return false;
-            }
-            let params = row.get("params").unwrap_or(&row);
-            let update = params.get("update").unwrap_or(params);
-            update.get("sessionUpdate").and_then(Value::as_str) == Some("rewind_marker")
-        })
-    })
+    lines
+        .lines()
+        .any(|line| matches!(decode_row(line), DecodedRow::Rewind { .. }))
 }
 
 fn visible_text(update: &Value) -> Option<&str> {
@@ -401,61 +479,36 @@ pub(super) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
 /// suffix contains a rewind marker, expose only assistant text after its last
 /// marker and discard abandoned bytes from that same suffix.
 pub(super) fn parse_assistant_suffix(lines: &str) -> Vec<String> {
-    let rows = lines.lines().collect::<Vec<_>>();
-    let start = rows
-        .iter()
-        .rposition(|line| {
-            serde_json::from_str::<Value>(line).ok().is_some_and(|row| {
-                if row.get("method").and_then(Value::as_str) != Some(XAI_SESSION_UPDATE_METHOD) {
-                    return false;
-                }
-                let params = row.get("params").unwrap_or(&row);
-                let update = params.get("update").unwrap_or(params);
-                update.get("sessionUpdate").and_then(Value::as_str) == Some("rewind_marker")
-            })
-        })
-        .map_or(0, |index| index + 1);
     let mut messages = Vec::<String>::new();
     let mut adjacent = false;
-    for line in &rows[start..] {
-        let (text, assistant, thought) = serde_json::from_str::<Value>(line)
-            .ok()
-            .map(|row| {
-                if row.get("method").and_then(Value::as_str) != Some(SESSION_UPDATE_METHOD) {
-                    return (None, false, false);
+    for row in lines.lines().map(decode_row) {
+        match row {
+            DecodedRow::Rewind { .. } => {
+                messages.clear();
+                adjacent = false;
+            }
+            DecodedRow::Thought {
+                streaming: true, ..
+            } => {}
+            DecodedRow::AssistantMessage {
+                text: Some(text),
+                streaming: true,
+                ..
+            } if !text.trim().is_empty() => {
+                let text = text.trim();
+                if adjacent {
+                    let message = messages
+                        .last_mut()
+                        .expect("adjacent assistant has prior text");
+                    message.push(' ');
+                    message.push_str(text);
+                } else {
+                    messages.push(text.to_owned());
                 }
-                let params = row.get("params").unwrap_or(&row);
-                let update = params.get("update").unwrap_or(params);
-                let tag = update.get("sessionUpdate").and_then(Value::as_str);
-                let assistant = tag == Some("agent_message_chunk") && !is_sidechain(params, update);
-                (
-                    visible_text(update).map(|text| text.trim().to_owned()),
-                    assistant,
-                    tag == Some("agent_thought_chunk"),
-                )
-            })
-            .unwrap_or((None, false, false));
-        if thought {
-            continue;
+                adjacent = true;
+            }
+            _ => adjacent = false,
         }
-        let Some(text) = text else {
-            adjacent = false;
-            continue;
-        };
-        if !assistant || text.is_empty() {
-            adjacent = false;
-            continue;
-        }
-        if adjacent {
-            let message = messages
-                .last_mut()
-                .expect("adjacent assistant has prior text");
-            message.push(' ');
-            message.push_str(&text);
-        } else {
-            messages.push(text);
-        }
-        adjacent = true;
     }
     messages
 }
