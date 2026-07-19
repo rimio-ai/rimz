@@ -614,15 +614,13 @@ impl crate::agents::capabilities::SpendingCapability for CopilotAdapter {
 
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         paths::copilot_home()
-            .and_then(|home| {
-                crate::agents::spending::SpendingSourceTree::new(
+            .map(|home| {
+                crate::agents::spending::SpendingSource::tree(
                     home.join("session-state"),
                     "*/events.jsonl",
                 )
             })
-            .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
-            .into_iter()
-            .collect()
+            .unwrap_or_default()
     }
 
     fn parse_spend(

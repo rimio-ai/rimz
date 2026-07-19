@@ -663,10 +663,9 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         spend::claude_config_roots()
             .into_iter()
-            .filter_map(|dir| {
-                crate::agents::spending::SpendingSourceTree::new(dir.join("projects"), "**/*.jsonl")
+            .flat_map(|dir| {
+                crate::agents::spending::SpendingSource::tree(dir.join("projects"), "**/*.jsonl")
             })
-            .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
             .collect()
     }
 

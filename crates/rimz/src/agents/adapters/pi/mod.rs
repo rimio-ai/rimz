@@ -506,8 +506,7 @@ impl crate::agents::capabilities::SpendingCapability for PiAdapter {
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
         spend::pi_session_roots()
             .into_iter()
-            .filter_map(|root| crate::agents::spending::SpendingSourceTree::new(root, "**/*.jsonl"))
-            .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
+            .flat_map(|root| crate::agents::spending::SpendingSource::tree(root, "**/*.jsonl"))
             .collect()
     }
 

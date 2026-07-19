@@ -531,13 +531,10 @@ impl crate::agents::capabilities::AccountCapability for KimiAdapter {
 
 impl crate::agents::capabilities::SpendingCapability for KimiAdapter {
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
-        crate::agents::spending::SpendingSourceTree::new(
+        crate::agents::spending::SpendingSource::tree(
             wire::kimi_home().join("sessions"),
             "*/*/agents/main/wire.jsonl",
         )
-        .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
-        .into_iter()
-        .collect()
     }
 
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {

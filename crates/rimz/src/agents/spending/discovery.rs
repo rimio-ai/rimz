@@ -30,6 +30,16 @@ impl SpendingSource {
         Self::Group(SpendingSourceGroup::all(trees))
     }
 
+    /// The single-tree store: one root and one glob. Yields no source when the
+    /// root does not resolve, so an adapter whose provider is not installed
+    /// contributes nothing to discovery.
+    pub fn tree(root: impl Into<PathBuf>, pattern: impl Into<String>) -> Vec<Self> {
+        SpendingSourceTree::new(root, pattern)
+            .map(|tree| Self::group(vec![tree]))
+            .into_iter()
+            .collect()
+    }
+
     /// Select the first matching path from the first tree that has a match.
     /// This models stores such as OpenCode's preferred primary database and
     /// sorted per-channel fallback without teaching discovery provider names.

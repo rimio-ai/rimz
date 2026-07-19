@@ -567,13 +567,10 @@ impl crate::agents::capabilities::AccountCapability for QwenAdapter {
 
 impl crate::agents::capabilities::SpendingCapability for QwenAdapter {
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
-        crate::agents::spending::SpendingSourceTree::new(
+        crate::agents::spending::SpendingSource::tree(
             spend::runtime_base().join("projects"),
             "*/chats/*.jsonl",
         )
-        .map(|tree| crate::agents::spending::SpendingSource::group(vec![tree]))
-        .into_iter()
-        .collect()
     }
     fn parse_spend(
         &self,
