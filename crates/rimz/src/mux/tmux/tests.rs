@@ -18,6 +18,10 @@ fn tmux_var_parser_extracts_a_nonempty_socket() {
         socket_path_from_tmux_var("/tmp/tmux-1001/default"),
         Some(PathBuf::from("/tmp/tmux-1001/default")),
     );
+    assert_eq!(
+        socket_path_from_tmux_var(" /tmp/tmux-1001/default ,42,3"),
+        Some(PathBuf::from("/tmp/tmux-1001/default")),
+    );
     assert_eq!(socket_path_from_tmux_var(",42,3"), None);
     assert_eq!(socket_path_from_tmux_var(""), None);
 }

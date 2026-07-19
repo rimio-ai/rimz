@@ -119,7 +119,7 @@ pub(crate) fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBu
 
 /// Extract the server socket from tmux's `socket,pid,index` environment value.
 pub(crate) fn socket_path_from_tmux_var(value: &str) -> Option<PathBuf> {
-    let socket = value.split(',').next()?;
+    let socket = value.split(',').next()?.trim();
     (!socket.is_empty()).then(|| PathBuf::from(socket))
 }
 

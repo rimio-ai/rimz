@@ -143,12 +143,7 @@ impl Drop for PresenceWatch {
 /// The control-mode socket of the server this process is running inside, from
 /// `$TMUX` (`<socket>,<pid>,<session-idx>`). `None` outside tmux.
 pub fn control_socket_from_env() -> Option<PathBuf> {
-    control_socket_from(&std::env::var("TMUX").ok()?)
-}
-
-pub(super) fn control_socket_from(raw: &str) -> Option<PathBuf> {
-    let socket = raw.split(',').next()?.trim();
-    (!socket.is_empty()).then(|| PathBuf::from(socket))
+    super::socket_path_from_tmux_var(&std::env::var("TMUX").ok()?)
 }
 
 /// Classify one tmux control-mode line. Reply blocks, pane output, and
@@ -330,7 +325,6 @@ impl LayoutParser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use super::*;
 
@@ -429,15 +423,5 @@ mod tests {
             ),
             Some(vec!["%3".to_owned(), "%4".to_owned(), "%5".to_owned()])
         );
-    }
-
-    #[test]
-    fn control_socket_parses_the_tmux_env_shape() {
-        assert_eq!(
-            control_socket_from("/tmp/tmux-1000/default,12345,0"),
-            Some(PathBuf::from("/tmp/tmux-1000/default"))
-        );
-        assert_eq!(control_socket_from(""), None);
-        assert_eq!(control_socket_from(",12345,0"), None);
     }
 }
