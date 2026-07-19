@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use super::pane_topology::PaneTopologyCache;
 use super::pane_topology::PaneTopologyPane;
 use super::parse::{SessionState, is_no_active_sessions, session_state_from_line};
-use super::raw_pane::{SessionCleanliness, classify_session_panes};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::WorkspaceId;
@@ -288,23 +287,16 @@ impl ZellijBackend {
         }
     }
 
-    /// Classify `name`'s live room from a bounded pane listing. A running
-    /// live sidebar chrome pane plus no held command pane is clean. A held
-    /// sidebar means Zellij is waiting on the user (no heartbeats); a held command
-    /// pane is the resurrection fingerprint — Zellij brought a serialized room
-    /// back with `start_suspended` panes. Either inspected condition makes the
-    /// room non-functional and safe to rebirth.
-    ///
-    /// A failed or timed-out listing is different: the room is uninspectable, not
-    /// proven stale. Preserve it and let the caller surface the stuck-room path
-    /// rather than force-deleting panes it could not see.
-    pub(super) fn session_cleanliness(
+    /// Prove `name`'s live room can be inspected through a bounded pane listing.
+    /// A failed or timed-out listing preserves the uninspectable room; any
+    /// successful inspection lets the slow-path caller rebirth it.
+    pub(super) fn inspect_session_panes(
         &self,
         name: &str,
         workspace_id: &WorkspaceId,
-    ) -> Result<SessionCleanliness> {
+    ) -> Result<()> {
         self.topology_panes_for_workspace(name, workspace_id, None, health_probe_timeout())
-            .map(|panes| classify_session_panes(&panes))
+            .map(drop)
     }
 
     /// Lossy birth-path classification. A probe failure leaves the existing

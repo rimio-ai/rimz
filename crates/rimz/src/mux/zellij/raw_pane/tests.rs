@@ -203,58 +203,7 @@ fn floating_pane_teardown_targets_only_the_anchor_tab() {
     );
 }
 #[test]
-fn session_panes_classify_clean_sidebar_and_suspended_commands() {
-    let clean = r#"[
-          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
-          {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
-        ]"#;
-    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(clean).unwrap();
-    assert_eq!(classify_session_panes(&parsed), SessionCleanliness::Clean);
-
-    let held_sidebar = r#"[
-          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": true, "tab_id": 0},
-          {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
-        ]"#;
-    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(held_sidebar).unwrap();
-    assert_eq!(
-        classify_session_panes(&parsed),
-        SessionCleanliness::MissingSidebar,
-    );
-
-    let no_sidebar = r#"[
-          {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
-        ]"#;
-    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(no_sidebar).unwrap();
-    assert_eq!(
-        classify_session_panes(&parsed),
-        SessionCleanliness::MissingSidebar,
-    );
-
-    let suspended_command = r#"[
-          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
-          {"id": 1, "is_plugin": false, "title": "claude", "is_held": true, "tab_id": 0}
-        ]"#;
-    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(suspended_command).unwrap();
-    assert_eq!(
-        classify_session_panes(&parsed),
-        SessionCleanliness::SuspendedCommandPane,
-    );
-
-    let suspended_floating_command = r#"[
-          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
-          {
-            "id": 1, "is_plugin": false, "is_floating": true,
-            "title": "codex", "is_held": true, "tab_id": 0
-          }
-        ]"#;
-    let parsed: Vec<PaneTopologyPane> = serde_json::from_str(suspended_floating_command).unwrap();
-    assert_eq!(
-        classify_session_panes(&parsed),
-        SessionCleanliness::SuspendedCommandPane,
-    );
-}
-#[test]
-fn topology_cache_panes_feed_the_existing_classifier() {
+fn topology_cache_panes_preserve_foreground_and_spawn_commands() {
     let cache: PaneTopologyCache = serde_json::from_str(
         r#"{
           "session_name": "rimz-test",
@@ -277,10 +226,6 @@ fn topology_cache_panes_feed_the_existing_classifier() {
     .unwrap();
     let panes = cache.panes;
 
-    assert_eq!(
-        classify_session_panes(&panes),
-        SessionCleanliness::SuspendedCommandPane,
-    );
     assert_eq!(panes[0].display_command().as_deref(), Some("rimz-sidebar"));
     assert_eq!(panes[1].foreground_command(), Some("claude"));
     assert_eq!(panes[1].spawn_command(), Some("rimz agents exec claude"));

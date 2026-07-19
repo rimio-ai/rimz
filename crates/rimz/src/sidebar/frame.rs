@@ -480,12 +480,7 @@ pub(crate) fn resolve_session_focus(
     }
 
     if client_view_fresh {
-        return crate::mux::ClientView {
-            clients: client_views.to_vec(),
-            viewed_panes: client_viewed.to_vec(),
-            presence: crate::mux::ClientPresence::default(),
-        }
-        .unique_live_focus(live);
+        return crate::mux::ClientView::unique_live_focus(client_views, client_viewed, live);
     }
 
     prior.filter(|prior| live.contains(*prior)).cloned()

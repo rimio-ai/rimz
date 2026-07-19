@@ -293,21 +293,36 @@ pub struct ClientView {
 
 impl ClientView {
     /// Resolve fresh attached-client evidence only when every observation names
-    /// the same live pane. Detailed client rows outrank summarized pane ids.
-    pub fn unique_live_focus(&self, live: &std::collections::HashSet<PaneId>) -> Option<PaneId> {
-        let viewed = if self.clients.is_empty() {
-            self.viewed_panes.iter().collect::<Vec<_>>()
-        } else {
-            self.clients
+    /// the same live pane. Detailed client rows outrank summarized pane ids;
+    /// dead summarized panes do not invalidate one distinct live pane.
+    pub fn unique_live_focus(
+        clients: &[ClientPaneView],
+        viewed_panes: &[PaneId],
+        live: &std::collections::HashSet<PaneId>,
+    ) -> Option<PaneId> {
+        if !clients.is_empty() {
+            let live_viewed = clients
                 .iter()
                 .map(|client| &client.pane_id)
-                .collect::<Vec<_>>()
-        };
-        let first = (*viewed.first()?).clone();
-        viewed
+                .filter(|pane| live.contains(*pane))
+                .collect::<std::collections::HashSet<_>>();
+            if live_viewed.len() != 1
+                || clients
+                    .iter()
+                    .any(|client| !live_viewed.contains(&client.pane_id))
+            {
+                return None;
+            }
+            return live_viewed.into_iter().next().cloned();
+        }
+        let live_viewed = viewed_panes
             .iter()
-            .all(|pane| **pane == first && live.contains(*pane))
-            .then_some(first)
+            .filter(|pane| live.contains(*pane))
+            .collect::<std::collections::HashSet<_>>();
+        if live_viewed.len() != 1 {
+            return None;
+        }
+        live_viewed.into_iter().next().cloned()
     }
 }
 

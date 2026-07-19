@@ -1,6 +1,9 @@
 use super::*;
 
 #[cfg(unix)]
+use super::backend::reconcile_pane;
+
+#[cfg(unix)]
 use crate::config::MultiplexerConfig;
 #[cfg(unix)]
 use crate::ids::{PaneId, WorkspaceId};
@@ -9,8 +12,8 @@ use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, Top
 #[cfg(unix)]
 use crate::mux::{
     LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, PaneReadConsistency,
-    SidebarPaneOptions, SidebarWidth, SplitDirection, SplitPaneOptions, SplitPlacement,
-    SplitTarget, TabOptions, WidthPercent, WidthSyncOptions,
+    ReconcilePaneRole, SidebarPaneOptions, SidebarWidth, SplitDirection, SplitPaneOptions,
+    SplitPlacement, SplitTarget, TabOptions, WidthPercent, WidthSyncOptions,
 };
 #[cfg(unix)]
 use crate::sidebar::cache::write_pane_topology_cache;
@@ -116,6 +119,33 @@ fn terminal_pane(
         pane_pid: None,
         terminal_command: None,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn reconcile_mapping_classifies_native_sidebar_daemon_and_work_panes() {
+    let mut sidebar = terminal_pane(1, 4, 20, 0, crate::pane::SIDEBAR_CHROME_TITLE);
+    sidebar.is_held = true;
+    let mut named_daemon = terminal_pane(2, 5, 80, 20, "host");
+    named_daemon.tab_name = Some(crate::daemon_view::VIEW_NAME.to_owned());
+    let mut command_daemon = terminal_pane(3, 6, 80, 20, "host");
+    command_daemon.terminal_command = Some("rimz app-server serve".to_owned());
+    let mut work = terminal_pane(4, 7, 80, 20, "work");
+    work.exited = true;
+    let mut plugin = terminal_pane(5, 8, 80, 20, "plugin");
+    plugin.is_plugin = true;
+
+    let mapped = [
+        reconcile_pane(&sidebar).expect("held sidebar remains structural"),
+        reconcile_pane(&named_daemon).expect("named daemon remains structural"),
+        reconcile_pane(&command_daemon).expect("command daemon remains structural"),
+        reconcile_pane(&work).expect("exited work pane remains structural"),
+    ];
+    assert_eq!(mapped[0].role, ReconcilePaneRole::Sidebar);
+    assert_eq!(mapped[1].role, ReconcilePaneRole::DaemonHost);
+    assert_eq!(mapped[2].role, ReconcilePaneRole::DaemonHost);
+    assert_eq!(mapped[3].role, ReconcilePaneRole::Working);
+    assert!(reconcile_pane(&plugin).is_none());
 }
 
 #[cfg(unix)]

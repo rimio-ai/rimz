@@ -11,12 +11,37 @@ pub(crate) enum PresencePaneRole {
     LaunchChrome,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PaneEventEligibility {
+    pub open: bool,
+    pub close: bool,
+    pub command: bool,
+    pub direct_focus: bool,
+}
+
+impl PaneEventEligibility {
+    pub const ALL: Self = Self {
+        open: true,
+        close: true,
+        command: true,
+        direct_focus: true,
+    };
+
+    pub const NONE: Self = Self {
+        open: false,
+        close: false,
+        command: false,
+        direct_focus: false,
+    };
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PaneObservation {
     pub pane_id: PaneId,
     pub view: String,
     pub command: Option<String>,
     pub role: PresencePaneRole,
+    pub events: PaneEventEligibility,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,27 +76,23 @@ pub(crate) fn project_presence(
     let mut fallback = false;
     for transition in transitions {
         match transition {
-            PresenceTransition::PaneObserved { current, previous } => {
-                if current.role != PresencePaneRole::Working {
-                    continue;
-                }
-                match previous {
-                    None => events.push(SidebarEvent::PaneOpened {
-                        pane_id: current.pane_id,
-                        command: current.command,
-                    }),
-                    Some(previous) if previous.command != current.command => {
-                        if let Some(command) = current.command {
-                            events.push(SidebarEvent::CommandChanged {
-                                pane_id: current.pane_id,
-                                command,
-                            });
-                        }
+            PresenceTransition::PaneObserved { current, previous } => match previous {
+                None if current.events.open => events.push(SidebarEvent::PaneOpened {
+                    pane_id: current.pane_id,
+                    command: current.command,
+                }),
+                Some(previous) if current.events.command && previous.command != current.command => {
+                    if let Some(command) = current.command {
+                        events.push(SidebarEvent::CommandChanged {
+                            pane_id: current.pane_id,
+                            command,
+                        });
                     }
-                    Some(_) => {}
                 }
-            }
-            PresenceTransition::PaneRemoved(pane) if pane.role == PresencePaneRole::Working => {
+                None => {}
+                Some(_) => {}
+            },
+            PresenceTransition::PaneRemoved(pane) if pane.events.close => {
                 events.push(SidebarEvent::PaneClosed {
                     pane_id: pane.pane_id,
                 });
@@ -80,11 +101,11 @@ pub(crate) fn project_presence(
             PresenceTransition::PaneFocused {
                 focused: Some(focused),
                 prior,
-            } if focused.role != PresencePaneRole::LaunchChrome => {
+            } if focused.events.direct_focus => {
                 events.push(SidebarEvent::FocusChanged {
                     focused: vec![focused.pane_id],
                     unfocused: prior
-                        .filter(|pane| pane.role != PresencePaneRole::LaunchChrome)
+                        .filter(|pane| pane.events.direct_focus)
                         .map(|pane| pane.pane_id)
                         .into_iter()
                         .collect(),
@@ -97,7 +118,7 @@ pub(crate) fn project_presence(
                 events.push(SidebarEvent::FocusChanged {
                     focused: Vec::new(),
                     unfocused: prior
-                        .filter(|pane| pane.role != PresencePaneRole::LaunchChrome)
+                        .filter(|pane| pane.events.direct_focus)
                         .map(|pane| pane.pane_id)
                         .into_iter()
                         .collect(),
@@ -121,11 +142,10 @@ pub(crate) fn project_presence(
                 focused: Some(focused),
                 prior,
                 ..
-            } if focused.role != PresencePaneRole::LaunchChrome => {
+            } => {
                 events.push(SidebarEvent::FocusChanged {
                     focused: vec![focused.pane_id.clone()],
                     unfocused: prior
-                        .filter(|pane| pane.role != PresencePaneRole::LaunchChrome)
                         .filter(|pane| pane.pane_id != focused.pane_id)
                         .map(|pane| pane.pane_id)
                         .into_iter()
@@ -158,6 +178,7 @@ mod tests {
             view: "view".to_owned(),
             command: command.map(str::to_owned),
             role,
+            events: PaneEventEligibility::ALL,
         }
     }
 
@@ -216,23 +237,95 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_and_launch_chrome_suppress_pane_overlays() {
-        let transitions = [
-            PresenceTransition::PaneObserved {
-                current: pane(MuxName::Tmux, "%1", PresencePaneRole::Sidebar, Some("rimz")),
-                previous: None,
-            },
-            PresenceTransition::PaneObserved {
-                current: pane(
-                    MuxName::Tmux,
-                    "%2",
-                    PresencePaneRole::LaunchChrome,
-                    Some("rimz"),
-                ),
-                previous: None,
-            },
-            PresenceTransition::Nudge,
-        ];
-        assert_eq!(project_presence(transitions), [SidebarEvent::PanesChanged]);
+    fn eligibility_controls_direct_events_without_changing_view_switches() {
+        let mut suppressed = pane(
+            MuxName::Tmux,
+            "%1",
+            PresencePaneRole::LaunchChrome,
+            Some("rimz"),
+        );
+        suppressed.events = PaneEventEligibility::NONE;
+        let mut prior = suppressed.clone();
+        prior.command = Some("old".to_owned());
+
+        assert_eq!(
+            project_presence([
+                PresenceTransition::PaneObserved {
+                    current: suppressed.clone(),
+                    previous: None,
+                },
+                PresenceTransition::PaneObserved {
+                    current: suppressed.clone(),
+                    previous: Some(prior.clone()),
+                },
+                PresenceTransition::PaneRemoved(suppressed.clone()),
+                PresenceTransition::PaneFocused {
+                    focused: Some(suppressed.clone()),
+                    prior: None,
+                },
+                PresenceTransition::Nudge,
+            ]),
+            [SidebarEvent::PanesChanged],
+        );
+        assert_eq!(
+            project_presence([PresenceTransition::ViewSwitched {
+                focused: Some(suppressed.clone()),
+                prior: Some(prior),
+                has_working: false,
+                generation: 0,
+                clients: Vec::new(),
+            }]),
+            [SidebarEvent::FocusChanged {
+                focused: vec![suppressed.pane_id.clone()],
+                unfocused: Vec::new(),
+            }],
+        );
+    }
+
+    #[test]
+    fn partial_eligibility_suppresses_only_the_named_event_kinds() {
+        let mut sidebar = pane(
+            MuxName::Zellij,
+            "terminal_1",
+            PresencePaneRole::Sidebar,
+            Some("new"),
+        );
+        sidebar.events = PaneEventEligibility {
+            open: false,
+            ..PaneEventEligibility::ALL
+        };
+        let mut previous = sidebar.clone();
+        previous.command = Some("old".to_owned());
+
+        assert_eq!(
+            project_presence([
+                PresenceTransition::PaneObserved {
+                    current: sidebar.clone(),
+                    previous: None,
+                },
+                PresenceTransition::PaneRemoved(sidebar.clone()),
+                PresenceTransition::PaneObserved {
+                    current: sidebar.clone(),
+                    previous: Some(previous),
+                },
+                PresenceTransition::PaneFocused {
+                    focused: Some(sidebar.clone()),
+                    prior: None,
+                },
+            ]),
+            [
+                SidebarEvent::PaneClosed {
+                    pane_id: sidebar.pane_id.clone(),
+                },
+                SidebarEvent::CommandChanged {
+                    pane_id: sidebar.pane_id.clone(),
+                    command: "new".to_owned(),
+                },
+                SidebarEvent::FocusChanged {
+                    focused: vec![sidebar.pane_id],
+                    unfocused: Vec::new(),
+                },
+            ],
+        );
     }
 }

@@ -807,8 +807,8 @@ impl MuxBackend for ZellijBackend {
                 self.create_session_with_sidebar(opts, daemon)
             }
             SessionState::Live => {
-                match self.session_cleanliness(&opts.session_name, &opts.workspace_id) {
-                    Ok(_) => {
+                match self.inspect_session_panes(&opts.session_name, &opts.workspace_id) {
+                    Ok(()) => {
                         self.delete_session(&opts.session_name)?;
                         self.create_session_with_sidebar(opts, daemon)
                     }
@@ -911,21 +911,7 @@ impl MuxBackend for ZellijBackend {
             crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
         )?;
         let panes = listing.panes;
-        let views =
-            group_reconcile_panes(panes.iter().filter(|pane| pane.is_terminal()).map(|pane| {
-                let role = if is_sidebar_pane(pane) {
-                    ReconcilePaneRole::Sidebar
-                } else if is_daemon_host_pane(pane) {
-                    ReconcilePaneRole::DaemonHost
-                } else {
-                    ReconcilePaneRole::Working
-                };
-                ReconcilePane {
-                    view: pane.tab_position.to_string(),
-                    pane_id: PaneId::from(pane.native_id()),
-                    role,
-                }
-            }));
+        let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
         let plan = super::super::plan_reconcile(&views, live);
         let planned_closes = plan.close_panes();
         // Kept sidebars (not planned for closing) whose geometry sits off the
@@ -1162,6 +1148,24 @@ impl MuxBackend for ZellijBackend {
     fn version(&self) -> Result<String> {
         memoized_version(&self.version, &self.cmd().arg("--version"))
     }
+}
+
+pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {
+    if !pane.is_terminal() {
+        return None;
+    }
+    let role = if is_sidebar_pane(pane) {
+        ReconcilePaneRole::Sidebar
+    } else if is_daemon_host_pane(pane) {
+        ReconcilePaneRole::DaemonHost
+    } else {
+        ReconcilePaneRole::Working
+    };
+    Some(ReconcilePane {
+        view: pane.tab_position.to_string(),
+        pane_id: PaneId::from(pane.native_id()),
+        role,
+    })
 }
 
 fn off_spec_sidebars(

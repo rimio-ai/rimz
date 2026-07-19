@@ -95,6 +95,8 @@ The receive path drops an event for another workspace or session before it reach
 | `Notify` | `title`, `body`, target panes, `recheck_unread`, kind | Renderer action only: raise the configured desktop/bell/command notification, gated on row-unread when `recheck_unread`; never fused into rows ([notifications.md](./notifications.md)) | the notification path |
 | `Reload` | none | Accelerate the supervisor's durable workspace-record poll; the worker hands off or hard-refreshes | `rimz reload` |
 
+Normalized pane observations carry event eligibility so the shared projector preserves each backend's established stream: tmux suppresses pane open, close, and command overlays for sidebar and launch chrome, suppresses direct focus for launch chrome, and keeps direct sidebar focus; Zellij suppresses only sidebar opens, emits launch-chrome opens without a command, closes every removed terminal, permits live-sidebar command changes, and emits direct focus for every live terminal. View switches retain their separate contract on both backends: launch chrome emits `FocusChanged`, while a sidebar with a working sibling emits `FocusStranded`.
+
 ### Push channels
 
 Each push channel exists so a change a writer already knows about reaches every node within one wakeup instead of a poll window; the producer's pull stays the structural backstop behind all of them.

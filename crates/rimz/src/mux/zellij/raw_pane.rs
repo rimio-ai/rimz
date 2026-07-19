@@ -8,19 +8,8 @@ use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_
 use crate::mux::zellij::pane_topology::{PaneTopologyPane, ZellijPaneId};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
-/// Cleanliness of a live room after a successful pane inspection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SessionCleanliness {
-    /// Sidebar and command panes are running.
-    Clean,
-    /// The sidebar is absent or held at a "Waiting to run" prompt.
-    MissingSidebar,
-    /// At least one non-sidebar command pane is held at a "Waiting to run" prompt.
-    SuspendedCommandPane,
-}
-
 /// A live, non-plugin sidebar pane is one Zellij still titles with the shared
-/// sidebar chrome title — the same signal `classify_session_panes` trusts.
+/// sidebar chrome title.
 pub(super) fn is_sidebar_pane(pane: &PaneTopologyPane) -> bool {
     !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_CHROME_TITLE)
 }
@@ -49,41 +38,6 @@ pub(super) fn is_daemon_host_pane(pane: &PaneTopologyPane) -> bool {
         || pane
             .foreground_command()
             .is_some_and(crate::daemon_view::command_is_host)
-}
-
-pub(super) fn classify_session_panes(panes: &[PaneTopologyPane]) -> SessionCleanliness {
-    if !has_healthy_sidebar(panes) {
-        return SessionCleanliness::MissingSidebar;
-    }
-    if has_suspended_command_pane(panes) {
-        return SessionCleanliness::SuspendedCommandPane;
-    }
-    SessionCleanliness::Clean
-}
-
-pub(super) fn has_healthy_sidebar(panes: &[PaneTopologyPane]) -> bool {
-    let mut found = false;
-    for pane in panes.iter().filter(|pane| is_sidebar_pane(pane)) {
-        found = true;
-        if pane.is_held {
-            return false;
-        }
-    }
-    found
-}
-
-/// Any non-sidebar command pane Zellij is holding at a "Waiting to run" prompt —
-/// the fingerprint of a resurrected (serialized) room, where every command pane
-/// comes back `start_suspended`. Floating panes count here because a floating
-/// agent is a real command pane, even though geometry ignores overlays.
-pub(super) fn has_suspended_command_pane(panes: &[PaneTopologyPane]) -> bool {
-    panes
-        .iter()
-        .any(|pane| is_session_health_command_pane(pane) && pane.is_held)
-}
-
-fn is_session_health_command_pane(pane: &PaneTopologyPane) -> bool {
-    !pane.is_plugin && !pane.is_suppressed && !is_sidebar_pane(pane)
 }
 
 pub(super) fn floating_panes_in_anchor_view(

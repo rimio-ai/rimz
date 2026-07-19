@@ -33,19 +33,8 @@ pub struct PaneTopologyCache {
 
 impl PaneTopologyCache {
     pub(crate) fn projected_session_focus(&self) -> Option<PaneId> {
-        let live = self
-            .panes
-            .iter()
-            .filter(|pane| pane.is_listed_pane())
-            .map(|pane| PaneId::from(pane.native_id()))
-            .collect::<HashSet<_>>();
-        match self.clients.clone().map(TopologyClients::into_client_view) {
-            Some(clients) => clients.unique_live_focus(&live),
-            None => self
-                .focused_pane
-                .map(|id| PaneId::from(ZellijPaneId::Terminal(id)))
-                .filter(|pane| live.contains(pane)),
-        }
+        let clients = self.clients.clone().map(TopologyClients::into_client_view);
+        project_session_focus(&self.panes, clients.as_ref(), self.focused_pane)
     }
 
     pub(super) fn into_pane_listing(self, session_name: String) -> PaneListing {
@@ -57,17 +46,7 @@ impl PaneTopologyCache {
             ..
         } = self;
         let client_view = clients.map(TopologyClients::into_client_view);
-        let live = panes
-            .iter()
-            .filter(|pane| pane.is_listed_pane())
-            .map(|pane| PaneId::from(pane.native_id()))
-            .collect::<HashSet<_>>();
-        let session_focus = match client_view.as_ref() {
-            Some(clients) => clients.unique_live_focus(&live),
-            None => focused_pane
-                .map(|id| PaneId::from(ZellijPaneId::Terminal(id)))
-                .filter(|pane| live.contains(pane)),
-        };
+        let session_focus = project_session_focus(&panes, client_view.as_ref(), focused_pane);
         PaneListing {
             panes: panes
                 .into_iter()
@@ -102,6 +81,26 @@ impl PaneTopologyCache {
             session_focus,
             client_view,
         }
+    }
+}
+
+fn project_session_focus(
+    panes: &[PaneTopologyPane],
+    clients: Option<&ClientView>,
+    legacy_focus: Option<u64>,
+) -> Option<PaneId> {
+    let live = panes
+        .iter()
+        .filter(|pane| pane.is_listed_pane())
+        .map(|pane| PaneId::from(pane.native_id()))
+        .collect::<HashSet<_>>();
+    match clients {
+        Some(clients) => {
+            ClientView::unique_live_focus(&clients.clients, &clients.viewed_panes, &live)
+        }
+        None => legacy_focus
+            .map(|id| PaneId::from(ZellijPaneId::Terminal(id)))
+            .filter(|pane| live.contains(pane)),
     }
 }
 

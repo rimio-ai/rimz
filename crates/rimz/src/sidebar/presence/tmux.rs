@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::tmux::ControlLine;
 use crate::pane::SIDEBAR_CHROME_TITLE;
-use crate::sidebar::presence::projector::{PaneObservation, PresencePaneRole, PresenceTransition};
+use crate::sidebar::presence::projector::{
+    PaneEventEligibility, PaneObservation, PresencePaneRole, PresenceTransition,
+};
 
 #[derive(Default)]
 pub(crate) struct TmuxPresenceState {
@@ -82,12 +84,14 @@ impl TmuxPresenceState {
             .as_deref()
             .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE);
         let suppress_overlay = is_sidebar || title.is_none() && command.as_deref() == Some("rimz");
+        let role = pane_role(suppress_overlay, is_sidebar);
         let old = self.panes.get(&pane).cloned();
         let current = PaneObservation {
             pane_id: pane_id(&pane),
             view: window.clone(),
             command: command.clone(),
-            role: pane_role(suppress_overlay, is_sidebar),
+            role,
+            events: tmux_event_eligibility(role),
         };
         let mut events = Vec::new();
 
@@ -307,11 +311,24 @@ fn pane_role(overlay_suppressed: bool, is_sidebar: bool) -> PresencePaneRole {
 }
 
 fn pane_observation(raw: &str, entry: &PaneEntry) -> PaneObservation {
+    let role = pane_role(entry.overlay_suppressed, entry.is_sidebar);
     PaneObservation {
         pane_id: pane_id(raw),
         view: entry.window.clone(),
         command: entry.command.clone(),
-        role: pane_role(entry.overlay_suppressed, entry.is_sidebar),
+        role,
+        events: tmux_event_eligibility(role),
+    }
+}
+
+const fn tmux_event_eligibility(role: PresencePaneRole) -> PaneEventEligibility {
+    match role {
+        PresencePaneRole::Working => PaneEventEligibility::ALL,
+        PresencePaneRole::Sidebar => PaneEventEligibility {
+            direct_focus: true,
+            ..PaneEventEligibility::NONE
+        },
+        PresencePaneRole::LaunchChrome => PaneEventEligibility::NONE,
     }
 }
 
@@ -469,6 +486,29 @@ mod tests {
                 focused: vec![pane_id("%9")],
                 unfocused: vec![pane_id("%1")],
             }]
+        );
+    }
+
+    #[test]
+    fn window_switch_focuses_launch_chrome_in_both_directions() {
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, untitled_rimz_sub("%9", "@2", true), true);
+        project_apply(&mut roster, swin("$1", "@1"), true);
+
+        assert_eq!(
+            project_apply(&mut roster, swin("$1", "@2"), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%9")],
+                unfocused: vec![pane_id("%1")],
+            }],
+        );
+        assert_eq!(
+            project_apply(&mut roster, swin("$1", "@1"), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%1")],
+                unfocused: vec![pane_id("%9")],
+            }],
         );
     }
 

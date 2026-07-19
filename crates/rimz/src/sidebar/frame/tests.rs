@@ -329,6 +329,25 @@ fn multiple_client_views_ignore_prior_missing_from_live_frame() {
 }
 
 #[test]
+fn summarized_client_view_ignores_dead_panes_when_one_live_pane_remains() {
+    let live = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let dead = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![pane("terminal_1", "tab_0", Some("zsh"), false)],
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: &[dead, live.clone()],
+        client_views: &[],
+        client_view_fresh: true,
+        prior: None,
+    });
+
+    assert_eq!(frame.focused_pane, Some(live));
+}
+
+#[test]
 fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
     let prior_focus = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let prior = PaneFrame {
