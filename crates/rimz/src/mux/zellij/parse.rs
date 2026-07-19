@@ -3,7 +3,9 @@
 use std::collections::BTreeSet;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{ClientPaneView, ClientPresence, ClientView, MuxClientId, MuxErr};
+use crate::mux::{
+    ClientPaneView, ClientPresence, ClientView, MuxClientId, MuxErr, SessionLiveness,
+};
 
 /// Whether action stdout is the transient empty race rather than a real answer.
 /// Empty or whitespace-only output means the action client raced the session
@@ -55,30 +57,19 @@ pub(super) fn classify_session_not_found(err: MuxErr, session: &str) -> MuxErr {
     }
 }
 
-/// Liveness of a Zellij session, as reported by `zellij list-sessions`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SessionState {
-    /// No session by that name.
-    Absent,
-    /// Running and attachable.
-    Live,
-    /// Present but exited — `attach` would resurrect a stale serialized layout.
-    Exited,
-}
-
 /// Parse one `list-sessions` line for `name`. Lines look like
 /// `name [Created 6m ago]` (live) or
 /// `name [Created 6m ago] (EXITED - attach to resurrect)`. `strip_ansi` guards
 /// against a colorized line even though `--no-formatting` should preclude one.
-pub(super) fn session_state_from_line(line: &str, name: &str) -> Option<SessionState> {
+pub(super) fn session_state_from_line(line: &str, name: &str) -> Option<SessionLiveness> {
     let clean = strip_ansi(line);
     if clean.split_whitespace().next()? != name {
         return None;
     }
     Some(if clean.contains("EXITED") {
-        SessionState::Exited
+        SessionLiveness::Exited
     } else {
-        SessionState::Live
+        SessionLiveness::Live
     })
 }
 
@@ -87,7 +78,7 @@ pub(super) fn live_session_name_from_line(line: &str) -> Option<String> {
     let name = clean.split_whitespace().next()?;
     matches!(
         session_state_from_line(&clean, name),
-        Some(SessionState::Live)
+        Some(SessionLiveness::Live)
     )
     .then(|| name.to_owned())
 }
@@ -340,14 +331,14 @@ mod tests {
     fn session_state_classifies_list_sessions_lines() {
         assert_eq!(
             session_state_from_line("rimz-query-engine [Created 6m ago]", "rimz-query-engine"),
-            Some(SessionState::Live),
+            Some(SessionLiveness::Live),
         );
         assert_eq!(
             session_state_from_line(
                 "rimz-query-engine [Created 6m ago] (EXITED - attach to resurrect)",
                 "rimz-query-engine",
             ),
-            Some(SessionState::Exited),
+            Some(SessionLiveness::Exited),
         );
         // A colorized line (no `--no-formatting`) still parses via `strip_ansi`.
         assert_eq!(
@@ -355,7 +346,7 @@ mod tests {
                 "\x1b[32;1mrimz-query-engine\x1b[m [Created ago] (\x1b[31;1mEXITED\x1b[m - resurrect)",
                 "rimz-query-engine",
             ),
-            Some(SessionState::Exited),
+            Some(SessionLiveness::Exited),
         );
         // A different session's line is not a match.
         assert_eq!(

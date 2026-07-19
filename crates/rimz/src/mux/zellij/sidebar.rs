@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use super::layout::{TempLayoutFile, render_session_layout};
 use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
 use super::parse::{
-    SessionState, classify_session_not_found, is_session_not_found, parse_client_view, strip_ansi,
+    classify_session_not_found, is_session_not_found, parse_client_view, strip_ansi,
     terminal_client_ids,
 };
 use super::raw_pane::{
@@ -23,7 +23,7 @@ use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::{
     DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
-    SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
+    SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::timing::RECONCILE_LIST_TIMEOUT;
@@ -992,7 +992,7 @@ impl ZellijBackend {
     ) -> bool {
         let deadline = Instant::now() + SIDEBAR_LAYOUT_TIMEOUT;
         while Instant::now() < deadline {
-            if self.session_state(session_name) != SessionState::Live {
+            if self.session_state(session_name) != SessionLiveness::Live {
                 return false;
             }
             if let Ok(panes) = self.topology_panes_for_workspace(

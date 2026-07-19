@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 
 use super::pane_topology::PaneTopologyCache;
 use super::pane_topology::PaneTopologyPane;
-use super::parse::{SessionState, is_no_active_sessions, session_state_from_line};
+use super::parse::{is_no_active_sessions, session_state_from_line};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::WorkspaceId;
-use crate::mux::{MuxErr, Result};
+use crate::mux::{MuxErr, Result, SessionLiveness};
 use crate::mux::{PaneReadConsistency, PresencePluginOptions};
 use crate::sidebar::cache::{pane_topology_cache_is_fresh, read_pane_topology_cache};
 use crate::sidebar::timing::unix_now_ms;
@@ -134,7 +134,7 @@ impl ZellijBackend {
         {
             return Ok(cache);
         }
-        if self.session_state(&session) != SessionState::Live {
+        if self.session_state(&session) != SessionLiveness::Live {
             return Err(MuxErr::SessionNotFound { session });
         }
         let floor_ms = min_topology_produced_at_ms.unwrap_or(now_ms);
@@ -301,26 +301,26 @@ impl ZellijBackend {
 
     /// Lossy birth-path classification. A probe failure leaves the existing
     /// fail-open birth behaviour intact by reading as absence.
-    pub(super) fn session_state(&self, name: &str) -> SessionState {
+    pub(super) fn session_state(&self, name: &str) -> SessionLiveness {
         self.session_state_checked(name)
-            .unwrap_or(SessionState::Absent)
+            .unwrap_or(SessionLiveness::Absent)
     }
 
     /// Classify `name` from `zellij list-sessions` while preserving command
     /// failures. Zellij's exit-1 no-sessions response is definitive absence;
     /// timeouts and every other failure remain unavailable to callers.
-    pub(super) fn session_state_checked(&self, name: &str) -> Result<SessionState> {
+    pub(super) fn session_state_checked(&self, name: &str) -> Result<SessionLiveness> {
         let output = match self.cmd().args(["list-sessions", "--no-formatting"]).run() {
             Ok(output) => output,
             Err(MuxErr::Command { ref stderr, .. }) if is_no_active_sessions(stderr.as_bytes()) => {
-                return Ok(SessionState::Absent);
+                return Ok(SessionLiveness::Absent);
             }
             Err(err) => return Err(err),
         };
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
             .find_map(|line| session_state_from_line(line, name))
-            .unwrap_or(SessionState::Absent))
+            .unwrap_or(SessionLiveness::Absent))
     }
 
     /// Force-delete a session (exited or live) so the next create births a clean

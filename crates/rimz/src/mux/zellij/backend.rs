@@ -8,8 +8,8 @@ use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
 use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
 use super::parse::{
-    SessionState, classify_session_not_found, is_no_active_sessions, is_session_not_found,
-    is_transient_empty, live_session_name_from_line, parse_client_view, trim_capture,
+    classify_session_not_found, is_no_active_sessions, is_session_not_found, is_transient_empty,
+    live_session_name_from_line, parse_client_view, trim_capture,
 };
 use super::raw_pane::{
     floating_panes_in_anchor_view, is_daemon_host_pane, is_sidebar_pane, sidebar_geometry_off_spec,
@@ -463,11 +463,7 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn session_liveness(&self, name: &str) -> Result<SessionLiveness> {
-        Ok(match self.session_state_checked(name)? {
-            SessionState::Live => SessionLiveness::Live,
-            SessionState::Exited => SessionLiveness::Exited,
-            SessionState::Absent => SessionLiveness::Absent,
-        })
+        self.session_state_checked(name)
     }
 
     fn cached_pane_roster(
@@ -801,12 +797,12 @@ impl MuxBackend for ZellijBackend {
         //             --create`). A sidebar-less rimz session is non-functional
         //             and cannot gain a left pane in place, so rebirth it.
         match self.session_state(&opts.session_name) {
-            SessionState::Absent => self.create_session_with_sidebar(opts, daemon),
-            SessionState::Exited => {
+            SessionLiveness::Absent => self.create_session_with_sidebar(opts, daemon),
+            SessionLiveness::Exited => {
                 self.delete_session(&opts.session_name)?;
                 self.create_session_with_sidebar(opts, daemon)
             }
-            SessionState::Live => {
+            SessionLiveness::Live => {
                 match self.inspect_session_panes(&opts.session_name, &opts.workspace_id) {
                     Ok(()) => {
                         self.delete_session(&opts.session_name)?;
@@ -829,11 +825,11 @@ impl MuxBackend for ZellijBackend {
     fn probe_session_health(&self, name: &str) -> Result<SessionHealth> {
         Ok(match self.session_state(name) {
             // Nothing to attach to — a fresh birth will produce a clean room.
-            SessionState::Absent => SessionHealth::Healthy,
+            SessionLiveness::Absent => SessionHealth::Healthy,
             // `attach --create` would resurrect a serialized, suspended layout.
-            SessionState::Exited => SessionHealth::Stuck,
+            SessionLiveness::Exited => SessionHealth::Stuck,
             // `list-sessions` liveness is the attach gate truth; attach live rooms as-is.
-            SessionState::Live => SessionHealth::Healthy,
+            SessionLiveness::Live => SessionHealth::Healthy,
         })
     }
 
@@ -846,7 +842,7 @@ impl MuxBackend for ZellijBackend {
         // A live room is trusted from `list-sessions` alone: attach as-is, never
         // inspect panes. A stale topology cache is not evidence the room is
         // stuck.
-        if matches!(state, SessionState::Live) {
+        if matches!(state, SessionLiveness::Live) {
             return Ok(SessionHealth::Healthy);
         }
         // Absent → first birth; Exited → delete and rebirth from the layout so
@@ -854,7 +850,7 @@ impl MuxBackend for ZellijBackend {
         // can never resurrect). A rebirth that still fails to talk to Zellij
         // reads as Stuck so the caller runs or reports the reset path.
         let rebirth = || -> Result<()> {
-            if !matches!(state, SessionState::Absent) {
+            if !matches!(state, SessionLiveness::Absent) {
                 self.delete_session(&opts.session_name)?;
             }
             self.create_session_with_sidebar(opts, daemon)

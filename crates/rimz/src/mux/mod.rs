@@ -861,9 +861,7 @@ pub trait MuxBackend: Send + Sync {
     /// If the session is absent from the backend's live list, the wrapper
     /// preserves the agent for recovery.
     fn session_accepts_agent_close(&self, name: &str) -> bool {
-        self.list_sessions()
-            .map(|sessions| sessions.iter().any(|session| session == name))
-            .unwrap_or(false)
+        matches!(self.session_liveness(name), Ok(SessionLiveness::Live))
     }
     /// Guarantee the next [`Self::attach_command`] lands on a live, running
     /// room. Probe `opts.session_name`; a live room is left untouched
