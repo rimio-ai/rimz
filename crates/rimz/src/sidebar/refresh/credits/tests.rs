@@ -114,6 +114,60 @@ fn no_credentials_completion_preserves_same_account_display_and_settles_auth() {
 }
 
 #[test]
+fn no_credentials_completion_adopts_preflight_scope_and_settles_cadence() {
+    let (_dir, runtime) = runtime();
+    let claim_nonce = nonce(43);
+    let now = 500;
+    let scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let prior = ProviderCreditsEntry {
+        oauth_read_at_ms: 1,
+        direct_query_claim: Some(DirectQueryClaim {
+            nonce: claim_nonce,
+            claimed_at_ms: 100,
+            requested_scope: scope.clone(),
+            credentials_stamp: Some(7),
+            preflight_account_key: None,
+        }),
+        ..Default::default()
+    };
+    let (next, completion) = prior
+        .complete_account_usage(
+            claim_nonce,
+            AccountUsageProbe::NoCredentials(identity(
+                Some(7),
+                None,
+                ProviderAccountScope::KindWide,
+            )),
+            now,
+        )
+        .expect("matching claim completes");
+
+    assert_eq!(next.scope, scope.clone());
+    assert_eq!(next.oauth_read_at_ms, now);
+    assert!(next.auth_settled);
+    assert!(completion.account_changed);
+    write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            entries: BTreeMap::from([("pi".to_owned(), next)]),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(
+        claim_provider_account_usage_with_hint_at(
+            &runtime,
+            "pi",
+            Some(identity(Some(7), None, scope)),
+            now + 1,
+            nonce(44),
+        ),
+        None,
+        "the settled no-credentials attempt must not reopen on the next producer fold",
+    );
+}
+
+#[test]
 fn unsupported_completion_uses_claim_identity_and_preserves_same_account_display() {
     let claim_nonce = nonce(42);
     let scope = ProviderAccountScope::sub_provider("openai", "oauth");

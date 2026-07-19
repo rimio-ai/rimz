@@ -142,7 +142,11 @@ fn normalize_probe(
         AccountUsageProbe::Failed(identity) => (identity, None, false, true),
         AccountUsageProbe::Unsupported => (claim_identity.clone(), None, false, true),
     };
-    if failed {
+    // Delegated providers can fail before selecting the sub-provider encoded
+    // by the account preflight. Keep that requested identity for both a
+    // transient failure and a settled no-credentials result so the completed
+    // attempt satisfies the same cache key the next producer fold asks for.
+    if failed || auth_settled {
         if identity.scope == ProviderAccountScope::KindWide
             && claim_identity.scope != ProviderAccountScope::KindWide
         {
@@ -197,8 +201,8 @@ pub struct DirectQueryClaim {
     pub requested_scope: ProviderAccountScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_stamp: Option<u64>,
-    /// Cache-derived owner fallback for normalizing a failed or unsupported
-    /// authoritative probe.
+    /// Cache-derived owner fallback for a probe that could not resolve its
+    /// authoritative account identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preflight_account_key: Option<String>,
 }
