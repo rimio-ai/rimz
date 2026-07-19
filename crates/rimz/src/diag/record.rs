@@ -787,6 +787,411 @@ impl DiagEvent {
             Self::RendererExit { cause } => format!("{}:{}", self.kind_name(), cause.as_str()),
         }
     }
+
+    /// The incident family this event belongs to: sibling variants that
+    /// describe one ongoing incident share a family so the doctor groups them.
+    pub fn family(&self) -> &'static str {
+        match self {
+            Self::GateHold { .. } | Self::GateRelease { .. } => "gate",
+            Self::PaneCarryForward { .. } | Self::PaneCarryRefuted { .. } => "pane_carry",
+            Self::FrameRejected { .. } | Self::FrameShrinkVerified { .. } => "frame_shrink",
+            _ => self.kind_name(),
+        }
+    }
+
+    /// The identity of the incident this event belongs to. Sibling variants
+    /// within a family collapse onto one key so repeats fold into one row.
+    pub fn family_key(&self) -> String {
+        match self {
+            Self::GateHold { rule, .. } | Self::GateRelease { rule, .. } => {
+                format!("gate:{rule:?}")
+            }
+            Self::PaneCarryForward { carried, .. } | Self::PaneCarryRefuted { carried, .. } => {
+                format!("pane_carry:{carried:?}")
+            }
+            Self::FrameRejected { .. } | Self::FrameShrinkVerified { .. } => {
+                "frame_shrink".to_owned()
+            }
+            Self::HealthAlert {
+                reason, since_ms, ..
+            } => format!("health:{reason}:{since_ms}"),
+            Self::LinkAlert { since_ms, .. } => format!("link:{since_ms}"),
+            Self::TickBudgetBreach {
+                tick_loop,
+                since_ms,
+                ..
+            } => format!("tick:{tick_loop:?}:{since_ms}"),
+            Self::TopologyWriteRejected {
+                accepted_plugin_id,
+                accepted_loaded_at_ms,
+                ..
+            }
+            | Self::TopologyWriterChanged {
+                plugin_id: accepted_plugin_id,
+                loaded_at_ms: accepted_loaded_at_ms,
+                ..
+            } => format!("topology_writer:{accepted_loaded_at_ms}:{accepted_plugin_id}"),
+            _ => self.identity_key(),
+        }
+    }
+
+    /// Captured frame dumps this event points at, for follow-up inspection.
+    pub fn evidence_refs(&self) -> Vec<String> {
+        match self {
+            Self::FrameRejected { frames_ref, .. }
+            | Self::PaneCountDrop { frames_ref, .. }
+            | Self::PaneCarryForward { frames_ref, .. }
+            | Self::PaneCarryRefuted { frames_ref, .. } => frames_ref.iter().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A one-line human description of what this event records.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::FrameRejected {
+                reason,
+                prior_pane_count,
+                fresh_pane_count,
+                frames_ref,
+            } => format!(
+                "rejected {reason:?}; panes {prior_pane_count}->{fresh_pane_count}{}",
+                frames_ref
+                    .as_ref()
+                    .map(|name| format!("; frames {name}"))
+                    .unwrap_or_default()
+            ),
+            Self::ResolutionFallback { reason } => {
+                format!("resolution snapshot fell back to rollup: {reason}")
+            }
+            Self::FrameShrinkVerified { prior, fresh } => {
+                format!("verified shrink {prior}->{fresh}")
+            }
+            Self::PaneCountDrop {
+                prior,
+                new,
+                frames_ref,
+                ..
+            } => format!(
+                "pane count {prior}->{new}{}",
+                frames_ref
+                    .as_ref()
+                    .map(|name| format!("; frames {name}"))
+                    .unwrap_or_default()
+            ),
+            Self::PaneCarryForward {
+                carried,
+                prior,
+                fresh,
+                cli_confirmed,
+                frames_ref,
+                ..
+            } => format!(
+                "carried {} panes over source shrink {prior}->{fresh}; cli_confirmed={cli_confirmed}{}",
+                carried.len(),
+                frames_ref
+                    .as_ref()
+                    .map(|name| format!("; frames {name}"))
+                    .unwrap_or_default()
+            ),
+            Self::PaneCarryRefuted {
+                carried,
+                prior,
+                fresh,
+                verified,
+                frames_ref,
+                ..
+            } => format!(
+                "refuted {} carried panes after source re-pull {prior}->{fresh}->{verified}{}",
+                carried.len(),
+                frames_ref
+                    .as_ref()
+                    .map(|name| format!("; frames {name}"))
+                    .unwrap_or_default()
+            ),
+            Self::CarryForwardExpired {
+                pane_id,
+                pid,
+                carried_ms,
+            } => match pid {
+                Some(pid) => format!("expired carried {pane_id} pid {pid} after {carried_ms}ms"),
+                None => format!("expired carried {pane_id} after {carried_ms}ms"),
+            },
+            Self::HostedCarryDropped {
+                pane_id,
+                agent_kind,
+                reason,
+            } => format!(
+                "dropped hosted {agent_kind} carry for {pane_id}: {}",
+                reason.as_str()
+            ),
+            Self::TopologyWriterChanged {
+                prior_plugin_id,
+                prior_loaded_at_ms,
+                plugin_id,
+                loaded_at_ms,
+            } => format!(
+                "topology writer changed {prior_loaded_at_ms}:{prior_plugin_id}->{loaded_at_ms}:{plugin_id}"
+            ),
+            Self::TopologyWriteRejected {
+                plugin_id,
+                loaded_at_ms,
+                accepted_plugin_id,
+                accepted_loaded_at_ms,
+                rejected_count,
+            } => format!(
+                "rejected topology writer {loaded_at_ms}:{plugin_id}; accepted {accepted_loaded_at_ms}:{accepted_plugin_id}; count {rejected_count}"
+            ),
+            Self::GateHold {
+                rule,
+                reject_streak,
+                ..
+            } => format!("held {rule:?}; streak {reject_streak}"),
+            Self::GateRelease {
+                rule,
+                held_ms,
+                via_escape_hatch,
+            } => format!("released {rule:?} after {held_ms}ms; escape={via_escape_hatch}"),
+            Self::FetchFailure {
+                reason,
+                failure_streak,
+            } => format!("{reason}; streak {failure_streak}"),
+            Self::HealthAlert {
+                reason,
+                recovered_after_ms,
+                ..
+            } => match recovered_after_ms {
+                Some(ms) => format!("recovered after {ms}ms: {reason}"),
+                None => reason.clone(),
+            },
+            Self::LinkAlert {
+                tier,
+                rtt_ms,
+                miss_pct,
+                recovered_after_ms,
+                ..
+            } => {
+                let rtt = rtt_ms
+                    .map(|ms| format!("{ms}ms"))
+                    .unwrap_or_else(|| "?".to_owned());
+                match recovered_after_ms {
+                    Some(ms) => format!("link recovered after {ms}ms; rtt {rtt}; loss {miss_pct}%"),
+                    None => format!("link {tier:?}; rtt {rtt}; loss {miss_pct}%"),
+                }
+            }
+            Self::ClientReaped {
+                killed_pids,
+                pre_clients,
+                post_clients,
+                settled,
+                timed_out,
+                errors,
+            } => format!(
+                "remote Zellij client reap pids {killed_pids:?}; clients {pre_clients:?}->{post_clients:?}; settled={settled}; timed_out={timed_out}{}",
+                if errors.is_empty() {
+                    String::new()
+                } else {
+                    format!("; {}", errors.join("; "))
+                }
+            ),
+            Self::SidebarWidthIntent {
+                trigger,
+                own_cols,
+                base_cols,
+                step_cols,
+                step_exact,
+                target_cols,
+                verdict,
+            } => format!(
+                "sidebar width {}: own {own_cols}, base {base_cols}, step {step_cols:?} (exact={step_exact}), target {target_cols:?}; {}",
+                trigger.as_str(),
+                verdict.as_str(),
+            ),
+            Self::SidebarWidthNudge {
+                trigger,
+                from_cols,
+                target_cols,
+            } => format!(
+                "sidebar width nudge ({}) {from_cols}->{target_cols}",
+                trigger.as_str()
+            ),
+            Self::SidebarWidthSettle {
+                settled_cols,
+                learned_step,
+                outcome,
+            } => format!(
+                "sidebar width settled at {settled_cols}; learned step {learned_step:?}; {}",
+                outcome.as_str()
+            ),
+            Self::TickBudgetBreach {
+                tick_loop,
+                over_ticks,
+                last_wall_ms,
+                last_mux_wait_ms,
+                last_fold_bytes,
+                last_spawns,
+                wall_ms,
+                mux_wait_ms,
+                fold_bytes,
+                spawns,
+                budget_wall_ms,
+                budget_mux_wait_ms,
+                budget_fold_bytes,
+                budget_spawns,
+                recovered_after_ms,
+                ..
+            } => {
+                let last = format!(
+                    "last {last_wall_ms}ms ({last_mux_wait_ms}ms mux)/{last_fold_bytes}B/{last_spawns} spawns"
+                );
+                let worst = format!(
+                    "worst {wall_ms}ms ({mux_wait_ms}ms mux)/{fold_bytes}B/{spawns} spawns"
+                );
+                let budget = format!(
+                    "budget {budget_wall_ms}ms in-process/{budget_mux_wait_ms}ms mux/{budget_fold_bytes}B/{budget_spawns} spawns"
+                );
+                match recovered_after_ms {
+                    Some(ms) => {
+                        format!(
+                            "{tick_loop:?} tick recovered after {ms}ms; {over_ticks} over ticks; {last}; {worst}; {budget}"
+                        )
+                    }
+                    None => {
+                        format!(
+                            "{tick_loop:?} tick over budget for {over_ticks} ticks; {last}; {worst}; {budget}"
+                        )
+                    }
+                }
+            }
+            Self::ProducerElected { prior_elder } => {
+                format!("this renderer became producer after {prior_elder} aged out")
+            }
+            Self::ProducerDemoted { new_elder } => {
+                format!("this renderer stopped producing; elder {new_elder}")
+            }
+            Self::RowConflict {
+                agent_kind,
+                agent_session_id,
+                bound_pane,
+                conflicting_pane,
+            } => format!(
+                "{agent_kind}/{agent_session_id} already on {bound_pane}; suppressed {conflicting_pane}"
+            ),
+            Self::DuplicatePaneId { pane_id } => format!("duplicate {pane_id} suppressed"),
+            Self::ForeignSessionPane { pane_id, session } => {
+                format!("dropped {pane_id} from session {session}")
+            }
+            Self::GroupMigration {
+                pane_id, from, to, ..
+            } => format!(
+                "{pane_id} moved {}:{} -> {}:{}",
+                from.kind, from.key, to.kind, to.key
+            ),
+            Self::NewbornQuarantined { pane_id } => {
+                format!("held newborn {pane_id} until cwd resolves")
+            }
+            Self::MixedBuildWriters {
+                prior_build,
+                own_build,
+            } => format!("prior frame from build {prior_build}; this producer is {own_build}"),
+            Self::RendererPanic { message, .. } => message.clone(),
+            Self::RendererSignalDeath {
+                signal,
+                exit_code,
+                stderr_excerpt,
+            } => {
+                let reason = match (signal, exit_code) {
+                    (Some(signal), _) => format!("signal {signal}"),
+                    (None, Some(code)) => format!("exit {code}"),
+                    (None, None) => "unknown termination".to_owned(),
+                };
+                let excerpt = stderr_excerpt.lines().last().unwrap_or(stderr_excerpt);
+                format!("render worker died by {reason}: {excerpt}")
+            }
+            Self::RendererOrphanReaped {
+                pane_id,
+                worker_pid,
+            } => format!("reaped orphaned renderer {worker_pid} after pane {pane_id} disappeared"),
+            Self::SidebarOrphanReaped {
+                pane_id,
+                pid,
+                first_confirmed_at_ms,
+                second_confirmed_at_ms,
+                sigkilled,
+            } => format!(
+                "reaped orphaned sidebar {pid} after pane {pane_id} was absent at {first_confirmed_at_ms} and {second_confirmed_at_ms}; sigkill={sigkilled}"
+            ),
+            Self::PaneCacheDivergence {
+                pane_id,
+                pid,
+                cache_observed_at_ms,
+                authoritative_observed_at_ms,
+            } => format!(
+                "pane cache at {cache_observed_at_ms:?} omitted live sidebar {pid} in {pane_id}; authoritative roster observed it at {authoritative_observed_at_ms}"
+            ),
+            Self::SupervisorConvergence { target_build } => {
+                format!("supervisor converging onto build {target_build}")
+            }
+            Self::SupervisorPreflightRejected {
+                target_build,
+                reason,
+            } => format!("supervisor rejected build {target_build}: {reason}"),
+            Self::SelfCloseRejected { siblings, reason } => {
+                format!("self-close rejected ({siblings} siblings): {reason}")
+            }
+            Self::RendererExit { cause } => format!("renderer exited: {}", cause.as_str()),
+            Self::FetchFoldStats {
+                interval_ms,
+                causes,
+            } => format!(
+                "fetch fold totals over {interval_ms}ms across {} causes",
+                causes.len()
+            ),
+            Self::FrameAnomaly {
+                anomaly:
+                    AnomalyKind::RowPresenceFlap {
+                        row_id,
+                        gone_at_ms,
+                        back_at_ms,
+                        gap_evidence: Some(evidence),
+                        ..
+                    },
+                suppressed_since_last,
+                ..
+            } => {
+                let pulled_pane = evidence
+                    .pulled_pane_present
+                    .map(|present| present.to_string())
+                    .unwrap_or_else(|| "unknown".to_owned());
+                let suppressed = if *suppressed_since_last > 0 {
+                    format!("; {suppressed_since_last} suppressed")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "observed row_presence_flap on {row_id}; gap {}ms; pulled row present={}; pulled pane present={pulled_pane}{suppressed}",
+                    back_at_ms.saturating_sub(*gone_at_ms),
+                    evidence.pulled_row_present,
+                )
+            }
+            Self::FrameAnomaly {
+                anomaly,
+                suppressed_since_last,
+                ..
+            } => {
+                let subject = anomaly
+                    .subject()
+                    .map(|subject| format!(" on {subject}"))
+                    .unwrap_or_default();
+                let suppressed = if *suppressed_since_last > 0 {
+                    format!("; {suppressed_since_last} suppressed")
+                } else {
+                    String::new()
+                };
+                format!("observed {}{subject}{suppressed}", anomaly.key())
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

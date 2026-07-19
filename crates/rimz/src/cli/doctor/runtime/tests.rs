@@ -1,8 +1,8 @@
 use super::*;
 use rimz::diag::record::{
     AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FetchFoldCause, FetchFoldCauseStats,
-    FrameRejectReason, FrameStamp, HostedCarryDropReason, ObserveRole, PaneDropEvidence,
-    PaneDropViewEvidence, RendererExitCause, RowPresenceGapEvidence, TickLoop,
+    FrameStamp, HostedCarryDropReason, ObserveRole, PaneDropEvidence, PaneDropViewEvidence,
+    TickLoop,
 };
 use rimz::remote::link::LinkTier;
 
@@ -398,116 +398,6 @@ fn newer_cache_writer_supersedes_only_older_conflicts() {
         newer.as_ref()
     ));
     assert!(!topology_conflict_superseded(None, None));
-}
-
-#[test]
-fn diagnostic_summary_includes_frame_ref_and_producer_peer_ids() {
-    let rejected = diagnostic_summary(&DiagEvent::FrameRejected {
-        reason: FrameRejectReason::MissingOwnPane,
-        prior_pane_count: 3,
-        fresh_pane_count: 2,
-        frames_ref: Some("frame.42.0.frame_rejected.json".to_owned()),
-    });
-    assert!(rejected.contains("frame.42.0.frame_rejected.json"));
-
-    let elder = sidebar("sb_019e8c565bbd708097fce9514f79da04");
-    assert!(
-        diagnostic_summary(&DiagEvent::ProducerElected {
-            prior_elder: elder.clone(),
-        })
-        .contains(elder.as_str())
-    );
-    assert!(
-        diagnostic_summary(&DiagEvent::ProducerDemoted {
-            new_elder: elder.clone(),
-        })
-        .contains(elder.as_str())
-    );
-
-    let tick = diagnostic_summary(&DiagEvent::TickBudgetBreach {
-        tick_loop: TickLoop::Fetch,
-        over_ticks: 5,
-        last_wall_ms: 900,
-        last_mux_wait_ms: 250,
-        last_fold_bytes: 1_024,
-        last_spawns: 1,
-        wall_ms: 1_500,
-        mux_wait_ms: 900,
-        fold_bytes: 300_000,
-        spawns: 40,
-        budget_wall_ms: 1_000,
-        budget_mux_wait_ms: 5_000,
-        budget_fold_bytes: 262_144,
-        budget_spawns: 32,
-        since_ms: 10,
-        recovered_after_ms: None,
-    });
-    assert!(tick.contains("last 900ms (250ms mux)/1024B/1 spawns"));
-    assert!(tick.contains("worst 1500ms (900ms mux)/300000B/40 spawns"));
-}
-
-#[test]
-fn diagnostic_summary_describes_renderer_exit_without_cleanly_label() {
-    assert_eq!(
-        diagnostic_summary(&DiagEvent::RendererExit {
-            cause: RendererExitCause::SelfCloseEmptyTab,
-        }),
-        "renderer exited: self_close_empty_tab"
-    );
-    assert_eq!(
-        diagnostic_summary(&DiagEvent::RendererExit {
-            cause: RendererExitCause::DegradedGaveUp,
-        }),
-        "renderer exited: degraded_gave_up"
-    );
-}
-
-#[test]
-fn diagnostic_summary_attributes_row_presence_gap_at_missing_edge() {
-    let row_flap = |gap_evidence| DiagEvent::FrameAnomaly {
-        role: ObserveRole::Consumer,
-        anomaly: AnomalyKind::RowPresenceFlap {
-            row_id: "agent:a".to_owned(),
-            pane_id: Some("zellij:terminal_1".to_owned()),
-            gone_at_ms: 10,
-            back_at_ms: 25,
-            gap_evidence,
-        },
-        window_ms: Some(10_000),
-        frame: FrameStamp {
-            produced_at_ms: Some(8),
-            rows: 2,
-            agents: 2,
-            processes: 0,
-            pulled_rows: Some(2),
-            pulled_panes_produced_at_ms: Some(8),
-        },
-        events_recent: EventsSig::default(),
-        gate_reject_streak: 0,
-        health_failure_streak: 0,
-        suppressed_since_last: 0,
-        dropped_msgs: 0,
-    };
-
-    assert_eq!(
-        diagnostic_summary(&row_flap(None)),
-        "observed row_presence_flap on agent:a"
-    );
-    assert_eq!(
-        diagnostic_summary(&row_flap(Some(RowPresenceGapEvidence {
-            frame: FrameStamp {
-                produced_at_ms: Some(7),
-                rows: 1,
-                agents: 1,
-                processes: 0,
-                pulled_rows: Some(2),
-                pulled_panes_produced_at_ms: Some(7),
-            },
-            pulled_row_present: true,
-            pulled_pane_present: Some(true),
-        }))),
-        "observed row_presence_flap on agent:a; gap 15ms; pulled row present=true; pulled pane present=true"
-    );
 }
 
 #[test]
