@@ -15,7 +15,7 @@ use super::view::SidebarSnapshot;
 use crate::agents::lifecycle;
 use crate::agents::{
     AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentTurnError, RateLimitWindow,
-    TurnErrorClass,
+    TurnErrorClass, TurnSettle, TurnSettleOutcome,
 };
 use crate::agents::{AgentState, AgentStatus, ProviderCapacity};
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
@@ -171,15 +171,9 @@ pub(super) trait AgentStateFx: Sized {
     fn paused_turn_error(self, secs_ago: i64, label: &str) -> Self;
     fn spend_limit_turn_error(self, secs_ago: i64, label: &str) -> Self;
     fn overloaded_turn_error(self, secs_ago: i64, label: &str) -> Self;
-    /// Attach a clean turn-completion marker stamped `secs_ago` before the
-    /// [`epoch`] — the success twin of [`turn_error`](Self::turn_error).
-    fn turn_complete(self, secs_ago: i64) -> Self;
-    /// Attach an interrupted-turn marker stamped `secs_ago` before the
-    /// [`epoch`] — the idle sibling of [`turn_complete`](Self::turn_complete).
-    fn turn_interrupted(self, secs_ago: i64) -> Self;
-    /// Attach a display-only native permission marker stamped `secs_ago`
-    /// before the [`epoch`].
-    fn native_permission_wait(self, secs_ago: i64) -> Self;
+    /// Attach a resting-turn marker of `outcome` stamped `secs_ago` before the
+    /// [`epoch`] — the settle twin of [`turn_error`](Self::turn_error).
+    fn settle(self, secs_ago: i64, outcome: TurnSettleOutcome) -> Self;
     /// Stamp the compaction head `secs` before the [`epoch`].
     fn compacting_ago(self, secs: i64) -> Self;
 }
@@ -256,24 +250,11 @@ impl AgentStateFx for AgentState {
         self.turn_error_class(secs_ago, label, TurnErrorClass::PausedOverloaded)
     }
 
-    fn turn_complete(mut self, secs_ago: i64) -> Self {
-        self.context.get_or_insert_with(bare_context).turn_complete =
-            Some(epoch() - std::time::Duration::from_secs(secs_ago as u64));
-        self
-    }
-
-    fn turn_interrupted(mut self, secs_ago: i64) -> Self {
-        self.context
-            .get_or_insert_with(bare_context)
-            .turn_interrupted = Some(epoch() - std::time::Duration::from_secs(secs_ago as u64));
-        self
-    }
-
-    fn native_permission_wait(mut self, secs_ago: i64) -> Self {
-        self.context
-            .get_or_insert_with(bare_context)
-            .native_permission_wait =
-            Some(epoch() - std::time::Duration::from_secs(secs_ago as u64));
+    fn settle(mut self, secs_ago: i64, outcome: TurnSettleOutcome) -> Self {
+        self.context.get_or_insert_with(bare_context).settle = Some(TurnSettle::new(
+            epoch() - std::time::Duration::from_secs(secs_ago as u64),
+            outcome,
+        ));
         self
     }
 
@@ -286,31 +267,7 @@ impl AgentStateFx for AgentState {
 /// An empty rich context observed at the [`epoch`] — the base the fluent
 /// `limits`/`turn_error` enrichments build on.
 pub(super) fn bare_context() -> AgentContext {
-    AgentContext {
-        source: "claude".to_owned(),
-        session_name: None,
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
-        agent_version: None,
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: None,
-        pr: None,
-        account: None,
-        turn_opened_by: Vec::new(),
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
-        observed_at: epoch(),
-    }
+    AgentContext::new("claude", epoch())
 }
 
 /// A rate-limit window reading: `used`% drained, resetting `resets_in_secs`

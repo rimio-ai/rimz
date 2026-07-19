@@ -299,8 +299,9 @@ pub fn merge_observed(
         merge_optional!(pr);
         merge_optional!(account);
         merge_optional!(turn_error);
-        merge_optional!(turn_complete);
-        merge_optional!(turn_interrupted);
+        merge_optional!(settle);
+        merge_optional!(model_id);
+        merge_optional!(effort);
         if let Some(rate_limits) = context.rate_limits
             && record.context.rate_limits.as_ref() != Some(&rate_limits)
         {
@@ -310,18 +311,6 @@ pub fn merge_observed(
         }
         if let Some(tokens) = context.tokens {
             changed |= merge_observed_tokens(&mut record.context.tokens, tokens);
-        }
-        if let Some(model_id) = context.model_id
-            && record.context.model_id.as_ref() != Some(&model_id)
-        {
-            record.context.model_id = Some(model_id);
-            changed = true;
-        }
-        if let Some(effort) = context.effort
-            && record.context.effort.as_ref() != Some(&effort)
-        {
-            record.context.effort = Some(effort);
-            changed = true;
         }
         if let Some(cost) = context.cost
             && let Some(total_cost_usd) = cost.total_cost_usd

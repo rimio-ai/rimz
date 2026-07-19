@@ -300,10 +300,7 @@ fn context_with_cost(total_cost_usd: f64) -> AgentContext {
         account: None,
         turn_opened_by: Vec::new(),
         turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        settle: None,
         observed_at: row_time(),
     }
 }

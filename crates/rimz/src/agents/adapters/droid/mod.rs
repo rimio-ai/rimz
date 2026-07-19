@@ -33,7 +33,8 @@ use super::{
     AgentLifecycleObservation, AgentTokenUsage, FieldPatch, HookOutput, HookRouting,
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
     RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
-    optional_payload_string, read_transcript_lines, sanitize_user_prompt,
+    TurnSettle, TurnSettleOutcome, optional_payload_string, read_transcript_lines,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -434,10 +435,12 @@ impl crate::agents::capabilities::ContextCapability for DroidAdapter {
                     .map_or(FieldPatch::Keep, FieldPatch::Set),
                 tokens: LocalTokenPatch::ReplaceCurrentPreservingSession(tokens),
                 cost: cost.map_or(FieldPatch::Clear, FieldPatch::Set),
-                native_permission_wait: refresh
+                settle: refresh
                     .telemetry
                     .native_permission_wait
-                    .map_or(FieldPatch::Clear, FieldPatch::Set),
+                    .map_or(FieldPatch::Clear, |at| {
+                        FieldPatch::Set(TurnSettle::new(at, TurnSettleOutcome::NativeWait))
+                    }),
                 ..LocalContextPatch::authoritative_current()
             },
             transcript_path: Some(refresh.transcript_path.to_string_lossy().into_owned()),

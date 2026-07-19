@@ -153,32 +153,11 @@ mod tests {
         let agent = row.as_agent_mut().unwrap();
         agent.registered_at = registered_at;
         agent.context = usd.map(|usd| crate::agents::AgentContext {
-            source: "claude".to_owned(),
-            session_name: None,
-            session_preview: None,
-            model_id: None,
-            model_display_name: None,
-            effort: None,
-            thinking_enabled: None,
-            output_style: None,
-            vim_mode: None,
-            agent_version: None,
-            exceeds_200k_tokens: None,
             cost: Some(crate::agents::AgentCost {
                 total_cost_usd: Some(usd),
                 ..Default::default()
             }),
-            tokens: None,
-            rate_limits: None,
-            pr: None,
-            account: None,
-            turn_opened_by: Vec::new(),
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
-            observed_at: now,
+            ..crate::agents::AgentContext::new("claude", now)
         });
         row
     }

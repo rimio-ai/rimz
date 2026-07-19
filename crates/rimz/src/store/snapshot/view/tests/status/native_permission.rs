@@ -6,7 +6,7 @@ fn fresh_native_permission_marker_routes_attention_without_mutating_rollup_truth
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(60)
-        .native_permission_wait(10);
+        .settle(10, TurnSettleOutcome::NativeWait);
     session.pane.as_mut().unwrap().command = Some("agy".to_owned());
 
     let snapshot = room_with_agent_panes(vec![session]);
@@ -28,7 +28,7 @@ fn newer_lifecycle_activity_self_clears_a_stale_native_permission_marker() {
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(5)
-        .native_permission_wait(60);
+        .settle(60, TurnSettleOutcome::NativeWait);
     session.pane.as_mut().unwrap().command = Some("agy".to_owned());
 
     let snapshot = room_with_agent_panes(vec![session]);

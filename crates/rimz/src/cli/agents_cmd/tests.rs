@@ -1138,7 +1138,10 @@ mod render {
             1_000,
         );
         let mut context = rimz::agents::AgentContext::new("droid", now);
-        context.native_permission_wait = Some(Timestamp::from_second(1_010).unwrap());
+        context.settle = Some(rimz::agents::TurnSettle::new(
+            Timestamp::from_second(1_010).unwrap(),
+            rimz::agents::TurnSettleOutcome::NativeWait,
+        ));
         native_wait.context = Some(context);
         let mut native_out = anstream::StripStream::new(Vec::new());
         super::show::render_activity_section(&mut native_out, &native_wait, None, false, now)

@@ -3,7 +3,8 @@ use crate::agents::context::WindowSource;
 use crate::agents::{
     AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage, AgentTokenUsage,
     AgentTurnError, FieldPatch, LocalContextPatch, LocalContextRefresh, LocalSpendFold,
-    LocalTokenPatch, RateLimitWindow, TranscriptStat, TurnErrorClass,
+    LocalTokenPatch, RateLimitWindow, TranscriptStat, TurnErrorClass, TurnSettle,
+    TurnSettleOutcome,
 };
 
 #[test]
@@ -51,7 +52,10 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
                 }),
             })),
             cost: FieldPatch::Clear,
-            native_permission_wait: FieldPatch::Set(Timestamp::from_second(1_700_000_001).unwrap()),
+            settle: FieldPatch::Set(TurnSettle::new(
+                Timestamp::from_second(1_700_000_001).unwrap(),
+                TurnSettleOutcome::NativeWait,
+            )),
             ..LocalContextPatch::authoritative_current()
         },
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
@@ -67,8 +71,11 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     assert_eq!(tokens.used_percentage, None);
     assert_eq!(tokens.current_usage, None);
     assert_eq!(
-        merged.context.native_permission_wait,
-        Some(Timestamp::from_second(1_700_000_001).unwrap())
+        merged.context.settle,
+        Some(TurnSettle::new(
+            Timestamp::from_second(1_700_000_001).unwrap(),
+            TurnSettleOutcome::NativeWait,
+        ))
     );
     let session = tokens.session_usage.as_ref().unwrap();
     assert_eq!(session.input_tokens, Some(100));
@@ -107,7 +114,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     assert_eq!(tokens.used_percentage, None);
     assert_eq!(tokens.current_usage, None);
     assert!(tokens.session_usage.is_some());
-    assert!(unresolved.context.native_permission_wait.is_none());
+    assert!(unresolved.context.settle.is_none());
 }
 
 struct MergeCase {
@@ -349,17 +356,17 @@ fn local_refresh_overwrites_turn_settle_markers() {
     let old = Timestamp::from_second(1_700_000_000).unwrap();
     let new = Timestamp::from_second(1_700_000_030).unwrap();
     let mut prior = codex_record(observed_at);
-    prior.context.plan_proposed = Some(old);
-    prior.context.turn_interrupted = Some(old);
+    prior.context.settle = Some(TurnSettle::new(old, TurnSettleOutcome::PlanProposed));
     write_record(&runtime, &prior).unwrap();
 
     let mut refresh = unpriced_refresh();
-    refresh.context.plan_proposed = FieldPatch::Set(new);
-    refresh.context.turn_interrupted = FieldPatch::Set(new);
+    refresh.context.settle = FieldPatch::Set(TurnSettle::new(new, TurnSettleOutcome::Interrupted));
     merge_local_context(&runtime, spec("codex"), "sess-1", refresh, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
-    assert_eq!(merged.context.plan_proposed, Some(new));
-    assert_eq!(merged.context.turn_interrupted, Some(new));
+    assert_eq!(
+        merged.context.settle,
+        Some(TurnSettle::new(new, TurnSettleOutcome::Interrupted))
+    );
 
     merge_local_context(
         &runtime,
@@ -370,10 +377,9 @@ fn local_refresh_overwrites_turn_settle_markers() {
     )
     .unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
-    assert_eq!(merged.context.plan_proposed, None);
     assert_eq!(
-        merged.context.turn_interrupted, None,
-        "local detector clears stale interrupted markers when the tail advances"
+        merged.context.settle, None,
+        "local detector clears stale settle markers when the tail advances"
     );
 }
 
@@ -930,10 +936,7 @@ fn observed_context() -> AgentContext {
         account: None,
         turn_opened_by: Vec::new(),
         turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        settle: None,
         observed_at: observed_at(),
     }
 }

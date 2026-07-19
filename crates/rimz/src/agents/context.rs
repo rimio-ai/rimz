@@ -136,50 +136,62 @@ pub struct AgentContext {
     /// rollup's `turn_started_at` proves the marker belongs to a prior turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error: Option<AgentTurnError>,
-    /// A turn that completed cleanly, detected from the rollout tail when the
-    /// turn fired no `Stop` hook to record its end — Codex's `/review` runs in
-    /// review mode and closes on a `task_complete` without a `Stop`.
-    /// Status-projection marker like [`turn_error`](Self::turn_error) and
-    /// self-clearing the same way: the projection settles a falsely-`running`
-    /// row to `success` while the marker postdates `last_activity`, and a newer
-    /// prompt advancing `last_activity` past it drops the row back to its
-    /// lifecycle status.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_complete: Option<Timestamp>,
-    /// A completed Codex planning turn resting on its native plan selector,
-    /// detected from the rollout tail when the `Stop` hook was missed.
-    /// Status-projection marker like [`turn_complete`](Self::turn_complete):
-    /// the projection settles a falsely-`running` row to `waiting` while the
-    /// marker postdates `last_activity`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_proposed: Option<Timestamp>,
-    /// A provider status channel or validated local transcript currently
-    /// reports a native input dialog. The marker time must postdate the latest
-    /// lifecycle activity to project a waiting card; a subsequent tool/turn
-    /// hook or local-source refresh self-clears a stale marker.
-    /// Display-only: it creates no durable ask and the provider pane remains
-    /// the answer surface. The field retains its original permission-specific
-    /// wire name for sidecar compatibility while also carrying native questions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_permission_wait: Option<Timestamp>,
-    /// A turn that was interrupted with no `Stop` hook, detected from the
-    /// rollout tail — Codex writes `turn_aborted` for `/clear` mid-turn and
-    /// Esc. Status-projection marker like
-    /// [`turn_complete`](Self::turn_complete) and self-clearing the same way:
-    /// the projection settles a falsely-`running` row to `idle` while the
-    /// marker postdates `last_activity`, and a newer prompt advancing
+    /// How the current turn came to rest when it fired no `Stop` hook to
+    /// record its end. Status-projection marker like
+    /// [`turn_error`](Self::turn_error) and self-clearing the same way: the
+    /// projection settles a falsely-active row to the outcome's status while
+    /// the marker postdates `last_activity`, and a newer prompt advancing
     /// `last_activity` past it drops the row back to its lifecycle status.
+    /// Display-only — it never reaches the event log or a decision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_interrupted: Option<Timestamp>,
+    pub settle: Option<TurnSettle>,
     /// When the producer observed this record. Snapshot liveness comes from
     /// the rollup row; a sidecar without a surviving row is not joined.
     pub observed_at: Timestamp,
 }
 
-impl AgentContext {
-    pub fn new(source: &str, observed_at: Timestamp) -> Self {
+/// Why a turn came to rest without a `Stop` hook to record its end. A provider
+/// tail yields at most one resting outcome per turn, so the outcomes are
+/// mutually exclusive and travel as one marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSettleOutcome {
+    /// The turn finished cleanly — Codex's `/review` runs in review mode and
+    /// closes on a `task_complete` without a `Stop`. Settles a running row to
+    /// `success` instead of letting the stall window misread a finished review
+    /// as failed.
+    Complete,
+    /// A completed planning turn rests on the provider's native plan selector.
+    /// Settles a running row to `waiting`.
+    PlanProposed,
+    /// A provider status channel or validated local transcript reports a native
+    /// input dialog. Settles a running row to `waiting` as a display-only
+    /// attention edge: it creates no durable ask and the provider pane remains
+    /// the answer surface.
+    NativeWait,
+    /// The turn was interrupted with no result — Codex writes `turn_aborted`
+    /// for `/clear` mid-turn and Esc. Settles a running or waiting row to
+    /// `idle`, including a native ask that Esc cancelled without a hook.
+    Interrupted,
+}
+
+/// One resting-turn marker: the outcome and the instant the provider proved it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnSettle {
+    pub at: Timestamp,
+    pub outcome: TurnSettleOutcome,
+}
+
+impl TurnSettle {
+    pub fn new(at: Timestamp, outcome: TurnSettleOutcome) -> Self {
+        Self { at, outcome }
+    }
+}
+
+impl Default for AgentContext {
+    fn default() -> Self {
         Self {
-            source: source.to_owned(),
+            source: String::new(),
             session_name: None,
             session_preview: None,
             model_id: None,
@@ -197,11 +209,18 @@ impl AgentContext {
             account: None,
             turn_opened_by: Vec::new(),
             turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
+            settle: None,
+            observed_at: Timestamp::UNIX_EPOCH,
+        }
+    }
+}
+
+impl AgentContext {
+    pub fn new(source: &str, observed_at: Timestamp) -> Self {
+        Self {
+            source: source.to_owned(),
             observed_at,
+            ..Self::default()
         }
     }
 }
@@ -269,20 +288,14 @@ pub struct LocalContextPatch {
     pub tokens: LocalTokenPatch,
     pub cost: FieldPatch<AgentCost>,
     pub turn_error: FieldPatch<AgentTurnError>,
-    pub turn_complete: FieldPatch<Timestamp>,
-    pub plan_proposed: FieldPatch<Timestamp>,
-    pub native_permission_wait: FieldPatch<Timestamp>,
-    pub turn_interrupted: FieldPatch<Timestamp>,
+    pub settle: FieldPatch<TurnSettle>,
 }
 
 impl LocalContextPatch {
     pub fn authoritative_current() -> Self {
         Self {
             tokens: LocalTokenPatch::PreserveEstablished(None),
-            turn_complete: FieldPatch::Clear,
-            plan_proposed: FieldPatch::Clear,
-            native_permission_wait: FieldPatch::Clear,
-            turn_interrupted: FieldPatch::Clear,
+            settle: FieldPatch::Clear,
             ..Self::default()
         }
     }
@@ -311,11 +324,7 @@ impl LocalContextPatch {
         );
         self.cost.apply(&mut context.cost);
         self.turn_error.apply(&mut context.turn_error);
-        self.turn_complete.apply(&mut context.turn_complete);
-        self.plan_proposed.apply(&mut context.plan_proposed);
-        self.native_permission_wait
-            .apply(&mut context.native_permission_wait);
-        self.turn_interrupted.apply(&mut context.turn_interrupted);
+        self.settle.apply(&mut context.settle);
     }
 }
 

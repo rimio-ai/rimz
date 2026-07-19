@@ -68,7 +68,7 @@ use super::{
     non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
-use crate::agents::TurnErrorClass;
+use crate::agents::{TurnErrorClass, TurnSettle, TurnSettleOutcome};
 use crate::transcript::AskQuestion;
 
 /// Everything `const` about Claude Code, in one place. See
@@ -619,7 +619,8 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
         let mut context = parsed.into_context(source, Timestamp::now());
         if let Some(tail) = transcript_tail_from_payload(payload) {
             context.turn_error = statusline::detect_turn_error(&tail);
-            context.turn_interrupted = statusline::detect_turn_interrupted(&tail);
+            context.settle = statusline::detect_turn_interrupted(&tail)
+                .map(|at| TurnSettle::new(at, TurnSettleOutcome::Interrupted));
         }
         super::ContextObservation::new(agent_id, context)
     }

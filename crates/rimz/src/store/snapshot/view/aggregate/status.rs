@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
     AgentContext, AgentState, AgentStatus, AgentTurnError, ProviderCapacity, TurnErrorClass,
-    display_turn_error, effective_turn_error_class,
+    TurnSettleOutcome, display_turn_error, effective_turn_error_class,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
@@ -98,7 +98,9 @@ pub(super) fn project_display_status(
                 (AgentStatus::Running, false)
             }
         };
-        if crate::agents::is_native_permission_wait(status, agent.context.as_ref(), last_activity) {
+        if crate::agents::settled_outcome(status, agent.context.as_ref(), last_activity)
+            == Some(TurnSettleOutcome::NativeWait)
+        {
             agent.status = AgentStatus::Waiting;
             agent.phase = TurnPhase::Idle;
             continue;
@@ -204,7 +206,9 @@ fn resolve_waiting(
     // An interruption marker proves Esc cancelled the native prompt.
     // Otherwise a human-blocked prompt outranks every derived state, while
     // a later activity heartbeat means it was answered in the pane.
-    if crate::agents::is_turn_interrupted(status, context, last_activity) {
+    if crate::agents::settled_outcome(status, context, last_activity)
+        == Some(TurnSettleOutcome::Interrupted)
+    {
         WaitingResolution::Interrupted
     } else if source_agent.is_some_and(AgentState::is_awaiting_input) {
         WaitingResolution::AwaitingInput
@@ -254,17 +258,18 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
     {
         return Settled::status(AgentStatus::Running);
     }
-    if crate::agents::is_turn_complete(status, context, last_activity) {
+    match crate::agents::settled_outcome(status, context, last_activity) {
         // A turn that finished without a `Stop` hook (Codex `/review` review
         // mode) settles to success instead of spinning until the stall
         // window misreads it as failed.
-        return Settled::status(AgentStatus::Success);
-    }
-    if crate::agents::is_turn_interrupted(status, context, last_activity) {
+        Some(TurnSettleOutcome::Complete) => return Settled::status(AgentStatus::Success),
         // A turn or native ask interrupted without a `Stop` hook is at rest
         // with no result, so settle to idle before the stall window can
         // misread it as failed.
-        return Settled::status(AgentStatus::Idle);
+        Some(TurnSettleOutcome::Interrupted) => return Settled::status(AgentStatus::Idle),
+        // Plan and native-wait markers raise `waiting` through
+        // `AgentState::effective_status`, which already fed `effective_status`.
+        Some(TurnSettleOutcome::PlanProposed | TurnSettleOutcome::NativeWait) | None => {}
     }
 
     let stalled = crate::agents::is_stalled(status, last_activity, now, stalled_after_secs);

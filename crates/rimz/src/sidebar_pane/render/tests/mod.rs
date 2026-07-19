@@ -345,10 +345,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
         account: None,
         turn_opened_by: Vec::new(),
         turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        settle: None,
         observed_at: now,
     }
 }
@@ -392,10 +389,7 @@ fn codex_context(now: Timestamp) -> AgentContext {
         account: None,
         turn_opened_by: Vec::new(),
         turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        settle: None,
         observed_at: now,
     }
 }

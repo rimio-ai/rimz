@@ -171,10 +171,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
             at: ts(error_at),
             label: Some(label.to_owned()),
         }),
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
+        settle: None,
         observed_at: ts(error_at),
     });
     agent

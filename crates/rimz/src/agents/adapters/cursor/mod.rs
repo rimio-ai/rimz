@@ -484,8 +484,7 @@ impl crate::agents::capabilities::ContextCapability for CursorAdapter {
             .and_then(transcript::statusline_turn_markers);
         let mut context = payload.into_context(source, Timestamp::now());
         if let Some(markers) = markers {
-            context.turn_complete = markers.turn_complete;
-            context.turn_interrupted = markers.turn_interrupted;
+            context.settle = markers.settle;
             context.turn_error = markers.turn_error;
         }
         super::ContextObservation::new(agent_id, context)

@@ -110,7 +110,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
     refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
     let first = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("first refresh");
     let first_stat = first.transcript_stat.expect("first stat");
-    let first_complete = first.context.turn_complete.expect("first terminal marker");
+    let first_complete = first.context.settle.expect("first terminal marker").at;
 
     std::fs::write(
         &path,
@@ -138,8 +138,8 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
     assert!(
         merged
             .context
-            .turn_complete
-            .is_some_and(|at| at > first_complete)
+            .settle
+            .is_some_and(|settle| settle.at > first_complete)
     );
     assert_eq!(merged.context.model_id.as_deref(), Some("cursor/model"));
     assert!(merged.context.tokens.is_none());

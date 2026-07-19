@@ -141,13 +141,13 @@ fn turn_interrupted_reads_the_tail_from_the_payload_path() {
                     "transcript_path": transcript.to_str().unwrap(),
                 }),
             )
-            .and_then(|observation| observation.context.turn_interrupted),
+            .and_then(|observation| observation.context.settle.map(|settle| settle.at)),
         Some("2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap())
     );
     assert!(
         ClaudeAdapter
             .observe_context("claude", &json!({ "session_id": "sess-1" }))
-            .is_some_and(|observation| observation.context.turn_interrupted.is_none())
+            .is_some_and(|observation| observation.context.settle.is_none())
     );
 }
 

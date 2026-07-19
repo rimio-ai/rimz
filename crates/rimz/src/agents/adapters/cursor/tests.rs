@@ -1486,10 +1486,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
         shared_pricing_cache_path: &pricing,
     })
     .expect("torn transcript still registers its path");
-    assert_eq!(
-        refresh.context.turn_complete,
-        crate::agents::FieldPatch::Clear
-    );
+    assert_eq!(refresh.context.settle, crate::agents::FieldPatch::Clear);
 
     std::fs::write(&path, format!("{terminal}\n{terminal}\n")).unwrap();
     let healed = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
@@ -1502,7 +1499,10 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
         shared_pricing_cache_path: &pricing,
     })
     .expect("new complete terminal refresh");
-    assert!(healed.context.turn_complete.as_set().is_some());
+    assert_eq!(
+        healed.context.settle.as_set().map(|settle| settle.outcome),
+        Some(crate::agents::TurnSettleOutcome::Complete)
+    );
 }
 
 #[test]
@@ -1527,14 +1527,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
         first.context.model_id.as_set().map(String::as_str),
         Some("cursor/model")
     );
-    assert_eq!(
-        first.context.turn_complete,
-        crate::agents::FieldPatch::Clear
-    );
-    assert_eq!(
-        first.context.turn_interrupted,
-        crate::agents::FieldPatch::Clear
-    );
+    assert_eq!(first.context.settle, crate::agents::FieldPatch::Clear);
     assert_eq!(first.context.turn_error, crate::agents::FieldPatch::Clear);
 
     std::fs::write(
@@ -1552,7 +1545,14 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
         shared_pricing_cache_path: &pricing,
     })
     .expect("changed transcript refresh");
-    assert!(interrupted.context.turn_interrupted.as_set().is_some());
+    assert_eq!(
+        interrupted
+            .context
+            .settle
+            .as_set()
+            .map(|settle| settle.outcome),
+        Some(crate::agents::TurnSettleOutcome::Interrupted)
+    );
     assert_eq!(
         interrupted.context.tokens,
         crate::agents::LocalTokenPatch::PreserveEstablished(None)
@@ -1583,11 +1583,12 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
         shared_pricing_cache_path: &pricing,
     })
     .expect("first completed snapshot");
-    let first_complete = *first
+    let first_complete = first
         .context
-        .turn_complete
+        .settle
         .as_set()
-        .expect("first terminal marker");
+        .expect("first terminal marker")
+        .at;
     let first_stat = first.transcript_stat.expect("first transcript stat");
 
     let two_turns = concat!(
@@ -1623,9 +1624,9 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
     assert!(
         rewritten
             .context
-            .turn_complete
+            .settle
             .as_set()
-            .is_some_and(|at| *at > first_complete)
+            .is_some_and(|settle| settle.at > first_complete)
     );
     assert!(
         CursorAdapter

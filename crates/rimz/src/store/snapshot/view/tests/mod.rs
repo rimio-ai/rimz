@@ -26,7 +26,9 @@ use super::rows::row_from_agent;
 use super::{SidebarSnapshot, SidebarWorktreeKind, WorktreePrState, row_identity_violations};
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::{LifecycleSignal, TurnPhase};
-use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally, SpendWindow};
+use crate::agents::{
+    AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally, SpendWindow, TurnSettleOutcome,
+};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::AgentKind;
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};

@@ -554,12 +554,11 @@ fn transcript_refresh_stamps_plan_marker_instead_of_completion() {
     )
     .expect("transcript refresh");
     assert_eq!(
-        refresh.context.plan_proposed,
-        crate::agents::FieldPatch::Set("2026-07-13T10:00:02Z".parse().unwrap())
-    );
-    assert_eq!(
-        refresh.context.turn_complete,
-        crate::agents::FieldPatch::Clear
+        refresh.context.settle,
+        crate::agents::FieldPatch::Set(crate::agents::TurnSettle::new(
+            "2026-07-13T10:00:02Z".parse().unwrap(),
+            crate::agents::TurnSettleOutcome::PlanProposed,
+        ))
     );
     assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
 }
@@ -636,18 +635,15 @@ fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
     )
     .expect("changed transcript refreshes");
     assert_eq!(
-        refresh.context.turn_interrupted,
-        crate::agents::FieldPatch::Set(
+        refresh.context.settle,
+        crate::agents::FieldPatch::Set(crate::agents::TurnSettle::new(
             "2026-07-07T14:12:00.000Z"
                 .parse::<jiff::Timestamp>()
-                .unwrap()
-        )
+                .unwrap(),
+            crate::agents::TurnSettleOutcome::Interrupted,
+        ))
     );
     assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
-    assert_eq!(
-        refresh.context.turn_complete,
-        crate::agents::FieldPatch::Clear
-    );
 }
 
 #[test]
@@ -697,10 +693,7 @@ fn messageless_task_complete_refreshes_as_overload_death() {
             error.label.as_deref(),
             Some("turn ended with no final message")
         );
-        assert_eq!(
-            refresh.context.turn_complete,
-            crate::agents::FieldPatch::Clear
-        );
+        assert_eq!(refresh.context.settle, crate::agents::FieldPatch::Clear);
     }
 }
 
@@ -730,10 +723,7 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
     )
     .expect("changed transcript refreshes");
     assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
-    assert_eq!(
-        refresh.context.turn_complete,
-        crate::agents::FieldPatch::Clear
-    );
+    assert_eq!(refresh.context.settle, crate::agents::FieldPatch::Clear);
 
     let path = dir.path().join("rollout-error.jsonl");
     let real_error = json!({
@@ -764,10 +754,7 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         Some("Server is busy. Try again later.")
     );
     assert_eq!(error.class, crate::agents::TurnErrorClass::PausedOverloaded);
-    assert_eq!(
-        refresh.context.turn_complete,
-        crate::agents::FieldPatch::Clear
-    );
+    assert_eq!(refresh.context.settle, crate::agents::FieldPatch::Clear);
 }
 
 #[test]

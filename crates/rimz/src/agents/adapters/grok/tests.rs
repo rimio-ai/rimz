@@ -310,10 +310,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
         shared_pricing_cache_path: &pricing,
     };
     let initial = refresh_resolved_context(&updates, Some(&events), &ctx).unwrap();
-    assert_eq!(
-        initial.context.native_permission_wait,
-        crate::agents::FieldPatch::Clear
-    );
+    assert_eq!(initial.context.settle, crate::agents::FieldPatch::Clear);
 
     let requested_at = "2026-07-18T04:21:46.248Z";
     std::fs::write(
@@ -333,8 +330,15 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     };
     let requested = refresh_resolved_context(&updates, Some(&events), &requested_ctx).unwrap();
     assert_eq!(
-        requested.context.native_permission_wait.as_set().copied(),
-        requested_at.parse().ok()
+        requested
+            .context
+            .settle
+            .as_set()
+            .map(|settle| (settle.at, settle.outcome)),
+        requested_at
+            .parse()
+            .ok()
+            .map(|at| (at, crate::agents::TurnSettleOutcome::NativeWait))
     );
 
     let unchanged_ctx = LocalContextRefreshCtx {
@@ -363,10 +367,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     )
     .unwrap();
     let resolved = refresh_resolved_context(&updates, Some(&events), &unchanged_ctx).unwrap();
-    assert_eq!(
-        resolved.context.native_permission_wait,
-        crate::agents::FieldPatch::Clear
-    );
+    assert_eq!(resolved.context.settle, crate::agents::FieldPatch::Clear);
     assert!(
         GrokAdapter
             .decode_hook(

@@ -11,7 +11,7 @@ fn interrupted_turn_settles_running_to_idle_before_stall() {
         .in_pane("%1")
         .turn_started_ago(default_stall_secs() + 120)
         .active_ago(default_stall_secs() + 60)
-        .turn_interrupted(10);
+        .settle(10, TurnSettleOutcome::Interrupted);
 
     let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-clear");
@@ -34,7 +34,7 @@ fn interrupted_native_ask_settles_waiting_to_idle() {
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(60)
-        .turn_interrupted(10);
+        .settle(10, TurnSettleOutcome::Interrupted);
     session.budget_park = Some(crate::harness::budget::BudgetPark {
         cap_usd: 5.0,
         spend_usd: 5.25,
@@ -73,7 +73,7 @@ fn interruption_before_last_activity_leaves_row_running() {
         .in_pane("%1")
         .turn_started_ago(20)
         .active_ago(5)
-        .turn_interrupted(120);
+        .settle(120, TurnSettleOutcome::Interrupted);
 
     let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-clear");
@@ -91,7 +91,7 @@ fn turn_error_outranks_interruption_marker() {
         .in_pane("%1")
         .turn_started_ago(120)
         .active_ago(60)
-        .turn_interrupted(10)
+        .settle(10, TurnSettleOutcome::Interrupted)
         .turn_error(10, "API Error: Bad Request");
 
     let snapshot = room_with_agent_panes(vec![session]);

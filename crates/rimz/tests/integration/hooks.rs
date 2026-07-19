@@ -2323,7 +2323,7 @@ fn cursor_statusline_and_stop_hook_merge_rich_context_and_idempotent_cost() {
         .find(|record| record.agent_id.as_str() == "sess-cursor")
         .expect("Cursor statusline sidecar");
     assert!(
-        settled.context.turn_complete.is_some(),
+        settled.context.settle.is_some(),
         "continuous statusline refresh re-derives the transcript-tail settle marker"
     );
 
@@ -2551,9 +2551,13 @@ fn statusline_feed_captures_claude_turn_interruption() {
     let marker = contexts
         .iter()
         .find(|record| record.agent_id == "sess-interrupted")
-        .and_then(|record| record.context.turn_interrupted)
+        .and_then(|record| record.context.settle)
         .expect("statusline feed persists the transcript interruption marker");
-    assert_eq!(marker, "2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap());
+    assert_eq!(marker.outcome, rimz::agents::TurnSettleOutcome::Interrupted);
+    assert_eq!(
+        marker.at,
+        "2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap()
+    );
 }
 
 /// The `--subagent` feed harvests every task in a `subagentStatusLine` payload

@@ -18,7 +18,8 @@ use super::rollout::{
 };
 use super::spend::resume_live_fold;
 use crate::agents::context::{
-    AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass,
+    AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettle,
+    TurnSettleOutcome,
 };
 use crate::agents::pricing;
 use crate::agents::{
@@ -58,12 +59,20 @@ pub fn refresh_transcript_context(
         .as_deref()
         .map(|tail| scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_parts())
         .unwrap_or_default();
-    let (turn_complete, plan_proposed, turn_interrupted, turn_error) = match outcome {
-        Some(RestingTurnOutcome::Complete(at)) => (Some(at), None, None, None),
-        Some(RestingTurnOutcome::PlanProposed(plan)) => (None, Some(plan.at), None, None),
-        Some(RestingTurnOutcome::Interrupted(at)) => (None, None, Some(at), None),
-        Some(RestingTurnOutcome::Died(error)) => (None, None, None, Some(error)),
-        None => (None, None, None, None),
+    let (settle, turn_error) = match outcome {
+        Some(RestingTurnOutcome::Complete(at)) => {
+            (Some(TurnSettle::new(at, TurnSettleOutcome::Complete)), None)
+        }
+        Some(RestingTurnOutcome::PlanProposed(plan)) => (
+            Some(TurnSettle::new(plan.at, TurnSettleOutcome::PlanProposed)),
+            None,
+        ),
+        Some(RestingTurnOutcome::Interrupted(at)) => (
+            Some(TurnSettle::new(at, TurnSettleOutcome::Interrupted)),
+            None,
+        ),
+        Some(RestingTurnOutcome::Died(error)) => (None, Some(error)),
+        None => (None, None),
     };
     let (tokens, model_id) = transcript_enrichment(&usage, model_hint);
     let cost = (spend_fold.total_usd > 0.0).then_some(AgentCost {
@@ -77,9 +86,7 @@ pub fn refresh_transcript_context(
             tokens: LocalTokenPatch::PreserveEstablished(tokens),
             cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
             turn_error: turn_error.map_or(FieldPatch::Clear, FieldPatch::Set),
-            turn_complete: turn_complete.map_or(FieldPatch::Clear, FieldPatch::Set),
-            plan_proposed: plan_proposed.map_or(FieldPatch::Clear, FieldPatch::Set),
-            turn_interrupted: turn_interrupted.map_or(FieldPatch::Clear, FieldPatch::Set),
+            settle: settle.map_or(FieldPatch::Clear, FieldPatch::Set),
             ..LocalContextPatch::authoritative_current()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),

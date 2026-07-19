@@ -25,7 +25,7 @@ use super::{
     AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError, FieldPatch,
     HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
     LocalTokenPatch, RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TurnErrorClass,
-    non_empty_trimmed, sanitize_user_prompt,
+    TurnSettle, TurnSettleOutcome, non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -548,9 +548,11 @@ pub(crate) fn refresh_resolved_context(
                 .map_or(FieldPatch::Keep, FieldPatch::Set),
             tokens: LocalTokenPatch::PreserveEstablished(tokens),
             cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
-            native_permission_wait: events
+            settle: events
                 .and_then(transcript::native_permission_wait)
-                .map_or(FieldPatch::Clear, FieldPatch::Set),
+                .map_or(FieldPatch::Clear, |at| {
+                    FieldPatch::Set(TurnSettle::new(at, TurnSettleOutcome::NativeWait))
+                }),
             ..LocalContextPatch::authoritative_current()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),

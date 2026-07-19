@@ -375,7 +375,10 @@ fn statusline_projects_model_account_and_context_usage() {
     );
     assert_eq!(context.model_display_name.as_deref(), Some(FLASH));
     assert_eq!(context.agent_version.as_deref(), Some("1.1.2"));
-    assert!(context.native_permission_wait.is_some());
+    assert_eq!(
+        context.settle.map(|settle| settle.outcome),
+        Some(crate::agents::TurnSettleOutcome::NativeWait)
+    );
     let account = context.account.unwrap();
     assert_eq!(
         (
@@ -403,7 +406,7 @@ fn statusline_projects_model_account_and_context_usage() {
             )
             .unwrap()
             .context
-            .native_permission_wait
+            .settle
             .is_none()
     );
 }

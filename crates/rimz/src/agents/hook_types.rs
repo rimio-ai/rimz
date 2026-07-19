@@ -32,7 +32,10 @@ pub struct CanonicalHookEvent {
 
 #[derive(Debug, PartialEq)]
 pub enum CanonicalHookFact {
-    Lifecycle(AgentLifecycleObservation),
+    /// Boxed, like [`Context`](Self::Context): the observation dwarfs every
+    /// other fact, so inlining it would size the whole enum — and every
+    /// `Vec<CanonicalHookFact>` — to its width.
+    Lifecycle(Box<AgentLifecycleObservation>),
     Ask {
         questions: Vec<AskQuestion>,
         detail: Option<String>,
@@ -41,7 +44,7 @@ pub enum CanonicalHookFact {
     AssistantOutput(String),
     FinalOutput(String),
     Error(AgentTurnError),
-    Context(ContextObservation),
+    Context(Box<ContextObservation>),
     Progress,
     SessionEnded,
 }
@@ -145,7 +148,7 @@ impl HookOutput {
 
     pub fn lifecycle(&self) -> Option<&AgentLifecycleObservation> {
         self.event.facts.iter().find_map(|fact| match fact {
-            CanonicalHookFact::Lifecycle(observation) => Some(observation),
+            CanonicalHookFact::Lifecycle(observation) => Some(&**observation),
             _ => None,
         })
     }
@@ -157,7 +160,7 @@ impl HookOutput {
             .iter()
             .position(|fact| matches!(fact, CanonicalHookFact::Lifecycle(_)))?;
         match self.event.facts.remove(index) {
-            CanonicalHookFact::Lifecycle(observation) => Some(observation),
+            CanonicalHookFact::Lifecycle(observation) => Some(*observation),
             _ => unreachable!("matched lifecycle fact"),
         }
     }
@@ -210,7 +213,7 @@ impl HookOutput {
 
     pub fn observed_context(&self) -> Option<&ContextObservation> {
         self.event.facts.iter().find_map(|fact| match fact {
-            CanonicalHookFact::Context(context) => Some(context),
+            CanonicalHookFact::Context(context) => Some(&**context),
             _ => None,
         })
     }
@@ -222,7 +225,7 @@ impl HookOutput {
             .iter()
             .position(|fact| matches!(fact, CanonicalHookFact::Context(_)))?;
         match self.event.facts.remove(index) {
-            CanonicalHookFact::Context(context) => Some(context),
+            CanonicalHookFact::Context(context) => Some(*context),
             _ => unreachable!("matched context fact"),
         }
     }
@@ -303,7 +306,7 @@ impl HookOutput {
         });
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Context(_)),
-            context.map(CanonicalHookFact::Context),
+            context.map(|context| CanonicalHookFact::Context(Box::new(context))),
         );
     }
 
@@ -314,13 +317,13 @@ impl HookOutput {
     pub(crate) fn attach_lifecycle(&mut self, observation: AgentLifecycleObservation) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Lifecycle(_)),
-            Some(CanonicalHookFact::Lifecycle(observation)),
+            Some(CanonicalHookFact::Lifecycle(Box::new(observation))),
         );
     }
 
     pub fn update_lifecycle(&mut self, update: impl FnOnce(&mut AgentLifecycleObservation)) {
         if let Some(observation) = self.event.facts.iter_mut().find_map(|fact| match fact {
-            CanonicalHookFact::Lifecycle(observation) => Some(observation),
+            CanonicalHookFact::Lifecycle(observation) => Some(&mut **observation),
             _ => None,
         }) {
             update(observation);

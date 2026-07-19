@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use jiff::Timestamp;
 use serde::Deserialize;
 
-use crate::agents::context::{AgentTurnError, TurnErrorClass};
+use crate::agents::context::{AgentTurnError, TurnErrorClass, TurnSettle, TurnSettleOutcome};
 use crate::agents::local_session_cache::StampedPaths;
 use crate::agents::transcript_fs::deserialize_optional_string_lossy;
 use crate::agents::{
@@ -36,8 +36,7 @@ enum TerminalOutcome {
 
 #[derive(Debug, Default)]
 pub(super) struct TurnMarkers {
-    pub turn_complete: Option<Timestamp>,
-    pub turn_interrupted: Option<Timestamp>,
+    pub settle: Option<TurnSettle>,
     pub turn_error: Option<AgentTurnError>,
 }
 
@@ -61,12 +60,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
             turn_error: markers
                 .turn_error
                 .map_or(FieldPatch::Clear, FieldPatch::Set),
-            turn_complete: markers
-                .turn_complete
-                .map_or(FieldPatch::Clear, FieldPatch::Set),
-            turn_interrupted: markers
-                .turn_interrupted
-                .map_or(FieldPatch::Clear, FieldPatch::Set),
+            settle: markers.settle.map_or(FieldPatch::Clear, FieldPatch::Set),
             ..LocalContextPatch::authoritative_current()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),
@@ -93,11 +87,11 @@ pub(super) fn turn_markers_at(path: &Path, stat: TranscriptStat) -> Option<TurnM
     let at = timestamp_from_stat(stat)?;
     Some(match outcome {
         Some(TerminalOutcome::Complete) => TurnMarkers {
-            turn_complete: Some(at),
+            settle: Some(TurnSettle::new(at, TurnSettleOutcome::Complete)),
             ..TurnMarkers::default()
         },
         Some(TerminalOutcome::Interrupted) => TurnMarkers {
-            turn_interrupted: Some(at),
+            settle: Some(TurnSettle::new(at, TurnSettleOutcome::Interrupted)),
             ..TurnMarkers::default()
         },
         Some(TerminalOutcome::Error(label)) => TurnMarkers {

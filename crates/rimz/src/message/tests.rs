@@ -3,7 +3,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 
 use super::*;
-use crate::agents::{AgentContext, AgentState, AgentStatus};
+use crate::agents::{AgentContext, AgentState, AgentStatus, TurnSettle, TurnSettleOutcome};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
@@ -51,7 +51,10 @@ fn delivery_gates_follow_agent_lifecycle() {
     let mut running = agent("sess-interrupted", None);
     running.status = AgentStatus::Running;
     running.phase = crate::agents::TurnPhase::Reasoning;
-    running.context = Some(settle_context(None, Some(running.last_activity)));
+    running.context = Some(settle_context(
+        Some(running.last_activity),
+        TurnSettleOutcome::Interrupted,
+    ));
     let now = Timestamp::now();
     assert!(gate_open_for_agent(
         DeliveryGate::Done,
@@ -64,9 +67,10 @@ fn delivery_gates_follow_agent_lifecycle() {
     let mut plan = agent("sess-plan", None);
     plan.status = AgentStatus::Running;
     plan.phase = crate::agents::TurnPhase::Reasoning;
-    let mut plan_context = settle_context(None, None);
-    plan_context.plan_proposed = Some(plan.last_activity + jiff::SignedDuration::from_secs(1));
-    plan.context = Some(plan_context);
+    plan.context = Some(settle_context(
+        Some(plan.last_activity),
+        TurnSettleOutcome::PlanProposed,
+    ));
     assert!(plan.is_awaiting_input());
     assert!(!gate_open_for_agent(DeliveryGate::Any, &plan, false, now));
 
@@ -1054,30 +1058,10 @@ fn when_condition(
     }
 }
 
-fn settle_context(complete: Option<Timestamp>, interrupted: Option<Timestamp>) -> AgentContext {
+/// A Codex sidecar whose resting marker postdates `after` by one second.
+fn settle_context(after: Option<Timestamp>, outcome: TurnSettleOutcome) -> AgentContext {
     AgentContext {
-        source: "codex".to_owned(),
-        session_name: None,
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
-        agent_version: None,
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: None,
-        pr: None,
-        account: None,
-        turn_opened_by: Vec::new(),
-        turn_error: None,
-        turn_complete: complete.map(|at| at + jiff::SignedDuration::from_secs(1)),
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: interrupted.map(|at| at + jiff::SignedDuration::from_secs(1)),
-        observed_at: Timestamp::now(),
+        settle: after.map(|at| TurnSettle::new(at + jiff::SignedDuration::from_secs(1), outcome)),
+        ..AgentContext::new("codex", Timestamp::now())
     }
 }

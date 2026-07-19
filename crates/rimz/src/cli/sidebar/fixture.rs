@@ -1926,37 +1926,17 @@ fn agent_context(
     sub_provider: Option<&str>,
 ) -> rimz::agents::AgentContext {
     rimz::agents::AgentContext {
-        source: source.to_owned(),
-        session_name: None,
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
-        agent_version: None,
-        exceeds_200k_tokens: None,
         cost: cost_usd.map(|usd| rimz::agents::AgentCost {
             total_cost_usd: Some(usd),
             ..rimz::agents::AgentCost::default()
         }),
-        tokens: None,
-        rate_limits: None,
-        pr: None,
         account: sub_provider.map(|provider| rimz::agents::AgentAccount {
             sub_provider: Some(provider.to_owned()),
             plan: Some("OpenAI OAuth".to_owned()),
             metered: Some(false),
             ..rimz::agents::AgentAccount::default()
         }),
-        turn_opened_by: Vec::new(),
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
-        observed_at: now,
+        ..rimz::agents::AgentContext::new(source, now)
     }
 }
 

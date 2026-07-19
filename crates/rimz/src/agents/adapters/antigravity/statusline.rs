@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::agents::context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage, CostCoverage,
-    clamp_pct,
+    TurnSettle, TurnSettleOutcome, clamp_pct,
 };
 use crate::agents::payload::non_empty_trimmed;
 use crate::agents::pricing::{PriceBook, TokenSplit};
@@ -144,8 +144,8 @@ impl StatuslinePayload {
     pub(crate) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
         let (model_display_name, effort, thinking_enabled) =
             normalize_model_display(self.model.display_name);
-        let native_permission_wait =
-            (self.tool_confirmation_pending == Some(true)).then_some(observed_at);
+        let settle = (self.tool_confirmation_pending == Some(true))
+            .then(|| TurnSettle::new(observed_at, TurnSettleOutcome::NativeWait));
         let has_current_usage = self.context_window.current_usage.input_tokens.is_some()
             || self.context_window.current_usage.output_tokens.is_some()
             || self
@@ -196,7 +196,7 @@ impl StatuslinePayload {
             agent_version: self.version.as_deref().and_then(non_empty_trimmed),
             tokens,
             account,
-            native_permission_wait,
+            settle,
             ..AgentContext::new(source, observed_at)
         }
     }

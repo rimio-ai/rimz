@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{AgentKind, AgentSessionId, AskId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
-use super::context::{AgentContext, AgentTokenUsage, AgentTurnError, TurnErrorClass};
+use super::context::{
+    AgentContext, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettleOutcome,
+};
 use super::lifecycle::{AskKind, LifecycleState, TurnPhase};
 use super::observation::AgentUsageSummary;
 
@@ -265,75 +267,35 @@ pub(crate) fn effective_turn_error_class(error: &AgentTurnError) -> TurnErrorCla
     }
 }
 
-/// Whether a `running` agent's latest turn completed cleanly with no `Stop` hook
-/// to record it — the rollout-tail marker (`AgentContext::turn_complete`, folded
-/// in via the context sidecar) postdates the agent's `last_activity`. The
-/// success sibling of [`is_turn_dead`]: a Codex `/review` runs in review mode and
-/// ends on a `task_complete` that fires no `Stop`, so the lifecycle state machine
-/// never leaves `running`; this settles the row to `success` instead of letting
-/// the stall window misread a finished review as failed. Only `Running` can be
-/// turn-complete — a hook-reported turn end already resolved every other status.
-/// Self-clearing like [`is_turn_dead`]: any newer hook event advances
-/// `last_activity` past the marker. A RimZ-derived projection over enrichment,
-/// never a status the agent reports.
-pub fn is_turn_complete(
+/// How a turn came to rest when the lifecycle state machine never saw its end,
+/// or `None` when no marker applies. The provider marker
+/// (`AgentContext::settle`, folded in via the context sidecar) must postdate the
+/// agent's `last_activity`, and the row's status must admit the outcome: only a
+/// `running` row can complete, propose a plan, or open a native wait, because a
+/// hook-reported turn end already resolved every other status, while an
+/// interruption also settles a `waiting` row whose native ask Esc cancelled.
+///
+/// Self-clearing: any newer hook event advances `last_activity` past the marker
+/// and drops the row back to its lifecycle status. A RimZ-derived projection
+/// over enrichment, never a status the agent reports.
+pub fn settled_outcome(
     status: AgentStatus,
     context: Option<&AgentContext>,
     last_activity: Timestamp,
-) -> bool {
-    status == AgentStatus::Running
-        && context
-            .and_then(|context| context.turn_complete)
-            .is_some_and(|at| at > last_activity)
-}
-
-/// Whether a `running` agent's completed planning turn is resting on Codex's
-/// native plan selector with no `Stop` hook to record the ask. The rollout-tail
-/// marker postdates `last_activity` and settles the row to `waiting`; a newer
-/// hook event self-clears it by advancing `last_activity`.
-pub fn is_plan_proposed(
-    status: AgentStatus,
-    context: Option<&AgentContext>,
-    last_activity: Timestamp,
-) -> bool {
-    status == AgentStatus::Running
-        && context
-            .and_then(|context| context.plan_proposed)
-            .is_some_and(|at| at > last_activity)
-}
-
-/// Whether a provider's live state or validated local transcript reports a
-/// native input dialog newer than the last lifecycle heartbeat. This is a
-/// display-only attention edge: it routes the human to the pane without
-/// manufacturing a durable ask or answering through a provider decision hook.
-pub fn is_native_permission_wait(
-    status: AgentStatus,
-    context: Option<&AgentContext>,
-    last_activity: Timestamp,
-) -> bool {
-    status == AgentStatus::Running
-        && context
-            .and_then(|context| context.native_permission_wait)
-            .is_some_and(|at| at > last_activity)
-}
-
-/// Whether a `running` or `waiting` agent's latest turn was interrupted with no
-/// `Stop` hook to record it — the provider marker
-/// (`AgentContext::turn_interrupted`, folded in via the context sidecar)
-/// postdates the agent's `last_activity`. This settles a falsely active row to
-/// `idle`, including a native ask that Esc cancelled without a lifecycle hook.
-/// Self-clearing like [`is_turn_complete`]: any newer hook event advances
-/// `last_activity` past the marker. A RimZ-derived projection over enrichment,
-/// never a status the agent reports.
-pub fn is_turn_interrupted(
-    status: AgentStatus,
-    context: Option<&AgentContext>,
-    last_activity: Timestamp,
-) -> bool {
-    matches!(status, AgentStatus::Running | AgentStatus::Waiting)
-        && context
-            .and_then(|context| context.turn_interrupted)
-            .is_some_and(|at| at > last_activity)
+) -> Option<TurnSettleOutcome> {
+    let settle = context.and_then(|context| context.settle)?;
+    if settle.at <= last_activity {
+        return None;
+    }
+    let admitted = match settle.outcome {
+        TurnSettleOutcome::Interrupted => {
+            matches!(status, AgentStatus::Running | AgentStatus::Waiting)
+        }
+        TurnSettleOutcome::Complete
+        | TurnSettleOutcome::PlanProposed
+        | TurnSettleOutcome::NativeWait => status == AgentStatus::Running,
+    };
+    admitted.then_some(settle.outcome)
 }
 
 /// How long after its last compaction-start signal an agent still reads as
@@ -837,15 +799,14 @@ impl AgentState {
     /// waiting rows to `idle`, which opens message delivery gates. Budget-aware
     /// callers may still upgrade a paused projection to `failed`.
     pub fn effective_status(&self) -> AgentStatus {
-        if is_native_permission_wait(self.status, self.context.as_ref(), self.last_activity) {
+        let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
+        if settled == Some(TurnSettleOutcome::NativeWait) {
             return AgentStatus::Waiting;
         }
         if self.budget_park.is_some() && self.status != AgentStatus::Waiting {
             return AgentStatus::Paused;
         }
-        if self.status == AgentStatus::Waiting
-            && is_turn_interrupted(self.status, self.context.as_ref(), self.last_activity)
-        {
+        if self.status == AgentStatus::Waiting && settled == Some(TurnSettleOutcome::Interrupted) {
             return AgentStatus::Idle;
         }
         if self.status != AgentStatus::Running {
@@ -858,16 +819,13 @@ impl AgentState {
                 self.status
             };
         }
-        if is_plan_proposed(self.status, self.context.as_ref(), self.last_activity) {
-            return AgentStatus::Waiting;
+        match settled {
+            Some(TurnSettleOutcome::PlanProposed) => AgentStatus::Waiting,
+            Some(TurnSettleOutcome::Complete) => AgentStatus::Success,
+            Some(TurnSettleOutcome::Interrupted) => AgentStatus::Idle,
+            // A native wait already returned above.
+            Some(TurnSettleOutcome::NativeWait) | None => self.status,
         }
-        if is_turn_complete(self.status, self.context.as_ref(), self.last_activity) {
-            return AgentStatus::Success;
-        }
-        if is_turn_interrupted(self.status, self.context.as_ref(), self.last_activity) {
-            return AgentStatus::Idle;
-        }
-        self.status
     }
 
     /// True when the row must reserve pane input for a native prompt. Durable
@@ -877,16 +835,17 @@ impl AgentState {
     /// sibling tools also touch activity. Newer activity self-clears keyless
     /// and derived asks.
     pub fn is_awaiting_input(&self) -> bool {
-        is_native_permission_wait(self.status, self.context.as_ref(), self.last_activity)
-            || is_plan_proposed(self.status, self.context.as_ref(), self.last_activity)
-            || (self.status == AgentStatus::Waiting
-                && (self
-                    .open_ask
-                    .as_ref()
-                    .is_some_and(|ask| ask.native_key.is_some())
-                    || self
-                        .waiting_since
-                        .is_some_and(|waiting_since| self.last_activity <= waiting_since)))
+        matches!(
+            settled_outcome(self.status, self.context.as_ref(), self.last_activity),
+            Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
+        ) || (self.status == AgentStatus::Waiting
+            && (self
+                .open_ask
+                .as_ref()
+                .is_some_and(|ask| ask.native_key.is_some())
+                || self
+                    .waiting_since
+                    .is_some_and(|waiting_since| self.last_activity <= waiting_since)))
     }
 
     /// Provider API error currently explaining this row's displayed state. The

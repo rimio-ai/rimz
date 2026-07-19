@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::TurnSettle;
 
 #[test]
 fn seed_sets_status_phase_clocks_and_empty_enrichment() {
@@ -260,10 +261,9 @@ fn context_error(class: TurnErrorClass, at: i64) -> AgentContext {
     }
 }
 
-fn context_settle(complete: Option<i64>, interrupted: Option<i64>) -> AgentContext {
+fn context_settle(at: Option<i64>, outcome: TurnSettleOutcome) -> AgentContext {
     AgentContext {
-        turn_complete: complete.map(|at| Timestamp::from_second(at).unwrap()),
-        turn_interrupted: interrupted.map(|at| Timestamp::from_second(at).unwrap()),
+        settle: at.map(|at| TurnSettle::new(Timestamp::from_second(at).unwrap(), outcome)),
         ..AgentContext::new("codex", Timestamp::from_second(1_000).unwrap())
     }
 }
@@ -311,68 +311,66 @@ fn waiting_and_interruption_outrank_a_budget_park() {
     });
     assert_eq!(waiting.effective_status(), AgentStatus::Waiting);
 
-    waiting.context = Some(context_settle(None, Some(1_010)));
+    waiting.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
     assert_eq!(waiting.effective_status(), AgentStatus::Idle);
 }
 
 #[test]
 fn effective_status_projects_hookless_turn_settle_markers() {
     let mut plan = test_agent(AgentStatus::Running, 1_000);
-    let mut plan_context = context_settle(None, None);
-    plan_context.plan_proposed = Some(Timestamp::from_second(1_010).unwrap());
+    let plan_context = context_settle(Some(1_010), TurnSettleOutcome::PlanProposed);
     plan.context = Some(plan_context);
     assert_eq!(plan.effective_status(), AgentStatus::Waiting);
     assert!(plan.is_awaiting_input());
 
     let mut native = test_agent(AgentStatus::Running, 1_000);
-    let mut native_context = context_settle(None, None);
-    native_context.native_permission_wait = Some(Timestamp::from_second(1_010).unwrap());
+    let native_context = context_settle(Some(1_010), TurnSettleOutcome::NativeWait);
     native.context = Some(native_context);
     assert_eq!(native.effective_status(), AgentStatus::Waiting);
     assert!(native.is_awaiting_input());
 
     let mut stale_native = test_agent(AgentStatus::Running, 1_000);
-    let mut stale_native_context = context_settle(None, None);
-    stale_native_context.native_permission_wait = Some(Timestamp::from_second(990).unwrap());
+    let stale_native_context = context_settle(Some(990), TurnSettleOutcome::NativeWait);
     stale_native.context = Some(stale_native_context);
     assert_eq!(stale_native.effective_status(), AgentStatus::Running);
     assert!(!stale_native.is_awaiting_input());
 
     let mut stale_plan = test_agent(AgentStatus::Running, 1_000);
-    let mut stale_plan_context = context_settle(None, None);
-    stale_plan_context.plan_proposed = Some(Timestamp::from_second(990).unwrap());
+    let stale_plan_context = context_settle(Some(990), TurnSettleOutcome::PlanProposed);
     stale_plan.context = Some(stale_plan_context);
     assert_eq!(stale_plan.effective_status(), AgentStatus::Running);
     assert!(!stale_plan.is_awaiting_input());
 
     let mut complete = test_agent(AgentStatus::Running, 1_000);
-    complete.context = Some(context_settle(Some(1_010), None));
+    complete.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Complete));
     assert_eq!(complete.effective_status(), AgentStatus::Success);
 
     let mut interrupted = test_agent(AgentStatus::Running, 1_000);
-    interrupted.context = Some(context_settle(None, Some(1_010)));
+    interrupted.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
     assert_eq!(interrupted.effective_status(), AgentStatus::Idle);
 
     let mut interrupted_waiting = test_agent(AgentStatus::Waiting, 1_000);
-    interrupted_waiting.context = Some(context_settle(None, Some(1_010)));
+    interrupted_waiting.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
     assert_eq!(interrupted_waiting.effective_status(), AgentStatus::Idle);
 
     let mut stale_waiting = test_agent(AgentStatus::Waiting, 1_000);
-    stale_waiting.context = Some(context_settle(None, Some(990)));
+    stale_waiting.context = Some(context_settle(Some(990), TurnSettleOutcome::Interrupted));
     assert_eq!(stale_waiting.effective_status(), AgentStatus::Waiting);
 
     let mut stale = test_agent(AgentStatus::Running, 1_000);
-    stale.context = Some(context_settle(Some(990), Some(990)));
+    stale.context = Some(context_settle(Some(990), TurnSettleOutcome::Complete));
     assert_eq!(stale.effective_status(), AgentStatus::Running);
 
     let mut non_running = test_agent(AgentStatus::Idle, 1_000);
-    non_running.context = Some(context_settle(Some(1_010), Some(1_010)));
+    non_running.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Complete));
     assert_eq!(non_running.effective_status(), AgentStatus::Idle);
 
     let mut parked = test_agent(AgentStatus::Running, 1_000);
     let mut context = context_error(TurnErrorClass::PausedRateLimit, 1_010);
-    context.turn_complete = Some(Timestamp::from_second(1_010).unwrap());
-    context.turn_interrupted = Some(Timestamp::from_second(1_010).unwrap());
+    context.settle = Some(TurnSettle::new(
+        Timestamp::from_second(1_010).unwrap(),
+        TurnSettleOutcome::Complete,
+    ));
     parked.context = Some(context);
     assert_eq!(parked.effective_status(), AgentStatus::Paused);
 }
