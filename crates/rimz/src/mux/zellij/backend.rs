@@ -115,7 +115,7 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
         .into_iter()
         .map(|pane| {
             (
-                pane.id,
+                (pane.is_plugin, pane.id),
                 (
                     pane.pane_command,
                     pane.pane_cwd,
@@ -127,7 +127,8 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
         })
         .collect::<HashMap<_, _>>();
     for pane in &mut cache.panes {
-        let Some((command, cwd, pid, columns, x)) = enrichment.get(&pane.id) else {
+        let Some((command, cwd, pid, columns, x)) = enrichment.get(&(pane.is_plugin, pane.id))
+        else {
             continue;
         };
         if pane.pane_command.is_none() {

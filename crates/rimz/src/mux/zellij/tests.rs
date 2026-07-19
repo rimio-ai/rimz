@@ -366,6 +366,13 @@ fn authoritative_list_panes_preserves_server_identity_and_cache_enrichment() {
                 ..terminal_pane(7, 0, 999, 999, "zsh")
             },
             PaneTopologyPane {
+                is_plugin: true,
+                pane_command: Some("plugin-command".to_owned()),
+                pane_cwd: Some("/plugin".to_owned()),
+                pane_pid: Some(909),
+                ..terminal_pane(7, 0, 888, 888, "plugin")
+            },
+            PaneTopologyPane {
                 pane_command: Some("rimz-sidebar".to_owned()),
                 terminal_command: Some("rimz".to_owned()),
                 ..terminal_pane(8, 1, 40, 0, "rimz-sidebar")
@@ -383,7 +390,7 @@ dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/zellij.log"
 case " $* " in
   *" action list-panes --all --json "*)
-    printf '[{"id":7,"is_plugin":false,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","pane_columns":40,"pane_x":0,"title":"rimz-sidebar","terminal_command":"rimz"}]\n'
+    printf '[{"id":7,"is_plugin":true,"tab_position":0,"tab_name":"work","title":"plugin"},{"id":7,"is_plugin":false,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","pane_columns":40,"pane_x":0,"title":"rimz-sidebar","terminal_command":"rimz"}]\n'
     exit 0 ;;
 esac
 exit 1
@@ -398,11 +405,19 @@ exit 1
             Duration::from_secs(1),
         )
         .expect("authoritative listing");
-    assert_eq!(listing.panes.len(), 2, "cache-only pane stays absent");
+    assert_eq!(listing.panes.len(), 3, "cache-only pane stays absent");
+    let plugin = listing
+        .panes
+        .iter()
+        .find(|pane| pane.is_plugin && pane.id == 7)
+        .expect("plugin");
+    assert_eq!(plugin.pane_command.as_deref(), Some("plugin-command"));
+    assert_eq!(plugin.pane_cwd.as_deref(), Some("/plugin"));
+    assert_eq!(plugin.pane_pid, Some(909));
     let active = listing
         .panes
         .iter()
-        .find(|pane| pane.id == 7)
+        .find(|pane| !pane.is_plugin && pane.id == 7)
         .expect("active");
     assert_eq!((active.pane_columns, active.pane_x), (Some(100), Some(0)));
     assert_eq!(active.pane_command.as_deref(), Some("vim"));
