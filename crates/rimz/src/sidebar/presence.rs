@@ -15,7 +15,7 @@ use crate::diag::plugin_presence::{PluginPresenceSample, WASM_PAGE_BYTES};
 use crate::diag::record::DiagEvent;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{
-    PaneTopologyCache, SwitchVerdict, TopologyWriter, classify_switch_settled,
+    PaneTopologyCache, TopologyWriter, classify_switch_settled,
 };
 use crate::sidebar::cache::{
     PresenceDesired, pane_topology_cache_is_fresh, read_pane_topology_cache, read_presence_desired,
@@ -173,10 +173,10 @@ pub fn ingest_zellij_wake(
         let topology = accepted_topology
             .filter(|topology| topology.session_name == session_name)
             .or_else(|| read_pane_topology_cache(runtime, session_name));
-        let verdict = topology.as_ref().and_then(|topology| {
+        let repair_owner = topology.as_ref().and_then(|topology| {
             classify_switch_settled(topology, active_tab, &wake.focus_clients)
         });
-        if let Some(SwitchVerdict::Stranded { pane_id }) = verdict {
+        if let Some(pane_id) = repair_owner {
             events.push(SidebarEvent::FocusStranded {
                 pane_id,
                 generation,

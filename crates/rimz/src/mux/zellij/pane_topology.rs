@@ -139,36 +139,23 @@ fn zellij_pane_id(raw: u64) -> PaneId {
     PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw}"))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SwitchVerdict {
-    Healthy,
-    Stranded { pane_id: PaneId },
-}
-
 /// Classify one settled post-tab-switch client observation against the
-/// accepted topology. Pane roles stay host-side; the plugin reports only the
-/// active tab and raw client views.
+/// accepted topology and return the sidebar that owns any required repair.
+/// Pane roles stay host-side; the plugin reports only the active tab and raw
+/// client views.
 pub(crate) fn classify_switch_settled(
     topology: &PaneTopologyCache,
     active_tab: u64,
     clients: &[ClientPaneView],
-) -> Option<SwitchVerdict> {
+) -> Option<PaneId> {
     let mut views = clients.iter().map(|client| &client.pane_id);
     let viewed = views.next()?;
     if views.any(|pane_id| pane_id != viewed) {
         return None;
     }
 
-    if viewed.mux() != MuxName::Zellij {
-        return None;
-    } else if viewed.raw().strip_prefix("plugin_").is_some() {
-        // A plugin view cannot be healthy work.
-    } else {
-        let id = viewed
-            .raw()
-            .strip_prefix("terminal_")?
-            .parse::<u64>()
-            .ok()?;
+    if let Some(raw_id) = viewed.raw().strip_prefix("terminal_") {
+        let id = raw_id.parse::<u64>().ok()?;
         let pane = topology
             .panes
             .iter()
@@ -179,8 +166,10 @@ pub(crate) fn classify_switch_settled(
         if pane.tab_position != active_tab || is_sidebar_pane(pane) {
             // A live pane outside the active tab or its sidebar is stranded.
         } else {
-            return Some(SwitchVerdict::Healthy);
+            return None;
         }
+    } else if viewed.raw().strip_prefix("plugin_").is_none() {
+        return None;
     }
     let sidebars = topology
         .panes
@@ -193,9 +182,7 @@ pub(crate) fn classify_switch_settled(
         pane.tab_position == active_tab && pane.is_live_terminal() && !is_sidebar_pane(pane)
     });
     match sidebars.as_slice() {
-        [sidebar] if has_card => Some(SwitchVerdict::Stranded {
-            pane_id: zellij_pane_id(sidebar.id),
-        }),
+        [sidebar] if has_card => Some(zellij_pane_id(sidebar.id)),
         _ => None,
     }
 }
@@ -369,14 +356,13 @@ mod tests {
         );
         assert_eq!(
             classify_switch_settled(&topology, 1, &[view(1, "terminal_11")]),
-            Some(SwitchVerdict::Healthy),
+            None,
+            "healthy work needs no repair",
         );
         for viewed in ["terminal_10", "terminal_1", "plugin_99"] {
             assert_eq!(
                 classify_switch_settled(&topology, 1, &[view(1, viewed)]),
-                Some(SwitchVerdict::Stranded {
-                    pane_id: zellij_pane_id(10),
-                }),
+                Some(zellij_pane_id(10)),
             );
         }
     }
@@ -395,6 +381,17 @@ mod tests {
         );
         assert_eq!(
             classify_switch_settled(&topology, 1, &[view(1, "terminal_999")]),
+            None,
+        );
+        let mut exited = topology;
+        exited
+            .panes
+            .iter_mut()
+            .find(|pane| !pane.is_plugin && pane.id == 1)
+            .expect("foreign-tab pane")
+            .exited = true;
+        assert_eq!(
+            classify_switch_settled(&exited, 1, &[view(1, "terminal_1")]),
             None,
         );
     }
