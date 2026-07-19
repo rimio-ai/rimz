@@ -32,9 +32,9 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTurnError, DecodedHook, HookRouting,
-    ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity, TurnErrorClass,
-    non_empty_trimmed, optional_payload_string, resolve_root_identity, resolve_subagent_identity,
+    AgentAdapter, AgentLifecycleObservation, AgentTurnError, DecodedHook, HookRouting, Result,
+    RootIdentity, SessionOrigin, SubagentIdentity, TurnErrorClass, non_empty_trimmed,
+    optional_payload_string, resolve_root_identity, resolve_subagent_identity,
     sanitize_user_prompt, stop_payload_errored,
 };
 #[cfg(test)]
@@ -543,7 +543,7 @@ impl AgentAdapter for QwenAdapter {
         parse_physical_assistant_messages(new_lines)
     }
 
-    fn managed_source(&self) -> Option<&'static ManagedSource> {
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&MANAGED_SOURCE)
     }
 

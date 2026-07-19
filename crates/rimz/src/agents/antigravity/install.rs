@@ -12,7 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, StatusLineChange, agent_config_path, read_optional_file,
+    HookUninstallReport, ManagedIntegration, Result, StatusLineChange, agent_config_path,
+    read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
@@ -20,6 +21,43 @@ use super::{ANTIGRAVITY_HOOKS, HOOK_TIMEOUT_SECS, RIMZ_HOOK_MARKER, STATUS_LINE}
 
 const AGENT: &str = "antigravity";
 const RIMZ_HOOK_NAME: &str = "rimz";
+
+pub(super) static MANAGED_INTEGRATION: AntigravityManagedIntegration =
+    AntigravityManagedIntegration;
+
+pub(super) struct AntigravityManagedIntegration;
+
+impl ManagedIntegration for AntigravityManagedIntegration {
+    fn install(&self) -> Result<HookInstallReport> {
+        install(&hooks_path()?, &settings_path()?)
+    }
+
+    fn preview(&self) -> Result<HookInstallPreview> {
+        preview(&hooks_path()?, &settings_path()?)
+    }
+
+    fn uninstall(&self) -> Result<HookUninstallReport> {
+        uninstall(&hooks_path()?, &settings_path()?)
+    }
+
+    fn installed(&self) -> bool {
+        hooks_path()
+            .and_then(|hooks| settings_path().map(|settings| installed(&hooks, &settings)))
+            .unwrap_or(false)
+    }
+
+    fn managed_artifacts_present(&self) -> bool {
+        hooks_path()
+            .and_then(|hooks| settings_path().map(|settings| managed(&hooks, &settings)))
+            .unwrap_or(false)
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        settings_path()
+            .ok()
+            .and_then(|path| wrapped_statusline_command(&path))
+    }
+}
 
 pub(super) fn hooks_path() -> Result<PathBuf> {
     agent_config_path(

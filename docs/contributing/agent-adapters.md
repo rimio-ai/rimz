@@ -35,7 +35,7 @@ Create `crates/rimz/src/agents/<kind>/` on the established anatomy:
 - `payloads.rs` — typed structs for the native wire; structured parsers, never ad-hoc `Value` digging past the classify step.
 - `spend.rs` — the read-only cost parser (step 8).
 - `account.rs`, plus `oauth_usage.rs` when the provider has a usage API (step 8).
-- The install surface: declare one [`ManagedSource`](../../crates/rimz/src/agents/managed_source.rs) backed by a JSON hook merge like Claude/Droid/Qwen or a RimZ-authored whole file like Pi/OpenCode; keep direct operation overrides for custom installers such as Codex (step 5).
+- The install surface: return one [`ManagedIntegration`](../../crates/rimz/src/agents/managed_source.rs) from the adapter. Use `ManagedSource` for a JSON hook merge like Claude/Droid/Qwen or a RimZ-authored whole file like Pi/OpenCode; implement the same Interface in the provider's `install.rs` for TOML or multi-file transactions such as Codex and Cursor (step 5).
 - The `tests` module (step 9); past the size gate it becomes a sibling `tests.rs` or `tests/` dir.
 
 Register it: `pub mod <kind>;` plus the adapter re-export in [`agents/mod.rs`](../../crates/rimz/src/agents/mod.rs), and one `&<Kind>Adapter` line in [`registry::ADAPTERS`](../../crates/rimz/src/agents/registry.rs). That line is the whole hookup — kind resolution, the `<kind>-auto`/`-ask`/`-yolo`/`-plan` permission variants, and `<kind>-ping` all derive from the registry plus adapter methods, so no shared `match` grows an arm. The one optional extra is the `BUILTIN_PEER` default-layout string in [`harness/spec.rs`](../../crates/rimz/src/harness/spec.rs) when the kind belongs in the zero-config room.
@@ -52,7 +52,7 @@ The trait requires `descriptor` and `decode_hook`; the decoder parses one native
 
 The contract rules, each owned by [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) and [model.md → Hook stdout is the decision channel](../internals/agents/model.md#hook-stdout-is-the-decision-channel): blocking ask hooks install sync, neutral is the agent-native no-op on stdout with diagnostics on stderr, helper children get fresh piped stdio, install is idempotent by command-substring reclaim, and installed hook timeouts leave margin under the upstream deadline.
 
-Install is the visible security step ([model.md → Hook install](../internals/agents/model.md#hook-install-the-visible-security-step)): declare one `managed_source` so its backend drives install, preview, uninstall, installed, partial-artifact, and upgrade behavior; override individual operations only when the provider needs a custom installer, and include every installed hook command in the [trust hash](../internals/harness/trust.md).
+Install is the visible security step ([model.md → Hook install](../internals/agents/model.md#hook-install-the-visible-security-step)): declare one `managed_integration` so it drives install, preview, uninstall, installed, partial-artifact, upgrade, wiring-path, wrapped-statusline, and trust reporting. `ManagedSource` implements this Interface for shared backends; custom provider file transactions stay in that provider's `install.rs`. Include every installed hook command in the [trust hash](../internals/harness/trust.md).
 
 ## Step 6 — Wire launch, resume, and presets
 
@@ -105,7 +105,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] `pub mod` + re-export in `agents/mod.rs`, one line in `registry::ADAPTERS`
 - [ ] `decode_hook` · `classification_corpus` · `native_hook_events`
-- [ ] Install / preview / uninstall / `hooks_installed`
+- [ ] One managed integration covering install / preview / uninstall / `hooks_installed`
 - [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` · `ping_args`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · `spend_fixture`

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, agent_config_path, read_optional_file,
+    HookUninstallReport, ManagedIntegration, Result, agent_config_path, read_optional_file,
 };
 use crate::store::atomic;
 
@@ -14,6 +14,42 @@ use super::{
     CODEX_HOOK_TIMEOUT_SECS, CODEX_HOOKS, HOOKS_TABLE, RIMZ_BLOCK, RIMZ_HOOK_COMMAND,
     RIMZ_HOOK_MARKER,
 };
+
+pub(super) static MANAGED_INTEGRATION: CodexManagedIntegration = CodexManagedIntegration;
+
+pub(super) struct CodexManagedIntegration;
+
+impl ManagedIntegration for CodexManagedIntegration {
+    fn install(&self) -> Result<HookInstallReport> {
+        install_into(&codex_config_path()?)
+    }
+
+    fn preview(&self) -> Result<HookInstallPreview> {
+        preview_install_at(&codex_config_path()?)
+    }
+
+    fn uninstall(&self) -> Result<HookUninstallReport> {
+        uninstall_from(&codex_config_path()?)
+    }
+
+    fn installed(&self) -> bool {
+        codex_config_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+
+    fn managed_artifacts_present(&self) -> bool {
+        codex_config_path().is_ok_and(|path| managed_artifacts_at(&path))
+    }
+
+    fn wiring_input_paths(&self, _descriptor: &super::super::AgentDescriptor) -> Vec<PathBuf> {
+        codex_config_path().into_iter().collect()
+    }
+
+    fn untrusted_installed_hooks(&self) -> Vec<String> {
+        codex_config_path()
+            .map(|path| untrusted_hook_events_at(&path))
+            .unwrap_or_default()
+    }
+}
 
 pub(super) fn codex_config_path() -> Result<PathBuf> {
     // Honour an explicit override (`RIMZ_CODEX_CONFIG`) so tests and tooling

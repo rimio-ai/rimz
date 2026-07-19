@@ -27,10 +27,10 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, decode_catalog_entry, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, DecodedHook, HookInstallPreview, HookInstallReport,
-    HookRouting, HookUninstallReport, LocalSessionObservation, Result, SpawnedSubagent,
-    SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
-    TranscriptMessage, non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, DecodedHook, HookRouting, LocalSessionObservation,
+    Result, SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity,
+    SubagentSpawnInput, TranscriptMessage, non_empty_trimmed, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -510,38 +510,8 @@ impl AgentAdapter for AntigravityAdapter {
         })
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        install::install(&install::hooks_path()?, &install::settings_path()?)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        install::preview(&install::hooks_path()?, &install::settings_path()?)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        install::uninstall(&install::hooks_path()?, &install::settings_path()?)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        install::hooks_path()
-            .and_then(|hooks| {
-                install::settings_path().map(|settings| install::installed(&hooks, &settings))
-            })
-            .unwrap_or(false)
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        install::hooks_path()
-            .and_then(|hooks| {
-                install::settings_path().map(|settings| install::managed(&hooks, &settings))
-            })
-            .unwrap_or(false)
-    }
-
-    fn wrapped_status_line_command(&self) -> Option<String> {
-        install::settings_path()
-            .ok()
-            .and_then(|path| install::wrapped_statusline_command(&path))
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
+        Some(&install::MANAGED_INTEGRATION)
     }
 }
 

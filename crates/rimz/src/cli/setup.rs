@@ -148,8 +148,8 @@ impl SetupReport {
                     hook_install: descriptor.has_wired_hook_install(),
                     hooks_installed: agent.hooks_installed(),
                     hook_upgrade_available: agent
-                        .managed_source()
-                        .is_some_and(rimz::agents::ManagedSource::upgrade_available),
+                        .managed_integration()
+                        .is_some_and(rimz::agents::ManagedIntegration::upgrade_available),
                     local_session_discovery: descriptor.capabilities.local_session_discovery,
                 }
             })

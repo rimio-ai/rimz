@@ -24,10 +24,10 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTurnError, DecodedHook, FieldPatch,
-    HookInstallPreview, HookInstallReport, HookRouting, HookUninstallReport, LocalContextPatch,
-    LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result,
-    TranscriptStat, TurnErrorClass, non_empty_trimmed, sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, AgentTurnError, DecodedHook, FieldPatch, HookRouting,
+    LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
+    RefreshTrigger, Result, TranscriptStat, TurnErrorClass, non_empty_trimmed,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -507,23 +507,8 @@ impl AgentAdapter for KimiAdapter {
         refresh_wire_context(ctx)
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        install::install(&install::config_path()?)
-    }
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        install::preview(&install::config_path()?)
-    }
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        install::uninstall(&install::config_path()?)
-    }
-    fn hooks_installed(&self) -> bool {
-        install::config_path().is_ok_and(|path| install::installed(&path))
-    }
-    fn wiring_input_paths(&self) -> Vec<PathBuf> {
-        install::config_path().into_iter().collect()
-    }
-    fn managed_hook_artifacts_present(&self) -> bool {
-        install::config_path().is_ok_and(|path| install::managed(&path))
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
+        Some(&install::MANAGED_INTEGRATION)
     }
 
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {

@@ -29,7 +29,7 @@ use super::hook_types::{HookRecord, SessionSource, decode_catalog_hook, hook_rec
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, DecodedHook, FieldPatch, HookRouting,
-    LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch, ManagedSource,
+    LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
     RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
     optional_payload_string, read_transcript_lines, sanitize_user_prompt,
 };
@@ -450,7 +450,7 @@ impl AgentAdapter for DroidAdapter {
         spend::parse(path, prices)
     }
 
-    fn managed_source(&self) -> Option<&'static ManagedSource> {
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&MANAGED_SOURCE)
     }
 }

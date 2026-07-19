@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    read_optional_file,
+    AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, ManagedIntegration,
+    Result, read_optional_file,
 };
 use crate::store::atomic;
 
@@ -13,6 +13,36 @@ use super::KIMI_HOOKS;
 pub(super) const RIMZ_HOOK_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source kimi";
 const RIMZ_COMMAND_MARKER: &str = "rimz hooks feed --source kimi";
+
+pub(super) static MANAGED_INTEGRATION: KimiManagedIntegration = KimiManagedIntegration;
+
+pub(super) struct KimiManagedIntegration;
+
+impl ManagedIntegration for KimiManagedIntegration {
+    fn install(&self) -> Result<HookInstallReport> {
+        install(&config_path()?)
+    }
+
+    fn preview(&self) -> Result<HookInstallPreview> {
+        preview(&config_path()?)
+    }
+
+    fn uninstall(&self) -> Result<HookUninstallReport> {
+        uninstall(&config_path()?)
+    }
+
+    fn installed(&self) -> bool {
+        config_path().is_ok_and(|path| installed(&path))
+    }
+
+    fn managed_artifacts_present(&self) -> bool {
+        config_path().is_ok_and(|path| managed(&path))
+    }
+
+    fn wiring_input_paths(&self, _descriptor: &super::super::AgentDescriptor) -> Vec<PathBuf> {
+        config_path().into_iter().collect()
+    }
+}
 
 pub(super) fn config_path() -> Result<PathBuf> {
     Ok(std::env::var_os("RIMZ_KIMI_CONFIG")

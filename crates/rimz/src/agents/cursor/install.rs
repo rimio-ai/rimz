@@ -6,13 +6,51 @@ use serde_json::{Map, Value, json};
 
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, agent_config_path, read_optional_file,
+    HookUninstallReport, ManagedIntegration, Result, agent_config_path, read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
 use super::{
     CURSOR_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, RIMZ_STATUS_LINE_MARKER, STATUS_LINE,
 };
+
+pub(super) static MANAGED_INTEGRATION: CursorManagedIntegration = CursorManagedIntegration;
+
+pub(super) struct CursorManagedIntegration;
+
+impl ManagedIntegration for CursorManagedIntegration {
+    fn install(&self) -> Result<HookInstallReport> {
+        install_into(&cursor_hooks_path()?, &cursor_cli_config_path()?)
+    }
+
+    fn preview(&self) -> Result<HookInstallPreview> {
+        preview_at(&cursor_hooks_path()?, &cursor_cli_config_path()?)
+    }
+
+    fn uninstall(&self) -> Result<HookUninstallReport> {
+        uninstall_from(&cursor_hooks_path()?, &cursor_cli_config_path()?)
+    }
+
+    fn installed(&self) -> bool {
+        let Ok(hooks_path) = cursor_hooks_path() else {
+            return false;
+        };
+        let Ok(config_path) = cursor_cli_config_path() else {
+            return false;
+        };
+        hooks_installed_at(&hooks_path) && statusline_installed_at(&config_path)
+    }
+
+    fn managed_artifacts_present(&self) -> bool {
+        cursor_hooks_path().is_ok_and(|path| managed_artifacts_at(&path))
+            || cursor_cli_config_path().is_ok_and(|path| statusline_artifact_at(&path))
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        let root = read_existing_json(&cursor_cli_config_path().ok()?).ok()?;
+        super::super::managed_statusline::wrapped_command(&root, &STATUS_LINE)
+    }
+}
 
 pub(super) fn cursor_hooks_path() -> Result<PathBuf> {
     agent_config_path(

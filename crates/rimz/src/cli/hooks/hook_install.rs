@@ -24,8 +24,8 @@ pub(super) fn install_disposition(agent: &dyn rimz::agents::AgentAdapter) -> Ins
     if !agent.hooks_installed() {
         InstallDisposition::Installed
     } else if agent
-        .managed_source()
-        .is_some_and(rimz::agents::ManagedSource::upgrade_available)
+        .managed_integration()
+        .is_some_and(rimz::agents::ManagedIntegration::upgrade_available)
     {
         InstallDisposition::Refreshed
     } else {
@@ -65,8 +65,8 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool
         let descriptor = agent.descriptor();
         if !agent.hooks_installed()
             || agent
-                .managed_source()
-                .is_some_and(rimz::agents::ManagedSource::upgrade_available)
+                .managed_integration()
+                .is_some_and(rimz::agents::ManagedIntegration::upgrade_available)
         {
             actionable.push(agent.preview_hook_install()?);
             continue;

@@ -4,12 +4,45 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    AgentErr, HookInstallFileReport, HookUninstallReport, Result, read_optional_file,
+    AgentErr, HookInstallFileReport, HookInstallPreview, HookInstallReport, HookUninstallReport,
+    ManagedIntegration, Result, read_optional_file,
 };
 
 const AGENT: &str = "kiro";
 const RECLAIM_KEY: &str = "hooks feed --source kiro";
 const LEGACY_EVENTS: &[&str] = &["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
+
+pub(super) static MANAGED_INTEGRATION: KiroManagedIntegration = KiroManagedIntegration;
+
+pub(super) struct KiroManagedIntegration;
+
+impl ManagedIntegration for KiroManagedIntegration {
+    fn install(&self) -> Result<HookInstallReport> {
+        Err(AgentErr::Install {
+            agent: AGENT,
+            reason: super::HOOK_INSTALL_UNAVAILABLE.to_owned(),
+        })
+    }
+
+    fn preview(&self) -> Result<HookInstallPreview> {
+        Err(AgentErr::Install {
+            agent: AGENT,
+            reason: super::HOOK_INSTALL_UNAVAILABLE.to_owned(),
+        })
+    }
+
+    fn uninstall(&self) -> Result<HookUninstallReport> {
+        uninstall_from(&hooks_path()?)
+    }
+
+    fn installed(&self) -> bool {
+        false
+    }
+
+    fn managed_artifacts_present(&self) -> bool {
+        hooks_path().is_ok_and(|path| managed_at(&path))
+    }
+}
 
 pub(super) fn hooks_path() -> Result<PathBuf> {
     resolve_hooks_path(

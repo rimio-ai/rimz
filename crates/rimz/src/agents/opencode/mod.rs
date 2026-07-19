@@ -624,7 +624,7 @@ impl AgentAdapter for OpencodeAdapter {
         spend::parse_opencode_spend(path, resume, prices)
     }
 
-    fn managed_source(&self) -> Option<&'static ManagedSource> {
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&OPENCODE_MANAGED_SOURCE)
     }
 

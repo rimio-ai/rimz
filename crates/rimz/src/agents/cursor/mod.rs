@@ -29,10 +29,9 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, catalog_contains, decode_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, DecodedHook, HookInstallPreview, HookInstallReport,
-    HookRouting, HookUninstallReport, LocalSessionObservation, LocallyPricedTurnCost, PriceBook,
-    Result, SubagentIdentity, locate_binary, non_empty_trimmed, resolve_subagent_identity,
-    sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, DecodedHook, HookRouting, LocalSessionObservation,
+    LocallyPricedTurnCost, PriceBook, Result, SubagentIdentity, locate_binary, non_empty_trimmed,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -556,46 +555,8 @@ impl AgentAdapter for CursorAdapter {
         Some(argv)
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        install::install_into(
-            &install::cursor_hooks_path()?,
-            &install::cursor_cli_config_path()?,
-        )
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        install::preview_at(
-            &install::cursor_hooks_path()?,
-            &install::cursor_cli_config_path()?,
-        )
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        install::uninstall_from(
-            &install::cursor_hooks_path()?,
-            &install::cursor_cli_config_path()?,
-        )
-    }
-
-    fn hooks_installed(&self) -> bool {
-        let Ok(hooks_path) = install::cursor_hooks_path() else {
-            return false;
-        };
-        let Ok(config_path) = install::cursor_cli_config_path() else {
-            return false;
-        };
-        install::hooks_installed_at(&hooks_path) && install::statusline_installed_at(&config_path)
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        install::cursor_hooks_path().is_ok_and(|path| install::managed_artifacts_at(&path))
-            || install::cursor_cli_config_path()
-                .is_ok_and(|path| install::statusline_artifact_at(&path))
-    }
-
-    fn wrapped_status_line_command(&self) -> Option<String> {
-        let root = install::read_existing_json(&install::cursor_cli_config_path().ok()?).ok()?;
-        super::managed_statusline::wrapped_command(&root, &STATUS_LINE)
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
+        Some(&install::MANAGED_INTEGRATION)
     }
 
     fn status_line_invocation(&self) -> super::StatusLineInvocation {

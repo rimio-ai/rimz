@@ -22,7 +22,7 @@ use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
     AgentAdapter, AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError,
     DecodedHook, FieldPatch, HookRouting, LocalContextPatch, LocalContextRefresh,
-    LocalContextRefreshCtx, LocalTokenPatch, ManagedSource, RefreshTrigger, Result, SessionOrigin,
+    LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result, SessionOrigin,
     TranscriptMessage, TurnErrorClass, non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
@@ -478,7 +478,7 @@ impl AgentAdapter for GrokAdapter {
         Some(argv)
     }
 
-    fn managed_source(&self) -> Option<&'static ManagedSource> {
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&install::MANAGED_SOURCE)
     }
 }

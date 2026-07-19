@@ -9,11 +9,43 @@ use crate::store::atomic;
 use super::hook_types::HookRecord;
 use super::managed_json_hooks::ManagedJsonHookSpec;
 use super::{
-    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, read_optional_file,
+    AgentDescriptor, AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview,
+    HookInstallReport, HookUninstallReport, Result, read_optional_file,
 };
 
 pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
+
+/// Provider-owned file transaction behind the adapter's managed integration seam.
+pub trait ManagedIntegration: Sync {
+    fn install(&self) -> Result<HookInstallReport>;
+    fn preview(&self) -> Result<HookInstallPreview>;
+    fn uninstall(&self) -> Result<HookUninstallReport>;
+    fn installed(&self) -> bool;
+
+    fn managed_artifacts_present(&self) -> bool {
+        self.installed()
+    }
+
+    fn upgrade_available(&self) -> bool {
+        false
+    }
+
+    fn wiring_input_paths(&self, _descriptor: &AgentDescriptor) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        None
+    }
+
+    fn wrapped_subagent_status_line_command(&self) -> Option<String> {
+        None
+    }
+
+    fn untrusted_installed_hooks(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
 
 enum ManagedSourceBackend {
     WholeFile {
@@ -243,6 +275,47 @@ impl ManagedSource {
             return Vec::new();
         };
         catalog.iter().map(|hook| hook.event.to_owned()).collect()
+    }
+}
+
+impl ManagedIntegration for ManagedSource {
+    fn install(&self) -> Result<HookInstallReport> {
+        ManagedSource::install(self)
+    }
+
+    fn preview(&self) -> Result<HookInstallPreview> {
+        ManagedSource::preview(self)
+    }
+
+    fn uninstall(&self) -> Result<HookUninstallReport> {
+        ManagedSource::uninstall(self)
+    }
+
+    fn installed(&self) -> bool {
+        ManagedSource::installed(self)
+    }
+
+    fn managed_artifacts_present(&self) -> bool {
+        ManagedSource::managed_artifacts_present(self)
+    }
+
+    fn upgrade_available(&self) -> bool {
+        ManagedSource::upgrade_available(self)
+    }
+
+    fn wiring_input_paths(&self, descriptor: &AgentDescriptor) -> Vec<PathBuf> {
+        if descriptor.capabilities.local_session_discovery || !descriptor.has_wired_hook_install() {
+            return Vec::new();
+        }
+        self.resolved_path().into_iter().collect()
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        ManagedSource::wrapped_status_line_command(self)
+    }
+
+    fn wrapped_subagent_status_line_command(&self) -> Option<String> {
+        ManagedSource::wrapped_subagent_status_line_command(self)
     }
 }
 

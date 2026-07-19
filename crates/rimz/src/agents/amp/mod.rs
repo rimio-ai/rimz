@@ -440,7 +440,7 @@ impl AgentAdapter for AmpAdapter {
         Some(argv)
     }
 
-    fn managed_source(&self) -> Option<&'static ManagedSource> {
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&AMP_MANAGED_SOURCE)
     }
 

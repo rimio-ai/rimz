@@ -20,10 +20,9 @@ use super::descriptor::{
     ToolClassification,
 };
 use super::{
-    AgentAdapter, AgentErr, AgentHookClass, ClassifiedHook, DecodedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LocalContextPatch, LocalContextRefresh,
-    LocalContextRefreshCtx, LocalSessionObservation, RefreshTrigger, Result, TranscriptMessage,
-    TranscriptStat,
+    AgentAdapter, AgentHookClass, ClassifiedHook, DecodedHook, LocalContextPatch,
+    LocalContextRefresh, LocalContextRefreshCtx, LocalSessionObservation, RefreshTrigger, Result,
+    TranscriptMessage, TranscriptStat,
 };
 
 const HOOK_INSTALL_UNAVAILABLE: &str = "the v3 engine does not execute standalone hook configs (verified against Kiro CLI 2.12.1); re-enable after a pinned v3 release provides a reproducible native hook contract";
@@ -255,29 +254,7 @@ impl AgentAdapter for KiroAdapter {
         })
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        Err(AgentErr::Install {
-            agent: self.descriptor().kind,
-            reason: HOOK_INSTALL_UNAVAILABLE.to_owned(),
-        })
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        Err(AgentErr::Install {
-            agent: self.descriptor().kind,
-            reason: HOOK_INSTALL_UNAVAILABLE.to_owned(),
-        })
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        install::uninstall_from(&install::hooks_path()?)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        false
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        install::hooks_path().is_ok_and(|path| install::managed_at(&path))
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
+        Some(&install::MANAGED_INTEGRATION)
     }
 }

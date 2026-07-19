@@ -104,7 +104,7 @@ pub use lifecycle::{
 };
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
-pub use managed_source::ManagedSource;
+pub use managed_source::{ManagedIntegration, ManagedSource};
 pub use observation::{
     AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin, SpawnedSubagent,
     SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
@@ -789,14 +789,10 @@ pub trait AgentAdapter: Send + Sync {
     /// [`Self::hooks_installed`] and [`Self::default_launch_model`]. Resolving a
     /// path performs no provider-file I/O.
     fn wiring_input_paths(&self) -> Vec<PathBuf> {
-        let descriptor = self.descriptor();
-        if descriptor.capabilities.local_session_discovery || !descriptor.has_wired_hook_install() {
-            return Vec::new();
-        }
-        self.managed_source()
-            .and_then(|source| source.resolved_path().ok())
-            .into_iter()
-            .collect()
+        self.managed_integration()
+            .map_or_else(Vec::new, |integration| {
+                integration.wiring_input_paths(self.descriptor())
+            })
     }
 
     /// The agent's configured launch model and reasoning effort, used only as
@@ -1245,8 +1241,8 @@ pub trait AgentAdapter: Send + Sync {
         BTreeMap::new()
     }
 
-    /// Whole-file integration source managed by this adapter, when applicable.
-    fn managed_source(&self) -> Option<&'static ManagedSource> {
+    /// Provider-owned hook and statusline file transaction, when applicable.
+    fn managed_integration(&self) -> Option<&'static dyn ManagedIntegration> {
         None
     }
 
@@ -1254,8 +1250,8 @@ pub trait AgentAdapter: Send + Sync {
     /// config file. Defaults to an explicit "not implemented" error until an
     /// adapter owns installation.
     fn install_hooks(&self) -> Result<HookInstallReport> {
-        if let Some(source) = self.managed_source() {
-            return source.install();
+        if let Some(integration) = self.managed_integration() {
+            return integration.install();
         }
         Err(AgentErr::Install {
             agent: self.descriptor().kind,
@@ -1266,8 +1262,8 @@ pub trait AgentAdapter: Send + Sync {
     /// Preview the exact per-user config write the installer would make,
     /// without touching disk. Used by the first-run consent gate.
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        if let Some(source) = self.managed_source() {
-            return source.preview();
+        if let Some(integration) = self.managed_integration() {
+            return integration.preview();
         }
         Err(AgentErr::Install {
             agent: self.descriptor().kind,
@@ -1278,8 +1274,8 @@ pub trait AgentAdapter: Send + Sync {
     /// Remove the adapter's hook entries from the agent's per-user config
     /// file. Defaults to an explicit "not implemented" error.
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        if let Some(source) = self.managed_source() {
-            return source.uninstall();
+        if let Some(integration) = self.managed_integration() {
+            return integration.uninstall();
         }
         Err(AgentErr::Install {
             agent: self.descriptor().kind,
@@ -1292,9 +1288,9 @@ pub trait AgentAdapter: Send + Sync {
     /// usable by [`Self::hooks_installed`]. No-arg uninstall uses this so
     /// "ensure absent" cleans damaged configs without rewriting untouched ones.
     fn managed_hook_artifacts_present(&self) -> bool {
-        self.managed_source().map_or_else(
+        self.managed_integration().map_or_else(
             || self.hooks_installed(),
-            ManagedSource::managed_artifacts_present,
+            ManagedIntegration::managed_artifacts_present,
         )
     }
 
@@ -1304,8 +1300,8 @@ pub trait AgentAdapter: Send + Sync {
     /// its pass-through target. Best-effort: a read/parse failure reads as
     /// `None`.
     fn wrapped_status_line_command(&self) -> Option<String> {
-        self.managed_source()
-            .and_then(ManagedSource::wrapped_status_line_command)
+        self.managed_integration()
+            .and_then(ManagedIntegration::wrapped_status_line_command)
     }
 
     /// Match the provider's invocation contract when forwarding a wrapped
@@ -1321,8 +1317,8 @@ pub trait AgentAdapter: Send + Sync {
     /// or no wrap is configured. Best-effort: a read/parse failure reads as
     /// `None`.
     fn wrapped_subagent_status_line_command(&self) -> Option<String> {
-        self.managed_source()
-            .and_then(ManagedSource::wrapped_subagent_status_line_command)
+        self.managed_integration()
+            .and_then(ManagedIntegration::wrapped_subagent_status_line_command)
     }
 
     /// Whether this agent's per-user config currently carries RimZ-managed
@@ -1331,7 +1327,8 @@ pub trait AgentAdapter: Send + Sync {
     /// ever fires `rimz hooks feed` when this holds, so `rimz doctor` surfaces
     /// it — an un-wired agent is invisible, never silently broken.
     fn hooks_installed(&self) -> bool {
-        self.managed_source().is_some_and(ManagedSource::installed)
+        self.managed_integration()
+            .is_some_and(ManagedIntegration::installed)
     }
 
     /// RimZ-installed hook events this agent will silently skip until the
@@ -1340,7 +1337,8 @@ pub trait AgentAdapter: Send + Sync {
     /// RimZ cannot trust on the user's behalf, so `rimz start` and
     /// `rimz doctor` surface the fix ([`hook_trust_fix`]) instead.
     fn untrusted_installed_hooks(&self) -> Vec<String> {
-        Vec::new()
+        self.managed_integration()
+            .map_or_else(Vec::new, ManagedIntegration::untrusted_installed_hooks)
     }
 }
 

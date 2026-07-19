@@ -64,10 +64,9 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentHookClass, AgentLifecycleObservation, AgentTurnError, DecodedHook,
-    HookRouting, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
-    SubagentObservation, TranscriptMessage, non_empty_trimmed, optional_payload_string,
-    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored,
+    HookRouting, Result, RootIdentity, SessionOrigin, SubagentIdentity, SubagentObservation,
+    TranscriptMessage, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::transcript::AskQuestion;
@@ -634,7 +633,7 @@ impl AgentAdapter for ClaudeAdapter {
         parsed.into_observations(Timestamp::now())
     }
 
-    fn managed_source(&self) -> Option<&'static ManagedSource> {
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&MANAGED_SOURCE)
     }
 

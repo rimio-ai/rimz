@@ -45,12 +45,11 @@ use jiff::Timestamp;
 
 use self::app_server::CodexAppServer;
 pub use self::app_server::{REFRESH_THROTTLE_SECS, app_server_due, merge_app_server_context};
-use self::install::{
-    codex_config_path, hooks_installed_at, install_into, managed_artifacts_at, preview_install_at,
-    uninstall_from, untrusted_hook_events_at,
-};
 #[cfg(test)]
-use self::install::{has_rimz_hook_command, snake_event_token};
+use self::install::{
+    has_rimz_hook_command, hooks_installed_at, install_into, snake_event_token, uninstall_from,
+    untrusted_hook_events_at,
+};
 use self::payloads::{
     CodexChildIdentity, CodexCommon, CodexPermissionRequest, CodexPostCompact, CodexPostToolUse,
     CodexPreCompact, CodexPreToolUse, CodexSessionStart, CodexStop, CodexSubagentStart,
@@ -96,12 +95,11 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentAdapter, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr,
-    AnswerStep, AskReply, DecodedHook, ExtraCredits, HookInstallPreview, HookInstallReport,
-    HookRouting, HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh,
-    LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity,
-    SubagentIdentity, TranscriptMessage, non_empty_trimmed, optional_payload_string,
-    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored,
+    AnswerStep, AskReply, DecodedHook, ExtraCredits, HookRouting, LifecycleRefreshCtx,
+    LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, ResetCredits,
+    Result, RootIdentity, SubagentIdentity, TranscriptMessage, non_empty_trimmed,
+    optional_payload_string, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::transcript::{AskOption, AskQuestion};
 
@@ -475,10 +473,6 @@ impl AgentAdapter for CodexAdapter {
         configured_model().or_else(|| self.descriptor().default_model.map(ToOwned::to_owned))
     }
 
-    fn wiring_input_paths(&self) -> Vec<PathBuf> {
-        codex_config_path().into_iter().collect()
-    }
-
     fn configured_identity(&self) -> (Option<String>, Option<String>) {
         (configured_model(), configured_reasoning_effort())
     }
@@ -675,33 +669,8 @@ impl AgentAdapter for CodexAdapter {
         parse_messages(lines)
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        let path = codex_config_path()?;
-        install_into(&path)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        let path = codex_config_path()?;
-        preview_install_at(&path)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        let path = codex_config_path()?;
-        uninstall_from(&path)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        codex_config_path().is_ok_and(|path| hooks_installed_at(&path))
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        codex_config_path().is_ok_and(|path| managed_artifacts_at(&path))
-    }
-
-    fn untrusted_installed_hooks(&self) -> Vec<String> {
-        codex_config_path()
-            .map(|path| untrusted_hook_events_at(&path))
-            .unwrap_or_default()
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
+        Some(&install::MANAGED_INTEGRATION)
     }
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {

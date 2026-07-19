@@ -6,13 +6,66 @@ use serde_json::{Map, Value};
 
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, read_optional_file,
+    HookUninstallReport, ManagedIntegration, Result, read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
 use super::{COPILOT_HOOKS, COPILOT_MANAGED_SOURCE, RIMZ_STATUS_LINE_MARKER, STATUS_LINE};
 
 const AGENT: &str = "copilot";
+
+pub(super) static MANAGED_INTEGRATION: CopilotManagedIntegration = CopilotManagedIntegration;
+
+pub(super) struct CopilotManagedIntegration;
+
+impl ManagedIntegration for CopilotManagedIntegration {
+    fn install(&self) -> Result<HookInstallReport> {
+        install(
+            &super::paths::hooks_path()?,
+            &super::paths::settings_path()?,
+        )
+    }
+
+    fn preview(&self) -> Result<HookInstallPreview> {
+        preview(
+            &super::paths::hooks_path()?,
+            &super::paths::settings_path()?,
+        )
+    }
+
+    fn uninstall(&self) -> Result<HookUninstallReport> {
+        uninstall(
+            &super::paths::hooks_path()?,
+            &super::paths::settings_path()?,
+        )
+    }
+
+    fn installed(&self) -> bool {
+        super::paths::hooks_path()
+            .and_then(|hooks| Ok((hooks, super::paths::settings_path()?)))
+            .is_ok_and(|(hooks, settings)| installed(&hooks, &settings))
+    }
+
+    fn managed_artifacts_present(&self) -> bool {
+        super::paths::hooks_path()
+            .and_then(|hooks| Ok((hooks, super::paths::settings_path()?)))
+            .is_ok_and(|(hooks, settings)| managed(&hooks, &settings))
+    }
+
+    fn wiring_input_paths(
+        &self,
+        _descriptor: &super::super::AgentDescriptor,
+    ) -> Vec<std::path::PathBuf> {
+        [super::paths::hooks_path(), super::paths::settings_path()]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        wrapped_statusline_command(&super::paths::settings_path().ok()?)
+    }
+}
 
 pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookInstallReport> {
     let hooks_original = settings_json::read_optional_bytes(AGENT, hooks_path)?;

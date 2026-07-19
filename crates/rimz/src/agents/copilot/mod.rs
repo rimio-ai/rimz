@@ -37,12 +37,11 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTurnError, AskKind, DecodedHook,
-    HookInstallPreview, HookInstallReport, HookRouting, HookUninstallReport, LocalContextRefresh,
-    LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, SpawnedSubagent,
-    SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
-    TranscriptMessage, TurnErrorClass, optional_payload_string, resolve_subagent_identity,
-    sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, AgentTurnError, AskKind, DecodedHook, HookRouting,
+    LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin,
+    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity,
+    SubagentSpawnInput, TranscriptMessage, TurnErrorClass, optional_payload_string,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -626,43 +625,8 @@ impl AgentAdapter for CopilotAdapter {
         )
     }
 
-    fn managed_source(&self) -> Option<&'static ManagedSource> {
-        Some(&COPILOT_MANAGED_SOURCE)
-    }
-
-    fn wiring_input_paths(&self) -> Vec<PathBuf> {
-        [paths::hooks_path(), paths::settings_path()]
-            .into_iter()
-            .flatten()
-            .collect()
-    }
-
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        install::install(&paths::hooks_path()?, &paths::settings_path()?)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        install::preview(&paths::hooks_path()?, &paths::settings_path()?)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        install::uninstall(&paths::hooks_path()?, &paths::settings_path()?)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        paths::hooks_path()
-            .and_then(|hooks| Ok((hooks, paths::settings_path()?)))
-            .is_ok_and(|(hooks, settings)| install::installed(&hooks, &settings))
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        paths::hooks_path()
-            .and_then(|hooks| Ok((hooks, paths::settings_path()?)))
-            .is_ok_and(|(hooks, settings)| install::managed(&hooks, &settings))
-    }
-
-    fn wrapped_status_line_command(&self) -> Option<String> {
-        install::wrapped_statusline_command(&paths::settings_path().ok()?)
+    fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
+        Some(&install::MANAGED_INTEGRATION)
     }
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
