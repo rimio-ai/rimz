@@ -54,7 +54,15 @@ Claude names the active session log in every hook payload's `transcript_path`. E
 | ------------------------------------------------------------------------- | ----------------------------------------- |
 | `usage.input_tokens` + `usage.cache_read_input_tokens` + `usage.cache_creation_input_tokens` | context tokens (the gauge numerator) |
 | context tokens + `usage.output_tokens`                                    | `total_tokens`                            |
+| `usage.input_tokens`                                                      | `fresh_input_tokens`                      |
+| `usage.cache_read_input_tokens`                                           | `cache_read_input_tokens`                 |
+| `usage.cache_creation_input_tokens`                                       | `cache_write_input_tokens`                |
+| `usage.output_tokens`                                                     | `output_tokens`                           |
 | `message.model`                                                           | `model` (bare id — no capability marker)  |
+
+The four components ride alongside the total they sum to, so the card reports where the window went rather than one opaque figure — a warm session is mostly cache reads, and a 250k-token gauge backed by cache reuse reads very differently from 250k of fresh input. A transcript that opens with no assistant usage yet reports `total_tokens = 0` (the gauge baseline) and leaves the split `None`: unknown, never four asserted zeroes.
+
+A subagent payload carries two transcripts — `transcript_path` is the parent's and `agent_transcript_path` is the child's. Child usage and model resolve from `agent_transcript_path` alone; without it they stay unknown rather than inheriting the parent's figures onto the child's row.
 
 The adapter's `parse_transcript_messages` function is the single conversation parser for Claude transcripts. It reads main-thread `user` and `assistant` entries with timestamps, filters sidechain replay, and excludes API-error assistant entries from conversation output; `stream_assistant_messages` filters that normalized parse for supervised streaming.
 

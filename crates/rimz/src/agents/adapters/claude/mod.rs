@@ -923,7 +923,17 @@ fn build_claude_observation(
 ) -> AgentLifecycleObservation {
     let transcript_path = optional_payload_string(payload, &["session_id"])
         .and_then(|_| optional_payload_string(payload, &["transcript_path"]));
-    let usage = transcript_path
+    // A subagent payload carries both transcripts: `transcript_path` is the
+    // parent's and `agent_transcript_path` is the child's. Reading the parent's
+    // for a child would stamp the parent's newest model and token total onto the
+    // child's row, so a child sources usage from its own transcript alone —
+    // absent that, usage stays unknown rather than borrowed.
+    let usage_path = match parts.subagent_stop.as_ref() {
+        Some(stop) => stop.agent_transcript_path.clone(),
+        None if parent_agent_id.is_some() => None,
+        None => transcript_path.clone(),
+    };
+    let usage = usage_path
         .as_deref()
         .map(usage_from_transcript)
         .unwrap_or_default();
@@ -949,6 +959,10 @@ fn build_claude_observation(
     observation.launch.effort = claude_effort(payload, parts);
     observation.usage.context_window = context_window;
     observation.usage.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+    observation.usage.fresh_input_tokens = usage.fresh_input_tokens;
+    observation.usage.cache_read_input_tokens = usage.cache_read_input_tokens;
+    observation.usage.cache_write_input_tokens = usage.cache_write_input_tokens;
+    observation.usage.output_tokens = usage.output_tokens;
     observation
 }
 
@@ -1049,10 +1063,17 @@ fn pending_background_work(
 
 /// Context-window usage derived from a Claude transcript tail. Carries the
 /// latest turn's token total (context-occupying input plus output), the gauge
-/// numerator the fold scales against the resolved window.
+/// numerator the fold scales against the resolved window, plus the four
+/// components that total is summed from. Claude reports the split on every
+/// assistant record, so keeping it costs nothing and lets the card show where
+/// the window actually went (fresh input vs. cache reuse vs. output).
 #[derive(Default)]
 struct TranscriptUsage {
     total_tokens: Option<u64>,
+    fresh_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+    cache_write_input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
     model: Option<String>,
 }
 
@@ -1062,10 +1083,14 @@ impl TranscriptUsage {
     /// bar at 0% instead of vanishing until the first turn completes. A
     /// transcript that cannot be read stays `default()` (all `None`): unknown,
     /// not zero.
+    ///
+    /// Only the total is zeroed. The breakdown stays `None` so a tail that
+    /// simply outran its last usage record reports "unknown" for the split
+    /// rather than asserting four confident zeroes.
     fn fresh() -> Self {
         Self {
             total_tokens: Some(0),
-            model: None,
+            ..Self::default()
         }
     }
 }
@@ -1109,9 +1134,10 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
             continue;
         };
         let field = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-        let context_tokens = field("input_tokens")
-            + field("cache_read_input_tokens")
-            + field("cache_creation_input_tokens");
+        let fresh_input = field("input_tokens");
+        let cache_read = field("cache_read_input_tokens");
+        let cache_write = field("cache_creation_input_tokens");
+        let context_tokens = fresh_input + cache_read + cache_write;
         let output = field("output_tokens");
         if context_tokens == 0 && output == 0 {
             continue;
@@ -1125,6 +1151,10 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
         // folded window, which carries the `[1m]`-marked model's bump.
         return TranscriptUsage {
             total_tokens: Some(context_tokens + output),
+            fresh_input_tokens: Some(fresh_input),
+            cache_read_input_tokens: Some(cache_read),
+            cache_write_input_tokens: Some(cache_write),
+            output_tokens: Some(output),
             model,
         };
     }

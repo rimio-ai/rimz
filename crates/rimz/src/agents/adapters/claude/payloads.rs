@@ -108,11 +108,15 @@ pub struct ClaudeSubagentStart {
     pub common: ClaudeCommon,
 }
 
+/// `agent_transcript_path` names the *child's* own transcript. The sibling
+/// `transcript_path` on the same payload is the parent's, so a child's tokens
+/// and model must be read from this field or not at all.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudeSubagentStop {
     #[serde(flatten)]
     pub common: ClaudeCommon,
+    pub agent_transcript_path: Option<String>,
 }
 
 /// Fires after context compaction completes. The `trigger` shape mirrors

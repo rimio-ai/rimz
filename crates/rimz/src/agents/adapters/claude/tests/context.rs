@@ -25,6 +25,12 @@ fn transcript_tail_drives_context_window_and_tokens() {
     assert_eq!(obs.usage.total_tokens, Some(100_500));
     assert_eq!(obs.usage.context_window, None);
     assert_eq!(obs.launch.model.as_deref(), Some("claude-opus-4-7"));
+    // The total is a sum; the components survive it so the card can show where
+    // the window went rather than one opaque figure.
+    assert_eq!(obs.usage.fresh_input_tokens, Some(100_000));
+    assert_eq!(obs.usage.cache_read_input_tokens, Some(0));
+    assert_eq!(obs.usage.cache_write_input_tokens, Some(0));
+    assert_eq!(obs.usage.output_tokens, Some(500));
 
     // The 1M beta is signalled by a `[1m]` marker that rides only the hook
     // payload's model field — the transcript writes the bare id. The adapter
@@ -248,6 +254,12 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         .unwrap();
     assert_eq!(obs.usage.total_tokens, Some(0));
     assert_eq!(obs.usage.context_window, None);
+    // The zero is a gauge baseline for the total only. Claiming four confident
+    // zeroes for the split would be asserting a fact no record carries.
+    assert_eq!(obs.usage.fresh_input_tokens, None);
+    assert_eq!(obs.usage.cache_read_input_tokens, None);
+    assert_eq!(obs.usage.cache_write_input_tokens, None);
+    assert_eq!(obs.usage.output_tokens, None);
 
     // No readable transcript means unknown (None), not a false 0%.
     let obs = ClaudeAdapter
@@ -282,4 +294,108 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         .unwrap();
     assert_eq!(obs.usage.total_tokens, None);
     assert_eq!(obs.usage.context_window, None);
+}
+
+#[test]
+fn subagent_usage_comes_from_the_child_transcript_not_the_parents() {
+    // A SubagentStop payload names both transcripts. Reading the parent's would
+    // stamp the parent's model and token total onto the child's row, which is
+    // how a cheap Haiku child inherits its Opus parent's figures.
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("parent.jsonl");
+    std::fs::write(
+        &parent,
+        "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":\
+             {\"input_tokens\":900000,\"output_tokens\":1000}}}\n",
+    )
+    .unwrap();
+    let child = dir.path().join("child.jsonl");
+    std::fs::write(
+        &child,
+        "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-haiku-4-5\",\"usage\":\
+             {\"input_tokens\":10,\"cache_read_input_tokens\":40,\"output_tokens\":7}}}\n",
+    )
+    .unwrap();
+    let obs = ClaudeAdapter
+        .decode_hook(
+            "SubagentStop",
+            &json!({
+                "session_id": "parent-sess",
+                "agent_id": "child-sess",
+                "agent_type": "Explore",
+                "transcript_path": parent.to_str().unwrap(),
+                "agent_transcript_path": child.to_str().unwrap(),
+            }),
+        )
+        .expect("test hook decodes")
+        .lifecycle()
+        .cloned()
+        .unwrap();
+    assert_eq!(obs.usage.total_tokens, Some(57));
+    assert_eq!(obs.usage.fresh_input_tokens, Some(10));
+    assert_eq!(obs.usage.cache_read_input_tokens, Some(40));
+    assert_eq!(obs.usage.output_tokens, Some(7));
+    assert_eq!(obs.launch.model.as_deref(), Some("claude-haiku-4-5"));
+}
+
+#[test]
+fn subagent_without_its_own_transcript_reports_unknown_usage() {
+    // No child transcript means unknown, never the parent's figures borrowed.
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("parent-only.jsonl");
+    std::fs::write(
+        &parent,
+        "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":\
+             {\"input_tokens\":900000,\"output_tokens\":1000}}}\n",
+    )
+    .unwrap();
+    let obs = ClaudeAdapter
+        .decode_hook(
+            "SubagentStart",
+            &json!({
+                "session_id": "parent-sess",
+                "agent_id": "child-sess",
+                "agent_type": "Explore",
+                "transcript_path": parent.to_str().unwrap(),
+            }),
+        )
+        .expect("test hook decodes")
+        .lifecycle()
+        .cloned()
+        .unwrap();
+    assert_eq!(obs.usage.total_tokens, None);
+    assert_eq!(obs.usage.fresh_input_tokens, None);
+    assert_eq!(obs.launch.model.as_deref(), None);
+}
+
+#[test]
+fn transcript_tail_splits_a_cache_heavy_turn() {
+    // The steady state of a warm session: almost all context is cache reads,
+    // and `input_tokens` is a couple of fresh tokens. Reporting only the sum
+    // makes a 250k-token card look like a runaway agent; the split shows the
+    // window is cache reuse, which is the figure a human acts on.
+    let dir = tempfile::tempdir().unwrap();
+    let warm = dir.path().join("warm.jsonl");
+    std::fs::write(
+        &warm,
+        "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":\
+             {\"input_tokens\":2,\"cache_read_input_tokens\":226584,\
+              \"cache_creation_input_tokens\":7853,\"output_tokens\":491}}}\n",
+    )
+    .unwrap();
+    let obs = ClaudeAdapter
+        .decode_hook(
+            "Stop",
+            &json!({ "session_id": "sess-1", "transcript_path": warm.to_str().unwrap() }),
+        )
+        .expect("test hook decodes")
+        .lifecycle()
+        .cloned()
+        .unwrap();
+    assert_eq!(obs.usage.fresh_input_tokens, Some(2));
+    assert_eq!(obs.usage.cache_read_input_tokens, Some(226_584));
+    assert_eq!(obs.usage.cache_write_input_tokens, Some(7_853));
+    assert_eq!(obs.usage.output_tokens, Some(491));
+    // The components still reconcile against the total the gauge scales.
+    assert_eq!(obs.usage.total_tokens, Some(2 + 226_584 + 7_853 + 491));
 }
