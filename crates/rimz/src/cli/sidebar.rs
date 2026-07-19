@@ -188,12 +188,12 @@ struct WakeArgs {
     focus_generation: Option<u64>,
     #[arg(long, hide = true)]
     focus_clients: Option<String>,
-    #[arg(long = "command-arg")]
-    command_args: Vec<String>,
-    #[arg(long = "focused-pane-id")]
-    focused_pane_ids: Vec<String>,
-    #[arg(long = "unfocused-pane-id")]
-    unfocused_pane_ids: Vec<String>,
+    #[arg(long = "command-arg", hide = true)]
+    _command_args: Vec<String>,
+    #[arg(long = "focused-pane-id", hide = true)]
+    _focused_pane_ids: Vec<String>,
+    #[arg(long = "unfocused-pane-id", hide = true)]
+    _unfocused_pane_ids: Vec<String>,
     #[arg(
         long = "topology",
         hide = true,
@@ -244,12 +244,12 @@ enum WakeReason {
 impl From<WakeReason> for ZellijWakeReason {
     fn from(reason: WakeReason) -> Self {
         match reason {
-            WakeReason::PanesChanged => Self::PanesChanged,
-            WakeReason::PaneOpened => Self::PaneOpened,
-            WakeReason::PaneClosed => Self::PaneClosed,
+            WakeReason::PanesChanged
+            | WakeReason::PaneOpened
+            | WakeReason::PaneClosed
+            | WakeReason::CommandChanged
+            | WakeReason::FocusChanged => Self::Announced,
             WakeReason::FocusStranded => Self::FocusStranded,
-            WakeReason::CommandChanged => Self::CommandChanged,
-            WakeReason::FocusChanged => Self::FocusChanged,
             WakeReason::Alive => Self::Alive,
         }
     }
@@ -380,9 +380,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 pane_id,
                 focus_generation,
                 focus_clients,
-                command_args,
-                focused_pane_ids,
-                unfocused_pane_ids,
+                _command_args: _,
+                _focused_pane_ids: _,
+                _unfocused_pane_ids: _,
                 topology,
                 plugin_mem_pages,
                 plugin_id,
@@ -409,25 +409,6 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                         .as_deref()
                         .map(parse_zellij_focus_clients)
                         .unwrap_or_default(),
-                    command: {
-                        let command = command_args
-                            .iter()
-                            .filter(|arg| !arg.is_empty())
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        (!command.is_empty()).then_some(command)
-                    },
-                    focused_pane_ids: focused_pane_ids
-                        .iter()
-                        .filter(|raw| !raw.is_empty())
-                        .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
-                        .collect(),
-                    unfocused_pane_ids: unfocused_pane_ids
-                        .iter()
-                        .filter(|raw| !raw.is_empty())
-                        .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
-                        .collect(),
                     topology: (!topology.is_empty()).then(|| topology.concat()).and_then(|raw| {
                         match serde_json::from_str(&raw) {
                             Ok(cache) => Some(cache),
@@ -983,10 +964,11 @@ fn wake(globals: &GlobalFlags, workspace_id: Option<String>, wake: ZellijWake) -
         ZellijWakeOutcome::RejectedStaleWriter => {
             std::process::exit(rimz::sidebar::presence::STALE_WRITER_EXIT_CODE)
         }
-        ZellijWakeOutcome::Accepted(Some(event)) => {
-            broadcast_wake_event(&runtime, wake.session_name.as_deref(), event);
+        ZellijWakeOutcome::Accepted(events) => {
+            for event in events {
+                broadcast_wake_event(&runtime, wake.session_name.as_deref(), event);
+            }
         }
-        ZellijWakeOutcome::Accepted(None) => {}
     }
     Ok(())
 }

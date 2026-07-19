@@ -125,26 +125,14 @@ pub(super) fn materialize_presence_plugin_bytes(
 /// The `key=value,key=value` configuration the plugin reads at load. The
 /// parse is Zellij's — split on `,` then `=` — so a `rimz` path containing
 /// either separator cannot be expressed; `rimz_bin` is omitted and the plugin
-/// falls back to `rimz` on the host PATH, while an inexpressible plugin URL
-/// disables the runtime focus keybind rather than register a mis-targeted pipe.
-/// Workspace ids are `ws_` + hex by construction, always expressible.
+/// falls back to `rimz` on the host PATH. Workspace ids are `ws_` + hex by
+/// construction, always expressible.
 pub(crate) fn presence_plugin_configuration(opts: &super::super::PresencePluginOptions) -> String {
     let mut configuration = format!("workspace_id={}", opts.workspace_id.as_str());
-    let plugin_url = format!("file:{}", opts.wasm.display());
-    let focus_destination_expressible = !plugin_url.contains([',', '=']);
-    if focus_destination_expressible {
-        configuration.push_str(",plugin_url=");
-        configuration.push_str(&plugin_url);
-    } else {
-        tracing::debug!(
-            plugin_url,
-            "presence plugin URL contains a plugin-configuration separator; the Zellij focus keybind is disabled",
-        );
-    }
     if opts.session_name.contains([',', '=']) {
         tracing::debug!(
             session = %opts.session_name,
-            "session name contains a plugin-configuration separator; command-change shortcut is disabled",
+            "session name contains a plugin-configuration separator; session-scoped topology is disabled",
         );
     } else {
         configuration.push_str(",session_name=");
@@ -177,12 +165,7 @@ pub(crate) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
     // backends); here we only guard the plugin-config separators and let the
     // plugin's own parser skip anything malformed.
     if let Some(focus_key) = opts.focus_key.as_deref() {
-        if !focus_destination_expressible {
-            tracing::debug!(
-                focus_key,
-                "the Zellij focus keybind is disabled because the plugin URL is not expressible",
-            );
-        } else if focus_key.contains([',', '=']) {
+        if focus_key.contains([',', '=']) {
             tracing::debug!(
                 focus_key,
                 "focus_key contains a plugin-configuration separator; the Zellij focus keybind is disabled",

@@ -123,7 +123,26 @@ fn tabs_by_index(entries: Vec<(usize, Vec<PaneFields>)>) -> BTreeMap<usize, Vec<
 }
 
 fn raw_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>) -> u64 {
-    policy::manifest_hash(tabs)
+    policy::raw_stable_hash(tabs.iter().flat_map(|(tab, panes)| {
+        panes.iter().map(move |pane| {
+            (
+                *tab,
+                policy::RawStablePaneFields {
+                    id: pane.id,
+                    is_plugin: pane.is_plugin,
+                    is_suppressed: pane.is_suppressed,
+                    is_floating: pane.is_floating,
+                    exited: pane.exited,
+                    is_held: pane.is_held,
+                    tab_position: pane.tab_position,
+                    tab_name: pane.tab_name.as_deref(),
+                    pane_x: pane.pane_x,
+                    pane_columns: pane.pane_columns,
+                    terminal_command: pane.terminal_command.as_deref(),
+                },
+            )
+        })
+    }))
 }
 
 fn grant(engine: &mut Engine, now: u64, host: &FakeHost) {
@@ -175,7 +194,7 @@ fn has_timeout(effects: &[Effect], delay_ms: u64) -> bool {
 }
 
 #[test]
-fn pregrant_change_holds_until_grant_and_grant_without_pending_emits_alive() {
+fn pregrant_unknown_patch_is_retained_until_the_manifest_arrives() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, reconfigure_config());
 
@@ -198,6 +217,13 @@ fn pregrant_change_holds_until_grant_and_grant_without_pending_emits_alive() {
     assert!(effects.contains(&Effect::ListClients));
     assert_eq!(reasons(&effects), vec!["panes-changed"]);
 
+    let manifest = tabs(vec![pane(1)]);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 30, &host);
+    assert!(run_commands(&effects).is_empty());
+    let effects = engine.on_dump_topology_pipe(40, &host);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["panes"][0]["pane_command"], "codex");
+
     let mut fresh = Engine::new(0, config());
     let effects = fresh.on_permission_granted(20, &host);
     assert!(effects.contains(&Effect::ListClients));
@@ -215,10 +241,6 @@ fn cached_grant_on_first_manifest_hides_and_first_manifest_is_baseline() {
     assert!(effects.contains(&Effect::HideSelf));
     assert!(effects.contains(&Effect::ListClients));
     assert_eq!(reasons(&effects), vec!["alive"]);
-    assert!(
-        !reasons(&effects).contains(&"pane-opened"),
-        "first manifest is learned baseline, not pane opens",
-    );
 }
 
 #[test]
@@ -255,7 +277,7 @@ fn stable_manifest_skips_lazy_projection() {
 }
 
 #[test]
-fn manifest_adding_two_card_panes_emits_two_opens_without_changed() {
+fn manifest_adding_two_card_panes_emits_one_changed_snapshot() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
@@ -264,11 +286,11 @@ fn manifest_adding_two_card_panes_emits_two_opens_without_changed() {
 
     let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 30, &host);
 
-    assert_eq!(reasons(&effects), vec!["pane-opened", "pane-opened"]);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
 }
 
 #[test]
-fn command_changed_floor_is_per_pane_and_pane_close_clears_it() {
+fn command_and_close_changes_share_the_room_poke_floor() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
@@ -281,7 +303,7 @@ fn command_changed_floor_is_per_pane_and_pane_close_clears_it() {
         100,
         &host,
     );
-    assert_eq!(reasons(&effects), vec!["command-changed"]);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
 
     let effects = engine.on_command_changed(
         ProjectedPaneId::Terminal(1),
@@ -303,7 +325,8 @@ fn command_changed_floor_is_per_pane_and_pane_close_clears_it() {
         210,
         &host,
     );
-    assert_eq!(reasons(&effects), vec!["command-changed"]);
+    assert!(run_commands(&effects).is_empty());
+    assert!(has_timeout(&effects, POKE_FLOOR_MS - 10));
 
     let _ = engine.on_pane_closed(ProjectedPaneId::Terminal(1), 220, &host);
     let effects = engine.on_command_changed(
@@ -313,21 +336,21 @@ fn command_changed_floor_is_per_pane_and_pane_close_clears_it() {
         230,
         &host,
     );
-    assert_eq!(reasons(&effects), vec!["command-changed"]);
+    assert!(run_commands(&effects).is_empty());
 }
 
 #[test]
-fn pane_closed_terminal_has_identity_and_plugin_falls_back_to_changed() {
+fn pane_closed_signals_canonical_room_changes() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
     seed_manifest(&mut engine, tabs(vec![pane(1), plugin_pane(9)]), 20, &host);
 
     let effects = engine.on_pane_closed(ProjectedPaneId::Terminal(1), 30, &host);
-    assert_eq!(reasons(&effects), vec!["pane-closed"]);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
 
     let effects = engine.on_pane_closed(ProjectedPaneId::Plugin(9), 40, &host);
-    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    assert!(run_commands(&effects).is_empty());
 }
 
 #[test]
@@ -370,7 +393,7 @@ fn manifest_probes_each_pane_pid_once_including_failures() {
     let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 200, &host);
 
     assert_eq!(*host.pid_calls.borrow(), vec![1, 2]);
-    assert_eq!(reasons(&effects), vec!["pane-opened"]);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
     let topology = topology_json(run_commands(&effects)[0]);
     assert_eq!(topology["panes"][0]["pane_pid"], 101);
     assert!(topology["panes"][1].get("pane_pid").is_none());
@@ -390,7 +413,7 @@ fn dump_topology_on_fresh_state_probes_missing_pids() {
     host.pids.insert(1, 101);
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
-    engine.room.tabs = tabs(vec![pane(1)]);
+    assert!(engine.room.apply_manifest(tabs(vec![pane(1)]), &host));
 
     let effects = engine.on_dump_topology_pipe(20, &host);
 
@@ -398,6 +421,51 @@ fn dump_topology_on_fresh_state_probes_missing_pids() {
     assert_eq!(*host.pid_calls.borrow(), vec![1]);
     let topology = topology_json(run_commands(&effects)[0]);
     assert_eq!(topology["panes"][0]["pane_pid"], 101);
+}
+
+#[test]
+fn canonical_room_retains_partial_tabs_and_event_enrichment_while_moving_panes() {
+    let host = FakeHost::default();
+    let mut room = RoomState::default();
+    assert!(room.apply_manifest(
+        tabs_by_index(vec![
+            (0, vec![pane_in_tab(10, 0)]),
+            (1, vec![pane_in_tab(20, 1)]),
+        ]),
+        &host,
+    ));
+    assert!(room.update_foreground(
+        ProjectedPaneId::Terminal(10),
+        Some("codex --search".to_owned()),
+    ));
+
+    assert!(!room.apply_manifest(tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]), &host,));
+    assert!(!room.apply_manifest(tabs_by_index(vec![(1, Vec::new())]), &host));
+    let retained = room.published_panes();
+    assert_eq!(retained.len(), 2);
+    assert_eq!(retained[0].pane_command.as_deref(), Some("codex --search"));
+    assert_eq!(retained[1].tab_position, 1);
+
+    assert!(room.apply_manifest(
+        tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), pane_in_tab(20, 0)],)]),
+        &host,
+    ));
+    let moved = room.published_panes();
+    assert_eq!(
+        moved.iter().map(|pane| pane.id).collect::<Vec<_>>(),
+        vec![10, 20]
+    );
+    assert!(moved.iter().all(|pane| pane.tab_position == 0));
+}
+
+#[test]
+fn canonical_room_ignores_command_enrichment_for_plugin_panes() {
+    let host = FakeHost::default();
+    let mut room = RoomState::default();
+    assert!(room.apply_manifest(tabs(vec![plugin_pane(9)]), &host));
+
+    assert!(!room.update_foreground(ProjectedPaneId::Plugin(9), Some("ignored".to_owned()),));
+    assert!(room.published_panes()[0].pane_command.is_none());
 }
 
 #[test]
@@ -524,7 +592,9 @@ fn list_clients_publish_presence_and_unique_session_focus() {
         50,
         &host,
     );
-    assert_eq!(reasons(&effects), vec!["focus-changed"]);
+    assert!(run_commands(&effects).is_empty());
+    let effects = engine.on_timer(30 + POKE_FLOOR_MS, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
 }
 
 fn client(client_id: u16, pane_id: ProjectedPaneId) -> ProjectedClientFocus {
@@ -625,10 +695,11 @@ fn explicit_cross_tab_work_view_cancels_repair_and_publishes_transition() {
 
     let effects =
         engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(11))], 110, &host);
-    assert_eq!(reasons(&effects), vec!["focus-changed"]);
-    let argv = run_commands(&effects)[0];
-    assert_eq!(arg_after(argv, "--unfocused-pane-id"), Some("terminal_1"));
-    assert_eq!(arg_after(argv, "--focused-pane-id"), Some("terminal_11"));
+    assert!(run_commands(&effects).is_empty());
+    let effects = engine.on_timer(40 + POKE_FLOOR_MS, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["focused_pane"], 11);
     assert!(!engine
         .on_timer(100 + policy::FOCUS_SETTLE_MS, &host)
         .iter()
@@ -672,10 +743,10 @@ fn rapid_switch_supersedes_the_old_query_and_preserves_the_prior_register() {
 
     let stale = engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(11))], 120, &host);
     assert!(stale.contains(&Effect::ListClients));
-    assert!(!reasons(&stale).contains(&"focus-changed"));
+    assert!(!reasons(&stale).contains(&"panes-changed"));
 
     let latest = engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(1))], 130, &host);
-    assert!(!reasons(&latest).contains(&"focus-changed"));
+    assert!(!reasons(&latest).contains(&"panes-changed"));
     assert!(
         !engine
             .on_timer(110 + policy::FOCUS_SETTLE_MS, &host)
@@ -700,7 +771,9 @@ fn same_pane_clients_agree_while_distinct_views_clear_session_focus() {
         50,
         &host,
     );
-    assert_eq!(reasons(&effects), vec!["focus-changed"]);
+    assert!(run_commands(&effects).is_empty());
+    let effects = engine.on_timer(30 + POKE_FLOOR_MS, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
     assert_eq!(topology_json(run_commands(&effects)[0])["focused_pane"], 1);
 
     let effects = engine.on_list_clients(
@@ -708,10 +781,12 @@ fn same_pane_clients_agree_while_distinct_views_clear_session_focus() {
             client(1, ProjectedPaneId::Terminal(1)),
             client(2, ProjectedPaneId::Terminal(2)),
         ],
-        60,
+        140,
         &host,
     );
-    assert_eq!(reasons(&effects), vec!["focus-changed"]);
+    assert!(run_commands(&effects).is_empty());
+    let effects = engine.on_timer(30 + 2 * POKE_FLOOR_MS, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
     assert!(
         topology_json(run_commands(&effects)[0])
             .get("focused_pane")
@@ -853,7 +928,7 @@ fn session_update_and_keepalive_request_client_sample() {
 
     let effects = engine.on_timer(KEEPALIVE_MS, &host);
     assert!(effects.contains(&Effect::ListClients));
-    assert_eq!(reasons(&effects), vec!["alive"]);
+    assert_eq!(reasons(&effects), vec!["panes-changed", "alive"]);
 }
 
 #[test]
@@ -1131,8 +1206,8 @@ fn topology_after_foreground_change_carries_overlaid_command() {
     );
     let argv = run_commands(&effects)
         .into_iter()
-        .find(|argv| arg_after(argv, "--reason") == Some("command-changed"))
-        .expect("command-changed wake");
+        .find(|argv| arg_after(argv, "--reason") == Some("panes-changed"))
+        .expect("changed snapshot wake");
     let topology = topology_json(argv);
 
     assert_eq!(topology["panes"][0]["pane_command"], "vim README.md");

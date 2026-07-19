@@ -36,6 +36,28 @@ fn plugin_focus_argv_parses_without_workspace_id() {
 }
 
 #[test]
+fn legacy_zellij_wake_shape_remains_parseable() {
+    use clap::Parser;
+
+    crate::cli::Cli::try_parse_from([
+        "rimz",
+        "sidebar",
+        "wake",
+        "--reason",
+        "pane-opened",
+        "--command-arg",
+        "codex",
+        "--focused-pane-id",
+        "terminal_7",
+        "--unfocused-pane-id",
+        "terminal_6",
+        "--topology",
+        r#"{"session_name":"rimz-test","produced_at_ms":1,"panes":[]}"#,
+    ])
+    .expect("legacy Zellij wake parses after a host upgrade");
+}
+
+#[test]
 fn plugin_wake_argv_accepts_repeated_topology_chunks() {
     use clap::Parser;
 

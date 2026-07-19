@@ -33,7 +33,7 @@ fn pane(id: u32) -> PaneFields {
 }
 #[test]
 fn topology_json_carries_focused_pane() {
-    let tabs = BTreeMap::from([(0, vec![pane(7)])]);
+    let panes = vec![pane(7)];
     let json = topology_json(
         Some("session-1"),
         42,
@@ -45,7 +45,7 @@ fn topology_json_carries_focused_pane() {
         }),
         Some(7),
         None,
-        &tabs,
+        &panes,
     )
     .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
@@ -64,8 +64,8 @@ fn topology_json_carries_present_pid_and_omits_absent_pid() {
         pane_pid: Some(707),
         ..pane(7)
     };
-    let tabs = BTreeMap::from([(0, vec![enriched, pane(8)])]);
-    let json = topology_json(Some("session-1"), 42, None, Some(7), None, &tabs)
+    let panes = vec![enriched, pane(8)];
+    let json = topology_json(Some("session-1"), 42, None, Some(7), None, &panes)
         .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
@@ -77,7 +77,7 @@ fn topology_json_carries_present_pid_and_omits_absent_pid() {
 
 #[test]
 fn topology_json_carries_clients_when_sampled() {
-    let tabs = BTreeMap::from([(0, vec![pane(7)])]);
+    let panes = vec![pane(7)];
     let clients = policy::ClientSample {
         human_clients: 2,
         viewed_panes: vec![7, 9],
@@ -86,7 +86,7 @@ fn topology_json_carries_clients_when_sampled() {
             pane_id: policy::ClientPaneId::Terminal(7),
         }],
     };
-    let json = topology_json(Some("session-1"), 42, None, Some(7), Some(&clients), &tabs)
+    let json = topology_json(Some("session-1"), 42, None, Some(7), Some(&clients), &panes)
         .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
@@ -96,7 +96,7 @@ fn topology_json_carries_clients_when_sampled() {
         serde_json::json!([7, 9])
     );
 
-    let json = topology_json(Some("session-1"), 42, None, Some(7), None, &tabs)
+    let json = topology_json(Some("session-1"), 42, None, Some(7), None, &panes)
         .expect("topology serializes");
     let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
     assert!(payload.get("clients").is_none());
@@ -112,6 +112,8 @@ fn changed_wake_argv_carries_workspace_and_topology() {
             "wake",
             "--reason",
             "panes-changed",
+            "--session-name",
+            "session-1",
             "--workspace-id",
             "workspace-1",
             "--topology",
@@ -153,6 +155,8 @@ fn oversized_topology_keeps_wake_without_topology_arguments() {
             "wake",
             "--reason",
             "panes-changed",
+            "--session-name",
+            "session-1",
             "--workspace-id",
             "workspace-1",
         ])
@@ -236,55 +240,6 @@ fn command_counters_split_every_exit_bucket() {
 }
 
 #[test]
-fn pane_opened_wake_argv_carries_optional_command() {
-    assert_eq!(
-        wake_argv(
-            &ctx(),
-            WakeRequest::PaneOpened {
-                pane_id: 7,
-                command: Some("codex".to_owned()),
-            },
-            None,
-        ),
-        Some(strings(&[
-            "/bin/rimz",
-            "sidebar",
-            "wake",
-            "--reason",
-            "pane-opened",
-            "--session-name",
-            "session-1",
-            "--pane-id",
-            "terminal_7",
-            "--workspace-id",
-            "workspace-1",
-            "--command-arg",
-            "codex",
-        ])),
-    );
-}
-
-#[test]
-fn pane_closed_wake_argv_names_terminal_pane() {
-    assert_eq!(
-        wake_argv(&ctx(), WakeRequest::PaneClosed { pane_id: 8 }, None),
-        Some(strings(&[
-            "/bin/rimz",
-            "sidebar",
-            "wake",
-            "--reason",
-            "pane-closed",
-            "--session-name",
-            "session-1",
-            "--pane-id",
-            "terminal_8",
-            "--workspace-id",
-            "workspace-1",
-        ])),
-    );
-}
-
-#[test]
 fn focus_stranded_wake_argv_names_terminal_pane() {
     assert_eq!(
         wake_argv(
@@ -320,107 +275,13 @@ fn focus_stranded_wake_argv_names_terminal_pane() {
 }
 
 #[test]
-fn command_changed_wake_argv_drops_empty_args() {
-    assert_eq!(
-        wake_argv(
-            &ctx(),
-            WakeRequest::CommandChanged {
-                pane_id: 10,
-                args: strings(&["codex", "", "--model", "gpt"]),
-            },
-            None,
-        ),
-        Some(strings(&[
-            "/bin/rimz",
-            "sidebar",
-            "wake",
-            "--reason",
-            "command-changed",
-            "--session-name",
-            "session-1",
-            "--pane-id",
-            "terminal_10",
-            "--workspace-id",
-            "workspace-1",
-            "--command-arg",
-            "codex",
-            "--command-arg",
-            "--model",
-            "--command-arg",
-            "gpt",
-        ])),
-    );
-}
-
-#[test]
-fn focus_changed_wake_argv_names_session_transition() {
-    assert_eq!(
-        wake_argv(
-            &ctx(),
-            WakeRequest::FocusChanged {
-                previous: Some(1),
-                current: Some(2),
-            },
-            None,
-        ),
-        Some(strings(&[
-            "/bin/rimz",
-            "sidebar",
-            "wake",
-            "--reason",
-            "focus-changed",
-            "--session-name",
-            "session-1",
-            "--workspace-id",
-            "workspace-1",
-            "--unfocused-pane-id",
-            "terminal_1",
-            "--focused-pane-id",
-            "terminal_2",
-        ])),
-    );
-}
-
-#[test]
-fn wake_argv_none_gates_session_bound_and_empty_requests() {
+fn wake_argv_none_gates_session_bound_requests() {
     let no_session = WakeContext {
         rimz_bin: None,
         workspace_id: None,
         session_name: None,
     };
-    assert_eq!(
-        wake_argv(
-            &no_session,
-            WakeRequest::PaneOpened {
-                pane_id: 1,
-                command: None,
-            },
-            None,
-        ),
-        None,
-    );
-    assert_eq!(
-        wake_argv(
-            &ctx(),
-            WakeRequest::CommandChanged {
-                pane_id: 1,
-                args: strings(&["", ""]),
-            },
-            None,
-        ),
-        None,
-    );
-    assert_eq!(
-        wake_argv(
-            &ctx(),
-            WakeRequest::FocusChanged {
-                previous: Some(1),
-                current: Some(1),
-            },
-            None,
-        ),
-        None,
-    );
+    assert_eq!(wake_argv(&no_session, WakeRequest::Changed, None), None,);
 }
 
 #[test]

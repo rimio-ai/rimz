@@ -4,8 +4,6 @@
 //! host. It stays pure and host-tested so the shell only projects Zellij
 //! events, gathers runtime telemetry, and executes these outputs.
 
-use std::collections::BTreeMap;
-
 use crate::policy::{self, PaneFields};
 
 /// The pipe message name the focus-sidebar keybind sends to this plugin. The
@@ -230,31 +228,16 @@ pub struct WakeContext<'a> {
 pub enum WakeRequest {
     Changed,
     Alive(PluginTelemetry),
-    PaneOpened {
-        pane_id: u32,
-        command: Option<String>,
-    },
-    PaneClosed {
-        pane_id: u32,
-    },
     FocusStranded {
         pane_id: u32,
         generation: u64,
         clients: Vec<policy::ClientViewEntry>,
     },
-    CommandChanged {
-        pane_id: u32,
-        args: Vec<String>,
-    },
-    FocusChanged {
-        previous: Option<u32>,
-        current: Option<u32>,
-    },
 }
 
-/// Build the `rimz sidebar wake` argv for a presence poke. `None` means the
-/// request cannot be expressed with the available context and the caller should
-/// fall back to an identity-free change signal.
+/// Build the `rimz sidebar wake` argv for a presence poke. `None` means a
+/// session-scoped request cannot be expressed with the available context, so
+/// the caller drops it.
 pub fn wake_argv(
     ctx: &WakeContext<'_>,
     request: WakeRequest,
@@ -263,11 +246,7 @@ pub fn wake_argv(
     let reason = match &request {
         WakeRequest::Changed => "panes-changed",
         WakeRequest::Alive(_) => "alive",
-        WakeRequest::PaneOpened { .. } => "pane-opened",
-        WakeRequest::PaneClosed { .. } => "pane-closed",
         WakeRequest::FocusStranded { .. } => "focus-stranded",
-        WakeRequest::CommandChanged { .. } => "command-changed",
-        WakeRequest::FocusChanged { .. } => "focus-changed",
     };
     let mut argv = vec![
         ctx.rimz_bin.unwrap_or("rimz").to_owned(),
@@ -278,6 +257,7 @@ pub fn wake_argv(
     ];
     match request {
         WakeRequest::Changed => {
+            push_session(ctx, &mut argv)?;
             push_workspace(ctx, &mut argv);
         }
         WakeRequest::Alive(telemetry) => {
@@ -315,20 +295,6 @@ pub fn wake_argv(
                 argv.push(session_name.to_owned());
             }
         }
-        WakeRequest::PaneOpened { pane_id, command } => {
-            push_session(ctx, &mut argv)?;
-            push_pane_id(&mut argv, pane_id);
-            push_workspace(ctx, &mut argv);
-            if let Some(command) = command.filter(|command| !command.is_empty()) {
-                argv.push("--command-arg".to_owned());
-                argv.push(command);
-            }
-        }
-        WakeRequest::PaneClosed { pane_id } => {
-            push_session(ctx, &mut argv)?;
-            push_pane_id(&mut argv, pane_id);
-            push_workspace(ctx, &mut argv);
-        }
         WakeRequest::FocusStranded {
             pane_id,
             generation,
@@ -341,35 +307,6 @@ pub fn wake_argv(
             argv.push("--focus-clients".to_owned());
             argv.push(serde_json::to_string(&clients).ok()?);
             push_workspace(ctx, &mut argv);
-        }
-        WakeRequest::CommandChanged { pane_id, args } => {
-            push_session(ctx, &mut argv)?;
-            push_pane_id(&mut argv, pane_id);
-            push_workspace(ctx, &mut argv);
-            let mut pushed = false;
-            for arg in args.into_iter().filter(|arg| !arg.is_empty()) {
-                argv.push("--command-arg".to_owned());
-                argv.push(arg);
-                pushed = true;
-            }
-            if !pushed {
-                return None;
-            }
-        }
-        WakeRequest::FocusChanged { previous, current } => {
-            if previous == current {
-                return None;
-            }
-            push_session(ctx, &mut argv)?;
-            push_workspace(ctx, &mut argv);
-            if let Some(previous) = previous {
-                argv.push("--unfocused-pane-id".to_owned());
-                argv.push(format!("terminal_{previous}"));
-            }
-            if let Some(current) = current {
-                argv.push("--focused-pane-id".to_owned());
-                argv.push(format!("terminal_{current}"));
-            }
         }
     }
     if let Some(topology) = topology_json.filter(|topology| topology.len() <= TOPOLOGY_MAX_BYTES) {
@@ -428,7 +365,7 @@ pub fn topology_json(
     writer: Option<policy::TopologyWriter>,
     focused_pane: Option<u32>,
     clients: Option<&policy::ClientSample>,
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    panes: &[PaneFields],
 ) -> Option<String> {
     let payload = policy::published_topology_payload(
         session_name?,
@@ -436,7 +373,7 @@ pub fn topology_json(
         writer,
         focused_pane,
         clients.cloned(),
-        tabs,
+        panes,
     )?;
     serde_json::to_string(&payload).ok()
 }

@@ -1,11 +1,10 @@
 //! Verifies the presence channel end to end at the CLI seam.
 //!
 //! The poke contract (`rimz sidebar wake`): every reason refreshes the presence
-//! stamp that flips the producer's pane TTL to event mode. Every reason but
-//! `alive` broadcasts a typed sidebar event to every fresh heartbeat — exact
-//! command/open/close events update renderer-owned overlays and never patch
-//! `snapshot.json`; a sparse poke degrades to the identity-free
-//! `PanesChanged` nudge.
+//! stamp that flips the producer's pane TTL to event mode. Announced topology
+//! snapshots are diffed against the accepted cache into typed sidebar events;
+//! `alive` snapshots update the cache silently, and a sparse announced poke
+//! degrades to the identity-free `PanesChanged` nudge.
 //!
 //! The producer contract (`rimz sidebar snapshot`): with a fresh stamp, a pane
 //! cache far past the default TTL is served without a mux roster read — the
@@ -483,6 +482,25 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
     let recv_eldest = env.bind_socket("sidebar.eldest.sock");
     env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
 
+    let baseline = env.topology_cache(unix_now_ms());
+    let baseline_json = serde_json::to_string(&baseline).expect("serialize baseline topology");
+    assert!(
+        env.wake_with(
+            "alive",
+            true,
+            &["--session-name", SESSION_NAME, "--topology", &baseline_json],
+        )
+        .status
+        .success()
+    );
+    let mut opened = baseline.clone();
+    opened.produced_at_ms += 1;
+    let mut pane = opened.panes[1].clone();
+    pane.id = 9;
+    pane.pane_command = Some("zsh".to_owned());
+    opened.panes.push(pane);
+    let opened_json = serde_json::to_string(&opened).expect("serialize opened topology");
+
     let output = env.wake_with(
         "pane-opened",
         true,
@@ -493,6 +511,8 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
             "terminal_9",
             "--command-arg",
             "zsh",
+            "--topology",
+            &opened_json,
         ],
     );
     assert!(output.status.success());
@@ -502,10 +522,21 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
     assert_eq!(event["event"]["pane_id"], "zellij:terminal_9");
     assert_eq!(event["event"]["command"], "zsh");
 
+    let mut closed = opened;
+    closed.produced_at_ms += 1;
+    closed.panes.retain(|pane| pane.id != 9);
+    let closed_json = serde_json::to_string(&closed).expect("serialize closed topology");
     let output = env.wake_with(
         "pane-closed",
         true,
-        &["--session-name", SESSION_NAME, "--pane-id", "terminal_9"],
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--pane-id",
+            "terminal_9",
+            "--topology",
+            &closed_json,
+        ],
     );
     assert!(output.status.success());
     let event = recv_sidebar_event(&recv_eldest, "eldest");
@@ -944,6 +975,27 @@ fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
     env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
     env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
 
+    let baseline = env.topology_cache(unix_now_ms());
+    let baseline_json = serde_json::to_string(&baseline).expect("serialize baseline topology");
+    assert!(
+        env.wake_with(
+            "alive",
+            true,
+            &["--session-name", SESSION_NAME, "--topology", &baseline_json],
+        )
+        .status
+        .success()
+    );
+    let mut changed = baseline;
+    changed.produced_at_ms += 1;
+    changed
+        .panes
+        .iter_mut()
+        .find(|pane| pane.id == 7)
+        .expect("working pane")
+        .pane_command = Some("codex".to_owned());
+    let changed_json = serde_json::to_string(&changed).expect("serialize changed topology");
+
     let output = env.wake_with(
         "command-changed",
         true,
@@ -954,6 +1006,8 @@ fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
             "terminal_7",
             "--command-arg",
             "codex",
+            "--topology",
+            &changed_json,
         ],
     );
     assert!(

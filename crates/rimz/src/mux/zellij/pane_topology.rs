@@ -192,7 +192,7 @@ impl PaneTopologyPane {
 
     /// A live tiled terminal pane. Command fields may still be absent for an
     /// implicit shell; the producer repairs raced-null fields when possible.
-    pub(super) fn is_live_terminal(&self) -> bool {
+    pub(crate) fn is_live_terminal(&self) -> bool {
         self.is_listed_pane() && !self.is_floating
     }
 

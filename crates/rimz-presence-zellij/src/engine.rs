@@ -123,204 +123,306 @@ enum PanePid {
     Known(u32),
 }
 
-#[derive(Debug, Default)]
-struct PaneRuntime {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct PaneKey {
+    is_plugin: bool,
+    id: u32,
+}
+
+impl From<ProjectedPaneId> for PaneKey {
+    fn from(pane: ProjectedPaneId) -> Self {
+        match pane {
+            ProjectedPaneId::Terminal(id) => Self {
+                is_plugin: false,
+                id,
+            },
+            ProjectedPaneId::Plugin(id) => Self {
+                is_plugin: true,
+                id,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PaneState {
+    tab: Option<usize>,
+    is_suppressed: bool,
+    is_floating: bool,
+    exited: bool,
+    is_held: bool,
+    tab_name: Option<String>,
+    pane_x: Option<u64>,
+    pane_columns: Option<u64>,
+    title: String,
     foreground: Option<String>,
     shell: Option<String>,
     cwd: Option<String>,
     pid: PanePid,
+    terminal_command: Option<String>,
 }
 
 #[derive(Debug, Default)]
 struct RoomState {
-    tabs: BTreeMap<usize, Vec<PaneFields>>,
-    runtime: BTreeMap<u32, PaneRuntime>,
+    panes: BTreeMap<PaneKey, PaneState>,
+    manifest_applied: bool,
 }
 
 impl RoomState {
-    fn tabs(&self) -> &BTreeMap<usize, Vec<PaneFields>> {
-        &self.tabs
+    fn has_manifest(&self) -> bool {
+        self.manifest_applied
     }
 
-    fn is_empty(&self) -> bool {
-        self.tabs.is_empty()
-    }
-
-    fn manifest_hash(&self) -> u64 {
-        policy::manifest_hash(&self.tabs)
-    }
-
-    fn merge_manifest(
+    fn apply_manifest(
         &mut self,
         projected: BTreeMap<usize, Vec<PaneFields>>,
         host: &impl Host,
-    ) -> Vec<PaneFields> {
-        let mut next = policy::merged_room(&self.tabs, &projected);
-        self.prune_runtime(&next);
-        self.probe_missing_pids_in(&next, host);
-        Self::apply_enrichment(&self.runtime, &mut next);
-        let opened = policy::opened_card_panes(&self.tabs, &next);
-        self.tabs = next;
-        opened
+    ) -> bool {
+        let before = self.panes.clone();
+        self.manifest_applied = true;
+        for (tab, panes) in projected {
+            if panes.is_empty() {
+                continue;
+            }
+            let reported = panes
+                .iter()
+                .map(|pane| PaneKey {
+                    is_plugin: pane.is_plugin,
+                    id: pane.id,
+                })
+                .collect::<BTreeSet<_>>();
+            self.panes
+                .retain(|key, state| state.tab != Some(tab) || reported.contains(key));
+            for pane in panes {
+                let key = PaneKey {
+                    is_plugin: pane.is_plugin,
+                    id: pane.id,
+                };
+                match self.panes.get_mut(&key) {
+                    Some(state) => state.apply_manifest(tab, pane),
+                    None => {
+                        self.panes.insert(key, PaneState::from_manifest(tab, pane));
+                    }
+                }
+            }
+        }
+        self.probe_missing_pids(host);
+        self.panes != before
     }
 
     fn probe_missing_pids(&mut self, host: &impl Host) {
         let live = self
-            .tabs
-            .values()
-            .flatten()
-            .filter(|pane| pane.is_live_terminal())
-            .map(|pane| pane.id)
+            .panes
+            .iter()
+            .filter(|(key, state)| state.is_live_terminal(**key))
+            .map(|(key, _)| key.id)
             .collect::<Vec<_>>();
-        self.probe_ids(live, host);
-        Self::apply_enrichment(&self.runtime, &mut self.tabs);
-    }
-
-    fn probe_missing_pids_in(&mut self, tabs: &BTreeMap<usize, Vec<PaneFields>>, host: &impl Host) {
-        let live = tabs
-            .values()
-            .flatten()
-            .filter(|pane| pane.is_live_terminal())
-            .map(|pane| pane.id)
-            .collect::<Vec<_>>();
-        self.probe_ids(live, host);
-    }
-
-    fn probe_ids(&mut self, ids: Vec<u32>, host: &impl Host) {
-        for id in ids {
-            let runtime = self.runtime.entry(id).or_default();
-            if runtime.pid == PanePid::Unprobed {
-                runtime.pid = host.pane_pid(id).map_or(PanePid::Missing, PanePid::Known);
+        for id in live {
+            let key = PaneKey {
+                is_plugin: false,
+                id,
+            };
+            if let Some(state) = self.panes.get_mut(&key)
+                && state.pid == PanePid::Unprobed
+            {
+                state.pid = host.pane_pid(id).map_or(PanePid::Missing, PanePid::Known);
             }
         }
     }
 
-    fn prune_runtime(&mut self, tabs: &BTreeMap<usize, Vec<PaneFields>>) {
-        let pane_ids = tabs
-            .values()
-            .flatten()
-            .filter(|pane| !pane.is_plugin)
-            .map(|pane| pane.id)
-            .collect::<BTreeSet<_>>();
-        self.runtime.retain(|id, _| pane_ids.contains(id));
-    }
-
-    fn apply_enrichment(
-        runtime: &BTreeMap<u32, PaneRuntime>,
-        tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
-    ) {
-        for pane in tabs.values_mut().flatten().filter(|pane| !pane.is_plugin) {
-            let pane_runtime = runtime.get(&pane.id);
-            pane.pane_command = pane_runtime
-                .and_then(|state| state.foreground.as_ref().or(state.shell.as_ref()))
-                .cloned();
-            pane.pane_cwd = pane_runtime.and_then(|state| state.cwd.clone());
-            pane.pane_pid = pane_runtime.and_then(|state| match state.pid {
-                PanePid::Known(pid) => Some(pid),
-                PanePid::Unprobed | PanePid::Missing => None,
-            });
+    fn update_foreground(&mut self, pane: ProjectedPaneId, command: Option<String>) -> bool {
+        let ProjectedPaneId::Terminal(id) = pane else {
+            return false;
+        };
+        let state = self
+            .panes
+            .entry(PaneKey::terminal(id))
+            .or_insert_with(PaneState::pending);
+        if state.foreground == command {
+            return false;
         }
+        state.foreground = command;
+        true
     }
 
-    fn update_foreground(&mut self, pane: ProjectedPaneId, command: Option<String>) {
+    fn update_shell(&mut self, pane: ProjectedPaneId, command: String) -> bool {
         let ProjectedPaneId::Terminal(id) = pane else {
-            return;
+            return false;
         };
-        self.runtime.entry(id).or_default().foreground = command;
-        self.apply_runtime_to_pane(id);
-    }
-
-    fn update_shell(&mut self, pane: ProjectedPaneId, command: String) {
-        let ProjectedPaneId::Terminal(id) = pane else {
-            return;
-        };
-        let runtime = self.runtime.entry(id).or_default();
-        runtime.foreground = None;
-        runtime.shell = Some(command);
-        self.apply_runtime_to_pane(id);
+        let state = self
+            .panes
+            .entry(PaneKey::terminal(id))
+            .or_insert_with(PaneState::pending);
+        if state.foreground.is_none() && state.shell.as_deref() == Some(&command) {
+            return false;
+        }
+        state.foreground = None;
+        state.shell = Some(command);
+        true
     }
 
     fn update_cwd(&mut self, pane: ProjectedPaneId, cwd: Option<String>) -> bool {
         let ProjectedPaneId::Terminal(id) = pane else {
             return false;
         };
-        let runtime = self.runtime.entry(id).or_default();
-        if runtime.cwd == cwd {
+        let state = self
+            .panes
+            .entry(PaneKey::terminal(id))
+            .or_insert_with(PaneState::pending);
+        if state.cwd == cwd {
             return false;
         }
-        runtime.cwd = cwd;
-        self.apply_runtime_to_pane(id);
+        state.cwd = cwd;
         true
     }
 
-    fn apply_runtime_to_pane(&mut self, id: u32) {
-        let Some(runtime) = self.runtime.get(&id) else {
-            return;
-        };
-        let pane_command = runtime
-            .foreground
-            .as_ref()
-            .or(runtime.shell.as_ref())
-            .cloned();
-        let pane_cwd = runtime.cwd.clone();
-        let pane_pid = match runtime.pid {
-            PanePid::Known(pid) => Some(pid),
-            PanePid::Unprobed | PanePid::Missing => None,
-        };
-        if let Some((_, pane)) = self.pane_location_mut(id) {
-            pane.pane_command = pane_command;
-            pane.pane_cwd = pane_cwd;
-            pane.pane_pid = pane_pid;
-        }
+    fn close_pane(&mut self, pane: ProjectedPaneId) -> bool {
+        self.panes.remove(&pane.into()).is_some()
     }
 
-    fn close_pane(&mut self, pane: ProjectedPaneId) {
-        let (is_plugin, id) = match pane {
-            ProjectedPaneId::Terminal(id) => (false, id),
-            ProjectedPaneId::Plugin(id) => (true, id),
-        };
-        for panes in self.tabs.values_mut() {
-            panes.retain(|pane| pane.is_plugin != is_plugin || pane.id != id);
-        }
-        self.tabs.retain(|_, panes| !panes.is_empty());
-        if !is_plugin {
-            self.runtime.remove(&id);
-        }
+    fn pane_location(&self, id: u32) -> Option<(usize, &PaneState)> {
+        self.panes
+            .get(&PaneKey::terminal(id))
+            .and_then(|pane| pane.tab.map(|tab| (tab, pane)))
     }
 
-    fn pane_location(&self, id: u32) -> Option<(usize, &PaneFields)> {
-        self.tabs.iter().find_map(|(tab, panes)| {
-            panes
-                .iter()
-                .find(|pane| !pane.is_plugin && pane.id == id)
-                .map(|pane| (*tab, pane))
+    fn live_terminal(&self, id: u32) -> Option<&PaneState> {
+        self.pane_location(id).map(|(_, pane)| pane).filter(|pane| {
+            pane.is_live_terminal(PaneKey {
+                is_plugin: false,
+                id,
+            })
         })
-    }
-
-    fn pane_location_mut(&mut self, id: u32) -> Option<(usize, &mut PaneFields)> {
-        self.tabs.iter_mut().find_map(|(tab, panes)| {
-            panes
-                .iter_mut()
-                .find(|pane| !pane.is_plugin && pane.id == id)
-                .map(|pane| (*tab, pane))
-        })
-    }
-
-    fn live_terminal(&self, id: u32) -> Option<&PaneFields> {
-        self.pane_location(id)
-            .map(|(_, pane)| pane)
-            .filter(|pane| pane.is_live_terminal())
     }
 
     fn repair_owner(&self, tab: usize) -> Option<u32> {
-        let panes = self.tabs.get(&tab)?;
-        let sidebars = panes
+        let sidebars = self
+            .panes
             .iter()
-            .filter(|pane| pane.is_sidebar())
-            .map(|pane| pane.id)
+            .filter(|(key, pane)| pane.tab == Some(tab) && pane.is_sidebar(**key))
+            .map(|(key, _)| key.id)
             .collect::<Vec<_>>();
-        let has_work = panes.iter().any(PaneFields::is_card_pane);
+        let has_work = self
+            .panes
+            .iter()
+            .any(|(key, pane)| pane.tab == Some(tab) && pane.is_card_pane(*key));
         matches!(sidebars.as_slice(), [sidebar] if has_work).then(|| sidebars[0])
+    }
+
+    fn published_panes(&self) -> Vec<PaneFields> {
+        let mut panes = self
+            .panes
+            .iter()
+            .filter_map(|(key, state)| state.tab.map(|tab| (tab, key, state)))
+            .collect::<Vec<_>>();
+        panes.sort_unstable_by_key(|(tab, key, _)| (*tab, **key));
+        panes
+            .into_iter()
+            .map(|(tab, key, state)| state.published(*key, tab))
+            .collect()
+    }
+}
+
+impl PaneKey {
+    fn terminal(id: u32) -> Self {
+        Self {
+            is_plugin: false,
+            id,
+        }
+    }
+}
+
+impl PaneState {
+    fn from_manifest(tab: usize, pane: PaneFields) -> Self {
+        let pid = pane.pane_pid.map_or(PanePid::Unprobed, PanePid::Known);
+        Self {
+            tab: Some(tab),
+            is_suppressed: pane.is_suppressed,
+            is_floating: pane.is_floating,
+            exited: pane.exited,
+            is_held: pane.is_held,
+            tab_name: pane.tab_name,
+            pane_x: pane.pane_x,
+            pane_columns: pane.pane_columns,
+            title: pane.title,
+            foreground: pane.pane_command,
+            shell: None,
+            cwd: pane.pane_cwd,
+            pid,
+            terminal_command: pane.terminal_command,
+        }
+    }
+
+    fn pending() -> Self {
+        Self {
+            tab: None,
+            is_suppressed: false,
+            is_floating: false,
+            exited: false,
+            is_held: false,
+            tab_name: None,
+            pane_x: None,
+            pane_columns: None,
+            title: String::new(),
+            foreground: None,
+            shell: None,
+            cwd: None,
+            pid: PanePid::Unprobed,
+            terminal_command: None,
+        }
+    }
+
+    fn apply_manifest(&mut self, tab: usize, pane: PaneFields) {
+        self.tab = Some(tab);
+        self.is_suppressed = pane.is_suppressed;
+        self.is_floating = pane.is_floating;
+        self.exited = pane.exited;
+        self.is_held = pane.is_held;
+        self.tab_name = pane.tab_name;
+        self.pane_x = pane.pane_x;
+        self.pane_columns = pane.pane_columns;
+        self.title = pane.title;
+        self.terminal_command = pane.terminal_command;
+    }
+
+    fn is_live_terminal(&self, key: PaneKey) -> bool {
+        self.tab.is_some()
+            && !key.is_plugin
+            && !self.is_suppressed
+            && !self.is_floating
+            && !self.exited
+            && !self.is_held
+    }
+
+    fn is_sidebar(&self, key: PaneKey) -> bool {
+        self.is_live_terminal(key) && self.title == policy::SIDEBAR_PANE_TITLE
+    }
+
+    fn is_card_pane(&self, key: PaneKey) -> bool {
+        self.is_live_terminal(key) && !self.is_sidebar(key)
+    }
+
+    fn published(&self, key: PaneKey, tab: usize) -> PaneFields {
+        PaneFields {
+            id: key.id,
+            is_plugin: key.is_plugin,
+            is_suppressed: self.is_suppressed,
+            is_floating: self.is_floating,
+            exited: self.exited,
+            is_held: self.is_held,
+            tab_position: tab as u64,
+            tab_name: self.tab_name.clone(),
+            pane_x: self.pane_x,
+            pane_columns: self.pane_columns,
+            title: self.title.clone(),
+            pane_command: self.foreground.as_ref().or(self.shell.as_ref()).cloned(),
+            pane_cwd: self.cwd.clone(),
+            pane_pid: match self.pid {
+                PanePid::Known(pid) => Some(pid),
+                PanePid::Unprobed | PanePid::Missing => None,
+            },
+            terminal_command: self.terminal_command.clone(),
+        }
     }
 }
 
@@ -574,13 +676,31 @@ fn classify_switch_observation(
         ClientObservation::Ambiguous => SwitchObservation::Abstain,
         ClientObservation::Unique(ProjectedPaneId::Plugin(_)) => SwitchObservation::Repairable,
         ClientObservation::Unique(ProjectedPaneId::Terminal(id)) => match room.pane_location(id) {
-            Some((pane_tab, pane)) if pane_tab == tab && pane.is_card_pane() => {
+            Some((pane_tab, pane))
+                if pane_tab == tab
+                    && pane.is_card_pane(PaneKey {
+                        is_plugin: false,
+                        id,
+                    }) =>
+            {
                 SwitchObservation::Work(id)
             }
-            Some((pane_tab, pane)) if pane_tab != tab && pane.is_live_terminal() => {
+            Some((pane_tab, pane))
+                if pane_tab != tab
+                    && pane.is_live_terminal(PaneKey {
+                        is_plugin: false,
+                        id,
+                    }) =>
+            {
                 SwitchObservation::Repairable
             }
-            Some((pane_tab, pane)) if pane_tab == tab && pane.is_sidebar() => {
+            Some((pane_tab, pane))
+                if pane_tab == tab
+                    && pane.is_sidebar(PaneKey {
+                        is_plugin: false,
+                        id,
+                    }) =>
+            {
                 SwitchObservation::Repairable
             }
             Some(_) | None => SwitchObservation::Pending,
@@ -711,34 +831,14 @@ impl Engine {
         // changes. The raw focus bit is deliberately absent from the topology
         // hash; refresh attached-client truth even when the roster is stable.
         self.focus.request_general_observation();
-        let stable_unchanged = self.last_raw_stable_hash == Some(raw_hash) && !self.room.is_empty();
+        let stable_unchanged =
+            self.last_raw_stable_hash == Some(raw_hash) && self.room.has_manifest();
         self.last_raw_stable_hash = Some(raw_hash);
         if !stable_unchanged {
             let projected = project(&self.tab_names);
-            let opened = self.room.merge_manifest(projected, host);
-            // Poke every opened pane — `fold`, not `any`, so a manifest carrying
-            // two new panes emits both card-create events.
-            let emitted_open = opened.iter().fold(false, |emitted, pane| {
-                let command = pane
-                    .pane_command
-                    .as_ref()
-                    .or(pane.terminal_command.as_ref())
-                    .filter(|command| !command.is_empty())
-                    .cloned();
-                self.run_wake(
-                    wire::WakeRequest::PaneOpened {
-                        pane_id: pane.id,
-                        command,
-                    },
-                    now,
-                    &mut effects,
-                ) || emitted
-            });
-            if emitted_open {
-                let hash = self.room.manifest_hash();
-                self.policy.accept_manifest(hash);
-            } else {
-                self.fold(now);
+            let baseline = !self.room.has_manifest();
+            if self.room.apply_manifest(projected, host) && !baseline {
+                self.signal_change(now);
             }
         }
         self.finish_update(now, host, effects)
@@ -772,38 +872,18 @@ impl Engine {
         if self.retired {
             return Vec::new();
         }
-        let mut effects = Vec::new();
-        match policy::foreground_command_update(&command, is_foreground) {
+        let effects = Vec::new();
+        let changed = match policy::foreground_command_update(&command, is_foreground) {
             ForegroundCommandUpdate::Remember(command_text) => {
-                self.room.update_foreground(pane, Some(command_text));
-                if let Some(id) = self.optimistic_command_poke_pane(pane, now)
-                    && self.run_wake(
-                        wire::WakeRequest::CommandChanged {
-                            pane_id: id,
-                            args: command,
-                        },
-                        now,
-                        &mut effects,
-                    )
-                {
-                    let hash = self.room.manifest_hash();
-                    self.policy.accept_manifest(hash);
-                    self.policy.accept_optimistic_pane_poke(id, now);
-                } else {
-                    self.signal_change(now);
-                }
+                self.room.update_foreground(pane, Some(command_text))
             }
             ForegroundCommandUpdate::Shell(command_text) => {
-                let ProjectedPaneId::Terminal(_) = pane else {
-                    return self.finish_update(now, host, effects);
-                };
-                self.room.update_shell(pane, command_text);
-                self.signal_change(now);
+                self.room.update_shell(pane, command_text)
             }
-            ForegroundCommandUpdate::Forget => {
-                self.room.update_foreground(pane, None);
-                self.signal_change(now);
-            }
+            ForegroundCommandUpdate::Forget => self.room.update_foreground(pane, None),
+        };
+        if changed {
+            self.signal_change(now);
         }
         self.finish_update(now, host, effects)
     }
@@ -839,22 +919,13 @@ impl Engine {
         }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
-        let closed_terminal = match pane {
-            ProjectedPaneId::Terminal(id) => Some(id),
-            ProjectedPaneId::Plugin(_) => None,
-        };
-        self.room.close_pane(pane);
+        let changed = self.room.close_pane(pane);
         self.focus.close_pane(pane);
-        if let ProjectedPaneId::Terminal(id) = pane {
-            self.policy.forget_pane(id);
-        }
-        if !closed_terminal.is_some_and(|pane_id| {
-            self.run_wake(wire::WakeRequest::PaneClosed { pane_id }, now, &mut effects)
-        }) {
+        if changed {
+            // A close followed by same-shaped pane ID reuse has the same raw hash;
+            // force the replacement manifest through the canonical reducer.
+            self.last_raw_stable_hash = None;
             self.signal_change(now);
-        } else {
-            let hash = self.room.manifest_hash();
-            self.policy.accept_manifest(hash);
         }
         self.finish_update(now, host, effects)
     }
@@ -893,11 +964,29 @@ impl Engine {
         }
         let mut effects = Vec::new();
         let update = self.focus.accept_client_sample(&self.room, clients, now);
-        let emitted_focus = update
-            .outcome
-            .is_some_and(|outcome| self.emit_focus_outcome(outcome, now, &mut effects));
-        if update.sample_changed && !emitted_focus {
-            self.run_wake(wire::WakeRequest::Changed, now, &mut effects);
+        let mut changed = update.sample_changed;
+        if let Some(outcome) = update.outcome {
+            match outcome {
+                FocusOutcome::Transition { .. } => changed = true,
+                FocusOutcome::Stranded {
+                    pane_id,
+                    generation,
+                    clients,
+                } => {
+                    self.run_wake(
+                        wire::WakeRequest::FocusStranded {
+                            pane_id,
+                            generation,
+                            clients,
+                        },
+                        now,
+                        &mut effects,
+                    );
+                }
+            }
+        }
+        if changed {
+            self.signal_change(now);
         }
         self.finish_update(now, host, effects)
     }
@@ -1050,35 +1139,6 @@ impl Engine {
         }
     }
 
-    /// Fold the current projected shape into the policy.
-    fn fold(&mut self, now: u64) {
-        let hash = self.room.manifest_hash();
-        self.policy.on_manifest(hash, now);
-    }
-
-    fn emit_focus_outcome(
-        &self,
-        outcome: FocusOutcome,
-        now: u64,
-        effects: &mut Vec<Effect>,
-    ) -> bool {
-        let request = match outcome {
-            FocusOutcome::Transition { previous, current } => {
-                wire::WakeRequest::FocusChanged { previous, current }
-            }
-            FocusOutcome::Stranded {
-                pane_id,
-                generation,
-                clients,
-            } => wire::WakeRequest::FocusStranded {
-                pane_id,
-                generation,
-                clients,
-            },
-        };
-        self.run_wake(request, now, effects)
-    }
-
     fn dispatch_due(&mut self, now: u64, host: &impl Host, effects: &mut Vec<Effect>) {
         for poke in self.policy.due(now) {
             if poke == Poke::Alive {
@@ -1144,13 +1204,14 @@ impl Engine {
             build: self.plugin_build.clone(),
             config: self.plugin_config.clone(),
         });
+        let panes = self.room.published_panes();
         let topology = wire::topology_json(
             self.session_name.as_deref(),
             now,
             writer,
             self.focus.session_focus(),
             self.focus.client_sample(),
-            self.room.tabs(),
+            &panes,
         );
         let Some(argv) = wire::wake_argv(&self.wake_context(), request, topology.as_deref()) else {
             return false;
@@ -1189,15 +1250,6 @@ impl Engine {
         effects.push(Effect::RunCommand(wire::focus_sidebar_argv(
             &self.wake_context(),
         )));
-    }
-
-    fn optimistic_command_poke_pane(&self, pane_id: ProjectedPaneId, now: u64) -> Option<u32> {
-        let ProjectedPaneId::Terminal(id) = pane_id else {
-            return None;
-        };
-        self.policy
-            .optimistic_pane_poke_allowed(id, now)
-            .then_some(id)
     }
 }
 

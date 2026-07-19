@@ -1,10 +1,9 @@
-//! The plugin's pure decision core: the stable-field manifest hash, poke
-//! policy and foreground overlay. Time is injected
+//! The plugin's pure decision core: the raw stable-field hash, poke policy,
+//! and foreground overlay. Time is injected
 //! as Unix milliseconds and no `zellij-tile` type appears, so this module
 //! compiles and unit-tests on the host target; `main.rs` is the thin wasm shell
 //! that projects Zellij events into it.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
@@ -32,11 +31,11 @@ pub const KEEPALIVE_MS: u64 = 60_000;
 /// Pane title the Zellij layouts assign to RimZ's native sidebar.
 pub const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 
-/// The pane fields the plugin projects. The manifest hash folds only the stable
-/// subset whose change means the sidebar should refetch panes. `title` and
-/// `pane_command` are carried for topology publication but
-/// deliberately excluded from the hash: agents mutate titles per output line,
-/// and foreground command changes already publish through `CommandChanged`.
+/// The pane fields the plugin projects. The raw manifest hash folds only the
+/// stable subset whose change means the reducer should run. `title` and
+/// `pane_command` are carried for topology publication but excluded from the
+/// hash because agents mutate titles per output line and command events patch
+/// the canonical room directly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneFields {
     pub id: u32,
@@ -64,9 +63,8 @@ pub struct PaneFields {
 }
 
 /// Stable pane fields folded before the wasm shell allocates projected
-/// [`PaneFields`]. This mirrors [`manifest_hash`]'s per-pane field set:
-/// title and foreground `pane_command` stay out because they churn without
-/// changing the sidebar roster.
+/// [`PaneFields`]. Title and foreground `pane_command` stay out because they
+/// churn without changing the sidebar roster.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct RawStablePaneFields<'a> {
     pub id: u32,
@@ -82,6 +80,7 @@ pub struct RawStablePaneFields<'a> {
     pub terminal_command: Option<&'a str>,
 }
 
+#[cfg(test)]
 impl<'a> RawStablePaneFields<'a> {
     fn from_projected(pane: &'a PaneFields) -> Self {
         Self {
@@ -149,9 +148,9 @@ pub fn published_topology_payload(
     writer: Option<TopologyWriter>,
     focused_pane: Option<u32>,
     clients: Option<ClientSample>,
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    panes: &[PaneFields],
 ) -> Option<TopologyPayload> {
-    if tabs.is_empty() {
+    if panes.is_empty() {
         return None;
     }
     Some(TopologyPayload {
@@ -160,7 +159,7 @@ pub fn published_topology_payload(
         writer,
         focused_pane,
         clients,
-        panes: tabs.values().flatten().cloned().collect(),
+        panes: panes.to_vec(),
     })
 }
 
@@ -198,21 +197,6 @@ impl PaneFields {
     }
 }
 
-/// Fold the projected manifest into one stable hash. The `BTreeMap` keying by
-/// tab position makes iteration order deterministic regardless of the host
-/// map's order; callers sort each tab's panes by id before inserting. The
-/// active tab is deliberately excluded: tab switches are navigation, while the
-/// sidebar's row roster and selection baseline change only when the per-pane
-/// fields change. The value only ever compares against the previous hash in
-/// this process, so no cross-version stability is needed.
-pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>) -> u64 {
-    raw_stable_hash(tabs.iter().flat_map(|(tab, panes)| {
-        panes
-            .iter()
-            .map(move |pane| (*tab, RawStablePaneFields::from_projected(pane)))
-    }))
-}
-
 /// Fold raw stable pane fields without allocating projected [`PaneFields`].
 /// The caller may feed raw host order; an order-only difference costs one full
 /// fold, while a title-only event stays cheap because title is absent from
@@ -227,104 +211,6 @@ where
         pane.hash(&mut hasher);
     }
     hasher.finish()
-}
-
-/// The card panes `next` holds that `previous` does not — the genuinely new
-/// panes a manifest reports, each worth one card-create poke. The first
-/// manifest after plugin load has no `previous` and names every pre-existing
-/// pane; those are not opens — the producer's pull already covers the room —
-/// so an empty `previous` reports nothing.
-pub fn opened_card_panes(
-    previous: &BTreeMap<usize, Vec<PaneFields>>,
-    next: &BTreeMap<usize, Vec<PaneFields>>,
-) -> Vec<PaneFields> {
-    if previous.is_empty() {
-        return Vec::new();
-    }
-    let mut opened = Vec::new();
-    for panes in next.values() {
-        for pane in panes {
-            if pane.is_card_pane()
-                && !previous
-                    .values()
-                    .flatten()
-                    .any(|old| old.id == pane.id && old.is_plugin == pane.is_plugin)
-            {
-                opened.push(pane.clone());
-            }
-        }
-    }
-    opened
-}
-
-/// Merge a Zellij pane manifest without letting a partial `PaneUpdate` churn
-/// the detection map. Zellij can deliver a manifest that carries only part of
-/// the room — a tab omitted entirely, or carried with an empty pane list on its
-/// ~60s serialization blip — so carried non-empty tabs overwrite exactly while
-/// both an absent tab and a present-but-empty one retain what they last held
-/// until `PaneClosed` removes their panes. The first manifest after plugin load
-/// is the baseline; a partial first manifest self-heals on the next manifest
-/// that carries the omitted tabs. Publication uses this merged room, so partial
-/// `PaneUpdate` bursts neither shrink the topology cache nor emit spurious
-/// `panes-changed` pokes.
-///
-/// Retention is bounded by one-tab-per-pane: a pane id is unique across the
-/// session, so a copy left in a tab Zellij renumbered or dropped without a
-/// `PaneClosed` is stale and is evicted once the pane is reported fresh
-/// elsewhere — without this a moved/renumbered tab leaks the same pane into
-/// several tab positions forever.
-pub fn merged_room(
-    previous: &BTreeMap<usize, Vec<PaneFields>>,
-    next: &BTreeMap<usize, Vec<PaneFields>>,
-) -> BTreeMap<usize, Vec<PaneFields>> {
-    if previous.is_empty() {
-        return next
-            .iter()
-            .filter(|(_, panes)| !panes.is_empty())
-            .map(|(tab, panes)| (*tab, panes.clone()))
-            .collect();
-    }
-    let mut merged = previous.clone();
-    for (tab, panes) in next {
-        // An empty pane vector is a serialization artifact, never a real empty
-        // tab: a live tab always holds at least one pane, and a tab's panes
-        // leave through `PaneClosed`. Treat it like an omitted tab — retain what
-        // the tab last held — so a transiently-partial manifest cannot collapse
-        // an idle tab out of the published room.
-        if panes.is_empty() {
-            continue;
-        }
-        merged.insert(*tab, panes.clone());
-    }
-    enforce_one_tab_per_pane(&mut merged, next);
-    merged
-}
-
-/// Drop every duplicate of a pane so each `(is_plugin, id)` lives under one tab.
-/// The fresh manifest is authoritative for where a pane lives, so a copy in any
-/// other tab is evicted; a residual duplicate among retained-only tabs keeps its
-/// lowest-positioned occurrence. Tabs emptied by eviction are removed.
-fn enforce_one_tab_per_pane(
-    room: &mut BTreeMap<usize, Vec<PaneFields>>,
-    authoritative: &BTreeMap<usize, Vec<PaneFields>>,
-) {
-    let mut home = BTreeMap::new();
-    for (tab, panes) in authoritative {
-        for pane in panes {
-            home.insert((pane.is_plugin, pane.id), *tab);
-        }
-    }
-    let mut kept = BTreeSet::new();
-    for (tab, panes) in room.iter_mut() {
-        panes.retain(|pane| {
-            let key = (pane.is_plugin, pane.id);
-            match home.get(&key) {
-                Some(fresh_tab) => fresh_tab == tab,
-                None => kept.insert(key),
-            }
-        });
-    }
-    room.retain(|_, panes| !panes.is_empty());
 }
 
 pub fn joined_foreground_command(command: &[String]) -> Option<String> {
@@ -359,12 +245,6 @@ pub fn foreground_command_update(
     }
 }
 
-pub fn is_card_pane_id(tabs: &BTreeMap<usize, Vec<PaneFields>>, pane_id: u32) -> bool {
-    tabs.values()
-        .flatten()
-        .any(|pane| pane.id == pane_id && pane.is_card_pane())
-}
-
 /// What the shell should do now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Poke {
@@ -374,14 +254,12 @@ pub enum Poke {
     Alive,
 }
 
-/// The poke-policy state machine. The shell feeds it manifest hashes and
+/// The poke-policy state machine. The shell feeds it room-change signals and
 /// clock readings; it answers "which pokes are due" and "when to wake next".
 /// Spurious wake-ups are harmless — [`PokePolicy::due`] is idempotent between
 /// deadline crossings — so the shell may consult it on every event.
 #[derive(Debug)]
 pub struct PokePolicy {
-    last_hash: Option<u64>,
-    last_optimistic_poke_by_pane: BTreeMap<u32, u64>,
     /// First change of the current duplicate burst. The first change pokes
     /// immediately; a later change inside [`POKE_FLOOR_MS`] is held until the
     /// floor lifts and then pokes once for the burst.
@@ -396,8 +274,6 @@ pub struct PokePolicy {
 impl PokePolicy {
     pub fn new(now_ms: u64) -> Self {
         Self {
-            last_hash: None,
-            last_optimistic_poke_by_pane: BTreeMap::new(),
             pending_since: None,
             last_changed_poke: None,
             settle_due_at: None,
@@ -405,61 +281,10 @@ impl PokePolicy {
         }
     }
 
-    /// Fold a manifest observation. The first manifest after load is the
-    /// baseline — the room did not change, the plugin just learned it — so it
-    /// arms nothing.
-    pub fn on_manifest(&mut self, hash: u64, now_ms: u64) {
-        if self.last_hash == Some(hash) {
-            return;
-        }
-        let baseline = self.last_hash.is_none();
-        self.last_hash = Some(hash);
-        if baseline {
-            return;
-        }
-        self.queue_change(now_ms);
-    }
-
-    /// Accept a manifest observation without queuing a producer poke. Used after
-    /// an optimistic direct event already reached the renderer.
-    pub fn accept_manifest(&mut self, hash: u64) {
-        self.last_hash = Some(hash);
-    }
-
     /// Fold an explicit host signal that means the live pane frame should be
     /// refreshed even when no full manifest accompanies it.
     pub fn on_signal(&mut self, now_ms: u64) {
         self.queue_change(now_ms);
-    }
-
-    /// Fold an optimistic change that already published a command patch through
-    /// the host CLI. It skips the immediate `panes-changed` poke and arms only
-    /// the settled read that verifies the patch against Zellij's pane list.
-    pub fn on_optimistic_signal(&mut self, now_ms: u64) {
-        self.pending_since = None;
-        self.last_changed_poke = Some(now_ms);
-        self.settle_due_at = Some(now_ms + SETTLE_POKE_MS);
-    }
-
-    /// Whether a same-pane optimistic command patch may fork the host now.
-    /// Repeated command churn for one pane uses the normal floored change path;
-    /// distinct panes keep their own fast lane so a burst in one pane does not
-    /// hide another pane's first foreground change.
-    pub fn optimistic_pane_poke_allowed(&self, pane_id: u32, now_ms: u64) -> bool {
-        self.last_optimistic_poke_by_pane
-            .get(&pane_id)
-            .is_none_or(|last| now_ms >= last.saturating_add(POKE_FLOOR_MS))
-    }
-
-    /// Record an emitted same-pane optimistic command patch and arm its settled
-    /// verification read.
-    pub fn accept_optimistic_pane_poke(&mut self, pane_id: u32, now_ms: u64) {
-        self.last_optimistic_poke_by_pane.insert(pane_id, now_ms);
-        self.on_optimistic_signal(now_ms);
-    }
-
-    pub fn forget_pane(&mut self, pane_id: u32) {
-        self.last_optimistic_poke_by_pane.remove(&pane_id);
     }
 
     fn queue_change(&mut self, now_ms: u64) {

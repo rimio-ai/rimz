@@ -23,6 +23,10 @@ use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, StatePaths};
 
+mod diff;
+
+use diff::derive_sidebar_events;
+
 const TOPOLOGY_CONFLICT_DIAG_MS: u64 = 60_000;
 /// Private `rimz sidebar wake` status consumed by the Zellij plugin. Three
 /// consecutive publishes rejected with this code retire the losing writer.
@@ -30,13 +34,9 @@ pub const STALE_WRITER_EXIT_CODE: i32 = 73;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZellijWakeReason {
-    PanesChanged,
-    PaneOpened,
-    PaneClosed,
-    FocusStranded,
-    CommandChanged,
-    FocusChanged,
+    Announced,
     Alive,
+    FocusStranded,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,9 +62,6 @@ pub struct ZellijWake {
     pub pane_id: Option<PaneId>,
     pub focus_generation: Option<u64>,
     pub focus_clients: Vec<crate::mux::ClientPaneView>,
-    pub command: Option<String>,
-    pub focused_pane_ids: Vec<PaneId>,
-    pub unfocused_pane_ids: Vec<PaneId>,
     pub topology: Option<PaneTopologyCache>,
     pub telemetry: Option<ZellijPluginTelemetry>,
 }
@@ -72,7 +69,7 @@ pub struct ZellijWake {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZellijWakeOutcome {
     RejectedStaleWriter,
-    Accepted(Option<SidebarEvent>),
+    Accepted(Vec<SidebarEvent>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,6 +94,7 @@ pub fn ingest_zellij_wake(
     runtime: &RuntimePaths,
     wake: &ZellijWake,
 ) -> Result<ZellijWakeOutcome, ZellijWakeError> {
+    let mut events = Vec::new();
     if let Some(incoming) = wake.topology.as_ref() {
         let _guard = crate::store::lock::WorkspaceLock::acquire_with_timeout(
             &runtime.topology_writer_lock(),
@@ -119,6 +117,11 @@ pub fn ingest_zellij_wake(
             .is_none_or(|existing| incoming.writer != existing.writer);
         let mut cache = incoming.clone();
         sanitize_topology_cache(&mut cache);
+        events = derive_sidebar_events(
+            existing.as_ref(),
+            &cache,
+            wake.reason == ZellijWakeReason::Announced,
+        );
         write_pane_topology_cache(runtime, &cache).map_err(ZellijWakeError::TopologyWrite)?;
         if let Some(existing) = existing.as_ref()
             && incoming.writer != existing.writer
@@ -139,7 +142,19 @@ pub fn ingest_zellij_wake(
     if let Some(telemetry) = wake.telemetry.as_ref() {
         write_plugin_presence_sample(state, wake.session_name.clone(), telemetry);
     }
-    Ok(ZellijWakeOutcome::Accepted(wake_event(wake)))
+    if wake.topology.is_none() && wake.reason == ZellijWakeReason::Announced {
+        events.push(SidebarEvent::PanesChanged);
+    }
+    if wake.reason == ZellijWakeReason::FocusStranded
+        && let (Some(pane_id), Some(generation)) = (&wake.pane_id, wake.focus_generation)
+    {
+        events.push(SidebarEvent::FocusStranded {
+            pane_id: pane_id.clone(),
+            generation,
+            clients: wake.focus_clients.clone(),
+        });
+    }
+    Ok(ZellijWakeOutcome::Accepted(events))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -304,56 +319,7 @@ fn write_plugin_presence_sample(
     });
 }
 
-/// Map a poke reason onto its typed event. `None` means the poke carries no
-/// event of its own (`alive` is stamp-only). Producer-verifying pane reasons
-/// missing their pane data degrade to the identity-free `PanesChanged` nudge,
-/// so a sparse poke still triggers the producer's verifying pull.
-fn wake_event(wake: &ZellijWake) -> Option<SidebarEvent> {
-    match wake.reason {
-        ZellijWakeReason::Alive => None,
-        ZellijWakeReason::PanesChanged => Some(SidebarEvent::PanesChanged),
-        ZellijWakeReason::PaneOpened => Some(match wake.pane_id.as_ref() {
-            Some(pane_id) => SidebarEvent::PaneOpened {
-                pane_id: pane_id.clone(),
-                command: wake
-                    .command
-                    .clone()
-                    .filter(|command| !command_is_launch_chrome(command)),
-            },
-            None => SidebarEvent::PanesChanged,
-        }),
-        ZellijWakeReason::PaneClosed => Some(match wake.pane_id.as_ref() {
-            Some(pane_id) => SidebarEvent::PaneClosed {
-                pane_id: pane_id.clone(),
-            },
-            None => SidebarEvent::PanesChanged,
-        }),
-        ZellijWakeReason::FocusStranded => wake.pane_id.as_ref().and_then(|pane_id| {
-            wake.focus_generation
-                .map(|generation| SidebarEvent::FocusStranded {
-                    pane_id: pane_id.clone(),
-                    generation,
-                    clients: wake.focus_clients.clone(),
-                })
-        }),
-        ZellijWakeReason::CommandChanged => Some(match (&wake.pane_id, &wake.command) {
-            (Some(_), Some(command)) if command_is_launch_chrome(command) => {
-                SidebarEvent::PanesChanged
-            }
-            (Some(pane_id), Some(command)) => SidebarEvent::CommandChanged {
-                pane_id: pane_id.clone(),
-                command: command.clone(),
-            },
-            _ => SidebarEvent::PanesChanged,
-        }),
-        ZellijWakeReason::FocusChanged => Some(SidebarEvent::FocusChanged {
-            focused: wake.focused_pane_ids.clone(),
-            unfocused: wake.unfocused_pane_ids.clone(),
-        }),
-    }
-}
-
-fn command_is_launch_chrome(command: &str) -> bool {
+pub(super) fn command_is_launch_chrome(command: &str) -> bool {
     let mut tokens = command.split_whitespace().filter(|token| !token.is_empty());
     let Some(program) = tokens.next() else {
         return false;
@@ -465,9 +431,6 @@ mod tests {
             pane_id: None,
             focus_generation: None,
             focus_clients: Vec::new(),
-            command: None,
-            focused_pane_ids: Vec::new(),
-            unfocused_pane_ids: Vec::new(),
             topology: None,
             telemetry: None,
         }
@@ -635,7 +598,7 @@ mod tests {
 
         assert_eq!(
             ingest_zellij_wake(&state, &runtime, &accepted).unwrap(),
-            ZellijWakeOutcome::Accepted(None),
+            ZellijWakeOutcome::Accepted(Vec::new()),
         );
         assert!(read_topology_writer_conflict(&runtime).is_none());
     }
@@ -681,40 +644,27 @@ mod tests {
     }
 
     #[test]
-    fn sparse_event_inputs_keep_their_fallbacks() {
-        for reason in [
-            ZellijWakeReason::PaneOpened,
-            ZellijWakeReason::PaneClosed,
-            ZellijWakeReason::CommandChanged,
-        ] {
-            assert_eq!(wake_event(&wake(reason)), Some(SidebarEvent::PanesChanged));
-        }
-        assert_eq!(wake_event(&wake(ZellijWakeReason::FocusStranded)), None);
-        assert_eq!(wake_event(&wake(ZellijWakeReason::Alive)), None);
-    }
-
-    #[test]
-    fn normalized_command_and_focus_inputs_pass_through() {
-        let mut command = wake(ZellijWakeReason::CommandChanged);
-        command.pane_id = Some(zellij_pane("terminal_7"));
-        command.command = Some("codex --search".to_owned());
+    fn sparse_requests_keep_their_fallbacks() {
+        let (_dir, state, runtime) = paths();
         assert_eq!(
-            wake_event(&command),
-            Some(SidebarEvent::CommandChanged {
-                pane_id: zellij_pane("terminal_7"),
-                command: "codex --search".to_owned(),
-            }),
+            ingest_zellij_wake(&state, &runtime, &wake(ZellijWakeReason::Announced)).unwrap(),
+            ZellijWakeOutcome::Accepted(vec![SidebarEvent::PanesChanged]),
+        );
+        assert_eq!(
+            ingest_zellij_wake(&state, &runtime, &wake(ZellijWakeReason::Alive)).unwrap(),
+            ZellijWakeOutcome::Accepted(Vec::new()),
         );
 
-        let mut focus = wake(ZellijWakeReason::FocusChanged);
-        focus.focused_pane_ids = vec![zellij_pane("terminal_8")];
-        focus.unfocused_pane_ids = vec![zellij_pane("terminal_7")];
+        let mut stranded = wake(ZellijWakeReason::FocusStranded);
+        stranded.pane_id = Some(zellij_pane("terminal_7"));
+        stranded.focus_generation = Some(8);
         assert_eq!(
-            wake_event(&focus),
-            Some(SidebarEvent::FocusChanged {
-                focused: vec![zellij_pane("terminal_8")],
-                unfocused: vec![zellij_pane("terminal_7")],
-            }),
+            ingest_zellij_wake(&state, &runtime, &stranded).unwrap(),
+            ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusStranded {
+                pane_id: zellij_pane("terminal_7"),
+                generation: 8,
+                clients: Vec::new(),
+            }]),
         );
     }
 
@@ -737,23 +687,48 @@ mod tests {
     }
 
     #[test]
-    fn launch_chrome_events_keep_existing_fallbacks() {
-        let launch = "rimz agents claude,codex --worktree=quality-pass".to_owned();
-        let mut opened = wake(ZellijWakeReason::PaneOpened);
-        opened.pane_id = Some(zellij_pane("terminal_7"));
-        opened.command = Some(launch.clone());
-        assert_eq!(
-            wake_event(&opened),
-            Some(SidebarEvent::PaneOpened {
-                pane_id: zellij_pane("terminal_7"),
-                command: None,
-            }),
-        );
+    fn announced_snapshot_is_sanitized_before_diff_and_persist() {
+        let (_dir, state, runtime) = paths();
+        let current_writer = writer(2, 200);
+        let mut existing = topology(unix_now_ms(), Some(current_writer.clone()));
+        existing
+            .panes
+            .push(crate::mux::zellij::pane_topology::PaneTopologyPane {
+                id: 7,
+                is_plugin: false,
+                is_held: false,
+                exited: false,
+                is_suppressed: false,
+                is_floating: false,
+                tab_position: 1,
+                tab_name: None,
+                pane_columns: None,
+                pane_x: None,
+                title: Some("work".to_owned()),
+                pane_command: Some("cargo build".to_owned()),
+                pane_cwd: None,
+                pane_pid: None,
+                terminal_command: None,
+            });
+        write_pane_topology_cache(&runtime, &existing).unwrap();
+        let mut incoming = existing.clone();
+        incoming.produced_at_ms += 1;
+        incoming.panes[0].pane_command =
+            Some("rimz agents claude,codex --worktree=quality-pass".to_owned());
+        let mut announced = wake(ZellijWakeReason::Announced);
+        announced.topology = Some(incoming);
 
-        let mut changed = wake(ZellijWakeReason::CommandChanged);
-        changed.pane_id = Some(zellij_pane("terminal_7"));
-        changed.command = Some(launch);
-        assert_eq!(wake_event(&changed), Some(SidebarEvent::PanesChanged));
+        assert_eq!(
+            ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+            ZellijWakeOutcome::Accepted(vec![SidebarEvent::PanesChanged]),
+        );
+        assert_eq!(
+            read_pane_topology_cache(&runtime, "rimz-test")
+                .unwrap()
+                .panes[0]
+                .pane_command,
+            None,
+        );
     }
 
     #[test]

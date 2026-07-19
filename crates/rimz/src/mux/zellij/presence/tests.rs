@@ -435,7 +435,7 @@ fn presence_plugin_configuration_renders_expressible_fields() {
             session: "rimz-test",
             rimz_bin: "/state/rimz/workspaces/ws_0123456789abcdef01234567/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/state/rimz/workspaces/ws_0123456789abcdef01234567/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/state/rimz/workspaces/ws_0123456789abcdef01234567/rimz,focus_follows_mouse=false,mouse_click_through=true",
         },
         Case {
             session: "rimz-test",
@@ -444,43 +444,43 @@ fn presence_plugin_configuration_renders_expressible_fields() {
                 opts.focus_follows_mouse = true;
                 opts.mouse_click_through = false;
             },
-            expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=true,mouse_click_through=false",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=true,mouse_click_through=false",
         },
         Case {
             session: "rimz-test",
             rimz_bin: "/tmp/a,b/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
         },
         Case {
             session: "rimz-test",
             rimz_bin: "/tmp/a=b/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
         },
         Case {
             session: "rimz,test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
         },
         Case {
             session: "rimz=test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
         },
         Case {
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |opts| opts.focus_key = Some("Alt+p".to_owned()),
-            expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,focus_key=Alt+p",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,focus_key=Alt+p",
         },
         Case {
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |opts| opts.focus_key = Some("Alt=p".to_owned()),
-            expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
         },
     ];
 
