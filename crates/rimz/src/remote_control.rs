@@ -229,8 +229,9 @@ pub fn apply_runtime_toggle(
 /// Claude settings input used by readiness and daemon repair invalidation.
 /// Resolving the path performs no parsing or CLI probe.
 pub(crate) fn claude_settings_path() -> PathBuf {
+    // The validated built-in Claude definition always supplies this input.
     runtime_control::wiring_input_path("claude")
-        .unwrap_or_else(|| PathBuf::from("~/.claude/settings.json"))
+        .expect("Claude runtime-control wiring input must be registered")
 }
 
 #[cfg(test)]

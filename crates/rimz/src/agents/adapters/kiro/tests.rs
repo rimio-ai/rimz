@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 
 use crate::agents::definition::{ConcernCoverage, IntegrationConcern};
 use crate::agents::{
-    AgentErr, LaunchPreset, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
-    TranscriptPosition, TranscriptRole,
+    AgentErr, AgentHookClass, LaunchPreset, LocalSessionObservation, LocalSessionProjection,
+    LocalSessionState, TranscriptPosition, TranscriptRole,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
     let LocalSessionProjection::Lifecycle(state) = &observation.projection else {
@@ -20,15 +20,17 @@ fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
 
 #[test]
 fn native_hooks_are_explicitly_unsupported() {
-    let definition = KiroAdapter.spec();
+    let agent = crate::agents::find_definition("kiro").expect("Kiro definition");
+    let definition = agent.spec();
+    assert!(!agent.has_hooks());
     assert!(!definition.has_wired_hook_install());
     assert!(
-        !KiroAdapter
+        !agent
             .decode_hook("unknown", &json!({}))
             .expect("unknown hook decodes")
             .records_progress()
     );
-    assert!(KiroAdapter.conformance().classification.is_empty());
+    assert!(agent.conformance().classification.is_empty());
     assert!(matches!(
         definition.concern_coverage(IntegrationConcern::TurnLifecycle),
         ConcernCoverage::Partial { .. }
@@ -37,14 +39,14 @@ fn native_hooks_are_explicitly_unsupported() {
     for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] {
         let payload = json!({ "session_id": "sess_redacted", "prompt": "ignored" });
         assert_eq!(
-            KiroAdapter
+            agent
                 .decode_hook(event, &payload)
                 .expect("test hook decodes")
                 .class(),
             AgentHookClass::Unknown
         );
         assert!(
-            KiroAdapter
+            agent
                 .decode_hook(event, &payload)
                 .expect("test hook decodes")
                 .lifecycle()
@@ -52,7 +54,7 @@ fn native_hooks_are_explicitly_unsupported() {
                 .is_none()
         );
         assert_eq!(
-            KiroAdapter
+            agent
                 .decode_hook(event, &Value::Null)
                 .expect("test hook decodes")
                 .json_reply()
@@ -62,7 +64,7 @@ fn native_hooks_are_explicitly_unsupported() {
     }
 
     assert!(
-        KiroAdapter
+        agent
             .decode_hook("Stop", &json!({}))
             .expect("test hook decodes")
             .final_message()

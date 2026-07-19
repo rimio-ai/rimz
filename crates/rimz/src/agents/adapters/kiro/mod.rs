@@ -14,17 +14,14 @@ pub(crate) use crate::agents::capabilities::*;
 
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
 use super::definition::{
     AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
 use super::{
-    AgentHookClass, ClassifiedHook, HookOutput, LocalContextPatch, LocalContextRefresh,
-    LocalContextRefreshCtx, LocalSessionObservation, RefreshTrigger, Result, TranscriptMessage,
-    TranscriptStat,
+    LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalSessionObservation,
+    RefreshTrigger, TranscriptMessage, TranscriptStat,
 };
 
 const HOOK_INSTALL_UNAVAILABLE: &str = "the v3 engine does not execute standalone hook configs (verified against Kiro CLI 2.12.1); re-enable after a pinned v3 release provides a reproducible native hook contract";
@@ -216,16 +213,6 @@ impl crate::agents::capabilities::CoreCapability for KiroAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for KiroAdapter {}
-
-impl crate::agents::capabilities::HookCapability for KiroAdapter {
-    fn decode_hook(&self, event_name: &str, _payload: &Value) -> Result<HookOutput> {
-        Ok(HookOutput::new(ClassifiedHook {
-            class: AgentHookClass::Unknown,
-            ask_kind: None,
-            event_name: event_name.to_owned(),
-        }))
-    }
-}
 
 impl crate::agents::capabilities::InstallationCapability for KiroAdapter {
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
