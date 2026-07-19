@@ -182,11 +182,47 @@ pub struct PluginTelemetry {
     pub uptime_ms: u64,
     pub commands_completed: u64,
     pub commands_succeeded: u64,
-    pub commands_failed: u64,
     pub stale_writer_rejections: u64,
     pub topology_failures: u64,
     pub other_failures: u64,
     pub zellij_version: String,
+    /// Why the most recent failing wake failed. Counters say how often the
+    /// host refused; this says what it said while refusing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_failure: Option<CommandFailure>,
+}
+
+/// The evidence Zellij hands back with a failed `run_command`: what the host
+/// exited with, and the first thing it wrote to stderr on the way out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct CommandFailure {
+    pub exit_code: Option<i32>,
+    pub detail: String,
+}
+
+/// Longest stderr excerpt carried back to the host. One line of `anyhow`
+/// context names the cause; the rest is argv the host already knows.
+const FAILURE_DETAIL_MAX_BYTES: usize = 200;
+
+impl CommandFailure {
+    pub fn new(exit_code: Option<i32>, stderr: &[u8]) -> Self {
+        Self {
+            exit_code,
+            detail: first_line(&String::from_utf8_lossy(stderr)),
+        }
+    }
+}
+
+/// The first non-empty stderr line, bounded on a char boundary.
+fn first_line(stderr: &str) -> String {
+    let Some(line) = stderr.lines().map(str::trim).find(|line| !line.is_empty()) else {
+        return String::new();
+    };
+    let mut end = line.len().min(FAILURE_DETAIL_MAX_BYTES);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line[..end].to_owned()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -198,23 +234,56 @@ pub struct CommandCounters {
     pub other_failures: u64,
 }
 
+/// Which bucket a finished command landed in, so the caller knows whether the
+/// failure is worth keeping evidence for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandOutcome {
+    Succeeded,
+    StaleWriter,
+    TopologyFailure,
+    OtherFailure,
+}
+
+/// Fold one finished command into the retained failure evidence. A success
+/// clears it, a real failure replaces it, and a stale-writer rejection leaves
+/// it alone — that exit is the fence doing its job, and reporting it as the
+/// cause would bury the failure the reader is actually chasing.
+pub fn fold_failure(
+    previous: Option<CommandFailure>,
+    outcome: CommandOutcome,
+    exit_code: Option<i32>,
+    stderr: &[u8],
+) -> Option<CommandFailure> {
+    match outcome {
+        CommandOutcome::Succeeded => None,
+        CommandOutcome::StaleWriter => previous,
+        CommandOutcome::TopologyFailure | CommandOutcome::OtherFailure => {
+            Some(CommandFailure::new(exit_code, stderr))
+        }
+    }
+}
+
 impl CommandCounters {
-    pub fn record(&mut self, exit_code: Option<i32>, published_topology: bool) {
+    pub fn record(&mut self, exit_code: Option<i32>, published_topology: bool) -> CommandOutcome {
         self.completed = self.completed.saturating_add(1);
         match exit_code {
-            Some(0) => self.succeeded = self.succeeded.saturating_add(1),
+            Some(0) => {
+                self.succeeded = self.succeeded.saturating_add(1);
+                CommandOutcome::Succeeded
+            }
             Some(STALE_WRITER_EXIT_CODE) if published_topology => {
                 self.stale_writer_rejections = self.stale_writer_rejections.saturating_add(1);
+                CommandOutcome::StaleWriter
             }
             _ if published_topology => {
                 self.topology_failures = self.topology_failures.saturating_add(1);
+                CommandOutcome::TopologyFailure
             }
-            _ => self.other_failures = self.other_failures.saturating_add(1),
+            _ => {
+                self.other_failures = self.other_failures.saturating_add(1);
+                CommandOutcome::OtherFailure
+            }
         }
-    }
-
-    pub fn failed(self) -> u64 {
-        self.completed.saturating_sub(self.succeeded)
     }
 }
 

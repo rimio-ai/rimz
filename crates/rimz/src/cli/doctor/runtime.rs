@@ -459,6 +459,12 @@ fn presence_plugins_view(
                 stale_writer_rejections_delta: span.stale_writer_rejections_delta,
                 topology_failures_delta: span.topology_failures_delta,
                 other_failures_delta: span.other_failures_delta,
+                last_failure: span.last_failure.as_ref().map(|failure| {
+                    model::PresenceCommandFailure {
+                        exit_code: failure.exit_code,
+                        detail: failure.detail.clone(),
+                    }
+                }),
             });
             model::PresencePluginRow {
                 plugin_id,

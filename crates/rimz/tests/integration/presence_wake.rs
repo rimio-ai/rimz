@@ -651,7 +651,9 @@ fn wake_alive_with_plugin_telemetry_records_a_sample() {
     assert_eq!(sample["bytes"], 42 * 65_536);
     assert_eq!(sample["uptime_ms"], 1_000);
     assert_eq!(sample["commands"], 5);
-    assert_eq!(sample["commands_failed"], 2);
+    // `--plugin-commands-failed` still parses so a lagging plugin's wake lands,
+    // but the derived counter is no longer recorded.
+    assert!(sample.get("commands_failed").is_none());
     assert_eq!(sample["zellij_version"], "0.44.3");
     env.assert_no_mux_fork();
 }

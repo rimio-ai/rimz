@@ -119,7 +119,7 @@ fn plugin_telemetry_decodes_structured_and_legacy_argv() {
         "--reason",
         "alive",
         "--plugin-telemetry",
-        r#"{"plugin_id":9,"plugin_build":"wasm-build","loaded_at_ms":1000,"mem_pages":12,"uptime_ms":34,"commands_completed":56,"commands_succeeded":49,"commands_failed":7,"stale_writer_rejections":3,"topology_failures":2,"other_failures":2,"zellij_version":"0.44.3"}"#,
+        r#"{"plugin_id":9,"plugin_build":"wasm-build","loaded_at_ms":1000,"mem_pages":12,"uptime_ms":34,"commands_completed":56,"commands_succeeded":49,"commands_failed":7,"stale_writer_rejections":3,"topology_failures":2,"other_failures":2,"zellij_version":"0.44.3","last_failure":{"exit_code":1,"detail":"Error: could not publish accepted topology"}}"#,
         "--plugin-mem-pages",
         "999",
     ]);
@@ -133,11 +133,14 @@ fn plugin_telemetry_decodes_structured_and_legacy_argv() {
             uptime_ms: 34,
             commands: 56,
             commands_succeeded: Some(49),
-            commands_failed: 7,
             stale_writer_rejections: Some(3),
             topology_failures: Some(2),
             other_failures: Some(2),
             zellij_version: Some("0.44.3".to_owned()),
+            last_failure: Some(rimz::sidebar::presence::PluginCommandFailure {
+                exit_code: Some(1),
+                detail: "Error: could not publish accepted topology".to_owned(),
+            }),
         }),
         "structured telemetry supersedes legacy flags",
     );
@@ -175,11 +178,11 @@ fn plugin_telemetry_decodes_structured_and_legacy_argv() {
             uptime_ms: 30,
             commands: 40,
             commands_succeeded: None,
-            commands_failed: 5,
             stale_writer_rejections: None,
             topology_failures: None,
             other_failures: None,
             zellij_version: Some("0.43.1".to_owned()),
+            last_failure: None,
         }),
     );
 }

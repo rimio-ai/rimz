@@ -221,8 +221,10 @@ struct WakeArgs {
     plugin_commands: Option<u64>,
     #[arg(long, hide = true)]
     plugin_commands_succeeded: Option<u64>,
-    #[arg(long, hide = true)]
-    plugin_commands_failed: Option<u64>,
+    /// Accepted so a lagging plugin's wake still parses; the value is
+    /// `completed - succeeded`, which the host derives when it needs it.
+    #[arg(long = "plugin-commands-failed", hide = true)]
+    _plugin_commands_failed: Option<u64>,
     #[arg(long, hide = true)]
     plugin_stale_writer_rejections: Option<u64>,
     #[arg(long, hide = true)]
@@ -250,11 +252,12 @@ impl WakeArgs {
             uptime_ms: self.plugin_uptime_ms.unwrap_or_default(),
             commands: self.plugin_commands.unwrap_or_default(),
             commands_succeeded: self.plugin_commands_succeeded,
-            commands_failed: self.plugin_commands_failed.unwrap_or_default(),
             stale_writer_rejections: self.plugin_stale_writer_rejections,
             topology_failures: self.plugin_topology_failures,
             other_failures: self.plugin_other_failures,
             zellij_version: self.plugin_zellij_version.clone(),
+            // Split-flag builds predate failure evidence and never send one.
+            last_failure: None,
         })
     }
 }
@@ -428,7 +431,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 plugin_uptime_ms: _,
                 plugin_commands: _,
                 plugin_commands_succeeded: _,
-                plugin_commands_failed: _,
+                _plugin_commands_failed: _,
                 plugin_stale_writer_rejections: _,
                 plugin_topology_failures: _,
                 plugin_other_failures: _,

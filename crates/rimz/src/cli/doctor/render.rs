@@ -685,40 +685,52 @@ fn presence_plugin_verdict(tally: &mut Tally, row: &PresencePluginRow) -> Cell {
     if row.status == PresencePluginStatus::Inactive {
         return verdict(tally, Health::Info, "loaded; not writing pane topology");
     }
-    let commands = row
-        .telemetry
-        .as_ref()
-        .map(|telemetry| telemetry.commands_completed_delta)
-        .unwrap_or_default();
-    match row.telemetry.as_ref().and_then(recent_command_failures) {
-        Some((topology, _)) if topology > 0 => verdict(
+    let telemetry = row.telemetry.as_ref();
+    if telemetry.is_some_and(failing_recently) {
+        // The traffic line below owns every count; this line owns the cause.
+        let cause = telemetry
+            .and_then(|telemetry| telemetry.last_failure.as_ref())
+            .map_or_else(
+                || "pane discovery lags; run `rimz reload`".to_owned(),
+                failure_cause,
+            );
+        return verdict(
             tally,
             Health::Warn,
-            format!(
-                "writing pane topology; {topology} of {commands} commands failed — pane discovery lags; run `rimz reload`"
-            ),
-        ),
-        Some((_, other)) => verdict(
-            tally,
-            Health::Warn,
-            format!("writing pane topology; {other} plugin commands failed"),
-        ),
-        None if row.outdated => verdict(
+            format!("writing pane topology; wakes are failing — {cause}"),
+        );
+    }
+    if row.outdated {
+        return verdict(
             tally,
             Health::Info,
             "writing pane topology on an outdated build; run `rimz reload`",
-        ),
-        None => verdict(tally, Health::Ok, "writing pane topology"),
+        );
     }
+    verdict(tally, Health::Ok, "writing pane topology")
 }
 
-/// Command failures the plugin reported while its telemetry was still fresh.
-fn recent_command_failures(telemetry: &PresencePluginTelemetry) -> Option<(u64, u64)> {
+/// Whether the plugin reported command failures while its telemetry was still
+/// fresh. Stale telemetry describes a plugin that is no longer reporting, and
+/// the identity line already says so.
+fn failing_recently(telemetry: &PresencePluginTelemetry) -> bool {
     let topology = telemetry.topology_failures_delta.unwrap_or_default();
     let other = telemetry.other_failures_delta.unwrap_or_default();
     let fresh =
         telemetry.last_seen_age_secs <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs();
-    (fresh && (topology > 0 || other > 0)).then_some((topology, other))
+    fresh && (topology > 0 || other > 0)
+}
+
+/// The host's own account of the failure, falling back to the exit status when
+/// it died without saying anything.
+fn failure_cause(failure: &super::model::PresenceCommandFailure) -> String {
+    if !failure.detail.is_empty() {
+        return failure.detail.clone();
+    }
+    match failure.exit_code {
+        Some(code) => format!("the wake exited {code} without reporting a cause"),
+        None => "the wake was killed before it could report".to_owned(),
+    }
 }
 
 /// Which build is loaded, when it loaded, and how recently it reported in.
@@ -1012,19 +1024,22 @@ fn issue_span(issue: &super::model::MuxLogIssue) -> String {
         count => format!("{count}×"),
     };
     let now = Timestamp::now();
-    match (issue.first_occurrence, issue.last_occurrence) {
-        (Some(first), Some(last)) if first != last => format!(
+    // A burst inside one second has no span worth naming; reporting it as
+    // "over 0s" reads as a broken clock rather than a tight cluster.
+    let span_secs = match (issue.first_occurrence, issue.last_occurrence) {
+        (Some(first), Some(last)) => u64::try_from(last.duration_since(first).as_secs())
+            .ok()
+            .filter(|secs| *secs > 0),
+        _ => None,
+    };
+    match (span_secs, issue.first_occurrence, issue.last_occurrence) {
+        (Some(secs), _, Some(last)) => format!(
             "{count} over {}, last {}",
-            age_label(
-                last.duration_since(first)
-                    .as_secs()
-                    .try_into()
-                    .unwrap_or_default()
-            ),
+            age_label(secs),
             age_short(now, last)
         ),
-        (Some(at), _) | (_, Some(at)) => format!("{count}, {}", age_short(now, at)),
-        (None, None) => count,
+        (_, Some(at), None) | (_, _, Some(at)) => format!("{count}, {}", age_short(now, at)),
+        (_, None, None) => count,
     }
 }
 

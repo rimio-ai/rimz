@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::JsonlLog;
+use crate::sidebar::presence::PluginCommandFailure;
 
 const PLUGIN_PRESENCE_LOG_NAME: &str = "plugin-presence.log.jsonl";
 const PLUGIN_PRESENCE_LOG_MAX_BYTES: u64 = 1_048_576;
@@ -32,9 +33,6 @@ pub struct PluginPresenceSample {
     pub commands: u64,
     #[serde(default)]
     pub commands_succeeded: Option<u64>,
-    /// Legacy cumulative failures. Split counters are authoritative when set.
-    #[serde(default)]
-    pub commands_failed: u64,
     #[serde(default)]
     pub stale_writer_rejections: Option<u64>,
     #[serde(default)]
@@ -43,6 +41,8 @@ pub struct PluginPresenceSample {
     pub other_failures: Option<u64>,
     #[serde(default)]
     pub zellij_version: Option<String>,
+    #[serde(default)]
+    pub last_failure: Option<PluginCommandFailure>,
 }
 
 pub fn log(state_root: &Path) -> JsonlLog {
@@ -78,6 +78,7 @@ pub struct PluginPresenceSpan {
     pub stale_writer_rejections_delta: Option<u64>,
     pub topology_failures_delta: Option<u64>,
     pub other_failures_delta: Option<u64>,
+    pub last_failure: Option<PluginCommandFailure>,
 }
 
 pub fn generation_span(
@@ -147,6 +148,12 @@ fn span_from_samples(
         ),
         topology_failures_delta: option_delta(last.topology_failures, first.topology_failures),
         other_failures_delta: option_delta(last.other_failures, first.other_failures),
+        // A plugin that recovered clears its evidence, so the newest sample
+        // often carries none. The reader still wants the last cause seen.
+        last_failure: samples
+            .iter()
+            .rev()
+            .find_map(|sample| sample.last_failure.clone()),
     })
 }
 
@@ -191,11 +198,11 @@ mod tests {
                 uptime_ms: at_ms,
                 commands: at_ms / 10,
                 commands_succeeded: Some(at_ms / 10 - failures),
-                commands_failed: failures,
                 stale_writer_rejections: Some(1),
                 topology_failures: Some(failures),
                 other_failures: Some(0),
                 zellij_version: Some("0.44.3".to_owned()),
+                last_failure: None,
             })
             .unwrap()
         };

@@ -304,6 +304,16 @@ pub(super) struct PresencePluginTelemetry {
     pub(super) topology_failures_delta: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) other_failures_delta: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) last_failure: Option<PresenceCommandFailure>,
+}
+
+/// What the host said on stderr the last time a presence wake failed.
+#[derive(Debug, Serialize)]
+pub(super) struct PresenceCommandFailure {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) exit_code: Option<i32>,
+    pub(super) detail: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

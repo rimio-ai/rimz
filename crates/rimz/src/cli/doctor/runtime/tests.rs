@@ -90,6 +90,7 @@ fn plugin_span(
         stale_writer_rejections_delta: Some(0),
         topology_failures_delta: Some(0),
         other_failures_delta: Some(0),
+        last_failure: None,
     }
 }
 

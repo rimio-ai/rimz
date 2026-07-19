@@ -59,11 +59,22 @@ pub struct ZellijPluginTelemetry {
     #[serde(rename = "commands_completed")]
     pub commands: u64,
     pub commands_succeeded: Option<u64>,
-    pub commands_failed: u64,
     pub stale_writer_rejections: Option<u64>,
     pub topology_failures: Option<u64>,
     pub other_failures: Option<u64>,
     pub zellij_version: Option<String>,
+    #[serde(default)]
+    pub last_failure: Option<PluginCommandFailure>,
+}
+
+/// Why the plugin's most recent wake failed, as the host itself reported it on
+/// stderr before exiting.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct PluginCommandFailure {
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -519,11 +530,11 @@ fn write_plugin_presence_sample(
         uptime_ms: telemetry.uptime_ms,
         commands: telemetry.commands,
         commands_succeeded: telemetry.commands_succeeded,
-        commands_failed: telemetry.commands_failed,
         stale_writer_rejections: telemetry.stale_writer_rejections,
         topology_failures: telemetry.topology_failures,
         other_failures: telemetry.other_failures,
         zellij_version: telemetry.zellij_version.clone(),
+        last_failure: telemetry.last_failure.clone(),
     });
 }
 

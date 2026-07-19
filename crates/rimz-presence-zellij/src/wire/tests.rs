@@ -171,11 +171,11 @@ fn alive_wake_argv_carries_telemetry_before_session_name() {
                 uptime_ms: 34,
                 commands_completed: 56,
                 commands_succeeded: 49,
-                commands_failed: 7,
                 stale_writer_rejections: 3,
                 topology_failures: 2,
                 other_failures: 2,
                 zellij_version: "0.44.3".to_owned(),
+                last_failure: None,
             }),
             None,
         ),
@@ -188,7 +188,7 @@ fn alive_wake_argv_carries_telemetry_before_session_name() {
             "--workspace-id",
             "workspace-1",
             "--plugin-telemetry",
-            r#"{"plugin_id":9,"plugin_build":"wasm-build","loaded_at_ms":1000,"mem_pages":12,"uptime_ms":34,"commands_completed":56,"commands_succeeded":49,"commands_failed":7,"stale_writer_rejections":3,"topology_failures":2,"other_failures":2,"zellij_version":"0.44.3"}"#,
+            r#"{"plugin_id":9,"plugin_build":"wasm-build","loaded_at_ms":1000,"mem_pages":12,"uptime_ms":34,"commands_completed":56,"commands_succeeded":49,"stale_writer_rejections":3,"topology_failures":2,"other_failures":2,"zellij_version":"0.44.3"}"#,
             "--session-name",
             "session-1",
         ])),
@@ -198,18 +198,130 @@ fn alive_wake_argv_carries_telemetry_before_session_name() {
 #[test]
 fn command_counters_split_every_exit_bucket() {
     let mut counters = CommandCounters::default();
-    counters.record(Some(0), true);
-    counters.record(Some(STALE_WRITER_EXIT_CODE), true);
-    counters.record(Some(1), true);
-    counters.record(None, false);
-    counters.record(Some(STALE_WRITER_EXIT_CODE), false);
+    assert_eq!(counters.record(Some(0), true), CommandOutcome::Succeeded);
+    assert_eq!(
+        counters.record(Some(STALE_WRITER_EXIT_CODE), true),
+        CommandOutcome::StaleWriter
+    );
+    assert_eq!(
+        counters.record(Some(1), true),
+        CommandOutcome::TopologyFailure
+    );
+    assert_eq!(counters.record(None, false), CommandOutcome::OtherFailure);
+    assert_eq!(
+        counters.record(Some(STALE_WRITER_EXIT_CODE), false),
+        CommandOutcome::OtherFailure
+    );
 
     assert_eq!(counters.completed, 5);
     assert_eq!(counters.succeeded, 1);
     assert_eq!(counters.stale_writer_rejections, 1);
     assert_eq!(counters.topology_failures, 1);
     assert_eq!(counters.other_failures, 2);
-    assert_eq!(counters.failed(), 4);
+}
+
+/// The host names the cause on its first stderr line; the rest is argv the
+/// reader already has.
+#[test]
+fn command_failure_keeps_the_first_meaningful_stderr_line() {
+    let failure = CommandFailure::new(
+        Some(1),
+        b"\n  \nError: could not serialize topology writer selection: lock timeout\n\nCaused by:\n    0: timed out\n",
+    );
+
+    assert_eq!(failure.exit_code, Some(1));
+    assert_eq!(
+        failure.detail,
+        "Error: could not serialize topology writer selection: lock timeout"
+    );
+}
+
+#[test]
+fn command_failure_bounds_the_detail_on_a_char_boundary() {
+    let failure = CommandFailure::new(None, "é".repeat(200).as_bytes());
+
+    assert_eq!(failure.exit_code, None);
+    assert!(failure.detail.len() <= FAILURE_DETAIL_MAX_BYTES);
+    assert!(failure.detail.chars().all(|ch| ch == 'é'));
+}
+
+/// A wake that dies without writing anything still carries its exit status.
+#[test]
+fn command_failure_survives_silent_stderr() {
+    assert_eq!(CommandFailure::new(Some(101), b"").detail, "");
+    assert_eq!(CommandFailure::new(Some(101), b"   \n\n").detail, "");
+}
+
+/// The fence rejecting a losing writer is designed behaviour, so it must not
+/// masquerade as the cause of the failures the reader is chasing.
+#[test]
+fn fold_failure_keeps_real_causes_and_ignores_the_writer_fence() {
+    let real = fold_failure(
+        None,
+        CommandOutcome::TopologyFailure,
+        Some(1),
+        b"lock timeout",
+    );
+    assert_eq!(
+        real.as_ref().map(|failure| failure.detail.as_str()),
+        Some("lock timeout")
+    );
+
+    // A stale-writer rejection neither reports a cause nor buries the last one.
+    let after_fence = fold_failure(
+        real.clone(),
+        CommandOutcome::StaleWriter,
+        Some(STALE_WRITER_EXIT_CODE),
+        b"rejected as stale",
+    );
+    assert_eq!(after_fence, real);
+    assert_eq!(
+        fold_failure(
+            None,
+            CommandOutcome::StaleWriter,
+            Some(STALE_WRITER_EXIT_CODE),
+            b""
+        ),
+        None
+    );
+
+    // A success means the plugin recovered; the evidence goes with it.
+    assert_eq!(
+        fold_failure(real, CommandOutcome::Succeeded, Some(0), b""),
+        None
+    );
+}
+
+#[test]
+fn alive_wake_argv_carries_the_last_failure() {
+    let telemetry = PluginTelemetry {
+        plugin_id: Some(9),
+        plugin_build: None,
+        loaded_at_ms: 1_000,
+        mem_pages: 12,
+        uptime_ms: 34,
+        commands_completed: 56,
+        commands_succeeded: 49,
+        stale_writer_rejections: 3,
+        topology_failures: 2,
+        other_failures: 2,
+        zellij_version: "0.44.3".to_owned(),
+        last_failure: Some(CommandFailure {
+            exit_code: Some(1),
+            detail: "Error: could not publish accepted topology".to_owned(),
+        }),
+    };
+    let argv = wake_argv(&ctx(), WakeRequest::Alive(telemetry), None).expect("argv");
+    let payload = argv
+        .iter()
+        .skip_while(|arg| *arg != "--plugin-telemetry")
+        .nth(1)
+        .expect("telemetry payload");
+
+    assert!(
+        payload.contains(r#""last_failure":{"exit_code":1,"detail":"Error: could not publish accepted topology"}"#),
+        "payload carries the cause: {payload}",
+    );
 }
 
 #[test]

@@ -448,11 +448,11 @@ fn topology_write_failure_returns_error_before_accepted_side_effects() {
         uptime_ms: 1,
         commands: 1,
         commands_succeeded: Some(1),
-        commands_failed: 0,
         stale_writer_rejections: Some(0),
         topology_failures: Some(0),
         other_failures: Some(0),
         zellij_version: Some("0.44.3".to_owned()),
+        last_failure: None,
     });
 
     assert!(matches!(

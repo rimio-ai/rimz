@@ -25,12 +25,16 @@ mod shell {
         engine: Option<Engine>,
         /// The shell owns command counters and feeds them into telemetry.
         commands: wire::CommandCounters,
+        /// Evidence from the most recent failing wake, cleared once one
+        /// succeeds. Kept beside the counters so they stay `Copy`.
+        last_failure: Option<wire::CommandFailure>,
         /// Zellij answers this through plugin stdio, so cache it at load.
         zellij_version: String,
     }
 
     struct ShellHost<'a> {
         commands: wire::CommandCounters,
+        last_failure: Option<&'a wire::CommandFailure>,
         zellij_version: &'a str,
     }
 
@@ -50,11 +54,11 @@ mod shell {
                 uptime_ms: 0,
                 commands_completed: self.commands.completed,
                 commands_succeeded: self.commands.succeeded,
-                commands_failed: self.commands.failed(),
                 stale_writer_rejections: self.commands.stale_writer_rejections,
                 topology_failures: self.commands.topology_failures,
                 other_failures: self.commands.other_failures,
                 zellij_version: self.zellij_version.to_owned(),
+                last_failure: self.last_failure.cloned(),
             }
         }
     }
@@ -89,6 +93,7 @@ mod shell {
             let mut engine = Engine::new(now, config);
             let host = ShellHost {
                 commands: self.commands,
+                last_failure: self.last_failure.as_ref(),
                 zellij_version: &self.zellij_version,
             };
             execute(engine.on_load(now, &host));
@@ -97,16 +102,21 @@ mod shell {
 
         fn update(&mut self, event: Event) -> bool {
             let now = now_ms();
-            if let Event::RunCommandResult(exit_code, _, _, context) = event {
+            if let Event::RunCommandResult(exit_code, _, stderr, context) = event {
                 let published_topology = context
                     .get(wire::TOPOLOGY_PUBLISH_CONTEXT)
                     .is_some_and(|value| value == "1");
-                self.commands.record(exit_code, published_topology);
+                // Zellij hands back the host's stderr with the exit code; it is
+                // the only account of why a wake failed that ever reaches here.
+                let outcome = self.commands.record(exit_code, published_topology);
+                self.last_failure =
+                    wire::fold_failure(self.last_failure.take(), outcome, exit_code, &stderr);
                 let Some(engine) = self.engine.as_mut() else {
                     return false;
                 };
                 let host = ShellHost {
                     commands: self.commands,
+                    last_failure: self.last_failure.as_ref(),
                     zellij_version: &self.zellij_version,
                 };
                 execute(engine.on_run_command_result(exit_code, published_topology, now, &host));
@@ -117,6 +127,7 @@ mod shell {
             };
             let host = ShellHost {
                 commands: self.commands,
+                last_failure: self.last_failure.as_ref(),
                 zellij_version: &self.zellij_version,
             };
             let effects = match event {
@@ -194,6 +205,7 @@ mod shell {
             if pipe_message.name == DUMP_TOPOLOGY_PIPE {
                 let host = ShellHost {
                     commands: self.commands,
+                    last_failure: self.last_failure.as_ref(),
                     zellij_version: &self.zellij_version,
                 };
                 execute(engine.on_dump_topology_pipe(now, &host));

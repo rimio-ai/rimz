@@ -1,8 +1,9 @@
 use super::*;
 use crate::cli::doctor::model::{
     HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow, MessageProblemRow,
-    MuxBinaries, MuxLogIssue, OpenCounts, PresencePluginRow, PresencePluginStatus,
-    PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps,
+    MuxBinaries, MuxLogIssue, OpenCounts, PresenceCommandFailure, PresencePluginRow,
+    PresencePluginStatus, PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageRootView,
+    TmuxCaps,
 };
 use rimz::ids::MuxName;
 
@@ -291,6 +292,30 @@ fn log_issue(
     }
 }
 
+/// A span is worth naming only when it covers real time. A burst inside one
+/// second reads as a broken clock if it is reported as "over 0s".
+#[test]
+fn issue_span_names_a_real_span_and_drops_a_sub_second_one() {
+    let now = jiff::Timestamp::now();
+    let spanned = |first_ms: i64, last_ms: i64| {
+        let mut issue = log_issue("boom", DoctorState::Investigate, DoctorImpact::Warn, 4);
+        issue.first_occurrence = Some(now - jiff::SignedDuration::from_millis(first_ms));
+        issue.last_occurrence = Some(now - jiff::SignedDuration::from_millis(last_ms));
+        issue_span(&issue)
+    };
+
+    // Four hits spread over two minutes: the span is the finding.
+    assert!(
+        spanned(125_000, 5_000).starts_with("4× over 2m, last "),
+        "{}",
+        spanned(125_000, 5_000)
+    );
+    // Four hits inside one second: no span worth printing, just the recency.
+    let burst = spanned(3_600_400, 3_600_000);
+    assert!(!burst.contains("over"), "sub-second span is named: {burst}");
+    assert!(burst.starts_with("4×, "), "{burst}");
+}
+
 #[test]
 fn mux_log_spends_lines_on_issues_and_counts_the_lifecycle_noise() {
     let mux = Mux {
@@ -405,6 +430,7 @@ fn presence_telemetry_fixture() -> PresencePluginTelemetry {
         stale_writer_rejections_delta: Some(0),
         topology_failures_delta: Some(0),
         other_failures_delta: Some(0),
+        last_failure: None,
     }
 }
 
@@ -460,24 +486,28 @@ fn mux_section_states_what_a_healthy_presence_plugin_does() {
     }
 }
 
-/// Failures are the finding, so they lead the row with their cost and remedy
-/// rather than trailing a counter pair.
-#[test]
-fn mux_section_leads_with_the_cost_of_presence_plugin_failures() {
-    let mut mux = mux_fixture();
-    mux.presence_plugins = presence_plugins_fixture(vec![PresencePluginRow {
+fn failing_presence_plugin(telemetry: PresencePluginTelemetry) -> Probe<PresencePlugins> {
+    presence_plugins_fixture(vec![PresencePluginRow {
         plugin_id: 80,
         loaded_at_ms: Some(1_000),
         build: Some("desired-build".to_owned()),
         status: PresencePluginStatus::Active,
         rejected_count: None,
         outdated: false,
-        telemetry: Some(PresencePluginTelemetry {
-            commands_succeeded_delta: Some(125),
-            topology_failures_delta: Some(17),
-            ..presence_telemetry_fixture()
-        }),
+        telemetry: Some(telemetry),
     }])
+}
+
+/// A plugin that reported no cause is all the doctor had before the wake
+/// carried evidence, so the generic remedy still stands in for one.
+#[test]
+fn mux_section_falls_back_to_the_generic_remedy_without_failure_evidence() {
+    let mut mux = mux_fixture();
+    mux.presence_plugins = failing_presence_plugin(PresencePluginTelemetry {
+        commands_succeeded_delta: Some(125),
+        topology_failures_delta: Some(17),
+        ..presence_telemetry_fixture()
+    })
     .into();
 
     let out = strip(|w| {
@@ -487,7 +517,7 @@ fn mux_section_leads_with_the_cost_of_presence_plugin_failures() {
     });
 
     for expected in [
-        "17 of 142 commands failed",
+        "wakes are failing",
         "pane discovery lags",
         "rimz reload",
         "17 failed to apply topology",
@@ -495,6 +525,73 @@ fn mux_section_leads_with_the_cost_of_presence_plugin_failures() {
     ] {
         assert!(out.contains(expected), "missing {expected}:\n{out}");
     }
+    // The traffic line owns every count; the verdict owns the cause.
+    assert!(
+        !out.contains("17 of 142"),
+        "the verdict restates the traffic line's count:\n{out}"
+    );
+}
+
+/// Once the plugin reports what the host said, the verdict names the cause
+/// instead of prescribing a reload that would not fix it.
+#[test]
+fn mux_section_names_the_cause_a_failing_wake_reported() {
+    let mut mux = mux_fixture();
+    mux.presence_plugins = failing_presence_plugin(PresencePluginTelemetry {
+        commands_succeeded_delta: Some(125),
+        topology_failures_delta: Some(17),
+        last_failure: Some(PresenceCommandFailure {
+            exit_code: Some(1),
+            detail: "Error: could not serialize topology writer selection: lock timeout".to_owned(),
+        }),
+        ..presence_telemetry_fixture()
+    })
+    .into();
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+
+    assert!(
+        out.contains("could not serialize topology writer selection: lock timeout"),
+        "the verdict names the reported cause:\n{out}"
+    );
+    assert!(
+        !out.contains("rimz reload"),
+        "a named cause replaces the reload that would not fix it:\n{out}"
+    );
+}
+
+/// A wake killed before it could speak still leaves its exit status behind.
+#[test]
+fn mux_section_reports_a_silent_failure_by_its_exit_status() {
+    let mut mux = mux_fixture();
+    mux.presence_plugins = failing_presence_plugin(PresencePluginTelemetry {
+        other_failures_delta: Some(3),
+        last_failure: Some(PresenceCommandFailure {
+            exit_code: None,
+            detail: String::new(),
+        }),
+        ..presence_telemetry_fixture()
+    })
+    .into();
+
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+
+    assert!(
+        out.contains("killed before it could report"),
+        "a silent failure still reports how it died:\n{out}"
+    );
+    assert!(
+        out.contains("3 other failures"),
+        "the traffic line still owns the count:\n{out}"
+    );
 }
 
 /// A plugin loaded under a different Zellij than the running server is the one
