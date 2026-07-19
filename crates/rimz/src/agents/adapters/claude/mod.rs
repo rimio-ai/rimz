@@ -594,6 +594,14 @@ impl crate::agents::capabilities::SessionCapability for ClaudeAdapter {
     fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<super::LocalSessionObservation> {
         local_sessions::discover(workspaces)
     }
+
+    fn local_conversation_present(
+        &self,
+        session_id: &crate::ids::AgentSessionId,
+        cwd: &Path,
+    ) -> Option<bool> {
+        local_sessions::conversation_present(session_id, cwd)
+    }
 }
 
 impl crate::agents::capabilities::TranscriptCapability for ClaudeAdapter {

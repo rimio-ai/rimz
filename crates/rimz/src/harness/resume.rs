@@ -1922,20 +1922,36 @@ fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
     })
 }
 
-/// A resumed agent must have a conversation on disk. Claude and Codex stamp a
-/// `transcript_path` on their first `SessionStart` hook, before any prompt, so a
-/// never-answered session carries an id and a path to a file that was never
-/// written. Require a recorded transcript to exist and be non-empty; treat an
-/// unreported path (Pi, OpenCode) as present so their resume is unchanged.
+/// A resumed agent must have a conversation the provider can still reopen.
+///
+/// Claude and Codex stamp a `transcript_path` on their first `SessionStart`
+/// hook, before any prompt, so a never-answered session carries an id and a
+/// path to a file that was never written. When the record names a transcript,
+/// that file is the provider's own answer: require it to exist and be
+/// non-empty.
+///
+/// A record can also reach resume planning with no stamped path — an id adopted
+/// from a command line or from local-session discovery, or a rollup that lost
+/// the hook that carried it. Ask the adapter, which resolves the same location
+/// its own resume resolves
+/// ([`crate::agents::AgentDefinition::local_conversation_present`]), so a
+/// stored id the provider can no longer redeem plans fresh instead of launching
+/// into a resume that exits. Adapters that keep no inspectable store, as Pi and
+/// OpenCode do, abstain and the session stays resumable.
 pub fn resume_session_present(agent: &AgentState) -> bool {
-    match agent
+    if let Some(path) = agent
         .transcript_path
         .as_deref()
         .filter(|path| !path.is_empty())
     {
-        Some(path) => std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0),
-        None => true,
+        return std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0);
     }
+    agent_worktree(agent)
+        .and_then(|cwd| {
+            find_definition(&agent.kind)
+                .and_then(|adapter| adapter.local_conversation_present(&agent.agent_id, &cwd))
+        })
+        .unwrap_or(true)
 }
 
 fn agent_worktree(agent: &AgentState) -> Option<PathBuf> {

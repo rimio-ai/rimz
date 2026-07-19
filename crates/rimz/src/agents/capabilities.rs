@@ -324,6 +324,21 @@ pub trait SessionCapability: CoreCapability {
         Vec::new()
     }
 
+    /// Report whether the provider's machine-local store still holds the
+    /// conversation that `resume_command` would reopen for one exact session in
+    /// `cwd`. Resume planning treats this as the authority on whether a stored
+    /// session id is still redeemable, so an implementation answers only where
+    /// it resolves the same location the provider's own resume resolves.
+    /// `None` keeps planning on its recorded-transcript fallback, for adapters
+    /// whose store is absent, shared, or too coarse to prove one id absent.
+    fn local_conversation_present(
+        &self,
+        _session_id: &crate::ids::AgentSessionId,
+        _cwd: &Path,
+    ) -> Option<bool> {
+        None
+    }
+
     /// Parse a provider-native resumed-session command line. Implementations
     /// accept only their actual interactive launcher/engine forms and return a
     /// typed, non-empty session identity.

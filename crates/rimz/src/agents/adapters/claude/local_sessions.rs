@@ -209,6 +209,37 @@ pub(super) fn discover_under(config_dir: &Path, workspace: &Path) -> Vec<LocalSe
     ClaudeDiscoverySnapshot::default().refresh(key, Instant::now())
 }
 
+/// Resolve the one file `claude --resume <session_id>` opens from `cwd`, and
+/// report whether it holds a conversation.
+///
+/// Claude keys its store by config dir, then by the flattened workspace path,
+/// then by session id, so this resolves the same location the provider's own
+/// resume resolves — an id recorded against another workspace reads absent
+/// here exactly as it would there. `None` means no config dir is readable, so
+/// the caller keeps its recorded-transcript fallback rather than declaring a
+/// live session gone.
+pub(super) fn conversation_present(session_id: &AgentSessionId, cwd: &Path) -> Option<bool> {
+    let config_dirs = claude_config_dirs();
+    if config_dirs.is_empty() {
+        return None;
+    }
+    Some(conversation_present_under(&config_dirs, session_id, cwd))
+}
+
+fn conversation_present_under(
+    config_dirs: &[PathBuf],
+    session_id: &AgentSessionId,
+    cwd: &Path,
+) -> bool {
+    let workspace = crate::worktree::normalize_path_lexical(cwd);
+    let project = project_directory_name(&workspace);
+    let file = format!("{}.jsonl", session_id.as_str());
+    config_dirs.iter().any(|config_dir| {
+        fs::metadata(config_dir.join("projects").join(&project).join(&file))
+            .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+    })
+}
+
 fn observation_cmp(
     left: &LocalSessionObservation,
     right: &LocalSessionObservation,
@@ -328,6 +359,53 @@ mod tests {
     fn write_session(dir: &Path, id: &str, records: &[&str]) {
         fs::create_dir_all(dir).unwrap();
         fs::write(dir.join(format!("{id}.jsonl")), records.join("\n")).unwrap();
+    }
+
+    #[test]
+    fn conversation_presence_follows_the_workspace_the_resume_would_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dirs = vec![temp.path().to_path_buf()];
+        let workspace = Path::new("/repo/account-change");
+        let id = AgentSessionId::from("06e78f43-ecc1-486b-b50d-3c1f7770a5ae");
+        let project = temp.path().join("projects").join("-repo-account-change");
+
+        assert!(!conversation_present_under(&config_dirs, &id, workspace));
+
+        write_session(&project, id.as_str(), &[r#"{"type":"user"}"#]);
+        assert!(conversation_present_under(&config_dirs, &id, workspace));
+
+        // The same id under another workspace is not this workspace's session.
+        assert!(!conversation_present_under(
+            &config_dirs,
+            &id,
+            Path::new("/repo/other")
+        ));
+
+        // An unwritten session carries an id and an empty file.
+        let unwritten = AgentSessionId::from("11111111-1111-4111-8111-111111111111");
+        write_session(&project, unwritten.as_str(), &[]);
+        assert!(!conversation_present_under(
+            &config_dirs,
+            &unwritten,
+            workspace
+        ));
+    }
+
+    #[test]
+    fn conversation_presence_normalizes_the_workspace_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dirs = vec![temp.path().to_path_buf()];
+        let id = AgentSessionId::from("06e78f43-ecc1-486b-b50d-3c1f7770a5ae");
+        write_session(
+            &temp.path().join("projects").join("-repo-worktrees-lane"),
+            id.as_str(),
+            &[r#"{"type":"user"}"#],
+        );
+        assert!(conversation_present_under(
+            &config_dirs,
+            &id,
+            Path::new("/repo/nested/../worktrees/lane")
+        ));
     }
 
     #[test]

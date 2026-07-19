@@ -1268,7 +1268,6 @@ fn resume_session_present_requires_non_empty_recorded_file() {
     let missing = dir.path().join("missing.jsonl");
 
     let mut agent = agent("claude", "a1", "/repo", None, 0);
-    assert!(resume_session_present(&agent));
     agent.transcript_path = Some(present.to_string_lossy().into_owned());
     assert!(resume_session_present(&agent));
     agent.transcript_path = Some(missing.to_string_lossy().into_owned());
@@ -1277,6 +1276,28 @@ fn resume_session_present_requires_non_empty_recorded_file() {
     assert!(!resume_session_present(&agent));
     agent.transcript_path = Some(dir.path().to_string_lossy().into_owned());
     assert!(!resume_session_present(&agent));
+}
+
+/// A record without a recorded transcript defers to the adapter, which reads the
+/// provider store the resume would open; the store probe itself is covered in
+/// the adapter that owns it. Adapters that keep no inspectable store abstain,
+/// and an agent with no worktree leaves nothing for one to resolve — both stay
+/// resumable.
+#[test]
+fn resume_session_without_recorded_transcript_falls_back_to_resumable() {
+    let mut unplaced = agent(
+        "claude",
+        "06e78f43-ecc1-486b-b50d-3c1f7770a5ae",
+        "",
+        None,
+        0,
+    );
+    unplaced.transcript_path = None;
+    assert!(resume_session_present(&unplaced));
+
+    let mut opencode = agent("opencode", "ses_abc", "/repo", None, 0);
+    opencode.transcript_path = None;
+    assert!(resume_session_present(&opencode));
 }
 
 #[test]

@@ -764,6 +764,14 @@ impl AgentDefinition {
         self.sessions?.resumed_session_id_from_cmdline(cmdline)
     }
 
+    pub fn local_conversation_present(
+        &self,
+        session_id: &crate::ids::AgentSessionId,
+        cwd: &Path,
+    ) -> Option<bool> {
+        self.sessions?.local_conversation_present(session_id, cwd)
+    }
+
     pub fn parse_transcript_messages(&self, lines: &str) -> Vec<super::TranscriptMessage> {
         self.transcript.map_or_else(Vec::new, |capability| {
             capability.parse_transcript_messages(lines)
