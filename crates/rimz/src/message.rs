@@ -741,21 +741,6 @@ pub fn queue_head<'a>(
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
 
-/// The oldest queued message in the candidate's delivery lane. Resume nudges
-/// are control traffic for a parked turn, so they do not wait behind ordinary
-/// user messages that can only deliver after the turn resumes.
-pub(crate) fn queue_head_for_message<'a>(
-    pending: impl IntoIterator<Item = &'a MessageRecord>,
-    candidate: &'a MessageRecord,
-    now: Timestamp,
-) -> Option<&'a MessageRecord> {
-    if candidate.status != MessageStatus::Queued || !candidate.is_deliverable(now) {
-        return None;
-    }
-    older_ready_blocker(pending, candidate, |message| message.is_deliverable(now))
-        .or(Some(candidate))
-}
-
 /// Oldest ready record ahead of `candidate` in the same logical-card lane.
 /// Callers choose what readiness means: Store claims use durable stamps, while
 /// diagnosis can use currently true dynamic conditions for the candidate.

@@ -731,40 +731,6 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
 
     {
         let receiver = agent("real-session", Some("lucid-atlas"));
-        let mut ordinary = MessageRecord::new(
-            ws.clone(),
-            &receiver,
-            "ordinary".to_owned(),
-            true,
-            DeliveryGate::Done,
-        );
-        let mut resume = MessageRecord::new(
-            ws.clone(),
-            &receiver,
-            "continue".to_owned(),
-            true,
-            DeliveryGate::Resume,
-        );
-        ordinary.message_id = message_id(1);
-        resume.message_id = message_id(2);
-        let pending = [ordinary.clone(), resume.clone()];
-
-        assert_eq!(
-            queue_head_for_message(pending.iter(), &ordinary, now)
-                .unwrap()
-                .message_id,
-            ordinary.message_id
-        );
-        assert_eq!(
-            queue_head_for_message(pending.iter(), &resume, now)
-                .unwrap()
-                .message_id,
-            resume.message_id
-        );
-    }
-
-    {
-        let receiver = agent("real-session", Some("lucid-atlas"));
         let mut future = MessageRecord::new(
             ws.clone(),
             &receiver,

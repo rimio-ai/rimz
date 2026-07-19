@@ -5,9 +5,11 @@ use jiff::Timestamp;
 
 use crate::agents::{AgentCardRef, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
+#[cfg(test)]
+use crate::message::CLAIM_TTL;
 use crate::message::{
-    AutoCompact, CLAIM_TTL, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord,
-    MessageStatus, claim_expired, delivery_batch_indices,
+    AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
+    claim_expired, delivery_batch_indices,
 };
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 
