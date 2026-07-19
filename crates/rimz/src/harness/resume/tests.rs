@@ -122,16 +122,30 @@ fn resume_id(seed: &CohortSeed) -> Option<&str> {
     }
 }
 
-fn local_session(kind: &str, id: &str, created: &str, last: &str) -> LocalSessionObservation {
+fn session_ids(observations: &[LocalSessionObservation]) -> Vec<&str> {
+    observations
+        .iter()
+        .map(|observation| observation.session_id.as_str())
+        .collect()
+}
+
+/// A native session observation running from hour `created` to hour `last`,
+/// counted from a fixed base. Clustering compares interval endpoints only, so
+/// plain hours show the overlap structure that ISO stamps bury.
+fn local_session(kind: &str, id: &str, created: i64, last: i64) -> LocalSessionObservation {
+    let at = |hour: i64| {
+        "2025-01-01T00:00:00Z".parse::<Timestamp>().unwrap()
+            + std::time::Duration::from_secs(hour.max(0) as u64 * 3600)
+    };
     LocalSessionObservation {
         kind: AgentKind::new_unchecked(kind),
         session_id: AgentSessionId::from(id),
         workspace: PathBuf::from("/code/query-engine"),
         transcript_path: PathBuf::from(format!("/provider/{id}.jsonl")),
-        created_at: created.parse().unwrap(),
+        created_at: at(created),
         fresh_binding_at: None,
         first_event_at: None,
-        last_activity: last.parse().unwrap(),
+        last_activity: at(last),
         projection: crate::agents::LocalSessionProjection::IdentityOnly,
     }
 }
@@ -426,103 +440,44 @@ impl<'a> LaneCase<'a> {
 }
 
 #[test]
-fn concurrent_session_set_merges_transitive_overlap() {
-    let observations = vec![
-        local_session(
-            "claude",
-            "first",
-            "2025-01-01T09:00:00Z",
-            "2025-01-01T17:00:00Z",
-        ),
-        local_session(
-            "codex",
-            "second",
-            "2025-01-01T13:00:00Z",
-            "2025-01-01T16:00:00Z",
-        ),
-        local_session(
-            "claude",
-            "third",
-            "2025-01-01T10:00:00Z",
-            "2025-01-01T18:00:00Z",
-        ),
+fn concurrent_session_set_selects_the_newest_overlap_cluster() {
+    // `second` overlaps neither `first` nor `third` on its own, but both
+    // bracket it, so the three merge transitively into one working set.
+    let overlapping = vec![
+        local_session("claude", "first", 9, 17),
+        local_session("codex", "second", 13, 16),
+        local_session("claude", "third", 10, 18),
+    ];
+    // A day apart: two clusters that never touch.
+    let disjoint = vec![
+        local_session("claude", "yesterday", 9, 10),
+        local_session("codex", "today", 33, 34),
     ];
 
-    let (resume, skipped) = concurrent_session_set(observations);
-
-    assert_eq!(resume.len(), 3);
-    assert_eq!(resume[0].session_id.as_str(), "third");
-    assert!(skipped.is_empty());
-}
-
-#[test]
-fn concurrent_session_set_keeps_only_the_newest_disjoint_run() {
-    let observations = vec![
-        local_session(
-            "claude",
-            "yesterday",
-            "2025-01-01T09:00:00Z",
-            "2025-01-01T10:00:00Z",
+    for (label, observations, expect_resume, expect_skipped) in [
+        (
+            "transitive overlap merges, newest first",
+            overlapping,
+            vec!["third", "first", "second"],
+            vec![],
         ),
-        local_session(
-            "codex",
-            "today",
-            "2025-01-02T09:00:00Z",
-            "2025-01-02T10:00:00Z",
+        (
+            "only the newest disjoint run resumes",
+            disjoint,
+            vec!["today"],
+            vec!["yesterday"],
         ),
-    ];
-
-    let (resume, skipped) = concurrent_session_set(observations);
-
-    assert_eq!(resume[0].session_id.as_str(), "today");
-    assert_eq!(skipped[0].session_id.as_str(), "yesterday");
-}
-
-#[test]
-fn concurrent_session_set_handles_single_and_empty_inputs() {
-    let single = local_session(
-        "claude",
-        "only",
-        "2025-01-01T09:00:00Z",
-        "2025-01-01T10:00:00Z",
-    );
-    assert_eq!(
-        concurrent_session_set(vec![single]).0[0]
-            .session_id
-            .as_str(),
-        "only"
-    );
-    assert_eq!(concurrent_session_set(Vec::new()), (Vec::new(), Vec::new()));
-}
-
-#[test]
-fn discovered_candidate_is_paneless_and_keeps_native_facts() {
-    let observation = local_session(
-        "claude",
-        "only",
-        "2025-01-01T09:00:00Z",
-        "2025-01-01T10:00:00Z",
-    );
-
-    let candidate = ResumeCandidate::from_observation(&observation).expect("native candidate");
-
-    assert_eq!(candidate.session_id.as_str(), "only");
-    assert_eq!(candidate.cwd, PathBuf::from("/code/query-engine"));
-    assert!(candidate.pane_id.is_none());
-    assert!(candidate.channel.is_none());
-    assert!(candidate.team.is_none());
-    assert!(candidate.role.is_none());
-    assert!(candidate.conversation_present);
+        ("nothing observed", Vec::new(), vec![], vec![]),
+    ] {
+        let (resume, skipped) = concurrent_session_set(observations);
+        assert_eq!(session_ids(&resume), expect_resume, "{label}");
+        assert_eq!(session_ids(&skipped), expect_skipped, "{label}");
+    }
 }
 
 #[test]
 fn discovered_candidate_requires_session_and_workspace() {
-    let mut observation = local_session(
-        "claude",
-        "only",
-        "2025-01-01T09:00:00Z",
-        "2025-01-01T10:00:00Z",
-    );
+    let mut observation = local_session("claude", "only", 9, 10);
     observation.session_id = AgentSessionId::from("");
     assert!(ResumeCandidate::from_observation(&observation).is_none());
 
@@ -611,40 +566,52 @@ fn cohort_resume_includes_every_ended_session_backed_member() {
 }
 
 #[test]
-fn cohort_resume_refuses_a_still_live_member() {
-    let planner = AgentState {
+fn cohort_refuses_live_and_unmatched_specs() {
+    // The pet name is what proves the live-member label format.
+    let live_planner = AgentState {
         name: Some("swift-otter".to_owned()),
         ..team_agent("claude", "planner", "planner", "/code/forge", 1)
     };
-    let err = cohort_with(
-        &[planner],
-        &[cohort_cell("claude", Some("planner"))],
-        Some("forge"),
-        live,
-        |_| true,
-        |_| true,
-    )
-    .expect_err("live member refuses resume");
 
-    assert_eq!(
-        err,
-        CohortResumeErr::MembersStillLive {
-            labels: vec!["claude:swift-otter (planner)".to_owned()]
-        }
-    );
-}
-
-#[test]
-fn cohort_resume_refuses_when_nothing_matches() {
-    let agents = vec![agent("codex", "c1", "/code/query-engine", 1)];
-    let err = cohort(&agents, &[cohort_cell("claude", None)], None).expect_err("no matching kind");
-
-    assert_eq!(
-        err,
-        CohortResumeErr::NothingToResume {
-            spec: "claude".to_owned()
-        }
-    );
+    for (label, agents, cells, team, liveness, on_disk, expected) in [
+        (
+            "a still-live member blocks the relaunch",
+            vec![live_planner],
+            vec![cohort_cell("claude", Some("planner"))],
+            Some("forge"),
+            live as fn(&AgentState) -> AgentLiveness,
+            true,
+            CohortResumeErr::MembersStillLive {
+                labels: vec!["claude:swift-otter (planner)".to_owned()],
+            },
+        ),
+        (
+            "no prior session of the requested kind",
+            vec![agent("codex", "c1", "/code/query-engine", 1)],
+            vec![cohort_cell("claude", None)],
+            None,
+            dead,
+            true,
+            CohortResumeErr::NothingToResume {
+                spec: "claude".to_owned(),
+            },
+        ),
+        (
+            "a vanished worktree drops its members",
+            vec![agent("claude", "a1", "/code/gone", 1)],
+            vec![cohort_cell("claude", None)],
+            None,
+            dead,
+            false,
+            CohortResumeErr::NothingToResume {
+                spec: "claude".to_owned(),
+            },
+        ),
+    ] {
+        let err =
+            cohort_with(&agents, &cells, team, liveness, |_| on_disk, |_| true).expect_err(label);
+        assert_eq!(err, expected, "{label}");
+    }
 }
 
 #[test]
@@ -816,110 +783,92 @@ fn cohort_relaunch_normalizes_worktrees_and_keeps_named_team_siblings() {
 }
 
 #[test]
-fn cohort_relaunch_uses_newest_inline_launch_group() {
-    let old_planner = inline_agent(
-        "claude",
-        "old-planner",
-        "launch_old",
-        0,
-        "/code/feature",
-        10,
-    );
-    let old_coder = inline_agent("codex", "old-coder", "launch_old", 1, "/code/feature", 9);
-    let new_planner = AgentState {
-        ended_at: Some(Timestamp::UNIX_EPOCH),
-        ..inline_agent("claude", "new-planner", "launch_new", 0, "/code/feature", 2)
-    };
-    let new_coder = AgentState {
-        ended_at: Some(Timestamp::UNIX_EPOCH),
-        ..inline_agent("codex", "new-coder", "launch_new", 1, "/code/feature", 1)
-    };
-
-    assert_eq!(
-        inspect_cohort_relaunch(
-            &[old_planner, old_coder, new_planner, new_coder],
-            Path::new("/code/feature"),
-            &[cohort_cell("claude", None), cohort_cell("codex", None)],
-            None,
-        ),
-        CohortRelaunchState::Closed
-    );
-}
-
-#[test]
 fn cohort_relaunch_presence_table() {
-    let cell = cohort_cell("codex", None);
-    let ended = AgentState {
+    let one_cell = vec![cohort_cell("codex", None)];
+    let two_cells = vec![cohort_cell("claude", None), cohort_cell("codex", None)];
+    let closed = |agent: AgentState| AgentState {
         ended_at: Some(Timestamp::UNIX_EPOCH),
-        ..agent("codex", "ended", "/code/feature", 4)
+        ..agent
     };
-    let with_pane = agent("codex", "pane", "/code/feature", 3);
-    let without_pane = AgentState {
+    let paneless = |agent: AgentState| AgentState {
         pane: None,
-        ..agent("codex", "paneless", "/code/feature", 2)
+        ..agent
     };
+    let member = |kind, id, group, ordinal, secs| {
+        inline_agent(kind, id, group, ordinal, "/code/feature", secs)
+    };
+
+    let with_pane = agent("codex", "pane", "/code/feature", 3);
     let live_without_pane = {
         let base = agent("codex", "live", "/code/feature", 1);
         AgentState {
-            pane: None,
             runtime_owner: Some(crate::store::runtime::current_process_owner(
                 crate::pane::RuntimeOwnerKind::Agent,
                 base.agent_id.to_string(),
             )),
-            ..base
+            ..paneless(base)
         }
     };
+    let closed_newest_group = vec![
+        member("claude", "old-planner", "launch_old", 0, 10),
+        member("codex", "old-coder", "launch_old", 1, 9),
+        closed(member("claude", "new-planner", "launch_new", 0, 2)),
+        closed(member("codex", "new-coder", "launch_new", 1, 1)),
+    ];
+    let present_group = vec![
+        member("claude", "older", "launch_group", 0, 5),
+        member("codex", "fresher", "launch_group", 1, 1),
+    ];
 
-    for (label, agents, expected) in [
-        ("absent", Vec::new(), CohortRelaunchState::Absent),
-        ("ended", vec![ended], CohortRelaunchState::Closed),
+    for (label, agents, cells, expected) in [
+        ("absent", Vec::new(), &one_cell, CohortRelaunchState::Absent),
+        (
+            "ended",
+            vec![closed(agent("codex", "ended", "/code/feature", 4))],
+            &one_cell,
+            CohortRelaunchState::Closed,
+        ),
         (
             "unknown with pane",
             vec![with_pane],
+            &one_cell,
             CohortRelaunchState::Present {
                 focus_pane: Some(pane_id("terminal_pane")),
             },
         ),
         (
             "unknown without pane",
-            vec![without_pane],
+            vec![paneless(agent("codex", "paneless", "/code/feature", 2))],
+            &one_cell,
             CohortRelaunchState::Closed,
         ),
         (
             "live without pane",
             vec![live_without_pane],
+            &one_cell,
             CohortRelaunchState::Present { focus_pane: None },
+        ),
+        (
+            "newest inline group decides, and it is closed",
+            closed_newest_group,
+            &two_cells,
+            CohortRelaunchState::Closed,
+        ),
+        (
+            "focus lands on the freshest present pane",
+            present_group,
+            &two_cells,
+            CohortRelaunchState::Present {
+                focus_pane: Some(pane_id("terminal_fresher")),
+            },
         ),
     ] {
         assert_eq!(
-            inspect_cohort_relaunch(
-                &agents,
-                Path::new("/code/feature"),
-                std::slice::from_ref(&cell),
-                None,
-            ),
+            inspect_cohort_relaunch(&agents, Path::new("/code/feature"), cells, None),
             expected,
             "{label}"
         );
     }
-}
-
-#[test]
-fn cohort_relaunch_focuses_freshest_present_pane() {
-    let older = inline_agent("claude", "older", "launch_group", 0, "/code/feature", 5);
-    let fresher = inline_agent("codex", "fresher", "launch_group", 1, "/code/feature", 1);
-
-    assert_eq!(
-        inspect_cohort_relaunch(
-            &[older, fresher],
-            Path::new("/code/feature"),
-            &[cohort_cell("claude", None), cohort_cell("codex", None)],
-            None,
-        ),
-        CohortRelaunchState::Present {
-            focus_pane: Some(pane_id("terminal_fresher")),
-        }
-    );
 }
 
 #[test]
@@ -1401,52 +1350,70 @@ fn caps_and_reports_the_overflow() {
 }
 
 #[test]
-fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
-    let agents = vec![agent("codex", "c1", "/code/query-engine", 1)];
-    let plan = plan(&agents);
-    assert_eq!(plan.tabs[0].label, "#query-engine");
-    assert_eq!(
-        build_label("codex", None, Path::new("/code/query-engine")),
-        "codex:query-engine"
-    );
+fn build_label_prefers_channel_over_worktree_dir() {
+    let cwd = Path::new("/code/query-engine");
+    assert_eq!(build_label("codex", None, cwd), "codex:query-engine");
+    assert_eq!(build_label("codex", Some("design"), cwd), "codex:design");
 }
 
 #[test]
-fn named_channel_groups_by_explicit_channel_and_replays_identity() {
-    let design = AgentState {
-        channel: Some("design".to_owned()),
-        ..agent("codex", "c1", "/code/query-engine", 1)
-    };
-    let plan = plan(&[design]);
+fn resume_tab_labels_and_replayed_channel() {
+    for (label, agent, project_root, tab_label, channel, team) in [
+        (
+            "no channel falls back to the worktree directory",
+            agent("codex", "c1", "/code/query-engine", 1),
+            None,
+            "#query-engine",
+            None,
+            None,
+        ),
+        (
+            "an explicit channel names the tab and is replayed",
+            AgentState {
+                channel: Some("design".to_owned()),
+                ..agent("codex", "c1", "/code/query-engine", 1)
+            },
+            None,
+            "#design",
+            Some("design"),
+            None,
+        ),
+        (
+            "a team worktree under the project root resolves a room channel",
+            team_agent("claude", "planner", "planner", "/code/project-wt/auth", 1),
+            Some(Path::new("/code/project")),
+            "#auth",
+            Some("auth"),
+            Some("forge"),
+        ),
+    ] {
+        let plan = plan_with(
+            &[agent],
+            DEFAULT_RESUME_MAX,
+            project_root,
+            |_| true,
+            |_| true,
+        );
 
-    assert_eq!(plan.tabs[0].label, "#design");
-    assert_eq!(
-        build_label("codex", Some("design"), Path::new("/code/query-engine")),
-        "codex:design"
-    );
-    let request = decode_exec_request(&first_argv(&plan.tabs[0]));
-    assert_eq!(request.identity.params.channel.as_deref(), Some("design"));
+        assert_eq!(plan.tabs[0].label, tab_label, "{label}");
+        let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+        assert_eq!(
+            request.identity.params.channel.as_deref(),
+            channel,
+            "{label}"
+        );
+        assert_eq!(request.identity.params.team.as_deref(), team, "{label}");
+    }
 }
 
+/// A recorded transcript is the provider's own answer: require it to exist and
+/// carry content. A record without one defers to the adapter, which reads the
+/// store the resume would open; the store probe itself is covered in the
+/// adapter that owns it. Adapters that keep no inspectable store abstain, and
+/// an agent with no worktree leaves nothing for one to resolve — both stay
+/// resumable.
 #[test]
-fn worktree_team_resume_replays_flat_worktree_channel() {
-    let planner = team_agent("claude", "planner", "planner", "/code/project-wt/auth", 1);
-    let plan = plan_with(
-        &[planner],
-        DEFAULT_RESUME_MAX,
-        Some(Path::new("/code/project")),
-        |_| true,
-        |_| true,
-    );
-
-    assert_eq!(plan.tabs[0].label, "#auth");
-    let request = decode_exec_request(&first_argv(&plan.tabs[0]));
-    assert_eq!(request.identity.params.channel.as_deref(), Some("auth"));
-    assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
-}
-
-#[test]
-fn resume_session_present_requires_non_empty_recorded_file() {
+fn resume_session_present_requires_a_redeemable_conversation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let present = dir.path().join("present.jsonl");
     std::fs::write(&present, "{}\n").expect("write transcript");
@@ -1454,29 +1421,37 @@ fn resume_session_present_requires_non_empty_recorded_file() {
     std::fs::write(&empty, "").expect("write empty transcript");
     let missing = dir.path().join("missing.jsonl");
 
-    let mut agent = agent("claude", "a1", "/repo", 0);
-    agent.transcript_path = Some(present.to_string_lossy().into_owned());
-    assert!(resume_session_present(&agent));
-    agent.transcript_path = Some(missing.to_string_lossy().into_owned());
-    assert!(!resume_session_present(&agent));
-    agent.transcript_path = Some(empty.to_string_lossy().into_owned());
-    assert!(!resume_session_present(&agent));
-    agent.transcript_path = Some(dir.path().to_string_lossy().into_owned());
-    assert!(!resume_session_present(&agent));
-}
+    let recorded = |path: &Path| AgentState {
+        transcript_path: Some(path.to_string_lossy().into_owned()),
+        ..agent("claude", "a1", "/repo", 0)
+    };
 
-/// A record without a recorded transcript defers to the adapter, which reads the
-/// provider store the resume would open; the store probe itself is covered in
-/// the adapter that owns it. Adapters that keep no inspectable store abstain,
-/// and an agent with no worktree leaves nothing for one to resolve — both stay
-/// resumable.
-#[test]
-fn resume_session_without_recorded_transcript_falls_back_to_resumable() {
-    let unplaced = agent("claude", "06e78f43-ecc1-486b-b50d-3c1f7770a5ae", "", 0);
-    assert!(resume_session_present(&unplaced));
-
-    let opencode = agent("opencode", "ses_abc", "/repo", 0);
-    assert!(resume_session_present(&opencode));
+    for (label, agent, expected) in [
+        (
+            "a written transcript is redeemable",
+            recorded(&present),
+            true,
+        ),
+        ("a missing transcript is not", recorded(&missing), false),
+        ("an empty transcript is not", recorded(&empty), false),
+        (
+            "a directory is not a transcript",
+            recorded(dir.path()),
+            false,
+        ),
+        (
+            "no transcript and no worktree leaves nothing to probe",
+            agent("claude", "06e78f43-ecc1-486b-b50d-3c1f7770a5ae", "", 0),
+            true,
+        ),
+        (
+            "an adapter without an inspectable store abstains",
+            agent("opencode", "ses_abc", "/repo", 0),
+            true,
+        ),
+    ] {
+        assert_eq!(resume_session_present(&agent), expected, "{label}");
+    }
 }
 
 #[test]
@@ -1743,81 +1718,74 @@ fn lane_listing_groups_deduped_members_and_sorts_freshest_first() {
     assert_eq!(lanes[1].members, 1);
 }
 
+/// The team tab is planned first and its panes count against the cap, so a
+/// flat member only rides along when the cap leaves room for it.
 #[test]
-fn lane_all_closed_counts_team_panes_before_flat_capacity() {
-    let (teams, profiles, commands) = team_configs();
-    let agents = [
-        team_agent("claude", "planner", "planner", "/lane", 1),
-        team_agent("codex", "coder", "coder", "/lane", 2),
-        agent("codex", "flat", "/lane", 3),
-    ];
-    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
-        .current_root("/lane")
-        .max(2)
-        .restore(|| {
-            Ok(LaneRestoreConfig {
-                teams,
-                profiles,
-                commands,
+fn lane_all_closed_restores_team_first_within_the_cap() {
+    for (label, max, entries, panes, over_cap) in [
+        (
+            "the two team panes consume a cap of two",
+            2,
+            ["team"].as_slice(),
+            [2].as_slice(),
+            true,
+        ),
+        (
+            "a cap of three leaves room for the flat member",
+            3,
+            ["team", "flat"].as_slice(),
+            [2, 1].as_slice(),
+            false,
+        ),
+    ] {
+        let (teams, profiles, commands) = team_configs();
+        let agents = [
+            team_agent("claude", "planner", "planner", "/lane", 1),
+            team_agent("codex", "coder", "coder", "/lane", 2),
+            agent("codex", "flat", "/lane", 3),
+        ];
+        let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+            .current_root("/lane")
+            .max(max)
+            .restore(|| {
+                Ok(LaneRestoreConfig {
+                    teams,
+                    profiles,
+                    commands,
+                })
             })
-        })
-        .run()
-        .unwrap();
+            .run()
+            .unwrap();
 
-    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
-        panic!("expected closed restore");
-    };
-    assert_eq!(
-        plan.recovery
-            .entries
-            .iter()
-            .filter(|entry| matches!(entry, RecoveryEntry::Team(_)))
-            .count(),
-        1
-    );
-    assert!(
-        !plan
+        let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+            panic!("expected closed restore: {label}");
+        };
+        let kinds = plan
             .recovery
             .entries
             .iter()
-            .any(|entry| matches!(entry, RecoveryEntry::Flat(_)))
-    );
-    assert!(
-        plan.recovery
-            .skipped
-            .iter()
-            .any(|skip| { skip.label == "codex:lane" && skip.reason == ResumeSkipReason::OverCap })
-    );
-}
-
-#[test]
-fn lane_all_closed_restores_team_and_flat_remainder() {
-    let (teams, profiles, commands) = team_configs();
-    let agents = [
-        team_agent("claude", "planner", "planner", "/lane", 1),
-        team_agent("codex", "coder", "coder", "/lane", 2),
-        agent("codex", "flat", "/lane", 3),
-    ];
-    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
-        .current_root("/lane")
-        .max(3)
-        .restore(|| {
-            Ok(LaneRestoreConfig {
-                teams,
-                profiles,
-                commands,
+            .map(|entry| match entry {
+                RecoveryEntry::Team(_) => "team",
+                RecoveryEntry::Flat(_) => "flat",
             })
-        })
-        .run()
-        .unwrap();
-
-    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
-        panic!("expected closed restore");
-    };
-    assert_eq!(plan.recovery.entries.len(), 2);
-    assert!(matches!(plan.recovery.entries[0], RecoveryEntry::Team(_)));
-    assert!(matches!(plan.recovery.entries[1], RecoveryEntry::Flat(_)));
-    assert_eq!(plan.recovery.entries[1].pane_count(), 1);
+            .collect::<Vec<_>>();
+        let pane_counts = plan
+            .recovery
+            .entries
+            .iter()
+            .map(RecoveryEntry::pane_count)
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, entries, "{label}");
+        assert_eq!(pane_counts, panes, "{label}");
+        assert_eq!(
+            plan.recovery
+                .skipped
+                .iter()
+                .any(|skip| skip.label == "codex:lane" && skip.reason == ResumeSkipReason::OverCap),
+            over_cap,
+            "{label}"
+        );
+    }
 }
 
 #[test]
@@ -1909,12 +1877,7 @@ fn lane_listing_discovers_only_worktrees_without_durable_members() {
         .worktrees(&worktrees)
         .discover(|path| {
             assert_eq!(path, Path::new("/repo-worktrees/native"));
-            vec![local_session(
-                "claude",
-                "native",
-                "2025-01-04T09:00:00Z",
-                "2025-01-04T10:00:00Z",
-            )]
+            vec![local_session("claude", "native", 9, 10)]
         })
         .restore(|| panic!("listing must not load restore config"))
         .run()
