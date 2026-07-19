@@ -243,7 +243,7 @@ fn project_group<'a>(
     let pr_open = group.pr_state == Some(WorktreePrState::Open);
     project_rows(
         &group.rows,
-        group.finished,
+        group.collapses(),
         filter,
         expanded,
         held,
@@ -254,7 +254,7 @@ fn project_group<'a>(
 
 fn project_rows<'a>(
     source: &'a [SidebarRow],
-    finished: bool,
+    collapses: bool,
     filter: Option<BodyFilter>,
     expanded: bool,
     held: Option<&HashSet<String>>,
@@ -270,9 +270,9 @@ fn project_rows<'a>(
                 .map(|row| row.id.as_str())
         })
         .flatten();
-    // Keep a finished roster whole while focus or the order hold anchors any
+    // Keep a collapsing roster whole while focus or the order hold anchors any
     // member. Once both clear, every row collapses into the receipt together.
-    let revealed = finished
+    let revealed = collapses
         && source.iter().any(|row| {
             row_is_focused(row, focused_pane) || held.is_some_and(|ids| ids.contains(&row.id))
         });
@@ -286,7 +286,7 @@ fn project_rows<'a>(
                 .is_some_and(|status| status != AgentStatus::Idle)
             || row_is_focused(row, focused_pane)
             || liveness_process_id == Some(row.id.as_str());
-        let natural = if finished {
+        let natural = if collapses {
             revealed
         } else {
             essential || natural_visible < WORKTREE_ROW_CAP
@@ -296,7 +296,7 @@ fn project_rows<'a>(
         let visible = match filter {
             Some(filter) => filter.matches(row, pr_open),
             None if expanded => true,
-            None if finished => revealed,
+            None if collapses => revealed,
             None => {
                 essential
                     || held.is_some_and(|ids| ids.contains(&row.id))
@@ -451,6 +451,19 @@ mod tests {
             None,
         );
         assert_eq!(ids(&filtered), ["done-unread", "done-focused"]);
+    }
+
+    #[test]
+    fn roster_keeps_lone_finished_row_visible() {
+        let mut finished = group(vec![agent_row("done", AgentStatus::Success)]);
+        finished.finished = true;
+        let snapshot = snapshot(vec![finished]);
+
+        let roster = VisibleRoster::baseline(&snapshot);
+
+        assert_eq!(ids(&roster), ["done"]);
+        assert_eq!(roster.groups()[0].hidden_count(), 0);
+        assert_eq!(roster.groups()[0].natural_hidden_count(), 0);
     }
 
     #[test]

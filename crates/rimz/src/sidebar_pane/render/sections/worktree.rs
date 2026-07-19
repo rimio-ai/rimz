@@ -1,8 +1,8 @@
 //! Worktree group composition: the bold pod header with its linked-PR identity
 //! and right-pinned git story, the dim `external` divider, and the row roster
-//! with its parallel hit-test map entries. Finished pods collapse hidden agents
-//! into a two-line receipt: an expandable team/member roster with cost pinned
-//! right, then token totals with the finished age pinned right.
+//! with its parallel hit-test map entries. Finished multi-row pods collapse
+//! hidden agents into a two-line receipt: an expandable team/member roster with
+//! cost pinned right, then token totals with the finished age pinned right.
 
 use std::collections::HashSet;
 
@@ -49,9 +49,9 @@ enum WorktreeTail {
 /// The row index captured for a row's lines matches `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
 /// expansion, and make-up filters. The caller skips a group the filter empties;
-/// a finished pod the collapse empties still renders its header and two-line
-/// receipt when totals exist. The live more/less line is filter-suppressed
-/// because a narrowed body is already uncapped.
+/// a finished multi-row pod the collapse empties still renders its header and
+/// two-line receipt when totals exist. The live more/less line is
+/// filter-suppressed because a narrowed body is already uncapped.
 pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     render: WorktreeRenderContext<'_, '_>,
 ) -> RenderedBlock {
@@ -83,15 +83,13 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
     let header = group_header(ctx.theme, group, ctx.width, group_selected);
-    let header_hit = group
-        .finished
-        .then(|| (0..u16::MAX, HitTarget::ToggleGroup(group.key.clone())));
-    // A finished worktree's name toggles its collapsed roster. A live worktree's
+    let collapses = group.collapses();
+    let header_hit = collapses.then(|| (0..u16::MAX, HitTarget::ToggleGroup(group.key.clone())));
+    // A collapsing worktree's name toggles its roster. Every other worktree's
     // name lands on the first row — the adjacent agent — while the `external`
     // divider stays inert chrome.
-    let header_target =
-        (!group.finished && group.kind != SidebarWorktreeKind::External && passing > 0)
-            .then_some(first_row);
+    let header_target = (!collapses && group.kind != SidebarWorktreeKind::External && passing > 0)
+        .then_some(first_row);
     block.push_with_regions(
         with_gutter(ctx.theme, header, lane, None, ctx.width),
         header_target,
@@ -132,21 +130,21 @@ fn worktree_tail(
     visible_group: &VisibleGroup<'_>,
 ) -> WorktreeTail {
     let group = visible_group.source();
+    let collapses = group.collapses();
     let hidden = visible_group.hidden_count();
     if hidden > 0 && !visible_group.expanded() {
         return WorktreeTail::More {
-            line: if group.finished {
+            line: if collapses {
                 finished_roster_line(ctx, visible_group, roster)
             } else {
                 Line::styled(format!("  +{hidden} more"), ctx.theme.muted())
             },
-            totals: group
-                .finished
+            totals: collapses
                 .then(|| finished_totals_line(ctx, group))
                 .flatten(),
         };
     }
-    if visible_group.natural_hidden_count() > 0 && visible_group.expanded() && !group.finished {
+    if visible_group.natural_hidden_count() > 0 && visible_group.expanded() && !collapses {
         WorktreeTail::Less(Line::styled("  − less", ctx.theme.muted()))
     } else {
         WorktreeTail::None

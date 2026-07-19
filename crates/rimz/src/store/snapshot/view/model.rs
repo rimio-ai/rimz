@@ -161,7 +161,8 @@ pub struct SidebarWorktreeGroup {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worktree_backed: bool,
     /// Terminal line of work: git verdict `Done` with no attention or running
-    /// member. Forces the archive band and collapses the roster in renderers.
+    /// member. Forces the archive band and collapses multi-row rosters in
+    /// renderers.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub finished: bool,
     /// Whether the working tree is clean.
@@ -183,6 +184,14 @@ pub struct SidebarWorktreeGroup {
     /// branch, else the worktree marker's `--from-pr` provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_number: Option<u64>,
+}
+
+impl SidebarWorktreeGroup {
+    /// A finished multi-row roster collapses behind the two-line receipt; a
+    /// lone finished card stays on screen under the merged header.
+    pub fn collapses(&self) -> bool {
+        self.finished && self.rows.len() > 1
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

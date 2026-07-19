@@ -595,6 +595,40 @@ fn finished_header_toggles_both_directions_while_live_header_jumps_to_a_row() {
 }
 
 #[test]
+fn lone_finished_row_stays_visible_and_header_jumps_to_it() {
+    for (kind, row, identity) in [
+        ("agent", agent_row("solo", AgentStatus::Success), "✓ solo"),
+        ("process", process_row("shell"), "○ zsh"),
+    ] {
+        let mut finished = group(vec![row]);
+        finished.finished = true;
+
+        let (texts, map, hits) = render_group(&finished, false);
+
+        assert!(
+            texts.iter().any(|line| line.contains(identity)),
+            "lone finished {kind} keeps its natural card identity: {texts:?}"
+        );
+        assert!(
+            texts.iter().all(|line| !line.contains('▸')),
+            "lone finished {kind} emits no receipt: {texts:?}"
+        );
+        assert_eq!(map[0], Some(0), "{kind} header jumps to its row");
+        assert!(
+            map.iter().skip(1).all(|target| *target == Some(0)),
+            "every {kind} card line targets row 0: {map:?}"
+        );
+        assert!(
+            hits.iter().all(|hit| !matches!(
+                hit.target,
+                HitTarget::ToggleGroup(ref key) if key == &finished.key
+            )),
+            "lone finished {kind} header has no collapse target: {hits:?}"
+        );
+    }
+}
+
+#[test]
 fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
     let mut first = agent_row_with_cost("planner", 0.42);
     first.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
@@ -666,7 +700,9 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
     agent.usage.fresh_input_tokens = Some(300_000);
     agent.usage.output_tokens = Some(180_000);
     agent.usage.cache_read_input_tokens = Some(700_000);
-    let mut finished = group(vec![row]);
+    let mut witness = agent_row("coder", AgentStatus::Success);
+    witness.last_activity = row.last_activity;
+    let mut finished = group(vec![row, witness]);
     finished.finished = true;
 
     let (texts, _, _) = render_group_at_width(&finished, false, 30);
