@@ -838,10 +838,6 @@ impl FetchMode {
 }
 
 impl FetchRequest {
-    pub(super) fn store_delta_with_fresh_panes() -> Self {
-        Self::producer_fresh_panes()
-    }
-
     pub(super) fn producer_fresh_panes() -> Self {
         Self {
             mode: FetchMode::ProducerFreshPanes,

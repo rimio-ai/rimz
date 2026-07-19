@@ -595,7 +595,7 @@ impl LoopState {
             }
             SidebarEvent::StoreDelta { .. } => {
                 let request = if requests_verification {
-                    FetchRequest::store_delta_with_fresh_panes()
+                    FetchRequest::producer_fresh_panes()
                 } else {
                     FetchRequest::default()
                 };
