@@ -346,27 +346,27 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         "the first poke carries the session name: {:?}",
         lines[0],
     );
+    let telemetry: serde_json::Value = serde_json::from_str(
+        logged_arg(&lines[0], "--plugin-telemetry").expect("telemetry payload"),
+    )
+    .expect("telemetry JSON parses");
     assert!(
-        logged_arg(&lines[0], "--plugin-mem-pages")
-            .expect("telemetry carries WASM pages")
-            .parse::<u64>()
-            .expect("pages parse")
-            > 0,
+        telemetry["mem_pages"]
+            .as_u64()
+            .is_some_and(|pages| pages > 0),
         "the first poke carries WASM page telemetry: {:?}",
         lines[0],
     );
-    logged_arg(&lines[0], "--plugin-uptime-ms")
-        .expect("telemetry carries uptime")
-        .parse::<u64>()
-        .expect("uptime parses");
+    assert!(telemetry["uptime_ms"].as_u64().is_some());
     assert_eq!(
-        logged_arg(&lines[0], "--plugin-commands"),
-        Some("0"),
+        telemetry["commands_completed"], 0,
         "the first poke has not yet completed a run_command reply: {:?}",
         lines[0],
     );
     assert!(
-        logged_arg(&lines[0], "--plugin-zellij-version").is_some_and(|version| !version.is_empty()),
+        telemetry["zellij_version"]
+            .as_str()
+            .is_some_and(|version| !version.is_empty()),
         "the first poke carries the Zellij version: {:?}",
         lines[0],
     );
