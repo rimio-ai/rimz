@@ -1009,6 +1009,7 @@ pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Lande
     };
     if non_merge.lines().any(|line| !line.trim().is_empty()) {
         let Some(head_tree) = head_tree else {
+            // Fail closed if tree lookup violates the resolved-commit invariant.
             return LandedVerdict::Unknown;
         };
         let exclusive_range = format!("{head_ref}..{comparison_ref}");

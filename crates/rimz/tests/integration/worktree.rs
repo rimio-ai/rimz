@@ -1562,6 +1562,117 @@ fn gc_sweeps_rewritten_worktree_whose_tip_tree_landed() {
 }
 
 #[test]
+fn gc_keeps_unlanded_worktree_whose_tip_tree_is_only_shared_history() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    if !git_succeeds(
+        &env.project_root,
+        &["merge-tree", "--write-tree", "HEAD", "HEAD"],
+    ) {
+        return;
+    }
+    let shared_history_tree = git_stdout(&env.project_root, &["rev-parse", "HEAD^{tree}"]);
+    commit_file(
+        &env.project_root,
+        "shared.txt",
+        "shared\n",
+        "establish branch point",
+    );
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+
+    commit_file(
+        &path,
+        "shared.txt",
+        "branch scratch\n",
+        "change shared file on branch",
+    );
+    git(&path, &["rm", "shared.txt"]);
+    git(&path, &["commit", "-m", "remove shared file on branch"]);
+    let branch_tree = git_stdout(&path, &["rev-parse", "HEAD^{tree}"]);
+    assert_eq!(
+        branch_tree, shared_history_tree,
+        "the branch tip repeats a tree from shared pre-divergence history"
+    );
+
+    commit_file(
+        &env.project_root,
+        "shared.txt",
+        "main content\n",
+        "change shared file on main",
+    );
+    let comparison_tree = git_stdout(&env.project_root, &["rev-parse", "main^{tree}"]);
+    assert_ne!(
+        branch_tree, comparison_tree,
+        "the current main tree must not match the branch tip"
+    );
+    assert!(
+        !git_succeeds(&path, &["merge-tree", "--write-tree", "main", "HEAD"]),
+        "the modify-delete conflict prevents merge absorption"
+    );
+    assert_eq!(
+        git_stdout(
+            &path,
+            &[
+                "log",
+                "--right-only",
+                "--cherry-pick",
+                "--no-merges",
+                "--format=%H",
+                "main...HEAD",
+            ],
+        )
+        .lines()
+        .count(),
+        2,
+        "the branch retains unlanded patch residue"
+    );
+    assert!(
+        git_stdout(&path, &["log", "--format=%T", "main"])
+            .lines()
+            .any(|tree| tree == branch_tree),
+        "an unrestricted main scan would find the shared historical tree"
+    );
+    let exclusive_trees = git_stdout(&path, &["log", "--format=%T", "HEAD..main"]);
+    assert!(
+        exclusive_trees.lines().any(|tree| tree == comparison_tree),
+        "main's tip tree is present but cannot stand in for the branch tip"
+    );
+    assert!(
+        exclusive_trees.lines().all(|tree| tree != branch_tree),
+        "the shared historical tree is absent from main's exclusive history"
+    );
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .landed,
+        rimz::worktree::LandedVerdict::Pending,
+        "shared pre-divergence history cannot prove branch content landed"
+    );
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("kept: demo — not merged yet"));
+
+    assert!(path.exists(), "gc keeps the unlanded worktree");
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "gc keeps the unlanded branch"
+    );
+}
+
+#[test]
 fn gc_sweeps_merge_landed_worktree() {
     if git_missing() {
         return;
