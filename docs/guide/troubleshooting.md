@@ -4,7 +4,7 @@ When something looks off, `rimz doctor` is the first move, this page is the symp
 
 ## Start with `rimz doctor`
 
-`rimz doctor` reports the whole room in one pass: the multiplexer backend and whether its version clears the floor, per-machine config parsing, per-agent hook status, workspace and store health, project trust state, terminal color depth, scheduled loop tasks, and the Zellij presence grant. The `HOOKS` section lists detected agents and summarizes absent agents in a footer; RimZ offers their hooks automatically once the agent is installed. It resolves the workspace, probes each of those surfaces, and prints a verdict. A normal run writes nothing, so you can run it as often as you like.
+`rimz doctor` reports the whole room in one pass: the multiplexer backend and whether its version clears the floor, per-machine config parsing, per-agent hook status, workspace and store health, project trust state, terminal color depth, scheduled loop tasks, and the Zellij presence grant. The `HOOKS` section opens with the agents already reporting to RimZ, gives a row to each one that wants a command, and closes with the agents this machine does not carry; RimZ offers their hooks automatically once one appears. It resolves the workspace, probes each of those surfaces, and prints a verdict. A normal run writes nothing, so you can run it as often as you like.
 
 ```sh
 rimz doctor
@@ -28,19 +28,22 @@ MULTIPLEXER
   backend:        zellij
   version:        zellij 0.44.3
   zellij floor:   ✓ OK (>= 0.44.0 required)
+  log:            /tmp/zellij-1000/zellij-log/zellij.log
+                  read last 256 KB of 3.3 MB · written by every zellij server running as uid 1000
   session health: ✓ ok
   presence:       ✓ event mode (poked 12s ago)
   …
+    ! plugin pane queries timed out — pane discovery lags behind the room (44× over 6m, last 12s ago)
+    ▸ 1180 records are routine room lifecycle: a client left the session · zellij acknowledged CliPipe late (the action still ran)
 
 TERMINAL
   depth:   ✓ truecolor (mode truecolor)
 
 HOOKS
-   AGENT     STATUS     FIX
-✓  claude    installed  -
-✓  codex     installed  -
-✓  pi        installed  -
-✓  opencode  installed  -
+  4 reporting to RimZ: claude, codex, opencode, pi
+   AGENT   STATUS         FIX
+✗  cursor  not installed  run `rimz hooks install cursor` to wire cursor agents
+    · not found on this machine: amp, droid, grok, kimi
 
 TRUST
   trust: ✓ trusted (granted 2026-07-07T13:59:21.705032339Z)
@@ -55,10 +58,13 @@ MESSAGES
 ✗  msg_06fk51isbpsgl81l  errored  @coder                 20m ago  receiver not found
 
 DIAGNOSTICS
-  12 recent records (…/diag.log.jsonl)
-  …
+  12 recent incidents (…/diag.log.jsonl)
+   KIND               SEEN  SUMMARY
+!  pane_count_drop  9m ago  pane count 16->14; frames frame.1784492895638.6.pane_count_drop.json
+    ▸ 11 handled and closed themselves: group_migration · hosted_carry_dropped · link_alert
 
-✗ 2 problems, ⚠ 9 warnings
+✗ 2 problems in HOOKS, MESSAGES  ·  ! 1 warning in DIAGNOSTICS
+  ✗ marks something broken, with the command that fixes it beside it; ! marks something degraded that still works
 ```
 
 Run it before anything below. Most symptoms on this page show up as a named doctor row with the fix already attached, so the report doubles as the fix list.
@@ -67,15 +73,17 @@ Run it before anything below. Most symptoms on this page show up as a named doct
 
 Each row carries a glyph that sets its tone:
 
-- `✓` clear, `●` informational, `·` neutral background fact.
-- `⚠` a warning: working, but worth a look.
+- `✓` clear, `▸` informational, `·` neutral background fact.
+- `!` a warning: working, but worth a look.
 - `✗` a problem: something is broken and a `FIX` column or inline hint says what to run.
 
-The last line tallies the run (`✗ 2 problems, ⚠ 9 warnings`, or `✓ no problems found`). Work top down and clear the `✗` rows first. The rest of this page expands the common ones.
+The last line counts what the run found and names the sections holding it (`✗ 2 problems in HOOKS, MESSAGES  ·  ! 1 warning in DIAGNOSTICS`, or `✓ everything checked is healthy`), with a reminder of what each glyph asks of you. Jump to the sections it names and clear the `✗` rows first. The rest of this page expands the common ones.
 
-The tail sections (`AGENTS`, `MESSAGES`, `DIAGNOSTICS`) report live state rather than machine setup: the agents doctor observed, messages that failed to land, and RimZ's evidence-folded incidents. An `investigate` incident is unresolved or lacks enough proof and its `warn`/`alarm` impact contributes to the final tally; `contained` means a guard successfully prevented bad state, `recovered` pairs the active episode with its recovery, and `expected` has positive evidence for a normal topology or lifecycle transition. Those last three are informational context for a bug report rather than a to-do list.
+The tail sections (`AGENTS`, `MESSAGES`, `DIAGNOSTICS`) report live state rather than machine setup: the agents doctor observed, messages that failed to land, and RimZ's evidence-folded incidents. An `investigate` incident is unresolved or lacks enough proof, takes a row of the table, and contributes its `warn`/`alarm` impact to the final tally. The three settled states share one closing line that counts them and names their kinds: `contained` means a guard successfully prevented bad state, `recovered` pairs the active episode with its recovery, and `expected` has positive evidence for a normal topology or lifecycle transition. Those are context for a bug report rather than a to-do list; `rimz doctor --json` keeps every field of each one.
 
-The Zellij log source is host-user-wide for the uid Doctor prints, so its grouped issues can include other Zellij sessions owned by that user. The tmux log source is server-scoped. Use the scope and retained samples before attributing a log issue to the current room; incomplete or changed versions of a known benign sequence stay investigative.
+The `MULTIPLEXER` section's `log` row names the server log, how far back the scan reached, and who writes into it: the Zellij log is host-user-wide for the uid doctor prints, so its issues can come from other Zellij sessions owned by that user, while the tmux log is server-scoped. Check that scope before attributing an issue to this room.
+
+A busy room provokes far more log traffic than it has problems, so the scan sorts what it finds. An issue still under investigation gets its own line naming what it means, how often it fired, and how recently; an alarm also keeps the raw record for a bug report. Records with positive evidence of ordinary lifecycle — a client leaving, a pane's terminal closing, a late action acknowledgement on a busy server — are counted and named on one closing line instead of one line each. Incomplete or changed versions of a known benign sequence stay investigative rather than being dismissed on a guess.
 
 The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, `agents.toml`, or `loop.toml` file RimZ cannot parse and includes the precise error. `rimz start` also warns on stderr and opens the room with built-in defaults for every setting in that file; fix it, then restart so RimZ loads the intended values.
 
@@ -161,10 +169,10 @@ When the running RimZ build drifts from an agent's tested version range, reporti
 rimz reload             # re-exec sidebars in place; every pane stays unchanged
 rimz sidebar repair     # repair missing, duplicate, mis-docked, or wedged sidebars
 rimz reload --repair    # run those two independent operations in order
-rimz doctor --clear     # dismiss diagnostics and incidents from before the upgrade
+rimz doctor --clear     # dismiss diagnostics, incidents, and log records from before the upgrade
 ```
 
-`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the pane-preserving fix for that mixed-build state. A sidebar that misses the command's reporting window keeps converging from the durable room record without a repair. Run `rimz sidebar repair` only for structural damage; a replacement mounts and proves a current-build heartbeat before the old pane closes. Once the live writers converge, `rimz doctor --clear` records a workspace watermark so pre-upgrade diagnostics, the last incident, and message failures stop appearing without deleting their evidence files.
+`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the pane-preserving fix for that mixed-build state. A sidebar that misses the command's reporting window keeps converging from the durable room record without a repair. Run `rimz sidebar repair` only for structural damage; a replacement mounts and proves a current-build heartbeat before the old pane closes. Once the live writers converge, `rimz doctor --clear` records a workspace watermark so pre-upgrade diagnostics, the last incident, message failures, and multiplexer log records stop appearing without deleting their evidence files.
 
 After an upgrade, `rimz start` and `rimz attach` also warn when a live room still runs a different sidebar build and point to `rimz reload`.
 
