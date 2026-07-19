@@ -671,8 +671,9 @@ fn spending_source_for_expanded_pattern(path: &Path) -> Option<super::spending::
         root
     };
     let relative = relative.to_str()?.to_owned();
-    super::spending::SpendingSourceTree::new(root, relative)
-        .map(|tree| super::spending::SpendingSource::group(vec![tree]))
+    super::spending::SpendingSource::tree(root, relative)
+        .into_iter()
+        .next()
 }
 
 fn spending_source_for_relative_pattern(
@@ -689,8 +690,9 @@ fn spending_source_for_relative_pattern(
     };
     let root = base.join(components[..split].iter().collect::<PathBuf>());
     let relative = components[split..].iter().collect::<PathBuf>();
-    super::spending::SpendingSourceTree::new(root, relative.to_str()?.to_owned())
-        .map(|tree| super::spending::SpendingSource::group(vec![tree]))
+    super::spending::SpendingSource::tree(root, relative.to_str()?.to_owned())
+        .into_iter()
+        .next()
 }
 
 fn glob_component_has_magic(component: &str) -> bool {
