@@ -249,6 +249,7 @@ fn finalize_agent_cell(
             .extend(adapter.spec().launch.permission_args(permission_mode));
         cell.launch.mode = Some(permission_mode);
     }
+    let mut overridden = Vec::new();
     if !options.preset.is_empty() {
         let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
             kind: cell.kind.to_string(),
@@ -266,6 +267,7 @@ fn finalize_agent_cell(
             .filter(|value| !value.is_empty())
         {
             cell.launch.model = Some(model.clone());
+            overridden.push(crate::agents::PresetField::Model);
         }
         if let Some(effort) = options
             .preset
@@ -274,6 +276,7 @@ fn finalize_agent_cell(
             .filter(|value| !value.is_empty())
         {
             cell.launch.effort = Some(effort.clone());
+            overridden.push(crate::agents::PresetField::Effort);
         }
     }
     cell.args.extend(options.passthrough.iter().cloned());
@@ -281,7 +284,7 @@ fn finalize_agent_cell(
         cell.launch.budget = Some(budget.to_string());
     }
     if let Some(adapter) = adapter {
-        reconcile_preset_args(cell, adapter, warnings)?;
+        reconcile_preset_args(cell, adapter, &overridden, warnings)?;
         if cell.launch.model.is_none()
             && let Some(default) = adapter.default_launch_model()
         {
@@ -300,9 +303,13 @@ fn finalize_agent_cell(
     Ok(())
 }
 
+/// Reconcile declared launch fields against the args a profile carries. Fields
+/// in `overridden` were named on this command line: the CLI value replaces the
+/// profile's arg silently, since the override is the user's stated intent.
 fn reconcile_preset_args(
     cell: &mut AgentCell,
     adapter: &crate::agents::AgentDefinition,
+    overridden: &[crate::agents::PresetField],
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
     use crate::agents::PresetField;
@@ -357,7 +364,7 @@ fn reconcile_preset_args(
             continue;
         }
         for occurrence in &occurrences {
-            if occurrence.value != declared_value {
+            if occurrence.value != declared_value && !overridden.contains(&field) {
                 warnings.push(LaunchFinalizeWarning::DeclaredFieldWins {
                     profile: label.clone(),
                     setting: matcher.display_setting(&occurrence.value),

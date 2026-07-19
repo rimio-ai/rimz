@@ -574,7 +574,7 @@ fn args_only_model_uses_last_short_or_joined_occurrence() {
 }
 
 #[test]
-fn launch_model_override_wins_over_profile_and_args_models() {
+fn launch_model_override_wins_over_profile_and_args_models_silently() {
     let mut layout = LayoutSpec::single(preset_cell(
         "codex",
         &["--model", "profile", "--model", "raw"],
@@ -590,8 +590,28 @@ fn launch_model_override_wins_over_profile_and_args_models() {
         &[],
     )
     .expect("finalize launch");
-    assert_eq!(warnings.len(), 2);
+    assert!(warnings.is_empty());
     assert!(matches!(&layout.columns[0].rows[0],
+        Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
+            if model == "override" && args == &["--model", "override"]));
+
+    let mut args_only = LayoutSpec::single(preset_cell(
+        "codex",
+        &["--model", "profile-args"],
+        None,
+        None,
+    ));
+    let warnings = finalize(
+        &mut args_only,
+        &crate::agents::LaunchPreset {
+            model: Some("override".into()),
+            ..Default::default()
+        },
+        &[],
+    )
+    .expect("finalize launch");
+    assert!(warnings.is_empty());
+    assert!(matches!(&args_only.columns[0].rows[0],
         Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
             if model == "override" && args == &["--model", "override"]));
 }
