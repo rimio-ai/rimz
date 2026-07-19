@@ -55,9 +55,8 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             return Err(err.into());
         }
     };
-    let (process, raw_provider_argv) = match stage {
-        rimz::harness::launch::AgentProcessStage::Wrapped(process) => (process, false),
-        rimz::harness::launch::AgentProcessStage::FinalizedRaw(process) => (process, true),
+    let process = match stage {
+        rimz::harness::launch::AgentProcessStage::Ready(process) => process,
         rimz::harness::launch::AgentProcessStage::LoginShellReentry { process, argv } => {
             let (program, rest) = argv.split_first().ok_or_else(|| {
                 anyhow::anyhow!("finalized Qwen launch produced an empty command")
@@ -76,12 +75,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(identity) = launch_identity.as_ref() {
         record_own_launch_pane(&invocation, identity);
     }
-    let argv = if raw_provider_argv {
-        &process.provider_argv
-    } else {
-        &process.argv
-    };
-    let (program, rest) = argv.split_first().ok_or_else(|| {
+    let (program, rest) = process.argv.split_first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
     if should_exec_agent_directly(&request) {

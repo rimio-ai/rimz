@@ -94,7 +94,7 @@ pub type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
     /// Provider command before shell startup wrapping.
-    pub provider_argv: Vec<String>,
+    provider_argv: Vec<String>,
     /// Provider executable used by PATH preflight.
     pub provider_program: String,
     /// Final shell-wrapped command.
@@ -105,8 +105,7 @@ pub struct CompiledAgentProcess {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentProcessStage {
-    Wrapped(CompiledAgentProcess),
-    FinalizedRaw(CompiledAgentProcess),
+    Ready(CompiledAgentProcess),
     LoginShellReentry {
         process: CompiledAgentProcess,
         argv: Vec<String>,
@@ -483,6 +482,33 @@ pub fn compile_agent_process(
     })
 }
 
+/// Compile one process and resolve managed-account applicability from its final inputs.
+pub fn compile_managed_agent_process(
+    project_root: &Path,
+    rtk: crate::config::RtkMode,
+    request: &ExecRequest,
+    cwd: &Path,
+    requested: &crate::agents::ManagedLaunchState,
+) -> AgentProcessResult<(CompiledAgentProcess, crate::agents::ManagedLaunchState)> {
+    let process = compile_agent_process(project_root, rtk, request, cwd)?;
+    let state = if matches!(
+        requested,
+        crate::agents::ManagedLaunchState::PendingResolution
+    ) {
+        let adapter = crate::agents::find_adapter(request.kind.as_str())
+            .expect("process compilation already resolved the adapter");
+        adapter.resolve_managed_launch(
+            cwd,
+            &effective_launch_env(&process.env),
+            request.identity.params.model.as_deref(),
+            &process.provider_argv,
+        )
+    } else {
+        requested.clone()
+    };
+    Ok((process, state))
+}
+
 /// Compile the serialized wrapper stage for a proven managed provider binding.
 /// Pending stages re-enter through the login shell once; finalized stages
 /// execute raw provider argv after the adapter verifies the effective binding.
@@ -518,8 +544,17 @@ pub fn compile_agent_process_stage(
     } else {
         None
     };
+    finalize_agent_process_stage(process, request, managed_launch.as_ref(), rimz_bin)
+}
+
+fn finalize_agent_process_stage(
+    process: CompiledAgentProcess,
+    request: &ExecRequest,
+    managed_launch: Option<&crate::agents::ManagedLaunchState>,
+    rimz_bin: &Path,
+) -> Result<AgentProcessStage, AgentProcessStageErr> {
     match &request.provider_account {
-        ProviderAccountState::Unbound => Ok(AgentProcessStage::Wrapped(process)),
+        ProviderAccountState::Unbound => Ok(AgentProcessStage::Ready(process)),
         ProviderAccountState::Pending { binding } => {
             let mut finalized = request.clone();
             finalized.provider_account = ProviderAccountState::Finalized {
@@ -533,10 +568,13 @@ pub fn compile_agent_process_stage(
             Ok(AgentProcessStage::LoginShellReentry { process, argv })
         }
         ProviderAccountState::Finalized { binding } => {
-            if managed_launch.as_ref().and_then(|state| state.binding()) != Some(binding) {
+            if managed_launch.and_then(crate::agents::ManagedLaunchState::binding) != Some(binding)
+            {
                 return Err(AgentProcessStageErr::FinalizedProviderMismatch);
             }
-            Ok(AgentProcessStage::FinalizedRaw(process))
+            let mut process = process;
+            process.argv = std::mem::take(&mut process.provider_argv);
+            Ok(AgentProcessStage::Ready(process))
         }
     }
 }
@@ -708,7 +746,7 @@ pub fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
 /// Process environment after applying RimZ's launch overrides. Non-Unicode
 /// ambient values stay inherited by the child but cannot affect Qwen's textual
 /// provider selection.
-pub fn effective_launch_env(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+fn effective_launch_env(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut env = std::env::vars_os()
         .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .collect::<BTreeMap<_, _>>();

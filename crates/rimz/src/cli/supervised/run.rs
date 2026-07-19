@@ -335,21 +335,13 @@ fn prepare_supervised(
             ..rimz::harness::launch::ExecIdentity::default()
         },
     };
-    let process = rimz::harness::launch::compile_agent_process(
+    let (process, managed_launch) = rimz::harness::launch::compile_managed_agent_process(
         &workspace.project_root,
         machine_config.harness.rtk,
         &launch_invocation,
         &launch.cwd,
+        &request.managed_launch,
     )?;
-    let managed_launch = match &request.managed_launch {
-        rimz::agents::ManagedLaunchState::PendingResolution => adapter.resolve_managed_launch(
-            &launch.cwd,
-            &rimz::harness::launch::effective_launch_env(&process.env),
-            agent_cell.launch.model.as_deref(),
-            &process.provider_argv,
-        ),
-        state => state.clone(),
-    };
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(&process)?;
     let store = crate::cli::open_store(&workspace)?;

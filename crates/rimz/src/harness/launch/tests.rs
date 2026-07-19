@@ -465,6 +465,13 @@ fn provider_account_stage_validates_and_reenters_once() {
                 extra_args: Vec::new(),
             },
         ),
+        (
+            "qwen",
+            ExecAction::Fork {
+                session_id: "sess-1".to_owned(),
+                extra_args: Vec::new(),
+            },
+        ),
     ] {
         let mut input = request(kind, action);
         input.provider_account = ProviderAccountState::Pending {
@@ -525,6 +532,63 @@ fn provider_account_stage_validates_and_reenters_once() {
     .expect_err("unresolved account mismatches");
     assert!(err.is_finalized_provider_mismatch());
     assert!(!format!("{err:?}").contains("owner"));
+
+    let unbound = request(
+        "codex",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let expected = compile_agent_process(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &unbound,
+        project.path(),
+    )
+    .expect("ordinary process");
+    let AgentProcessStage::Ready(ordinary) = compile_agent_process_stage(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &unbound,
+        project.path(),
+        Path::new("/bin/rimz"),
+    )
+    .expect("ordinary stage") else {
+        panic!("unbound launch is ready");
+    };
+    assert_eq!(ordinary.argv, expected.argv);
+    assert_ne!(ordinary.argv, ordinary.provider_argv);
+
+    let mut finalized_request = request(
+        "qwen",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    finalized_request.provider_account = ProviderAccountState::Finalized {
+        binding: binding.clone(),
+    };
+    let process = compile_agent_process(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &finalized_request,
+        project.path(),
+    )
+    .expect("finalized process");
+    let raw = process.provider_argv.clone();
+    let AgentProcessStage::Ready(finalized) = finalize_agent_process_stage(
+        process,
+        &finalized_request,
+        Some(&crate::agents::ManagedLaunchState::Bound(binding)),
+        Path::new("/bin/rimz"),
+    )
+    .expect("matching finalized binding") else {
+        panic!("finalized launch is ready");
+    };
+    assert_eq!(finalized.argv, raw);
+    assert!(finalized.provider_argv.is_empty());
 }
 
 #[test]

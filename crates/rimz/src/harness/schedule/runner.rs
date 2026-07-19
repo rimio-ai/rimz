@@ -20,9 +20,11 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use crate::agents::ProviderAccountBinding;
 use crate::agents::{
-    HookPreflightErr, LongestWindowSignal, ManagedLaunchState, ProviderAccountBinding,
-    ProviderCapacity, TurnLifecycleNeed, WindowSurplus, find_adapter, preflight_hooks,
+    HookPreflightErr, LongestWindowSignal, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed,
+    WindowSurplus, find_adapter, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use crate::harness::assist_log::AssistWindowReset;
@@ -1199,18 +1201,14 @@ fn resolve_managed_spawn_state(
             ..Default::default()
         },
     };
-    let process = crate::harness::launch::compile_agent_process(
+    let (_, managed_launch) = crate::harness::launch::compile_managed_agent_process(
         &workspace.project_root,
         config.harness.rtk,
         &invocation,
         &workspace.worktree_root,
+        &ManagedLaunchState::PendingResolution,
     )?;
-    Ok(adapter.resolve_managed_launch(
-        &workspace.worktree_root,
-        &crate::harness::launch::effective_launch_env(&process.env),
-        resolved.model.as_deref(),
-        &process.provider_argv,
-    ))
+    Ok(managed_launch)
 }
 
 /// Newest durable supervised run still active for one loop task.
@@ -1442,10 +1440,6 @@ pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
     }
 }
 
-pub fn deadline_expired(entry: &TaskEntry) -> bool {
-    deadline_expired_at(entry, Timestamp::now())
-}
-
 fn deadline_expired_at(entry: &TaskEntry, now: Timestamp) -> bool {
     entry.deadline.is_some_and(|deadline| now >= deadline)
 }
@@ -1651,42 +1645,6 @@ fn drain_pipe(
     })
 }
 
-/// Whether `entry`'s provider already has a budget window counting down, read
-/// from the shared account-scoped cache. The window state is account-scoped, so
-/// the entry's workspace is resolved only to reach this user's runtime root.
-pub fn window_already_running(
-    entry: &TaskEntry,
-    kind: &str,
-    managed_launch: &ManagedLaunchState,
-) -> Result<Option<bool>> {
-    let runtime = entry_runtime(entry)?;
-    Ok(capacity_for(&runtime, kind, managed_launch)
-        .and_then(|capacity| capacity.shortest_window_running(Timestamp::now())))
-}
-
-/// Whether `entry`'s provider already has its longest budget window counting
-/// down, read from the shared account-scoped cache.
-pub fn reset_window_already_running(
-    entry: &TaskEntry,
-    kind: &str,
-    managed_launch: &ManagedLaunchState,
-) -> Result<Option<bool>> {
-    let runtime = entry_runtime(entry)?;
-    Ok(capacity_for(&runtime, kind, managed_launch)
-        .and_then(|capacity| capacity.longest_window_running(Timestamp::now())))
-}
-
-pub fn binding_cache_matches(
-    entry: &TaskEntry,
-    kind: &str,
-    binding: &ProviderAccountBinding,
-) -> Result<Option<bool>> {
-    let runtime = entry_runtime(entry)?;
-    Ok(ProviderCapacity::binding_cache_matches(
-        &runtime, kind, binding,
-    ))
-}
-
 /// Resolve the exact provider account a fresh ping task would launch with.
 fn managed_ping_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState {
     let config = MachineConfig::load_lenient();
@@ -1739,25 +1697,6 @@ fn qwen_ping_cache_reason(
         (_, Some(true)) => Some("qwen budget window already counting down".to_owned()),
         _ => None,
     }
-}
-
-/// Decide whether a task's provider-window surplus gate keeps this fire closed.
-pub fn surplus_gate(
-    entry: &TaskEntry,
-    kind: &str,
-    managed_launch: &ManagedLaunchState,
-    now: Timestamp,
-) -> Result<Option<String>> {
-    if entry.surplus.is_none() && entry.surplus_after.is_none() {
-        return Ok(None);
-    }
-    let runtime = entry_runtime(entry)?;
-    Ok(surplus_gate_in(
-        entry,
-        kind,
-        capacity_for(&runtime, kind, managed_launch)
-            .and_then(|capacity| capacity.longest_window_surplus(now)),
-    ))
 }
 
 fn surplus_gate_in(
