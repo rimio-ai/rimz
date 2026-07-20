@@ -967,6 +967,54 @@ fn model_breakdown_reserves_the_last_capped_row_for_other() {
 }
 
 #[test]
+fn model_breakdown_folds_rows_below_one_percent_into_other() {
+    let stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::from([
+            ("model-a".to_owned(), model_tally(9_750, 97.5, 9_750, 0, 0)),
+            ("model-b".to_owned(), model_tally(100, 1.0, 100, 0, 0)),
+            ("model-c".to_owned(), model_tally(100, 1.0, 100, 0, 0)),
+            ("model-d".to_owned(), model_tally(25, 0.25, 25, 0, 0)),
+            ("model-e".to_owned(), model_tally(25, 0.25, 25, 0, 0)),
+        ]),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+
+    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+
+    assert_eq!(model_breakdown_size(&stats, Window::AllTime), 4);
+    assert_eq!(
+        models
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["Model A", "Model B", "Model C", "Other"]
+    );
+    assert_eq!(models[3].1.tokens, 50);
+    assert_eq!(models[3].1.input, 50);
+    assert_eq!(models[3].1.usd, 0.5);
+}
+
+#[test]
+fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
+    let stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::from([
+            ("model-a".to_owned(), model_tally(100, 0.0, 100, 0, 0)),
+            ("model-b".to_owned(), model_tally(50, 0.0, 50, 0, 0)),
+        ]),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+
+    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+
+    assert_eq!(models.len(), 2);
+    assert!(models.iter().all(|(name, _)| name != "Other"));
+}
+
+#[test]
 fn modern_theme_flips_stats_token_glyphs_to_nerd_font() {
     let theme = ThemeConfig {
         style: Some(rimz::config::ThemeStyle::Modern),
@@ -1091,6 +1139,41 @@ fn agent_breakdown_folds_tail_totals_into_other() {
 
     let all = agent_breakdown(&stats, Window::AllTime, None);
     assert_eq!(all.len(), 5, "uncapped JSON data stays complete");
+}
+
+#[test]
+fn agent_breakdown_folds_rows_below_one_percent_into_other() {
+    let stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::new(),
+        by_agent: BTreeMap::from([
+            ("agent-a".to_owned(), tally(9_800, 98.0, 196)),
+            ("agent-b".to_owned(), tally(100, 1.0, 2)),
+            ("agent-c".to_owned(), tally(50, 0.5, 1)),
+            ("agent-d".to_owned(), tally(25, 0.25, 1)),
+        ]),
+        total: SpendTally::default(),
+    };
+
+    let agents = agent_breakdown(&stats, Window::AllTime, Some(MAX_AGENTS));
+
+    assert_eq!(agent_breakdown_size(&stats, Window::AllTime), 3);
+    assert_eq!(
+        agents
+            .iter()
+            .map(|agent| agent.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Agent-a", "Agent-b", "Other"]
+    );
+    assert_eq!(agents[1].window.sessions, 2, "one percent stays named");
+    assert_eq!(agents[2].window.sessions, 2);
+    assert_eq!(agents[2].window.tokens, 75);
+    assert_eq!(agents[2].window.usd, 0.75);
+    assert!((agents[2].share - 0.01).abs() < f64::EPSILON);
+
+    let all = agent_breakdown(&stats, Window::AllTime, None);
+    assert_eq!(all.len(), 4, "uncapped JSON data stays complete");
+    assert!(all.iter().all(|agent| !agent.folded));
 }
 
 #[test]

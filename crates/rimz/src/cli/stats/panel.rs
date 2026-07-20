@@ -648,14 +648,22 @@ pub(super) fn model_cells(
         .collect()
 }
 
-fn model_breakdown_size(stats: &Stats, active: Window) -> usize {
+pub(super) fn model_breakdown_size(stats: &Stats, active: Window) -> usize {
+    let total_usd: f64 = stats
+        .by_model
+        .values()
+        .map(|tally| active.select(tally))
+        .filter(|spend| spend.tokens > 0)
+        .map(|spend| spend.usd)
+        .sum();
     let mut named = 0;
     let mut other = false;
     for (id, tally) in &stats.by_model {
-        if active.select(tally).tokens == 0 {
+        let spend = active.select(tally);
+        if spend.tokens == 0 {
             continue;
         }
-        if id.is_empty() {
+        if id.is_empty() || below_minimum_share(spend.usd, total_usd) {
             other = true;
         } else {
             named += 1;
@@ -677,6 +685,13 @@ pub(super) fn model_breakdown(
     if total == 0 {
         return Vec::new();
     }
+    let total_usd: f64 = stats
+        .by_model
+        .values()
+        .map(|tally| active.select(tally))
+        .filter(|spend| spend.tokens > 0)
+        .map(|spend| spend.usd)
+        .sum();
 
     let mut named: Vec<(String, SpendWindow)> = Vec::new();
     let mut other = SpendWindow::default();
@@ -685,7 +700,7 @@ pub(super) fn model_breakdown(
         if spend.tokens == 0 {
             continue;
         }
-        if id.is_empty() {
+        if id.is_empty() || below_minimum_share(spend.usd, total_usd) {
             fold_window(&mut other, &spend);
         } else {
             named.push((rimz::agents::model_display::display_model(id), spend));
@@ -713,6 +728,10 @@ pub(super) fn model_breakdown(
     named
 }
 
+fn below_minimum_share(value: f64, total: f64) -> bool {
+    total > 0.0 && value < total * MIN_BREAKDOWN_SHARE
+}
+
 pub(super) fn fold_window(acc: &mut SpendWindow, add: &SpendWindow) {
     acc.usd += add.usd;
     acc.tokens += add.tokens;
@@ -735,12 +754,26 @@ pub(super) struct AgentBreakdown<'a> {
     pub(super) folded: bool,
 }
 
-fn agent_breakdown_size(stats: &Stats, active: Window) -> usize {
-    stats
+pub(super) fn agent_breakdown_size(stats: &Stats, active: Window) -> usize {
+    let total_sessions: u32 = stats
         .by_agent
         .values()
-        .filter(|tally| active.select(tally).tokens > 0)
-        .count()
+        .map(|tally| active.select(tally).sessions)
+        .sum();
+    let mut named = 0;
+    let mut other = false;
+    for tally in stats.by_agent.values() {
+        let window = active.select(tally);
+        if window.tokens == 0 {
+            continue;
+        }
+        if below_minimum_share(window.sessions.into(), total_sessions.into()) {
+            other = true;
+        } else {
+            named += 1;
+        }
+    }
+    named + usize::from(other)
 }
 
 pub(super) fn agent_breakdown(
@@ -784,19 +817,33 @@ pub(super) fn agent_breakdown(
     if cap == 0 {
         return Vec::new();
     }
-    if agents.len() > cap {
-        let folded = agents.split_off(cap - 1);
-        let mut window = SpendWindow::default();
-        let mut share = 0.0;
-        for agent in folded {
-            fold_window(&mut window, &agent.window);
-            share += agent.share;
+    let mut other_window = SpendWindow::default();
+    let mut other_share = 0.0;
+    let mut has_other = false;
+    agents.retain(|agent| {
+        if below_minimum_share(agent.window.sessions.into(), total_sessions.into()) {
+            fold_window(&mut other_window, &agent.window);
+            other_share += agent.share;
+            has_other = true;
+            false
+        } else {
+            true
         }
+    });
+    let natural_rows = agents.len() + usize::from(has_other);
+    if natural_rows > cap {
+        for agent in agents.split_off(cap - 1) {
+            fold_window(&mut other_window, &agent.window);
+            other_share += agent.share;
+            has_other = true;
+        }
+    }
+    if has_other {
         agents.push(AgentBreakdown {
             kind: "",
             name: "Other".to_owned(),
-            window,
-            share,
+            window: other_window,
+            share: other_share,
             folded: true,
         });
     }

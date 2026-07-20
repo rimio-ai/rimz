@@ -44,10 +44,7 @@ A one-shot run on a machine with recorded history, default glyph set:
   Agents
   ● Codex       ◎ 4003 · ◇ 30.3B · $21,808               77.6% ━━━━━━━━━━━━━────
   ● Claude      ◎ 1025 · ◇  7.3B · $10,149               19.9% ━━━──────────────
-  ● Pi          ◎   46 · ◇   33M ·     $28                0.9% ─────────────────
-  ● Open Code   ◎   28 · ◇  552K ·      $2                0.5% ─────────────────
-  ● Copilot     ◎   24 · ◇    1M ·      $0                0.5% ─────────────────
-  ● Other       ◎   33 · ◇    2M ·      $0                0.6% ─────────────────
+  ● Other       ◎  131 · ◇   36M ·     $30                2.5% ─────────────────
 
   Sessions: 5,159              Spend: $31,986.33
   Active days: 28/28           Longest streak: 51 days
@@ -86,13 +83,15 @@ Account-global setup creates the shared roots only (`ensure_shared_runtime`); st
 
 Every window's token total folds in cache-read tokens. Tokens are attributed per model and per agent independently of pricing coverage, so an unpriced model still contributes its tokens to the breakdown.
 
+Each named model must carry at least 1.0% of the window's model spend, and each named agent must carry at least 1.0% of its sessions. Smaller entries fold into `Other` before the row cap applies. A section with no priced model spend or no agent sessions has no defined percentage denominator, so its entries remain itemized until the cap applies. Machine-readable JSON keeps every entry separate.
+
 ## Rendering
 
 The panel is plain strings, not widgets. `render_panel` builds a `Vec<String>` and `emit` writes it with a shared left pad. Crossterm enters only for key events in the held loop, and the sidebar pane's ratatui stack is not on this path at all — expect string arithmetic, and expect tests that assert on rendered text.
 
 **Geometry.** `PanelGeometry::current` reads the terminal once per render. Columns choose the heatmap width through `weeks_for_terminal`, clamped between 4 and 52 weeks; the week count then fixes the panel width, and the panel centres in the terminal. Row count is read only when stdout is a TTY, so a pipe carries `None` and never degrades.
 
-**Degradation.** `fit` spends a row budget with data outranking chrome. The wordmark drops first, before any data row. The two breakdowns then shrink toward a floor of three rows each, split by `allocate_breakdown_rows` in proportion to what each section naturally wants. Both cap at six rows with the tail folded into a final `Other`, so a breakdown never grows without bound. A piped run keeps the full panel.
+**Degradation.** `fit` spends a row budget with data outranking chrome. The wordmark drops first, before any data row. The two breakdowns then shrink toward a floor of three rows each, split by `allocate_breakdown_rows` in proportion to what each section naturally wants after the 1.0% fold. Both cap at six rows with the remaining tail folded into the same final `Other`, so a breakdown never grows without bound. A piped run keeps the full panel.
 
 **Glyphs.** `resolve_panel_glyphs` reads the machine theme, so `[theme] style = "modern"` with `[theme.glyphs] set = "nerd_font"` swaps the token vocabulary (`◎ ◇ ↘ ↗ ◌`) for its Nerd Font equivalents while the CLI colors stay on the default palette. The [theme pipeline](./theme.md) owns that resolution.
 

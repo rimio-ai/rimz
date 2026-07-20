@@ -60,6 +60,9 @@ const GUTTER: usize = 6;
 /// Breakdown rows shown before the tail folds into the final "Other" row.
 const MAX_MODELS: usize = 6;
 const MAX_AGENTS: usize = 6;
+/// A named breakdown row must carry at least one percent of its section's
+/// displayed quantity; smaller rows fold into "Other".
+const MIN_BREAKDOWN_SHARE: f64 = 0.01;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
 const MIN_SHARE_BAR_WIDTH: usize = 10;
