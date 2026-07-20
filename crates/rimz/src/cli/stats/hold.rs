@@ -16,8 +16,8 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
         let (tx, rx) = mpsc::channel();
         let worker_paths = paths.clone();
         thread::spawn(move || {
-            let event = refresh_event(|| load_or_refresh_stats_via_service(&worker_paths));
-            let _ = tx.send(event);
+            let result = refresh_result(|| load_or_refresh_stats_via_service(&worker_paths));
+            let _ = tx.send(result);
         });
         match hold_cycle(&mut state, &rx)? {
             CycleExit::Refresh => {}
@@ -67,21 +67,13 @@ pub(super) enum CycleExit {
     Quit,
 }
 
-pub(super) struct RefreshEvent {
-    pub(super) stats: Option<Result<Stats>>,
-}
-
-pub(super) fn refresh_event(load: impl FnOnce() -> Result<Stats>) -> RefreshEvent {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(load)) {
-        Ok(stats) => RefreshEvent { stats: Some(stats) },
-        Err(payload) => {
-            tracing::warn!(
-                panic = %panic_payload_message(payload.as_ref()),
-                "stats refresh panicked"
-            );
-            RefreshEvent { stats: None }
-        }
-    }
+pub(super) fn refresh_result(load: impl FnOnce() -> Result<Stats>) -> Result<Stats> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(load)).unwrap_or_else(|payload| {
+        Err(anyhow!(
+            "stats refresh panicked: {}",
+            panic_payload_message(payload.as_ref())
+        ))
+    })
 }
 
 pub(super) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
@@ -113,12 +105,28 @@ impl HeldStats {
         }
     }
 
-    fn accept_refresh(&mut self, event: RefreshEvent, w: &mut impl Write) -> Result<()> {
-        if let Some(stats) = event.stats {
-            self.current = Some(stats?);
-            self.repaint(w)?;
+    pub(super) fn accept_refresh(
+        &mut self,
+        result: Result<Stats>,
+        w: &mut impl Write,
+    ) -> Result<()> {
+        match result {
+            Ok(stats) => {
+                self.current = Some(stats);
+                self.repaint(w)?;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "stats refresh failed; holding the current frame"
+                );
+            }
         }
         Ok(())
+    }
+
+    pub(super) fn has_frame(&self) -> bool {
+        self.current.is_some()
     }
 
     pub(super) fn apply_key(&mut self, key: KeyEvent, w: &mut impl Write) -> Result<KeyOutcome> {
@@ -171,9 +179,9 @@ impl HeldStats {
 
 pub(super) fn hold_cycle(
     state: &mut HeldStats,
-    rx: &mpsc::Receiver<RefreshEvent>,
+    rx: &mpsc::Receiver<Result<Stats>>,
 ) -> Result<CycleExit> {
-    let deadline = Instant::now() + REFRESH_INTERVAL;
+    let mut deadline = Instant::now() + REFRESH_INTERVAL;
     let mut refresh_finished = false;
     loop {
         if take_reload_request() {
@@ -183,6 +191,9 @@ pub(super) fn hold_cycle(
             Ok(event) => {
                 state.accept_refresh(event, &mut std::io::stdout().lock())?;
                 refresh_finished = true;
+                if !state.has_frame() {
+                    deadline = Instant::now() + EMPTY_REFRESH_RETRY;
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) if !refresh_finished => {

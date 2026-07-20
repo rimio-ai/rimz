@@ -508,8 +508,51 @@ fn held_stats_preserves_reload_quit_and_hold_outcomes() {
 }
 
 #[test]
-fn refresh_event_carries_success_and_error_without_unwinding() {
-    let success = refresh_event(|| {
+fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
+    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut out = Vec::new();
+    let today = unix_secs_now() as i64 / DAY_SECS;
+    let mut stats = Stats {
+        by_day: BTreeMap::from([(today, day(42, 0.0))]),
+        by_model: BTreeMap::new(),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+    stats.total.year.tokens = 42;
+
+    state.accept_refresh(Ok(stats), &mut out).unwrap();
+    assert!(state.has_frame());
+    out.clear();
+
+    state
+        .accept_refresh(Err(anyhow!("refresh failed")), &mut out)
+        .unwrap();
+    assert!(state.has_frame());
+    assert!(out.is_empty(), "a failed refresh does not repaint");
+
+    state
+        .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out)
+        .unwrap();
+    let frame = String::from_utf8(out).unwrap();
+    assert!(frame.contains("All time 42"), "frame was {frame:?}");
+}
+
+#[test]
+fn held_stats_survives_a_first_refresh_failure_without_painting() {
+    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut out = Vec::new();
+
+    state
+        .accept_refresh(Err(anyhow!("refresh failed")), &mut out)
+        .unwrap();
+
+    assert!(!state.has_frame());
+    assert!(out.is_empty());
+}
+
+#[test]
+fn refresh_result_carries_success_error_and_panic() {
+    let success = refresh_result(|| {
         let mut stats = Stats {
             by_day: BTreeMap::new(),
             by_model: BTreeMap::new(),
@@ -519,21 +562,19 @@ fn refresh_event_carries_success_and_error_without_unwinding() {
         stats.total.year.tokens = 42;
         Ok(stats)
     });
-    match success.stats {
-        Some(Ok(stats)) => assert_eq!(stats.total.year.tokens, 42),
-        _ => panic!("successful refresh must carry stats"),
-    }
+    assert_eq!(success.unwrap().total.year.tokens, 42);
 
-    let error = refresh_event(|| Err(anyhow!("refresh failed")));
-    match error.stats {
-        Some(Err(error)) => assert_eq!(error.to_string(), "refresh failed"),
-        _ => panic!("ordinary refresh failure must stay in the event"),
-    }
+    let error = refresh_result(|| Err(anyhow!("refresh failed")))
+        .err()
+        .expect("ordinary refresh error");
+    assert_eq!(error.to_string(), "refresh failed");
 
-    let panic = refresh_event(|| -> Result<Stats> { panic!("refresh panic") });
+    let panic = refresh_result(|| -> Result<Stats> { panic!("refresh panic") })
+        .err()
+        .expect("panic refresh error");
     assert!(
-        panic.stats.is_none(),
-        "panic becomes an empty refresh event"
+        panic.to_string().contains("refresh panic"),
+        "panic payload was {panic}"
     );
 }
 

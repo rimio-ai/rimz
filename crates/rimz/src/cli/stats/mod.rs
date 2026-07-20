@@ -66,6 +66,7 @@ const STAT_GUTTER: usize = 3;
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const EMPTY_REFRESH_RETRY: Duration = Duration::from_secs(5);
 const REFRESH_POLL_TICK: Duration = Duration::from_millis(100);
 
 /// The wordmark, spaced for a monospace terminal (the README carries a variant
