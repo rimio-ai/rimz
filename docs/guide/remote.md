@@ -123,6 +123,10 @@ The RimZ toggle covers the machine-level Claude host; Claude's own `remoteContro
 
 `rimz start` checks the preconditions. An enabled toggle whose agent is missing is skipped so the room still opens, and `rimz doctor` names the install fix; an installed host with a fixable misconfiguration (a Claude older than remote control, `disableRemoteControl` set) refuses at start with the fix spelled out, so an enabled toggle always means a working bridge.
 
+Claude asks `Enable Remote Control? (y/n)` the first time the host runs on a machine and records that the dialog ran as `remoteDialogSeen` in `~/.claude.json`. Your toggle is that answer, so RimZ records it before the host starts and an unattended pane serves immediately instead of holding on a prompt nobody is there to type into. Set `remoteDialogSeen` to `false` by hand and RimZ keeps your word: it leaves the value alone and refuses at start with the fix.
+
+The `⇅ rc` flag and `rimz doctor` read Claude's own record of the process serving each project root, so a host whose server stopped reads as down rather than riding on a pane that outlived it.
+
 Undo is the same toggle set back to `false`: it closes the RimZ-managed Claude host panes in every running room, or stops the Codex daemon. One known gap: a session you spawn from the phone runs headless in its worktree with no local pane, and the sidebar does not yet render these remote agents.
 
 Key detail and the daemon-view placement live in [configuration → remote control](./configuration.md#remote-control); which providers carry the surface is the `remote` row of the [coverage matrix](../reference/agent-support.md#the-coverage-matrix).

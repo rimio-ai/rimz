@@ -34,6 +34,8 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 - The sidebar defaults to the wide dashboard width when pets are enabled, including on narrow views and when launch geometry is unknown. Explicit width configuration and room overrides keep precedence.
 - An explicit `--model` overrides a profile's declared model silently, instead of warning about the conflict.
 - `rimz worktree remove` refuses a worktree an agent or an open pane is still working in, naming what holds it, and `--force` warns before overriding. It previously checked only Git state, so it could delete a checkout out from under a running agent. A stale session record from a crashed agent still does not block removal. → [worktrees](./docs/guide/worktrees.md#cleanup-once-work-lands)
+- Turning on `remote_control.claude` starts the Claude host unattended. Claude asks `Enable Remote Control? (y/n)` once per machine, and RimZ now records that answer for you before the host starts, so the pane serves instead of waiting on a prompt in a room you left. Setting Claude's `remoteDialogSeen` to `false` by hand still refuses at start with the fix. → [remote](./docs/guide/remote.md)
+- The `⇅ rc` flag and `rimz doctor` report whether the Claude host is actually serving, read from Claude's own record of the process behind each project root. A host whose server stopped now reads as down instead of staying healthy on a pane that outlived it.
 
 ### Fixed
 
