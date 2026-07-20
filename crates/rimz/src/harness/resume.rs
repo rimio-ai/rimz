@@ -2312,6 +2312,63 @@ fn candidate_resume_command(
     result.unwrap_or_else(|err| unreachable!("serializing canonical exec request: {err}"))
 }
 
+/// The launch spec that re-addresses one durable agent identity: a named team
+/// role (`team.role`), then its profile, then its bare kind. The exit hint and
+/// the cohort-resume suggestions teach the same spec the `--resume` matcher
+/// keys on, so the command a user retypes finds the stamps that produced it.
+pub fn relaunch_spec(
+    team: Option<&str>,
+    role: Option<&str>,
+    profile: Option<&str>,
+    kind: &str,
+) -> String {
+    fn field(value: Option<&str>) -> Option<&str> {
+        value.filter(|value| !value.is_empty())
+    }
+    match (field(team), field(role), field(profile)) {
+        (Some(team), Some(role), _) => format!("{team}.{role}"),
+        (_, _, Some(profile)) => profile.to_owned(),
+        _ => kind.to_owned(),
+    }
+}
+
+/// Distinct relaunch specs for the closed, resume-capable root members of a
+/// scoped roster, newest first. When an explicit `--resume` spec matches
+/// nothing, these name what the same scope can actually resume.
+pub fn closed_cohort_specs(
+    agents: &[AgentState],
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
+) -> Vec<String> {
+    let mut members = agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.agent_id.is_empty())
+        .filter(|agent| !matches!(liveness(agent), AgentLiveness::Live { .. }))
+        .filter(|agent| supports_agent_resume(agent))
+        .collect::<Vec<_>>();
+    members.sort_by(|left, right| {
+        newest_cmp(
+            left.last_activity,
+            left.agent_id.as_str(),
+            right.last_activity,
+            right.agent_id.as_str(),
+        )
+    });
+    let mut seen = HashSet::new();
+    members
+        .into_iter()
+        .map(|agent| {
+            relaunch_spec(
+                agent.team.as_deref(),
+                agent.role.as_deref(),
+                agent.profile.as_deref(),
+                agent.kind.as_str(),
+            )
+        })
+        .filter(|spec| seen.insert(spec.clone()))
+        .collect()
+}
+
 /// A short, view-safe label for a resumed agent: `kind:<channel>`, falling back
 /// to the worktree directory name, then `kind:agent`. Used in skip reports and
 /// legacy per-agent tab title fallbacks.

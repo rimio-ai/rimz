@@ -331,7 +331,7 @@ fn launch_resume_layout(
         |path| path.is_dir(),
         rimz::harness::resume::resume_session_present,
     )
-    .map_err(|err| cohort_resume_error(err, spec, scope.as_deref()))?;
+    .map_err(|err| cohort_resume_error(err, spec, scope.as_deref(), &agents))?;
     let cwd = plan
         .cwd
         .clone()
@@ -343,8 +343,13 @@ fn launch_resume_layout(
         plan.channel.as_deref(),
     );
     plan.channel = channel.clone();
-    let scoped_resume =
-        channel.is_some() || (cwd != workspace.project_root && cwd != workspace.worktree_root);
+    let scoped_resume = resume_outside_launch_dir(
+        channel.as_deref(),
+        &cwd,
+        &workspace.project_root,
+        &workspace.worktree_root,
+        std::env::current_dir().ok().as_deref(),
+    );
     let placement = if single_cell {
         apply_in_place_downgrade(
             resolve_placement(
@@ -486,6 +491,24 @@ fn resume_worktree_scope_with(
     }
 }
 
+/// Whether a resolved resume lands outside the pane the command runs in. A
+/// launch pane already sitting in the cohort's working directory is the origin
+/// pane — an agent that dropped to a shell there resumes in place instead of
+/// opening a lane tab.
+fn resume_outside_launch_dir(
+    channel: Option<&str>,
+    cwd: &Path,
+    project_root: &Path,
+    worktree_root: &Path,
+    launch_dir: Option<&Path>,
+) -> bool {
+    let target = rimz::worktree::normalize_path_lexical(cwd);
+    if launch_dir.is_some_and(|dir| rimz::worktree::normalize_path_lexical(dir) == target) {
+        return false;
+    }
+    channel.is_some() || (cwd != project_root && cwd != worktree_root)
+}
+
 fn worktree_scope_label(path: &Path) -> Option<String> {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -495,11 +518,24 @@ fn cohort_resume_error(
     err: rimz::harness::resume::CohortResumeErr,
     spec: &str,
     scope: Option<&str>,
+    agents: &[AgentState],
 ) -> anyhow::Error {
     let subject = cohort_resume_subject(spec, scope);
     match err {
         rimz::harness::resume::CohortResumeErr::NothingToResume { .. } => {
-            anyhow::anyhow!("nothing to resume for {subject}; launch without `--resume`")
+            let resumable = rimz::harness::resume::closed_cohort_specs(
+                agents,
+                rimz::store::runtime::agent_liveness,
+            );
+            match resumable.first() {
+                Some(first) => anyhow::anyhow!(
+                    "nothing to resume for {subject}; resumable here: {} — retry with `rimz agents {first} --resume`",
+                    resumable.join(", ")
+                ),
+                None => {
+                    anyhow::anyhow!("nothing to resume for {subject}; launch without `--resume`")
+                }
+            }
         }
         rimz::harness::resume::CohortResumeErr::MembersStillLive { labels } => {
             anyhow::anyhow!(
@@ -667,6 +703,53 @@ pub(super) fn validate_resolved_launch_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_in_the_lane_directory_stays_in_the_origin_pane() {
+        let project = Path::new("/repo");
+        let worktree = Path::new("/repo-worktrees/single-card");
+
+        // The dropped-to-shell origin pane: launch dir is the cohort cwd, so
+        // in-place placement stays available despite the lane channel.
+        assert!(!resume_outside_launch_dir(
+            Some("single-card"),
+            worktree,
+            project,
+            worktree,
+            Some(worktree),
+        ));
+
+        // From anywhere else the lane resume still opens its own tab.
+        assert!(resume_outside_launch_dir(
+            Some("single-card"),
+            worktree,
+            project,
+            project,
+            Some(project),
+        ));
+        assert!(resume_outside_launch_dir(
+            Some("single-card"),
+            worktree,
+            project,
+            worktree,
+            None,
+        ));
+    }
+
+    #[test]
+    fn resume_launch_dir_comparison_is_lexically_normalized() {
+        let project = Path::new("/repo");
+        let worktree = Path::new("/repo-worktrees/single-card");
+        let launch_dir = Path::new("/repo-worktrees/../repo-worktrees/single-card");
+
+        assert!(!resume_outside_launch_dir(
+            Some("single-card"),
+            worktree,
+            project,
+            worktree,
+            Some(launch_dir),
+        ));
+    }
 
     #[test]
     fn worktree_filter_matches_normalized_agent_paths() {

@@ -83,6 +83,66 @@ fn cohort_resume_includes_every_ended_session_backed_member() {
 }
 
 #[test]
+fn relaunch_spec_prefers_team_role_then_profile_then_kind() {
+    assert_eq!(
+        relaunch_spec(Some("forge"), Some("coder"), Some("codex-plan"), "codex"),
+        "forge.coder"
+    );
+    assert_eq!(
+        relaunch_spec(None, Some("coder"), Some("codex-plan"), "codex"),
+        "codex-plan"
+    );
+    assert_eq!(relaunch_spec(Some("forge"), None, None, "codex"), "codex");
+    assert_eq!(relaunch_spec(Some(""), Some(""), Some(""), "codex"), "codex");
+}
+
+#[test]
+fn closed_cohort_specs_name_resumable_members_newest_first() {
+    let coder = team_agent("codex", "coder", "coder", "/code/forge", 2);
+    let coder = AgentState {
+        ended_at: Some(coder.last_seen),
+        ..coder
+    };
+    let reviewer = team_agent("claude", "reviewer", "reviewer", "/code/forge", 8);
+    let live_member = team_agent("claude", "live", "planner", "/code/forge", 1);
+    let provisional = team_agent(
+        "codex",
+        "launch_019f2cecea067320b667c5946d266e64",
+        "scout",
+        "/code/forge",
+        3,
+    );
+    let subagent = AgentState {
+        parent_agent_id: Some(AgentSessionId::from("coder")),
+        ..agent("claude", "sub", "/code/forge", 1)
+    };
+
+    let live_id = live_member.agent_id.clone();
+    let specs = closed_cohort_specs(
+        &[coder, reviewer, live_member, provisional, subagent],
+        move |candidate| {
+            if candidate.agent_id == live_id {
+                AgentLiveness::Live { pid: 42 }
+            } else {
+                AgentLiveness::Dead
+            }
+        },
+    );
+
+    assert_eq!(specs, ["forge.coder", "forge.reviewer"]);
+}
+
+#[test]
+fn closed_cohort_specs_dedupe_repeat_identities() {
+    let old = team_agent("codex", "old", "coder", "/code/forge", 30);
+    let new = team_agent("codex", "new", "coder", "/code/forge", 2);
+
+    let specs = closed_cohort_specs(&[old, new], dead);
+
+    assert_eq!(specs, ["forge.coder"]);
+}
+
+#[test]
 fn cohort_refuses_live_and_unmatched_specs() {
     // The pet name is what proves the live-member label format.
     let live_planner = AgentState {

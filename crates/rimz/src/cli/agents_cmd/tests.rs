@@ -783,13 +783,48 @@ mod pane_exec {
         assert_eq!(relaunch_command(&bare_exec_args()), "rimz agents codex");
 
         let status = exit_status(0);
-        let message = exit_hint("codex", &status, false, "rimz agents codex-plan");
+        let message = exit_hint("codex", &status, false, "rimz agents codex-plan", false);
         assert_eq!(
             message,
             format!(
                 "rimz: agent `codex` exited ({status}); relaunch with `rimz agents codex-plan`\r\n"
             )
         );
+    }
+
+    #[test]
+    fn exit_hint_teaches_resume_for_a_redeemable_session() {
+        let status = exit_status(0);
+        let message = exit_hint("codex", &status, false, "rimz agents forge.coder", true);
+        assert_eq!(
+            message,
+            format!(
+                "rimz: agent `codex` exited ({status}); resume with `rimz agents forge.coder --resume`\r\n"
+            )
+        );
+
+        // A startup failure never advertises resume: there is no conversation.
+        let failed = exit_status(1);
+        let message = exit_hint("codex", &failed, true, "rimz agents forge.coder", true);
+        assert!(message.contains("failed to start"), "{message}");
+        assert!(!message.contains("--resume"), "{message}");
+    }
+
+    #[test]
+    fn exited_session_resumable_requires_real_id_and_resume_cli() {
+        let cwd = Path::new("/code/feature");
+        let codex = (
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            rimz::ids::AgentSessionId::from("019f796b-f60b-7ab0-9adb-35be6e6904b7"),
+        );
+        assert!(exited_session_resumable(Some(&codex), cwd));
+
+        let provisional = (
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            rimz::ids::AgentSessionId::from("launch_019f2cecea067320b667c5946d266e64"),
+        );
+        assert!(!exited_session_resumable(Some(&provisional), cwd));
+        assert!(!exited_session_resumable(None, cwd));
     }
 
     fn exit_status(code: i32) -> std::process::ExitStatus {

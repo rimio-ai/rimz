@@ -103,6 +103,8 @@ What matches what:
 - Add `-w <NAME>` to resume that exact worktree's cohort. Use bare `-w`, or omit the flag while running inside a worktree, to scope resume to that worktree; run from the project root to keep the room-wide newest-by-spec behavior.
 - Cleanly closed cohort members still match when their worktree exists. Cells with no resumable prior member launch fresh in the matched cohort's cwd and channel. A matched member that is still live refuses the command, so the room does not duplicate the same address.
 
+A single-cell resume run from the cohort's own directory takes over the launching pane, so an exited team member comes back in its origin pane — the exit hint an agent leaves behind (`resume with rimz agents forge.coder --resume`) works from the very shell it dropped into. Run from anywhere else, a lane-scoped resume opens its own tab. A spec that matches nothing fails naming the specs the same scope can still resume.
+
 Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--model`, `--effort`, `--ask`, `--yolo`, `-p`, system-prompt flags, and passthrough args after `--`.
 
 ### Resume a lane by place
