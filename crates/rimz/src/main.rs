@@ -69,7 +69,7 @@ fn log_filter_for(args: impl Iterator<Item = String>) -> &'static str {
         if saw_stats && arg == "--refresh" {
             return RENDERED_PANE_LOG_FILTER;
         }
-        saw_sidebar |= arg == "sidebar";
+        saw_sidebar = arg == "sidebar";
         saw_stats |= arg == "stats";
     }
     DEFAULT_LOG_FILTER
@@ -95,5 +95,6 @@ mod tests {
         assert_eq!(filter(&["stats"]), "warn");
         assert_eq!(filter(&["stats", "--json"]), "warn");
         assert_eq!(filter(&["sidebar", "--refresh-ms", "500"]), "warn");
+        assert_eq!(filter(&["sidebar", "snapshot", "serve"]), "warn");
     }
 }

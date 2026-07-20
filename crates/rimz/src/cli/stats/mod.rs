@@ -11,8 +11,9 @@
 //! Windows: the heatmap always reads the full available history (the cache spans
 //! the trailing year). In the held dashboard, the windows row is a tab bar that
 //! scopes the model breakdown, agent breakdown, and insights below it.
-//! `--refresh` recomputes on a background thread, repaints the held frame in
-//! place every minute, and re-centres promptly after a width change.
+//! `--refresh` recomputes on a background thread, retries an unavailable first
+//! frame after five seconds, then repaints in place every minute and re-centres
+//! promptly after a width change.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};

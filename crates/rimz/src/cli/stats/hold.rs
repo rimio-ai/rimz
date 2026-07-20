@@ -88,6 +88,7 @@ pub(super) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
 
 pub(super) struct HeldStats {
     current: Option<Stats>,
+    refresh_failure_active: bool,
     active: Window,
     dollars: bool,
     glyphs: PanelGlyphs,
@@ -98,6 +99,7 @@ impl HeldStats {
     pub(super) fn new(dollars: bool, glyphs: PanelGlyphs, hold: bool) -> Self {
         Self {
             current: None,
+            refresh_failure_active: false,
             active: Window::AllTime,
             dollars,
             glyphs,
@@ -112,14 +114,23 @@ impl HeldStats {
     ) -> Result<()> {
         match result {
             Ok(stats) => {
+                self.refresh_failure_active = false;
                 self.current = Some(stats);
                 self.repaint(w)?;
             }
             Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "stats refresh failed; holding the current frame"
-                );
+                if self.refresh_failure_active {
+                    tracing::debug!(
+                        error = %error,
+                        "stats refresh still failing; holding the current frame"
+                    );
+                } else {
+                    tracing::warn!(
+                        error = %error,
+                        "stats refresh failed; holding the current frame"
+                    );
+                }
+                self.refresh_failure_active = true;
             }
         }
         Ok(())
@@ -127,6 +138,11 @@ impl HeldStats {
 
     pub(super) fn has_frame(&self) -> bool {
         self.current.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_refresh_failure(&self) -> bool {
+        self.refresh_failure_active
     }
 
     pub(super) fn apply_key(&mut self, key: KeyEvent, w: &mut impl Write) -> Result<KeyOutcome> {
@@ -188,12 +204,10 @@ pub(super) fn hold_cycle(
             return Ok(CycleExit::Reload);
         }
         match rx.try_recv() {
-            Ok(event) => {
-                state.accept_refresh(event, &mut std::io::stdout().lock())?;
+            Ok(result) => {
+                state.accept_refresh(result, &mut std::io::stdout().lock())?;
                 refresh_finished = true;
-                if !state.has_frame() {
-                    deadline = Instant::now() + EMPTY_REFRESH_RETRY;
-                }
+                deadline = deadline_after_refresh(deadline, Instant::now(), state.has_frame());
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) if !refresh_finished => {
@@ -239,6 +253,14 @@ pub(super) fn hold_cycle(
                 return Ok(CycleExit::Quit);
             }
         }
+    }
+}
+
+pub(super) fn deadline_after_refresh(current: Instant, now: Instant, has_frame: bool) -> Instant {
+    if has_frame {
+        current
+    } else {
+        now + EMPTY_REFRESH_RETRY
     }
 }
 

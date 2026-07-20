@@ -528,6 +528,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         .accept_refresh(Err(anyhow!("refresh failed")), &mut out)
         .unwrap();
     assert!(state.has_frame());
+    assert!(state.has_refresh_failure());
     assert!(out.is_empty(), "a failed refresh does not repaint");
 
     state
@@ -535,6 +536,45 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         .unwrap();
     let frame = String::from_utf8(out).unwrap();
     assert!(frame.contains("All time 42"), "frame was {frame:?}");
+}
+
+#[test]
+fn held_stats_refresh_failure_streak_resets_after_success() {
+    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut out = Vec::new();
+
+    state
+        .accept_refresh(Err(anyhow!("first failure")), &mut out)
+        .unwrap();
+    state
+        .accept_refresh(Err(anyhow!("repeated failure")), &mut out)
+        .unwrap();
+    assert!(state.has_refresh_failure());
+
+    state
+        .accept_refresh(
+            Ok(Stats {
+                by_day: BTreeMap::new(),
+                by_model: BTreeMap::new(),
+                by_agent: BTreeMap::new(),
+                total: SpendTally::default(),
+            }),
+            &mut out,
+        )
+        .unwrap();
+    assert!(!state.has_refresh_failure());
+}
+
+#[test]
+fn empty_dashboard_refreshes_early_until_a_frame_exists() {
+    let now = Instant::now();
+    let current = now + REFRESH_INTERVAL;
+
+    assert_eq!(
+        deadline_after_refresh(current, now, false),
+        now + EMPTY_REFRESH_RETRY
+    );
+    assert_eq!(deadline_after_refresh(current, now, true), current);
 }
 
 #[test]
