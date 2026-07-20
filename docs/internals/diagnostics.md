@@ -10,9 +10,9 @@ Most of this doc is the local log and the [frame-stream observer](#the-frame-str
 
 ## Where diagnostics land
 
-Each workspace writes its diagnostic logs under its state directory, `~/.local/state/rimz/workspaces/<workspace-id>/`. The state directory is the right home because the job is investigation after the pane, mux session, or machine has gone away: runtime caches under `$XDG_RUNTIME_DIR` die with the session, while these records survive reboot like store records.
+Workspace-scoped diagnostic logs land under `~/.local/state/rimz/workspaces/<workspace-id>/`; cross-workspace focus repairs land beside the account-global assist history. Persistent state is the right home because the job is investigation after the pane, mux session, or machine has gone away: runtime caches under `$XDG_RUNTIME_DIR` die with the session, while these records survive reboot like store records.
 
-The `diag/` module owns a family of append-only JSONL surfaces sharing one rotating interface, [`JsonlLog`](../../crates/rimz/src/diag/rotating.rs). Every file rotates at 1 MiB to one kept generation (`<name>.1.jsonl`), appends best-effort, and visits decoded records from the retained generation through the active file without collecting them internally. A failed write logs at debug rather than surfacing on a RimZ path, and missing files and malformed lines contribute no records.
+The `diag/` module owns a family of append-only JSONL surfaces sharing one rotating interface, [`JsonlLog`](../../crates/rimz/src/diag/rotating.rs). Workspace diagnostic files rotate at 1 MiB to one kept generation (`<name>.1.jsonl`); the account-global focus-repair log uses the assist history's 4 MiB ceiling. Every surface appends best-effort and visits decoded records from the retained generation through the active file without collecting them internally. A failed write logs at debug rather than surfacing on a RimZ path, and missing files and malformed lines contribute no records.
 
 Three surfaces carry workspace identity through one [`DiagSink`](../../crates/rimz/src/diag.rs). A disabled sink is a no-op with the same methods, so emitting callsites need no `#[cfg]` or branch.
 
@@ -22,6 +22,7 @@ Three surfaces carry workspace identity through one [`DiagSink`](../../crates/ri
 | `diag-frames/` | state dir, `0700` | prior/offending pane-frame pairs | [Frame captures](#frame-captures) |
 | `notify.log.jsonl` | state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md) |
 | `plugin-presence.log.jsonl` | state dir | Zellij presence-plugin keepalive telemetry | [below](#zellij-presence-plugin-telemetry) |
+| `focus-repairs.log.jsonl` | account-global state root | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
 | `binding.log.jsonl` | runtime dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
 | `topology-writer-conflict.json` | runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 

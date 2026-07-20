@@ -573,7 +573,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     wait_for_focused_client_pane(&backend, &name, &birth_work);
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);
-    let assists_before = accepted_focus_repairs(xdg.path(), &target_work);
+    let repairs_before = accepted_focus_repairs(xdg.path(), &target_work);
     client.go_to_tab(2);
     let settled = wait_for_switch_settled(&poke_log, pokes_before);
     assert!(
@@ -591,7 +591,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         actions_before,
         "first switch-settled repair",
     );
-    let assists = wait_for_accepted_focus_repair(xdg.path(), &target_work, assists_before);
+    let repairs = wait_for_accepted_focus_repair(xdg.path(), &target_work, repairs_before);
 
     client.send_line("rimz-routed-first");
     let routed = poll_until(
@@ -602,7 +602,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     );
     assert!(routed.contains("rimz-routed-first"));
 
-    assert!(assists.iter().any(|record| {
+    assert!(repairs.iter().any(|record| {
         record.target == target_work
             && record.outcome == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
     }));
@@ -630,7 +630,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     wait_for_reload_baseline(&poke_log, pokes_before_reload, &birth_work);
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);
-    let assists_before = accepted_focus_repairs(xdg.path(), &target_work);
+    let repairs_before = accepted_focus_repairs(xdg.path(), &target_work);
     client.go_to_tab(2);
     wait_for_switch_settled(&poke_log, pokes_before);
     wait_for_focus_action(
@@ -640,7 +640,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         actions_before,
         "post-reload repair",
     );
-    wait_for_accepted_focus_repair(xdg.path(), &target_work, assists_before);
+    wait_for_accepted_focus_repair(xdg.path(), &target_work, repairs_before);
     client.send_line("rimz-routed-after-reload");
     poll_until(
         Duration::from_secs(10),

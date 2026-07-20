@@ -2004,6 +2004,26 @@ fn steer_auto_compact_runs_before_a_full_window() {
     assert_eq!(command.status, MessageStatus::Sent);
     assert_eq!(prompt.text, "go");
     assert_eq!(prompt.status, MessageStatus::Sent);
+    let compact_assist = rimz::harness::assist_log::recent(&env.state_root(), None)
+        .into_iter()
+        .find(|record| {
+            matches!(
+                &record.assist,
+                rimz::harness::assist_log::Assist::AutoCompact { message_id, .. }
+                    if message_id == command.message_id.as_str()
+            )
+        })
+        .expect("auto-compact assist");
+    assert!(matches!(
+        compact_assist.assist,
+        rimz::harness::assist_log::Assist::AutoCompact {
+            kind,
+            agent_id,
+            threshold: rimz::message::AutoCompact::Percent(70),
+            occupied_tokens: None,
+            ..
+        } if kind.as_str() == "claude" && agent_id == "sess-ac"
+    ));
 }
 
 #[test]

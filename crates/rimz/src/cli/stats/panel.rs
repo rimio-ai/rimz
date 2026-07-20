@@ -159,7 +159,7 @@ pub(super) struct PanelPlan {
     pub(super) agent_rows: usize,
 }
 
-pub(super) const PANEL_FIXED_ROWS: usize = 17;
+pub(super) const PANEL_FIXED_ROWS: usize = 18;
 pub(super) const PANEL_HEADER_ROWS: usize = 9;
 pub(super) const SECTION_CHROME_ROWS: usize = 2;
 const SECTION_FLOOR_ROWS: usize = 3;
@@ -959,6 +959,22 @@ pub(super) fn insights_lines(
         .most_active
         .map(fmt_day)
         .unwrap_or_else(|| "—".to_string());
+    let cost_per_session = (selected.sessions > 0)
+        .then(|| rimz::theme::fmt::dollars2(selected.usd / f64::from(selected.sessions)))
+        .unwrap_or_else(|| "—".to_owned());
+    let average_span = match active {
+        Window::AllTime => Window::Year.span_days(),
+        _ => active.span_days(),
+    };
+    let average_cutoff = today_day - i64::from(average_span - 1);
+    let average_active_days = stats
+        .by_day
+        .iter()
+        .filter(|(day, spend)| **day >= average_cutoff && **day <= today_day && spend.tokens > 0)
+        .count();
+    let daily_average = (average_active_days > 0)
+        .then(|| rimz::theme::fmt::dollars2(selected.usd / average_active_days as f64))
+        .unwrap_or_else(|| "—".to_owned());
     let left = [
         kv("Sessions:", &group_thousands(selected.sessions as u64)),
         kv(
@@ -966,18 +982,67 @@ pub(super) fn insights_lines(
             &format!("{}/{}", activity.active_count, activity.window_days),
         ),
         kv("Most active day:", &most),
+        kv("Cost/session:", &cost_per_session),
     ];
+    let trend = spend_trend(&stats.by_day, today_day, active)
+        .map(|trend| {
+            let rounded = trend.round() as i64;
+            let (arrow, magnitude) = if rounded > 0 {
+                ('↑', rounded)
+            } else if rounded < 0 {
+                ('↓', -rounded)
+            } else {
+                ('→', 0)
+            };
+            format!(
+                " ({arrow}{magnitude}% vs prior {})",
+                match active {
+                    Window::Week => "week",
+                    Window::Month => "month",
+                    Window::AllTime | Window::Year => "window",
+                }
+            )
+        })
+        .unwrap_or_default();
     let right = [
         format!(
-            "{} {}",
+            "{} {}{}",
             render::paint(render::palette::muted(), "Spend:"),
-            render::paint(render::palette::money(), &fmt_usd(selected.usd))
+            render::paint(
+                render::palette::money(),
+                &rimz::theme::fmt::dollars2(selected.usd)
+            ),
+            render::paint(render::palette::muted(), &trend),
         ),
         kv("Longest streak:", &plural_days(activity.longest_streak)),
         kv("Current streak:", &plural_days(activity.current_streak)),
+        kv("Daily avg:", &daily_average),
     ];
 
     two_column(lines, &left, &right, panel_width);
+}
+
+pub(super) fn spend_trend(
+    by_day: &BTreeMap<i64, DaySpend>,
+    today_day: i64,
+    window: Window,
+) -> Option<f64> {
+    let span = match window {
+        Window::Week => 7,
+        Window::Month => 30,
+        Window::AllTime | Window::Year => return None,
+    };
+    let current_start = today_day - span + 1;
+    let prior_start = current_start - span;
+    let prior_end = current_start - 1;
+    let sum = |start, end| {
+        by_day
+            .range(start..=end)
+            .map(|(_, spend)| spend.usd)
+            .sum::<f64>()
+    };
+    let prior = sum(prior_start, prior_end);
+    (prior > 0.0).then(|| (sum(current_start, today_day) - prior) / prior * 100.0)
 }
 
 pub(super) fn two_column(

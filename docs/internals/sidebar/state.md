@@ -314,7 +314,7 @@ Command acceptance and later native client observations resolve an intent. The p
 | `Present` | A requested anchor is fresh, or an applied anchor is fresh with its pre-action map unchanged. | Keep presenting the target. |
 | `Fence` | The pre-action map is unchanged past `FOCUS_ANCHOR_FRESH`. | Yield unknown rather than restore stale evidence. |
 
-A missed `FocusIntent` wakeup delays the fold until another event or pull arrives, because the file stays authoritative until observation resolves it. Automatic repairs append an assist record at command acceptance (`AcceptedUnconfirmed`) or failure, and another when observation later confirms, supersedes, or invalidates the action.
+A missed `FocusIntent` wakeup delays the fold until another event or pull arrives, because the file stays authoritative until observation resolves it. Automatic repairs append to the account-global `focus-repairs.log.jsonl` diagnostics log at command acceptance (`AcceptedUnconfirmed`) or failure, and again when observation later confirms, supersedes, or invalidates the action.
 
 ## Cadences
 

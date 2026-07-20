@@ -206,6 +206,7 @@ fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
     let missing = dir.path().join("missing");
     let fixture = Fixture::new(&[("live", &live, true), ("missing", &missing, false)]);
     let plan = fixture.inspect(false);
+    let planned_labels = plan.preview().labels().to_vec();
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
 
@@ -229,6 +230,26 @@ fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
         serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).unwrap())
             .expect("marker");
     assert_eq!(marker.recovered, Some(1));
+    let assist = crate::harness::assist_log::recent(&crate::store::paths::state_home(), None)
+        .into_iter()
+        .find(|record| {
+            matches!(
+                &record.assist,
+                crate::harness::assist_log::Assist::AutoResume { workspace_id, .. }
+                    if workspace_id == &fixture.paths.workspace_id
+            )
+        })
+        .expect("auto-resume assist");
+    assert!(matches!(
+        assist.assist,
+        crate::harness::assist_log::Assist::AutoResume {
+            session_name,
+            cause: Some(SessionDeathCause::Crash),
+            recovered: 1,
+            labels,
+            ..
+        } if session_name == "rimz-test" && labels == planned_labels
+    ));
 }
 
 #[test]

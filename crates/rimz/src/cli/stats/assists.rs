@@ -5,6 +5,8 @@ use rimz::harness::assist_log::{self, Assist, AssistRecord, AssistWindowReset};
 use rimz::harness::auto_redeem::RedeemReason;
 use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult, PingWindowOutcome};
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::message::AutoCompact;
+use rimz::store::event::SessionDeathCause;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub(super) struct AssistStats {
@@ -21,6 +23,9 @@ pub(super) struct AssistRollup {
     pub(super) resets: usize,
     pub(super) resumes: usize,
     pub(super) recovered_secs: u64,
+    pub(super) compacts: usize,
+    pub(super) restores: usize,
+    pub(super) restored_sessions: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -67,6 +72,26 @@ pub(super) enum AssistEvent {
         parked_since: Option<Timestamp>,
         delivered: bool,
         message_id: String,
+    },
+    AutoCompact {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        threshold: AutoCompact,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        occupied_tokens: Option<u64>,
+        message_id: String,
+    },
+    AutoResume {
+        at: Timestamp,
+        workspace_id: rimz::ids::WorkspaceId,
+        session_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cause: Option<SessionDeathCause>,
+        recovered: usize,
+        labels: Vec<String>,
     },
 }
 
@@ -123,6 +148,11 @@ impl AssistStats {
                         rollup.resumes += 1;
                         rollup.recovered_secs += recovered_secs(*parked_since, *at);
                     }
+                }
+                AssistEvent::AutoCompact { .. } => rollup.compacts += 1,
+                AssistEvent::AutoResume { recovered, .. } => {
+                    rollup.restores += 1;
+                    rollup.restored_sessions += recovered;
                 }
             }
         }
@@ -183,6 +213,36 @@ impl AssistEvent {
                 delivered,
                 message_id,
             },
+            Assist::AutoCompact {
+                kind,
+                agent_id,
+                label,
+                threshold,
+                occupied_tokens,
+                message_id,
+            } => Self::AutoCompact {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                threshold,
+                occupied_tokens,
+                message_id,
+            },
+            Assist::AutoResume {
+                workspace_id,
+                session_name,
+                cause,
+                recovered,
+                labels,
+            } => Self::AutoResume {
+                at: record.at,
+                workspace_id,
+                session_name,
+                cause,
+                recovered,
+                labels,
+            },
         }
     }
 
@@ -205,9 +265,11 @@ impl AssistEvent {
 
     fn at(&self) -> Timestamp {
         match self {
-            Self::Ping { at, .. } | Self::AutoRedeem { at, .. } | Self::AutoContinue { at, .. } => {
-                *at
-            }
+            Self::Ping { at, .. }
+            | Self::AutoRedeem { at, .. }
+            | Self::AutoContinue { at, .. }
+            | Self::AutoCompact { at, .. }
+            | Self::AutoResume { at, .. } => *at,
         }
     }
 }
@@ -277,13 +339,23 @@ pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
 }
 
 fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
-    let mut rows = Vec::with_capacity(4);
+    let mut rows = Vec::with_capacity(5);
     if rollup.pings > 0 {
         let mut value = rollup.pings.to_string();
         if rollup.ping_cost_usd > 0.0 {
             value.push_str(&format!(" (${:.2})", rollup.ping_cost_usd));
         }
         rows.push(("Auto-ping:", value));
+    }
+    if rollup.resumes > 0 {
+        let mut value = rollup.resumes.to_string();
+        if rollup.recovered_secs > 0 {
+            value.push_str(&format!(" (+{})", format_hours(rollup.recovered_secs)));
+        }
+        rows.push(("Auto-continue:", value));
+    }
+    if rollup.compacts > 0 {
+        rows.push(("Auto-compact:", rollup.compacts.to_string()));
     }
     if rollup.redeems > 0 {
         let mut value = rollup.redeems.to_string();
@@ -296,12 +368,16 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
         }
         rows.push(("Auto-redeem:", value));
     }
-    if rollup.resumes > 0 {
-        let mut value = rollup.resumes.to_string();
-        if rollup.recovered_secs > 0 {
-            value.push_str(&format!(" (+{})", format_hours(rollup.recovered_secs)));
+    if rollup.restores > 0 {
+        let mut value = rollup.restored_sessions.to_string();
+        if rollup.restores > 1 {
+            value.push_str(&format!(
+                " ({} rebirth{})",
+                rollup.restores,
+                plural(rollup.restores)
+            ));
         }
-        rows.push(("Auto-continue:", value));
+        rows.push(("Auto-resume:", value));
     }
     rows
 }
@@ -362,10 +438,43 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 span.unwrap_or_default()
             )
         }
+        AssistEvent::AutoCompact {
+            kind,
+            label,
+            occupied_tokens,
+            ..
+        } => {
+            let agent = label.as_deref().unwrap_or(kind.as_str());
+            let detail = occupied_tokens
+                .map(|tokens| {
+                    format!(
+                        " — {} ctx cleared before delivery",
+                        compact_token_count(tokens)
+                    )
+                })
+                .unwrap_or_default();
+            format!("{time} ⌁ {agent} auto-compact{detail}")
+        }
+        AssistEvent::AutoResume {
+            cause,
+            recovered,
+            labels,
+            ..
+        } => {
+            let cause =
+                cause.map_or_else(|| "rebirth".to_owned(), |cause| format!("{cause} rebirth"));
+            let labels = (!labels.is_empty())
+                .then(|| format!(" ({})", labels.join(", ")))
+                .unwrap_or_default();
+            format!(
+                "{time} ⟲ {recovered} agent{} restored — {cause}{labels}",
+                plural(*recovered)
+            )
+        }
     }
 }
 
-fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> String {
+pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> String {
     let at = event.at().to_zoned(zone.clone()).strftime("%Y-%m-%d %H:%M");
     let benefit = benefit_line(event, zone)
         .split_once(' ')
@@ -414,6 +523,31 @@ fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> String {
         } => format!(
             "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
         ),
+        AssistEvent::AutoCompact {
+            agent_id,
+            message_id,
+            threshold,
+            ..
+        } => format!(
+            "{at} {benefit} · agent {agent_id} · message {message_id} · threshold {}",
+            compact_threshold(*threshold),
+        ),
+        AssistEvent::AutoResume {
+            workspace_id,
+            session_name,
+            ..
+        } => format!("{at} {benefit} · workspace {workspace_id} · session {session_name}"),
+    }
+}
+
+fn compact_token_count(tokens: u64) -> String {
+    rimz::theme::fmt::compact_count(tokens)
+}
+
+fn compact_threshold(threshold: AutoCompact) -> String {
+    match threshold {
+        AutoCompact::Percent(percent) => format!("{percent}%"),
+        AutoCompact::Tokens(tokens) => compact_token_count(tokens),
     }
 }
 

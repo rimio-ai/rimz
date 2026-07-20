@@ -239,21 +239,22 @@ Both modules sit in the sidebar's read-only import graph, so they stay free of s
 
 ## The assist log
 
-> **Automation is accountable.** Every system-initiated intervention appends a durable record of its trigger, evidence, and outcome, and surfaces in `rimz stats`.
+> **Automation is accountable.** User-benefiting automation appends a durable record of its trigger, evidence, and outcome, and surfaces in `rimz stats`; internal repairs keep durable diagnostic records.
 
 That invariant is the assist log: `$XDG_STATE_HOME/rimz/assists.log.jsonl`, account-global, best-effort append, rotating at 4 MiB to one `assists.log.1.jsonl` predecessor. Readers fold both generations by timestamp. The intervention itself remains the operational truth when an append fails.
 
-Three `Assist` variants live in the log today:
+Four `Assist` variants live in the log today:
 
 | Variant | Writer | Records |
 | --- | --- | --- |
 | `auto_redeem` | the detached redeem helper | provider, decision reason, request id, available credits, soonest expiry, the natural reset it beat, consume outcome or error, whether a reset occurred, and refreshed window stamps |
 | `auto_continue` | the detached continue helper | typed provider and session ids, display handle, park class, original park timestamp, delivery verdict, and the durable message id |
-| `focus_repair` | a detached writer fed by the renderer | workspace, session, generation, the client pane views used as evidence, the target pane, and the outcome (`confirmed`, `accepted_unconfirmed`, `superseded`, `invalidated`, `failed`) |
+| `auto_compact` | the message delivery path after a compact command lands | target session, display handle, threshold, occupied context when known, and the durable compact-command message id |
+| `auto_resume` | rebirth recovery after materialization restores at least one pane | workspace, session, death cause, recovered pane count, and planned tab labels |
 
 Auto-ping is the deliberate exception: it enriches its existing `loop-runs.log.jsonl` row instead of duplicating a record. A completed ping compares run-scoped pre-turn capacity against a fresh post-turn cache read and stores the shortest and longest window durations and reset stamps only when the reading changed.
 
-`rimz stats` folds both assist-log generations together with completed ping rows, scoped to the active dashboard window, and publishes one rollup: ping count and cost, redeem attempts and `reset` outcomes, resumes and the summed `recorded_at - parked_since` as recovered time, and focus repairs split by confirmed and failed. The dashboard shows the counts, `rimz stats --assists` renders the merged newest-first event stream, and `rimz stats --json` publishes both.
+`rimz stats` folds both assist-log generations together with completed ping rows, scoped to the active dashboard window, and publishes one rollup: ping count and cost; delivered continues and their summed `recorded_at - parked_since` recovered time; compact commands sent; redeem attempts and `reset` outcomes; and rebirths plus restored panes. The dashboard shows those five non-zero categories, `rimz stats --assists` renders the merged newest-first event stream, and `rimz stats --json` publishes both.
 
 **Shipping a new smart strategy is one accountable slice**: define its typed trigger, evidence, and outcome record; append it from a writer outside the sidebar import graph; fold it into the Assists stats surface; and add its variant and writer to the table above.
 

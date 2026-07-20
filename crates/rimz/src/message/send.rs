@@ -167,10 +167,10 @@ pub(crate) fn send_batch_to_live_pane(
             .all(|message| message.body == MessageBody::Prompt)
     );
     let mut compacted = false;
-    let command = batch
-        .iter()
-        .find_map(|message| compact_message_for_target(store, target, bound, message));
-    if let Some(command) = command {
+    let compact = batch.iter().find_map(|message| {
+        compact_message_for_target(store, target, bound, message).map(|command| (message, command))
+    });
+    if let Some((prompt, command)) = compact {
         store.queue_message(&command, &workspace.session_name)?;
         match write_batch(
             workspace,
@@ -183,6 +183,19 @@ pub(crate) fn send_batch_to_live_pane(
         ) {
             Ok(PaneWrite::Sent) => {
                 compacted = true;
+                if let (Some(threshold), Some(agent)) = (prompt.auto_compact, bound) {
+                    crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+                        at: jiff::Timestamp::now(),
+                        assist: crate::harness::assist_log::Assist::AutoCompact {
+                            kind: target.kind.clone(),
+                            agent_id: agent.agent_id.clone(),
+                            label: Some(format!("@{}", target.label())),
+                            threshold,
+                            occupied_tokens: command.compacted_context_tokens,
+                            message_id: command.message_id.to_string(),
+                        },
+                    });
+                }
                 if !send.steer {
                     return Ok(Receipt::CompactionPending);
                 }

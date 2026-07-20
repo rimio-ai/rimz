@@ -1,8 +1,8 @@
 //! User-global history for system-initiated assistance.
 //!
-//! Auto-redeem and auto-continue helpers append one best-effort JSONL record
-//! after attempting their intervention. Readers fold the current file and its
-//! single rotated predecessor for the stats dashboard and forensic timeline.
+//! User-benefiting automation appends one best-effort JSONL record after its
+//! intervention. Readers fold the current file and its single rotated
+//! predecessor for the stats dashboard and forensic timeline.
 
 use std::path::{Path, PathBuf};
 
@@ -53,6 +53,24 @@ pub enum Assist {
         parked_since: Option<Timestamp>,
         delivered: bool,
         message_id: String,
+    },
+    AutoCompact {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        threshold: crate::message::AutoCompact,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        occupied_tokens: Option<u64>,
+        message_id: String,
+    },
+    AutoResume {
+        workspace_id: crate::ids::WorkspaceId,
+        session_name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<crate::store::event::SessionDeathCause>,
+        recovered: usize,
+        labels: Vec<String>,
     },
 }
 
@@ -135,9 +153,42 @@ mod tests {
         }
     }
 
+    fn compacted(at: i64) -> AssistRecord {
+        AssistRecord {
+            at: ts(at),
+            assist: Assist::AutoCompact {
+                kind: AgentKind::new_unchecked("codex"),
+                agent_id: AgentSessionId::from("session-1"),
+                label: Some("@coder".to_owned()),
+                threshold: crate::message::AutoCompact::Percent(70),
+                occupied_tokens: Some(210_000),
+                message_id: "msg_2".to_owned(),
+            },
+        }
+    }
+
+    fn restored(at: i64) -> AssistRecord {
+        AssistRecord {
+            at: ts(at),
+            assist: Assist::AutoResume {
+                workspace_id: crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567")
+                    .expect("workspace"),
+                session_name: "rimz-test".to_owned(),
+                cause: Some(crate::store::event::SessionDeathCause::Crash),
+                recovered: 2,
+                labels: vec!["@coder".to_owned(), "@reviewer".to_owned()],
+            },
+        }
+    }
+
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
-        for record in [redeem(20, "request-1"), resumed(20)] {
+        for record in [
+            redeem(20, "request-1"),
+            resumed(20),
+            compacted(20),
+            restored(20),
+        ] {
             let json = serde_json::to_string(&record).expect("serialize");
             let decoded: AssistRecord = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(decoded, record);

@@ -317,6 +317,35 @@ fn activity_week_scopes_active_count_and_streaks() {
 }
 
 #[test]
+fn spend_trend_compares_only_equal_adjacent_windows() {
+    let today = 20_000;
+    let mut by_day = BTreeMap::new();
+    for back in 0..7 {
+        by_day.insert(today - back, day(1, 2.0));
+        by_day.insert(today - 7 - back, day(1, 1.0));
+    }
+    by_day.insert(today - 14, day(1, 1_000.0));
+
+    assert_eq!(spend_trend(&by_day, today, Window::Week), Some(100.0));
+
+    let mut month = BTreeMap::new();
+    for back in 0..30 {
+        month.insert(today - back, day(1, 3.0));
+        month.insert(today - 30 - back, day(1, 2.0));
+    }
+    assert_eq!(spend_trend(&month, today, Window::Month), Some(50.0));
+}
+
+#[test]
+fn spend_trend_needs_a_supported_window_and_prior_spend() {
+    let by_day = BTreeMap::from([(20_000, day(1, 10.0))]);
+
+    assert_eq!(spend_trend(&by_day, 20_000, Window::Week), None);
+    assert_eq!(spend_trend(&by_day, 20_000, Window::AllTime), None);
+    assert_eq!(spend_trend(&by_day, 20_000, Window::Year), None);
+}
+
+#[test]
 fn cold_spinner_requires_human_stdout_and_stderr_ttys() {
     assert!(should_animate_cold_stats(true, true, true));
     assert!(!should_animate_cold_stats(false, true, true));
@@ -644,7 +673,7 @@ fn panel_fit_preserves_data_before_header_chrome() {
     );
     assert!(used(tall, 2) <= 79);
 
-    let floor = fit(Some(37), true, 8, 10, 0);
+    let floor = fit(Some(38), true, 8, 10, 0);
     assert_eq!(
         floor,
         PanelPlan {
@@ -653,9 +682,9 @@ fn panel_fit_preserves_data_before_header_chrome() {
             agent_rows: 3,
         }
     );
-    assert!(used(floor, 0) <= 36);
+    assert!(used(floor, 0) <= 37);
 
-    let without_header = fit(Some(30), true, 8, 10, 0);
+    let without_header = fit(Some(29), true, 8, 10, 0);
     assert_eq!(
         without_header,
         PanelPlan {
@@ -664,9 +693,9 @@ fn panel_fit_preserves_data_before_header_chrome() {
             agent_rows: 3,
         }
     );
-    assert!(used(without_header, 0) <= 29);
+    assert!(used(without_header, 0) <= 28);
 
-    let very_short = fit(Some(24), true, 8, 10, 0);
+    let very_short = fit(Some(25), true, 8, 10, 0);
     assert_eq!(
         very_short,
         PanelPlan {
@@ -675,7 +704,7 @@ fn panel_fit_preserves_data_before_header_chrome() {
             agent_rows: 1,
         }
     );
-    assert!(used(very_short, 0) <= 23);
+    assert!(used(very_short, 0) <= 24);
 
     let no_breakdowns = fit(Some(24), true, 0, 0, 0);
     assert!(!no_breakdowns.header);
@@ -1069,6 +1098,7 @@ fn insights_sessions_scope_to_the_active_window() {
     stats.total.week.usd = 12.0;
     stats.total.year.sessions = 7;
     stats.total.year.usd = 99.0;
+    stats.by_day.insert(0, day(1, 12.0));
     let mut lines = Vec::new();
 
     insights_lines(&mut lines, &stats, 0, 80, Window::Week);
@@ -1080,6 +1110,54 @@ fn insights_sessions_scope_to_the_active_window() {
     );
     assert!(row.contains("$12"), "row was {row:?}");
     assert!(!row.contains("$99"), "row was {row:?}");
+    let rendered = strip_ansi(&lines.join("\n"));
+    assert!(rendered.contains("Cost/session: $6.00"), "{rendered}");
+    assert!(rendered.contains("Daily avg: $12.00"), "{rendered}");
+}
+
+#[test]
+fn insights_append_the_prior_window_spend_trend() {
+    let today = 20_000;
+    let mut stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::new(),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+    for back in 0..7 {
+        stats.by_day.insert(today - back, day(1, 2.0));
+        stats.by_day.insert(today - 7 - back, day(1, 1.0));
+    }
+    stats.total.week.usd = 14.0;
+    let mut lines = Vec::new();
+
+    insights_lines(&mut lines, &stats, today, 80, Window::Week);
+
+    let rendered = strip_ansi(&lines.join("\n"));
+    assert!(
+        rendered.contains("Spend: $14.00 (↑100% vs prior week)"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Cost/session: —"), "{rendered}");
+}
+
+#[test]
+fn all_time_daily_average_uses_year_days_without_changing_recent_activity() {
+    let today = 20_000;
+    let mut stats = Stats {
+        by_day: BTreeMap::from([(today, day(1, 6.0)), (today - 100, day(1, 6.0))]),
+        by_model: BTreeMap::new(),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+    stats.total.year.usd = 12.0;
+    let mut lines = Vec::new();
+
+    insights_lines(&mut lines, &stats, today, 80, Window::AllTime);
+
+    let rendered = strip_ansi(&lines.join("\n"));
+    assert!(rendered.contains("Active days: 1/28"), "{rendered}");
+    assert!(rendered.contains("Daily avg: $6.00"), "{rendered}");
 }
 
 #[test]
@@ -1166,6 +1244,27 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
                 message_id: "msg_2".to_owned(),
             },
         },
+        AssistRecord {
+            at: ts(4_100),
+            assist: Assist::AutoCompact {
+                kind: AgentKind::new_unchecked("codex"),
+                agent_id: AgentSessionId::from("session-1"),
+                label: Some("@coder".to_owned()),
+                threshold: rimz::message::AutoCompact::Tokens(200_000),
+                occupied_tokens: Some(210_000),
+                message_id: "msg_3".to_owned(),
+            },
+        },
+        AssistRecord {
+            at: ts(4_200),
+            assist: Assist::AutoResume {
+                workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                session_name: "rimz-test".to_owned(),
+                cause: Some(rimz::store::event::SessionDeathCause::Crash),
+                recovered: 2,
+                labels: vec!["@coder".to_owned(), "@reviewer".to_owned()],
+            },
+        },
     ];
     let mut ping = LoopRunRecord::new(
         "autoping-codex",
@@ -1194,14 +1293,17 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             resets: 1,
             resumes: 1,
             recovered_secs: 3_600,
+            compacts: 1,
+            restores: 1,
+            restored_sessions: 2,
         }
     );
-    assert_eq!(stats.events.len(), 4, "every assist outcome stays forensic");
+    assert_eq!(stats.events.len(), 6, "every assist outcome stays forensic");
     let categories = category_rows(&stats.rollup)
         .into_iter()
         .map(|row| strip_ansi(&row))
         .collect::<Vec<_>>();
-    assert_eq!(categories.last().unwrap(), "Auto-continue: 1 (+1.0h)");
+    assert_eq!(categories.last().unwrap(), "Auto-resume: 2");
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
@@ -1228,6 +1330,29 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             .iter()
             .any(|line| line.contains("resume held — overload park"))
     );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("@coder auto-compact — 210k ctx cleared before delivery"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("2 agents restored — crash rebirth (@coder, @reviewer)"))
+    );
+    let forensics = stats
+        .events
+        .iter()
+        .map(|event| forensic_line(event, &zone))
+        .collect::<Vec<_>>();
+    assert!(
+        forensics
+            .iter()
+            .any(|line| line.contains("agent session-1 · message msg_3 · threshold 200k"))
+    );
+    assert!(forensics.iter().any(|line| {
+        line.contains("workspace ws_0123456789abcdef01234567 · session rimz-test")
+    }));
 
     let json = serde_json::to_value(&stats).unwrap();
     assert_eq!(json["rollup"]["resumes"], 1);
@@ -1249,6 +1374,9 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             resets: 1,
             resumes: 5,
             recovered_secs: 22_320,
+            compacts: 4,
+            restores: 2,
+            restored_sessions: 7,
         },
         events: Vec::new(),
     };
@@ -1260,20 +1388,26 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
         rows,
         [
             "Auto-ping: 9 ($0.09)",
-            "Auto-redeem: 2 (1 reset)",
             "Auto-continue: 5 (+6.2h)",
+            "Auto-compact: 4",
+            "Auto-redeem: 2 (1 reset)",
+            "Auto-resume: 7 (2 rebirths)",
         ]
     );
     panel_lines(&mut lines, &stats, 80);
-    assert_eq!(lines.len(), 3, "header plus two paired count rows");
+    assert_eq!(lines.len(), 4, "header plus three paired count rows");
     let panel = strip_ansi(&lines.join("\n"));
     assert!(panel.contains("Assists"));
     assert!(panel.contains("Auto-ping: 9 ($0.09)"));
+    assert!(panel.contains("Auto-resume: 7 (2 rebirths)"));
 
     let bare_counts = AssistRollup {
         pings: 1,
         redeems: 1,
         resumes: 1,
+        compacts: 1,
+        restores: 1,
+        restored_sessions: 1,
         ..Default::default()
     };
     let bare = category_rows(&bare_counts)
@@ -1309,11 +1443,26 @@ fn assists_load_scopes_both_logs_to_the_selected_window() {
             error: None,
         },
     };
+    let recent = AssistRecord {
+        at: now,
+        assist: Assist::AutoCompact {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            agent_id: rimz::ids::AgentSessionId::from("session-1"),
+            label: None,
+            threshold: rimz::message::AutoCompact::Percent(70),
+            occupied_tokens: None,
+            message_id: "msg_1".to_owned(),
+        },
+    };
     let assist_path = assist_log::log_path(dir.path());
     std::fs::create_dir_all(assist_path.parent().unwrap()).unwrap();
     std::fs::write(
         assist_path,
-        format!("{}\n", serde_json::to_string(&old).unwrap()),
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&old).unwrap(),
+            serde_json::to_string(&recent).unwrap()
+        ),
     )
     .unwrap();
 
@@ -1333,5 +1482,6 @@ fn assists_load_scopes_both_logs_to_the_selected_window() {
     let stats = AssistStats::load(dir.path(), Window::Week, now);
     assert_eq!(stats.rollup.pings, 1);
     assert_eq!(stats.rollup.redeems, 0);
-    assert_eq!(stats.events.len(), 1);
+    assert_eq!(stats.rollup.compacts, 1);
+    assert_eq!(stats.events.len(), 2);
 }

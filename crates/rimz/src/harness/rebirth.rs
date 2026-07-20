@@ -124,6 +124,8 @@ impl RebirthPlan {
 
     /// Commit post-choice side effects after the multiplexer session exists.
     pub fn materialize(self, choice: RebirthChoice, session_name: &str) -> RebirthOutcome {
+        let planned_labels = self.planned.labels();
+        let death_cause = self.death.as_ref().map(|death| death.cause);
         if let Some(boot) = self.boot_token.as_deref() {
             write_boot_marker(&self.paths.boot_marker, boot);
         }
@@ -194,6 +196,18 @@ impl RebirthPlan {
             );
         }
         let recovered = resume.tabs.iter().map(ResumeTab::pane_count).sum();
+        if choice == RebirthChoice::Recover && recovered > 0 {
+            crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+                at: Timestamp::now(),
+                assist: crate::harness::assist_log::Assist::AutoResume {
+                    workspace_id: self.paths.workspace_id.clone(),
+                    session_name: session_name.to_owned(),
+                    cause: death_cause,
+                    recovered,
+                    labels: planned_labels,
+                },
+            });
+        }
         let death = self.death.map(|mut death| {
             death.recovered = Some(recovered);
             write_last_death_marker(&self.paths, &death);

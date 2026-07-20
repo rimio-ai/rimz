@@ -83,7 +83,7 @@ pub enum FocusRepairParseError {
 
 pub fn recent(state_root: &Path) -> Vec<FocusRepairRecord> {
     let mut records = Vec::new();
-    log(state_root).visit_records(|record| records.push(record));
+    log(state_root).visit_records(|record: FocusRepairRecord| records.push(record));
     records.sort_by_key(|record| record.at);
     records
 }
