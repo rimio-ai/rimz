@@ -23,7 +23,7 @@ One trait, [`MuxBackend`](../../crates/rimz/src/mux/mod.rs), holds every backend
 
 **Parity is the rule, fast paths are the exception.** A backend-only capability is always a latency hint layered over shared truth — never a correctness requirement. If a feature exists only on Zellij, the tmux backend passes the same matrix without it. Cross-backend policy stays pure and above the backends: [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns stable pane-role grouping, the one-sidebar-per-view planner, current-build mount proof, and plan-execution accounting, while [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing math; each backend maps native facts and supplies native add, close, cleanup, geometry, and focus effects.
 
-The CLI hands `open_tab` backend-neutral pane argv and layout geometry. Agent resolution, prompts, and worktree cleanup are already compiled into the argv (`rimz agents exec …`), so the backend stays ignorant of agent kinds and worktree ownership. The layout IR lives in [harness.md](./harness/harness.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#cleanup).
+The CLI hands `open_tab` backend-neutral pane argv and layout geometry. Agent resolution, prompts, and worktree cleanup are already compiled into the argv (`rimz agents exec …`), so the backend stays ignorant of agent kinds and worktree ownership. The layout IR lives in [harness.md](./harness/harness.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#who-triggers-removal).
 
 ### The identity pin
 

@@ -74,7 +74,7 @@ created feat-a
   linked : 1 dir(s) from .worktreelink
 ```
 
-Neither file runs a command; sources are confined to the project root, and a pattern that matches nothing skips with a warning while the launch continues. The exact copy, symlink, and safety rules are in [the worktree internals](../internals/harness/worktrees.md#seeded-files-and-linked-directories).
+Neither file runs a command; sources are confined to the project root, and a pattern that matches nothing skips with a warning while the launch continues. The exact copy, symlink, and safety rules are in [the worktree internals](../internals/harness/worktrees.md#seeding-worktreeinclude-and-worktreelink).
 
 ## Common workflows
 
@@ -110,7 +110,7 @@ $ rimz worktree remove feat-a
 removed feat-a
 ```
 
-`--force` overrides the refusal when you have decided the work is disposable. `rimz gc` sweeps what automatic cleanup could not reach — trees left by a crash, or ones that became safe only after a later merge or fetch: it removes every clean, landed tree that no live pane or agent occupies, reports the disk it reclaimed, and previews with `--dry-run`. The full landed-content proof is in [the worktree internals](../internals/harness/worktrees.md#cleanup).
+`--force` overrides the refusal when you have decided the work is disposable. `rimz gc` sweeps what automatic cleanup could not reach — trees left by a crash, or ones that became safe only after a later merge or fetch: it removes every clean, landed tree that no live pane or agent occupies, reports the disk it reclaimed, and previews with `--dry-run`. The full landed-content proof is in [the worktree internals](../internals/harness/worktrees.md#the-content-landed-ladder).
 
 ## Under the hood
 
