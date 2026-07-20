@@ -23,15 +23,6 @@ pub struct PaneArgs {
 
 #[derive(Debug, Subcommand)]
 enum PaneSubcmd {
-    /// Profile the current room's per-pane render output (run on the host serving the room).
-    Bandwidth {
-        /// Sampling window in seconds.
-        #[arg(long, default_value_t = 5)]
-        secs: u64,
-        /// Emit JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// List panes known to the active multiplexer.
     List {
         /// Emit JSON.
@@ -40,6 +31,15 @@ enum PaneSubcmd {
         /// Session to list. Defaults to the cwd's workspace session.
         #[arg(long)]
         session_name: Option<String>,
+    },
+    /// Profile the current room's per-pane render output (run on the host serving the room).
+    Bandwidth {
+        /// Sampling window in seconds.
+        #[arg(long, default_value_t = 5)]
+        secs: u64,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Capture a pane's visible text.
     Capture {
