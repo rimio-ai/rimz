@@ -1634,13 +1634,10 @@ impl LoopState {
             return;
         };
         let now_ms = crate::sidebar::timing::unix_now_ms();
-        let Some(applied_at_ms) = anchor.applied_at_ms else {
-            return;
-        };
+        let presentation_at_ms = anchor.applied_at_ms.unwrap_or(anchor.issued_at_ms);
         if self.ui.selected_pane.as_ref() == Some(&anchor.pane_id)
-            && anchor.state == FocusIntentState::Applied
-            && applied_at_ms > self.ui.last_focus_anchor_ms
-            && crate::sidebar::focus_anchor::is_fresh(applied_at_ms, now_ms)
+            && anchor.issued_at_ms > self.ui.last_focus_anchor_ms
+            && crate::sidebar::focus_anchor::is_fresh(presentation_at_ms, now_ms)
         {
             self.ui.scroll_offset = anchor.offset;
             self.ui.manual_scroll = None;
@@ -1652,10 +1649,10 @@ impl LoopState {
                     &mut self.ui,
                     &mut self.current,
                     order,
-                    applied_at_ms as i64,
+                    presentation_at_ms as i64,
                 );
             }
-            self.ui.last_focus_anchor_ms = applied_at_ms;
+            self.ui.last_focus_anchor_ms = anchor.issued_at_ms;
         }
         if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
             crate::sidebar::focus_anchor::clear_matching(self.read_marks.runtime(), anchor.nonce);
@@ -1680,7 +1677,6 @@ impl LoopState {
             )
         };
         match outcome {
-            FocusObservationOutcome::Requested => None,
             FocusObservationOutcome::Present => Some(FocusPresentation::Target(Box::new(anchor))),
             FocusObservationOutcome::Fence => Some(FocusPresentation::Fence),
             FocusObservationOutcome::Confirmed

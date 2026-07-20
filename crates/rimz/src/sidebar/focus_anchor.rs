@@ -1,7 +1,8 @@
 //! Durable two-phase intent for RimZ-initiated attached-client focus actions.
 //!
-//! Command acceptance supplies a short presentation overlay. Native client
-//! observations confirm, supersede, or fence that overlay independently.
+//! The request supplies a short presentation overlay before mux dispatch.
+//! Command acceptance and native client observations confirm, supersede, or
+//! fence that overlay independently.
 
 use std::collections::HashSet;
 use std::fs;
@@ -125,7 +126,6 @@ pub struct FocusDispatchRetries {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FocusObservationOutcome {
-    Requested,
     Present,
     Fence,
     Confirmed,
@@ -215,6 +215,23 @@ pub fn request_action(
     session_name: &str,
     request: FocusActionRequest<'_>,
 ) -> Result<FocusNonce, FocusActionError> {
+    request_action_with_client_sample(runtime, session_name, request, || {
+        backend
+            .client_view(ClientFocusOptions {
+                session_name: Some(session_name.to_owned()),
+                command_timeout: None,
+            })
+            .map(|view| view.clients)
+            .map_err(FocusActionError::ClientSample)
+    })
+}
+
+fn request_action_with_client_sample(
+    runtime: &RuntimePaths,
+    session_name: &str,
+    request: FocusActionRequest<'_>,
+    sample: impl FnOnce() -> Result<Vec<ClientPaneView>, FocusActionError>,
+) -> Result<FocusNonce, FocusActionError> {
     let FocusActionRequest {
         pane_id,
         origin,
@@ -224,13 +241,7 @@ pub fn request_action(
         order,
     } = request;
     let _guard = crate::store::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())?;
-    let mut pre_action = backend
-        .client_view(ClientFocusOptions {
-            session_name: Some(session_name.to_owned()),
-            command_timeout: None,
-        })
-        .map_err(FocusActionError::ClientSample)?
-        .clients;
+    let mut pre_action = sample()?;
     normalize_views(&mut pre_action);
     if let Some(expected) = expected_pre_action {
         let mut expected = expected.to_vec();
@@ -240,6 +251,7 @@ pub fn request_action(
         }
     }
     let nonce = FocusNonce::new();
+    let event_pane_id = pane_id.clone();
     let anchor = FocusAnchor {
         nonce,
         session_name: session_name.to_owned(),
@@ -254,6 +266,17 @@ pub fn request_action(
         order,
     };
     store(runtime, &anchor)?;
+    drop(_guard);
+    if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
+        runtime,
+        Some(session_name),
+        crate::sidebar::events::SidebarEvent::FocusIntent {
+            pane_id: event_pane_id.clone(),
+            nonce,
+        },
+    ) {
+        debug!(pane = %event_pane_id, error = %err, "focus intent broadcast failed");
+    }
     Ok(nonce)
 }
 
@@ -314,17 +337,6 @@ pub fn dispatch_action_retried(
     anchor.state = FocusIntentState::Applied;
     anchor.applied_at_ms = Some(applied_at_ms);
     store(runtime, &anchor)?;
-    drop(_guard);
-    if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
-        runtime,
-        Some(session_name),
-        crate::sidebar::events::SidebarEvent::FocusIntent {
-            pane_id: pane_id.clone(),
-            nonce,
-        },
-    ) {
-        debug!(pane = %pane_id, error = %err, "focus intent broadcast failed");
-    }
     Ok(true)
 }
 
@@ -400,16 +412,20 @@ pub(crate) fn observation_outcome_from(
     observation: &FocusObservation,
     now_ms: u64,
 ) -> FocusObservationOutcome {
-    if anchor.state == FocusIntentState::Requested {
-        return FocusObservationOutcome::Requested;
-    }
     if observation.pane_session_name.as_deref() != Some(anchor.session_name.as_str())
         || !observation.pane_ids.contains(&anchor.pane_id)
     {
         return FocusObservationOutcome::Invalidated;
     }
+    if anchor.state == FocusIntentState::Requested {
+        return if is_fresh(anchor.issued_at_ms, now_ms) {
+            FocusObservationOutcome::Present
+        } else {
+            FocusObservationOutcome::Invalidated
+        };
+    }
     let Some(applied_at_ms) = anchor.applied_at_ms else {
-        return FocusObservationOutcome::Requested;
+        return FocusObservationOutcome::Invalidated;
     };
     if !observation.presence_known {
         return if is_fresh(applied_at_ms, now_ms) {
@@ -483,8 +499,9 @@ struct FocusAnchorFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{MuxName, WorkspaceId};
+    use crate::ids::{MuxName, SidebarInstanceId, WorkspaceId};
     use jiff::Timestamp;
+    use std::os::unix::net::UnixDatagram;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -625,6 +642,57 @@ mod tests {
     }
 
     #[test]
+    fn request_broadcasts_focus_intent_before_dispatch() {
+        let (_dir, runtime) = runtime();
+        runtime.ensure_dirs().expect("runtime dirs");
+        let instance = SidebarInstanceId::new();
+        let socket_path = runtime.sock_dir.join("focus-intent-test.sock");
+        let socket = UnixDatagram::bind(&socket_path).expect("bind wakeup socket");
+        socket
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("set socket timeout");
+        crate::sidebar::write_heartbeat(
+            &runtime,
+            runtime.workspace_id.clone(),
+            &instance,
+            MuxName::Tmux,
+            "rimz-test",
+            &socket_path,
+            None,
+        )
+        .expect("write heartbeat");
+        let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
+
+        let nonce = request_action_with_client_sample(
+            &runtime,
+            "rimz-test",
+            FocusActionRequest {
+                pane_id: pane_id.clone(),
+                origin: FocusOrigin::User,
+                repair_generation: None,
+                expected_pre_action: None,
+                offset: 7,
+                order: None,
+            },
+            || Ok(Vec::new()),
+        )
+        .expect("request focus");
+
+        let mut payload = [0_u8; 1024];
+        let received = socket.recv(&mut payload).expect("receive focus intent");
+        let envelope: crate::sidebar::events::SidebarEventEnvelope =
+            serde_json::from_slice(&payload[..received]).expect("decode focus intent");
+        assert_eq!(
+            envelope.event,
+            crate::sidebar::events::SidebarEvent::FocusIntent { pane_id, nonce }
+        );
+        assert_eq!(
+            load(&runtime).expect("stored anchor").state,
+            FocusIntentState::Requested
+        );
+    }
+
+    #[test]
     fn action_intent_observations_confirm_supersede_and_fence() {
         let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let prior = PaneId::from_parts(MuxName::Zellij, "terminal_1");
@@ -672,7 +740,11 @@ mod tests {
         intent.applied_at_ms = None;
         assert_eq!(
             observation_outcome(&intent, &confirmed, 1_001),
-            FocusObservationOutcome::Requested,
+            FocusObservationOutcome::Present,
+        );
+        assert_eq!(
+            observation_outcome(&intent, &confirmed, 1_000 + ttl_ms + 1),
+            FocusObservationOutcome::Invalidated,
         );
     }
 

@@ -28,6 +28,18 @@ fn applied_focus_anchor(
     }
 }
 
+fn requested_focus_anchor(
+    pane_id: PaneId,
+    offset: usize,
+    stamp_ms: u64,
+    order: Option<crate::sidebar_pane::render::FrozenOrder>,
+) -> crate::sidebar::focus_anchor::FocusAnchor {
+    let mut anchor = applied_focus_anchor(pane_id, offset, stamp_ms, order);
+    anchor.applied_at_ms = None;
+    anchor.state = crate::sidebar::focus_anchor::FocusIntentState::Requested;
+    anchor
+}
+
 #[test]
 fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     let mut rig = Rig::new();
@@ -57,34 +69,31 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
 }
 
 #[test]
-fn fresh_focus_anchor_with_order_installs_shared_hold() {
+fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     let mut rig = Rig::new();
     let first = zellij("terminal_1");
     let target = zellij("terminal_2");
     let stamp_ms = crate::sidebar::timing::unix_now_ms();
-    crate::sidebar::focus_anchor::store(
-        &rig.runtime,
-        &applied_focus_anchor(
-            target.clone(),
-            7,
-            stamp_ms,
-            Some(crate::sidebar_pane::render::FrozenOrder {
-                groups: vec!["/repo/main".to_owned()],
-                rows: vec![
-                    crate::sidebar_pane::render::FrozenRow {
-                        id: target.to_string(),
-                        pane: Some(target.to_string()),
-                    },
-                    crate::sidebar_pane::render::FrozenRow {
-                        id: first.to_string(),
-                        pane: Some(first.to_string()),
-                    },
-                ],
-                visible: HashSet::from([target.to_string()]),
-            }),
-        ),
-    )
-    .expect("store anchor");
+    let mut anchor = requested_focus_anchor(
+        target.clone(),
+        7,
+        stamp_ms,
+        Some(crate::sidebar_pane::render::FrozenOrder {
+            groups: vec!["/repo/main".to_owned()],
+            rows: vec![
+                crate::sidebar_pane::render::FrozenRow {
+                    id: target.to_string(),
+                    pane: Some(target.to_string()),
+                },
+                crate::sidebar_pane::render::FrozenRow {
+                    id: first.to_string(),
+                    pane: Some(first.to_string()),
+                },
+            ],
+            visible: HashSet::from([target.to_string()]),
+        }),
+    );
+    crate::sidebar::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
     rig.fold(snapshot, true);
@@ -106,6 +115,20 @@ fn fresh_focus_anchor_with_order_installs_shared_hold() {
         hold.expires_ms,
         stamp_ms as i64 + crate::sidebar::timing::REORDER_HOLD.as_millis() as i64
     );
+
+    rig.state.ui.scroll_offset = 4;
+    rig.state.ui.manual_scroll = Some(crate::sidebar_pane::render::ManualScroll {
+        selection_at_start: Some(target.clone()),
+    });
+    anchor.state = crate::sidebar::focus_anchor::FocusIntentState::Applied;
+    anchor.applied_at_ms = Some(crate::sidebar::timing::unix_now_ms());
+    crate::sidebar::focus_anchor::store(&rig.runtime, &anchor).expect("apply anchor");
+    let snapshot = snapshot_with_focused_pane(&rig.ws, target);
+    rig.fold(snapshot, true);
+
+    assert_eq!(rig.state.ui.scroll_offset, 4);
+    assert!(rig.state.ui.manual_scroll.is_some());
+    assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
 }
 
 #[test]

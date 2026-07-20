@@ -287,7 +287,7 @@ Fusion is pure over pulled truth, the event store, and `now_ms`: no IO, no subpr
 1. `PaneClosed` deletes rows. If it names `focused_pane`, the register clears and the renderer holds its last highlight.
 2. `CommandChanged` overlays the command for panes that survived step 1 and were already admitted.
 3. The newest `FocusChanged` lands after the observation overlays: one current pane sets the session register and marks that pane viewed, while a transition naming only the prior pane clears the register.
-4. An applied focus intent lands last and outranks both the pulled register and `FocusChanged` for `FOCUS_ANCHOR_FRESH`, provided its pane still has an admitted row.
+4. A requested focus intent lands last and outranks both the pulled register and `FocusChanged` for `FOCUS_ANCHOR_FRESH`, provided its pane still has an admitted row.
 
 `PaneOpened` creates nothing; it asks the producer for a verified frame. Pane rows carry no focus state at all, in any step.
 
@@ -299,10 +299,10 @@ Every RimZ-initiated focus action, whether a user jump or an automatic repair, i
 
 The intent has two states:
 
-- **`Requested`** is written before the one-way mux focus command. It is not presentable, so a command that never lands moves nothing on screen.
-- **`Applied`** records command acceptance and wakes every renderer with a store-less `FocusIntent`. It supplies a bounded presentation overlay: the highlight moves before the next client sample, without claiming native confirmation.
+- **`Requested`** is written and wakes every renderer with a store-less `FocusIntent` before the one-way mux focus command. It supplies a bounded presentation overlay, so peer tabs adopt the target, viewport offset, and frozen order while the destination is still hidden.
+- **`Applied`** records command acceptance without reseeding presentation. It is the honest accepted phase used by native confirmation and fencing.
 
-Later native client observations resolve an applied intent. The pre-action client map is the fence, and [`observation_outcome`](../../../crates/rimz/src/sidebar/focus_anchor.rs) returns one of five verdicts:
+Command acceptance and later native client observations resolve an intent. The pre-action client map is the fence, and [`observation_outcome`](../../../crates/rimz/src/sidebar/focus_anchor.rs) returns one of five verdicts:
 
 | Verdict | Condition | Effect |
 | --- | --- | --- |

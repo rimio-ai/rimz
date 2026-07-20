@@ -23,7 +23,7 @@ use crate::ids::PaneId;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::focus_anchor::{
-    FocusIntentState, FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
+    FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
@@ -532,8 +532,9 @@ pub(crate) static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex:
 /// Errors are logged at `debug!`, not surfaced: a pane recycled in the
 /// sub-second window since the snapshot is a benign, self-correcting race, so
 /// the line stays local under `RUST_LOG=debug` and off the off-box error
-/// channel. Command acceptance applies the durable intent and wakes every
-/// renderer; later native observations confirm or supersede it.
+/// channel. The durable request wakes every renderer before mux dispatch;
+/// command acceptance applies it, and later native observations confirm or
+/// supersede it.
 fn spawn_pane_focus(
     pane_id: PaneId,
     session_name: &str,

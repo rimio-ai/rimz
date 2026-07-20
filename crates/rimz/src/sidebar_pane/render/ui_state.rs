@@ -74,8 +74,9 @@ pub struct UiState {
     /// selected card stays in view unless a [`ManualScroll`] pin holds it —
     /// and written back as a byproduct of the draw, like frame interactions.
     pub(crate) scroll_offset: usize,
-    /// Stamp of the last jump scroll anchor this renderer applied, so a given
-    /// anchor seeds the viewport at most once. `0` before any jump handoff.
+    /// Request stamp of the last jump scroll anchor this renderer applied, so
+    /// its later acceptance cannot seed the viewport a second time. `0` before
+    /// any jump handoff.
     pub(crate) last_focus_anchor_ms: u64,
     /// Armed for one paint when a fold adopts an external focus change — a tab
     /// switch, or the first focused pane learned on attach. The next draw
