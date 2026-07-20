@@ -22,7 +22,9 @@ Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem,
 
 | Page | What it owns |
 | --- | --- |
-| [harness.md](./harness/harness.md) | Layout IR, the address grammar, supervised `-p` runs and the run wake, and the scheduled loop tasks. |
+| [harness.md](./harness/harness.md) | The subsystem overview: the layout IR, the exec wrapper, the address grammar, resume planning, budget scopes, and pane reclamation. |
+| [scripting.md](./harness/scripting.md) | Supervised `-p` runs: the durable run record, the completion fold, the wake socket, verification and retry, and the output projections. |
+| [loops.md](./harness/loops.md) | Loop scheduling: the task catalog and its sources, elder firing, the fire gate ladder, run history, and the assist log. |
 | [messaging.md](./harness/messaging.md) | Message routing: send modes, durable records, the delivery pipeline, reply waits, the channel lanes, the transcript, and the ask lifecycle. |
 | [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: creation, the ownership marker, seeding, and landed-work cleanup. |
 | [trust.md](./harness/trust.md) | The permission model: the executable launch surface, grants, and the stale-grant diff. |

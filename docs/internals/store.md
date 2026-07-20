@@ -4,7 +4,7 @@
 
 The store is the workspace's durable state engine: a directory of flat files that every writer appends to and every renderer reads. Correctness lives here — the harness, the message queue, the sidebar, and the agent UIs all own their semantics one layer up and keep their truth in the store's records.
 
-This doc owns the durability contract — the on-disk shape and the write classes. The write- and read-path *choreography* lives beside the code in [`store/AGENTS.md`](../../crates/rimz/src/store/AGENTS.md), and each file's mechanics live in the module linked from the rule that names it. The supervised-run wake that rides the store's write path is [harness.md → The run wake](./harness/harness.md#supervised-runs).
+This doc owns the durability contract — the on-disk shape and the write classes. The write- and read-path *choreography* lives beside the code in [`store/AGENTS.md`](../../crates/rimz/src/store/AGENTS.md), and each file's mechanics live in the module linked from the rule that names it. The supervised-run wake that rides the store's write path is [scripting.md → The wake socket](./harness/scripting.md#the-wake-socket).
 
 ## Durable state
 
@@ -22,7 +22,7 @@ snapshots/rollup.json                           resumable agent-rollup fold base
 messages/messages.jsonl                         the live message queue ([messaging.md](./harness/messaging.md))
 messages/history.jsonl                          terminal message records with text
 transcript/<bucket-start>.jsonl                 the append-only chat transcript log
-runs/<run_id>.json                              supervised-run records ([harness.md](./harness/harness.md))
+runs/<run_id>.json                              supervised-run records ([scripting.md](./harness/scripting.md))
 locks/workspace.lock                            the single-writer flock
 locks/{publish,log-sync,auto-rotate,dead-reap}.stamp debounce stamps for the off-lock write tail
 ```
@@ -93,7 +93,7 @@ Rebirth materialization also writes `last-death.json` beside the workspace store
 
 ## Wakeups
 
-After every write, the writer wakes live consumers off-lock: it walks fresh sidebar heartbeats (TTL ~5s) and sends each a `store_delta` wakeup datagram, and a completing run pings its waiter's [run socket](./harness/harness.md#supervised-runs). The send is non-blocking, so a full receiver queue drops the datagram. The envelope and its event taxonomy live in [state.md → event taxonomy](./sidebar/state.md#event-taxonomy) and [`sidebar/events.rs`](../../crates/rimz/src/sidebar/events.rs).
+After every write, the writer wakes live consumers off-lock: it walks fresh sidebar heartbeats (TTL ~5s) and sends each a `store_delta` wakeup datagram, and a completing run pings its waiter's [run socket](./harness/scripting.md#the-wake-socket). The send is non-blocking, so a full receiver queue drops the datagram. The envelope and its event taxonomy live in [state.md → event taxonomy](./sidebar/state.md#event-taxonomy) and [`sidebar/events.rs`](../../crates/rimz/src/sidebar/events.rs).
 
 A wakeup carries latency, not truth: the consumer folds the log tail from its own cursor, and the published checkpoint is a catch-up accelerator it can skip. A missed wakeup is closed by the next sidebar tick (`--tick-seconds`, default 1s) ([`wakeup.rs`](../../crates/rimz/src/store/wakeup.rs)).
 

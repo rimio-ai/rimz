@@ -1,6 +1,6 @@
 # Scripting
 
-> `rimz agents -p` is `claude -p` for every agent RimZ supports: one prompt, one supervised turn, one exit code — with the turn running in a real pane you can watch, answer, and steer. This page is how you drop an agent into a shell script, a `Makefile`, a cron line, or a CI job. The run records, wakeup socket, and pane cleanup underneath it are [harness.md → Supervised runs](../internals/harness/harness.md#supervised-runs).
+> `rimz agents -p` is `claude -p` for every agent RimZ supports: one prompt, one supervised turn, one exit code — with the turn running in a real pane you can watch, answer, and steer. This page is how you drop an agent into a shell script, a `Makefile`, a cron line, or a CI job. The run records, wakeup socket, and pane cleanup underneath it are [scripting.md](../internals/harness/scripting.md).
 
 ## Why `rimz agents -p`
 
@@ -58,9 +58,7 @@ On success, stdout is the final assistant answer and nothing else, so it pipes c
 rimz agents codex "Update dependencies and run the test suite." -p --timeout 30m
 ```
 
-**Cap the dollars.** `--budget 2` records `budget_exceeded` and exits `125`, distinct from a timeout or agent failure. The cap model behind the flag is the [budgets guide](./budget.md).
-
-**Honor the exact Qwen account.** A fresh managed Qwen run resolves the final Alibaba region and API key chosen by the launch environment, compares only that opaque account binding with cached Coding Plan windows, and exits `125` before recording the run or opening a pane when any authoritative window is spent. Missing quota data permits the run; a cache entry for another region or key cannot block it. Interactive launches, resume, fork, and wake keep their existing behaviour.
+**Cap the dollars.** `--budget 2` records `budget_exceeded` and exits `125`, distinct from a timeout or agent failure. A spent provider subscription quota exits `125` the same way, before the run record or the pane exists, so a script sees one code for "this run was not affordable" whichever limit stopped it. Both caps are the [budgets guide](./budget.md).
 
 Two more flags, `--verify` and `--retries`, gate what counts as done and rerun what failed; they have [their own section below](#verify-and-retry).
 
@@ -110,7 +108,7 @@ rimz agents codex "Fix the failing auth test." -p --verify "cargo xtask test aut
 rimz agents codex "Fix the failing checks." -p --retries 1 --timeout 30m
 ```
 
-The two compose: verification repairs stay in the same session after a completed turn, while an agent turn that fails with exit `1` starts a fresh-session retry and resets the verify attempt count. Both require a blocking text or JSON run and refuse `--bg` and `--output-format stream-json`.
+The two compose: verification repairs stay in the same session after a completed turn, while an agent turn that fails with exit `1` starts a fresh-session retry and resets the verify attempt count. Both need a blocking run, so both refuse `--bg` and `--output-format stream-json`; use `text` or `json` output and wait on the run. To verify work you started in the background, wait for it first and run the check on the result.
 
 ## A real agent, not a background job
 
@@ -214,4 +212,4 @@ Supervised runs need installed and trusted hooks, because hooks are the completi
 - [Agents](./fleet.md) — the profile, handle, and layout vocabulary these examples use.
 - [Worktrees](./worktrees.md) — the isolated branches behind `--worktree` runs.
 - [Agent control CLI](../reference/cli/agents.md#supervised-runs--p) — every flag on `-p`, `wait`, `show`, `stop`, and `pane`.
-- [harness.md → Supervised runs](../internals/harness/harness.md#supervised-runs) — run records, the wakeup socket, streaming, and pane cleanup.
+- [scripting.md](../internals/harness/scripting.md) — run records, the wakeup socket, streaming, and pane cleanup.

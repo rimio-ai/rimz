@@ -354,7 +354,7 @@ A batched delivery splits on the blank-line boundaries that introduce another se
 
 The reader computes a current-life boundary at read time: the earliest `registered_at` among the matching live root agents. Earlier entries are prior-session archive, hidden by default when a live cohort exists, rendered under a dated marker with `--all`, and rendered wholesale as archive when no live cohort exists. The buckets themselves are never mutated.
 
-Three nearby reads are not this log. Supervised-run streaming tails the provider-native transcript through the adapter-owned source ([harness.md § Supervised runs](./harness.md#supervised-runs)); the context and spend gauges read those same native stores ([model.md § Enrichment](../agents/model.md#enrichment)); and the audit trail below carries no message text at all.
+Three nearby reads are not this log. Supervised-run streaming tails the provider-native transcript through the adapter-owned source ([scripting.md § Output and input projections](./scripting.md#output-and-input-projections)); the context and spend gauges read those same native stores ([model.md § Enrichment](../agents/model.md#enrichment)); and the audit trail below carries no message text at all.
 
 ## Asks and answers
 

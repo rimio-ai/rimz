@@ -71,4 +71,4 @@ A task that is already running records `overlapped` and skips instead of stackin
 
 `loop logs <name>` prints complete forensic blocks for the latest ten records, oldest first so the newest finishes the stream. `-n, --runs <N>` changes the limit, and `--failed` keeps only failed, timed-out, budget-exceeded, verify-failed, and errored records. Each block includes the status, age, mode, exit information, check output, error chains, run ids, captured pane output tails, costs and tokens, and transcript links when recorded.
 
-The task model and config shape are in [harness.md → Scheduled turns](../../internals/harness/harness.md#scheduled-turns-loop).
+The task model and config shape are in [loops.md](../../internals/harness/loops.md).

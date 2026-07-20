@@ -491,7 +491,7 @@ Field notes:
 - Trusted project tasks win over same-named machine tasks and state instances; an untrusted or stale project task stays visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up.
 - RimZ-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file.
 
-The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [loop.md](../reference/cli/loop.md).
+The full model is in [loops.md](../internals/harness/loops.md), and the CLI is in [loop.md](../reference/cli/loop.md).
 
 ## theme.toml: appearance and pets
 

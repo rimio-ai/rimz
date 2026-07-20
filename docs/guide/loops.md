@@ -1,6 +1,6 @@
 # Loops
 
-> `rimz loop` is cron for your agents. A task is a name, a schedule, and one action: an agent turn in a real pane, a wake to an agent that is already running, or a shell command that guards either. It fires while the room is open. This page starts from a single scheduled turn and builds up to a fleet that works through the night. The clock, the state files, and the run log underneath are in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop).
+> `rimz loop` is cron for your agents. A task is a name, a schedule, and one action: an agent turn in a real pane, a wake to an agent that is already running, or a shell command that guards either. It fires while the room is open. This page starts from a single scheduled turn and builds up to a fleet that works through the night. The clock, the state files, and the run log underneath are in [loops.md](../internals/harness/loops.md).
 
 ## Why rimz loop
 
@@ -46,7 +46,9 @@ rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:
 
 Every weekday at 07:00 the task runs one lowest-effort turn, and the window runs 07:00 to 12:00. (Claude's ping pins Sonnet, so a flagship account does not prime at the flagship rate.) You sit down at 9:00 against an almost untouched budget, the reset lands at noon instead of mid-afternoon, and the next window carries you to 17:00. Same subscription, same limits. The resets just stop landing in the middle of your deep work.
 
-The ping is cheap insurance, not a wasted turn. Before it fires, RimZ reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex. `qwen-ping` binds the final launch to the exact Alibaba region and API-key fingerprint selected by Qwen's process environment; cold data permits the one priming turn, while missing, mismatched, or incomplete data after that keeps the gate closed before any `--check` command runs. Antigravity has no verified generic model-safe priming command, so `antigravity-ping` is rejected even though its account-owned `5h`/`7d` bars support display and surplus checks.
+The ping is cheap insurance, not a wasted turn. Before it fires, RimZ reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex.
+
+A `<kind>-ping` exists only where the adapter has a low-cost priming command RimZ has verified, which today means `claude-ping`, `codex-ping`, `qwen-ping`, and `kimi-ping`. Any other kind is refused when you add the task, so a provider without one fails at `rimz loop add` rather than quietly burning a full-price turn every morning.
 
 To keep the windows back-to-back all day, let the window set its own schedule:
 
@@ -54,7 +56,7 @@ To keep the windows back-to-back all day, let the window set its own schedule:
 rimz loop add prime --agent claude-ping --prompt ping --every reset
 ```
 
-`--every reset` fires one minute after the provider's longest pacing window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes. Qwen uses the exact account's `7d` window for reset recurrence; an exhausted Alibaba `30d` window still blocks a fire without stretching the recurrence to a month. The shape requires a supported `<kind>-ping`.
+`--every reset` fires one minute after the provider's longest pacing window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes. The shape requires a supported `<kind>-ping`.
 
 To keep the longest window running for every supported provider without defining each task, enable the machine-level loop flag:
 
@@ -102,13 +104,13 @@ The check runs first, every time, and costs nothing. Only its result spends a tu
 
 A `--check` with no agent action is still worth having. It is a scheduled command that logs `completed`, `failed`, or `timed out`, each with the exit code and output tail, into the run history, and it keeps recurring.
 
-`--check` gates firing; `--verify` gates completion. Add `--verify "cargo test"` to a scheduled `--agent` task when the command is the definition of done: a red result returns its evidence to the same live session, up to `--max-attempts` total turns, before the fire records `verify failed`.
+`--check` gates firing; `--verify` gates completion. Add `--verify "cargo test"` to a scheduled `--agent` task when the command is the definition of done: a red result returns its evidence to the same live session, up to `--max-attempts` total turns, before the fire records `verify failed`. It behaves exactly as it does on a hand-run `-p`, described in full under [verify and retry](./scripting.md#verify-and-retry).
 
 ## Soak up the weekly surplus
 
 The weekly subscription window expires whether you use it or not: whatever is left on the `7d` bar at the weekly reset is capacity you paid for and gave back. A recurring background task can absorb it — refactoring, filling test gaps, dependency triage are all real work with no deadline — but scheduled blindly it drains the same window your daytime sessions run on. The task should fire only when the week is ahead of pace.
 
-`--surplus` is that condition. Before each fire, RimZ reads the provider's longest pacing window and computes forward headroom, how far ahead of the sustainable pace the window is running: `1.0x` is exactly on pace, and `1.5x` means half again as much budget remains as the clock requires. Qwen uses the exact account's `7d` Alibaba window for pacing; its `30d` window remains an exhaustion boundary only. The headroom model, a worked example, and the fail-closed rules live in [budgets → spend the provider surplus](./budget.md#spend-the-provider-surplus).
+`--surplus` is that condition. Before each fire, RimZ reads the provider's longest pacing window and computes forward headroom, how far ahead of the sustainable pace the window is running: `1.0x` is exactly on pace, and `1.5x` means half again as much budget remains as the clock requires. Which window counts as the pacing window is per provider, and the headroom model, a worked example, and the fail-closed rules live in [budgets → spend the provider surplus](./budget.md#spend-the-provider-surplus).
 
 ```sh
 rimz loop add refactor-soak --agent claude --prompt "Refactor the next rough module and leave the branch green" \
@@ -143,11 +145,13 @@ rimz config set resume.auto_redeem true       # spend useful Codex reset credits
 rimz config set harness.smart_compact 200k    # compact before a message once context passes 200k tokens (or "70%")
 ```
 
-**Auto-continue** picks a certified parked turn back up on its own. A provider-owned per-turn failure marker proves why the turn stopped; an authoritative account window then supplies the reset clock for a rate-limit or spend-limit park, while a certified transient overload or API error uses a lengthening backoff ramp. An exhausted window, error message, or stalled pane cannot arm recovery by itself. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. Qwen's Alibaba launch quota is checked only before a fresh managed launch and does not arm mid-run auto-continue; Qwen's native stop failures continue through the ordinary rate-limit or overload classification. Antigravity has account-owned clocks but no failure marker certified recoverable, so its error stops remain terminal and a loop fire records the ordinary failure. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [providers.md → Auto-continue](../internals/agents/providers.md#auto-continue).
+**Auto-continue** picks a certified parked turn back up on its own. A provider-owned per-turn failure marker proves why the turn stopped; an authoritative account window then supplies the reset clock for a rate-limit or spend-limit park, while a certified transient overload or API error uses a lengthening backoff ramp. An exhausted window, error message, or stalled pane cannot arm recovery by itself. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running.
+
+That certified failure marker is what makes recovery a per-provider capability rather than a global switch: an agent whose adapter exposes no marker RimZ trusts keeps its error stops terminal, and a loop fire records the ordinary failure. [Agent support](../reference/agent-support.md#notes-on-the-alpha-and-experimental-set) states it per agent. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [providers.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 
 **Auto-redeem pairs with auto-continue** to carry Codex work through a spent long window: a useful or doomed reset credit restores the account capacity, then the existing certified recovery path wakes the parked turn.
 
-**Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. For check-gated work, `rimz loop show` separates the agent attempts from cheap check passes and totals their costs across the recorded history; other tasks retain the last-run and rolling ten-run average cost. Fresh input/output tokens stay visible per run. The room-fleet and provider-account daily caps gate the same fires before launch. An exact Qwen Alibaba window exhaustion records the same `budget skipped` result before the loop's `--check` command or pane exists, and a different API-key fingerprint cannot gate that launch. The whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
+**Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. For check-gated work, `rimz loop show` separates the agent attempts from cheap check passes and totals their costs across the recorded history; other tasks retain the last-run and rolling ten-run average cost. Fresh input/output tokens stay visible per run. The room-fleet and provider-account daily caps gate the same fires before launch, and a spent provider quota records the same `budget skipped` result before the task's `--check` command or pane exists. The whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
 
 **Smart compaction** rides the same loop. Past the threshold, RimZ submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
 
@@ -236,4 +240,4 @@ The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#
 - [Loop CLI](../reference/cli/loop.md) — every flag on `add`, `fire`, `list`, `show`, `rename`, and `remove`.
 - [Configuration](./configuration.md) — the `[resume]` and `[harness]` keys, and the `loop.toml` shape.
 - [Security and trust](./security.md) — the safety posture for bypass flags and project trust.
-- [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop) — the clock, state files, and run log underneath.
+- [loops.md](../internals/harness/loops.md) — the clock, state files, and run log underneath.

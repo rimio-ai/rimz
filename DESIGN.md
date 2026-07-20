@@ -33,13 +33,13 @@ A channel is a named lane where a human and a few agent colleagues work one line
 - `message` reaches a member in either tense: `--steer` types into the live pane now, the default parks text for the next open turn, `--schedule` sets a delivery floor, and `--on done|any` picks the boundary gate. Every mode routes through the one pane-send primitive and records an audit event that omits the message text.
 - Automation is a teammate. `rimz agents … -p` drives one member headless — cron, CI, or a script launches the turn, reads the answer or a stream, and branches on the exit code — through the same hooks, store, and pane path an interactive member uses.
 
-The launcher, address grammar, delivery gates, and supervised-run machinery live in [harness.md](./docs/internals/harness/harness.md).
+The launcher and address grammar live in [harness.md](./docs/internals/harness/harness.md), the delivery gates in [messaging.md](./docs/internals/harness/messaging.md), and the supervised-run machinery in [scripting.md](./docs/internals/harness/scripting.md).
 
 ## A programmable room
 
 Everything reaches the room through one CLI, and agent hooks are simply its primary callers: `rimz message` reaches any member, `rimz agents -p` runs a supervised turn and returns its answer, and `rimz pane capture` and `rimz pane send` read and type into any pane. Anything you do by hand, a script can do through the same commands: a CI gate messages a reviewer agent, a cron job launches a nightly turn and branches on its exit code, a notification handler wakes a command the moment a row needs eyes. This surface is where harness engineering lands: permission posture, guardrails, and self-correction wire up as your own commands over these primitives, enforced by the room rather than asked of the model.
 
-Loop engineering composes those primitives into a routine: `rimz loop` drives supervised runs on a clock (calendar, interval, cron, poll-until), notification handlers turn `waiting` and `failed` rows into desktop alerts, bells, or command wakeups you build on, and the message system carries steering text between members at safe turn boundaries. The intelligence behind a loop is yours — a bounded script, a smarter model, or another agent through the same harness ([harness.md](./docs/internals/harness/harness.md)).
+Loop engineering composes those primitives into a routine: `rimz loop` drives supervised runs on a clock (calendar, interval, cron, poll-until), notification handlers turn `waiting` and `failed` rows into desktop alerts, bells, or command wakeups you build on, and the message system carries steering text between members at safe turn boundaries. The intelligence behind a loop is yours — a bounded script, a smarter model, or another agent through the same harness ([loops.md](./docs/internals/harness/loops.md)).
 
 ## Built on what you already run
 
