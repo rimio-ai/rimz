@@ -41,6 +41,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 
 ### Fixed
 
+- The live `rimz stats` pane stays full-screen in `rimzd`, so the mouse wheel no longer reveals terminal scrollback behind the dashboard.
 - Grok cards use completed-turn input as their context occupancy, so the fresh/cache/output detail matches the displayed total, and locally estimate dollars from model pricing when current Grok Build records omit native cost ticks.
 - Remote attach keeps the panel layout stable while a confirmed session opens, animates the Multiplexer stage, and turns its handoff arrow green as the remote session renders. SSH control-client failures now appear as a recovery cause instead of leaking raw diagnostics over the panel.
 - Held stats dashboards survive spending-service contention and repaired Zellij daemon panes close with their commands, so `rimzd` stops accumulating failed content panes.

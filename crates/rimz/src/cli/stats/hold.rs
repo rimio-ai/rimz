@@ -8,9 +8,10 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     let glyphs = resolve_panel_glyphs(&super::super::machine_config().theme);
     let paths = RuntimePaths::shared();
     ensure_shared_runtime(&paths)?;
-    // Raw mode makes keypresses typed events instead of echoed cooked input;
-    // mouse reports from a sibling sidebar pane are drained below.
-    let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Main)?;
+    // The alternate screen keeps this live dashboard full-screen and out of
+    // mux scrollback. Raw mode turns keypresses and stray mouse reports into
+    // typed events that the loop drains instead of echoing them.
+    let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
     let mut state = HeldStats::new(dollars, glyphs, hold);
     loop {
         let (tx, rx) = mpsc::channel();

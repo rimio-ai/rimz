@@ -1,4 +1,4 @@
-//! Regression test for `rimz stats --refresh` re-centring after pane resize.
+//! Regression tests for the `rimz stats --refresh` terminal surface.
 //!
 //! Daemon stats panes can be born wide and then narrowed by mux layout work.
 //! The refresh loop must redraw at the new PTY width promptly, rather than
@@ -22,6 +22,21 @@ const TAGLINE: &str = "The control room for your coding agents";
 const INITIAL_BUDGET: Duration = Duration::from_secs(5);
 const REDRAW_DEADLINE: Duration = Duration::from_secs(5);
 const REDRAW_BUDGET: Duration = Duration::from_secs(2);
+
+#[test]
+fn stats_refresh_owns_the_alternate_screen() {
+    let harness = StatsRefreshHarness::launch(NARROW_COLS);
+
+    let initial_col = wait_for_tagline_col(&harness.parser, |_| true, INITIAL_BUDGET);
+    let parser = harness.parser.lock().expect("parser");
+    let initial_screen = parser.screen().contents();
+    initial_col.unwrap_or_else(|| panic!("stats never rendered the tagline:\n{initial_screen}"));
+
+    assert!(
+        parser.screen().alternate_screen(),
+        "refreshing stats must stay full-screen and out of terminal scrollback:\n{initial_screen}",
+    );
+}
 
 #[test]
 fn stats_refresh_recenters_on_resize() {

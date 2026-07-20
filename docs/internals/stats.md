@@ -100,7 +100,7 @@ The panel is plain strings, not widgets. `render_panel` builds a `Vec<String>` a
 
 ## The held dashboard
 
-`--refresh` runs `hold::run_refresh`. `TerminalModeGuard` takes the terminal in raw mode on the main screen with mouse capture off, so keypresses arrive as events rather than echoing, and mouse reports from a sibling sidebar pane get drained instead of printed.
+`--refresh` runs `hold::run_refresh`. `TerminalModeGuard` takes the terminal in raw mode on the alternate screen with mouse capture off, so the dashboard owns the full pane without adding mux scrollback, keypresses arrive as events rather than echoing, and stray mouse reports get drained instead of printed.
 
 Each cycle spawns a worker thread that loads through the elected spending service and sends back a single `Result<Stats>`; the foreground polls for keys every 100ms against a 60-second refresh deadline. A failed refresh holds the last frame and logs the failure streak's first warning rather than exiting; consecutive failures drop to debug until a refresh succeeds. A dashboard that has no frame yet retries after 5 seconds, then returns to the 60-second cadence once a refresh succeeds. Stderr logging is off for this rendered command, so warnings cannot smear its raw-mode frame; the reporting layer still receives them.
 
