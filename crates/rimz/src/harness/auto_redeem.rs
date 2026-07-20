@@ -4,6 +4,9 @@
 //! state, then spawns a hidden CLI helper only when a redemption is useful. The
 //! helper serializes account-wide attempts, refreshes both inputs, re-evaluates
 //! the same pure verdict, and performs the provider-specific consume request.
+//! Elected-producer and one-shot heavy refreshes may both advance the shared
+//! burn-rate cache; atomic replacement plus observation stamps make duplicate
+//! folds idempotent.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -160,15 +163,39 @@ pub(crate) fn redeem_verdict(
     }
 
     let expiry_count = usize::try_from(credits.count).unwrap_or(usize::MAX);
-    let expiries = &credits.expiries[..credits.expiries.len().min(expiry_count)];
+    let expiries = credits
+        .expiries
+        .iter()
+        .copied()
+        .filter(|expiry| *expiry > now)
+        .take(expiry_count)
+        .collect::<Vec<_>>();
     let first_expiry = *expiries.first()?;
-    if first_expiry <= now || now < chain_deadline(expiries, rate_pct_per_day)? {
+    if now < paced_chain_deadline(capacity, &expiries, rate_pct_per_day, now)? {
         return None;
     }
     if free_reset_defers(capacity, first_expiry, min_gain, now) {
         return None;
     }
     Some(RedeemReason::ScheduledRedeem)
+}
+
+fn paced_chain_deadline(
+    capacity: Option<&ProviderCapacity>,
+    expiries: &[Timestamp],
+    rate_pct_per_day: Option<f64>,
+    now: Timestamp,
+) -> Option<Timestamp> {
+    let refill = refill_interval(rate_pct_per_day)?;
+    let chain_deadline = chain_deadline(expiries, rate_pct_per_day)?;
+    let window = capacity?.longest_window_observation(now)?;
+    let resets_at = window.resets_at?;
+    let duration_mins = window.duration_mins.filter(|mins| *mins > 0)?;
+    let window_start = resets_at
+        .checked_sub(SignedDuration::from_secs(i64::from(duration_mins) * 60))
+        .ok()?;
+    let paced_deadline = window_start.checked_add(refill).ok()?;
+    Some(chain_deadline.max(paced_deadline))
 }
 
 fn chain_deadline(expiries: &[Timestamp], rate_pct_per_day: Option<f64>) -> Option<Timestamp> {
@@ -259,6 +286,9 @@ fn update_rate_stamp(prior: Option<&RateStamp>, window: &RateLimitWindow) -> Opt
             .as_secs_f64();
         let sample_rate =
             f64::from(last_used_pct - prior.last_used_pct) * SECONDS_PER_DAY / elapsed_secs;
+        if rate_pct_per_day == 0.0 && elapsed_secs < T_MIN.as_secs_f64() {
+            return Some(prior.clone());
+        }
         let alpha = 1.0 - 0.5_f64.powf(elapsed_secs / RATE_HALF_LIFE.as_secs_f64());
         rate_pct_per_day = if rate_pct_per_day > 0.0 {
             rate_pct_per_day + alpha * (sample_rate - rate_pct_per_day)

@@ -25,6 +25,16 @@ fn undated_spent_capacity() -> ProviderCapacity {
     }])
 }
 
+fn capacity_started_at(window_start: Timestamp, used_percentage: u8) -> ProviderCapacity {
+    ProviderCapacity::from_windows(vec![RateLimitWindow {
+        used_percentage: Some(used_percentage),
+        resets_at: Some(window_start + Duration::from_secs(7 * 86_400)),
+        duration_mins: Some(10_080),
+        observed_at: Some(window_start),
+        ..Default::default()
+    }])
+}
+
 fn credits(now: Timestamp, expiry: Option<Duration>) -> ResetCredits {
     ResetCredits {
         count: 1,
@@ -184,16 +194,19 @@ fn rate_stamp_learns_growth_and_restarts_at_window_edges() {
     let first = update_rate_stamp(None, &window(10, reset, observed)).unwrap();
     assert_eq!(first.rate_pct_per_day, 0.0);
 
-    let learned = update_rate_stamp(
+    let noisy = update_rate_stamp(
         Some(&first),
-        &window(30, reset, observed + Duration::from_secs(86_400)),
+        &window(11, reset, observed + Duration::from_secs(5 * 60)),
     )
     .unwrap();
+    assert_eq!(noisy, first, "a five-minute 1% tick is not a stable seed");
+
+    let learned = update_rate_stamp(Some(&first), &window(15, reset, observed + T_MIN)).unwrap();
     assert_eq!(learned.rate_pct_per_day, 20.0);
 
     let folded = update_rate_stamp(
         Some(&learned),
-        &window(40, reset, observed + Duration::from_secs(2 * 86_400)),
+        &window(25, reset, observed + T_MIN + Duration::from_secs(86_400)),
     )
     .unwrap();
     let alpha = 1.0 - 0.5_f64.powf(1.0 / 3.0);
@@ -203,7 +216,11 @@ fn rate_stamp_learns_growth_and_restarts_at_window_edges() {
     let next_reset = reset + Duration::from_secs(86_400);
     let restarted = update_rate_stamp(
         Some(&folded),
-        &window(1, next_reset, observed + Duration::from_secs(3 * 86_400)),
+        &window(
+            1,
+            next_reset,
+            observed + T_MIN + Duration::from_secs(2 * 86_400),
+        ),
     )
     .unwrap();
     assert_eq!(restarted.window_resets_at, next_reset);
@@ -212,7 +229,11 @@ fn rate_stamp_learns_growth_and_restarts_at_window_edges() {
 
     let stale = update_rate_stamp(
         Some(&restarted),
-        &window(90, next_reset, observed + Duration::from_secs(2 * 86_400)),
+        &window(
+            90,
+            next_reset,
+            observed + T_MIN + Duration::from_secs(86_400),
+        ),
     )
     .unwrap();
     assert_eq!(stale, restarted, "out-of-order observations are ignored");
@@ -242,9 +263,10 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
         expiries: expiries.to_vec(),
     };
     let deadline = rescue - refill - refill;
+    let capacity = capacity_started_at(deadline - refill, 80);
     assert_eq!(
         redeem_verdict(
-            None,
+            Some(&capacity),
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
@@ -255,7 +277,7 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
     );
     assert_eq!(
         redeem_verdict(
-            None,
+            Some(&capacity),
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
@@ -264,6 +286,128 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
         ),
         Some(RedeemReason::ScheduledRedeem),
     );
+}
+
+#[test]
+fn expired_credit_does_not_suppress_the_live_chain() {
+    let now = ts(1_700_000_000);
+    let expiry = now + Duration::from_secs(20 * 86_400);
+    let credits = ResetCredits {
+        count: 2,
+        soonest_expiry: Some(now - Duration::from_secs(1)),
+        expiries: vec![now - Duration::from_secs(1), expiry, expiry],
+    };
+    let deadline = expiry - EXPIRY_RESCUE_LEAD - Duration::from_secs(5 * 86_400);
+    let capacity = capacity_started_at(deadline - Duration::from_secs(5 * 86_400), 80);
+
+    assert_eq!(
+        redeem_verdict(
+            Some(&capacity),
+            &credits,
+            Some(20.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            deadline,
+        ),
+        Some(RedeemReason::ScheduledRedeem),
+    );
+}
+
+#[test]
+fn window_start_paces_a_late_chain_after_every_reset() {
+    let now = ts(1_700_000_000);
+    let expiry = now + Duration::from_secs(36 * 3_600);
+    let credits = ResetCredits {
+        count: 3,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry, expiry, expiry],
+    };
+    let fresh = capacity_started_at(now, 0);
+
+    assert!(chain_deadline(&credits.expiries, Some(100.0)).unwrap() < now);
+    assert_eq!(
+        redeem_verdict(
+            Some(&fresh),
+            &credits,
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            now,
+        ),
+        None,
+        "a freshly zeroed window must not spend the next credit immediately"
+    );
+    assert_eq!(
+        redeem_verdict(
+            Some(&fresh),
+            &credits,
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            now + Duration::from_secs(24 * 3_600),
+        ),
+        Some(RedeemReason::ScheduledRedeem),
+    );
+}
+
+#[test]
+fn slow_burn_does_not_drain_an_overdue_chain_after_the_cooldown() {
+    let now = ts(1_700_000_000);
+    let expiry = now + Duration::from_secs(30 * 86_400);
+    let credits = ResetCredits {
+        count: 2,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry, expiry],
+    };
+    let fresh = capacity_started_at(now, 0);
+
+    assert!(chain_deadline(&credits.expiries, Some(2.0)).unwrap() < now);
+    assert_eq!(
+        redeem_verdict(
+            Some(&fresh),
+            &credits,
+            Some(2.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            now + POST_SUCCESS_COOLDOWN,
+        ),
+        None,
+    );
+}
+
+#[test]
+fn scheduled_redeem_requires_a_dated_duration_window() {
+    let now = ts(1_700_000_000);
+    let expiry = now + Duration::from_secs(36 * 3_600);
+    let credits = ResetCredits {
+        count: 3,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry, expiry, expiry],
+    };
+    let missing_reset = ProviderCapacity::from_windows(vec![RateLimitWindow {
+        used_percentage: Some(50),
+        duration_mins: Some(10_080),
+        ..Default::default()
+    }]);
+    let missing_duration = ProviderCapacity::from_windows(vec![RateLimitWindow {
+        used_percentage: Some(50),
+        resets_at: Some(now + Duration::from_secs(7 * 86_400)),
+        ..Default::default()
+    }]);
+
+    for capacity in [&missing_reset, &missing_duration] {
+        assert_eq!(
+            redeem_verdict(
+                Some(capacity),
+                &credits,
+                Some(100.0),
+                Duration::from_secs(12 * 3_600),
+                true,
+                now,
+            ),
+            None,
+        );
+    }
 }
 
 #[test]
