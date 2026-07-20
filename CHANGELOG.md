@@ -1,12 +1,12 @@
 # Changelog
 
-What changed in each RimZ release, written for the people who run it. Every release is a git tag: `v0.3` tags the `0.3.0` workspace version, `v0.2` tags `0.2.0`. Each heading links to that release's full diff.
+What changed in each RimZ release, written for the people who run it. Every release is a git tag: `v0.4` tags the `0.4.0` workspace version, `v0.3` tags `0.3.0`. Each heading links to that release's full diff.
 
 RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output formats can change between releases while the design settles, so read the "Changed" section of a release before upgrading. Entries describe what you can do differently; the reasoning behind a change lives in the linked guide.
 
-## [0.4.0] (unreleased)
+## [0.4.0] (2026-07-20)
 
-This section accrues as work lands, and ships as `v0.4`. Three themes so far: provider accounts and money become a queryable surface of their own, remote attach gains port forwarding and honest reconnect reporting, and RimZ updates itself.
+Four themes: provider accounts and money become a queryable surface of their own, remote attach gains port forwarding and honest reconnect reporting, RimZ updates itself, and a broad correctness and performance pass steadies the sidebar, Zellij presence, and spend accounting while cutting the work behind each frame.
 
 ### Added
 
@@ -114,6 +114,6 @@ What shipped:
 - Theming and pets: bundled palettes, color-depth and slot overrides, custom themes, provider branding, and an animated companion on the provider dashboard. → [theme](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
 - `rimz doctor`, `rimz setup`, hook install and uninstall, project trust, and a documented reset and GC path. → [troubleshooting](./docs/guide/troubleshooting.md) · [security](./docs/guide/security.md)
 
-[0.4.0]: https://github.com/rimio-ai/rimz/compare/v0.3...HEAD
+[0.4.0]: https://github.com/rimio-ai/rimz/compare/v0.3...v0.4
 [0.3.0]: https://github.com/rimio-ai/rimz/compare/v0.2...v0.3
 [0.2.0]: https://github.com/rimio-ai/rimz/releases/tag/v0.2
