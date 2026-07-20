@@ -67,7 +67,7 @@ RimZ keeps your work local. Your prompts, transcripts, pane text, file paths, an
 
 ### Hook payload privacy
 
-Hook payloads can carry prompts, tool inputs, file paths, command arguments, and errors. They stay in RimZ's local state, and nothing forwards them off the box. Payload-fidelity and retention controls (a `[privacy]` block with `payload_mode` and `retention_days`) are a planned project surface, tracked in [configuration.md](./configuration.md) against the [hook adapter boundary](../internals/agents/model.md#the-adapter-boundary).
+Hook payloads can carry prompts, tool inputs, file paths, command arguments, and errors. They stay in RimZ's local state, and nothing forwards them off the box. Payload-fidelity and retention controls (a `[privacy]` block with `payload_mode` and `retention_days`) are a planned project surface, tracked in [configuration.md](./configuration.md) against the [hook adapter boundary](../internals/agents/adapter.md#the-hook-path).
 
 ### Off-box error reporting
 

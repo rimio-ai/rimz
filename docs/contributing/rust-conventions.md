@@ -34,7 +34,7 @@ A `println!` site is legal only when annotated `#[expect(clippy::print_stdout, r
 
 - a `--json` event stream or the final user-facing message of a command;
 - a single scripting value (`message` ids, launched agent names);
-- the agent-native decision channel — `rimz hooks <agent> ...` stdout is parsed by the agent, per [agent.md → Hook stdout is the decision channel](../internals/agents/model.md#hook-stdout-is-the-decision-channel);
+- the agent-native decision channel — `rimz hooks <agent> ...` stdout is parsed by the agent, per [adapter.md → Hook stdout is the decision channel](../internals/agents/adapter.md#hook-stdout-is-the-decision-channel);
 - the `doctor` multi-section diagnostic, a bespoke layout migrated to `render` opportunistically.
 
 Human-facing tables, key/value blocks, and listings render through the shared `cli/render` layer, never ad-hoc `println!`. `render::out()` returns an `anstream::AutoStream` over stdout that strips ANSI when output is piped or color is disabled (`NO_COLOR`/`CLICOLOR`, or `--color never`), so `--json` and snapshot output stay byte-clean; it writes through `writeln!`, keeping the `print_stdout` lint on guard without a new `#[expect]` site. Colors come from `render::palette`, which lazily resolves the machine's scheme, slot overrides, depth, and provider styles through the shared theme core. State tones resolve once in `render::status`, keyed on typed status values rather than rendered strings. Provider identity, state, hierarchy, and quantities follow the [interface language](../internals/theme.md#interface-language). New human output uses `render`; raw protocol surfaces stay theme-independent.

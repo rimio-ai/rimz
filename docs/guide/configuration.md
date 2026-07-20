@@ -553,4 +553,4 @@ Command-running fields enter the trust hash, so a clone with project config read
 
 Notification handlers, remote aliases, and trust records each have their own reference: [notifications.md](../internals/sidebar/notifications.md), `rimz remote` ([remote CLI](../reference/cli/remote.md#remote-rooms)), and `rimz trust` ([trust.md](../internals/harness/trust.md)).
 
-Payload-fidelity and retention controls (`[privacy] payload_mode`) are a planned project surface. The design and intended keys are in [security.md](./security.md), and the hook boundary they will govern is in [agent.md → The adapter boundary](../internals/agents/model.md#the-adapter-boundary).
+Payload-fidelity and retention controls (`[privacy] payload_mode`) are a planned project surface. The design and intended keys are in [security.md](./security.md), and the hook boundary they will govern is in [adapter.md → The hook path](../internals/agents/adapter.md#the-hook-path).

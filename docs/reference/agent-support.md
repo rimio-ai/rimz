@@ -77,7 +77,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 
 ## Per-agent mappings
 
-The detail for each agent — its full coverage rationale, permission-mode mapping, effort levels, install target, resume/fork surface, and account probing — lives in that agent's mapping doc, with its upstream protocol in the matching external reference. Adding an agent means implementing only its supported workflow capabilities, declaring an `AgentSpec`, and composing one registry definition ([adding an agent](../internals/agents/model.md#adding-an-agent)).
+The detail for each agent — its full coverage rationale, permission-mode mapping, effort levels, install target, resume/fork surface, and account probing — lives in that agent's mapping doc, with its upstream protocol in the matching external reference. Adding an agent means implementing only its supported workflow capabilities, declaring an `AgentSpec`, and composing one registry definition ([adding an agent](../internals/agents/adapter.md#adding-an-agent)).
 
 | Agent | Mapping | Upstream protocol |
 | --- | --- | --- |
@@ -101,7 +101,7 @@ RimZ tracks each agent's own release surface, and behaviour can shift with the a
 
 ## Agents not yet supported
 
-An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents land the same way the built-ins here did — one adapter over their verified hook or local-store surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
+An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents land the same way the built-ins here did — one adapter over their verified hook or local-store surface ([adding an agent](../internals/agents/adapter.md#adding-an-agent)). Two categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
 
 ## Third-party plugins
 
