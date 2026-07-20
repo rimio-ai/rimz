@@ -64,6 +64,8 @@ struct AskJsonView<'a> {
     kind: AskKind,
     since: jiff::Timestamp,
     detail: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<&'a str>,
     questions: Vec<AskQuestionJson<'a>>,
 }
 
@@ -90,6 +92,7 @@ impl<'a> From<&'a OpenAskView> for AskJsonView<'a> {
             kind: view.detail.open.kind,
             since: view.detail.open.since,
             detail: view.detail.open.detail.as_deref(),
+            context: view.detail.context.as_deref(),
             questions: view
                 .detail
                 .questions
@@ -192,9 +195,38 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
         return render::json_pretty(&AskJsonView::from(&view));
     }
     let mut out = render::out();
-    writeln!(out, "{}  {}", view.detail.open.id, view.agent.handle)?;
-    if let Some(detail) = view.detail.open.detail.as_deref() {
-        writeln!(out, "{detail}")?;
+    let now = jiff::Timestamp::now();
+    writeln!(
+        out,
+        "{}  {}  {}",
+        render::paint(render::palette::accent(), view.detail.open.id.as_str()),
+        view.agent.handle,
+        render::paint(
+            render::palette::muted(),
+            &format!(
+                "{} · {}",
+                view.detail.open.kind.short_label(),
+                render::age_short(view.detail.open.since, now)
+            )
+        )
+    )?;
+    if let Some(context) = view.detail.context.as_deref() {
+        writeln!(out)?;
+        let width = render::terminal_columns(100).min(100).saturating_sub(2);
+        for source_line in context.lines() {
+            let lines = render::wrap_words(source_line, width);
+            if lines.is_empty() {
+                writeln!(out, "{}", render::paint(render::palette::muted(), "▌"))?;
+            } else {
+                for line in lines {
+                    writeln!(
+                        out,
+                        "{}",
+                        render::paint(render::palette::muted(), &format!("▌ {line}"))
+                    )?;
+                }
+            }
+        }
     }
     for (question_index, question) in view.detail.questions.iter().enumerate() {
         if view.detail.questions.len() > 1 {

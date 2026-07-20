@@ -10,6 +10,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 
 ### Added
 
+- `rimz asks` carries the agent's context message on question and plan asks, renders it above the questions in `show`, and exposes it as `context` in JSON. → [asks](./docs/reference/cli/asks.md)
 - `rimz update` upgrades RimZ through the install path you already used. Homebrew delegates to `brew upgrade`, Cargo delegates to `cargo install --locked rimz`, and a prebuilt install downloads the release, verifies its checksum, smoke-tests it, and atomically replaces the running binary. When the binary changes, the new build reloads your running sidebars. `--version` selects a release tag, including the rolling `latest-main`. → [maintenance](./docs/reference/cli/maintenance.md)
 - A one-line install script for verified prebuilt binaries on macOS and Linux, with no `sudo` required for a user-owned destination. Unsupported platforms report the exact `cargo install` fallback rather than failing silently. → [installation](./docs/guide/installation.md)
 - `rimz providers` reports the account picture behind the provider dashboard: login status, plan, agent CLI version, included rate-limit windows, paid and reset credits, published spend, and daily-cap state. It runs inside or outside a room, `--json` emits a stable report array for scripts, and `--refresh` bypasses the caches for one call. → [providers CLI](./docs/reference/cli/providers.md)

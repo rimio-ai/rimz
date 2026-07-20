@@ -1,8 +1,6 @@
 //! Provider-neutral materialization of an agent's current actionable ask.
 //!
-//! [`AgentState::open_ask`] owns current identity
-//! and summary. Structured questions join from RimZ transcript state only by
-//! exact ask ID; adapter-owned safe options supply the fallback shape.
+//! [`AgentState::open_ask`] owns current identity and summary. Structured questions and the agent's ask-time message join from RimZ transcript state only by exact ask ID; adapter-owned safe options supply the fallback shape.
 
 use crate::agents::{AgentErr, AgentState, AskKind, OpenAsk, definition_by_kind};
 use crate::store::StatePaths;
@@ -11,6 +9,7 @@ use crate::transcript::{AskQuestion, TranscriptLogErr, latest_open_ask};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenAskDetail {
     pub open: OpenAsk,
+    pub context: Option<String>,
     pub questions: Vec<AskQuestion>,
 }
 
@@ -34,17 +33,24 @@ pub fn read_open_ask(
         return Ok(None);
     };
     let adapter = definition_by_kind(agent.kind.as_str())?;
-    let questions = match open.kind {
+    let (questions, context) = match open.kind {
         AskKind::Question | AskKind::PlanApproval => {
             latest_open_ask(paths, &agent.kind, &agent.agent_id)?
                 .filter(|entry| entry.id.as_ref() == Some(&open.id))
-                .map(|entry| entry.questions)
-                .unwrap_or_else(|| synthetic_questions(open, adapter))
+                .map(|entry| {
+                    let context = entry.text.trim();
+                    (
+                        entry.questions,
+                        (!context.is_empty()).then(|| context.to_owned()),
+                    )
+                })
+                .unwrap_or_else(|| (synthetic_questions(open, adapter), None))
         }
-        AskKind::Permission => synthetic_questions(open, adapter),
+        AskKind::Permission => (synthetic_questions(open, adapter), None),
     };
     Ok(Some(OpenAskDetail {
         open: open.clone(),
+        context,
         questions,
     }))
 }

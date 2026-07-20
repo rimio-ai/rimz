@@ -663,7 +663,7 @@ impl Table {
 
 /// Greedily wrap pre-collapsed single-line text to `width` display columns.
 /// Tokens wider than the budget are hard-split on character boundaries.
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return Vec::new();
     }

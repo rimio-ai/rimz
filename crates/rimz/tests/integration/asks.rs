@@ -12,6 +12,7 @@ fn question_payload() -> String {
         "hook_event_name": "PreToolUse",
         "session_id": "sess-question",
         "tool_name": "AskUserQuestion",
+        "last_assistant_message": "A staged rollout limits the blast radius.",
         "tool_input": {
             "questions": [{
                 "question": "Choose deployment path?",
@@ -104,6 +105,7 @@ fn asks_lists_and_shows_structured_question_json() {
             .is_some_and(|id| id.starts_with("ask_"))
     );
     assert_eq!(ask["kind"], "question");
+    assert_eq!(ask["context"], "A staged rollout limits the blast radius.");
     assert_eq!(ask["questions"][0]["question"], "Choose deployment path?");
     assert_eq!(ask["questions"][0]["options"][0]["label"], "safe");
     assert_eq!(ask["questions"][0]["options"][0]["mutates_trust"], false);
@@ -121,7 +123,33 @@ fn asks_lists_and_shows_structured_question_json() {
     );
     let shown: serde_json::Value = serde_json::from_slice(&output.stdout).expect("show json");
     assert_eq!(shown["ask_id"], ask_id);
+    assert_eq!(
+        shown["context"],
+        "A staged rollout limits the blast radius."
+    );
     assert_eq!(shown["questions"][0]["options"][1]["label"], "fast");
+
+    let output = env
+        .rimz()
+        .args(["asks", "show", ask_id])
+        .bounded_output()
+        .expect("show human ask");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let shown = String::from_utf8(output.stdout).expect("human ask");
+    assert!(
+        shown.contains("▌ A staged rollout limits the blast radius."),
+        "{shown}"
+    );
+    assert_eq!(
+        shown.matches("Choose deployment path?").count(),
+        1,
+        "{shown}"
+    );
+    assert!(shown.contains("question · "), "{shown}");
 }
 
 #[test]
@@ -329,6 +357,7 @@ fn asks_synthesizes_safe_permission_options() {
     );
     let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
     assert_eq!(asks[0]["kind"], "permission");
+    assert!(asks[0].get("context").is_none());
     assert_eq!(
         asks[0]["questions"][0]["question"],
         open.detail.as_deref().expect("current permission detail")
