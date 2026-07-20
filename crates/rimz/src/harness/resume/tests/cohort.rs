@@ -93,7 +93,10 @@ fn relaunch_spec_prefers_team_role_then_profile_then_kind() {
         "codex-plan"
     );
     assert_eq!(relaunch_spec(Some("forge"), None, None, "codex"), "codex");
-    assert_eq!(relaunch_spec(Some(""), Some(""), Some(""), "codex"), "codex");
+    assert_eq!(
+        relaunch_spec(Some(""), Some(""), Some(""), "codex"),
+        "codex"
+    );
 }
 
 #[test]
