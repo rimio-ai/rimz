@@ -212,7 +212,10 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     )?;
     if let Some(context) = view.detail.context.as_deref() {
         writeln!(out)?;
-        let width = render::terminal_columns(100).min(100).saturating_sub(2);
+        let width = render::terminal_columns(100)
+            .min(100)
+            .saturating_sub(2)
+            .max(1);
         for source_line in context.lines() {
             let lines = render::wrap_words(source_line, width);
             if lines.is_empty() {

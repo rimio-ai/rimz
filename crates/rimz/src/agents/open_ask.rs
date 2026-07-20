@@ -1,6 +1,8 @@
 //! Provider-neutral materialization of an agent's current actionable ask.
 //!
-//! [`AgentState::open_ask`] owns current identity and summary. Structured questions and the agent's ask-time message join from RimZ transcript state only by exact ask ID; adapter-owned safe options supply the fallback shape.
+//! [`AgentState::open_ask`] owns current identity and summary. Structured
+//! questions and the agent's ask-time message join from RimZ transcript state
+//! only by exact ask ID; adapter-owned safe options supply the fallback shape.
 
 use crate::agents::{AgentErr, AgentState, AskKind, OpenAsk, definition_by_kind};
 use crate::store::StatePaths;

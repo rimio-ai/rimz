@@ -7,12 +7,30 @@ use rimz::agents::{AgentState, AgentStatus, AskKind, OpenAsk};
 use rimz::ids::AskId;
 use rimz::transcript::{AskOption, AskQuestion, TranscriptEntry, TranscriptKind};
 
-fn question_payload() -> String {
+const QUESTION_CONTEXT: &str = concat!(
+    "A staged rollout limits the blast radius.\n\n",
+    "It also leaves time to observe each stage."
+);
+
+fn question_payload(env: &Env) -> String {
+    let transcript_path = env.home_root.join("question-transcript.jsonl");
+    let transcript = serde_json::to_string(&json!({
+        "type": "assistant",
+        "timestamp": "2026-07-13T10:00:01Z",
+        "message": {
+            "role": "assistant",
+            "content": [{ "type": "text", "text": QUESTION_CONTEXT }]
+        }
+    }))
+    .expect("Claude question transcript");
+    std::fs::write(&transcript_path, format!("{transcript}\n"))
+        .expect("write Claude question transcript");
+
     serde_json::to_string(&json!({
         "hook_event_name": "PreToolUse",
         "session_id": "sess-question",
+        "transcript_path": transcript_path,
         "tool_name": "AskUserQuestion",
-        "last_assistant_message": "A staged rollout limits the blast radius.",
         "tool_input": {
             "questions": [{
                 "question": "Choose deployment path?",
@@ -80,7 +98,7 @@ fn write_codex_plan_rollout(env: &Env) -> std::path::PathBuf {
 #[test]
 fn asks_lists_and_shows_structured_question_json() {
     let env = Env::new();
-    let hook = env.run_hook("claude", &question_payload());
+    let hook = env.run_hook("claude", &question_payload(&env));
     assert!(
         hook.status.success(),
         "{}",
@@ -105,7 +123,7 @@ fn asks_lists_and_shows_structured_question_json() {
             .is_some_and(|id| id.starts_with("ask_"))
     );
     assert_eq!(ask["kind"], "question");
-    assert_eq!(ask["context"], "A staged rollout limits the blast radius.");
+    assert_eq!(ask["context"], QUESTION_CONTEXT);
     assert_eq!(ask["questions"][0]["question"], "Choose deployment path?");
     assert_eq!(ask["questions"][0]["options"][0]["label"], "safe");
     assert_eq!(ask["questions"][0]["options"][0]["mutates_trust"], false);
@@ -123,10 +141,7 @@ fn asks_lists_and_shows_structured_question_json() {
     );
     let shown: serde_json::Value = serde_json::from_slice(&output.stdout).expect("show json");
     assert_eq!(shown["ask_id"], ask_id);
-    assert_eq!(
-        shown["context"],
-        "A staged rollout limits the blast radius."
-    );
+    assert_eq!(shown["context"], QUESTION_CONTEXT);
     assert_eq!(shown["questions"][0]["options"][1]["label"], "fast");
 
     let output = env
@@ -144,6 +159,11 @@ fn asks_lists_and_shows_structured_question_json() {
         shown.contains("▌ A staged rollout limits the blast radius."),
         "{shown}"
     );
+    assert!(
+        shown.contains("▌ It also leaves time to observe each stage."),
+        "{shown}"
+    );
+    assert!(shown.contains("\n▌\n"), "{shown}");
     assert_eq!(
         shown.matches("Choose deployment path?").count(),
         1,
@@ -233,7 +253,7 @@ fn pi_parallel_sibling_completion_keeps_the_keyed_ask_open() {
 #[test]
 fn asks_ignores_newer_transcript_question_with_a_different_id() {
     let env = Env::new();
-    let hook = env.run_hook("claude", &question_payload());
+    let hook = env.run_hook("claude", &question_payload(&env));
     assert!(
         hook.status.success(),
         "{}",
@@ -285,7 +305,7 @@ fn asks_ignores_newer_transcript_question_with_a_different_id() {
 #[test]
 fn permission_request_does_not_replace_its_native_question_ask() {
     let env = Env::new();
-    let question = env.run_hook("claude", &question_payload());
+    let question = env.run_hook("claude", &question_payload(&env));
     assert!(question.status.success());
     let before = env
         .rimz()
@@ -516,6 +536,7 @@ fn codex_plan_stop_lists_rollout_plan_as_waiting_ask() {
     );
     let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
     assert_eq!(asks[0]["kind"], "plan_approval");
+    assert_eq!(asks[0]["context"], "Codex says:");
     assert_eq!(
         asks[0]["questions"][0]["question"],
         "Requesting plan approval:\n\n# Plan\n\nShip safely."
@@ -622,7 +643,7 @@ fn fake_tmux(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
 fn answer_question_sends_to_bound_pane_and_timeout_has_distinct_exit() {
     let env = Env::new();
     let hook =
-        env.run_installed_hook_in_pane("claude", &question_payload(), &[("TMUX_PANE", "%7")]);
+        env.run_installed_hook_in_pane("claude", &question_payload(&env), &[("TMUX_PANE", "%7")]);
     assert!(
         hook.status.success(),
         "{}",
