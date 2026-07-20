@@ -1010,7 +1010,7 @@ pub fn ping_kind_supported(kind: &str) -> Result<()> {
         find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     if adapter.ping_args().is_none() {
         anyhow::bail!(
-            "agent kind `{kind}` does not support a ping turn; use `claude`, `codex`, or `qwen`"
+            "agent kind `{kind}` does not support a ping turn; use `claude`, `codex`, `qwen`, or `kimi`"
         );
     }
     Ok(())
