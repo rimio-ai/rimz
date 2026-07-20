@@ -959,9 +959,11 @@ pub(super) fn insights_lines(
         .most_active
         .map(fmt_day)
         .unwrap_or_else(|| "—".to_string());
-    let cost_per_session = (selected.sessions > 0)
-        .then(|| rimz::theme::fmt::dollars2(selected.usd / f64::from(selected.sessions)))
-        .unwrap_or_else(|| "—".to_owned());
+    let cost_per_session = if selected.sessions > 0 {
+        rimz::theme::fmt::dollars2(selected.usd / f64::from(selected.sessions))
+    } else {
+        "—".to_owned()
+    };
     let average_span = match active {
         Window::AllTime => Window::Year.span_days(),
         _ => active.span_days(),
@@ -972,9 +974,11 @@ pub(super) fn insights_lines(
         .iter()
         .filter(|(day, spend)| **day >= average_cutoff && **day <= today_day && spend.tokens > 0)
         .count();
-    let daily_average = (average_active_days > 0)
-        .then(|| rimz::theme::fmt::dollars2(selected.usd / average_active_days as f64))
-        .unwrap_or_else(|| "—".to_owned());
+    let daily_average = if average_active_days > 0 {
+        rimz::theme::fmt::dollars2(selected.usd / average_active_days as f64)
+    } else {
+        "—".to_owned()
+    };
     let left = [
         kv("Sessions:", &group_thousands(selected.sessions as u64)),
         kv(

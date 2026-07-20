@@ -369,14 +369,12 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
         rows.push(("Auto-redeem:", value));
     }
     if rollup.restores > 0 {
-        let mut value = rollup.restored_sessions.to_string();
-        if rollup.restores > 1 {
-            value.push_str(&format!(
-                " ({} rebirth{})",
-                rollup.restores,
-                plural(rollup.restores)
-            ));
-        }
+        let value = format!(
+            "{} ({} agent{})",
+            rollup.restores,
+            rollup.restored_sessions,
+            plural(rollup.restored_sessions)
+        );
         rows.push(("Auto-resume:", value));
     }
     rows
@@ -461,13 +459,14 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             labels,
             ..
         } => {
-            let cause =
-                cause.map_or_else(|| "rebirth".to_owned(), |cause| format!("{cause} rebirth"));
-            let labels = (!labels.is_empty())
-                .then(|| format!(" ({})", labels.join(", ")))
-                .unwrap_or_default();
+            let cause = cause.map_or_else(String::new, |cause| format!(" after {cause}"));
+            let labels = if labels.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", labels.join(", "))
+            };
             format!(
-                "{time} ⟲ {recovered} agent{} restored — {cause}{labels}",
+                "{time} ⟲ rebirth recovery — {recovered} agent{} restored{cause}{labels}",
                 plural(*recovered)
             )
         }

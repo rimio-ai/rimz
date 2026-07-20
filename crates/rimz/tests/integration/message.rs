@@ -2019,10 +2019,11 @@ fn steer_auto_compact_runs_before_a_full_window() {
         rimz::harness::assist_log::Assist::AutoCompact {
             kind,
             agent_id,
+            label: Some(label),
             threshold: rimz::message::AutoCompact::Percent(70),
             occupied_tokens: None,
             ..
-        } if kind.as_str() == "claude" && agent_id == "sess-ac"
+        } if kind.as_str() == "claude" && agent_id == "sess-ac" && label == "@claude"
     ));
 }
 

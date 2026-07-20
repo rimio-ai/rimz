@@ -1303,7 +1303,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         .into_iter()
         .map(|row| strip_ansi(&row))
         .collect::<Vec<_>>();
-    assert_eq!(categories.last().unwrap(), "Auto-resume: 2");
+    assert_eq!(categories.last().unwrap(), "Auto-resume: 1 (2 agents)");
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
@@ -1335,11 +1335,9 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             .iter()
             .any(|line| line.contains("@coder auto-compact — 210k ctx cleared before delivery"))
     );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("2 agents restored — crash rebirth (@coder, @reviewer)"))
-    );
+    assert!(lines.iter().any(|line| {
+        line.contains("rebirth recovery — 2 agents restored after crash (@coder, @reviewer)")
+    }));
     let forensics = stats
         .events
         .iter()
@@ -1391,7 +1389,7 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             "Auto-continue: 5 (+6.2h)",
             "Auto-compact: 4",
             "Auto-redeem: 2 (1 reset)",
-            "Auto-resume: 7 (2 rebirths)",
+            "Auto-resume: 2 (7 agents)",
         ]
     );
     panel_lines(&mut lines, &stats, 80);
@@ -1399,7 +1397,7 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     let panel = strip_ansi(&lines.join("\n"));
     assert!(panel.contains("Assists"));
     assert!(panel.contains("Auto-ping: 9 ($0.09)"));
-    assert!(panel.contains("Auto-resume: 7 (2 rebirths)"));
+    assert!(panel.contains("Auto-resume: 2 (7 agents)"));
 
     let bare_counts = AssistRollup {
         pings: 1,
@@ -1418,6 +1416,24 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     assert!(!bare.contains('$'));
     assert!(!bare.contains("reset"));
     assert!(!bare.contains('h'));
+
+    let failed_only = AssistStats {
+        window: "7d".to_owned(),
+        rollup: AssistRollup::default(),
+        events: vec![AssistEvent::AutoContinue {
+            at: jiff::Timestamp::from_second(1).unwrap(),
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            agent_id: rimz::ids::AgentSessionId::from("session-1"),
+            label: Some("@coder".to_owned()),
+            park: "overloaded_backoff_retry".to_owned(),
+            parked_since: None,
+            delivered: false,
+            message_id: "msg_1".to_owned(),
+        }],
+    };
+    lines.clear();
+    panel_lines(&mut lines, &failed_only, 80);
+    assert!(lines.is_empty());
 }
 
 #[test]

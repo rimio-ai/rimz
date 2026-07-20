@@ -167,10 +167,10 @@ pub(crate) fn send_batch_to_live_pane(
             .all(|message| message.body == MessageBody::Prompt)
     );
     let mut compacted = false;
-    let compact = batch.iter().find_map(|message| {
-        compact_message_for_target(store, target, bound, message).map(|command| (message, command))
-    });
-    if let Some((prompt, command)) = compact {
+    let compact = batch
+        .iter()
+        .find_map(|message| compact_message_for_target(store, target, bound, message));
+    if let Some((command, threshold, agent)) = compact {
         store.queue_message(&command, &workspace.session_name)?;
         match write_batch(
             workspace,
@@ -183,19 +183,18 @@ pub(crate) fn send_batch_to_live_pane(
         ) {
             Ok(PaneWrite::Sent) => {
                 compacted = true;
-                if let (Some(threshold), Some(agent)) = (prompt.auto_compact, bound) {
-                    crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
-                        at: jiff::Timestamp::now(),
-                        assist: crate::harness::assist_log::Assist::AutoCompact {
-                            kind: target.kind.clone(),
-                            agent_id: agent.agent_id.clone(),
-                            label: Some(format!("@{}", target.label())),
-                            threshold,
-                            occupied_tokens: command.compacted_context_tokens,
-                            message_id: command.message_id.to_string(),
-                        },
-                    });
-                }
+                let peers = snapshot.root_agents().collect::<Vec<_>>();
+                crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+                    at: jiff::Timestamp::now(),
+                    assist: crate::harness::assist_log::Assist::AutoCompact {
+                        kind: target.kind.clone(),
+                        agent_id: agent.agent_id.clone(),
+                        label: Some(crate::harness::target::agent_handle(agent, &peers, false)),
+                        threshold,
+                        occupied_tokens: command.compacted_context_tokens,
+                        message_id: command.message_id.to_string(),
+                    },
+                });
                 if !send.steer {
                     return Ok(Receipt::CompactionPending);
                 }
@@ -315,12 +314,12 @@ enum PaneWrite {
     SkippedWaiting,
 }
 
-pub fn compact_message_for_target(
+fn compact_message_for_target<'a>(
     store: &Store,
     target: &PaneAgent,
-    bound: Option<&AgentState>,
+    bound: Option<&'a AgentState>,
     prompt: &MessageRecord,
-) -> Option<MessageRecord> {
+) -> Option<(MessageRecord, AutoCompact, &'a AgentState)> {
     let threshold = prompt.auto_compact?;
     let agent = bound?;
     if !threshold.triggered(agent) {
@@ -361,7 +360,7 @@ pub fn compact_message_for_target(
         prompt.address.as_deref(),
     );
     record.compacted_context_tokens = occupied;
-    Some(record)
+    Some((record, threshold, agent))
 }
 
 pub fn already_compacted_at(store: &Store, agent: &AgentState, command: &str, used: u64) -> bool {

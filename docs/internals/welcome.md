@@ -143,7 +143,7 @@ This is the same surface the dead-end reaches, so the moment that used to print 
 
   Assists
   Auto-ping: 9 ($0.09)          Auto-redeem: 2 (2 resets)
-  Auto-continue: 5 (+6.2h)      Auto-resume: 7 (2 rebirths)
+  Auto-continue: 5 (+6.2h)      Auto-resume: 2 (7 agents)
   Auto-compact: 4
 ```
 
