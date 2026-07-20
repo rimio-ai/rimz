@@ -50,5 +50,5 @@ Each of these subsystems is one file at the top level.
 | [web.md](./web.md) | Zellij and ttyd browser access. |
 | [welcome.md](./welcome.md) | The lobby room picker and `rimz stats`. |
 | [diagnostics.md](./diagnostics.md) | The diagnostics log, the frame observer, and off-box Sentry. |
-| [performance.md](./performance.md) | The render budget, the cost map, and fleet overhead. |
+| [performance.md](./performance.md) | The performance model: threads and clocks, the cost map, the principles, and fleet overhead. |
 | [profiling.md](./profiling.md) | The field guide for profiling a live fleet. |
