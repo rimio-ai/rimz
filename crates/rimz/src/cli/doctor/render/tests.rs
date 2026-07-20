@@ -543,6 +543,7 @@ fn mux_section_names_the_cause_a_failing_wake_reported() {
         last_failure: Some(PresenceCommandFailure {
             exit_code: Some(1),
             detail: "Error: could not serialize topology writer selection: lock timeout".to_owned(),
+            at_ms: Some(1_000),
         }),
         ..presence_telemetry_fixture()
     })
@@ -573,6 +574,7 @@ fn mux_section_reports_a_silent_failure_by_its_exit_status() {
         last_failure: Some(PresenceCommandFailure {
             exit_code: None,
             detail: String::new(),
+            at_ms: Some(1_000),
         }),
         ..presence_telemetry_fixture()
     })

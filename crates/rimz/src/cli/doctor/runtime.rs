@@ -463,6 +463,7 @@ fn presence_plugins_view(
                     model::PresenceCommandFailure {
                         exit_code: failure.exit_code,
                         detail: failure.detail.clone(),
+                        at_ms: failure.at_ms,
                     }
                 }),
             });

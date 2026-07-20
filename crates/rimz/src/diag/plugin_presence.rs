@@ -148,12 +148,18 @@ fn span_from_samples(
         ),
         topology_failures_delta: option_delta(last.topology_failures, first.topology_failures),
         other_failures_delta: option_delta(last.other_failures, first.other_failures),
-        // A plugin that recovered clears its evidence, so the newest sample
-        // often carries none. The reader still wants the last cause seen.
+        // The cause has to explain the counters beside it, so it must come from
+        // the span those counters measure: a failure predating the span belongs
+        // to a window this one already recovered from. The plugin retains its
+        // last failure across recoveries, so the newest sample usually carries
+        // it; scanning back covers samples written before the plugin retained.
+        // An unstamped cause comes from a plugin older than the stamp and stays
+        // eligible, since dropping it would lose the only account there is.
         last_failure: samples
             .iter()
             .rev()
-            .find_map(|sample| sample.last_failure.clone()),
+            .filter_map(|sample| sample.last_failure.clone())
+            .find(|failure| failure.at_ms.is_none_or(|at_ms| at_ms >= first.at_ms)),
     })
 }
 
@@ -220,6 +226,98 @@ mod tests {
         assert_eq!(span.page_growth, 3);
         assert_eq!(span.topology_failures_delta, Some(2));
         assert!(generation_span(dir.path(), "other", 7, 100).is_none());
+    }
+
+    /// The cause has to describe the same window as the counters printed beside
+    /// it. The plugin retains its last failure across recoveries, so a span that
+    /// recovered long ago still carries one, and printing it would answer a
+    /// question about this hour with an explanation from a previous one.
+    #[test]
+    fn generation_span_takes_its_cause_from_the_window_its_counters_measure() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = log(dir.path()).path().to_owned();
+        let sample = |at_ms: u64, failure: Option<PluginCommandFailure>| {
+            serde_json::to_string(&PluginPresenceSample {
+                at_ms,
+                session_name: Some("room".to_owned()),
+                plugin_id: Some(7),
+                build: Some("wasm-build".to_owned()),
+                loaded_at_ms: 100,
+                pages: 2,
+                bytes: 2 * WASM_PAGE_BYTES,
+                uptime_ms: at_ms,
+                commands: at_ms,
+                commands_succeeded: Some(at_ms),
+                stale_writer_rejections: Some(0),
+                topology_failures: Some(0),
+                other_failures: Some(0),
+                zellij_version: Some("0.44.3".to_owned()),
+                last_failure: failure,
+            })
+            .unwrap()
+        };
+        let failure = |at_ms: Option<u64>| {
+            Some(PluginCommandFailure {
+                exit_code: Some(2),
+                detail: format!("failed at {at_ms:?}"),
+                at_ms,
+            })
+        };
+
+        // The span runs 1000..1200; the retained cause predates it.
+        std::fs::write(
+            &current,
+            format!(
+                "{}\n{}\n",
+                sample(1_000, failure(Some(400))),
+                sample(1_200, failure(Some(400))),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            generation_span(dir.path(), "room", 7, 100)
+                .unwrap()
+                .last_failure,
+            None,
+            "a cause older than the span explains a window that already closed",
+        );
+
+        // A cause raised inside the span is the one the counters are about.
+        std::fs::write(
+            &current,
+            format!(
+                "{}\n{}\n",
+                sample(1_000, failure(Some(400))),
+                sample(1_200, failure(Some(1_100))),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            generation_span(dir.path(), "room", 7, 100)
+                .unwrap()
+                .last_failure
+                .map(|failure| failure.detail),
+            Some("failed at Some(1100)".to_owned()),
+        );
+
+        // A plugin older than the stamp reports no time, and its one account of
+        // the failure stays usable rather than being dated to the epoch.
+        std::fs::write(
+            &current,
+            format!(
+                "{}\n{}\n",
+                sample(1_000, None),
+                sample(1_200, failure(None))
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            generation_span(dir.path(), "room", 7, 100)
+                .unwrap()
+                .last_failure
+                .map(|failure| failure.detail),
+            Some("failed at None".to_owned()),
+        );
     }
 
     #[test]

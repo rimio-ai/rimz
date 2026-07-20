@@ -110,7 +110,7 @@ mod shell {
                 // the only account of why a wake failed that ever reaches here.
                 let outcome = self.commands.record(exit_code, published_topology);
                 self.last_failure =
-                    wire::fold_failure(self.last_failure.take(), outcome, exit_code, &stderr);
+                    wire::fold_failure(self.last_failure.take(), outcome, exit_code, &stderr, now);
                 let Some(engine) = self.engine.as_mut() else {
                     return false;
                 };

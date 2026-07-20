@@ -140,9 +140,30 @@ fn plugin_telemetry_decodes_structured_and_legacy_argv() {
             last_failure: Some(rimz::sidebar::presence::PluginCommandFailure {
                 exit_code: Some(1),
                 detail: "Error: could not publish accepted topology".to_owned(),
+                // This payload predates the stamp, as a plugin loaded before it
+                // still sends; the cause survives without a time.
+                at_ms: None,
             }),
         }),
         "structured telemetry supersedes legacy flags",
+    );
+
+    let stamped = parse_wake(&[
+        "rimz",
+        "sidebar",
+        "wake",
+        "--reason",
+        "alive",
+        "--plugin-telemetry",
+        r#"{"plugin_id":9,"loaded_at_ms":1000,"mem_pages":12,"uptime_ms":34,"commands_completed":56,"last_failure":{"exit_code":2,"detail":"No such file or directory (os error 2)","at_ms":4242}}"#,
+    ]);
+    assert_eq!(
+        stamped
+            .telemetry()
+            .and_then(|telemetry| telemetry.last_failure)
+            .and_then(|failure| failure.at_ms),
+        Some(4_242),
+        "a stamped cause carries the time the host judges it by",
     );
 
     let legacy = parse_wake(&[

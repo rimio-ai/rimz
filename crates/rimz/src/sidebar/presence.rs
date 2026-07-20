@@ -68,13 +68,19 @@ pub struct ZellijPluginTelemetry {
 }
 
 /// Why the plugin's most recent wake failed, as the host itself reported it on
-/// stderr before exiting.
+/// stderr before exiting, and the plugin clock reading it happened at.
+///
+/// The stamp arrived with the failure-retention fix; a plugin loaded before it
+/// reports the cause without one. `None` therefore reads as "age unknown" and
+/// keeps such a cause usable, rather than dating it to the epoch and hiding it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct PluginCommandFailure {
     #[serde(default)]
     pub exit_code: Option<i32>,
     #[serde(default)]
     pub detail: String,
+    #[serde(default)]
+    pub at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

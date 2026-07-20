@@ -227,9 +227,11 @@ fn command_failure_keeps_the_first_meaningful_stderr_line() {
     let failure = CommandFailure::new(
         Some(1),
         b"\n  \nError: could not serialize topology writer selection: lock timeout\n\nCaused by:\n    0: timed out\n",
+        7_000,
     );
 
     assert_eq!(failure.exit_code, Some(1));
+    assert_eq!(failure.at_ms, 7_000);
     assert_eq!(
         failure.detail,
         "Error: could not serialize topology writer selection: lock timeout"
@@ -238,7 +240,7 @@ fn command_failure_keeps_the_first_meaningful_stderr_line() {
 
 #[test]
 fn command_failure_bounds_the_detail_on_a_char_boundary() {
-    let failure = CommandFailure::new(None, "é".repeat(200).as_bytes());
+    let failure = CommandFailure::new(None, "é".repeat(200).as_bytes(), 0);
 
     assert_eq!(failure.exit_code, None);
     assert!(failure.detail.len() <= FAILURE_DETAIL_MAX_BYTES);
@@ -248,8 +250,8 @@ fn command_failure_bounds_the_detail_on_a_char_boundary() {
 /// A wake that dies without writing anything still carries its exit status.
 #[test]
 fn command_failure_survives_silent_stderr() {
-    assert_eq!(CommandFailure::new(Some(101), b"").detail, "");
-    assert_eq!(CommandFailure::new(Some(101), b"   \n\n").detail, "");
+    assert_eq!(CommandFailure::new(Some(101), b"", 0).detail, "");
+    assert_eq!(CommandFailure::new(Some(101), b"   \n\n", 0).detail, "");
 }
 
 /// The fence rejecting a losing writer is designed behaviour, so it must not
@@ -261,11 +263,13 @@ fn fold_failure_keeps_real_causes_and_ignores_the_writer_fence() {
         CommandOutcome::TopologyFailure,
         Some(1),
         b"lock timeout",
+        5_000,
     );
     assert_eq!(
         real.as_ref().map(|failure| failure.detail.as_str()),
         Some("lock timeout")
     );
+    assert_eq!(real.as_ref().map(|failure| failure.at_ms), Some(5_000));
 
     // A stale-writer rejection neither reports a cause nor buries the last one.
     let after_fence = fold_failure(
@@ -273,6 +277,7 @@ fn fold_failure_keeps_real_causes_and_ignores_the_writer_fence() {
         CommandOutcome::StaleWriter,
         Some(STALE_WRITER_EXIT_CODE),
         b"rejected as stale",
+        6_000,
     );
     assert_eq!(after_fence, real);
     assert_eq!(
@@ -280,15 +285,31 @@ fn fold_failure_keeps_real_causes_and_ignores_the_writer_fence() {
             None,
             CommandOutcome::StaleWriter,
             Some(STALE_WRITER_EXIT_CODE),
-            b""
+            b"",
+            6_000
         ),
         None
     );
 
-    // A success means the plugin recovered; the evidence goes with it.
+    // Wakes outrun telemetry sampling, so a success that cleared the evidence
+    // took the cause of an intermittent failure with it before any sample could
+    // carry it. The record survives the recovery and the host judges its age.
     assert_eq!(
-        fold_failure(real, CommandOutcome::Succeeded, Some(0), b""),
-        None
+        fold_failure(real.clone(), CommandOutcome::Succeeded, Some(0), b"", 7_000),
+        real
+    );
+
+    // A later failure still replaces it, stamp and all.
+    let newer = fold_failure(
+        real,
+        CommandOutcome::OtherFailure,
+        Some(2),
+        b"no such file",
+        8_000,
+    );
+    assert_eq!(
+        newer.map(|failure| (failure.detail, failure.at_ms)),
+        Some(("no such file".to_owned(), 8_000))
     );
 }
 
@@ -309,6 +330,7 @@ fn alive_wake_argv_carries_the_last_failure() {
         last_failure: Some(CommandFailure {
             exit_code: Some(1),
             detail: "Error: could not publish accepted topology".to_owned(),
+            at_ms: 2_500,
         }),
     };
     let argv = wake_argv(&ctx(), WakeRequest::Alive(telemetry), None).expect("argv");
@@ -319,8 +341,8 @@ fn alive_wake_argv_carries_the_last_failure() {
         .expect("telemetry payload");
 
     assert!(
-        payload.contains(r#""last_failure":{"exit_code":1,"detail":"Error: could not publish accepted topology"}"#),
-        "payload carries the cause: {payload}",
+        payload.contains(r#""last_failure":{"exit_code":1,"detail":"Error: could not publish accepted topology","at_ms":2500}"#),
+        "payload carries the cause and when it happened: {payload}",
     );
 }
 

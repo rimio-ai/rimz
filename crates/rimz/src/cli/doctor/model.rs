@@ -308,12 +308,15 @@ pub(super) struct PresencePluginTelemetry {
     pub(super) last_failure: Option<PresenceCommandFailure>,
 }
 
-/// What the host said on stderr the last time a presence wake failed.
+/// What the host said on stderr the last time a presence wake failed, and when.
+/// The time is absent for a plugin loaded before the stamp shipped.
 #[derive(Debug, Serialize)]
 pub(super) struct PresenceCommandFailure {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) exit_code: Option<i32>,
     pub(super) detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) at_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

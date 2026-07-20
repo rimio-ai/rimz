@@ -193,11 +193,14 @@ pub struct PluginTelemetry {
 }
 
 /// The evidence Zellij hands back with a failed `run_command`: what the host
-/// exited with, and the first thing it wrote to stderr on the way out.
+/// exited with, the first thing it wrote to stderr on the way out, and when it
+/// happened. The stamp lets a reader place the cause against the window the
+/// counters describe, so an old cause stays recognizable as old.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct CommandFailure {
     pub exit_code: Option<i32>,
     pub detail: String,
+    pub at_ms: u64,
 }
 
 /// Longest stderr excerpt carried back to the host. One line of `anyhow`
@@ -205,10 +208,11 @@ pub struct CommandFailure {
 const FAILURE_DETAIL_MAX_BYTES: usize = 200;
 
 impl CommandFailure {
-    pub fn new(exit_code: Option<i32>, stderr: &[u8]) -> Self {
+    pub fn new(exit_code: Option<i32>, stderr: &[u8], at_ms: u64) -> Self {
         Self {
             exit_code,
             detail: first_line(&String::from_utf8_lossy(stderr)),
+            at_ms,
         }
     }
 }
@@ -244,21 +248,29 @@ pub enum CommandOutcome {
     OtherFailure,
 }
 
-/// Fold one finished command into the retained failure evidence. A success
-/// clears it, a real failure replaces it, and a stale-writer rejection leaves
-/// it alone — that exit is the fence doing its job, and reporting it as the
-/// cause would bury the failure the reader is actually chasing.
+/// Fold one finished command into the retained failure evidence. A real failure
+/// replaces it, and a stale-writer rejection leaves it alone — that exit is the
+/// fence doing its job, and reporting it as the cause would bury the failure the
+/// reader is actually chasing.
+///
+/// A success also leaves it alone, so the evidence outlives the recovery. Wakes
+/// run far more often than telemetry is sampled, so clearing here dropped the
+/// cause of an intermittent failure before any sample could carry it: the host
+/// counted the failure in its window and had nothing to say about it. Retaining
+/// the record keeps the plugin shipping observations — the last failure and its
+/// time — and leaves the host to judge whether that cause still explains the
+/// window it is describing.
 pub fn fold_failure(
     previous: Option<CommandFailure>,
     outcome: CommandOutcome,
     exit_code: Option<i32>,
     stderr: &[u8],
+    now_ms: u64,
 ) -> Option<CommandFailure> {
     match outcome {
-        CommandOutcome::Succeeded => None,
-        CommandOutcome::StaleWriter => previous,
+        CommandOutcome::Succeeded | CommandOutcome::StaleWriter => previous,
         CommandOutcome::TopologyFailure | CommandOutcome::OtherFailure => {
-            Some(CommandFailure::new(exit_code, stderr))
+            Some(CommandFailure::new(exit_code, stderr, now_ms))
         }
     }
 }
