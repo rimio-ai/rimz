@@ -25,26 +25,20 @@ struct TerminalState {
     title: Option<String>,
 }
 
-fn wait_for_stable_terminal_state_matching(
+fn wait_for_stable_terminal_state(
     xdg: &Path,
     session: &str,
     stable_for: Duration,
-    mut ready: impl FnMut(&BTreeMap<u64, TerminalState>) -> bool,
 ) -> BTreeMap<u64, TerminalState> {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let mut candidate = None;
     let mut unchanged_since = None;
-    let mut last_observation = None;
     let mut last_error = String::new();
     loop {
         match list_panes(xdg, session).map(|snapshot| terminal_state(&snapshot)) {
             Ok(state) => {
                 last_error.clear();
-                if !ready(&state) {
-                    last_observation = Some(state);
-                    candidate = None;
-                    unchanged_since = None;
-                } else if candidate.as_ref() == Some(&state) {
+                if candidate.as_ref() == Some(&state) {
                     if unchanged_since.is_some_and(|since: Instant| since.elapsed() >= stable_for) {
                         return state;
                     }
@@ -61,18 +55,10 @@ fn wait_for_stable_terminal_state_matching(
         }
         assert!(
             Instant::now() < deadline,
-            "terminal state for {session} did not stabilize; candidate: {candidate:?}; last observation: {last_observation:?}; last error: {last_error}"
+            "terminal state for {session} did not stabilize; candidate: {candidate:?}; last error: {last_error}"
         );
         std::thread::sleep(Duration::from_millis(100));
     }
-}
-
-fn wait_for_stable_terminal_state(
-    xdg: &Path,
-    session: &str,
-    stable_for: Duration,
-) -> BTreeMap<u64, TerminalState> {
-    wait_for_stable_terminal_state_matching(xdg, session, stable_for, |_| true)
 }
 
 fn terminal_state(snapshot: &PaneSnapshot) -> BTreeMap<u64, TerminalState> {
@@ -272,7 +258,12 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
         );
     }
 
-    let after_terminals = terminal_state(&expect_list_panes(xdg.path(), &name));
+    let after_terminals = poll_until(
+        Duration::from_secs(10),
+        || list_panes(xdg.path(), &name).map(|snapshot| terminal_state(&snapshot)),
+        |state| state == &before_terminals,
+        "terminal geometry to settle after bare reload",
+    );
     assert_eq!(
         after_terminals, before_terminals,
         "bare reload must preserve terminal ids, tabs, and geometry",
