@@ -265,12 +265,6 @@ pub struct FoldOpts<'a> {
     pub agent_projection: crate::sidebar::agent_projection::AgentProjection,
 }
 
-#[derive(Clone, Copy)]
-struct LocalProjection<'a> {
-    exclude: Option<&'a PaneId>,
-    classify: bool,
-}
-
 /// Probed managed-server liveness for the rc badge. `None` means no probe was
 /// available this tick (no pane frame or no reap cache yet).
 #[derive(Clone, Copy, Debug, Default)]
@@ -358,10 +352,6 @@ pub fn enrich_workspace(
         frame,
         runtime,
         messages_dir,
-        LocalProjection {
-            exclude: None,
-            classify: false,
-        },
         opts,
         diag,
     ))
@@ -406,14 +396,9 @@ fn enrich_core(
     frame: Option<&PaneFrame>,
     runtime: &RuntimePaths,
     messages_dir: Option<&Path>,
-    local_projection: LocalProjection<'_>,
     mut opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
-    let LocalProjection {
-        exclude,
-        classify: classify_local,
-    } = local_projection;
     let producing = opts.producing;
     let machine_config = opts
         .config
@@ -467,7 +452,7 @@ fn enrich_core(
     // enrichment. Discovery belongs to the room producer; every renderer keeps
     // the strict live-pane binding and discards paneless observations.
     if let Some(frame) = frame {
-        let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude);
+        let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
         snapshot = snapshot.with_local_sessions(&panes, opts.agent_projection.local_sessions);
     }
 
@@ -519,7 +504,7 @@ fn enrich_core(
         daemon_pids: &daemon_inputs.daemon_pids,
         loaded: daemon_inputs.loaded.as_ref(),
         frame_panes: reap_frame_panes.as_deref(),
-        exclude_pane: exclude,
+        exclude_pane: None,
     });
 
     let provider_capacities = crate::agents::ProviderCapacity::read_all(runtime);
@@ -542,22 +527,10 @@ fn enrich_core(
         snapshot.client_views = frame.client_views.clone();
         snapshot.pane_session_name = Some(frame.session_name.clone());
         snapshot.focused_pane = frame.focused_pane.clone();
-        // tmux `client_activity` is the idle signal for local and remote rooms;
-        // Zellij self-suppresses idle through an absent `last_input_ms`.
-        if classify_local {
-            let idle_threshold_ms = machine_config.sidebar.afk_after_ms();
-            let now_ms = snapshot.now.as_millisecond().max(0) as u64;
-            snapshot.presence = frame
-                .presence
-                .map(|sample| SidebarPresence::classify(sample, now_ms, idle_threshold_ms));
-        }
         snapshot.truth_degraded = truth_notice_for_frame(frame);
-        if classify_local && let Some(own) = exclude {
-            snapshot.own_view = SidebarOwnView::from_frame(own, frame);
-        }
         let metrics = frame.pane_metrics().collect::<Vec<_>>();
         let panes = frame.to_pane_refs();
-        let admitted_panes = SidebarSnapshot::card_admitted_live_panes(panes.clone(), exclude);
+        let admitted_panes = SidebarSnapshot::card_admitted_live_panes(panes.clone(), None);
         let lazy_pairings =
             crate::store::snapshot::compute_lazy_agent_pairings(&admitted_panes, &snapshot.agents);
         if producing {
@@ -629,30 +602,6 @@ fn enrich_core(
     // so publish the spine once both ranking inputs are present.
     snapshot.sort_groups_for_presentation();
     snapshot
-}
-
-#[cfg(test)]
-fn enrich_legacy(
-    snapshot: SidebarSnapshot,
-    frame: Option<&PaneFrame>,
-    runtime: &RuntimePaths,
-    messages_dir: Option<&Path>,
-    exclude: Option<&PaneId>,
-    opts: FoldOpts<'_>,
-    diag: &crate::diag::DiagSink,
-) -> SidebarSnapshot {
-    enrich_core(
-        snapshot,
-        frame,
-        runtime,
-        messages_dir,
-        LocalProjection {
-            exclude,
-            classify: true,
-        },
-        opts,
-        diag,
-    )
 }
 
 fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<crate::TruthNotice> {
