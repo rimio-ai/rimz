@@ -31,31 +31,31 @@ A one-shot run on a machine with recorded history, default glyph set:
       · · · ▒ · · · · · · · · · · · · · · ░ ░ ▒ · · ▒ ▒ ▓ ░ ▒ ▒ ▓ ▒ █ █ ▓ ▓ █
   Less · ░ ▒ ▓ █ More
 
-  All time 37.4B  ·  Week 13.2B  ·  Month 27.4B  ·  Year 37.4B
+  All time 37.6B  ·  Week 13.2B  ·  Month 27.5B  ·  Year 37.6B
 
   Models
-  ● GPT 5.5     $11,582 · ↘ 629.9m · ↗ 51.0m · ◌ 13.8b   36.3% ━━━━━━───────────
-  ● GPT 5.6 Sol  $9,226 · ↘ 345.3m · ↗ 33.9m · ◌ 12.8b   28.9% ━━━━━────────────
-  ● Opus 4.8     $6,359 · ↘ 210.0m · ↗ 66.7m · ◌  5.3b   19.9% ━━━──────────────
-  ● Fable 5      $3,669 · ↘  70.0m · ↗ 17.5m · ◌  1.4b   11.5% ━━───────────────
+  ● GPT 5.5     $11,582 · ↘ 629.9m · ↗ 51.0m · ◌ 13.8b   36.2% ━━━━━━───────────
+  ● GPT 5.6 Sol  $9,266 · ↘ 347.3m · ↗ 34.0m · ◌ 12.9b   29.0% ━━━━━────────────
+  ● Opus 4.8     $6,411 · ↘ 210.6m · ↗ 66.9m · ◌  5.4b   20.0% ━━━──────────────
+  ● Fable 5      $3,681 · ↘  70.1m · ↗ 17.6m · ◌  1.4b   11.5% ━━───────────────
   ● GPT 5.4        $649 · ↘  84.4m · ↗  6.9m · ◌  1.3b    2.0% ─────────────────
   ● Other          $397 · ↘  79.2m · ↗ 11.8m · ◌  1.1b    1.2% ─────────────────
 
   Agents
-  ● Codex       ◎ 3996 · ◇ 30.2B · $21,768               77.5% ━━━━━━━━━━━━━────
-  ● Claude      ◎ 1026 · ◇  7.2B · $10,084               19.9% ━━━──────────────
+  ● Codex       ◎ 4003 · ◇ 30.3B · $21,808               77.6% ━━━━━━━━━━━━━────
+  ● Claude      ◎ 1025 · ◇  7.3B · $10,149               19.9% ━━━──────────────
   ● Pi          ◎   46 · ◇   33M ·     $28                0.9% ─────────────────
   ● Open Code   ◎   28 · ◇  552K ·      $2                0.5% ─────────────────
   ● Copilot     ◎   24 · ◇    1M ·      $0                0.5% ─────────────────
   ● Other       ◎   33 · ◇    2M ·      $0                0.6% ─────────────────
 
-  Sessions: 5,153              Spend: $31,882
+  Sessions: 5,159              Spend: $31,986.33
   Active days: 28/28           Longest streak: 51 days
   Most active day: Jul 18      Current streak: 51 days
-
-  Assists
-  Focus repair: 80 (757 failed)
+  Cost/session: $6.20          Daily avg: $191.53
 ```
+
+The `Assists` block appears under the insight rows when the account has recorded any; this capture has none.
 
 Each heatmap cell is one UTC day on a five-step ramp that reserves `·` for a day with no usage and rises `░ ▒ ▓ █` through active days, scaled against the busiest day in view rather than an absolute ceiling. Weeks open on Monday. `--dollars` scales the same grid by spend instead of tokens.
 
@@ -79,7 +79,7 @@ Account-global setup creates the shared roots only (`ensure_shared_runtime`); st
 
 `Window` has four variants: `AllTime`, `Week`, `Month`, `Year`. Four behaviors are worth knowing before you read the render code.
 
-- **The heatmap ignores the window.** It always draws the full available history, which is the trailing year the cache spans. The window scopes the model breakdown, the agent breakdown, and the insights row beneath it.
+- **The heatmap ignores the window.** It always draws the full available history, which is the trailing year the cache spans. The window scopes the model breakdown, the agent breakdown, and the insight rows beneath them.
 - **All time and Year are the same number.** `Window::select` maps both onto the trailing-year tally, because a year is the longest span the cache carries. "All time" is a label, not a wider read.
 - **Non-interactive runs are always All time.** `render_panel` receives `active: None` and falls back to `AllTime`, so the report shape stays fixed for pipes, scripts, and `--json`.
 - **Only the held dashboard can change it.** `Tab` and `Shift-Tab` cycle the windows row into a tab bar; a one-shot run has no way to select a different window.
@@ -120,7 +120,9 @@ Each cycle spawns a worker thread that loads through the elected spending servic
 
 `--assists` (`assists.rs`) prints the complete newest-first assist timeline instead of the dashboard, one line per event with its forensics. It conflicts with `--json` and `--refresh`.
 
-Assists come from two durable logs, `harness::assist_log` and the loop run log in `harness::schedule::run_log`, folded into an `AssistRollup` of four categories: auto-ping with its cost, auto-redeem with attempts and resets, auto-continue with resumes and recovered time, and focus repair with confirmed and failed outcomes. The panel prints only the categories with a non-zero count; the timeline prints everything. This is where the "automation is accountable" invariant becomes visible, so a new smart strategy adds its record here.
+Assists come from two durable logs, `harness::assist_log` and the loop run log in `harness::schedule::run_log`, folded into an `AssistRollup` of five categories: auto-ping with its cost, auto-continue with resumes and recovered time, auto-compact with its count, auto-redeem with attempts and resets, and auto-resume with restores and the sessions they brought back. The panel prints only the categories with a non-zero count; the timeline prints everything.
+
+The line this draws is what counts as an assist. Automation that benefits the user earns a record here; RimZ repairing its own mux state does not, which is why focus repair keeps a durable record in the [diagnostics log](./diagnostics.md) rather than a row in this panel. A new smart strategy adds its record here when it acts for the user.
 
 ## Where the code lives
 
