@@ -413,7 +413,7 @@ fn success_rows(frame: &RecoveryFrame) -> Vec<DisplayRow> {
         dim: false,
     });
     rows.push(DisplayRow {
-        text: "opening session…".to_owned(),
+        text: "opening session… · this can take a few seconds".to_owned(),
         color: Color::DarkGrey,
         bold: false,
         dim: true,
@@ -431,8 +431,8 @@ fn success_rows(frame: &RecoveryFrame) -> Vec<DisplayRow> {
         dim: false,
     }));
     rows.push(DisplayRow {
-        text: format!("→  {:<12} attaching…", "Multiplexer"),
-        color: Color::Green,
+        text: format!("→  {:<12} loading…", "Multiplexer"),
+        color: Color::Yellow,
         bold: false,
         dim: false,
     });
@@ -785,13 +785,16 @@ mod tests {
 
         assert_eq!(text[0], "⚡ Connected to dev-box");
         assert!(rows[0].bold);
-        assert_eq!(text[1], "opening session…");
+        assert_eq!(text[1], "opening session… · this can take a few seconds");
         assert!(rows[1].dim);
         assert_eq!(text[3], "✓  Internet     cp.cloudflare.com");
         assert_eq!(text[4], "✓  Server       dev-box:22");
         assert_eq!(text[5], "✓  SSH session  connected");
-        assert_eq!(text[6], "→  Multiplexer  attaching…");
-        assert!(rows[3..].iter().all(|row| row.color == Color::Green));
+        assert_eq!(text[6], "→  Multiplexer  loading…");
+        // Settled checkpoints read green; the one stage still running reads
+        // yellow, so the eye lands on the row the wait belongs to.
+        assert!(rows[3..6].iter().all(|row| row.color == Color::Green));
+        assert_eq!(rows[6].color, Color::Yellow);
         assert_eq!(
             success_detail(&stage(
                 RecoveryStage::Server,
