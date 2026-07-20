@@ -6,55 +6,9 @@ The sidebar is the narrow column pinned beside your panes, and it answers one qu
 
 **One rule shapes the module.** Every decision is made once, in the snapshot, and painting is a pure projection of it. Which agent owns a pane, which worktree a row belongs to, how rows rank, what the cockpit counts: all of it is resolved before a single glyph is chosen. A renderer maps that view-model to lines and never re-derives it. Two consequences follow. Painting stays cheap and testable, because a golden test feeds a snapshot in and diffs the frame out. And the CLI listings (`rimz agents list` and friends) read the same view-model as the native pane, so the two surfaces cannot disagree about what is happening in the room.
 
+That rule splits the module in two, and the split is worth holding in mind while reading the rest of this page. **The producer** folds the store and the live pane roster into one `SidebarSnapshot`: presence, grouping, ranking, and every card field. **The renderer** turns that snapshot into lines for one terminal. `SidebarSnapshot` is the whole contract between them. When you are unsure where a behaviour belongs, ask whether it depends on the terminal in front of one viewer, or on what that viewer is currently looking at: width, color depth, selection, scroll position, and the cockpit lens are the renderer's, and the room's own facts are the producer's.
+
 The sidebar is also a UI client over the store, never a writer of it. It writes only runtime display files (its heartbeat, read receipts, `unread.json`, `focus-anchor.json`, and the producer caches) and imports no store-writer module. `cargo xtask invariants` enforces that boundary.
-
-## Where the code lives
-
-The sidebar spans three module trees. The first two are this doc; the third is [state.md](./state.md).
-
-**`crates/rimz/src/store/snapshot/` builds the view-model.** The table lists the modules in the order one snapshot runs them, each stage feeding the next.
-
-| module | owns |
-|---|---|
-| [`fold.rs`](../../../crates/rimz/src/store/snapshot/fold.rs) | the resumable event-log fold, its persisted rollup cache, and the carryover that survives log rotation |
-| [`project.rs`](../../../crates/rimz/src/store/snapshot/project.rs) | the lifecycle reducer: `agent.lifecycle` events folded into one `AgentState` per agent |
-| [`panes.rs`](../../../crates/rimz/src/store/snapshot/panes.rs), [`panes/lazy.rs`](../../../crates/rimz/src/store/snapshot/panes/lazy.rs) | pane binding: which agent owns which live pane, the own-view summary, and the unstamped recovery ladder |
-| [`process.rs`](../../../crates/rimz/src/store/snapshot/process.rs) | command classification for panes no agent claims: launchers, `sudo`, the supervised exec wrapper, agent-kind sniffing |
-| [`view/live.rs`](../../../crates/rimz/src/store/snapshot/view/live.rs) | folding live panes into rows, and the local-session and activity enrichments over them |
-| [`view/reap.rs`](../../../crates/rimz/src/store/snapshot/view/reap.rs) | collapsing ghosts, relaunches, and stale sessions out of the roster |
-| [`view/layout.rs`](../../../crates/rimz/src/store/snapshot/view/layout.rs) | grouping by worktree, the row rank key, and group comparison |
-| [`view/score.rs`](../../../crates/rimz/src/store/snapshot/view/score.rs) | the fixed-point attention score |
-| [`view/aggregate.rs`](../../../crates/rimz/src/store/snapshot/view/aggregate.rs) | group assembly, status tallies, displayed-status projection, child-activity folding |
-| [`view/providers.rs`](../../../crates/rimz/src/store/snapshot/view/providers.rs) | the provider dashboard panels |
-| [`assemble.rs`](../../../crates/rimz/src/store/snapshot/assemble.rs) | the read entry points, the persisted snapshot, and its lock-free fresh-latest fast path |
-
-`SidebarSnapshot` and the `Sidebar*` contract types are in [`view.rs`](../../../crates/rimz/src/store/snapshot/view.rs) and [`view/model.rs`](../../../crates/rimz/src/store/snapshot/view/model.rs); `SNAPSHOT_VERSION` gates cross-version adoption.
-
-**`crates/rimz/src/sidebar_pane/` is the renderer process.** `app/` runs the loop, `render/` paints.
-
-| module | owns |
-|---|---|
-| [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs), [`app/loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) | the fixed-timestep serve loop and its wakeup dispatch |
-| [`app/selection.rs`](../../../crates/rimz/src/sidebar_pane/app/selection.rs) | the identity-keyed highlight, the browse layer, and the key and mouse handlers |
-| [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs) | the last-resort hold that refuses a regressive frame |
-| [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | failure debounce, the sticky alert, and the give-up rule |
-| [`app/lifecycle.rs`](../../../crates/rimz/src/sidebar_pane/app/lifecycle.rs) | the self-close request latch and the grow-resize paint hold |
-| [`app/order_hold.rs`](../../../crates/rimz/src/sidebar_pane/app/order_hold.rs) | the renderer-local row and group order freeze |
-| [`app/reload.rs`](../../../crates/rimz/src/sidebar_pane/app/reload.rs) | detecting that the workspace build target changed |
-| [`app/width_control.rs`](../../../crates/rimz/src/sidebar_pane/app/width_control.rs) | the renderer-local pane width controller |
-| [`app/input.rs`](../../../crates/rimz/src/sidebar_pane/app/input.rs), [`app/keymap.rs`](../../../crates/rimz/src/sidebar_pane/app/keymap.rs) | the input-socket wire codec and the configurable navigation keymap |
-| [`view.rs`](../../../crates/rimz/src/sidebar_pane/view.rs) | `VisibleRoster`: body membership, the cap, and stable row ordinals, shared by render, browse, selection, and holds |
-| [`render/compose.rs`](../../../crates/rimz/src/sidebar_pane/render/compose.rs) | zone composition, scroll resolution, and the bottom chrome |
-| [`render/sections/`](../../../crates/rimz/src/sidebar_pane/render/sections/mod.rs) | one module per zone: `cockpit`, `fleet` (the make-up line), `worktree`, `agent_card`, `process`, `provider`, `pets` |
-| [`render/labels/`](../../../crates/rimz/src/sidebar_pane/render/labels/mod.rs) | the glyph and meter vocabulary every section shares |
-| [`render/interaction.rs`](../../../crates/rimz/src/sidebar_pane/render/interaction.rs) | typed hit geometry emitted with each painted frame |
-| [`render/theme.rs`](../../../crates/rimz/src/sidebar_pane/render/theme.rs) | palette depth and the motion modifiers the terminal supports |
-| [`render/animation.rs`](../../../crates/rimz/src/sidebar_pane/render/animation.rs), [`odometer.rs`](../../../crates/rimz/src/sidebar_pane/render/odometer.rs), [`scrollbar.rs`](../../../crates/rimz/src/sidebar_pane/render/scrollbar.rs) | motion, all driven by the wall-clock animation phase rather than data age |
-| [`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs) | the supervisor process: build convergence, respawn, pane-liveness, and self-close confirmation |
-
-**`crates/rimz/src/sidebar/` is the data plane.** Producer election, the published caches, realtime events, and fusion live there and are documented in [state.md](./state.md#where-the-code-lives).
-
-Where to start reading depends on the question. For "why is this row here", start at [`view/live.rs`](../../../crates/rimz/src/store/snapshot/view/live.rs) and follow it into `panes.rs`. For "why is this row *there*", start at [`view/layout.rs`](../../../crates/rimz/src/store/snapshot/view/layout.rs). For "why does it look like that", start at [`render/sections/agent_card/template.rs`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/template.rs). For "why did the pane do that", start at [`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs).
 
 ## From store to screen
 
@@ -70,9 +24,59 @@ One pass builds one frame. The stages run in this order, and each depends on the
 8. **Serialize** as `SidebarSnapshot`, published for consumers and read by the renderer.
 9. **Project to lines.** The renderer resolves the visible roster, composes the zones, and paints.
 
-Steps 1 through 8 happen in the elected producer and are published once for every renderer in the session; the split, its caches, and its timings are [state.md](./state.md#one-fetch-cycle). Step 9 is per-renderer, because terminal width, color depth, selection, and scroll position are local facts.
+Steps 1 through 8 happen in the elected producer and are published once for every renderer in the session; the split, its caches, and its timings are [state.md](./state.md#one-fetch-cycle). Step 9 runs per renderer, on the local facts named above plus the terminal's color depth.
 
-The command `rimz sidebar snapshot --json` runs steps 1 through 8 and prints the result. It is the fastest way to see what the renderer sees.
+The command `rimz sidebar snapshot --json` runs steps 1 through 8 and prints the result. It is the fastest way to see what the renderer sees, and the fastest way to settle whether a bug lives in the producer or the renderer: if the wrong answer is already in the JSON, stop looking at `sidebar_pane/`.
+
+## Where the code lives
+
+The sidebar spans three module trees, one per half of the split above plus the data plane that feeds it.
+
+**`crates/rimz/src/store/snapshot/` is the producer's view-model builder.** The table lists the modules in the order one snapshot runs them, matching stages 1 through 8 above.
+
+| module | owns |
+|---|---|
+| [`fold.rs`](../../../crates/rimz/src/store/snapshot/fold.rs) | the resumable event-log fold, its persisted rollup cache, and the carryover that survives log rotation |
+| [`project.rs`](../../../crates/rimz/src/store/snapshot/project.rs) | the lifecycle reducer: `agent.lifecycle` events folded into one `AgentState` per agent |
+| [`panes.rs`](../../../crates/rimz/src/store/snapshot/panes.rs), [`panes/lazy.rs`](../../../crates/rimz/src/store/snapshot/panes/lazy.rs) | pane binding: which agent owns which live pane, the own-view summary, and the unstamped recovery ladder |
+| [`process.rs`](../../../crates/rimz/src/store/snapshot/process.rs) | command classification for panes no agent claims: launchers, `sudo`, the supervised exec wrapper, agent-kind sniffing |
+| [`view/live.rs`](../../../crates/rimz/src/store/snapshot/view/live.rs) | folding live panes into rows, and the local-session and activity enrichments over them |
+| [`view/reap.rs`](../../../crates/rimz/src/store/snapshot/view/reap.rs) | collapsing ghosts, relaunches, and stale sessions out of the roster |
+| [`view/layout.rs`](../../../crates/rimz/src/store/snapshot/view/layout.rs) | grouping by worktree, the row rank key, and group comparison |
+| [`view/score.rs`](../../../crates/rimz/src/store/snapshot/view/score.rs) | the fixed-point attention score |
+| [`view/aggregate.rs`](../../../crates/rimz/src/store/snapshot/view/aggregate.rs) | group assembly, status tallies, displayed-status projection, child-activity folding |
+| [`view/providers.rs`](../../../crates/rimz/src/store/snapshot/view/providers.rs) | the provider dashboard panels |
+| [`assemble.rs`](../../../crates/rimz/src/store/snapshot/assemble.rs) | the read entry points, the persisted snapshot, and its lock-free fresh-latest fast path |
+
+The contract types are [`view.rs`](../../../crates/rimz/src/store/snapshot/view.rs) and [`view/model.rs`](../../../crates/rimz/src/store/snapshot/view/model.rs) for `SidebarSnapshot` and its `Sidebar*` members, and [`row.rs`](../../../crates/rimz/src/store/snapshot/row.rs) for `SidebarRow` with its `AgentCard` and `ProcessCard` payloads. `SNAPSHOT_VERSION` gates cross-version adoption.
+
+**`crates/rimz/src/sidebar_pane/` is the renderer process.** `app/` runs the loop, `render/` paints.
+
+| module | owns |
+|---|---|
+| [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs), [`app/loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) | the fixed-timestep serve loop and its wakeup dispatch |
+| [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | the off-thread fetch worker: cadence, election, memoization, and single-flight coalescing ([state.md](./state.md#one-fetch-cycle)) |
+| [`app/selection.rs`](../../../crates/rimz/src/sidebar_pane/app/selection.rs) | the identity-keyed highlight, the browse layer, and the key and mouse handlers |
+| [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs) | the last-resort hold that refuses a regressive frame |
+| [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | failure debounce, the sticky alert, and the give-up rule |
+| [`app/lifecycle.rs`](../../../crates/rimz/src/sidebar_pane/app/lifecycle.rs) | the self-close request latch and the grow-resize paint hold |
+| [`app/order_hold.rs`](../../../crates/rimz/src/sidebar_pane/app/order_hold.rs) | the renderer-local row and group order freeze |
+| [`app/reload.rs`](../../../crates/rimz/src/sidebar_pane/app/reload.rs) | detecting that the workspace build target changed |
+| [`app/width_control.rs`](../../../crates/rimz/src/sidebar_pane/app/width_control.rs) | the renderer-local pane width controller |
+| [`app/input.rs`](../../../crates/rimz/src/sidebar_pane/app/input.rs), [`app/keymap.rs`](../../../crates/rimz/src/sidebar_pane/app/keymap.rs) | the input-socket wire codec and the configurable navigation keymap |
+| [`render/ui_state.rs`](../../../crates/rimz/src/sidebar_pane/render/ui_state.rs) | `UiState`: the renderer-local scroll offset, selection, body filter, and pet view |
+| [`view.rs`](../../../crates/rimz/src/sidebar_pane/view.rs) | `VisibleRoster`: body membership, the cap, and stable row ordinals, shared by render, browse, selection, and holds |
+| [`render/compose.rs`](../../../crates/rimz/src/sidebar_pane/render/compose.rs) | zone composition, scroll resolution, and the bottom chrome |
+| [`render/sections/`](../../../crates/rimz/src/sidebar_pane/render/sections/mod.rs) | one module per zone: `cockpit`, `fleet` (the make-up line), `worktree`, `agent_card`, `process`, `provider`, `pets` |
+| [`render/labels/`](../../../crates/rimz/src/sidebar_pane/render/labels/mod.rs) | the glyph and meter vocabulary every section shares |
+| [`render/interaction.rs`](../../../crates/rimz/src/sidebar_pane/render/interaction.rs) | typed hit geometry emitted with each painted frame |
+| [`render/theme.rs`](../../../crates/rimz/src/sidebar_pane/render/theme.rs) | palette depth and the motion modifiers the terminal supports |
+| [`render/animation.rs`](../../../crates/rimz/src/sidebar_pane/render/animation.rs), [`odometer.rs`](../../../crates/rimz/src/sidebar_pane/render/odometer.rs), [`scrollbar.rs`](../../../crates/rimz/src/sidebar_pane/render/scrollbar.rs) | motion, all driven by the wall-clock animation phase rather than data age |
+| [`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs) | the supervisor process: build convergence, respawn, pane-liveness, and self-close confirmation |
+
+**`crates/rimz/src/sidebar/` is the data plane.** Producer election, the published caches, realtime events, and fusion live there and are documented in [state.md](./state.md#where-the-code-lives).
+
+Where to start reading depends on the question. For "why is this row here", start at [`view/live.rs`](../../../crates/rimz/src/store/snapshot/view/live.rs) and follow it into `panes.rs`. For "why is this row *there*", start at [`view/layout.rs`](../../../crates/rimz/src/store/snapshot/view/layout.rs). For "why does it look like that", start at [`render/sections/agent_card/template.rs`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/template.rs). For "why did the pane do that", start at [`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs).
 
 ## Presence model
 
@@ -80,7 +84,9 @@ The command `rimz sidebar snapshot --json` runs steps 1 through 8 and prints the
 
 [`pane_admits_card`](../../../crates/rimz/src/store/snapshot/panes.rs) is the admission rule. It admits work panes and excludes the caller's own pane, sidebar chrome, and the remote-control and app-server hosts. A pane running a shell becomes a [process row](#process-rows); a pane an agent stamped becomes that agent's row.
 
-**No live pane, no row.** An agent with no live pane, whether a subagent, a ghost a kill left in the rollup, or a relaunch the [reaper](../agents/model.md#liveness-and-presence) has not collapsed, is data rather than presence. It cannot resurrect a row or latch onto a stranger's pane, and there is no `offline` status. A relaunch in place is the subtle case: the [reaper](../../../crates/rimz/src/store/snapshot/view/reap.rs) collapses an older same-pane root when the newer one is a provably different process (a genuine relaunch), or when both roots carry fresh lineage from a same-pane `/clear` or `/new`. A same-process thread fork (Codex `/side` or `/btw`) carries `forked_from_id`, survives the reap, and stays pinned to the earliest-registered primary.
+**No live pane, no row.** An agent with no live pane is data rather than presence, whether it is a subagent, a ghost a kill left in the rollup, or a relaunch the [reaper](../agents/model.md#liveness-and-presence) has not collapsed. It cannot resurrect a row or latch onto a stranger's pane, and there is no `offline` status.
+
+A relaunch in place is the subtle case, because the old and new sessions claim the same pane. The [reaper](../../../crates/rimz/src/store/snapshot/view/reap.rs) collapses an older same-pane root under either of two proofs: the newer root is a provably different process (a genuine relaunch), or both roots carry fresh lineage from a same-pane `/clear` or `/new`. A same-process thread fork (Codex `/side` or `/btw`) is the exception that must survive: it carries `forked_from_id`, passes through the reap, and stays pinned to the earliest-registered primary.
 
 **Attention lives on the agent's row.** A blocking prompt is agent state: the `awaiting_input` lifecycle signal puts the session's one row in `? waiting`, so a session never stacks a second row for its ask, and the row returns to work once activity passes `waiting_since` ([model.md](../agents/model.md#the-state-machine)). If the agent's pane is absent the row leaves the sidebar with it, and the durable state stays in the store.
 
@@ -106,7 +112,7 @@ The exact predicates live in [`panes.rs`](../../../crates/rimz/src/store/snapsho
 The mux roster can arrive incomplete: a partial pane set, or a live pane missing its command or cwd. Four guards keep a momentary glitch from reaching the screen as a lie.
 
 - **Repaired fields.** The producer joins a fresh raced-null read to the last published process for that exact pane id, and backfills a missing cwd from the process backend, so a just-born pane groups under its worktree on first appearance rather than blinking in as an anonymous row.
-- **Carried panes.** A pane a fresh read omits carries forward only while liveness proves it still exists: a matching non-zombie process, or the renderer's own pane by identity. Carried panes are marked, publish a `pane_carry_forward` diagnostic, and expire after `PANE_CARRY_TTL`, so a real exit drops promptly once the process proof is gone.
+- **Carried panes.** A pane a fresh read omits carries forward only while liveness proves it still exists: a matching non-zombie process, or the renderer's own pane by identity. Carried panes are marked, publish a `pane_carry_forward` diagnostic, and expire after `PANE_CARRY_TTL` (30 seconds), so a real exit drops promptly once the process proof is gone.
 - **Nameless panes.** A pane with no readable identity after field repair folds no row this frame rather than an anonymous `process` row. The next read names it. An agent-stamped pane still binds by id, so it keeps rendering.
 - **The renderer's last-resort hold.** Frame plausibility lives in the producer and row identity in the projection, so the gate absorbs only a residual race that would erase or demote a stable row set. It holds an agent-to-process demotion only when the foreground command is unchanged or missing (the phantom-flicker signature), because a command change means the agent exited in place and the pane returned to its shell, which commits immediately.
 
@@ -125,7 +131,14 @@ A worktree is total isolation, so each group is one bounded block under its head
 
 The trunk-glyph ladder ranks reconciling (a local rebase or merge in flight) above local-merged, PR-merged, PR-closed, PR-open, and a plain branch. A pristine fork reads `≡ <trunk>`, landed work reads the merge glyph, and a merged PR collapses to that marker alone even when squash-merge ancestry leaves the local branch diverged. The trunk resolves per repo, preference first: `[sidebar] trunk` ([configuration.md](../../guide/configuration.md#sidebar-rendering)), then `main`, `master`, and the remote's advertised default. Stat and PR sourcing is [`refresh/git_stats.rs`](../../../crates/rimz/src/sidebar/refresh/git_stats.rs) and [`refresh/pr.rs`](../../../crates/rimz/src/sidebar/refresh/pr.rs); the look is in [the interface reference](../../interface/sidebar.md#worktree-groups-and-the-selection-lane).
 
-Which group a pane lands in follows one resolution order. A stamped channel pane groups under its channel pod first. An unstamped pane inside the repo's RimZ-owned worktree home folds into that worktree's `#channel` pod, matching message addressing and `rimz channel list`. Other panes group by the deepest group root containing their cwd. A repo room enumerates its checkouts with `git worktree list`; a directory room does not scan its tree, and the panes the root itself claims form a name-only root pod. A cwd outside every group root (a home shell, `/tmp`, CI) folds into a catch-all that renders as a dim `external` divider, always sorts last, and keeps an attention-only tally so an out-of-project ask still surfaces from the tail. The rules are pinned in [`view/tests/grouping/`](../../../crates/rimz/src/store/snapshot/view/tests/grouping).
+Which group a pane lands in follows one resolution order, first match winning.
+
+1. A stamped channel pane groups under its channel pod.
+2. An unstamped pane inside the repo's RimZ-owned worktree home folds into that worktree's `#channel` pod, matching message addressing and `rimz channel list`.
+3. Any other pane groups by the deepest group root containing its cwd. A repo room enumerates its checkouts with `git worktree list`; a directory room does not scan its tree, and the panes the root itself claims form a name-only root pod.
+4. A cwd outside every group root (a home shell, `/tmp`, CI) folds into a catch-all that renders as a dim `external` divider, always sorts last, and keeps an attention-only tally so an out-of-project ask still surfaces from the tail.
+
+The rules are pinned in [`view/tests/grouping/`](../../../crates/rimz/src/store/snapshot/view/tests/grouping).
 
 ### Attention ranking and the cap
 
@@ -139,16 +152,25 @@ Within a worktree, agent cards lead and process rows form the command tail. Orde
 
 The score itself is status weight times the time factor, both fixed-point ([`score.rs`](../../../crates/rimz/src/store/snapshot/view/score.rs)). Status weights are spaced so the lowest attention state still outranks the highest calm state. Process rows are exempt from the inactive and archive bands, because their activity clock is foreground-process start rather than attention: an idle shell stays live presence and seats below every agent card.
 
-Two aggregates reuse the same machinery.
+**Co-launched agents hold one block.** A named-team launch and an inline multi-agent layout render as one contiguous cohort inside their worktree or channel group. Team blocks use the declared role-list order, including custom layouts; inline blocks use agent-cell order. The block's state derives from its members, first match winning: any `waiting`/`failed` member makes it blocked, else any `paused` member parks it, else any `running` member makes it working, else any `success` member makes it success, else it is idle. Blocked and paused blocks use the oldest attention clock; calm blocks use the most recent member clock.
 
-- **Co-launched agents hold one block.** A named-team launch and an inline multi-agent layout render as one contiguous cohort inside their worktree or channel group. Team blocks use the declared role-list order, including custom layouts; inline blocks use agent-cell order. The block's state derives from its members: any `waiting`/`failed` member makes it blocked, else any `paused` member parks it, else any `running` member makes it working, else any `success` member makes it success, else it is idle. Blocked and paused blocks use the oldest attention clock; calm blocks use the most recent member clock.
-- **Groups carry the same three bands, then a calm rung, then git.** A group partitions hot, warm, and archive by its liveliest member, and leads within a partition with that member's attention score. When urgency ties, the winning band's calm activity sorts working, all-success, idle-agent, then process-only groups, before git refines equal activity by dirty, clean, unknown, and done. Done requires a merged or closed PR or a `WorktreeTrunkSync::Merged` verdict, so a pristine fork stays clean even when merge-base equals `HEAD`. A non-empty done group with no attention or running member enters archive immediately, and a revived member restores its activity band. The producer's presentation sort and each live overlay refresh stamp this predicate into `SidebarWorktreeGroup::finished`, keeping ranking and rendering on one verdict. Same-rank groups keep their earliest member's pane creation order, then label; `external` groups tail unconditionally, whatever attention member they hold.
+**Groups carry the same three bands, then a calm rung, then git.** A group partitions hot, warm, and archive by its liveliest member, and leads within a partition with that member's attention score. Below that urgency, three tiebreakers apply in order:
+
+1. The winning band's calm activity sorts working, all-success, idle-agent, then process-only groups.
+2. Git refines equal activity by dirty, clean, unknown, then done. Done requires a merged or closed PR or a `WorktreeTrunkSync::Merged` verdict, so a pristine fork stays clean even when merge-base equals `HEAD`.
+3. Same-rank groups keep their earliest member's pane creation order, then label.
+
+A non-empty done group with no attention or running member enters archive immediately, and a revived member restores its activity band. The producer's presentation sort and each live overlay refresh stamp this predicate into `SidebarWorktreeGroup::finished`, keeping ranking and rendering on one verdict. `external` groups tail unconditionally, whatever attention member they hold.
 
 The seams are [`sort_rows`/`compare_groups` and the rank key](../../../crates/rimz/src/store/snapshot/view/layout.rs), with cases pinned in [`view/tests/ranking/`](../../../crates/rimz/src/store/snapshot/view/tests/ranking). The reader-facing reasoning is [the sidebar guide](../../guide/sidebar.md#how-the-column-is-ordered).
 
-**The cap protects visible work.** The snapshot carries every row. Each renderer ordinarily caps only a worktree's idle and process tail in the resting body, showing up to `WORKTREE_ROW_CAP` (6) rows with a dim `+K more`; expanding a live group shows every row plus `− less`. Active, blocked, paused, finished, unread, and focused rows are exempt from that cap.
+**The cap protects visible work.** The snapshot carries every row; capping is renderer-local. Each renderer ordinarily caps only a worktree's idle and process tail in the resting body, showing up to `WORKTREE_ROW_CAP` (6) rows with a dim `+K more`; expanding a live group shows every row plus `− less`. Active, blocked, paused, finished, unread, and focused rows are exempt from that cap.
 
-A terminal `finished` group with several rows instead collapses every row, unread success included, behind a two-line dim receipt. A single-row group keeps its card visible and its header remains a jump target. The receipt's `▸` roster line leads at the content edge with the one shared `AgentCard::team` value when present, then each agent's final status glyph and display name in source order, with overflow and process rows folded into `+n` and rounded member cost pinned right. Its totals line sums the agents' detailed `◇ ↘ ↗ ◌` token split and pins the muted last-activity age right. A multi-row roster too narrow for one member, or one holding only processes, falls back to `▸ +K done`. The header, either receipt line, and the body status filter reveal the full matching roster, and the header collapses it. Focus or the order hold on any member reveals the whole group, keeping the focused card visible and preventing a half-collapsed receipt; the collapse lands as a unit once focus leaves and the hold expires. The state is renderer-local and clears when the group no longer hides a tail.
+A terminal `finished` group with several rows instead collapses every row, unread success included, behind a two-line dim receipt. A single-row group keeps its card visible and its header remains a jump target.
+
+The receipt's `▸` roster line leads at the content edge with the one shared `AgentCard::team` value when present, then each agent's final status glyph and display name in source order, with overflow and process rows folded into `+n` and rounded member cost pinned right. The totals line sums the agents' detailed `◇ ↘ ↗ ◌` token split and pins the muted last-activity age right. A multi-row roster too narrow for one member, or one holding only processes, falls back to `▸ +K done`.
+
+Three things reveal the full roster behind a receipt: the header, either receipt line, and the body status filter; the header collapses it again. Focus or the order hold on any member also reveals the whole group, keeping the focused card visible and preventing a half-collapsed receipt, and the collapse lands as a unit once focus leaves and the hold expires. The state is renderer-local and clears when the group no longer hides a tail.
 
 **Producer rank is truth, and the interactive renderer holds it still briefly.** After a jump or browse, or when the focused agent's ask is answered or its turn starts, the renderer keeps the last painted row and group order plus that frame's visible rows for `REORDER_HOLD` (5 seconds), so the glance back finds the cards where you left them. Frozen frames match rows by id, then by pane id, so launch-to-session identity rekeys keep their held slots. A row or group born during the hold splices into the held frame at its producer rank, so expiry does not reorder it. Read state clears immediately; only presentation order and cap exemptions hold.
 
@@ -166,13 +188,21 @@ Each agent is a small stacked card. Its anatomy and meter grammar are drawn in [
 
 **Enrichments are display-only and privacy-gated**, and none drives attention or routing. Context severity is one four-tier ramp (calm green through yellow and amber to red), classified once in the domain ([`ContextSeverity::classify`](../../../crates/rimz/src/agents/state.rs)) and stamped on each row; the renderer maps the row's position in the config stops ([configuration.md](../../guide/configuration.md#sidebar-bands)) to a continuous tone. `NO_COLOR` suppresses color only, and every bar's shape still carries the meter.
 
-A row is base identity plus one card payload: [`AgentCard`](../../../crates/rimz/src/store/snapshot/row.rs) for lifecycle and context fields, or [`ProcessCard`](../../../crates/rimz/src/store/snapshot/row.rs) for command and process metrics. Three projection rules are not evident from the field catalog. The renderer prefers the rich `context` blob over the coarse scalars, but prefers `row.effort` over `context.effort`. Codex line 2 reads the app-server thread preview then name, while other agents fall through session name, task, then prompt, so a row keeps a label once the turn ends. And the display preferences ride `SidebarSnapshot.sidebar`. The status projection is pinned in [`view/tests/status/`](../../../crates/rimz/src/store/snapshot/view/tests/status) and [`project/tests/`](../../../crates/rimz/src/store/snapshot/project/tests).
+A row is base identity plus one card payload: [`AgentCard`](../../../crates/rimz/src/store/snapshot/row.rs) for lifecycle and context fields, or [`ProcessCard`](../../../crates/rimz/src/store/snapshot/row.rs) for command and process metrics. Three projection rules are not evident from the field catalog.
+
+- The renderer prefers the rich `context` blob over the coarse scalars, but prefers `row.effort` over `context.effort`.
+- Codex line 2 reads the app-server thread preview then name, while other agents fall through session name, task, then prompt, so a row keeps a label once the turn ends.
+- The display preferences ride `SidebarSnapshot.sidebar`.
+
+The status projection is pinned in [`view/tests/status/`](../../../crates/rimz/src/store/snapshot/view/tests/status) and [`project/tests/`](../../../crates/rimz/src/store/snapshot/project/tests).
 
 ### Unread and read receipts
 
 Unread state is a durable runtime episode set (`unread.json`) plus runtime read receipts (`read-marks/`). The elder opens an episode for a row whose displayed status is `success`, `failed`, `waiting`, or `paused` when no read mark reaches the row's `last_activity`, and every fold derives `SidebarRow::unread` from that file plus the merged receipts. The fold stamps the unread bit before rendering, and the renderer cap keeps unread rows visible, so a row that recovers to `running` or `idle` stays visible and emphasized until read. Attaching to an already-busy room opens the current attention rows silently, without replaying a push storm.
 
-Focusing a row's pane writes a receipt and clears that row. Staying in the tab for `TAB_READ_DWELL` (2.5 seconds) clears unread siblings in it, and leaving before then leaves them unread. `rimz sidebar mark-read` and the `m` key write a durable manual receipt without focusing; `M` and `rimz sidebar mark-unread` open a fresh episode through the one mark-unread write path ([`sidebar::unread::mark_rows_unread`](../../../crates/rimz/src/sidebar/unread.rs)), stamped so no read receipt can reach it. Every fold merges the maximum clear time per row, and a receipt clears an episode only when its clear time is at or after the episode, so an old focus clear cannot erase a later turn. Receipt files are disposable runtime sidecars, swept once the owning heartbeat expires.
+Clearing happens four ways. Focusing a row's pane writes a receipt and clears that row. Staying in the tab for `TAB_READ_DWELL` (2.5 seconds) clears unread siblings in it, and leaving before then leaves them unread. `rimz sidebar mark-read` and the `m` key write a durable manual receipt without focusing. Going the other way, `M` and `rimz sidebar mark-unread` open a fresh episode through the one mark-unread write path ([`sidebar::unread::mark_rows_unread`](../../../crates/rimz/src/sidebar/unread.rs)), stamped so no read receipt can reach it.
+
+Every fold merges the maximum clear time per row, and a receipt clears an episode only when its clear time is at or after the episode, so an old focus clear cannot erase a later turn. Receipt files are disposable runtime sidecars, swept once the owning heartbeat expires.
 
 ### Sub-agent lists
 
@@ -208,7 +238,12 @@ The sidebar is **borderless**. It already lives inside a framed mux pane, so a t
 - **Jump anchors are renderer-to-renderer frame hints.** A sidebar-initiated jump writes `focus-anchor.json` with the focused pane, the clicked card's current viewport offset, and the held order and visible-row set from the source frame. Every renderer reads it on the fold that adopts the focus and seeds `UiState::scroll_offset` once while the anchor is fresh, then adopts the same held frame. Frozen rows match by id first and pane id second, so identity rekeys do not evict held slots. A cross-tab jump therefore keeps the destination card on the same on-screen row instead of re-following that tab's previous selection or fresh rank.
 - **A focus switch reveals the whole worktree.** When a fold adopts an external focus change (a tab switch, or the first focused pane the sidebar learns on attach) the renderer arms a one-shot group reveal: the next paint scrolls minimally so the focused card and its worktree header both sit in view. A sidebar-initiated jump cancels the reveal, because its fresh `focus-anchor` freezes the clicked row instead, so the reveal belongs only to focus moves originating outside the sidebar.
 - **Counts span the cap, the summary spans the spend window.** The cockpit make-up buckets sum each group's `status_counts` from the full roster, and every `running` agent tallies as working (the thinking head is a per-row head, not a bucket). The resting body may hide calm tail rows, while an active make-up pick shows every matching row uncapped, so bucket counts and narrowed cards agree. The summary's line 1 pairs headline facts, where the `◎` sessions and the token breakdown read `[sidebar] spend_window` from the JSONL `value_tally` rather than the live session sum. Line 2 carries the `¤` live-agent head count, the steady unread count when non-zero, and the count-up spend.
-- **The make-up line is the body's filter.** Each non-zero bucket is a click target that narrows the cards to its status; re-click clears, and a zero bucket emits no hit ([the look](../../interface/sidebar.md#zone-1--the-cockpit)). The cockpit unread and open-PR counts use the same model: clicking a count applies its lens, and the picked count paints as a chip while active. The pick (`UiState::make_up_filter`) is shared session scope: the renderer atomically persists it in room runtime, broadcasts a payload-free nudge, and every tab adopts it without a producer write. `FrameInteractions` carries bucket, count, dashboard-tab, banner, group-toggle, and row targets through the same translation and clipping operations as the rendered lines, while mouse row targets and every keyboard walker consume the same filtered `VisibleRoster` membership and ordinal projection as the body composer. Explicit filter clicks and keys replace or clear the scope, and `reconcile_selection` clears and publishes it when its full-fleet count reaches zero. The cockpit counts stay full-fleet while the body narrows, so the line remains an honest room tally while card clicks, `Enter`, inbox traversal, digits, arrows, pages, edges, and worktree motion stay inside the active scope.
+
+**The make-up line is the body's filter.** Each non-zero bucket is a click target that narrows the cards to its status; re-click clears, and a zero bucket emits no hit ([the look](../../interface/sidebar.md#zone-1--the-cockpit)). The cockpit unread and open-PR counts use the same model: clicking a count applies its lens, and the picked count paints as a chip while active.
+
+That pick (`UiState::make_up_filter`) is the one browsing choice shared across the room's renderers rather than held locally. The picking renderer atomically persists it to room runtime ([`body_filter.rs`](../../../crates/rimz/src/sidebar/body_filter.rs)) and broadcasts a payload-free `BodyFilterChanged` nudge; every other renderer reloads the value from runtime and adopts it, so no producer write is involved and the lens survives a tab switch. Explicit filter clicks and keys replace or clear it, and `reconcile_selection` clears and republishes it when its full-fleet count reaches zero. The cockpit counts stay full-fleet while the body narrows, so the line remains an honest room tally while card clicks, `Enter`, inbox traversal, digits, arrows, pages, edges, and worktree motion all stay inside the active scope.
+
+One mechanism keeps hit-testing and keyboard motion agreeing with what was painted: `FrameInteractions` carries bucket, count, dashboard-tab, banner, group-toggle, and row targets through the same translation and clipping operations as the rendered lines, and mouse row targets and every keyboard walker consume the same filtered `VisibleRoster` membership and ordinal projection as the body composer.
 
 The body carries only live rows. The sidebar shows what needs a decision or an action, and durable history lives in the store behind `rimz transcript`, `rimz message list`, and `rimz doctor --audit`. An empty room keeps the body clear under the cockpit and footer, and an active health alert takes the body alone.
 
