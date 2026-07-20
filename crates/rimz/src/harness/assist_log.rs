@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::harness::auto_redeem::RedeemReason;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::store::RuntimePaths;
 use crate::store::paths::state_home;
 
 const NAME: &str = "assists.log.jsonl";
@@ -55,28 +54,6 @@ pub enum Assist {
         delivered: bool,
         message_id: String,
     },
-    FocusRepair {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        nonce: Option<String>,
-        workspace_id: crate::ids::WorkspaceId,
-        session_name: String,
-        generation: u64,
-        evidence: Vec<crate::mux::ClientPaneView>,
-        target: crate::ids::PaneId,
-        outcome: FocusRepairOutcome,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FocusRepairOutcome {
-    AcceptedUnconfirmed,
-    Failed,
-    Confirmed,
-    Superseded,
-    Invalidated,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,51 +70,6 @@ pub fn log_path(state_root: &Path) -> PathBuf {
 
 pub fn append(record: &AssistRecord) {
     append_to(&state_home(), record, MAX_BYTES);
-}
-
-/// Hand focus-repair evidence to a detached CLI writer so the renderer stays
-/// read-only on user-global assist history.
-pub fn spawn_focus_repair_append(runtime: &RuntimePaths, record: &AssistRecord) {
-    if !matches!(record.assist, Assist::FocusRepair { .. }) {
-        tracing::debug!("sidebar: ignored non-focus assist passed to focus writer");
-        return;
-    }
-    let Ok(record_json) = serde_json::to_string(record) else {
-        tracing::debug!("sidebar: failed to serialize focus-repair assist");
-        return;
-    };
-    let mut command = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
-    command.args([
-        "sidebar",
-        "record-focus-assist",
-        "--record-json",
-        &record_json,
-    ]);
-    if let Err(err) =
-        crate::child_process::spawn_detached_reaped(&mut command, "focus-repair-assist")
-    {
-        tracing::debug!(
-            workspace = %runtime.workspace_id,
-            error = &err as &dyn std::error::Error,
-            "sidebar: failed to spawn focus-repair assist writer",
-        );
-    }
-}
-
-pub fn parse_focus_repair(raw: &str) -> Result<AssistRecord, FocusRepairParseError> {
-    let record = serde_json::from_str::<AssistRecord>(raw)?;
-    if !matches!(record.assist, Assist::FocusRepair { .. }) {
-        return Err(FocusRepairParseError::WrongAssist);
-    }
-    Ok(record)
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum FocusRepairParseError {
-    #[error("invalid focus-repair assist record: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("assist record is not a focus repair")]
-    WrongAssist,
 }
 
 pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> {
@@ -203,49 +135,13 @@ mod tests {
         }
     }
 
-    fn focus_repair(at: i64) -> AssistRecord {
-        AssistRecord {
-            at: ts(at),
-            assist: Assist::FocusRepair {
-                nonce: Some("nonce-1".to_owned()),
-                workspace_id: crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567")
-                    .expect("workspace"),
-                session_name: "rimz-test".to_owned(),
-                generation: 7,
-                evidence: vec![crate::mux::ClientPaneView {
-                    client_id: crate::mux::MuxClientId::Zellij(3),
-                    pane_id: crate::ids::PaneId::from_parts(
-                        crate::ids::MuxName::Zellij,
-                        "terminal_1",
-                    ),
-                }],
-                target: crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_2"),
-                outcome: FocusRepairOutcome::AcceptedUnconfirmed,
-                error: None,
-            },
-        }
-    }
-
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
-        for record in [redeem(20, "request-1"), resumed(20), focus_repair(20)] {
+        for record in [redeem(20, "request-1"), resumed(20)] {
             let json = serde_json::to_string(&record).expect("serialize");
             let decoded: AssistRecord = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(decoded, record);
         }
-    }
-
-    #[test]
-    fn focus_repair_parser_accepts_only_focus_assists() {
-        let focus = focus_repair(20);
-        let raw = serde_json::to_string(&focus).expect("serialize focus repair");
-        assert_eq!(parse_focus_repair(&raw).expect("focus repair"), focus);
-
-        let raw = serde_json::to_string(&resumed(20)).expect("serialize auto continue");
-        assert!(matches!(
-            parse_focus_repair(&raw),
-            Err(FocusRepairParseError::WrongAssist)
-        ));
     }
 
     #[test]
@@ -267,8 +163,9 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "{}\nnot-json\n{}\n",
+                "{}\nnot-json\n{}\n{}\n",
                 serde_json::to_string(&redeem(10, "old")).expect("old"),
+                r#"{"at":"1970-01-01T00:00:15Z","assist":"focus_repair","workspace_id":"ws_0123456789abcdef01234567","session_name":"rimz-test","generation":1,"evidence":[],"target":"zellij:terminal_2","outcome":"confirmed"}"#,
                 serde_json::to_string(&resumed(20)).expect("new")
             ),
         )

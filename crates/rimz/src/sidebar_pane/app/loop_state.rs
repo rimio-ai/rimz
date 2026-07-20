@@ -766,35 +766,33 @@ impl LoopState {
         }
     }
 
-    /// A strand RimZ decided not to act on is still a system-initiated
-    /// intervention: record why it lapsed so `rimz stats` accounts for it.
+    /// A strand RimZ decided not to act on still gets a durable diagnostic
+    /// record explaining why it lapsed.
     fn record_abandoned_focus_repair(
         &self,
         config: &ServeConfig,
         repair: &PendingFocusRepair,
         reason: &str,
     ) {
-        use crate::harness::assist_log::{Assist, AssistRecord, FocusRepairOutcome};
+        use crate::diag::focus_repair::{FocusRepairOutcome, FocusRepairRecord};
         debug!(
             pane = %repair.pane_id,
             generation = repair.generation,
             reason,
             "sidebar focus repair abandoned",
         );
-        crate::harness::assist_log::spawn_focus_repair_append(
+        crate::diag::focus_repair::spawn_append(
             self.read_marks.runtime(),
-            &AssistRecord {
+            &FocusRepairRecord {
                 at: jiff::Timestamp::now(),
-                assist: Assist::FocusRepair {
-                    nonce: None,
-                    workspace_id: self.read_marks.runtime().workspace_id.clone(),
-                    session_name: config.session_name.clone(),
-                    generation: repair.generation,
-                    evidence: repair.clients.clone(),
-                    target: repair.pane_id.clone(),
-                    outcome: FocusRepairOutcome::Failed,
-                    error: Some(reason.to_owned()),
-                },
+                nonce: None,
+                workspace_id: self.read_marks.runtime().workspace_id.clone(),
+                session_name: config.session_name.clone(),
+                generation: repair.generation,
+                evidence: repair.clients.clone(),
+                target: repair.pane_id.clone(),
+                outcome: FocusRepairOutcome::Failed,
+                error: Some(reason.to_owned()),
             },
         );
     }
@@ -1764,27 +1762,25 @@ impl LoopState {
         if anchor.origin != FocusOrigin::AutomaticRepair {
             return;
         }
-        use crate::harness::assist_log::{Assist, AssistRecord, FocusRepairOutcome};
+        use crate::diag::focus_repair::{FocusRepairOutcome, FocusRepairRecord};
         let outcome = match outcome {
             FocusObservationOutcome::Confirmed => FocusRepairOutcome::Confirmed,
             FocusObservationOutcome::Superseded => FocusRepairOutcome::Superseded,
             FocusObservationOutcome::Invalidated => FocusRepairOutcome::Invalidated,
             _ => return,
         };
-        crate::harness::assist_log::spawn_focus_repair_append(
+        crate::diag::focus_repair::spawn_append(
             self.read_marks.runtime(),
-            &AssistRecord {
+            &FocusRepairRecord {
                 at: jiff::Timestamp::now(),
-                assist: Assist::FocusRepair {
-                    nonce: Some(anchor.nonce.to_string()),
-                    workspace_id: self.read_marks.runtime().workspace_id.clone(),
-                    session_name: anchor.session_name.clone(),
-                    generation: anchor.repair_generation.unwrap_or_default(),
-                    evidence: anchor.pre_action.clone(),
-                    target: anchor.pane_id.clone(),
-                    outcome,
-                    error: None,
-                },
+                nonce: Some(anchor.nonce.to_string()),
+                workspace_id: self.read_marks.runtime().workspace_id.clone(),
+                session_name: anchor.session_name.clone(),
+                generation: anchor.repair_generation.unwrap_or_default(),
+                evidence: anchor.pre_action.clone(),
+                target: anchor.pane_id.clone(),
+                outcome,
+                error: None,
             },
         );
     }

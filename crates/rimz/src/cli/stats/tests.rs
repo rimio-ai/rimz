@@ -1118,7 +1118,7 @@ fn fmt_day_reads_month_and_day() {
 
 #[test]
 fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
-    use rimz::harness::assist_log::{Assist, AssistRecord, AssistWindowReset, FocusRepairOutcome};
+    use rimz::harness::assist_log::{Assist, AssistRecord, AssistWindowReset};
     use rimz::harness::auto_redeem::RedeemReason;
     use rimz::harness::schedule::run_log::{
         LoopRunMode, LoopRunRecord, LoopRunResult, PingWindowOutcome,
@@ -1166,32 +1166,6 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
                 message_id: "msg_2".to_owned(),
             },
         },
-        AssistRecord {
-            at: ts(4_100),
-            assist: Assist::FocusRepair {
-                nonce: Some("nonce-1".to_owned()),
-                workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-                session_name: "rimz-test".to_owned(),
-                generation: 7,
-                evidence: Vec::new(),
-                target: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_2"),
-                outcome: FocusRepairOutcome::AcceptedUnconfirmed,
-                error: None,
-            },
-        },
-        AssistRecord {
-            at: ts(4_200),
-            assist: Assist::FocusRepair {
-                nonce: Some("nonce-1".to_owned()),
-                workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-                session_name: "rimz-test".to_owned(),
-                generation: 7,
-                evidence: Vec::new(),
-                target: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_2"),
-                outcome: FocusRepairOutcome::Confirmed,
-                error: None,
-            },
-        },
     ];
     let mut ping = LoopRunRecord::new(
         "autoping-codex",
@@ -1220,18 +1194,14 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             resets: 1,
             resumes: 1,
             recovered_secs: 3_600,
-            focus_repairs: 1,
-            focus_confirmed: 1,
-            focus_failed: 0,
         }
     );
-    assert_eq!(stats.events.len(), 6, "every assist outcome stays forensic");
+    assert_eq!(stats.events.len(), 4, "every assist outcome stays forensic");
     let categories = category_rows(&stats.rollup)
         .into_iter()
         .map(|row| strip_ansi(&row))
         .collect::<Vec<_>>();
-    assert_eq!(categories.last().unwrap(), "Focus repair: 1");
-    assert!(categories.iter().all(|row| !row.contains("confirmed")));
+    assert_eq!(categories.last().unwrap(), "Auto-continue: 1 (+1.0h)");
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
@@ -1258,16 +1228,6 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             .iter()
             .any(|line| line.contains("resume held — overload park"))
     );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("focus repair zellij:terminal_2 — accepted"))
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("focus repair zellij:terminal_2 — confirmed"))
-    );
 
     let json = serde_json::to_value(&stats).unwrap();
     assert_eq!(json["rollup"]["resumes"], 1);
@@ -1289,9 +1249,6 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             resets: 1,
             resumes: 5,
             recovered_secs: 22_320,
-            focus_repairs: 3,
-            focus_confirmed: 0,
-            focus_failed: 2,
         },
         events: Vec::new(),
     };
@@ -1305,7 +1262,6 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             "Auto-ping: 9 ($0.09)",
             "Auto-redeem: 2 (1 reset)",
             "Auto-continue: 5 (+6.2h)",
-            "Focus repair: 3 (2 failed)",
         ]
     );
     panel_lines(&mut lines, &stats, 80);
@@ -1313,13 +1269,11 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     let panel = strip_ansi(&lines.join("\n"));
     assert!(panel.contains("Assists"));
     assert!(panel.contains("Auto-ping: 9 ($0.09)"));
-    assert!(panel.contains("Focus repair: 3 (2 failed)"));
 
     let bare_counts = AssistRollup {
         pings: 1,
         redeems: 1,
         resumes: 1,
-        focus_repairs: 1,
         ..Default::default()
     };
     let bare = category_rows(&bare_counts)
@@ -1330,27 +1284,6 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     assert!(!bare.contains('$'));
     assert!(!bare.contains("reset"));
     assert!(!bare.contains('h'));
-    assert!(!bare.contains("failed"));
-
-    use rimz::harness::assist_log::FocusRepairOutcome;
-    let superseded_only = AssistStats {
-        window: "7d".to_owned(),
-        rollup: AssistRollup::default(),
-        events: vec![AssistEvent::FocusRepair {
-            at: jiff::Timestamp::from_second(1).unwrap(),
-            nonce: None,
-            workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-            session_name: "rimz-test".to_owned(),
-            generation: 1,
-            evidence: Vec::new(),
-            target: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_2"),
-            outcome: FocusRepairOutcome::Superseded,
-            error: None,
-        }],
-    };
-    lines.clear();
-    panel_lines(&mut lines, &superseded_only, 80);
-    assert!(lines.is_empty());
 }
 
 #[test]

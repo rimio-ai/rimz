@@ -16,6 +16,7 @@ use crate::diag::record::{DiagEnvelope, DiagEvent};
 use crate::ids::{SidebarInstanceId, WorkspaceId};
 
 pub mod binding;
+pub mod focus_repair;
 pub mod notify;
 pub mod plugin_presence;
 pub mod record;

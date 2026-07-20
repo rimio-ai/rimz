@@ -229,17 +229,12 @@ fn strand_sidebar_focus(
 }
 
 fn accepted_focus_repairs(xdg: &Path, target_pane: &PaneId) -> usize {
-    rimz::harness::assist_log::recent(xdg, None)
+    rimz::diag::focus_repair::recent(xdg)
         .iter()
         .filter(|record| {
-            matches!(
-                &record.assist,
-                rimz::harness::assist_log::Assist::FocusRepair {
-                    target,
-                    outcome: rimz::harness::assist_log::FocusRepairOutcome::AcceptedUnconfirmed,
-                    ..
-                } if target == target_pane
-            )
+            record.target == *target_pane
+                && record.outcome
+                    == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
         })
         .count()
 }
@@ -248,27 +243,22 @@ fn wait_for_accepted_focus_repair(
     xdg: &Path,
     target_pane: &PaneId,
     prior_count: usize,
-) -> Vec<rimz::harness::assist_log::AssistRecord> {
+) -> Vec<rimz::diag::focus_repair::FocusRepairRecord> {
     poll_until(
         Duration::from_secs(10),
-        || Ok(rimz::harness::assist_log::recent(xdg, None)),
+        || Ok(rimz::diag::focus_repair::recent(xdg)),
         |records| {
             records
                 .iter()
                 .filter(|record| {
-                    matches!(
-                        &record.assist,
-                        rimz::harness::assist_log::Assist::FocusRepair {
-                            target,
-                            outcome: rimz::harness::assist_log::FocusRepairOutcome::AcceptedUnconfirmed,
-                            ..
-                        } if target == target_pane
-                    )
+                    record.target == *target_pane
+                        && record.outcome
+                            == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
                 })
                 .count()
                 > prior_count
         },
-        "accepted-unconfirmed focus repair assist",
+        "accepted-unconfirmed focus repair diagnostic",
     )
 }
 
@@ -613,13 +603,8 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     assert!(routed.contains("rimz-routed-first"));
 
     assert!(assists.iter().any(|record| {
-        matches!(
-            &record.assist,
-            rimz::harness::assist_log::Assist::FocusRepair {
-                outcome: rimz::harness::assist_log::FocusRepairOutcome::AcceptedUnconfirmed,
-                ..
-            }
-        )
+        record.target == target_work
+            && record.outcome == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
     }));
 
     strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);

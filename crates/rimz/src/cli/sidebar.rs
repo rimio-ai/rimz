@@ -151,7 +151,7 @@ enum SidebarSubcmd {
     /// Append renderer-owned focus-repair evidence. Hidden — detached helper
     /// infrastructure, not a human verb.
     #[command(hide = true)]
-    RecordFocusAssist {
+    RecordFocusRepair {
         #[arg(long)]
         record_json: String,
     },
@@ -355,7 +355,7 @@ impl SidebarArgs {
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
             SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
             SidebarSubcmd::Focus { .. } => "sidebar focus",
-            SidebarSubcmd::RecordFocusAssist { .. } => "sidebar record-focus-assist",
+            SidebarSubcmd::RecordFocusRepair { .. } => "sidebar record-focus-repair",
             SidebarSubcmd::NotifyTest { .. } => "sidebar notify-test",
         }
     }
@@ -469,10 +469,10 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             session_name,
             toggle,
         } => focus(globals, session_name, toggle),
-        SidebarSubcmd::RecordFocusAssist { record_json } => {
-            let record = rimz::harness::assist_log::parse_focus_repair(&record_json)
-                .context("parsing focus-repair assist record")?;
-            rimz::harness::assist_log::append(&record);
+        SidebarSubcmd::RecordFocusRepair { record_json } => {
+            let record = rimz::diag::focus_repair::parse(&record_json)
+                .context("parsing focus-repair diagnostic record")?;
+            rimz::diag::focus_repair::append(&record);
             Ok(())
         }
         SidebarSubcmd::NotifyTest {

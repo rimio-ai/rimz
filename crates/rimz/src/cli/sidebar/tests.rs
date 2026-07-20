@@ -219,33 +219,30 @@ fn gallery_argv_parses_pets_flag() {
 }
 
 #[test]
-fn focus_assist_writer_argv_parses_structured_record() {
+fn focus_repair_writer_argv_parses_structured_record() {
     use clap::Parser;
-    use rimz::harness::assist_log::{Assist, AssistRecord, FocusRepairOutcome};
+    use rimz::diag::focus_repair::{FocusRepairOutcome, FocusRepairRecord};
 
-    let record = AssistRecord {
+    let record = FocusRepairRecord {
         at: jiff::Timestamp::from_second(20).expect("timestamp"),
-        assist: Assist::FocusRepair {
-            nonce: Some("nonce-1".to_owned()),
-            workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567")
-                .expect("workspace"),
-            session_name: "room".to_owned(),
-            generation: 1,
-            evidence: Vec::new(),
-            target: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_1"),
-            outcome: FocusRepairOutcome::AcceptedUnconfirmed,
-            error: None,
-        },
+        nonce: Some("nonce-1".to_owned()),
+        workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace"),
+        session_name: "room".to_owned(),
+        generation: 1,
+        evidence: Vec::new(),
+        target: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_1"),
+        outcome: FocusRepairOutcome::AcceptedUnconfirmed,
+        error: None,
     };
     let record_json = serde_json::to_string(&record).expect("serialize");
     crate::cli::Cli::try_parse_from([
         "rimz",
         "sidebar",
-        "record-focus-assist",
+        "record-focus-repair",
         "--record-json",
         &record_json,
     ])
-    .expect("focus assist writer argv must parse");
+    .expect("focus repair writer argv must parse");
 }
 
 fn strip_sgr(ansi: &[u8]) -> String {

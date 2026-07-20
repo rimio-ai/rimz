@@ -579,25 +579,23 @@ fn spawn_pane_focus(
             Err(err) => (None, "failed", Some(err.to_string())),
         };
         if let Some(generation) = repair_generation {
-            use crate::harness::assist_log::{Assist, AssistRecord, FocusRepairOutcome};
-            crate::harness::assist_log::spawn_focus_repair_append(
+            use crate::diag::focus_repair::{FocusRepairOutcome, FocusRepairRecord};
+            crate::diag::focus_repair::spawn_append(
                 &runtime,
-                &AssistRecord {
+                &FocusRepairRecord {
                     at: jiff::Timestamp::now(),
-                    assist: Assist::FocusRepair {
-                        nonce: outcome.0.map(|nonce| nonce.to_string()),
-                        workspace_id: runtime.workspace_id.clone(),
-                        session_name: session_name.clone(),
-                        generation,
-                        evidence: expected_pre_action.unwrap_or_default(),
-                        target: pane_id.clone(),
-                        outcome: if outcome.1 == "accepted_unconfirmed" {
-                            FocusRepairOutcome::AcceptedUnconfirmed
-                        } else {
-                            FocusRepairOutcome::Failed
-                        },
-                        error: outcome.2.clone(),
+                    nonce: outcome.0.map(|nonce| nonce.to_string()),
+                    workspace_id: runtime.workspace_id.clone(),
+                    session_name: session_name.clone(),
+                    generation,
+                    evidence: expected_pre_action.unwrap_or_default(),
+                    target: pane_id.clone(),
+                    outcome: if outcome.1 == "accepted_unconfirmed" {
+                        FocusRepairOutcome::AcceptedUnconfirmed
+                    } else {
+                        FocusRepairOutcome::Failed
                     },
+                    error: outcome.2.clone(),
                 },
             );
         }
