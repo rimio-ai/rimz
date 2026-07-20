@@ -239,6 +239,11 @@ impl ProviderCapacity {
             .map(move |window| window.projected_at(now))
     }
 
+    /// Current observation of the longest duration-bearing window.
+    pub(crate) fn longest_window_observation(&self, now: Timestamp) -> Option<RateLimitWindow> {
+        Some(self.duration_window(true)?.clone().projected_at(now))
+    }
+
     /// Latest reset among subscription windows spent now with a future reset.
     pub(crate) fn latest_spent_window_reset(&self, now: Timestamp) -> Option<Timestamp> {
         self.projected_duration_windows(now)

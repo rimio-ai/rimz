@@ -641,6 +641,7 @@ fn reason_label(reason: RedeemReason) -> &'static str {
         RedeemReason::ExpiryRescue => "expiry rescue",
         RedeemReason::BlockedGain => "blocked gain",
         RedeemReason::DoomedCredit => "doomed credit",
+        RedeemReason::ScheduledRedeem => "scheduled redeem",
     }
 }
 

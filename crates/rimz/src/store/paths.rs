@@ -426,6 +426,11 @@ impl RuntimePaths {
             .join(format!("auto_redeem.{kind}.json"))
     }
 
+    pub fn shared_auto_redeem_rate_path(&self, kind: &str) -> PathBuf {
+        self.persistent_shared_root
+            .join(format!("auto_redeem_rate.{kind}.json"))
+    }
+
     pub fn shared_auto_redeem_lock(&self, kind: &str) -> PathBuf {
         self.shared_root.join(format!("auto_redeem.{kind}.lock"))
     }
@@ -999,6 +1004,13 @@ mod tests {
                 .join("rimz")
                 .join("shared")
                 .join("auto_redeem.codex.json")
+        );
+        assert_eq!(
+            paths.shared_auto_redeem_rate_path("codex"),
+            state_root
+                .join("rimz")
+                .join("shared")
+                .join("auto_redeem_rate.codex.json")
         );
         assert_eq!(
             paths.shared_auto_redeem_lock("codex"),

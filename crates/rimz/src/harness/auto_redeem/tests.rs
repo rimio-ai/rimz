@@ -38,7 +38,14 @@ fn verdict(
     credits: &ResetCredits,
     now: Timestamp,
 ) -> Option<RedeemReason> {
-    redeem_verdict(capacity, credits, Duration::from_secs(12 * 3600), true, now)
+    redeem_verdict(
+        capacity,
+        credits,
+        None,
+        Duration::from_secs(12 * 3600),
+        true,
+        now,
+    )
 }
 
 #[test]
@@ -142,6 +149,7 @@ fn limit_redemption_requires_opt_in_but_rescue_does_not() {
         redeem_verdict(
             Some(&blocked),
             &credits(now, None),
+            None,
             Duration::from_secs(12 * 3600),
             false,
             now,
@@ -152,11 +160,214 @@ fn limit_redemption_requires_opt_in_but_rescue_does_not() {
         redeem_verdict(
             Some(&blocked),
             &credits(now, Some(Duration::from_secs(10 * 60))),
+            None,
             Duration::from_secs(12 * 3600),
             false,
             now,
         ),
         Some(RedeemReason::ExpiryRescue),
+    );
+}
+
+#[test]
+fn rate_stamp_learns_growth_and_restarts_at_window_edges() {
+    let observed = ts(1_700_000_000);
+    let reset = observed + Duration::from_secs(7 * 86_400);
+    let window = |used_percentage, resets_at, observed_at| RateLimitWindow {
+        used_percentage: Some(used_percentage),
+        resets_at: Some(resets_at),
+        duration_mins: Some(10_080),
+        observed_at: Some(observed_at),
+        ..Default::default()
+    };
+
+    let first = update_rate_stamp(None, &window(10, reset, observed)).unwrap();
+    assert_eq!(first.rate_pct_per_day, 0.0);
+
+    let learned = update_rate_stamp(
+        Some(&first),
+        &window(30, reset, observed + Duration::from_secs(86_400)),
+    )
+    .unwrap();
+    assert_eq!(learned.rate_pct_per_day, 20.0);
+
+    let folded = update_rate_stamp(
+        Some(&learned),
+        &window(40, reset, observed + Duration::from_secs(2 * 86_400)),
+    )
+    .unwrap();
+    let alpha = 1.0 - 0.5_f64.powf(1.0 / 3.0);
+    let expected = 20.0 + alpha * (10.0 - 20.0);
+    assert!((folded.rate_pct_per_day - expected).abs() < 1e-9);
+
+    let next_reset = reset + Duration::from_secs(86_400);
+    let restarted = update_rate_stamp(
+        Some(&folded),
+        &window(1, next_reset, observed + Duration::from_secs(3 * 86_400)),
+    )
+    .unwrap();
+    assert_eq!(restarted.window_resets_at, next_reset);
+    assert_eq!(restarted.last_used_pct, 1);
+    assert_eq!(restarted.rate_pct_per_day, folded.rate_pct_per_day);
+
+    let stale = update_rate_stamp(
+        Some(&restarted),
+        &window(90, next_reset, observed + Duration::from_secs(2 * 86_400)),
+    )
+    .unwrap();
+    assert_eq!(stale, restarted, "out-of-order observations are ignored");
+}
+
+#[test]
+fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
+    let now = ts(1_700_000_000);
+    let expiry = now + Duration::from_secs(20 * 86_400);
+    let expiries = [expiry, expiry, expiry];
+    let refill = Duration::from_secs(5 * 86_400);
+    let rescue = expiry - EXPIRY_RESCUE_LEAD;
+
+    assert_eq!(chain_deadline(&expiries[..1], Some(20.0)), Some(rescue));
+    assert_eq!(
+        chain_deadline(&expiries, Some(20.0)),
+        Some(rescue - refill - refill)
+    );
+    assert_eq!(
+        chain_deadline(&expiries, Some(RATE_FLOOR - 0.01)),
+        Some(rescue)
+    );
+
+    let credits = ResetCredits {
+        count: 3,
+        soonest_expiry: Some(expiry),
+        expiries: expiries.to_vec(),
+    };
+    let deadline = rescue - refill - refill;
+    assert_eq!(
+        redeem_verdict(
+            None,
+            &credits,
+            Some(20.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            deadline - Duration::from_secs(1),
+        ),
+        None,
+    );
+    assert_eq!(
+        redeem_verdict(
+            None,
+            &credits,
+            Some(20.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            deadline,
+        ),
+        Some(RedeemReason::ScheduledRedeem),
+    );
+}
+
+#[test]
+fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
+    let now = ts(1_700_000_000);
+    let reset = now + Duration::from_secs(60 * 60);
+    let capacity = ProviderCapacity::from_windows(vec![RateLimitWindow {
+        used_percentage: Some(20),
+        resets_at: Some(reset),
+        duration_mins: Some(10_080),
+        observed_at: Some(now),
+        ..Default::default()
+    }]);
+    let chain = |expiry| ResetCredits {
+        count: 3,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry, expiry, expiry],
+    };
+
+    assert_eq!(
+        redeem_verdict(
+            Some(&capacity),
+            &chain(reset + MIN_HOLD),
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            now,
+        ),
+        None,
+        "a free refill wins while the credit retains a full hold interval"
+    );
+    assert_eq!(
+        redeem_verdict(
+            Some(&capacity),
+            &chain(reset + MIN_HOLD - Duration::from_secs(1)),
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            now,
+        ),
+        Some(RedeemReason::ScheduledRedeem),
+        "a credit that cannot survive the reset keeps its chain deadline"
+    );
+}
+
+#[test]
+fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
+    let now = ts(1_700_000_000);
+    let expiry = now + Duration::from_secs(3 * 86_400);
+    let chain = ResetCredits {
+        count: 13,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry; 13],
+    };
+    let blocked = spent_capacity(now, Duration::from_secs(2 * 86_400));
+
+    assert_eq!(
+        redeem_verdict(
+            Some(&blocked),
+            &chain,
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            now,
+        ),
+        Some(RedeemReason::BlockedGain),
+    );
+    let doomed_expiry = now + Duration::from_secs(12 * 3_600);
+    let doomed = ResetCredits {
+        count: 3,
+        soonest_expiry: Some(doomed_expiry),
+        expiries: vec![doomed_expiry; 3],
+    };
+    let short_block = spent_capacity(now, Duration::from_secs(60 * 60));
+    assert_eq!(
+        redeem_verdict(
+            Some(&short_block),
+            &doomed,
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            now,
+        ),
+        Some(RedeemReason::DoomedCredit),
+    );
+    assert_eq!(
+        redeem_verdict(
+            None,
+            &chain,
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            false,
+            now,
+        ),
+        None,
+    );
+}
+
+#[test]
+fn scheduled_reason_round_trips() {
+    assert_eq!(RedeemReason::ScheduledRedeem.as_str(), "scheduled_redeem");
+    assert_eq!(
+        "scheduled_redeem".parse::<RedeemReason>().unwrap(),
+        RedeemReason::ScheduledRedeem
     );
 }
 
@@ -225,6 +436,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
                 used_percentage: Some(100),
                 resets_at: Some(now + Duration::from_secs(3 * 86_400)),
                 duration_mins: Some(10_080),
+                observed_at: Some(now),
                 ..Default::default()
             }],
         },
@@ -241,6 +453,15 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     assert_eq!(first.attempted_at, now);
     assert_eq!(first.reason, RedeemReason::BlockedGain);
     assert_eq!(first.outcome, None);
+    assert_eq!(
+        read_rate_stamp(&runtime.shared_auto_redeem_rate_path(CODEX_KIND)),
+        Some(RateStamp {
+            window_resets_at: now + Duration::from_secs(3 * 86_400),
+            last_used_pct: 100,
+            last_observed_at: now,
+            rate_pct_per_day: 0.0,
+        })
+    );
 
     redeem_credits(
         std::slice::from_ref(&panel),

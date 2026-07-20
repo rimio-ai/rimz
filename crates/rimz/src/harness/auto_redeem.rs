@@ -9,13 +9,13 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::account::{
     ProviderCapacity, RedemptionCode, ResetCreditResult, prepare_reset_credit_redemption,
 };
-use crate::agents::{AccountUsageSnapshot, ResetCredits};
+use crate::agents::{AccountUsageSnapshot, RateLimitWindow, ResetCredits};
 #[cfg(not(test))]
 use crate::child_process::detached_rimz_command;
 use crate::config::ResumeConfig;
@@ -28,6 +28,10 @@ pub(crate) const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
 pub(crate) const MIN_HOLD: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const ATTEMPT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 pub(crate) const POST_SUCCESS_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+const RATE_HALF_LIFE: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+pub(crate) const RATE_FLOOR: f64 = 0.5;
+pub(crate) const T_MIN: Duration = Duration::from_secs(6 * 60 * 60);
+const SECONDS_PER_DAY: f64 = 24.0 * 60.0 * 60.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +39,7 @@ pub enum RedeemReason {
     ExpiryRescue,
     BlockedGain,
     DoomedCredit,
+    ScheduledRedeem,
 }
 
 impl RedeemReason {
@@ -43,6 +48,7 @@ impl RedeemReason {
             Self::ExpiryRescue => "expiry_rescue",
             Self::BlockedGain => "blocked_gain",
             Self::DoomedCredit => "doomed_credit",
+            Self::ScheduledRedeem => "scheduled_redeem",
         }
     }
 }
@@ -55,9 +61,18 @@ impl FromStr for RedeemReason {
             "expiry_rescue" => Ok(Self::ExpiryRescue),
             "blocked_gain" => Ok(Self::BlockedGain),
             "doomed_credit" => Ok(Self::DoomedCredit),
+            "scheduled_redeem" => Ok(Self::ScheduledRedeem),
             _ => Err(AutoRedeemErr::InvalidReason(value.to_owned())),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct RateStamp {
+    window_resets_at: Timestamp,
+    last_used_pct: u8,
+    last_observed_at: Timestamp,
+    rate_pct_per_day: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +130,7 @@ pub struct RedeemReport {
 pub(crate) fn redeem_verdict(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
+    rate_pct_per_day: Option<f64>,
     min_gain: Duration,
     auto_redeem: bool,
     now: Timestamp,
@@ -132,14 +148,66 @@ pub(crate) fn redeem_verdict(
         return None;
     }
 
-    let natural_reset = capacity?.latest_spent_window_reset(now)?;
-    if credits.soonest_expiry.is_some_and(|expiry| {
-        expiry.as_second() - natural_reset.as_second() < duration_seconds(MIN_HOLD)
-    }) {
-        return Some(RedeemReason::DoomedCredit);
+    if let Some(natural_reset) = capacity.and_then(|value| value.latest_spent_window_reset(now)) {
+        if credits.soonest_expiry.is_some_and(|expiry| {
+            expiry.as_second() - natural_reset.as_second() < duration_seconds(MIN_HOLD)
+        }) {
+            return Some(RedeemReason::DoomedCredit);
+        }
+        if natural_reset.as_second() - now.as_second() >= duration_seconds(min_gain) {
+            return Some(RedeemReason::BlockedGain);
+        }
     }
-    (natural_reset.as_second() - now.as_second() >= duration_seconds(min_gain))
-        .then_some(RedeemReason::BlockedGain)
+
+    let expiry_count = usize::try_from(credits.count).unwrap_or(usize::MAX);
+    let expiries = &credits.expiries[..credits.expiries.len().min(expiry_count)];
+    let first_expiry = *expiries.first()?;
+    if first_expiry <= now || now < chain_deadline(expiries, rate_pct_per_day)? {
+        return None;
+    }
+    if free_reset_defers(capacity, first_expiry, min_gain, now) {
+        return None;
+    }
+    Some(RedeemReason::ScheduledRedeem)
+}
+
+fn chain_deadline(expiries: &[Timestamp], rate_pct_per_day: Option<f64>) -> Option<Timestamp> {
+    let lead = SignedDuration::from_secs(duration_seconds(EXPIRY_RESCUE_LEAD));
+    let mut deadline = expiries.last()?.checked_sub(lead).ok()?;
+    let Some(refill) = refill_interval(rate_pct_per_day) else {
+        return expiries.first()?.checked_sub(lead).ok();
+    };
+    for expiry in expiries[..expiries.len() - 1].iter().rev() {
+        let rescue_deadline = expiry.checked_sub(lead).ok()?;
+        let chain_deadline = deadline.checked_sub(refill).ok()?;
+        deadline = rescue_deadline.min(chain_deadline);
+    }
+    Some(deadline)
+}
+
+fn refill_interval(rate_pct_per_day: Option<f64>) -> Option<SignedDuration> {
+    let rate = rate_pct_per_day.filter(|rate| rate.is_finite() && *rate >= RATE_FLOOR)?;
+    let seconds = (100.0 / rate * SECONDS_PER_DAY)
+        .max(T_MIN.as_secs_f64())
+        .ceil() as i64;
+    Some(SignedDuration::from_secs(seconds))
+}
+
+fn free_reset_defers(
+    capacity: Option<&ProviderCapacity>,
+    first_expiry: Timestamp,
+    min_gain: Duration,
+    now: Timestamp,
+) -> bool {
+    let Some(reset) = capacity
+        .and_then(|value| value.longest_window_observation(now))
+        .and_then(|window| window.resets_at)
+        .filter(|reset| *reset > now)
+    else {
+        return false;
+    };
+    reset.as_second() - now.as_second() < duration_seconds(min_gain)
+        && first_expiry.as_second() - reset.as_second() >= duration_seconds(MIN_HOLD)
 }
 
 fn duration_seconds(duration: Duration) -> i64 {
@@ -160,6 +228,83 @@ fn stamp_allows_attempt(stamp: Option<&RedeemStamp>, now: Timestamp) -> bool {
 
 fn read_stamp(path: &Path) -> Option<RedeemStamp> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+fn read_rate_stamp(path: &Path) -> Option<RateStamp> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+fn update_rate_stamp(prior: Option<&RateStamp>, window: &RateLimitWindow) -> Option<RateStamp> {
+    let (window_resets_at, last_used_pct, last_observed_at) = (
+        window.resets_at?,
+        window.used_percentage?,
+        window.observed_at?,
+    );
+    let Some(prior) = prior else {
+        return Some(RateStamp {
+            window_resets_at,
+            last_used_pct,
+            last_observed_at,
+            rate_pct_per_day: 0.0,
+        });
+    };
+    if last_observed_at <= prior.last_observed_at {
+        return Some(prior.clone());
+    }
+
+    let mut rate_pct_per_day = prior.rate_pct_per_day.max(0.0);
+    if window_resets_at == prior.window_resets_at && last_used_pct >= prior.last_used_pct {
+        let elapsed_secs = last_observed_at
+            .duration_since(prior.last_observed_at)
+            .as_secs_f64();
+        let sample_rate =
+            f64::from(last_used_pct - prior.last_used_pct) * SECONDS_PER_DAY / elapsed_secs;
+        let alpha = 1.0 - 0.5_f64.powf(elapsed_secs / RATE_HALF_LIFE.as_secs_f64());
+        rate_pct_per_day = if rate_pct_per_day > 0.0 {
+            rate_pct_per_day + alpha * (sample_rate - rate_pct_per_day)
+        } else {
+            sample_rate
+        };
+    }
+    Some(RateStamp {
+        window_resets_at,
+        last_used_pct,
+        last_observed_at,
+        rate_pct_per_day,
+    })
+}
+
+fn cached_rate(stamp: Option<&RateStamp>) -> Option<f64> {
+    stamp
+        .map(|stamp| stamp.rate_pct_per_day)
+        .filter(|rate| rate.is_finite() && *rate >= RATE_FLOOR)
+}
+
+fn update_rate_cache(
+    runtime: &RuntimePaths,
+    capacity: Option<&ProviderCapacity>,
+    now: Timestamp,
+) -> Option<f64> {
+    let path = runtime.shared_auto_redeem_rate_path(CODEX_KIND);
+    let prior = read_rate_stamp(&path);
+    let Some(next) = capacity
+        .and_then(|value| value.longest_window_observation(now))
+        .as_ref()
+        .and_then(|window| update_rate_stamp(prior.as_ref(), window))
+    else {
+        return cached_rate(prior.as_ref());
+    };
+    if prior.as_ref() != Some(&next)
+        && let Err(error) = write_temp_then_rename_cache(&path, &next)
+    {
+        tracing::debug!(
+            tags.operation = "auto_redeem.rate_cache",
+            error = &error as &dyn std::error::Error,
+            "auto-redeem: failed to publish burn-rate cache",
+        );
+        return cached_rate(prior.as_ref());
+    }
+    cached_rate(Some(&next))
 }
 
 fn write_stamp(path: &Path, stamp: &RedeemStamp) -> Result<(), AutoRedeemErr> {
@@ -224,13 +369,15 @@ pub(crate) fn redeem_credits(
     let Some(panel) = panels.iter().find(|panel| panel.kind == CODEX_KIND) else {
         return;
     };
+    let capacity = ProviderCapacity::read(runtime, CODEX_KIND);
+    let rate_pct_per_day = update_rate_cache(runtime, capacity.as_ref(), now);
     let Some(credits) = panel.reset_credits.as_ref() else {
         return;
     };
-    let capacity = ProviderCapacity::read(runtime, CODEX_KIND);
     let Some(reason) = redeem_verdict(
         capacity.as_ref(),
         credits,
+        rate_pct_per_day,
         config.auto_redeem_min_gain(),
         config.auto_redeem,
         now,
@@ -280,10 +427,13 @@ pub fn execute_auto_redeem(
         return Ok(None);
     }
 
+    let rate_pct_per_day =
+        cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(CODEX_KIND)).as_ref());
     let action = prepare_reset_credit_redemption(CODEX_KIND, |capacity, credits| {
         redeem_verdict(
             capacity,
             credits,
+            rate_pct_per_day,
             config.auto_redeem_min_gain(),
             config.auto_redeem,
             now,
