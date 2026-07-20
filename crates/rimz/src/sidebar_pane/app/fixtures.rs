@@ -2,11 +2,29 @@
 
 use crate::ids::PaneId;
 use crate::pane::PaneRef;
-use crate::{MuxName, SidebarSnapshot, WorkspaceId};
+use crate::sidebar_pane::app::ServeConfig;
+use crate::{MuxName, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 
 pub(crate) fn workspace() -> WorkspaceId {
     WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap()
+}
+
+pub(crate) fn serve_config(ws: &WorkspaceId) -> ServeConfig {
+    ServeConfig {
+        workspace_id: ws.clone(),
+        mux: crate::MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id: SidebarInstanceId::new(),
+        tick_seconds: 1,
+        refresh_ms_override: None,
+        timezone: jiff::tz::TimeZone::UTC,
+        notification_prefs: crate::config::NotificationsPrefs::default(),
+        nav_keys: crate::sidebar_pane::app::NavKeymap::from_config(
+            &crate::config::SidebarKeys::default(),
+        ),
+        own_pane: None,
+    }
 }
 
 pub(crate) fn snapshot(ws: &WorkspaceId) -> SidebarSnapshot {

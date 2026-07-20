@@ -4,7 +4,7 @@ use crate::diag::record::{DiagEvent, GateRule};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar_pane::app::ServeConfig;
 use crate::sidebar_pane::app::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame};
-use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
+use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
@@ -18,23 +18,6 @@ fn degraded_health(reason: &str) -> Health {
     Health {
         failure_streak: ALERT_AFTER_FAILURES,
         alert: Some(Alert::active(reason, jiff::Timestamp::now())),
-    }
-}
-
-fn serve_config(ws: &WorkspaceId) -> ServeConfig {
-    ServeConfig {
-        workspace_id: ws.clone(),
-        mux: crate::MuxName::Zellij,
-        session_name: "rimz-test".to_owned(),
-        instance_id: SidebarInstanceId::new(),
-        tick_seconds: 1,
-        refresh_ms_override: None,
-        timezone: jiff::tz::TimeZone::UTC,
-        notification_prefs: crate::config::NotificationsPrefs::default(),
-        nav_keys: crate::sidebar_pane::app::NavKeymap::from_config(
-            &crate::config::SidebarKeys::default(),
-        ),
-        own_pane: None,
     }
 }
 
