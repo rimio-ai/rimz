@@ -1,10 +1,10 @@
 # Grok Build adapter
 
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [grok-reference.md](../../externals/agent-adapter/grok-reference.md).
+
 Grok is an eagerly registered stock-TUI adapter. RimZ launches `grok`, installs passive global hooks in `${GROK_HOME:-~/.grok}/hooks/rimz.json`, and enriches each session from its durable `updates.jsonl`, `summary.json`, `signals.json`, and optional `events.jsonl` files. ACP and provider-private billing APIs stay outside this adapter.
 
 ## Hooks and lifecycle
-
-Grok uses three naming conventions on one surface: hook config keys are PascalCase, the stdin field is `hookEventName`, and the field's values are snake_case. The classifier accepts snake_case, camelCase, and PascalCase, then returns the canonical PascalCase name before shared lifecycle dispatch.
 
 | Native event | RimZ signal |
 | --- | --- |
@@ -18,31 +18,39 @@ Grok uses three naming conventions on one surface: hook config keys are PascalCa
 | `PreCompact` / `PostCompact` | compaction bracket with manual/automatic source |
 | `SessionEnd` | end the session |
 
+Grok uses three naming conventions on one surface: hook config keys are PascalCase, the stdin field is `hookEventName`, and the field's values are snake_case. The classifier accepts snake_case, camelCase, and PascalCase, then returns the canonical PascalCase name before shared lifecycle dispatch.
+
 Notification classification is exact: `permission_prompt` plus `Tool permission requested` or `Diff review requested` is Permission; `Plan approval requested` is PlanApproval; and `elicitation_dialog` plus `User question requested` is Question. Near matches and `agent_error` do not open an ask. Human answers stay in Grok's native pane, and hook stdout stays empty.
 
-The installer writes one four-second managed command, `rimz hooks feed --source grok`, for every passive event. The hook helper attributes the event through its bounded process-ancestor walk when `RIMZ_AGENT_PID` is absent. The installer omits `PreToolUse`, Grok's blocking decision channel, preserves unrelated global hooks, reclaims older marker-owned RimZ commands on reinstall, and restores only RimZ-owned entries on uninstall. `RIMZ_GROK_HOOKS` provides an isolated hook-file override for tests.
+**Install.** The installer writes one four-second managed command, `rimz hooks feed --source grok`, for every passive event. The hook helper attributes the event through its bounded process-ancestor walk when `RIMZ_AGENT_PID` is absent. The installer omits `PreToolUse`, Grok's blocking decision channel, preserves unrelated global hooks, reclaims older marker-owned RimZ commands on reinstall, and restores only RimZ-owned entries on uninstall. `RIMZ_GROK_HOOKS` provides an isolated hook-file override for tests.
 
-## Launch and sessions
+## Launch and resume
 
 Interactive launches remain `grok [flags]`. A supervised prompt alone adds `-p <prompt> --output-format streaming-json`; the streaming flags never reach an interactive TUI. Resume is `--resume <id>`, fork is `--resume <id> --fork-session`, model is `--model`, reasoning effort is `--reasoning-effort`, the headless turn cap is `--max-turns`, and manual compaction sends `/compact`.
 
 Ask maps to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`. Plan adds no argv because Grok exposes interactive `/plan` but no launch flag that enforces a plan-only posture. Grok has no provider-window ping profile.
 
+## Context and transcript
+
 A hook-supplied transcript path is accepted only when its canonical path is an `updates.jsonl` below the resolved sessions root and its parent directory exactly equals `sessionId`. Fallback discovery scans `${GROK_HOME:-~/.grok}/sessions/**/updates.jsonl` by that parent identity. The same resolver feeds lifecycle, context, history, and spend. Only after `updates.jsonl` validates may context enrichment derive an `events.jsonl` sibling whose canonical regular-file path stays in that same canonical session directory; the event file never discovers or identifies a session.
 
-## Transcript branch and context
-
-`updates.jsonl` is a logical branch. Main-thread `user_message_chunk` records establish prompt boundaries from `_meta.promptIndex`; visible `agent_message_chunk` text forms assistant output. Thoughts, tools, metadata, and subagent sidechains stay out of conversation history. Once indexed prompts appear, later unmarked user runs do not create phantom prompts.
+**The transcript is a logical branch.** Main-thread `user_message_chunk` records establish prompt boundaries from `_meta.promptIndex`; visible `agent_message_chunk` text forms assistant output. Thoughts, tools, metadata, and subagent sidechains stay out of conversation history. Once indexed prompts appear, later unmarked user runs do not create phantom prompts.
 
 A `rewind_marker.target_prompt_index` truncates the active fold to that prompt boundary before later records apply. History, context, cold spend, and changed-session live cost reuse this authoritative fold, so live refresh opens `updates.jsonl` once. Final assistant extraction accepts a complete tail `turn_completed.agent_result` only when no rewind appears in that tail and otherwise falls back to the full branch fold. Incremental assistant streaming is append-only: it discards bytes before the last rewind marker in the newly read suffix, but cannot retract output already delivered before the cursor.
 
 Local context refresh stat-gates the validated session files as one aggregate. `summary.json` supplies model, reasoning effort, and stable title; the newest active-branch `_meta.totalTokens` supplies occupancy; `signals.json.contextWindowTokens` supplies the denominator and is the usage fallback before a rewind. After a rewind with no newer token sample, occupancy remains unknown rather than showing stale abandoned-branch usage. Missing or malformed companion files remove only their optional enrichment.
 
-The optional `events.jsonl` tail supplies one display-only permission bracket for Grok versions that persist `permission_requested` and `permission_resolved` records without firing `Notification`. RimZ matches append-ordered records by exact non-empty `tool_name`, publishes the newest unmatched request through `native_permission_wait`, and reads only the bounded record-aligned tail. This marker raises the waiting card and routes attention to Grok's pane; it creates no lifecycle wait, open ask, ask ID, or structured answer path. A later lifecycle activity timestamp self-clears a stale marker through the shared projection.
+**The permission sidecar.** The optional `events.jsonl` tail supplies one display-only permission bracket for Grok versions that persist `permission_requested` and `permission_resolved` records without firing `Notification`. RimZ matches append-ordered records by exact non-empty `tool_name`, publishes the newest unmatched request through `native_permission_wait`, and reads only the bounded record-aligned tail. This marker raises the waiting card and routes attention to Grok's pane; it creates no lifecycle wait, open ask, ask ID, or structured answer path. A later lifecycle activity timestamp self-clears a stale marker through the shared projection.
 
 Exact `Notification` classification remains authoritative when Grok emits it: permission, plan approval, diff review, and question notifications create their existing durable lifecycle/open-ask state. The event sidecar neither broadens those mappings nor competes with them.
 
-## Spend
+## Account and balance
+
+The account probe reads `${GROK_HOME:-~/.grok}/auth.json` as non-secret metadata. It never retains `key` or `refresh_token`; deserialization records only whether each exists. The freshest valid session login wins over an API-key record, with stable scope order as the final tie-breaker. `XAI_API_KEY` contributes presence only when the file has no usable record. Session/OIDC login is metered, API-key login is unmetered, and malformed auth is unavailable.
+
+The adapter makes no network request and reports no billing or quota window.
+
+## Cost
 
 Exact dollars come only from active-branch `_x.ai/session/update` `turn_completed` records. RimZ accepts `costUsdTicks` when it is nonnegative, `usageIsIncomplete` is false, and `costIsPartial` is false, then divides by 10,000,000,000 ticks per USD. Missing or rejected native cost produces no spend entry rather than `$0`.
 
@@ -50,8 +58,10 @@ Exact dollars come only from active-branch `_x.ai/session/update` `turn_complete
 
 Ordinary refreshes resume at the file byte cursor. A rewind in the suffix triggers a cold branch fold with `replace_entries = true`, removing abandoned prompts from the spending cache. The stable dedup identity is the Grok session, prompt, and attributed model.
 
-## Account and known gaps
+## Known gaps
 
-The account probe reads `${GROK_HOME:-~/.grok}/auth.json` as non-secret metadata. It never retains `key` or `refresh_token`; deserialization records only whether each exists. The freshest valid session login wins over an API-key record, with stable scope order as the final tie-breaker. `XAI_API_KEY` contributes presence only when the file has no usable record. Session/OIDC login is metered, API-key login is unmetered, and malformed auth is unavailable.
+Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 
-The adapter makes no network request and reports no billing or quota window. Realtime cost remains completed-turn only. Background parking, remote control, ACP structured answers, and provider-owned billing extensions remain unsupported.
+- **No quota or billing window.** The adapter makes no network request, so the provider block carries spend without budget bars.
+- **Realtime cost is completed-turn only.** Dollars land when `turn_completed` writes them, never mid-turn.
+- **Background parking, remote control, and ACP structured answers** have no native signal. Human answers stay in Grok's pane.
