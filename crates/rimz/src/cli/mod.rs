@@ -517,8 +517,6 @@ enum Subcmd {
     /// Codex helper API. The Codex hook calls these; humans usually do not.
     #[command(hide = true)]
     Codex(codex::CodexArgs),
-    /// OpenCode helper API. The OpenCode hook calls these; humans usually do not.
-    #[command(hide = true)]
     /// Daemon dashboard helper API. The rimzd content panes call this; humans do not.
     #[command(hide = true)]
     Daemon(daemon::DaemonArgs),
