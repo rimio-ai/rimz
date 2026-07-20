@@ -42,16 +42,16 @@ The render loop never forks, never fsyncs, and never reads the pane roster synch
 
 The external reads a room needs (the pane roster, git, forge, provider accounts) cost the same whether one tab asks or twenty do. So exactly one renderer per workspace pays them.
 
-The eldest live renderer is elected **producer**. Its fetch worker resolves panes, roots, and local sessions; its cache refresher runs git diff-stats and accounts and requests account-global spend from a separately elected warm service. It publishes the result as runtime caches. Every younger renderer is a **consumer**: it keeps one [`PublishedSnapshotReader`](../../crates/rimz/src/sidebar/consumer.rs), folds those caches in process, and applies only what is local to it (pane exclusion, own-view, presence). A consumer forks nothing.
+The eldest live renderer is elected **producer** and pays them all, publishing the result as runtime caches. Every younger renderer is a **consumer**: it folds those caches in process through one [`PublishedSnapshotReader`](../../crates/rimz/src/sidebar/consumer.rs) and applies only what is local to it (pane exclusion, own-view, presence). A consumer forks nothing.
 
-Election is by birth order. Instance ids are UUIDv7, so the lexically smallest fresh heartbeat is the eldest ([`elder_sidebar_instance`](../../crates/rimz/src/sidebar/mod.rs)), and every renderer thread shares one process-local [`ProducerElectionTracker`](../../crates/rimz/src/sidebar/mod.rs) instead of rescanning the heartbeat directory per lookup.
+That turns N tabs into one external-read cost plus N-1 in-process folds, which is the single largest lever in the whole design: it is what keeps a 20-tab room costing about what a 2-tab room costs. The election mechanics, the per-thread ownership table, and the separately elected spending service live in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers).
 
 ### Why the election is safe
 
 The eldest-UUIDv7 rule looks like a distributed-consensus problem and is not one, because **the flock is the real election and the eldest rule is only an optimization.**
 
 - **The flock decides.** Every shared external read single-flights through [`store::single_flight::coalesce`](../../crates/rimz/src/store/single_flight.rs). Two renderers that both believe they are the producer still collapse to one pane-roster read per TTL window. The system is correct with zero, one, or many self-declared producers.
-- **The eldest rule saves the contention.** Sorting by birth lets a younger renderer skip production before ever touching the lock, turning N tabs into one producer plus N-1 in-process cache reads. A wrong pick costs nothing, because the flock bounds it.
+- **The eldest rule saves the contention.** Sorting by birth lets a younger renderer skip production before ever touching the lock, so the common case never contends at all. A wrong pick costs nothing, because the flock bounds it.
 - **The heartbeat TTL carries liveness.** On a producer death the next eldest flips within one `SIDEBAR_HEARTBEAT_TTL` (5s) and produces on its next cycle. Pane discovery lags a few seconds; agent status keeps flowing the entire time through the rollup fast lane, which needs no producer.
 
 ### Two clocks
