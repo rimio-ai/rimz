@@ -39,7 +39,7 @@ The three end-to-end budgets the cost map rolls up into, each with its dominant 
 
 ## The cost map
 
-Where the milliseconds are, and what bounds each. Reproducible figures come from `cargo xtask perf` on synthetic stores and pane frames, while external IPC rows name the measured production ranges they bound; exact cadence constants live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) and the staleness each lane may show is budgeted in [state.md → Pull-Tick Table](./sidebar/state.md#pull-tick-table).
+Where the milliseconds are, and what bounds each. Reproducible figures come from `cargo xtask perf` on synthetic stores and pane frames, while external IPC rows name the measured production ranges they bound; exact cadence constants live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) and the staleness each lane may show is budgeted in [state.md → Cadences](./sidebar/state.md#cadences).
 
 | Operation | Rough cost | Bound |
 | --- | --- | --- |

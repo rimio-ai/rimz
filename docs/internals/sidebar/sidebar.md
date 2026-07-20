@@ -1,6 +1,6 @@
 # Sidebar
 
-> [DESIGN.md](../../../DESIGN.md) states the commitments this doc operationalizes, [the interface reference](../../interface/sidebar.md) draws the sidebar frame by frame, and [state.md](./state.md) owns the data plane beneath it: the node model, the producer's caches, and the timing. This doc owns the mechanics between them: how presence, ranking, layout, and recovery are computed.
+> [DESIGN.md](../../../DESIGN.md) states the commitments this doc operationalizes, [the interface reference](../../interface/sidebar.md) draws the sidebar frame by frame, and [state.md](./state.md) owns the data plane beneath it: the producer/consumer split, the published caches, and the timing. This doc owns the mechanics between them: how presence, ranking, layout, and recovery are computed.
 
 The sidebar is a UI client over the workspace store. It reads the store in process, writes only runtime display files (its heartbeat, read receipts, `unread.json`, `focus-anchor.json`, and the producer caches), and imports no store-writer module. One renderer paints every moment of a session: a bare shell, the first agent, a waiting prompt, a fleet across worktrees, detach and reattach. What changes between those moments is the snapshot, never the renderer.
 
@@ -154,7 +154,7 @@ Zellij plugin upgrades are gated by identity rather than run on every reload. Th
 
 ### State access
 
-Data flow is [state.md](./state.md)'s domain: the node model, producer election, the published-file inventory, typed realtime events and push channels, fusion, render cadences, and the pull-tick table (values in [`sidebar/timing.rs`](../../../crates/rimz/src/sidebar/timing.rs)). This doc keeps the liveness contract: each renderer writes its own heartbeat in process and binds a per-instance wakeup socket, and the heartbeat carries the workspace, session, mux, instance id, protocol version, socket path, pane id, build id, semantic version, and last-seen timestamp.
+Data flow is [state.md](./state.md)'s domain: producer election, the fetch cycle, the published-lane inventory, typed realtime events and push channels, fusion, focus intent, and the cadence table (values in [`sidebar/timing.rs`](../../../crates/rimz/src/sidebar/timing.rs)). This doc keeps the liveness contract: each renderer writes its own heartbeat in process and binds a per-instance wakeup socket, and the heartbeat carries the workspace, session, mux, instance id, protocol version, socket path, pane id, build id, semantic version, and last-seen timestamp.
 
 ### Drawing
 

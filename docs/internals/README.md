@@ -33,7 +33,7 @@ Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem,
 | Page | What it owns |
 | --- | --- |
 | [sidebar.md](./sidebar/sidebar.md) | Rendering mechanics: presence, ranking, layout, and recovery. |
-| [state.md](./sidebar/state.md) | The data plane: the node model, producer caches, push channels, and timing. |
+| [state.md](./sidebar/state.md) | The data plane: the producer/consumer split, the published caches, push channels, fusion, and timing. |
 | [notifications.md](./sidebar/notifications.md) | Best-effort attention alerts over the same state. |
 | [pets.md](./sidebar/pets.md) | Renderer-local attention art for the provider dashboard. |
 

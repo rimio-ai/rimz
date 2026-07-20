@@ -102,7 +102,7 @@ The consistency family checks each committed frame alone, detecting and logging 
 
 ### Real-world cross-checks
 
-The writer thread re-verifies the latest roster against the world on its own cadence (`OBSERVE_CROSSCHECK_TTL`), reading only what the producer already published (the workspace pane frame through the stat-gated cache read) and process liveness. The observer adds no mux call of its own; the producer remains the only external puller ([state.md → The node model](./sidebar/state.md#the-node-model)).
+The writer thread re-verifies the latest roster against the world on its own cadence (`OBSERVE_CROSSCHECK_TTL`), reading only what the producer already published (the workspace pane frame through the stat-gated cache read) and process liveness. The observer adds no mux call of its own; the producer remains the only external puller ([state.md → Renderers, the producer, and consumers](./sidebar/state.md#renderers-the-producer-and-consumers)).
 
 - **Cards fit the frame.** Every roster pane id appears in the published frame (`row_pane_missing_from_frame`), and the roster never exceeds the frame's pane count (`cards_exceed_panes`). The comparison runs only when the roster's fold stamp equals the frame's `produced_at_ms`; a producer republish between fold and read is normal skew.
 - **PIDs are alive.** A row's pane pid is checked through the process backend with the start-time pid-reuse guard (`dead_pid`). A pid must stay dead across `OBSERVE_DEADPID_CONFIRMATIONS` consecutive passes before it logs, so a just-exited process the next frame removes leaves no record, and each dead-pid episode reports once. Platforms without process metrics skip the check.
