@@ -13,6 +13,7 @@ rimz stats --refresh       # hold the panel open and repaint every 60s (the rimz
 | --- | --- |
 | `--dollars` | Scale the heatmap by dollars spent rather than tokens used |
 | `--json` | Emit the stats document instead of the panel; the stable surface for scripts |
+| `--assists` | Print the complete newest-first system-assist timeline instead of the panel; conflicts with `--json` and `--refresh` |
 | `--refresh` | Hold the panel open, refresh every 60s, and re-centre on resize; conflicts with `--json` |
 
 A plain `rimz stats` prints the all-time window; in the held (`--refresh`) dashboard, `Tab` and `Shift-Tab` cycle the All time / Week / Month / Year window over the model, agent, and insight rows while the heatmap stays full-history.
