@@ -44,6 +44,7 @@ pub enum RecoveryStage {
     Internet,
     Server,
     Session,
+    Multiplexer,
 }
 
 /// Which connection transition the panel presents.
@@ -69,6 +70,7 @@ pub struct RecoveryFrame {
     pub attempt: u32,
     pub phase: FooterPhase,
     pub last_error: Option<String>,
+    pub attaching: bool,
     pub rows: Vec<StageFrame>,
 }
 
@@ -91,6 +93,7 @@ pub struct RecoveryPanel {
     internet: Option<Checkpoint>,
     server: Option<Checkpoint>,
     session: StageStatus,
+    master_ready: bool,
     attempt: u32,
     last_error: Option<String>,
 }
@@ -135,6 +138,7 @@ impl RecoveryPanel {
             }),
             server: server.map(checkpoint),
             session: StageStatus::Waiting,
+            master_ready: false,
             attempt: 0,
             last_error: None,
         }
@@ -146,6 +150,7 @@ impl RecoveryPanel {
         self.wait_started = true;
         self.shown_at = None;
         self.session = StageStatus::Waiting;
+        self.master_ready = false;
     }
 
     pub fn note_attempt(&mut self, consecutive_failures: u32) {
@@ -176,7 +181,13 @@ impl RecoveryPanel {
         self.session = StageStatus::Checking;
     }
 
+    pub fn note_master_ready(&mut self) {
+        self.master_ready = true;
+        self.session = StageStatus::Ok;
+    }
+
     pub fn note_ssh_error(&mut self, error: Option<String>) {
+        self.master_ready = false;
         self.session = if error.is_some() {
             StageStatus::Down
         } else {
@@ -203,7 +214,7 @@ impl RecoveryPanel {
     }
 
     pub fn frame(&self, outage_for: Duration, phase: FooterPhase) -> RecoveryFrame {
-        let mut rows = Vec::with_capacity(3);
+        let mut rows = Vec::with_capacity(4);
         if let Some(checkpoint) = &self.internet {
             rows.push(StageFrame {
                 stage: RecoveryStage::Internet,
@@ -251,7 +262,22 @@ impl RecoveryPanel {
                     .last_error
                     .clone()
                     .unwrap_or_else(|| "failed".to_owned()),
+                StageStatus::Ok => "connected".to_owned(),
                 _ => "waiting".to_owned(),
+            },
+        });
+        rows.push(StageFrame {
+            stage: RecoveryStage::Multiplexer,
+            status: if self.master_ready {
+                StageStatus::Checking
+            } else {
+                StageStatus::Waiting
+            },
+            label: "Multiplexer".to_owned(),
+            detail: if self.master_ready {
+                "attaching…".to_owned()
+            } else {
+                "waiting".to_owned()
             },
         });
         RecoveryFrame {
@@ -261,6 +287,7 @@ impl RecoveryPanel {
             attempt: self.attempt,
             phase,
             last_error: self.last_error.clone(),
+            attaching: self.master_ready,
             rows,
         }
     }
@@ -345,6 +372,14 @@ mod tests {
             Duration::from_millis(500),
             Duration::from_millis(1_500),
         )
+    }
+
+    fn row(frame: &RecoveryFrame, stage: RecoveryStage) -> &StageFrame {
+        frame
+            .rows
+            .iter()
+            .find(|row| row.stage == stage)
+            .expect("stage row")
     }
 
     #[test]
@@ -442,7 +477,11 @@ mod tests {
                 .iter()
                 .map(|row| row.stage)
                 .collect::<Vec<_>>(),
-            vec![RecoveryStage::Internet, RecoveryStage::Session]
+            vec![
+                RecoveryStage::Internet,
+                RecoveryStage::Session,
+                RecoveryStage::Multiplexer,
+            ]
         );
     }
 
@@ -535,17 +574,84 @@ mod tests {
             frame.last_error.as_deref(),
             Some("Permission denied (publickey).")
         );
-        assert_eq!(frame.rows.last().unwrap().status, StageStatus::Down);
+        assert_eq!(
+            row(&frame, RecoveryStage::Session).status,
+            StageStatus::Down
+        );
 
         panel.session_starting();
         let connecting = panel.frame(Duration::from_secs(133), FooterPhase::Connecting);
         assert_eq!(
-            connecting.rows.last().unwrap().status,
+            row(&connecting, RecoveryStage::Session).status,
             StageStatus::Checking
         );
         assert_eq!(
             connecting.last_error.as_deref(),
             Some("Permission denied (publickey).")
+        );
+    }
+
+    #[test]
+    fn multiplexer_stage_is_always_present_and_last() {
+        for server in [None, Some(plan("dev-box"))] {
+            let panel = panel(server.as_ref());
+            let frame = panel.frame(Duration::ZERO, FooterPhase::Connecting);
+            let multiplexer = frame.rows.last().expect("multiplexer row");
+
+            assert_eq!(multiplexer.stage, RecoveryStage::Multiplexer);
+            assert_eq!(multiplexer.status, StageStatus::Waiting);
+            assert_eq!(multiplexer.detail, "waiting");
+        }
+    }
+
+    #[test]
+    fn confirmed_master_moves_the_panel_to_attaching() {
+        let mut panel = panel(None);
+
+        panel.note_master_ready();
+
+        let frame = panel.frame(Duration::ZERO, FooterPhase::Connecting);
+        assert!(frame.attaching);
+        assert_eq!(row(&frame, RecoveryStage::Session).status, StageStatus::Ok);
+        assert_eq!(row(&frame, RecoveryStage::Session).detail, "connected");
+        assert_eq!(
+            row(&frame, RecoveryStage::Multiplexer).status,
+            StageStatus::Checking
+        );
+        assert_eq!(row(&frame, RecoveryStage::Multiplexer).detail, "attaching…");
+    }
+
+    #[test]
+    fn beginning_a_wait_clears_the_attaching_phase() {
+        let mut panel = panel(None);
+        panel.note_master_ready();
+
+        panel.begin_wait();
+
+        let frame = panel.frame(Duration::ZERO, FooterPhase::Connecting);
+        assert!(!frame.attaching);
+        assert_eq!(
+            row(&frame, RecoveryStage::Multiplexer).status,
+            StageStatus::Waiting
+        );
+    }
+
+    #[test]
+    fn master_failure_clears_the_attaching_phase() {
+        let mut panel = panel(None);
+        panel.note_master_ready();
+
+        panel.note_ssh_error(Some("control socket closed".to_owned()));
+
+        let frame = panel.frame(Duration::ZERO, FooterPhase::Connecting);
+        assert!(!frame.attaching);
+        assert_eq!(
+            row(&frame, RecoveryStage::Session).status,
+            StageStatus::Down
+        );
+        assert_eq!(
+            row(&frame, RecoveryStage::Multiplexer).status,
+            StageStatus::Waiting
         );
     }
 

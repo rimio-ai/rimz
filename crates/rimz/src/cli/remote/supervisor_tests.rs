@@ -19,7 +19,12 @@ fn disconnected_link_event_channel_keeps_poll_cadence() {
 
 #[test]
 fn fatal_session_message_points_missing_remote_rimz_at_setup() {
-    let message = fatal_session_message(rimz::remote::REMOTE_RIMZ_MISSING_EXIT, "dev-box", "dev");
+    let message = fatal_session_message(
+        rimz::remote::REMOTE_RIMZ_MISSING_EXIT,
+        "dev-box",
+        "dev",
+        None,
+    );
 
     assert!(
         message.contains("rimz is not installed on dev-box"),
@@ -34,7 +39,7 @@ fn fatal_session_message_points_missing_remote_rimz_at_setup() {
 
 #[test]
 fn fatal_session_message_keeps_reconnect_tail_for_other_codes() {
-    let message = fatal_session_message(2, "dev-box", "dev");
+    let message = fatal_session_message(2, "dev-box", "dev", None);
 
     assert!(
         message.contains("ssh to dev-box exited with status 2"),
@@ -45,8 +50,24 @@ fn fatal_session_message_keeps_reconnect_tail_for_other_codes() {
 }
 
 #[test]
+fn fatal_session_message_includes_a_captured_attach_error() {
+    let message =
+        fatal_session_message(2, "dev-box", "dev", Some("SSH control connection dropped"));
+
+    assert!(
+        message.ends_with("— SSH control connection dropped"),
+        "{message}"
+    );
+}
+
+#[test]
 fn fatal_session_message_explains_minor_version_bypass() {
-    let message = fatal_session_message(rimz::remote::REMOTE_VERSION_SKEW_EXIT, "dev-box", "dev");
+    let message = fatal_session_message(
+        rimz::remote::REMOTE_VERSION_SKEW_EXIT,
+        "dev-box",
+        "dev",
+        None,
+    );
 
     assert!(message.contains("differ by a minor version"), "{message}");
     assert!(message.contains("rimz remote setup dev"), "{message}");
@@ -59,6 +80,7 @@ fn fatal_session_message_keeps_major_version_refusal_hard() {
         rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT,
         "dev-box",
         "dev",
+        None,
     );
 
     assert!(message.contains("differ by a major version"), "{message}");

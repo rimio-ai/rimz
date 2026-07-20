@@ -1,11 +1,16 @@
 //! Attach action selection, attach-command printing, and exec.
 
+use std::ffi::OsStr;
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
 use rimz::ids::{MuxName, WorkspaceId};
 
 use super::{AttachAction, AttachMode};
+
+// The local recovery panel parks its cursor on the Multiplexer symbol cell;
+// this in-band marker lands there immediately before the mux paints.
+const ATTACH_MARK: &[u8] = b"\x1b[32m\xe2\x9c\x93\x1b[39m";
 
 pub(super) fn run_attach_action(
     spec: &rimz::mux::CommandSpec,
@@ -131,6 +136,7 @@ pub(super) fn report_already_inside(
 pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
+    emit_attach_mark();
     let mut command = spec.to_command();
     let err = command.exec();
     Err::<(), _>(err).with_context(|| format!("execing `{}`", spec.display_line()))
@@ -138,6 +144,7 @@ pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
 
 #[cfg(not(unix))]
 pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
+    emit_attach_mark();
     let status = spec
         .to_command()
         .status()
@@ -149,6 +156,21 @@ pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn emit_attach_mark() {
+    let mark = std::env::var_os(rimz::remote::ATTACH_MARK_ENV);
+    if !attach_mark_enabled(mark.as_deref(), std::io::stdout().is_terminal()) {
+        return;
+    }
+    let mut stdout = std::io::stdout().lock();
+    if stdout.write_all(ATTACH_MARK).is_ok() {
+        let _ = stdout.flush();
+    }
+}
+
+fn attach_mark_enabled(value: Option<&OsStr>, stdout_is_terminal: bool) -> bool {
+    stdout_is_terminal && value.is_some_and(|value| !value.is_empty())
 }
 
 fn print_attach_command(spec: &rimz::mux::CommandSpec) {
@@ -193,5 +215,13 @@ mod tests {
         assert!(!should_report_already_inside(AttachMode::Auto, false));
         assert!(!should_report_already_inside(AttachMode::Print, true));
         assert!(!should_report_already_inside(AttachMode::Attach, true));
+    }
+
+    #[test]
+    fn attach_marker_requires_a_nonempty_request_and_a_tty() {
+        assert!(attach_mark_enabled(Some(OsStr::new("1")), true));
+        assert!(!attach_mark_enabled(Some(OsStr::new("")), true));
+        assert!(!attach_mark_enabled(None, true));
+        assert!(!attach_mark_enabled(Some(OsStr::new("1")), false));
     }
 }

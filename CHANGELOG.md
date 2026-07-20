@@ -42,6 +42,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 ### Fixed
 
 - Grok cards use completed-turn input as their context occupancy, so the fresh/cache/output detail matches the displayed total, and locally estimate dollars from model pricing when current Grok Build records omit native cost ticks.
+- Remote attach keeps the panel layout stable while a confirmed session opens, animates the Multiplexer stage, and turns its handoff arrow green as the remote session renders. SSH control-client failures now appear as a recovery cause instead of leaking raw diagnostics over the panel.
 - Zellij presence upgrades launch background writers, so pane discovery, selection sync, and animation continue after leaving the tab that was active during `rimz reload`. Existing affected sessions self-repair on their next reload.
 - Sidebar: a cleanly finished turn with a background shell still running shows `✓` immediately alongside `⋯ bg`.
 - Provider dashboard session stats count spend from the full machine-global work burst, including providers driven through cross-provider teams.

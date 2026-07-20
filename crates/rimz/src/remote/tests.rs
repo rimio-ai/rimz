@@ -296,6 +296,32 @@ fn ssh_error_summary_uses_the_last_open_ssh_line() {
 }
 
 #[test]
+fn attach_error_summary_filters_detach_noise_and_names_control_failures() {
+    assert_eq!(
+        attach_error_summary(
+            "mux_client_request_session: read from master failed: Broken pipe\nConnection to dev-box closed.\n"
+        ),
+        Some("SSH control connection dropped".to_owned())
+    );
+    assert_eq!(
+        attach_error_summary(
+            "Control socket connect(/tmp/rimz.sock): Connection refused\nConnection to dev-box closed.\n"
+        ),
+        Some("SSH control connection dropped".to_owned())
+    );
+    assert_eq!(
+        attach_error_summary(
+            "ssh: Permission denied (publickey).\nConnection to dev-box closed.\n"
+        ),
+        Some("Permission denied (publickey).".to_owned())
+    );
+    assert_eq!(
+        attach_error_summary("\nConnection to dev-box closed.\n"),
+        None
+    );
+}
+
+#[test]
 fn term_plan_selects_keep_copy_or_downgrade() {
     for term in ["alacritty", "xterm-kitty", "xterm-ghostty"] {
         assert!(term_needs_terminfo_copy(term), "{term}");
@@ -604,6 +630,22 @@ fn ssh_attach_plan_marks_retries_only() {
             .unwrap()
             .contains("export RIMZ_REMOTE_RECONNECT=1;"),
         "retry snippet marks an unattended reconnect"
+    );
+}
+
+#[test]
+fn ssh_attach_attempt_exports_the_render_marker_only_when_requested() {
+    let plan = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false);
+    let unmarked = plan.retry().plain();
+    let marked = plan.retry().with_mark(true).plain();
+
+    assert!(!unmarked.args.last().unwrap().contains(ATTACH_MARK_ENV));
+    assert!(
+        marked
+            .args
+            .last()
+            .unwrap()
+            .contains("export RIMZ_ATTACH_MARK=1;")
     );
 }
 

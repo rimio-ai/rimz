@@ -84,6 +84,7 @@ The exported environment is the whole channel from client to host:
 | `RIMZ_REMOTE_CLIENT_VERSION` | The local binary's semantic version, for the skew gate. |
 | `RIMZ_REMOTE_FORCE_VERSION` | Set by `--force-version`, downgrading the minor refusal to a warning. |
 | `RIMZ_REMOTE_RECONNECT` | Set on retry attempts only, selecting the room's unattended posture. |
+| `RIMZ_ATTACH_MARK` | Set when a colored connection panel owns the alternate screen, asking a compatible remote RimZ to replace the parked Multiplexer arrow with a green check immediately before mux exec. |
 | `RIMZ_CLIENT_SIZE` | Locally probed `<cols>x<rows>`, seeding the sidebar when the remote birth has no pty. |
 | `COLORTERM` | `truecolor` when the local terminal advertises 24-bit color, which SSH does not forward. |
 | `TERM` | Set by the `TermPlan` below. |
@@ -162,7 +163,11 @@ RimZ pins `ControlPersist=no`, `ConnectionAttempts=1`, and `ClearAllForwardings=
 
 **The interactive fallback** exists because a batch-mode master cannot answer a password, two-factor, or host-key prompt. On an *initial* connection, a master failure whose stderr does not match `transport_failure` releases the panel for exactly one foreground interactive attach. A failure there is fatal, so RimZ never loops a password prompt. Recovery stays batch-only and retries until Ctrl-C.
 
-**The handoff** keeps the alternate screen alive across the transition. When the master is confirmed, the panel draws its success frame and releases the terminal without leaving the alternate screen, so the attached multiplexer paints directly over that frame. A safety leave restores the main screen after the session ends. Ctrl-C, and the interactive fallback, instead return to intact pre-panel scrollback.
+**The handoff** keeps the alternate screen alive across the transition. When the master is confirmed, the still-owned panel turns its checkpoints green and animates the yellow Multiplexer `attaching…` row for the rest of the minimum-display window. The final frame freezes that row with an arrow and parks the cursor on its symbol cell before releasing the terminal without leaving the alternate screen, so the attached multiplexer paints directly over that frame. A safety leave restores the main screen after the session ends. Ctrl-C, and the interactive fallback, instead return to intact pre-panel scrollback.
+
+The local supervisor requests `RIMZ_ATTACH_MARK` only when that colored panel held the alternate screen. Immediately before the remote room execs the mux client, a compatible RimZ writes a green check at the parked cursor; pty ordering puts the check ahead of the mux's first paint. An older remote ignores the variable and leaves the arrow in place until the mux renders.
+
+An attach over a confirmed master pipes and drains SSH stderr instead of letting control-client diagnostics paint over the panel. The supervisor filters routine `Connection to … closed.` output, maps a broken control socket to `SSH control connection dropped`, carries that cause into recovery or a fatal message, and prints `rimz: detached from <host>` for a clean exit. The initial interactive fallback inherits stderr so authentication prompts, banners, and host-key warnings remain usable.
 
 **Classifying the end** of a session is pure:
 
@@ -208,17 +213,18 @@ These workers drive presentation and pacing without owning truth. The background
 
 An interactive terminal gets a full-screen panel for the initial connection and for each outage, after a `500ms` grace. Redirected output, `RIMZ_NO_PROGRESS`, and an agent-owned terminal fall back to plain stderr transition lines instead.
 
-The panel separates three checkpoints, each holding its last settled result across attempts, including regressions back to unreachable:
+The panel separates four pipeline stages. Network checkpoints hold their last settled result across attempts, including regressions back to unreachable, and the Multiplexer row remains present throughout so the centered layout stays stable at handoff:
 
 | Row | Checkpoint |
 | --- | --- |
 | Internet | `GET http://cp.cloudflare.com/generate_204` returning status `204`. |
 | Server | The effective SSH endpoint from `ssh -G`. Omitted for proxy targets, whose direct endpoint does not describe the real path. |
 | SSH session | The next SSH attempt. |
+| Multiplexer | Waiting until the master confirms, then attaching to the remote room. |
 
 `StageStatus::Suspect` is the one non-obvious status. A server that still answers TCP after at least two failed SSH attempts reads yellow with `answers TCP · SSH failing`, rather than a green row beside a failing connection. A TUN route reads `via TUN <interface> · TCP check skipped`, becoming `via TUN <interface> · SSH failing` under the same condition.
 
-Presentation details worth preserving: the panel centers one block with left-aligned rows and fixed label columns; initial-stage wording says `Connecting` while recovery says `Connection lost`; exactly one row animates, the Internet row while waiting for the network and the SSH session row otherwise; the active phase, countdown, and final OpenSSH stderr line fold into that row while the dim header carries the attempt, elapsed time, and `Ctrl-C stops`. Once shown, the panel stays for at least `1.5s`, so a fast reconnect does not flash. A connection that lands inside the grace never shows a panel at all.
+Presentation details worth preserving: the panel centers one block with left-aligned rows and fixed label columns; initial-stage wording says `Connecting` while recovery says `Connection lost`; exactly one row animates, the Internet row while waiting for the network, the SSH session row while establishing the master, and the Multiplexer row after confirmation; the active phase, countdown, and final OpenSSH stderr line fold into that row while the dim header carries the attempt, elapsed time, and `Ctrl-C stops`. Once shown, the panel stays for at least `1.5s`, so a fast reconnect uses the remaining hold window for the attaching animation instead of flashing. A connection that lands inside the grace never shows a panel, marker, or handoff frame.
 
 Ctrl-C is polled as a terminal event in raw mode: it kills a pending master, restores the terminal, and stops the supervisor cleanly.
 

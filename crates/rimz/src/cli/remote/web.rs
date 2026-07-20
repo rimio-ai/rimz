@@ -333,7 +333,7 @@ fn run_web_prep(
     {
         bail!(
             "{}",
-            super::supervisor::fatal_session_message(code, host, setup_hint)
+            super::supervisor::fatal_session_message(code, host, setup_hint, None)
         );
     }
     bail!("{label} failed with {status}");

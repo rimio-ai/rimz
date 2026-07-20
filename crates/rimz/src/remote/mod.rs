@@ -36,6 +36,9 @@ pub const SSH_BIN_ENV: &str = "RIMZ_SSH_BIN";
 /// loop, so the remote room start uses its unattended posture.
 pub const REMOTE_RECONNECT_ENV: &str = "RIMZ_REMOTE_RECONNECT";
 
+/// Requests the in-band green attach marker from a compatible remote RimZ.
+pub const ATTACH_MARK_ENV: &str = "RIMZ_ATTACH_MARK";
+
 /// Stable per-device identity carried to the remote attach so a replacement
 /// can retire an orphaned predecessor before entering the multiplexer.
 pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
@@ -343,6 +346,7 @@ enum ControlMode<'a> {
 pub struct SshAttachAttempt<'a> {
     plan: &'a SshAttachPlan,
     phase: AttemptPhase,
+    mark: bool,
 }
 
 impl SshAttachPlan {
@@ -358,6 +362,7 @@ impl SshAttachPlan {
         SshAttachAttempt {
             plan: self,
             phase: AttemptPhase::Initial,
+            mark: false,
         }
     }
 
@@ -365,6 +370,7 @@ impl SshAttachPlan {
         SshAttachAttempt {
             plan: self,
             phase: AttemptPhase::Retry,
+            mark: false,
         }
     }
 
@@ -404,6 +410,11 @@ impl SshAttachPlan {
 }
 
 impl SshAttachAttempt<'_> {
+    pub fn with_mark(mut self, mark: bool) -> Self {
+        self.mark = mark;
+        self
+    }
+
     pub fn plain(&self) -> CommandSpec {
         self.compile(ControlMode::Plain)
     }
@@ -435,7 +446,7 @@ impl SshAttachAttempt<'_> {
             .args(control_path.into_iter().flat_map(link::control_options))
             .args(["-t", "--"])
             .arg(options.target.ssh_destination().as_str())
-            .arg(guarded_snippet(options, self.phase))
+            .arg(guarded_snippet(options, self.phase, self.mark))
     }
 }
 
@@ -515,7 +526,7 @@ pub fn term_plan_from(
 /// The single remote shell command: repair the non-login-shell PATH, fail
 /// with the install fix when the host has no `rimz`, provision the carried
 /// terminal when needed, then exec into the room.
-fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase) -> String {
+fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase, mark: bool) -> String {
     let (verb, arg) = match &options.target.spec {
         RemoteSpec::Path(path) => ("start", quote_remote_path(path)),
         RemoteSpec::Session(name) => ("attach", sh_quote(name)),
@@ -541,6 +552,9 @@ fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase) -> String {
     }
     if matches!(phase, AttemptPhase::Retry) {
         env_setup.push_str("export RIMZ_REMOTE_RECONNECT=1; ");
+    }
+    if mark {
+        env_setup.push_str(&format!("export {ATTACH_MARK_ENV}=1; "));
     }
     if options.truecolor {
         env_setup.push_str("export COLORTERM=truecolor; ");
@@ -757,17 +771,37 @@ pub fn transport_failure(summary: &str) -> bool {
 
 /// Extract the useful tail of OpenSSH stderr for the recovery panel.
 pub fn ssh_error_summary(stderr: &str) -> Option<String> {
+    let line = stderr.lines().rev().find(|line| !line.trim().is_empty())?;
+    Some(summarize_ssh_line(line))
+}
+
+/// Extract the useful tail of a confirmed ControlMaster attach's stderr.
+pub fn attach_error_summary(stderr: &str) -> Option<String> {
+    let line = stderr.lines().rev().find(|line| {
+        let line = line.trim();
+        !line.is_empty() && !(line.starts_with("Connection to ") && line.ends_with(" closed."))
+    })?;
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("mux_client")
+        || lower.contains("read from master failed")
+        || lower.contains("control socket connect")
+    {
+        return Some("SSH control connection dropped".to_owned());
+    }
+    Some(summarize_ssh_line(line))
+}
+
+fn summarize_ssh_line(line: &str) -> String {
     use unicode_width::UnicodeWidthChar as _;
 
     const MAX_CELLS: usize = 80;
-    let line = stderr.lines().rev().find(|line| !line.trim().is_empty())?;
     let line = line.trim().strip_prefix("ssh: ").unwrap_or(line.trim());
     let width = line
         .chars()
         .map(|ch| ch.width().unwrap_or(0))
         .sum::<usize>();
     if width <= MAX_CELLS {
-        return Some(line.to_owned());
+        return line.to_owned();
     }
     let mut used = 0;
     let mut summary = line
@@ -782,7 +816,7 @@ pub fn ssh_error_summary(stderr: &str) -> Option<String> {
         })
         .collect::<String>();
     summary.push('…');
-    Some(summary)
+    summary
 }
 
 pub(crate) fn env_ms(key: &str) -> Option<Duration> {

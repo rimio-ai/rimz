@@ -137,7 +137,8 @@ pub(super) fn supervise_remote(
             plan.initial()
         } else {
             plan.retry()
-        };
+        }
+        .with_mark(held_alt && !rimz::tui::no_color());
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
         let outcome = run_ssh_session(
@@ -146,6 +147,7 @@ pub(super) fn supervise_remote(
             &events_rx,
             &mut session_link,
             dial_plan.as_ref(),
+            confirmed_master,
         );
         guard.restore();
         if std::mem::take(&mut held_alt) {
@@ -153,6 +155,10 @@ pub(super) fn supervise_remote(
         }
         let mut outcome = outcome?;
         outcome.established |= confirmed_master;
+        let summary = outcome
+            .stderr
+            .as_deref()
+            .and_then(rimz::remote::attach_error_summary);
         drop(probe);
         drop(ready_master.take());
         if outcome.established {
@@ -168,10 +174,18 @@ pub(super) fn supervise_remote(
             RetryCause::Zombie
         } else {
             match reconnect.settle(outcome.status.code(), outcome.established) {
-                Verdict::CleanExit => return Ok(()),
+                Verdict::CleanExit => {
+                    if outcome.stderr.is_some() {
+                        let _ = writeln!(std::io::stderr().lock(), "rimz: detached from {host}");
+                    }
+                    return Ok(());
+                }
                 Verdict::Fatal { code } => {
                     guard.reset_emulator();
-                    bail!("{}", fatal_session_message(code, host, setup_hint))
+                    bail!(
+                        "{}",
+                        fatal_session_message(code, host, setup_hint, summary.as_deref())
+                    )
                 }
                 Verdict::Retry => {
                     guard.reset_emulator();
@@ -189,10 +203,15 @@ pub(super) fn supervise_remote(
             )
         });
         if matches!(retry_cause, RetryCause::Dropped) {
+            outage.panel.note_ssh_error(summary.clone());
             if ui.is_plain() {
+                let detail = summary
+                    .as_deref()
+                    .map(|summary| format!(" — {summary}"))
+                    .unwrap_or_default();
                 let _ = writeln!(
                     std::io::stderr().lock(),
-                    "rimz: link to {host} lost — reconnecting in the background; Ctrl-C stops",
+                    "rimz: link to {host} lost{detail} — reconnecting in the background; Ctrl-C stops",
                 );
             }
             if let Some(action) = session_link.transport_lost() {
@@ -231,7 +250,12 @@ enum RetryCause {
     Dropped,
 }
 
-pub(super) fn fatal_session_message(code: i32, host: &str, setup_hint: &str) -> String {
+pub(super) fn fatal_session_message(
+    code: i32,
+    host: &str,
+    setup_hint: &str,
+    summary: Option<&str>,
+) -> String {
     match code {
         rimz::remote::REMOTE_RIMZ_MISSING_EXIT => format!(
             "rimz is not installed on {host}; install it over SSH with:\n    \
@@ -246,10 +270,16 @@ pub(super) fn fatal_session_message(code: i32, host: &str, setup_hint: &str) -> 
             "your rimz and {host}'s rimz differ by a major version; upgrade required — \
              `rimz remote setup {setup_hint}` upgrades the remote"
         ),
-        _ => format!(
-            "ssh to {host} exited with status {code}; not reconnecting \
-             (only a dropped link on an established session is retried)"
-        ),
+        _ => {
+            let message = format!(
+                "ssh to {host} exited with status {code}; not reconnecting \
+                 (only a dropped link on an established session is retried)"
+            );
+            match summary {
+                Some(summary) => format!("{message} — {summary}"),
+                None => message,
+            }
+        }
     }
 }
 
@@ -259,11 +289,22 @@ fn run_ssh_session(
     events: &mpsc::Receiver<LinkEvent>,
     link: &mut SessionLinkState,
     dial_plan: Option<&DialPlan>,
+    capture_stderr: bool,
 ) -> Result<SessionOutcome> {
-    let mut child = spec
-        .to_command()
+    let mut command = spec.to_command();
+    if capture_stderr {
+        command.stderr(Stdio::piped());
+    }
+    let mut child = command
         .spawn()
         .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)))?;
+    let stderr = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut output = String::new();
+            let _ = stderr.read_to_string(&mut output);
+            output
+        })
+    });
     let started = Instant::now();
     let mut update = link.begin_session();
     loop {
@@ -273,6 +314,7 @@ fn run_ssh_session(
                 status,
                 established,
                 killed_zombie: false,
+                stderr: finish_session_stderr(stderr),
             });
         }
         let elapsed = started.elapsed();
@@ -283,13 +325,20 @@ fn run_ssh_session(
         for action in &update.actions {
             if matches!(action, SessionLinkAction::VerifyZombie) {
                 if let Some(outcome) = verify_zombie(&mut child, dial_plan)? {
-                    return Ok(outcome);
+                    return Ok(SessionOutcome {
+                        stderr: finish_session_stderr(stderr),
+                        ..outcome
+                    });
                 }
             } else {
                 render_session_link_action(host, *action);
             }
         }
     }
+}
+
+fn finish_session_stderr(stderr: Option<std::thread::JoinHandle<String>>) -> Option<String> {
+    stderr.map(|reader| reader.join().unwrap_or_default())
 }
 
 fn verify_zombie(
@@ -311,6 +360,7 @@ fn verify_zombie(
                 status,
                 established: true,
                 killed_zombie: true,
+                stderr: None,
             }))
         }
         Err(kill_err) => match child.try_wait().context("polling raced ssh session")? {
@@ -318,6 +368,7 @@ fn verify_zombie(
                 status,
                 established: true,
                 killed_zombie: false,
+                stderr: None,
             })),
             None => Err(kill_err).context("killing zombie ssh session"),
         },
@@ -334,6 +385,7 @@ struct SessionOutcome {
     status: std::process::ExitStatus,
     established: bool,
     killed_zombie: bool,
+    stderr: Option<String>,
 }
 
 pub(super) fn resolve_dial_plan(destination: &str) -> Option<DialPlan> {
@@ -461,7 +513,7 @@ fn wait_for_master(
             plan,
             control_path,
             policy.master_deadline,
-            &outage.panel,
+            &mut outage.panel,
         )? {
             MasterTick::Pending(state) => master = state,
             MasterTick::Failed(summary, may_need_interactive) => {
@@ -879,7 +931,7 @@ impl MasterState {
         plan: &SshAttachPlan,
         control_path: &Path,
         deadline: Duration,
-        panel: &RecoveryPanel,
+        panel: &mut RecoveryPanel,
     ) -> Result<MasterTick> {
         match self {
             Self::Idle => Ok(MasterTick::Pending(Self::Idle)),
@@ -899,6 +951,7 @@ impl MasterState {
                         .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
                         .is_ok()
                     {
+                        panel.note_master_ready();
                         let release_at = panel.release_at(wait_elapsed);
                         if wait_elapsed >= release_at {
                             return Ok(MasterTick::Connected(attempt.into_guard()));

@@ -293,7 +293,17 @@ impl OutagePanel {
     }
 
     fn handoff(mut self, frame: &RecoveryFrame) -> io::Result<()> {
-        self.draw_rows(&success_rows(frame))?;
+        let rows = attaching_rows(frame, '→');
+        self.draw_rows(&rows)?;
+        if let Some(layout) = self.last_layout {
+            let row_offset = u16::try_from(rows.len().saturating_sub(1)).unwrap_or(u16::MAX);
+            let mut stdout = std::io::stdout().lock();
+            queue!(
+                stdout,
+                MoveTo(layout.x0, layout.first_y.saturating_add(row_offset))
+            )?;
+            stdout.flush()?;
+        }
         if let Some(guard) = self.guard.take() {
             guard.release_keep_screen()?;
         }
@@ -310,6 +320,9 @@ struct DisplayRow {
 
 fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
     let spinner = SPINNER_FRAMES[frame_index % SPINNER_FRAMES.len()];
+    if frame.attaching {
+        return attaching_rows(frame, spinner);
+    }
     let spinner_stage = match frame.phase {
         FooterPhase::WaitingForNetwork
             if frame
@@ -358,12 +371,13 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
     });
     rows.extend(frame.rows.iter().map(|row| {
         let spinner_target = row.stage == spinner_stage;
-        let session_waiting = frame.phase == FooterPhase::WaitingForNetwork
-            && row.stage == RecoveryStage::Session
-            && !spinner_target;
+        let waiting_stage = row.stage == RecoveryStage::Multiplexer
+            || (frame.phase == FooterPhase::WaitingForNetwork
+                && row.stage == RecoveryStage::Session
+                && !spinner_target);
         let (symbol, color) = if spinner_target {
             (spinner, Color::Yellow)
-        } else if session_waiting {
+        } else if waiting_stage {
             ('○', Color::DarkGrey)
         } else {
             match row.status {
@@ -398,14 +412,14 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
             text: format!("{symbol}  {:<12} {detail}", row.label),
             color,
             bold: false,
-            dim: session_waiting,
+            dim: waiting_stage,
         }
     }));
     rows
 }
 
-fn success_rows(frame: &RecoveryFrame) -> Vec<DisplayRow> {
-    let mut rows = Vec::with_capacity(frame.rows.len() + 4);
+fn attaching_rows(frame: &RecoveryFrame, symbol: char) -> Vec<DisplayRow> {
+    let mut rows = Vec::with_capacity(frame.rows.len() + 3);
     rows.push(DisplayRow {
         text: format!("⚡ Connected to {}", frame.host),
         color: Color::Green,
@@ -424,18 +438,28 @@ fn success_rows(frame: &RecoveryFrame) -> Vec<DisplayRow> {
         bold: false,
         dim: false,
     });
-    rows.extend(frame.rows.iter().map(|row| DisplayRow {
-        text: format!("✓  {:<12} {}", row.label, success_detail(row)),
-        color: Color::Green,
-        bold: false,
-        dim: false,
+    rows.extend(frame.rows.iter().map(|row| {
+        let attaching = row.stage == RecoveryStage::Multiplexer;
+        DisplayRow {
+            text: format!(
+                "{}  {:<12} {}",
+                if attaching { symbol } else { '✓' },
+                row.label,
+                if attaching {
+                    "attaching…".to_owned()
+                } else {
+                    success_detail(row)
+                }
+            ),
+            color: if attaching {
+                Color::Yellow
+            } else {
+                Color::Green
+            },
+            bold: false,
+            dim: false,
+        }
     }));
-    rows.push(DisplayRow {
-        text: format!("→  {:<12} loading…", "Multiplexer"),
-        color: Color::Yellow,
-        bold: false,
-        dim: false,
-    });
     rows
 }
 
@@ -579,6 +603,7 @@ mod tests {
             attempt: 7,
             phase: FooterPhase::NextAttemptIn(Duration::from_millis(11_100)),
             last_error: Some("Permission denied (publickey).".to_owned()),
+            attaching: false,
             rows: vec![
                 stage(
                     RecoveryStage::Internet,
@@ -598,6 +623,12 @@ mod tests {
                     "SSH session",
                     "Permission denied (publickey).",
                 ),
+                stage(
+                    RecoveryStage::Multiplexer,
+                    StageStatus::Waiting,
+                    "Multiplexer",
+                    "waiting",
+                ),
             ],
         };
 
@@ -614,7 +645,9 @@ mod tests {
             text[5],
             "⠹  SSH session  Permission denied (publickey). · retry in 12s"
         );
-        assert_eq!(rows.len(), 6);
+        assert_eq!(text[6], "○  Multiplexer  waiting");
+        assert!(rows[6].dim);
+        assert_eq!(rows.len(), 7);
     }
 
     #[test]
@@ -626,6 +659,7 @@ mod tests {
             attempt: 3,
             phase: FooterPhase::WaitingForNetwork,
             last_error: None,
+            attaching: false,
             rows: vec![
                 stage(
                     RecoveryStage::Internet,
@@ -639,6 +673,12 @@ mod tests {
                     "SSH session",
                     "failed",
                 ),
+                stage(
+                    RecoveryStage::Multiplexer,
+                    StageStatus::Waiting,
+                    "Multiplexer",
+                    "waiting",
+                ),
             ],
         };
         let waiting = display_rows(&frame, 0);
@@ -648,12 +688,15 @@ mod tests {
         );
         assert_eq!(waiting[4].text, "○  SSH session  waiting");
         assert!(waiting[4].dim);
+        assert_eq!(waiting[5].text, "○  Multiplexer  waiting");
+        assert!(waiting[5].dim);
 
         frame.phase = FooterPhase::Connecting;
         let connecting = display_rows(&frame, 0);
         assert_eq!(connecting[3].text, "○  Internet     cp.cloudflare.com");
         assert_eq!(connecting[4].text, "⠋  SSH session  reconnecting…");
         assert!(!connecting[4].dim);
+        assert_eq!(connecting[5].text, "○  Multiplexer  waiting");
     }
 
     #[test]
@@ -665,12 +708,21 @@ mod tests {
             attempt: 1,
             phase: FooterPhase::Connecting,
             last_error: None,
-            rows: vec![stage(
-                RecoveryStage::Session,
-                StageStatus::Checking,
-                "SSH session",
-                "starting…",
-            )],
+            attaching: false,
+            rows: vec![
+                stage(
+                    RecoveryStage::Session,
+                    StageStatus::Checking,
+                    "SSH session",
+                    "starting…",
+                ),
+                stage(
+                    RecoveryStage::Multiplexer,
+                    StageStatus::Waiting,
+                    "Multiplexer",
+                    "waiting",
+                ),
+            ],
         };
 
         let rows = display_rows(&frame, 0);
@@ -688,6 +740,7 @@ mod tests {
             attempt: 3,
             phase: FooterPhase::WaitingForNetwork,
             last_error: Some("timed out".to_owned()),
+            attaching: false,
             rows: vec![
                 stage(
                     RecoveryStage::Internet,
@@ -706,6 +759,12 @@ mod tests {
                     StageStatus::Checking,
                     "SSH session",
                     "starting…",
+                ),
+                stage(
+                    RecoveryStage::Multiplexer,
+                    StageStatus::Waiting,
+                    "Multiplexer",
+                    "waiting",
                 ),
             ],
         };
@@ -735,12 +794,21 @@ mod tests {
             attempt: 3,
             phase: FooterPhase::WaitingForNetwork,
             last_error: None,
-            rows: vec![stage(
-                RecoveryStage::Session,
-                StageStatus::Waiting,
-                "SSH session",
-                "waiting",
-            )],
+            attaching: false,
+            rows: vec![
+                stage(
+                    RecoveryStage::Session,
+                    StageStatus::Waiting,
+                    "SSH session",
+                    "waiting",
+                ),
+                stage(
+                    RecoveryStage::Multiplexer,
+                    StageStatus::Waiting,
+                    "Multiplexer",
+                    "waiting",
+                ),
+            ],
         };
 
         let rows = display_rows(&frame, 0);
@@ -750,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn success_rows_mark_every_checkpoint_connected() {
+    fn attaching_rows_animate_then_freeze_the_multiplexer_stage() {
         let frame = RecoveryFrame {
             connect_stage: ConnectStage::Initial,
             host: "dev-box".to_owned(),
@@ -758,6 +826,7 @@ mod tests {
             attempt: 1,
             phase: FooterPhase::Connecting,
             last_error: None,
+            attaching: true,
             rows: vec![
                 stage(
                     RecoveryStage::Internet,
@@ -777,10 +846,21 @@ mod tests {
                     "SSH session",
                     "starting…",
                 ),
+                stage(
+                    RecoveryStage::Multiplexer,
+                    StageStatus::Checking,
+                    "Multiplexer",
+                    "attaching…",
+                ),
             ],
         };
 
-        let rows = success_rows(&frame);
+        let animated = display_rows(&frame, 0);
+        assert_eq!(animated[0].text, "⚡ Connected to dev-box");
+        assert_eq!(animated[6].text, "⠋  Multiplexer  attaching…");
+        assert_eq!(spinner_count(&animated), 1);
+
+        let rows = attaching_rows(&frame, '→');
         let text = rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>();
 
         assert_eq!(text[0], "⚡ Connected to dev-box");
@@ -790,7 +870,7 @@ mod tests {
         assert_eq!(text[3], "✓  Internet     cp.cloudflare.com");
         assert_eq!(text[4], "✓  Server       dev-box:22");
         assert_eq!(text[5], "✓  SSH session  connected");
-        assert_eq!(text[6], "→  Multiplexer  loading…");
+        assert_eq!(text[6], "→  Multiplexer  attaching…");
         // Settled checkpoints read green; the one stage still running reads
         // yellow, so the eye lands on the row the wait belongs to.
         assert!(rows[3..6].iter().all(|row| row.color == Color::Green));
