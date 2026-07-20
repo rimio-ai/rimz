@@ -39,6 +39,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 
 ### Fixed
 
+- Zellij presence upgrades launch background writers, so pane discovery, selection sync, and animation continue after leaving the tab that was active during `rimz reload`. Existing affected sessions self-repair on their next reload.
 - Sidebar: a cleanly finished turn with a background shell still running shows `✓` immediately alongside `⋯ bg`.
 - Provider dashboard session stats count spend from the full machine-global work burst, including providers driven through cross-provider teams.
 - Remote: the connect panel stays visible through the attach handoff and reports it as still in flight; terminal state is restored after an SSH session and verified across reconnects; supervised SSH children stay in the foreground so password, two-factor, and host-key prompts reach you; the confirmed master socket survives a reconnect; listener reports no longer depend on link timing.

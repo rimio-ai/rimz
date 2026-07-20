@@ -181,7 +181,10 @@ pub(crate) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
             configuration.push_str(focus_key);
         }
     }
-    configuration.push_str(",plugin_build=");
+    // Pipe-launched identities are background plugins. Changing this marker
+    // forces one global re-convergence, repairing identities previously
+    // created through the tab-scoped action fallback.
+    configuration.push_str(",launch_scope=background,plugin_build=");
     configuration.push_str(presence_plugin_build());
     let config_hash = crate::build_id::of_bytes(configuration.as_bytes());
     configuration.push_str(",plugin_config=");
@@ -243,7 +246,6 @@ impl ZellijBackend {
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
         self.seed_presence_permissions(opts);
-        let url = format!("file:{}", opts.wasm.display());
         let configuration = presence_plugin_configuration(opts);
         if let Some(config) = presence_plugin_config_hash(&configuration) {
             let desired = PresenceDesired {
@@ -272,22 +274,6 @@ impl ZellijBackend {
                 session = %opts.session_name,
                 "desired presence-plugin config identity is unavailable",
             );
-        }
-        if opts.converge {
-            // Reload a *running* plugin in place onto the current wasm —
-            // `start-or-reload-plugin` converges a pipe-launched instance
-            // (verified on 0.44.3: one instance throughout). It needs a
-            // connected client; with none the server drops it silently (exit
-            // 0 regardless), and the pipe below still ensures a plugin is
-            // loaded — the upgrade then lands on the next attached reload.
-            self.zellij_action(&opts.session_name)
-                .args([
-                    "start-or-reload-plugin".to_owned(),
-                    url.clone(),
-                    "--configuration".to_owned(),
-                    configuration.clone(),
-                ])
-                .run()?;
         }
         match self.pipe_to_presence_plugin(opts, PRESENCE_BOOT_PIPE, "load") {
             Ok(()) => Ok(()),
@@ -492,21 +478,21 @@ impl ZellijBackend {
         pipe_name: &str,
         payload: &str,
     ) -> Result<()> {
-        // `zellij pipe --plugin` launches the plugin if absent — the one load
-        // verb that works on a clientless session (`start-or-reload-plugin`
-        // refuses without a connected client) — and routes a no-op message to
-        // it when running, so the call is idempotent per (url, configuration).
+        // `zellij action pipe --plugin` is the only load verb: it launches a
+        // missing identity as a background plugin, works without an attached
+        // client, and otherwise routes to the live instance. Skip-cache
+        // defeats Zellij's path-keyed compiled-module cache when owner flows
+        // replace the wasm bytes at the canonical artifact path.
         let url = format!("file:{}", opts.wasm.display());
         let configuration = presence_plugin_configuration(opts);
-        self.cmd()
+        self.zellij_action(&opts.session_name)
             .args([
-                "--session",
-                &opts.session_name,
                 "pipe",
                 "--plugin",
                 &url,
                 "--plugin-configuration",
                 &configuration,
+                "--skip-plugin-cache",
                 "--name",
                 pipe_name,
                 "--",

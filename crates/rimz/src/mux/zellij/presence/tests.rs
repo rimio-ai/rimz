@@ -255,8 +255,15 @@ fn share_web_session_pipes_share_payload_to_presence_plugin() {
 
     let log = shim_log(&temp);
     assert!(
-        log.contains("--session rimz-test pipe --plugin file:/tmp/rimz-presence-zellij.wasm"),
+        log.contains(
+            "--session rimz-test action pipe --plugin file:/tmp/rimz-presence-zellij.wasm"
+        ),
         "share should target the presence plugin by session and wasm URL:\n{log}",
+    );
+    assert_eq!(
+        log.matches("--skip-plugin-cache").count(),
+        2,
+        "every plugin-addressed load pipe should bypass the path-keyed module cache:\n{log}",
     );
     assert!(
         log.contains("--name rimz_presence_boot -- load"),
@@ -317,6 +324,13 @@ fn owner_launch_records_the_desired_writer_identity() {
 fn presence_convergence_retires_after_replacement_writer_is_proven() {
     let log = presence_convergence_log(Some(current_writer(2, u64::MAX)));
 
+    assert!(
+        log.contains(
+            "--session rimz-test action pipe --plugin file:/tmp/rimz-presence-zellij.wasm"
+        ) && log.contains("--skip-plugin-cache"),
+        "convergence should launch only through the cache-bypassing action pipe:\n{log}",
+    );
+    assert!(!log.contains("start-or-reload-plugin"));
     assert!(
         log.contains("--name rimz:dump_topology -- dump"),
         "convergence should request replacement topology:\n{log}",
@@ -470,12 +484,25 @@ fn presence_plugin_configuration_renders_expressible_fields() {
     for case in cases {
         let mut opts = presence_opts(case.session, case.rimz_bin);
         (case.mutate)(&mut opts);
-        let without_config = format!("{},plugin_build={}", case.expected, presence_plugin_build());
+        let without_config = format!(
+            "{},launch_scope=background,plugin_build={}",
+            case.expected,
+            presence_plugin_build()
+        );
         let expected = format!(
             "{without_config},plugin_config={}",
             crate::build_id::of_bytes(without_config.as_bytes())
         );
-        assert_eq!(presence_plugin_configuration(&opts), expected);
+        let configuration = presence_plugin_configuration(&opts);
+        assert_eq!(configuration, expected);
+        let launch_scope = configuration
+            .find("launch_scope=background")
+            .expect("background launch scope");
+        let plugin_build = configuration.find("plugin_build=").expect("plugin build");
+        assert!(
+            launch_scope < plugin_build,
+            "the lifecycle marker participates in the hashed identity before the build"
+        );
     }
 }
 

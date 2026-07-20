@@ -622,9 +622,8 @@ pub struct PresencePluginOptions {
     /// Stable absolute `rimz` pointer the plugin runs, insulating the poke from
     /// the host PATH without changing the plugin configuration per build.
     pub rimz_bin: PathBuf,
-    /// Also converge a *running* plugin onto the current wasm — the explicit
-    /// upgrade verb `rimz reload` passes; routine loads leave a healthy
-    /// running plugin untouched.
+    /// Also converge the session onto this identity — the explicit upgrade
+    /// verb `rimz reload` passes; routine loads leave a healthy writer alone.
     pub converge: bool,
     /// Seed the Zellij permission cache for this plugin so the sidebar poke and
     /// web sharing work without the one-time prompt; set from `[web] enabled`.

@@ -469,9 +469,11 @@ Every host fork runs from `/`, which decouples the session-lifetime plugin from 
 
 Loading is RimZ-owned and never the user's `config.kdl`, because a layout cannot load plugins.
 
-The load verb is the idempotent `zellij … pipe --plugin`, the one verb that works on a clientless session. Only owner flows use it: room birth, `rimz reload` upgrade and repair, and web sharing. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
+The load verb is the idempotent `zellij … action pipe --plugin --skip-plugin-cache`, the one verb that works on a clientless session and carries the cache-bypass bit in Zellij 0.44. Only owner flows use it: room birth, `rimz reload` upgrade and repair, and web sharing. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
 
-Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`workspaces/<id>/rimz`), runtime mouse options, the lazy-once embedded-wasm digest, and a hash of the configuration itself.
+Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`workspaces/<id>/rimz`), runtime mouse options, the background launch scope, the lazy-once embedded-wasm digest, and a hash of the configuration itself. Every desired identity is instantiated only through this pipe, so an identity-matching writer is background by construction and receives global pane and tab updates. Changing an identity launches another background writer; the host accepts its proof and retires the old identity.
+
+The canonical artifact path stays stable across upgrades, while Zellij's compiled-module cache is keyed by that path rather than the wasm bytes. Every plugin-addressed pipe therefore skips the cache; a live identity treats the flag as a no-op, and a missing identity compiles the bytes currently installed at the path. The `launch_scope=background` configuration key gives existing sessions a one-time identity bump, so the same convergence flow repairs writers created through the removed tab-scoped action fallback.
 
 RimZ seeds Zellij's `permissions.kdl` cache for its own embedded plugin so the first attach is not interrupted by a prompt, even in a clientless session:
 

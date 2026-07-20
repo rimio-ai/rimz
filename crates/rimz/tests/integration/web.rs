@@ -154,10 +154,14 @@ fn assert_zellij_open_json(fixture: &ZellijOpenFixture) {
     );
     assert!(
         log.contains(&format!(
-            "--session\t{}\tpipe\t--plugin",
+            "--session\t{}\taction\tpipe\t--plugin",
             fixture.workspace.session_name
         )),
         "web open should pipe the presence plugin: {log}"
+    );
+    assert!(
+        log.contains("\t--skip-plugin-cache\t"),
+        "web open should bypass the path-keyed plugin cache: {log}"
     );
     assert!(
         log.contains("\t--name\trimz:share_session\t--\tshare"),

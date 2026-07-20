@@ -153,6 +153,22 @@ fn focus_action_count(log: &Path) -> usize {
         .unwrap_or_default()
 }
 
+fn presence_plugin_panes(xdg: &Path, session: &str) -> Result<Vec<ListedPane>, String> {
+    list_panes(xdg, session).map(|snapshot| {
+        snapshot
+            .panes
+            .into_iter()
+            .filter(|pane| {
+                pane.is_plugin
+                    && pane
+                        .title
+                        .as_deref()
+                        .is_some_and(|title| title.contains("rimz-presence-zellij"))
+            })
+            .collect()
+    })
+}
+
 fn wait_for_focus_action(
     log: &Path,
     renderer_log: &Path,
@@ -280,7 +296,7 @@ fn wait_for_reload_baseline(log: &Path, prior_lines: usize, pane: &PaneId) -> Ve
         }
         assert!(
             Instant::now() < deadline,
-            "reloaded presence plugin established no client baseline; pokes: {lines:?}",
+            "converged presence plugin established no client baseline; pokes: {lines:?}",
         );
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -308,8 +324,8 @@ fn wait_for_switch_settled(log: &Path, prior_lines: usize) -> Vec<String> {
 /// headlessly, the seeded grant (the test's scoped cache, never the user's)
 /// covers it, the load-time configuration reaches the plugin, and its first
 /// poke runs the pinned `rimz sidebar wake` argv. Then the converge verb
-/// (`rimz reload`'s upgrade path) reloads it in place — the reset state pokes
-/// a fresh `alive` — proving the two verbs address one instance.
+/// (`rimz reload`'s upgrade path) addresses that same identity through the
+/// pipe and requests a fresh topology dump without duplicating the instance.
 #[test]
 fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
     require_zellij!();
@@ -427,10 +443,13 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
             .is_some_and(|hash| !hash.is_empty())
     );
 
-    // Converge — `rimz reload`'s upgrade verb — reloads the instance in
-    // place: its reset state pokes a fresh `alive` on the next application
-    // state. One instance throughout: were a second one launched, its
-    // separate keepalive cadence would double the poke stream.
+    let plugins_before = presence_plugin_panes(session.xdg.path(), &name)
+        .expect("presence plugin roster before converge");
+    assert_eq!(plugins_before.len(), 1);
+
+    // Production reaches this path only for an identity change. The same-
+    // identity case proves the pipe stays idempotent and the explicit dump,
+    // rather than an in-place reload, republishes topology.
     let before = lines.len();
     opts.converge = true;
     backend
@@ -441,8 +460,189 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         lines[before..]
             .iter()
             .any(|line| line.contains("--reason alive")),
-        "a converged (reloaded-in-place) plugin re-pokes alive; got {lines:?}",
+        "a converged plugin republishes topology; got {lines:?}",
     );
+    let plugins_after = presence_plugin_panes(session.xdg.path(), &name)
+        .expect("presence plugin roster after converge");
+    assert_eq!(plugins_after.len(), 1);
+    let current_writer = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &name)
+        .and_then(|cache| cache.writer)
+        .expect("writer after same-identity converge");
+    assert_eq!(current_writer, writer);
+}
+
+#[test]
+fn presence_identity_transition_keeps_global_background_updates() {
+    require_zellij!();
+    let Some(wasm) = presence_wasm_artifact() else {
+        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        return;
+    };
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|version| version >= zellij::MIN_ZELLIJ_VERSION) => {}
+        _ => {
+            eprintln!("zellij below the presence-plugin floor; skipping test");
+            return;
+        }
+    }
+
+    let xdg = scoped_runtime_dir();
+    seed_presence_permissions(xdg.path(), &wasm);
+    let cwd = TempDir::new().expect("session cwd tempdir");
+    let name = unique_session_name("presence-upgrade");
+    create_plain_background_session(xdg.path(), &name, cwd.path(), "600");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let mut client = AttachedClient::attach(xdg.path(), &name, 160, 45);
+    wait_for_attached_client(xdg.path(), &name);
+
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
+    let mut opts = rimz::mux::PresencePluginOptions {
+        session_name: name.clone(),
+        workspace_id: workspace_id.clone(),
+        wasm,
+        rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
+        converge: false,
+        seed_permissions: false,
+        focus_key: None,
+        focus_follows_mouse: false,
+        mouse_click_through: true,
+    };
+    backend
+        .ensure_presence_plugin(&opts)
+        .expect("load initial presence identity");
+    let runtime =
+        rimz::store::RuntimePaths::under(workspace_id, xdg.path()).expect("presence runtime paths");
+    let initial_cache = poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            Ok(rimz::sidebar::cache::read_pane_topology_cache(
+                &runtime, &name,
+            ))
+        },
+        |cache| {
+            cache
+                .as_ref()
+                .and_then(|cache| cache.writer.as_ref())
+                .is_some()
+        },
+        "initial presence writer",
+    )
+    .expect("initial topology cache");
+    let initial_writer = initial_cache.writer.expect("initial writer");
+
+    open_new_tab(xdg.path(), &name);
+    let snapshot = expect_list_panes(xdg.path(), &name);
+    let mut tab_work = snapshot
+        .panes
+        .iter()
+        .filter(|pane| pane.is_live_terminal())
+        .map(|pane| (pane.tab_position.unwrap_or(u64::MAX), pane.tab_id, pane.id))
+        .collect::<Vec<_>>();
+    tab_work.sort_unstable();
+    tab_work.dedup_by_key(|(position, _, _)| *position);
+    assert_eq!(tab_work.len(), 2, "expected one work pane in each tab");
+    let (_, _, first_work) = tab_work[0];
+    let (_, second_tab_id, second_work) = tab_work[1];
+    client.go_to_tab(1);
+    focus_attached_client_pane_until(xdg.path(), &name, first_work, "first tab", || {
+        client.go_to_tab(1);
+    });
+
+    // A configuration change is the same Zellij identity transition as a wasm
+    // upgrade. Converge while tab one owns the attached client's focus.
+    opts.focus_key = Some("Alt+p".to_owned());
+    opts.converge = true;
+    backend
+        .ensure_presence_plugin(&opts)
+        .expect("converge changed presence identity");
+    let changed_cache = poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            Ok(rimz::sidebar::cache::read_pane_topology_cache(
+                &runtime, &name,
+            ))
+        },
+        |cache| {
+            cache
+                .as_ref()
+                .and_then(|cache| cache.writer.as_ref())
+                .is_some_and(|writer| writer.config != initial_writer.config)
+        },
+        "changed presence writer",
+    )
+    .expect("changed topology cache");
+    let changed_writer = changed_cache.writer.expect("changed writer");
+    assert_ne!(changed_writer.config, initial_writer.config);
+    assert!(changed_writer.generation() > initial_writer.generation());
+
+    let plugins = poll_until(
+        SPAWN_TIMEOUT,
+        || presence_plugin_panes(xdg.path(), &name),
+        |plugins| plugins.len() == 1,
+        "one presence plugin after identity convergence",
+    );
+    assert!(
+        plugins[0].is_suppressed,
+        "the background writer must not occupy a visible tiled pane: {plugins:?}",
+    );
+    assert_eq!(u64::from(changed_writer.plugin_id), plugins[0].id);
+
+    // Move away from the tab active during convergence, then create and focus
+    // a pane. A tab-scoped writer starves here; a background writer publishes
+    // both the new topology and the attached client's selection.
+    client.go_to_tab(2);
+    focus_attached_client_pane_until(xdg.path(), &name, second_work, "second tab", || {
+        client.go_to_tab(2);
+    });
+    let before_ids = expect_list_panes(xdg.path(), &name)
+        .panes
+        .into_iter()
+        .filter(|pane| pane.is_live_terminal())
+        .map(|pane| pane.id)
+        .collect::<BTreeSet<_>>();
+    spawn_sleep_pane(xdg.path(), &name, cwd.path());
+    let fresh = expect_list_panes(xdg.path(), &name)
+        .panes
+        .into_iter()
+        .find(|pane| {
+            pane.is_live_terminal()
+                && pane.tab_id == second_tab_id
+                && !before_ids.contains(&pane.id)
+        })
+        .expect("fresh pane in the second tab");
+    let updated = poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            Ok(rimz::sidebar::cache::read_pane_topology_cache(
+                &runtime, &name,
+            ))
+        },
+        |cache| {
+            cache.as_ref().is_some_and(|cache| {
+                cache.writer.as_ref() == Some(&changed_writer)
+                    && cache
+                        .panes
+                        .iter()
+                        .any(|pane| !pane.is_plugin && pane.id == fresh.id)
+                    && cache.clients.as_ref().is_some_and(|clients| {
+                        clients
+                            .views
+                            .iter()
+                            .any(|view| view.pane_id.terminal_id() == Some(fresh.id))
+                    })
+            })
+        },
+        "background topology and focus update from the second tab",
+    )
+    .expect("updated topology cache");
+    assert_eq!(updated.writer.as_ref(), Some(&changed_writer));
 }
 
 #[test]
@@ -626,7 +826,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             focus_follows_mouse: false,
             mouse_click_through: true,
         })
-        .expect("reload presence plugin in place");
+        .expect("converge presence plugin");
     wait_for_reload_baseline(&poke_log, pokes_before_reload, &birth_work);
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);

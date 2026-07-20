@@ -272,16 +272,7 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
         );
     }
 
-    // The short-lived `start-or-reload-plugin` client can temporarily publish
-    // its fallback terminal size before Zellij restores the held PTY client.
-    // Assert the settled session state so load does not make this a race with
-    // that client disconnect.
-    let after_terminals = wait_for_stable_terminal_state_matching(
-        xdg.path(),
-        &name,
-        Duration::from_millis(500),
-        |state| state == &before_terminals,
-    );
+    let after_terminals = terminal_state(&expect_list_panes(xdg.path(), &name));
     assert_eq!(
         after_terminals, before_terminals,
         "bare reload must preserve terminal ids, tabs, and geometry",
