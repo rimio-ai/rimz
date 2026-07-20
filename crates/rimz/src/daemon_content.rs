@@ -1,6 +1,8 @@
 //! Daemon dashboard middle-column content. The mux births each content pane as
 //! a small RimZ-owned supervisor, and the supervisor resolves the child command
 //! from the current per-machine `[daemon]` config so edits take effect in place.
+//!
+//! Internals: `docs/internals/rimzd.md`.
 
 use std::io;
 use std::path::{Path, PathBuf};

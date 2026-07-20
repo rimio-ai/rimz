@@ -10,6 +10,8 @@
 //! marker to settle, and re-lists before planning the next placement. This
 //! makes every newly restored pane available as the next spec-order anchor and
 //! preserves one runtime column when several panes disappear together.
+//!
+//! Internals: `docs/internals/rimzd.md`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
