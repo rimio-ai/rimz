@@ -258,14 +258,7 @@ impl MuxBackend for TmuxBackend {
         let timeout = opts
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
-        let mut spec = self.cmd().args([
-            "list-clients",
-            "-F",
-            "#{client_name}\t#{pane_id}\t#{client_activity}\t#{client_flags}",
-        ]);
-        if let Some(session) = opts.session_name {
-            spec = spec.args(["-t".to_owned(), session]);
-        }
+        let spec = self.client_view_command(opts.session_name.as_deref());
         let output = spec.run_with_timeout(timeout)?;
         Ok(parse_client_view(&output.stdout))
     }
@@ -933,5 +926,14 @@ impl TmuxBackend {
                 .args(["list-panes", "-s", "-t", session, "-F", format]),
             None => self.cmd().args(["list-panes", "-a", "-F", format]),
         }
+    }
+
+    pub(super) fn client_view_command(&self, session_name: Option<&str>) -> CommandSpec {
+        let format = "#{client_name}|#{pane_id}|#{client_activity}|#{client_flags}";
+        let mut spec = self.cmd().args(["list-clients", "-F", format]);
+        if let Some(session) = session_name {
+            spec = spec.args(["-t", session]);
+        }
+        spec
     }
 }

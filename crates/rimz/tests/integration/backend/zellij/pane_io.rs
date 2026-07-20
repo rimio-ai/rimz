@@ -207,10 +207,27 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
         .expect("focus first pane");
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 2);
-    scoped_zellij(xdg.path())
+    let active_tab_pane = wait_for_pane_count(xdg.path(), &name, 3)
+        .into_iter()
+        .find(|pane| pane.pane_id != first.pane_id && pane.pane_id != target.pane_id)
+        .expect("new tab pane");
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    wait_for_focused_client_pane(&backend, &name, &active_tab_pane.pane_id);
+    let active_tab_pane_id = active_tab_pane
+        .pane_id
+        .creation_ordinal()
+        .expect("numeric new tab pane id")
+        .to_string();
+    let moved = scoped_zellij(xdg.path())
+        .env("ZELLIJ_PANE_ID", active_tab_pane_id)
         .args(["--session", &name, "action", "move-tab", "left"])
         .bounded_output()
         .expect("move focused tab left");
+    assert!(
+        moved.status.success(),
+        "move focused tab left failed: {}",
+        String::from_utf8_lossy(&moved.stderr),
+    );
     let target = poll_until(
         Duration::from_secs(10),
         || Ok(expect_list_panes(xdg.path(), &name).pane_refs()),
@@ -219,13 +236,12 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
                 .iter()
                 .any(|pane| pane.pane_id == target.pane_id && pane.view_id != target.view_id)
         },
-        "target tab moved away from its stable Zellij tab id",
+        "target tab moved away from its original Zellij tab position",
     )
     .into_iter()
     .find(|pane| pane.pane_id == target.pane_id)
     .expect("moved target pane");
     let first_tab = target.view_id.clone().expect("moved target tab id");
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
     let authoritative = backend
         .list_panes(PaneListOptions {
             session_name: Some(name.clone()),

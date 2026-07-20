@@ -64,7 +64,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     let mut human_clients = 0;
     let mut last_input_ms: Option<u64> = None;
     for line in String::from_utf8_lossy(stdout).lines() {
-        let mut cols = line.splitn(4, '\t');
+        let mut cols = line.splitn(4, '|');
         let (Some(raw_client), Some(raw_pane)) = (cols.next(), cols.next()) else {
             continue;
         };
@@ -193,10 +193,8 @@ mod tests {
 
     #[test]
     fn parse_client_view_reads_panes_activity_and_human_clients() {
-        let panes = parse_client_view(
-            b"client-a\t%10\t100\t\nclient-a\t%10\t100\t\nclient-b\t%11\t100\t\n",
-        )
-        .viewed_panes;
+        let panes = parse_client_view(b"client-a|%10|100|\nclient-a|%10|100|\nclient-b|%11|100|\n")
+            .viewed_panes;
         assert_eq!(
             panes,
             vec![
@@ -206,17 +204,17 @@ mod tests {
         );
 
         assert!(
-            parse_client_view(b"\nclient-a\tno-pane\t100\t\nclient-b\t@1\t100\t\n")
+            parse_client_view(b"\nclient-a|no-pane|100|\nclient-b|@1|100|\n")
                 .viewed_panes
                 .is_empty()
         );
 
         let view = parse_client_view(
-            b"client-a\t%10\t1700000000\t\n\
-              client-b\t%10\t1700000001\tattached\n\
-              client-c\t%11\t1699999999\tignore-size,no-output\n\
-              client-d\t%12\tbad\tattached\n\
-              client-e\tno-pane\t1700000002\tattached\n",
+            b"client-a|%10|1700000000|\n\
+              client-b|%10|1700000001|attached\n\
+              client-c|%11|1699999999|ignore-size,no-output\n\
+              client-d|%12|bad|attached\n\
+              client-e|no-pane|1700000002|attached\n",
         );
 
         assert_eq!(
@@ -246,7 +244,7 @@ mod tests {
             ]
         );
 
-        let view = parse_client_view(b"\nclient-a\tno-pane\t1700000000\t\n");
+        let view = parse_client_view(b"\nclient-a|no-pane|1700000000|\n");
 
         assert!(view.viewed_panes.is_empty());
         assert_eq!(view.presence.human_clients, 0);

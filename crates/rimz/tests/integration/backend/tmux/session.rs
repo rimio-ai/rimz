@@ -274,7 +274,7 @@ fn client_view_tracks_attached_client() {
         "a detached session focuses no client panes: {detached:?}",
     );
     // Attach a client; its focused pane is the session's lone pane.
-    let _client = AttachedTmuxClient::attach(&server.socket, "focus", 200, 50);
+    let _client = AttachedTmuxControlClient::attach(&server.socket, "focus");
     let deadline = Instant::now() + Duration::from_secs(10);
     let focused = loop {
         let panes = server

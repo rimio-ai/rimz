@@ -336,6 +336,21 @@ fn list_panes_scopes_session_without_server_wide_flag() {
 }
 
 #[test]
+fn client_view_uses_a_printable_field_separator() {
+    let spec = TmuxBackend::default().client_view_command(Some("rimz-room"));
+    assert_eq!(
+        verb_args(&spec),
+        [
+            "list-clients",
+            "-F",
+            "#{client_name}|#{pane_id}|#{client_activity}|#{client_flags}",
+            "-t",
+            "rimz-room",
+        ],
+    );
+}
+
+#[test]
 fn sidebar_geometry_probe_is_one_session_scoped_command() {
     let backend = TmuxBackend::default();
 

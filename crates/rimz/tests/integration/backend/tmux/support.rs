@@ -497,6 +497,37 @@ impl Drop for AttachedTmuxClient {
     }
 }
 
+/// A control-mode tmux client held open on piped stdin.
+///
+/// It carries no `ignore-size` flag, so tmux exposes its focused pane through
+/// the same `list-clients` row the backend projects for an attached terminal.
+pub(super) struct AttachedTmuxControlClient {
+    child: std::process::Child,
+}
+
+impl AttachedTmuxControlClient {
+    pub(super) fn attach(socket: &Path, session: &str) -> Self {
+        let child = Command::new("tmux")
+            .scrub_session_env()
+            .arg("-S")
+            .arg(socket)
+            .args(["-C", "attach", "-t", session])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn tmux control attach");
+        Self { child }
+    }
+}
+
+impl Drop for AttachedTmuxControlClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 /// `tmux show-environment -t <session> <name>` — the session-scoped env the
 /// identity pin is stamped into.
 pub(super) fn show_session_environment(server: &TmuxServer, session: &str, name: &str) -> String {

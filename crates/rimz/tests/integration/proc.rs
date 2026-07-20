@@ -43,9 +43,13 @@ mod linux {
 
     #[test]
     fn process_domain_distinguishes_inherited_and_sandboxed_children() {
-        let inherited = ChildGuard::new(spawn_sleep().expect("spawn inherited child"));
+        let inherited = ChildGuard::new(
+            domain_sleep_command()
+                .spawn()
+                .expect("spawn inherited child"),
+        );
         let sandbox = tempfile::tempdir().expect("sandbox tempdir");
-        let mut sandbox_command = sleep_command();
+        let mut sandbox_command = domain_sleep_command();
         sandbox_command
             .env("HOME", sandbox.path().join("home"))
             .env("XDG_STATE_HOME", sandbox.path().join("state"))
@@ -55,7 +59,7 @@ mod linux {
         let sandboxed = ChildGuard::new(sandbox_command.spawn().expect("spawn sandboxed child"));
 
         let alternate_zellij = tempfile::tempdir().expect("alternate zellij socket tempdir");
-        let mut alternate_zellij_command = sleep_command();
+        let mut alternate_zellij_command = domain_sleep_command();
         alternate_zellij_command.env("ZELLIJ_SOCKET_DIR", alternate_zellij.path());
         let alternate_zellij_child = ChildGuard::new(
             alternate_zellij_command
@@ -85,6 +89,25 @@ mod linux {
         assert!(!current.same_world_as_process(u32::MAX));
         assert!(!current.same_mux_endpoint_as_process(u32::MAX, rimz::MuxName::Tmux));
         assert!(!current.same_mux_endpoint_as_process(u32::MAX, rimz::MuxName::Zellij));
+    }
+
+    fn domain_sleep_command() -> Command {
+        let mut command = sleep_command();
+        command.env_clear();
+        for key in [
+            "HOME",
+            "XDG_STATE_HOME",
+            "XDG_RUNTIME_DIR",
+            "TMPDIR",
+            "ZELLIJ_SOCKET_DIR",
+            "TMUX",
+            "PATH",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        command
     }
 
     fn spawn_sleep() -> std::io::Result<Child> {

@@ -38,7 +38,11 @@ fn cursor_reloads_across_a_rotation() {
         },
     )
     .unwrap();
-    std::fs::remove_file(&paths.events_log).unwrap();
+    let rotation = event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
+    assert!(
+        rotation.is_rotated(),
+        "the test must exercise the production rename-and-recreate rotation"
+    );
     reseed_rollup_cache_for_rotation(&paths).unwrap();
     event_log::append(&paths.events_log, &lifecycle("codex", "b")).unwrap();
     event_log::append(&paths.events_log, &lifecycle("codex", "c")).unwrap();
