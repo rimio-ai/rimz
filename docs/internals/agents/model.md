@@ -97,9 +97,10 @@ running ───── turn ended ─────┬── clean ────�
  parked     : a clean end with background work in flight stays running, phase ⋯ bg; a prompt wake resumes the same turn boundary
  subagents  : subagent started establishes the child row in running;
               subagent stopped resolves it to success / failed, and that terminal verdict absorbs a reordered late start
- compacting : a transient head held over any status (the bracket below)
+ compacting : a transient head held over any status, and the one signal that
+              clears waiting outright (the bracket below)
  waiting    : awaiting input enters from any status; the next turn, tool,
-              or compaction close returns the row to running
+              compaction open, or compaction close returns the row to running
  ended      : session end or reap stamps the durable row; runtime hides it, audit retains it for explicit resume
 ```
 
@@ -117,7 +118,7 @@ The edges, precisely:
 | `subagent_started` | *(none)* → `running` | establishes the child row, keyed by the child's own id; a terminal `success` / `failed` child holds its verdict when a reordered start arrives late |
 | `subagent_stopped` | `running` → `success` / `failed` | the child's terminal verdict, kept through the parent's turn |
 | `tool_used` (mutating) | resting or *(none)* → `running`, reconciled; `waiting` → `running` | completed work proves a turn; attention rows hold; a keyed ask clears only for a tool with the same native key, while either key being absent preserves the any-completion fallback; the first file-editing tool moves the phase to `acting` |
-| `compacting` | status and phase held | stamps the [compaction head](#the-compaction-bracket); a waiting row stays waiting |
+| `compacting` | status and phase held, except `waiting` → `running`, reconciled | stamps the [compaction head](#the-compaction-bracket); compaction proves the native prompt released the pane, so it clears a waiting row and the ask behind it |
 | `compaction_ended` | auto → `running` (phase carried) · manual → `idle` · trigger unknown → held · any close on `waiting` → `running` | closes and counts an open [bracket](#the-compaction-bracket) |
 | `ended` | held, row stamped ended | the reducer records `ended_at`; reaching `step` preserves the prior lifecycle state as an ignored no-op |
 | `lost` | held | Legacy `rimz.agent-lost` marker retained for log replay compatibility, reaching `step` as an ignored no-op |
@@ -152,7 +153,7 @@ A quiet `parked` row settles to `success` through the stall rung, while silent `
 
 ### The compaction bracket
 
-Compaction is a transient head over the status. The opening signal (`Compacting`) stamps `compacting_since` and holds the prior status and phase, so the sidebar pulses the compaction head over whatever the agent was doing. The session's next lifecycle signal closes the bracket: `step` emits the close as a transition fact ([`Transition::compaction_closed`](../../../crates/rimz/src/agents/lifecycle.rs)), and the rollup increments the durable `compaction_count` from it exactly once per bracket. The card surfaces the count as `↻ N` on the context line.
+Compaction is a transient head over the status. The opening signal (`Compacting`) stamps `compacting_since` and holds the prior status and phase, so the sidebar pulses the compaction head over whatever the agent was doing. A `waiting` row is the one exception: a compaction runs only once the native prompt has released the pane, so the open is proof the ask resolved and the row clears to `running` — the reconciled edge that recovers a prompt dismissed with `esc`, which reaches RimZ through no hook of its own. Without it a stale `?` outranks the head at the [lead cell](../../interface/sidebar.md#reading-the-glyphs), where a human-blocked glyph always wins, and the card paints an ask the agent no longer holds. The session's next lifecycle signal closes the bracket: `step` emits the close as a transition fact ([`Transition::compaction_closed`](../../../crates/rimz/src/agents/lifecycle.rs)), and the rollup increments the durable `compaction_count` from it exactly once per bracket. The card surfaces the count as `↻ N` on the context line.
 
 `CompactionEnded` is the explicit close, and its trigger decides where the agent lands: a known **automatic** trigger returns to `running` with the interrupted phase carried (automatic compaction happens mid-turn); a known **manual** trigger rests to `idle` (`/compact` runs between turns); an **absent** trigger holds the prior status and phase. A close that rests the agent advances `turn_started_at`, retiring the prior turn's subagents the same as a fresh prompt or `/clear`; an automatic mid-turn close resumes the turn and holds the boundary. Redundant close signals are idempotent, since an absent bracket closes nothing. The projection also expires the head past a short display window, so a crash mid-compact can never pulse it forever.
 

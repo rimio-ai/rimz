@@ -437,6 +437,57 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
     );
 }
 
+/// A dismissed ask reaches RimZ through no hook of its own, so the row keeps
+/// painting `?` until some later signal disproves it. `PreCompact` is that
+/// proof — compaction runs only once the native prompt has released the pane —
+/// so it clears the waiting row and lets the compacting head paint. Every other
+/// prior status still rides underneath the head untouched.
+#[test]
+fn compaction_clears_a_waiting_row_and_preserves_every_other_status() {
+    let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
+    let cleared = assert_next(
+        "compaction after a dismissed ask",
+        Some(waiting),
+        LifecycleSignal::Compacting,
+        state(AgentStatus::Running, TurnPhase::Reasoning, true),
+    );
+    assert_eq!(
+        (cleared.kind, cleared.waiting_cleared),
+        (
+            TransitionKind::Reconciled {
+                from: AgentStatus::Waiting,
+                reason: "compaction began while an ask was open",
+            },
+            true,
+        )
+    );
+
+    // The manual `/compact` that follows rests the row to idle, the way it does
+    // from any other running state.
+    assert_next(
+        "manual close after the cleared wait",
+        Some(cleared.next),
+        LifecycleSignal::CompactionEnded { auto: Some(false) },
+        state(AgentStatus::Idle, TurnPhase::Idle, false),
+    );
+
+    for (label, status, phase) in [
+        ("running", AgentStatus::Running, TurnPhase::Acting),
+        ("idle", AgentStatus::Idle, TurnPhase::Idle),
+        ("success", AgentStatus::Success, TurnPhase::Idle),
+        ("failed", AgentStatus::Failed, TurnPhase::Idle),
+    ] {
+        let transition = assert_next(
+            label,
+            Some(state(status, phase, false)),
+            LifecycleSignal::Compacting,
+            state(status, phase, true),
+        );
+        assert_eq!(transition.kind, TransitionKind::Normal, "{label}");
+        assert!(!transition.waiting_cleared, "{label}");
+    }
+}
+
 #[test]
 fn all_state_signal_pairs_preserve_machine_invariants() {
     let statuses = [

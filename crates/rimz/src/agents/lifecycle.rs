@@ -145,7 +145,10 @@ pub enum LifecycleSignal {
         native_key: Option<String>,
     },
     /// The agent began compacting its context window (Claude `PreCompact`,
-    /// Codex `PreCompact`). A transient head, not a status change.
+    /// Codex `PreCompact`). A transient head over the status it interrupts. It
+    /// resolves one status it would otherwise carry: compaction runs only after
+    /// the native prompt releases the pane, so it clears a waiting row and the
+    /// ask behind it.
     Compacting,
     /// Context compaction finished or was observed to have finished
     /// (Claude/Codex `PostCompact`, Claude/Codex `SessionStart` with
@@ -459,8 +462,21 @@ fn map_status(
                 )
             }
         }
-        // Status preserved; only the head is stamped.
-        LifecycleSignal::Compacting => prior_status.unwrap_or(AgentStatus::Idle),
+        // Status preserved; only the head is stamped. Waiting is the one status
+        // compaction resolves rather than preserves: a compaction runs only once
+        // the native prompt has released the pane, so the signal is proof the ask
+        // the row was blocked on is gone — including the dismissal (`esc`) that
+        // reaches RimZ through no hook of its own.
+        LifecycleSignal::Compacting => match prior_status {
+            Some(AgentStatus::Waiting) => {
+                *kind = TransitionKind::Reconciled {
+                    from: AgentStatus::Waiting,
+                    reason: "compaction began while an ask was open",
+                };
+                AgentStatus::Running
+            }
+            other => other.unwrap_or(AgentStatus::Idle),
+        },
         LifecycleSignal::CompactionEnded { auto: Some(true) } => {
             reconcile_activity(prior_status, "auto-compaction resumed a turn", kind)
         }
