@@ -247,7 +247,7 @@ jq -r '[.kind, .agent_id, .context.session_name] | @tsv' agent_context/ctx.*.jso
 jq . agent_context/ctx.<digest>.json                                                # the full record
 ```
 
-The store's own view without the sidecar fold is the published checkpoint plus log tail ([store.md](./store.md#runtime-projection)). Comparing it against the snapshot attributes a wrong figure to the rollup, the sidecar, or the fold. The renderer-side derivations a card dispute usually hinges on live on the view model: the gauge-source preference is [`AgentCard::context_gauge_percent`](../../crates/rimz/src/store/snapshot/row.rs) and the card-shape predicates sit in [`agent_card/mod.rs`](../../crates/rimz/src/sidebar_pane/render/sections/agent_card/mod.rs).
+The store's own view without the sidecar fold is the published checkpoint plus log tail ([store.md](./store.md#the-read-path)). Comparing it against the snapshot attributes a wrong figure to the rollup, the sidecar, or the fold. The renderer-side derivations a card dispute usually hinges on live on the view model: the gauge-source preference is [`AgentCard::context_gauge_percent`](../../crates/rimz/src/store/snapshot/row.rs) and the card-shape predicates sit in [`agent_card/mod.rs`](../../crates/rimz/src/sidebar_pane/render/sections/agent_card/mod.rs).
 
 ## Off-box error reporting
 

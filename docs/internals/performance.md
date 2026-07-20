@@ -1,6 +1,6 @@
 # Performance
 
-> The performance model that sits over the mechanisms. This doc says where the milliseconds go, what a whole fleet costs RimZ, which bounds hold each cost down, and the rules the next change follows. The mechanisms live elsewhere: sidebar data flow and cadences in [state.md](./sidebar/state.md), presence and ranking in [sidebar.md](./sidebar/sidebar.md), the durability contract in [store.md](./store.md#durable-state), the backend pane roster in [multiplexers.md](./multiplexers.md). To measure a running fleet, use [profiling.md](./profiling.md); to read what RimZ recorded about its own faults, [diagnostics.md](./diagnostics.md).
+> The performance model that sits over the mechanisms. This doc says where the milliseconds go, what a whole fleet costs RimZ, which bounds hold each cost down, and the rules the next change follows. The mechanisms live elsewhere: sidebar data flow and cadences in [state.md](./sidebar/state.md), presence and ranking in [sidebar.md](./sidebar/sidebar.md), the durability contract in [store.md](./store.md#write-classes), the backend pane roster in [multiplexers.md](./multiplexers.md). To measure a running fleet, use [profiling.md](./profiling.md); to read what RimZ recorded about its own faults, [diagnostics.md](./diagnostics.md).
 
 ## The workload
 
@@ -256,7 +256,7 @@ Every display figure is display-only by invariant ([DESIGN.md](../../DESIGN.md#t
 
 ### The zero-fsync write path
 
-The critical section covers durable truth only, and the flock hold drops to microseconds. The off-lock tail issues a group fdatasync debounced to at most 1/s, so one writer per interval makes the whole fleet's appends durable. Length-plus-CRC32 framing makes a lost suffix deterministic corruption that the next write tail self-heals. The full contract, including the CI grep that funnels every fsync through `store/atomic.rs`, lives in [store.md](./store.md#durable-state).
+The critical section covers durable truth only, and the flock hold drops to microseconds. The off-lock tail issues a group fdatasync debounced to at most 1/s, so one writer per interval makes the whole fleet's appends durable. Length-plus-CRC32 framing makes a lost suffix deterministic corruption that the next write tail self-heals. The full contract, including the CI grep that funnels every fsync through `store/atomic.rs`, lives in [store.md](./store.md#write-classes).
 
 ### Keep helper processes cheap
 

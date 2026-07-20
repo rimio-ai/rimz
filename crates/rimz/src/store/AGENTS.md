@@ -1,6 +1,6 @@
 # Store
 
-Local contract for `crates/rimz/src/store/` — durable workspace state. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. The durability contract — on-disk shape and write classes — lives in [docs/internals/store.md](../../../../docs/internals/store.md).
+Local contract for `crates/rimz/src/store/` — durable workspace state. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. [docs/internals/store.md](../../../../docs/internals/store.md) explains the subsystem — on-disk shape, event log, write and read paths, write classes — and is the place to send a reader; this file states the rules a change here must hold.
 
 ## Write path
 
