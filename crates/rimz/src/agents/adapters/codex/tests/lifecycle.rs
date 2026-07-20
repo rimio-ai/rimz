@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::SessionOrigin;
+use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
 
 #[test]
 fn observe_lifecycle_maps_each_event_to_its_signal() {
@@ -120,25 +121,16 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
         ),
     ];
     for (event, payload, expected) in cases {
-        let signal = CodexAdapter
-            .decode_hook(event, payload)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .map(|obs| obs.signal);
+        let signal = hook_observation(&CodexAdapter, event, payload).map(|obs| obs.signal);
         assert_eq!(&signal, expected, "{event} {payload}");
     }
 
     // A SessionStart carries the session as the agent identity and no task.
-    let session = CodexAdapter
-        .decode_hook(
-            "SessionStart",
-            &json!({"session_id":"sess-1","source":"startup"}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let session = hook_lifecycle(
+        &CodexAdapter,
+        "SessionStart",
+        &json!({"session_id":"sess-1","source":"startup"}),
+    );
     assert_eq!(session.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(session.task, None);
 }
@@ -164,12 +156,7 @@ fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
         "last_assistant_message": "Codex says:"
     });
 
-    let observation = CodexAdapter
-        .decode_hook("Stop", &payload)
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("plan Stop observation");
+    let observation = hook_lifecycle(&CodexAdapter, "Stop", &payload);
     assert_eq!(
         observation.signal,
         LifecycleSignal::AwaitingInput {
@@ -179,9 +166,7 @@ fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
             native_key: None,
         }
     );
-    let questions = CodexAdapter
-        .decode_hook("Stop", &payload)
-        .expect("test hook decodes")
+    let questions = hook_output(&CodexAdapter, "Stop", &payload)
         .questions()
         .to_vec();
     assert_eq!(
@@ -204,19 +189,15 @@ fn messageless_stop_keeps_raw_turn_error_empty() {
     )
     .unwrap();
 
-    let observation = CodexAdapter
-        .decode_hook(
-            "Stop",
-            &json!({
-                "session_id": "sess-messageless",
-                "turn_id": "turn-messageless",
-                "transcript_path": path,
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("messageless Stop observation");
+    let observation = hook_lifecycle(
+        &CodexAdapter,
+        "Stop",
+        &json!({
+            "session_id": "sess-messageless",
+            "turn_id": "turn-messageless",
+            "transcript_path": path,
+        }),
+    );
 
     assert_eq!(
         observation.signal,
@@ -229,32 +210,24 @@ fn messageless_stop_keeps_raw_turn_error_empty() {
 
 #[test]
 fn root_and_child_lifecycle_events_keep_identity_boundaries() {
-    let prompt = CodexAdapter
-        .decode_hook(
-            "UserPromptSubmit",
-            &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let prompt = hook_lifecycle(
+        &CodexAdapter,
+        "UserPromptSubmit",
+        &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
+    );
     assert_eq!(prompt.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.task.as_deref(), Some("fix auth flow"));
 
-    let start = CodexAdapter
-        .decode_hook(
-            "SubagentStart",
-            &json!({
-                "session_id": "sess-parent",
-                "agent_id": "child-thread-1",
-                "agent_type": "review",
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let start = hook_lifecycle(
+        &CodexAdapter,
+        "SubagentStart",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-thread-1",
+            "agent_type": "review",
+        }),
+    );
     assert_eq!(start.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(start.signal, LifecycleSignal::SubagentStarted);
     assert_eq!(start.agent_name.as_deref(), Some("review"));
@@ -262,19 +235,15 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     assert_eq!(start.launch.role.as_deref(), Some("review"));
     assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
 
-    let stop = CodexAdapter
-        .decode_hook(
-            "SubagentStop",
-            &json!({
-                "session_id": "sess-parent",
-                "agent_id": "child-thread-1",
-                "agent_type": "review",
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let stop = hook_lifecycle(
+        &CodexAdapter,
+        "SubagentStop",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-thread-1",
+            "agent_type": "review",
+        }),
+    );
     assert_eq!(stop.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(
         stop.signal,
@@ -283,20 +252,16 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     assert_eq!(stop.task.as_deref(), Some("review"));
     assert_eq!(stop.parent_agent_id.as_deref(), Some("sess-parent"));
 
-    let permission = CodexAdapter
-        .decode_hook(
-            "PermissionRequest",
-            &json!({
-                "session_id": "sess-parent",
-                "agent_id": "child-thread-1",
-                "agent_type": "review",
-                "tool_name": "shell",
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let permission = hook_lifecycle(
+        &CodexAdapter,
+        "PermissionRequest",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-thread-1",
+            "agent_type": "review",
+            "tool_name": "shell",
+        }),
+    );
     assert_eq!(permission.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(
         permission.signal,
@@ -310,20 +275,16 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     assert_eq!(permission.task.as_deref(), Some("review"));
     assert_eq!(permission.parent_agent_id.as_deref(), Some("sess-parent"));
 
-    let question = CodexAdapter
-        .decode_hook(
-            "PreToolUse",
-            &json!({
-                "session_id": "sess-parent",
-                "agent_id": "child-thread-1",
-                "agent_type": "review",
-                "tool_name": "request_user_input",
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let question = hook_lifecycle(
+        &CodexAdapter,
+        "PreToolUse",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-thread-1",
+            "agent_type": "review",
+            "tool_name": "request_user_input",
+        }),
+    );
     assert_eq!(question.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(
         question.signal,
@@ -384,11 +345,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
             }),
         ),
     ] {
-        let child = CodexAdapter
-            .decode_hook(event, &payload)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
+        let child = hook_observation(&CodexAdapter, event, &payload)
             .unwrap_or_else(|| panic!("{event} should update the child"));
         assert_eq!(child.agent_id.as_deref(), Some("child-thread-1"), "{event}");
         assert_eq!(
@@ -399,15 +356,11 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         assert_eq!(child.task.as_deref(), Some("review"), "{event}");
     }
 
-    let root = CodexAdapter
-        .decode_hook(
-            "PostToolUse",
-            &json!({ "session_id": "sess-parent", "tool_name": "shell" }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let root = hook_lifecycle(
+        &CodexAdapter,
+        "PostToolUse",
+        &json!({ "session_id": "sess-parent", "tool_name": "shell" }),
+    );
     assert_eq!(root.agent_id.as_deref(), Some("sess-parent"));
     assert_eq!(root.parent_agent_id, None);
 }
@@ -447,20 +400,16 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
     .unwrap();
 
     let start = with_codex_sessions_root(dir.path(), || {
-        CodexAdapter
-            .decode_hook(
-                "SubagentStart",
-                &json!({
-                    "session_id": "sess-parent",
-                    "agent_id": "child-thread-1",
-                    "agent_type": "default",
-                    "transcript_path": parent_path,
-                }),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
+        hook_lifecycle(
+            &CodexAdapter,
+            "SubagentStart",
+            &json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-thread-1",
+                "agent_type": "default",
+                "transcript_path": parent_path,
+            }),
+        )
     });
     assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
     assert_eq!(start.agent_name.as_deref(), Some("Atlas"));
@@ -475,21 +424,17 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
     assert_eq!(start.usage.output_tokens, Some(21));
     assert_eq!(start.transcript_path.as_deref(), child_path.to_str());
 
-    let stop = CodexAdapter
-        .decode_hook(
-            "SubagentStop",
-            &json!({
-                "session_id": "sess-parent",
-                "agent_id": "child-thread-1",
-                "agent_type": "default",
-                "transcript_path": parent_path,
-                "agent_transcript_path": child_path,
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let stop = hook_lifecycle(
+        &CodexAdapter,
+        "SubagentStop",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-thread-1",
+            "agent_type": "default",
+            "transcript_path": parent_path,
+            "agent_transcript_path": child_path,
+        }),
+    );
     assert_eq!(
         stop.signal,
         LifecycleSignal::SubagentStopped { errored: true }
@@ -521,34 +466,21 @@ fn root_identity_events_stamp_codex_session_origin() {
     );
 
     with_codex_sessions_root(dir.path(), || {
-        let registered = CodexAdapter
-            .decode_hook(
-                "SessionStart",
-                &json!({"session_id":"fresh","source":"startup"}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap();
+        let registered = hook_lifecycle(
+            &CodexAdapter,
+            "SessionStart",
+            &json!({"session_id":"fresh","source":"startup"}),
+        );
         assert_eq!(registered.origin, Some(SessionOrigin::Fresh));
 
-        let turn_started = CodexAdapter
-            .decode_hook(
-                "UserPromptSubmit",
-                &json!({"session_id":"fork","prompt":"continue"}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap();
+        let turn_started = hook_lifecycle(
+            &CodexAdapter,
+            "UserPromptSubmit",
+            &json!({"session_id":"fork","prompt":"continue"}),
+        );
         assert_eq!(turn_started.origin, Some(SessionOrigin::Forked));
 
-        let stop = CodexAdapter
-            .decode_hook("Stop", &json!({"session_id":"fresh"}))
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap();
+        let stop = hook_lifecycle(&CodexAdapter, "Stop", &json!({"session_id":"fresh"}));
         assert_eq!(stop.origin, None);
     });
 }
@@ -565,15 +497,11 @@ fn root_lifecycle_effort_falls_back_to_rollout_turn_context() {
     .unwrap();
 
     let turn_started = with_codex_sessions_root(dir.path(), || {
-        CodexAdapter
-            .decode_hook(
-                "UserPromptSubmit",
-                &json!({"session_id":"sess-live","prompt":"continue"}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
+        hook_lifecycle(
+            &CodexAdapter,
+            "UserPromptSubmit",
+            &json!({"session_id":"sess-live","prompt":"continue"}),
+        )
     });
 
     assert_eq!(turn_started.launch.model.as_deref(), Some("gpt-5"));
@@ -593,19 +521,15 @@ model_reasoning_effort = "xhigh"
     .unwrap();
 
     let start = with_codex_config_path(&path, || {
-        CodexAdapter
-            .decode_hook(
-                "SubagentStart",
-                &json!({
-                    "session_id": "sess-parent",
-                    "agent_id": "child-thread-1",
-                    "agent_type": "review",
-                }),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
+        hook_lifecycle(
+            &CodexAdapter,
+            "SubagentStart",
+            &json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-thread-1",
+                "agent_type": "review",
+            }),
+        )
     });
 
     assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
@@ -630,9 +554,7 @@ fn expiry_predicates_match_observed_root_signals() {
         ("PreCompact", json!({ "session_id": "sess-1" })),
         ("PostCompact", json!({ "session_id": "sess-1" })),
     ] {
-        let decoded = CodexAdapter
-            .decode_hook(event, &payload)
-            .expect("test hook decodes");
+        let decoded = hook_output(&CodexAdapter, event, &payload);
         let obs = decoded
             .lifecycle()
             .cloned()

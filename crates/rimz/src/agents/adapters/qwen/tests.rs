@@ -4,6 +4,7 @@ use std::io::Write as _;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 use crate::agents::transcript::TranscriptCursor;
 use crate::agents::{AgentHookClass, AskKind, CostCoverage};
 
@@ -17,23 +18,29 @@ fn classifies_native_asks_and_keeps_neutral_stdout_silent() {
         ("exit_plan_mode", AskKind::PlanApproval),
         ("run_shell_command", AskKind::Permission),
     ] {
-        let classified = adapter
-            .decode_hook("PermissionRequest", &json!({"tool_name":tool_name}))
-            .expect("test hook decodes");
+        let classified = hook_output(
+            &adapter,
+            "PermissionRequest",
+            &json!({"tool_name":tool_name}),
+        );
         assert_eq!(classified.class(), AgentHookClass::AwaitingUser);
         assert_eq!(classified.ask_kind(), Some(ask_kind));
     }
-    let pre_tool = adapter
-        .decode_hook("PreToolUse", &json!({"tool_name":"ask_user_question"}))
-        .expect("test hook decodes");
+    let pre_tool = hook_output(
+        &adapter,
+        "PreToolUse",
+        &json!({"tool_name":"ask_user_question"}),
+    );
     assert_eq!(pre_tool.class(), AgentHookClass::AwaitingUser);
     assert_eq!(pre_tool.ask_kind(), Some(AskKind::Question));
-    let ordinary = adapter
-        .decode_hook("PreToolUse", &json!({"tool_name":"run_shell_command"}))
-        .expect("test hook decodes");
+    let ordinary = hook_output(
+        &adapter,
+        "PreToolUse",
+        &json!({"tool_name":"run_shell_command"}),
+    );
     assert_eq!(ordinary.class(), AgentHookClass::Lifecycle);
     assert_eq!(ordinary.ask_kind(), None);
-    insta::assert_debug_snapshot!(adapter.decode_hook("PermissionRequest", &Value::Null).expect("test hook decodes").json_reply().cloned(), @"None");
+    insta::assert_debug_snapshot!(hook_output(&adapter, "PermissionRequest", &Value::Null).json_reply().cloned(), @"None");
 }
 
 #[test]
@@ -70,16 +77,6 @@ fn launch_and_permission_argv_match_qwen_cli() {
         Some(vec!["--max-session-turns".to_owned(), "7".to_owned()])
     );
     assert_eq!(adapter.spec().launch.compact_command(), Some("/compress"));
-    assert_eq!(
-        adapter.spec().render_preset(&crate::agents::LaunchPreset {
-            effort: Some("high".to_owned()),
-            ..Default::default()
-        }),
-        Err(crate::agents::PresetErr::UnsupportedField {
-            agent: "qwen",
-            field: "effort",
-        })
-    );
 }
 
 #[test]
@@ -215,26 +212,17 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
     let adapter = QwenAdapter;
     for prompt in ["", "  "] {
         assert_eq!(
-            adapter
-                .decode_hook(
-                    "UserPromptSubmit",
-                    &json!({"session_id":"s1","prompt":prompt})
-                )
-                .expect("test hook decodes")
-                .lifecycle()
-                .cloned(),
+            hook_observation(
+                &adapter,
+                "UserPromptSubmit",
+                &json!({"session_id":"s1","prompt":prompt})
+            ),
             None
         );
     }
     for payload in [json!({"session_id":"s1","prompt":"fix the bug"}), json!({})] {
         assert_eq!(
-            adapter
-                .decode_hook("UserPromptSubmit", &payload)
-                .expect("test hook decodes")
-                .lifecycle()
-                .cloned()
-                .unwrap()
-                .signal,
+            hook_signal(&adapter, "UserPromptSubmit", &payload),
             LifecycleSignal::TurnStarted
         );
     }
@@ -244,16 +232,11 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
         ("run_shell_command", AskKind::Permission),
     ] {
         assert_eq!(
-            adapter
-                .decode_hook(
-                    "PermissionRequest",
-                    &json!({"session_id":"s1","tool_name":tool_name})
-                )
-                .expect("test hook decodes")
-                .lifecycle()
-                .cloned()
-                .unwrap()
-                .signal,
+            hook_signal(
+                &adapter,
+                "PermissionRequest",
+                &json!({"session_id":"s1","tool_name":tool_name})
+            ),
             LifecycleSignal::AwaitingInput {
                 kind,
                 ask_id: None,
@@ -263,16 +246,11 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
         );
     }
     assert_eq!(
-        adapter
-            .decode_hook(
-                "PermissionRequest",
-                &json!({"session_id":"s1","tool_name":"ask_user_question","tool_use_id":"ask-1"})
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
-            .signal,
+        hook_signal(
+            &adapter,
+            "PermissionRequest",
+            &json!({"session_id":"s1","tool_name":"ask_user_question","tool_use_id":"ask-1"})
+        ),
         LifecycleSignal::AwaitingInput {
             kind: AskKind::Question,
             ask_id: None,
@@ -289,14 +267,11 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
         ),
         ("run_shell_command", None, Some("shell-1")),
     ] {
-        let observed = adapter
-            .decode_hook(
-                "PreToolUse",
-                &json!({"session_id":"s1","tool_name":tool_name,"tool_use_id":native_key}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned();
+        let observed = hook_observation(
+            &adapter,
+            "PreToolUse",
+            &json!({"session_id":"s1","tool_name":tool_name,"tool_use_id":native_key}),
+        );
         assert_eq!(
             observed.map(|observation| observation.signal),
             kind.map(|kind| LifecycleSignal::AwaitingInput {
@@ -322,26 +297,20 @@ fn reads_gate_details_from_permission_requests() {
             }]
         }
     });
-    let questions = adapter
-        .decode_hook("PermissionRequest", &question)
-        .expect("test hook decodes")
+    let questions = hook_output(&adapter, "PermissionRequest", &question)
         .questions()
         .to_vec();
     assert_eq!(questions.len(), 1);
     assert_eq!(questions[0].question, "Which path?\nMore context");
     assert_eq!(
-        adapter
-            .decode_hook("PreToolUse", &question)
-            .expect("test hook decodes")
+        hook_output(&adapter, "PreToolUse", &question)
             .questions()
             .to_vec()[0]
             .question,
         "Which path?\nMore context"
     );
     assert_eq!(
-        adapter
-            .decode_hook("PermissionRequest", &question)
-            .expect("test hook decodes")
+        hook_output(&adapter, "PermissionRequest", &question)
             .ask_detail()
             .map(str::to_owned)
             .as_deref(),
@@ -353,18 +322,14 @@ fn reads_gate_details_from_permission_requests() {
         "tool_input":{"command":"cargo xtask gate"}
     });
     assert_eq!(
-        adapter
-            .decode_hook("PermissionRequest", &permission)
-            .expect("test hook decodes")
+        hook_output(&adapter, "PermissionRequest", &permission)
             .ask_detail()
             .map(str::to_owned)
             .as_deref(),
         Some(r#"run_shell_command: {"command":"cargo xtask gate"}"#)
     );
     assert_eq!(
-        adapter
-            .decode_hook("PreToolUse", &question)
-            .expect("test hook decodes")
+        hook_output(&adapter, "PreToolUse", &question)
             .ask_detail()
             .map(str::to_owned)
             .as_deref(),
@@ -374,40 +339,38 @@ fn reads_gate_details_from_permission_requests() {
 
 #[test]
 fn shared_questionnaire_and_permission_normalization_preserves_qwen_details() {
-    let questions = QwenAdapter
-        .decode_hook(
-            "PermissionRequest",
-            &json!({
-                "tool_name": "ask_user_question",
-                "tool_input": {
-                    "questions": [
-                        {"question": "Camel?", "multiSelect": true},
-                        {"question": "Snake?", "multi_select": true},
-                        {"question": "OpenCode?", "multiple": true, "options": [
-                            {"label": " keep ", "description": "   "},
-                            {"label": "   "}
-                        ]},
-                        {"question": "   "}
-                    ]
-                }
-            }),
-        )
-        .expect("test hook decodes")
-        .questions()
-        .to_vec();
+    let questions = hook_output(
+        &QwenAdapter,
+        "PermissionRequest",
+        &json!({
+            "tool_name": "ask_user_question",
+            "tool_input": {
+                "questions": [
+                    {"question": "Camel?", "multiSelect": true},
+                    {"question": "Snake?", "multi_select": true},
+                    {"question": "OpenCode?", "multiple": true, "options": [
+                        {"label": " keep ", "description": "   "},
+                        {"label": "   "}
+                    ]},
+                    {"question": "   "}
+                ]
+            }
+        }),
+    )
+    .questions()
+    .to_vec();
     assert_eq!(questions.len(), 3);
     assert!(questions.iter().all(|question| question.multi_select));
     assert_eq!(questions[2].options.len(), 1);
     assert_eq!(questions[2].options[0].description, None);
 
-    let plan = QwenAdapter
-        .decode_hook(
-            "PermissionRequest",
-            &json!({"tool_name": "exit_plan_mode", "tool_input": {"plan": " Ship it "}}),
-        )
-        .expect("test hook decodes")
-        .questions()
-        .to_vec();
+    let plan = hook_output(
+        &QwenAdapter,
+        "PermissionRequest",
+        &json!({"tool_name": "exit_plan_mode", "tool_input": {"plan": " Ship it "}}),
+    )
+    .questions()
+    .to_vec();
     assert_eq!(plan[0].question, "Requesting plan approval:\n\nShip it");
     assert!(plan[0].options.is_empty());
 
@@ -417,26 +380,22 @@ fn shared_questionnaire_and_permission_normalization_preserves_qwen_details() {
         json!({"tool_name": " run_shell_command ", "tool_input": null}),
     ] {
         assert_eq!(
-            QwenAdapter
-                .decode_hook("PermissionRequest", &payload)
-                .expect("test hook decodes")
-                .ask_detail(),
+            hook_output(&QwenAdapter, "PermissionRequest", &payload).ask_detail(),
             Some("run_shell_command")
         );
     }
 
-    let detail = QwenAdapter
-        .decode_hook(
-            "PermissionRequest",
-            &json!({
-                "tool_name": "run_shell_command",
-                "tool_input": {"command": "x".repeat(200)}
-            }),
-        )
-        .expect("test hook decodes")
-        .ask_detail()
-        .expect("detail")
-        .to_owned();
+    let detail = hook_output(
+        &QwenAdapter,
+        "PermissionRequest",
+        &json!({
+            "tool_name": "run_shell_command",
+            "tool_input": {"command": "x".repeat(200)}
+        }),
+    )
+    .ask_detail()
+    .expect("detail")
+    .to_owned();
     assert_eq!(
         detail
             .strip_prefix("run_shell_command: ")
@@ -450,26 +409,18 @@ fn shared_questionnaire_and_permission_normalization_preserves_qwen_details() {
 #[test]
 fn maps_lifecycle_context_background_and_subagents() {
     let adapter = QwenAdapter;
-    let start = adapter
-        .decode_hook(
-            "SessionStart",
-            &json!({"session_id":"s1","source":"startup","model":"qwen3"}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let start = hook_lifecycle(
+        &adapter,
+        "SessionStart",
+        &json!({"session_id":"s1","source":"startup","model":"qwen3"}),
+    );
     assert_eq!(start.signal, LifecycleSignal::Registered);
     assert_eq!(start.origin, Some(SessionOrigin::Fresh));
-    let tool = adapter
-        .decode_hook(
-            "PostToolUse",
-            &json!({"session_id":"s1","tool_name":"write_file","tool_use_id":"write-1"}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let tool = hook_lifecycle(
+        &adapter,
+        "PostToolUse",
+        &json!({"session_id":"s1","tool_name":"write_file","tool_use_id":"write-1"}),
+    );
     assert_eq!(
         tool.signal,
         LifecycleSignal::ToolUsed {
@@ -478,7 +429,11 @@ fn maps_lifecycle_context_background_and_subagents() {
             native_key: Some("write-1".to_owned()),
         }
     );
-    let parked = adapter.decode_hook("Stop", &json!({"session_id":"s1","background_tasks":[{"status":"running"}],"context_usage":1.2,"context_limit":131072})).expect("test hook decodes").lifecycle().cloned().unwrap();
+    let parked = hook_lifecycle(
+        &adapter,
+        "Stop",
+        &json!({"session_id":"s1","background_tasks":[{"status":"running"}],"context_usage":1.2,"context_limit":131072}),
+    );
     assert_eq!(
         parked.signal,
         LifecycleSignal::TurnEnded {
@@ -488,29 +443,20 @@ fn maps_lifecycle_context_background_and_subagents() {
     );
     assert_eq!(parked.usage.context_pct, Some(100));
     assert_eq!(parked.usage.context_window, Some(131072));
-    let child = adapter
-        .decode_hook(
-            "SubagentStart",
-            &json!({"session_id":"parent","agent_id":"child","agent_type":"review"}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let child = hook_lifecycle(
+        &adapter,
+        "SubagentStart",
+        &json!({"session_id":"parent","agent_id":"child","agent_type":"review"}),
+    );
     assert_eq!(child.signal, LifecycleSignal::SubagentStarted);
     assert_eq!(child.task.as_deref(), Some("review"));
     assert!(child.parent_agent_id.is_some());
     assert_eq!(
-        adapter
-            .decode_hook(
-                "SessionStart",
-                &json!({"session_id":"s1","source":"compact"})
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
-            .signal,
+        hook_signal(
+            &adapter,
+            "SessionStart",
+            &json!({"session_id":"s1","source":"compact"})
+        ),
         LifecycleSignal::CompactionEnded { auto: None }
     );
 }
@@ -521,12 +467,11 @@ fn transcript_tail_and_statusline_supply_context() {
     let path = dir.path().join("s1.jsonl");
     fs::write(&path, "{\"uuid\":\"a1\",\"type\":\"assistant\",\"model\":\"qwen3\",\"contextWindowSize\":131072,\"usageMetadata\":{\"totalTokenCount\":420}}\n{\"uuid\":\"title-1\",\"parentUuid\":\"a1\",\"type\":\"system\",\"subtype\":\"custom_title\",\"systemPayload\":{\"customTitle\":\"Stable Qwen title\"}}\n").unwrap();
     let adapter = QwenAdapter;
-    let observation = adapter
-        .decode_hook("Stop", &json!({"session_id":"s1","transcript_path":path}))
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let observation = hook_lifecycle(
+        &adapter,
+        "Stop",
+        &json!({"session_id":"s1","transcript_path":path}),
+    );
     assert_eq!(observation.usage.total_tokens, Some(420));
     assert_eq!(observation.usage.context_window, Some(131072));
     assert_eq!(
@@ -601,20 +546,16 @@ fn subagent_stop_reads_model_and_description_from_meta_sidecar() {
     )
     .unwrap();
 
-    let observation = QwenAdapter
-        .decode_hook(
-            "SubagentStop",
-            &json!({
-                "session_id":"parent",
-                "agent_id":"child",
-                "agent_type":"general-purpose",
-                "transcript_path":transcript,
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let observation = hook_lifecycle(
+        &QwenAdapter,
+        "SubagentStop",
+        &json!({
+            "session_id":"parent",
+            "agent_id":"child",
+            "agent_type":"general-purpose",
+            "transcript_path":transcript,
+        }),
+    );
     assert_eq!(observation.launch.model.as_deref(), Some("deepseek-v4-pro"));
     assert_eq!(
         observation.description.as_deref(),
@@ -783,21 +724,17 @@ fn rewound_transcript_supplies_active_hook_boundary_usage() {
     fs::write(&path, REWOUND_SESSION).unwrap();
     let adapter = QwenAdapter;
     for event in ["SessionStart", "Stop"] {
-        let observation = adapter
-            .decode_hook(
-                event,
-                &json!({
-                    "hook_event_name": event,
-                    "session_id": "sess-rewind",
-                    "source": "startup",
-                    "transcript_path": path,
-                    "input_tokens": 450
-                }),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap();
+        let observation = hook_lifecycle(
+            &adapter,
+            event,
+            &json!({
+                "hook_event_name": event,
+                "session_id": "sess-rewind",
+                "source": "startup",
+                "transcript_path": path,
+                "input_tokens": 450
+            }),
+        );
         assert_eq!(
             observation.launch.model.as_deref(),
             Some("qwen-active-final")
@@ -825,15 +762,11 @@ fn successive_stops_publish_correlated_small_call_splits() {
     )
     .unwrap();
     let adapter = QwenAdapter;
-    let first = adapter
-        .decode_hook(
-            "Stop",
-            &json!({"session_id":"s1","transcript_path":path,"input_tokens":38727}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let first = hook_lifecycle(
+        &adapter,
+        "Stop",
+        &json!({"session_id":"s1","transcript_path":path,"input_tokens":38727}),
+    );
     assert_eq!(first.usage.total_tokens, Some(38_812));
     assert_eq!(first.usage.cache_read_input_tokens, Some(38_656));
     assert_eq!(first.usage.fresh_input_tokens, Some(71));
@@ -842,15 +775,11 @@ fn successive_stops_publish_correlated_small_call_splits() {
     let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
     writeln!(file, r#"{{"uuid":"u2","parentUuid":"a1","type":"user"}}"#).unwrap();
     writeln!(file, r#"{{"uuid":"a2","parentUuid":"u2","type":"assistant","model":"deepseek-v4-pro","contextWindowSize":1000000,"usageMetadata":{{"promptTokenCount":38735,"cachedContentTokenCount":38656,"candidatesTokenCount":92,"thoughtsTokenCount":80,"totalTokenCount":38827}}}}"#).unwrap();
-    let second = adapter
-        .decode_hook(
-            "Stop",
-            &json!({"session_id":"s1","transcript_path":path,"input_tokens":38735}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let second = hook_lifecycle(
+        &adapter,
+        "Stop",
+        &json!({"session_id":"s1","transcript_path":path,"input_tokens":38735}),
+    );
     assert_eq!(second.usage.total_tokens, Some(38_827));
     assert_eq!(second.usage.cache_read_input_tokens, Some(38_656));
     assert_eq!(second.usage.fresh_input_tokens, Some(79));
@@ -867,29 +796,21 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
     )
     .unwrap();
     let adapter = QwenAdapter;
-    let cached = adapter
-        .decode_hook(
-            "Stop",
-            &json!({"session_id":"s1","transcript_path":path,"input_tokens":100}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let cached = hook_lifecycle(
+        &adapter,
+        "Stop",
+        &json!({"session_id":"s1","transcript_path":path,"input_tokens":100}),
+    );
     assert_eq!(cached.usage.cache_read_input_tokens, Some(100));
     assert_eq!(cached.usage.fresh_input_tokens, Some(0));
     assert_eq!(cached.usage.output_tokens, Some(5));
 
     fs::write(&path, "").unwrap();
-    let fresh = adapter
-        .decode_hook(
-            "SessionStart",
-            &json!({"session_id":"s2","source":"startup","transcript_path":path}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let fresh = hook_lifecycle(
+        &adapter,
+        "SessionStart",
+        &json!({"session_id":"s2","source":"startup","transcript_path":path}),
+    );
     assert_eq!(fresh.usage.total_tokens, Some(0));
     assert_eq!(fresh.usage.cache_read_input_tokens, None);
     assert_eq!(fresh.usage.fresh_input_tokens, None);
@@ -900,15 +821,11 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
         r#"{"uuid":"stale","type":"assistant","model":"stale-model","contextWindowSize":123456,"usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":90,"candidatesTokenCount":5,"totalTokenCount":105}}"#,
     )
     .unwrap();
-    let stopped = adapter
-        .decode_hook(
-            "Stop",
-            &json!({"session_id":"s2","transcript_path":path,"input_tokens":200}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let stopped = hook_lifecycle(
+        &adapter,
+        "Stop",
+        &json!({"session_id":"s2","transcript_path":path,"input_tokens":200}),
+    );
     assert_eq!(stopped.usage.total_tokens, Some(200));
     assert_eq!(stopped.launch.model, None);
     assert_eq!(stopped.usage.context_window, None);
@@ -916,12 +833,11 @@ fn all_cached_and_stale_transcripts_keep_categories_honest() {
     assert_eq!(stopped.usage.fresh_input_tokens, None);
     assert_eq!(stopped.usage.output_tokens, None);
 
-    let explicit = adapter
-        .decode_hook(
-            "Stop",
-            &json!({"session_id":"s2","transcript_path":path,"input_tokens":200,"total_tokens":999}),
-        ).expect("test hook decodes").lifecycle().cloned()
-        .unwrap();
+    let explicit = hook_lifecycle(
+        &adapter,
+        "Stop",
+        &json!({"session_id":"s2","transcript_path":path,"input_tokens":200,"total_tokens":999}),
+    );
     assert_eq!(explicit.usage.total_tokens, Some(999));
 }
 
@@ -1047,9 +963,7 @@ fn parses_legacy_main_thread_transcript_and_excludes_sidechains() {
 fn stop_failure_maps_retryable_classes() {
     let adapter = QwenAdapter;
     assert_eq!(
-        adapter
-            .decode_hook("StopFailure", &json!({"error":"rate_limit"}))
-            .expect("test hook decodes")
+        hook_output(&adapter, "StopFailure", &json!({"error":"rate_limit"}))
             .turn_error()
             .cloned()
             .unwrap()
@@ -1057,9 +971,7 @@ fn stop_failure_maps_retryable_classes() {
         TurnErrorClass::PausedRateLimit
     );
     assert_eq!(
-        adapter
-            .decode_hook("StopFailure", &json!({"error":"server_error"}))
-            .expect("test hook decodes")
+        hook_output(&adapter, "StopFailure", &json!({"error":"server_error"}))
             .turn_error()
             .cloned()
             .unwrap()

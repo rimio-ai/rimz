@@ -16,8 +16,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-#[cfg(test)]
-use super::PresetErr;
 use super::definition::{
     AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
     LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,

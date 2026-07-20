@@ -5,10 +5,9 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
+use crate::agents::testkit::{hook_lifecycle, hook_output, hook_signal};
 use crate::agents::transcript::TranscriptCursor;
-use crate::agents::{
-    AgentHookClass, AgentStatus, LaunchPreset, PresetErr, TranscriptPosition, TranscriptRole,
-};
+use crate::agents::{AgentHookClass, AgentStatus, TranscriptPosition, TranscriptRole};
 
 const TRANSCRIPT_FIXTURE: &str = include_str!("tests/fixtures/droid-0.170.0-transcript-v2.jsonl");
 const SETTINGS_FIXTURE: &str =
@@ -86,34 +85,26 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
 
 #[test]
 fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
-    let startup = DroidAdapter
-        .decode_hook(
-            "SessionStart",
-            &json!({
-                "session_id": "sess-1",
-                "transcript_path": "/tmp/droid.jsonl",
-                "cwd": "/tmp/project",
-                "source": "startup"
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let startup = hook_lifecycle(
+        &DroidAdapter,
+        "SessionStart",
+        &json!({
+            "session_id": "sess-1",
+            "transcript_path": "/tmp/droid.jsonl",
+            "cwd": "/tmp/project",
+            "source": "startup"
+        }),
+    );
     assert_eq!(startup.signal, LifecycleSignal::Registered);
     assert_eq!(startup.origin, Some(SessionOrigin::Fresh));
     assert_eq!(startup.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(startup.transcript_path.as_deref(), Some("/tmp/droid.jsonl"));
 
-    let prompt = DroidAdapter
-        .decode_hook(
-            "UserPromptSubmit",
-            &json!({"session_id": "sess-1", "prompt": "  fix auth  "}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let prompt = hook_lifecycle(
+        &DroidAdapter,
+        "UserPromptSubmit",
+        &json!({"session_id": "sess-1", "prompt": "  fix auth  "}),
+    );
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
     let running = step(None, None, &prompt.signal).next;
@@ -126,16 +117,11 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         ("Read", false, false),
     ] {
         assert_eq!(
-            DroidAdapter
-                .decode_hook(
-                    "PostToolUse",
-                    &json!({"session_id": "sess-1", "tool_name": tool}),
-                )
-                .expect("test hook decodes")
-                .lifecycle()
-                .cloned()
-                .unwrap()
-                .signal,
+            hook_signal(
+                &DroidAdapter,
+                "PostToolUse",
+                &json!({"session_id": "sess-1", "tool_name": tool})
+            ),
             LifecycleSignal::ToolUsed {
                 mutates,
                 edits,
@@ -144,12 +130,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         );
     }
 
-    let stop = DroidAdapter
-        .decode_hook("Stop", &json!({"session_id": "sess-1"}))
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let stop = hook_lifecycle(&DroidAdapter, "Stop", &json!({"session_id": "sess-1"}));
     assert_eq!(
         stop.signal,
         LifecycleSignal::TurnEnded {
@@ -168,42 +149,35 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
     );
 
     assert_eq!(
-        DroidAdapter
-            .decode_hook("PreCompact", &json!({"session_id": "sess-1"}))
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
-            .signal,
+        hook_signal(
+            &DroidAdapter,
+            "PreCompact",
+            &json!({"session_id": "sess-1"})
+        ),
         LifecycleSignal::Compacting
     );
     assert_eq!(
-        DroidAdapter
-            .decode_hook(
-                "SessionStart",
-                &json!({"session_id": "sess-1", "source": "compact"}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
-            .signal,
+        hook_signal(
+            &DroidAdapter,
+            "SessionStart",
+            &json!({"session_id": "sess-1", "source": "compact"})
+        ),
         LifecycleSignal::CompactionEnded { auto: None }
     );
     assert!(
-        DroidAdapter
-            .decode_hook("SessionEnd", &json!({ "session_id": "sess-1" }))
-            .expect("test hook decodes")
-            .ends_session()
+        hook_output(
+            &DroidAdapter,
+            "SessionEnd",
+            &json!({ "session_id": "sess-1" })
+        )
+        .ends_session()
     );
     assert_eq!(
-        DroidAdapter
-            .decode_hook("SessionEnd", &json!({"session_id": "sess-1"}))
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
-            .signal,
+        hook_signal(
+            &DroidAdapter,
+            "SessionEnd",
+            &json!({"session_id": "sess-1"})
+        ),
         LifecycleSignal::Ended
     );
 }
@@ -297,15 +271,11 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
         ),
     )
     .unwrap();
-    let fallback = DroidAdapter
-        .decode_hook(
-            "Stop",
-            &json!({"session_id": "sess-1", "transcript_path": path}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let fallback = hook_lifecycle(
+        &DroidAdapter,
+        "Stop",
+        &json!({"session_id": "sess-1", "transcript_path": path}),
+    );
     assert_eq!(
         fallback.launch.model.as_deref(),
         Some("custom:fixture-model")
@@ -529,15 +499,12 @@ fn transcript_positions_abstain_for_missing_or_unknown_headers() {
 #[test]
 fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
     assert_eq!(
-        DroidAdapter
-            .decode_hook("Notification", &json!({}))
-            .expect("test hook decodes")
-            .class(),
+        hook_output(&DroidAdapter, "Notification", &json!({})).class(),
         AgentHookClass::Lifecycle
     );
-    insta::assert_json_snapshot!(DroidAdapter.decode_hook("Stop", &Value::Null).expect("test hook decodes").json_reply().cloned(), @"null");
+    insta::assert_json_snapshot!(hook_output(&DroidAdapter, "Stop", &Value::Null).json_reply().cloned(), @"null");
     insta::assert_json_snapshot!(
-        DroidAdapter.decode_hook("Stop", &json!([])).expect("test hook decodes").lifecycle().cloned().unwrap(),
+        hook_lifecycle(&DroidAdapter, "Stop", &json!([])),
         @r###"
         {
           "signal": {
@@ -607,47 +574,19 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
             .permission_args(PermissionMode::Plan),
         ["--use-spec"]
     );
-
-    assert_eq!(
-        DroidAdapter.spec().render_preset(&LaunchPreset {
-            append_system_prompt_file: Some(Path::new("/tmp/append.md").to_path_buf()),
-            ..Default::default()
-        }),
-        Ok(vec![
-            "--append-system-prompt-file".to_owned(),
-            "/tmp/append.md".to_owned()
-        ])
-    );
     // Interactive Droid 0.171.0 has no `--model`/`--reasoning-effort`; both are
-    // exec-only, so a profile that sets either fails fast rather than launching
-    // with a silently ignored (and prompt-corrupting) flag.
-    assert_eq!(
-        DroidAdapter.spec().render_preset(&LaunchPreset {
-            model: Some("glm-5".to_owned()),
-            ..Default::default()
-        }),
-        Err(PresetErr::UnsupportedField {
-            agent: "droid",
-            field: "model"
-        })
-    );
-    assert_eq!(
-        DroidAdapter.spec().render_preset(&LaunchPreset {
-            effort: Some("high".to_owned()),
-            ..Default::default()
-        }),
-        Err(PresetErr::UnsupportedField {
-            agent: "droid",
-            field: "effort"
-        })
-    );
+    // exec-only, so a profile that sets either must fail fast rather than launch
+    // with a silently ignored (and prompt-corrupting) flag. The registry-wide
+    // `render_preset_characterization` snapshot pins that rejection.
 }
 
 #[test]
 fn notification_without_lifecycle_signal_keeps_context_identity() {
-    let decoded = DroidAdapter
-        .decode_hook("Notification", &json!({"session_id": "sess-1"}))
-        .expect("test hook decodes");
+    let decoded = hook_output(
+        &DroidAdapter,
+        "Notification",
+        &json!({"session_id": "sess-1"}),
+    );
 
     assert_eq!(
         decoded.event_agent_id().map(AgentSessionId::as_str),

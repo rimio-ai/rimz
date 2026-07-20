@@ -3,7 +3,8 @@ use super::*;
 use std::collections::BTreeSet;
 
 use crate::agents::lifecycle::{TurnPhase, step};
-use crate::agents::{AgentErr, AgentHookClass, AgentStatus, LaunchPreset, PresetErr};
+use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
+use crate::agents::{AgentErr, AgentHookClass, AgentStatus};
 use serde_json::json;
 
 #[test]
@@ -34,41 +35,38 @@ fn account_usage_surface_is_declared_statically() {
 
 #[test]
 fn classifies_native_asks_and_lifecycle_events() {
-    let permission = CopilotAdapter
-        .decode_hook(
-            "permissionRequest",
-            &json!({"sessionId":"s","toolName":"bash"}),
-        )
-        .expect("test hook decodes");
+    let permission = hook_output(
+        &CopilotAdapter,
+        "permissionRequest",
+        &json!({"sessionId":"s","toolName":"bash"}),
+    );
     assert_eq!(permission.class(), AgentHookClass::AwaitingUser);
     assert_eq!(permission.ask_kind(), Some(AskKind::Permission));
 
-    let question = CopilotAdapter
-        .decode_hook(
-            "preToolUse",
-            &json!({"sessionId":"s","toolName":"ask_user"}),
-        )
-        .expect("test hook decodes");
+    let question = hook_output(
+        &CopilotAdapter,
+        "preToolUse",
+        &json!({"sessionId":"s","toolName":"ask_user"}),
+    );
     assert_eq!(question.class(), AgentHookClass::AwaitingUser);
     assert_eq!(question.ask_kind(), Some(AskKind::Question));
 
     assert_eq!(
-        CopilotAdapter
-            .decode_hook("preToolUse", &json!({"sessionId":"s","toolName":"bash"}),)
-            .expect("test hook decodes")
-            .class(),
+        hook_output(
+            &CopilotAdapter,
+            "preToolUse",
+            &json!({"sessionId":"s","toolName":"bash"})
+        )
+        .class(),
         AgentHookClass::Lifecycle
     );
     assert_eq!(
-        CopilotAdapter
-            .decode_hook(
-                "permissionRequest",
-                &json!({"sessionId":"s","toolName":"bash"}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .map(|observation| observation.signal),
+        hook_observation(
+            &CopilotAdapter,
+            "permissionRequest",
+            &json!({"sessionId":"s","toolName":"bash"})
+        )
+        .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,
             ask_id: None,
@@ -77,15 +75,12 @@ fn classifies_native_asks_and_lifecycle_events() {
         })
     );
     assert_eq!(
-        CopilotAdapter
-            .decode_hook(
-                "preToolUse",
-                &json!({"sessionId":"s","toolName":"ask_user"}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .map(|observation| observation.signal),
+        hook_observation(
+            &CopilotAdapter,
+            "preToolUse",
+            &json!({"sessionId":"s","toolName":"ask_user"})
+        )
+        .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Question,
             ask_id: None,
@@ -94,12 +89,12 @@ fn classifies_native_asks_and_lifecycle_events() {
         })
     );
     assert_eq!(
-        CopilotAdapter
-            .decode_hook("preToolUse", &json!({"sessionId":"s","toolName":"bash"}),)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .map(|observation| observation.signal),
+        hook_observation(
+            &CopilotAdapter,
+            "preToolUse",
+            &json!({"sessionId":"s","toolName":"bash"})
+        )
+        .map(|observation| observation.signal),
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
@@ -115,16 +110,11 @@ fn classifies_native_asks_and_lifecycle_events() {
         ]
     });
     assert_eq!(
-        CopilotAdapter
-            .decode_hook("preToolUse", &batched_question)
-            .expect("test hook decodes")
-            .ask_kind(),
+        hook_output(&CopilotAdapter, "preToolUse", &batched_question).ask_kind(),
         Some(AskKind::Question)
     );
     assert_eq!(
-        CopilotAdapter
-            .decode_hook("preToolUse", &batched_question)
-            .expect("test hook decodes")
+        hook_output(&CopilotAdapter, "preToolUse", &batched_question)
             .questions()
             .to_vec()[0]
             .question,
@@ -269,9 +259,7 @@ fn agent_stop_accepts_a_matching_native_transcript_and_reads_final_text() {
         "validated native path replaces derivation"
     );
     assert_eq!(
-        CopilotAdapter
-            .decode_hook("agentStop", &payload)
-            .expect("test hook decodes")
+        hook_output(&CopilotAdapter, "agentStop", &payload)
             .final_message()
             .map(str::to_owned)
             .as_deref(),
@@ -348,15 +336,12 @@ fn tool_mapping_uses_camel_case_names() {
         ("bash", Some((true, false))),
         ("read", None),
     ] {
-        let signal = CopilotAdapter
-            .decode_hook(
-                "postToolUseFailure",
-                &json!({"sessionId":"s","toolName":tool,"error":"tool failed"}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .map(|observation| observation.signal);
+        let signal = hook_observation(
+            &CopilotAdapter,
+            "postToolUseFailure",
+            &json!({"sessionId":"s","toolName":tool,"error":"tool failed"}),
+        )
+        .map(|observation| observation.signal);
         let (mutates, edits) = expected.unwrap_or((false, false));
         assert_eq!(
             signal,
@@ -369,15 +354,12 @@ fn tool_mapping_uses_camel_case_names() {
         );
     }
 
-    let signal = CopilotAdapter
-        .decode_hook(
-            "postToolUse",
-            &json!({"sessionId":"s","toolCalls":[{"name":"view"},{"name":"bash"},{"name":"edit"}]}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .map(|observation| observation.signal);
+    let signal = hook_observation(
+        &CopilotAdapter,
+        "postToolUse",
+        &json!({"sessionId":"s","toolCalls":[{"name":"view"},{"name":"bash"},{"name":"edit"}]}),
+    )
+    .map(|observation| observation.signal);
     assert_eq!(
         signal,
         Some(LifecycleSignal::ToolUsed {
@@ -388,12 +370,12 @@ fn tool_mapping_uses_camel_case_names() {
     );
 
     assert_eq!(
-        CopilotAdapter
-            .decode_hook("postToolUseFailure", &json!({"sessionId":"s"}))
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .map(|observation| observation.signal),
+        hook_observation(
+            &CopilotAdapter,
+            "postToolUseFailure",
+            &json!({"sessionId":"s"})
+        )
+        .map(|observation| observation.signal),
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
@@ -404,85 +386,84 @@ fn tool_mapping_uses_camel_case_names() {
 
 #[test]
 fn error_marker_only_accepts_non_recoverable_errors() {
-    let marker = CopilotAdapter
-        .decode_hook(
-            "errorOccurred",
-            &json!({
-                "sessionId":"s",
-                "timestamp":1700000000000i64,
-                "recoverable":false,
-                "errorContext":"model_call",
-                "error":{"name":"Error","message":"network error"}
-            }),
-        )
-        .expect("test hook decodes")
-        .turn_error()
-        .cloned()
-        .expect("marker");
+    let marker = hook_output(
+        &CopilotAdapter,
+        "errorOccurred",
+        &json!({
+            "sessionId":"s",
+            "timestamp":1700000000000i64,
+            "recoverable":false,
+            "errorContext":"model_call",
+            "error":{"name":"Error","message":"network error"}
+        }),
+    )
+    .turn_error()
+    .cloned()
+    .expect("marker");
     assert_eq!(marker.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(marker.label.as_deref(), Some("network error"));
     assert_eq!(marker.at, Timestamp::from_second(1_700_000_000).unwrap());
     assert!(
-        CopilotAdapter
-            .decode_hook(
-                "errorOccurred",
-                &json!({"recoverable":true,"error":{"message":"retry"}}),
-            )
-            .expect("test hook decodes")
-            .turn_error()
-            .cloned()
-            .is_none()
+        hook_output(
+            &CopilotAdapter,
+            "errorOccurred",
+            &json!({"recoverable":true,"error":{"message":"retry"}})
+        )
+        .turn_error()
+        .cloned()
+        .is_none()
     );
     assert!(
-        CopilotAdapter
-            .decode_hook("errorOccurred", &json!({"recoverable":false,"error":{}}),)
-            .expect("test hook decodes")
-            .turn_error()
-            .cloned()
-            .is_none()
+        hook_output(
+            &CopilotAdapter,
+            "errorOccurred",
+            &json!({"recoverable":false,"error":{}})
+        )
+        .turn_error()
+        .cloned()
+        .is_none()
     );
 }
 
 #[test]
 fn ask_details_are_best_effort() {
-    let questions = CopilotAdapter
-        .decode_hook(
-            "preToolUse",
-            &json!({"toolName":"ask_user","toolArgs":"{\"question\":\"Which branch?\"}"}),
-        )
-        .expect("test hook decodes")
-        .questions()
-        .to_vec();
+    let questions = hook_output(
+        &CopilotAdapter,
+        "preToolUse",
+        &json!({"toolName":"ask_user","toolArgs":"{\"question\":\"Which branch?\"}"}),
+    )
+    .questions()
+    .to_vec();
     assert_eq!(questions[0].question, "Which branch?");
     assert_eq!(
-        CopilotAdapter
-            .decode_hook("permissionRequest", &json!({"toolName":"powershell"}),)
-            .expect("test hook decodes")
-            .ask_detail()
-            .map(str::to_owned),
+        hook_output(
+            &CopilotAdapter,
+            "permissionRequest",
+            &json!({"toolName":"powershell"})
+        )
+        .ask_detail()
+        .map(str::to_owned),
         Some("powershell".to_owned())
     );
     assert!(
-        CopilotAdapter
-            .decode_hook("preToolUse", &json!({"toolName":"ask_user","toolArgs":{}}))
-            .expect("test hook decodes")
-            .questions()
-            .to_vec()
-            .is_empty()
+        hook_output(
+            &CopilotAdapter,
+            "preToolUse",
+            &json!({"toolName":"ask_user","toolArgs":{}})
+        )
+        .questions()
+        .to_vec()
+        .is_empty()
     );
 }
 
 #[test]
 fn neutral_output_is_empty_for_both_blocking_events() {
-    let question = CopilotAdapter
-        .decode_hook("preToolUse", &Value::Null)
-        .expect("test hook decodes")
+    let question = hook_output(&CopilotAdapter, "preToolUse", &Value::Null)
         .json_reply()
         .cloned();
     insta::assert_snapshot!(format!("{question:?}"), @"None");
-    let permission = CopilotAdapter
-        .decode_hook("permissionRequest", &Value::Null)
-        .expect("test hook decodes")
+    let permission = hook_output(&CopilotAdapter, "permissionRequest", &Value::Null)
         .json_reply()
         .cloned();
     insta::assert_snapshot!(format!("{permission:?}"), @"None");
@@ -490,16 +471,11 @@ fn neutral_output_is_empty_for_both_blocking_events() {
 
 #[test]
 fn malformed_payloads_degrade_without_inventing_lifecycle_data() {
-    let malformed = CopilotAdapter
-        .decode_hook("userPromptSubmitted", &json!(null))
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("known event still maps");
+    let malformed = hook_lifecycle(&CopilotAdapter, "userPromptSubmitted", &json!(null));
     assert!(malformed.agent_id.is_none());
     assert!(malformed.prompt.is_none());
     insta::assert_json_snapshot!(json!({
-        "class": format!("{:?}", CopilotAdapter.decode_hook("preToolUse", &json!(null)).expect("test hook decodes").class()),
+        "class": format!("{:?}", hook_output(&CopilotAdapter, "preToolUse", &json!(null)).class()),
         "observation": format!("{:?}", malformed.signal),
     }), @r###"
     {
@@ -647,29 +623,6 @@ fn launch_resume_permissions_and_presets_are_pinned() {
             .launch
             .permission_args(PermissionMode::Yolo),
         vec!["--allow-all"]
-    );
-    assert_eq!(
-        CopilotAdapter.spec().render_preset(&LaunchPreset {
-            model: Some("gpt-5".to_owned()),
-            effort: Some("high".to_owned()),
-            ..Default::default()
-        }),
-        Ok(vec![
-            "--model".to_owned(),
-            "gpt-5".to_owned(),
-            "--effort".to_owned(),
-            "high".to_owned()
-        ])
-    );
-    assert_eq!(
-        CopilotAdapter.spec().render_preset(&LaunchPreset {
-            system_prompt_file: Some(PathBuf::from("/tmp/system.md")),
-            ..Default::default()
-        }),
-        Err(PresetErr::UnsupportedField {
-            agent: "copilot",
-            field: "system-prompt-file"
-        })
     );
 }
 
@@ -966,10 +919,5 @@ fn embedded_hook_file_matches_the_declared_wire() {
 }
 
 fn observation(event: &str, payload: Value) -> AgentLifecycleObservation {
-    CopilotAdapter
-        .decode_hook(event, &payload)
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("observation")
+    hook_lifecycle(&CopilotAdapter, event, &payload)
 }

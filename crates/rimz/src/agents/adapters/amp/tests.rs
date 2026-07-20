@@ -1,8 +1,7 @@
 use super::*;
 
-use crate::agents::{
-    AgentErr, AgentHookClass, AgentStatus, LaunchPreset, PriceBook, TurnPhase, step,
-};
+use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
+use crate::agents::{AgentErr, AgentHookClass, AgentStatus, PriceBook, TurnPhase, step};
 use serde_json::json;
 
 #[test]
@@ -59,48 +58,20 @@ fn launch_resume_and_preset_commands_match_amp_cli() {
     );
     assert_eq!(AmpAdapter.spec().launch.fork_command("T-abc123"), None);
     assert_eq!(AmpAdapter.spec().launch.compact_command(), None);
-
-    assert_eq!(
-        AmpAdapter.spec().render_preset(&LaunchPreset {
-            model: Some("ultra".to_owned()),
-            effort: Some("high".to_owned()),
-            ..Default::default()
-        }),
-        Ok(vec![
-            "--mode".to_owned(),
-            "ultra".to_owned(),
-            "--effort".to_owned(),
-            "high".to_owned(),
-        ])
-    );
-    assert!(matches!(
-        AmpAdapter.spec().render_preset(&LaunchPreset {
-            system_prompt_file: Some(PathBuf::from("/tmp/prompt")),
-            ..Default::default()
-        }),
-        Err(PresetErr::UnsupportedField {
-            agent: "amp",
-            field: "system-prompt-file"
-        })
-    ));
 }
 
 #[test]
 fn lifecycle_events_map_through_the_shared_state_machine() {
-    let registered = AmpAdapter
-        .decode_hook(
-            "session_start",
-            &json!({
-                "session_id": "T-abc123",
-                "cwd": "/tmp/repo",
-                "model": "high",
-                "effort": "xhigh"
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let registered = hook_lifecycle(
+        &AmpAdapter,
+        "session_start",
+        &json!({
+            "session_id": "T-abc123",
+            "cwd": "/tmp/repo",
+            "model": "high",
+            "effort": "xhigh"
+        }),
+    );
     assert_eq!(registered.agent_id.as_deref(), Some("T-abc123"));
     assert_eq!(registered.worktree_path.as_deref(), Some("/tmp/repo"));
     assert_eq!(registered.launch.model.as_deref(), Some("high"));
@@ -109,45 +80,36 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
     let mut state = step(None, None, &registered.signal).next;
     assert_eq!(state.status, AgentStatus::Idle);
 
-    let started = AmpAdapter
-        .decode_hook(
-            "agent_start",
-            &json!({ "session_id": "T-abc123", "prompt": "  fix auth  " }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let started = hook_lifecycle(
+        &AmpAdapter,
+        "agent_start",
+        &json!({ "session_id": "T-abc123", "prompt": "  fix auth  " }),
+    );
     assert_eq!(started.prompt.as_deref(), Some("fix auth"));
     assert_eq!(started.task.as_deref(), Some("fix auth"));
     state = step(Some(&state), None, &started.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Reasoning);
 
-    let tool = AmpAdapter
-        .decode_hook(
-            "tool_result",
-            &json!({
-                "session_id": "T-abc123",
-                "tool_name": "unknown_dynamic_tool",
-                "files_modified": true,
-                "status": "done"
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let tool = hook_lifecycle(
+        &AmpAdapter,
+        "tool_result",
+        &json!({
+            "session_id": "T-abc123",
+            "tool_name": "unknown_dynamic_tool",
+            "files_modified": true,
+            "status": "done"
+        }),
+    );
     state = step(Some(&state), None, &tool.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Acting);
 
-    let waiting = AmpAdapter
-        .decode_hook("permission_ask", &json!({ "session_id": "T-abc123" }))
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let waiting = hook_lifecycle(
+        &AmpAdapter,
+        "permission_ask",
+        &json!({ "session_id": "T-abc123" }),
+    );
     state = step(Some(&state), None, &waiting.signal).next;
     assert_eq!(state.status, AgentStatus::Waiting);
 
@@ -156,15 +118,11 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
         ("error", AgentStatus::Failed),
         ("cancelled", AgentStatus::Failed),
     ] {
-        let ended = AmpAdapter
-            .decode_hook(
-                "agent_end",
-                &json!({ "session_id": "T-abc123", "status": status }),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap();
+        let ended = hook_lifecycle(
+            &AmpAdapter,
+            "agent_end",
+            &json!({ "session_id": "T-abc123", "status": status }),
+        );
         assert_eq!(
             step(Some(&state), None, &ended.signal).next.status,
             expected
@@ -188,12 +146,7 @@ fn files_modified_flag_precedes_static_tool_fallback() {
             true,
         ),
     ] {
-        let observed = AmpAdapter
-            .decode_hook("tool_result", &payload)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap();
+        let observed = hook_lifecycle(&AmpAdapter, "tool_result", &payload);
         assert_eq!(
             observed.signal,
             LifecycleSignal::ToolUsed {
@@ -213,18 +166,14 @@ fn agent_end_extracts_the_supervised_final_answer() {
         "last_assistant_message": "  Fixed the race.  "
     });
     assert_eq!(
-        AmpAdapter
-            .decode_hook("agent_end", &payload)
-            .expect("test hook decodes")
+        hook_output(&AmpAdapter, "agent_end", &payload)
             .final_message()
             .map(str::to_owned)
             .as_deref(),
         Some("Fixed the race.")
     );
     assert_eq!(
-        AmpAdapter
-            .decode_hook("tool_result", &payload)
-            .expect("test hook decodes")
+        hook_output(&AmpAdapter, "tool_result", &payload)
             .final_message()
             .map(str::to_owned),
         None
@@ -233,13 +182,15 @@ fn agent_end_extracts_the_supervised_final_answer() {
 
 #[test]
 fn ask_classification_and_neutral_output_are_pinned() {
-    let classified = AmpAdapter
-        .decode_hook("permission_ask", &json!({ "session_id": "T-abc123" }))
-        .expect("test hook decodes");
+    let classified = hook_output(
+        &AmpAdapter,
+        "permission_ask",
+        &json!({ "session_id": "T-abc123" }),
+    );
     assert_eq!(classified.class(), AgentHookClass::AwaitingUser);
     assert_eq!(classified.ask_kind(), Some(AskKind::Permission));
     insta::assert_snapshot!(
-        format!("{:?}", AmpAdapter.decode_hook("permission_ask", &Value::Null).expect("test hook decodes").json_reply().cloned()),
+        format!("{:?}", hook_output(&AmpAdapter, "permission_ask", &Value::Null).json_reply().cloned()),
         @"None"
     );
 }
@@ -247,11 +198,11 @@ fn ask_classification_and_neutral_output_are_pinned() {
 #[test]
 fn malformed_payloads_fold_to_no_observation() {
     insta::assert_snapshot!(
-        format!("{:?}", AmpAdapter.decode_hook("agent_start", &json!({ "prompt": "missing id" })).expect("test hook decodes").lifecycle().cloned()),
+        format!("{:?}", hook_observation(&AmpAdapter, "agent_start", &json!({ "prompt": "missing id" }))),
         @"None"
     );
     insta::assert_snapshot!(
-        format!("{:?}", AmpAdapter.decode_hook("agent_start", &json!("junk")).expect("test hook decodes").lifecycle().cloned()),
+        format!("{:?}", hook_observation(&AmpAdapter, "agent_start", &json!("junk"))),
         @"None"
     );
 }
@@ -478,12 +429,11 @@ fn lifecycle_stamps_the_exact_cache_path_for_run_recording() {
     std::fs::create_dir_all(&threads).unwrap();
     let path = threads.join("T-run.json");
     std::fs::write(&path, r#"{"id":"T-run","messages":[]}"#).unwrap();
-    let mut observation = AmpAdapter
-        .decode_hook("agent_end", &json!({"session_id":"T-run","status":"done"}))
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let mut observation = hook_lifecycle(
+        &AmpAdapter,
+        "agent_end",
+        &json!({"session_id":"T-run","status":"done"}),
+    );
 
     stamp_transcript_path(&mut observation, "T-run", dir.path());
     assert_eq!(

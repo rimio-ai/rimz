@@ -1,8 +1,53 @@
 //! Shared fixtures for the adapter unit tests: the exhaustive lifecycle-signal
-//! enumeration the totality tests sweep.
+//! enumeration the totality tests sweep, and the hook-decode accessors every
+//! adapter suite drives its native payloads through.
 
-use crate::agents::AskKind;
+use serde_json::Value;
+
+use crate::agents::capabilities::HookCapability;
 use crate::agents::lifecycle::LifecycleSignal;
+use crate::agents::{AgentLifecycleObservation, AskKind, HookOutput};
+
+/// Decode one native hook payload, asserting the adapter accepted it.
+pub(crate) fn hook_output(
+    adapter: &impl HookCapability,
+    event: &str,
+    payload: &Value,
+) -> HookOutput {
+    let kind = adapter.spec().kind;
+    adapter
+        .decode_hook(event, payload)
+        .unwrap_or_else(|err| panic!("{kind} decodes {event}: {err}"))
+}
+
+/// The lifecycle observation a native hook payload produces, if any.
+pub(crate) fn hook_observation(
+    adapter: &impl HookCapability,
+    event: &str,
+    payload: &Value,
+) -> Option<AgentLifecycleObservation> {
+    hook_output(adapter, event, payload).lifecycle().cloned()
+}
+
+/// The lifecycle observation a native hook payload must produce.
+pub(crate) fn hook_lifecycle(
+    adapter: &impl HookCapability,
+    event: &str,
+    payload: &Value,
+) -> AgentLifecycleObservation {
+    let kind = adapter.spec().kind;
+    hook_observation(adapter, event, payload)
+        .unwrap_or_else(|| panic!("{kind} {event} observes lifecycle"))
+}
+
+/// The lifecycle signal a native hook payload must produce.
+pub(crate) fn hook_signal(
+    adapter: &impl HookCapability,
+    event: &str,
+    payload: &Value,
+) -> LifecycleSignal {
+    hook_lifecycle(adapter, event, payload).signal
+}
 
 /// Every [`LifecycleSignal`] value, with each payload-carrying variant swept
 /// over its full flag space — the enumeration the state machine's totality

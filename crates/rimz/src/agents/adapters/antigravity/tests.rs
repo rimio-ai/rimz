@@ -1,7 +1,8 @@
 use super::*;
+use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 use crate::agents::{
-    AgentStatus, LaunchPreset, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
-    PriceBook, StatusLineChange, TranscriptRole, TurnPhase,
+    AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState, PriceBook,
+    StatusLineChange, TranscriptRole, TurnPhase,
 };
 use crate::ids::AgentSessionId;
 use serde_json::{Value, json};
@@ -37,32 +38,23 @@ fn hook_payload() -> Value {
 fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
     let payload = hook_payload();
     assert_eq!(
-        AntigravityAdapter
-            .decode_hook("PreInvocation", &Value::Null)
-            .expect("test hook decodes")
+        hook_output(&AntigravityAdapter, "PreInvocation", &Value::Null)
             .json_reply()
             .cloned(),
         Some(json!({}))
     );
     assert_eq!(
-        AntigravityAdapter
-            .decode_hook("Stop", &Value::Null)
-            .expect("test hook decodes")
+        hook_output(&AntigravityAdapter, "Stop", &Value::Null)
             .json_reply()
             .cloned(),
         Some(json!({"decision": ""}))
     );
     assert_eq!(
-        AntigravityAdapter
-            .decode_hook("PreToolUse", &payload)
-            .expect("test hook decodes")
-            .class(),
+        hook_output(&AntigravityAdapter, "PreToolUse", &payload).class(),
         AgentHookClass::Unknown
     );
     assert_eq!(
-        AntigravityAdapter
-            .decode_hook("PreToolUse", &Value::Null)
-            .expect("test hook decodes")
+        hook_output(&AntigravityAdapter, "PreToolUse", &Value::Null)
             .json_reply()
             .cloned(),
         None
@@ -80,15 +72,11 @@ fn native_hooks_normalize_lifecycle() {
         errored,
         parked_on_background,
     };
-    let started = AntigravityAdapter
-        .decode_hook(
-            "PreInvocation",
-            &with(&common, [("invocationNum", json!(0))]),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let started = hook_lifecycle(
+        &AntigravityAdapter,
+        "PreInvocation",
+        &with(&common, [("invocationNum", json!(0))]),
+    );
     assert_eq!(started.signal, LifecycleSignal::TurnStarted);
     assert_eq!(started.agent_id.as_deref(), Some(SESSION_ID));
     assert_eq!(started.worktree_path.as_deref(), Some("/workspace/project"));
@@ -148,21 +136,15 @@ fn native_hooks_normalize_lifecycle() {
         ),
         ("Stop", json!({"fullyIdle": true}), None),
     ] {
-        let signal = AntigravityAdapter
-            .decode_hook(event, &payload)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .map(|value| value.signal);
+        let signal =
+            hook_observation(&AntigravityAdapter, event, &payload).map(|value| value.signal);
         assert_eq!(signal, expected);
     }
 }
 
 #[test]
 fn catalog_events_without_lifecycle_signal_keep_context_identity() {
-    let camel = AntigravityAdapter
-        .decode_hook("PostInvocation", &hook_payload())
-        .expect("test hook decodes");
+    let camel = hook_output(&AntigravityAdapter, "PostInvocation", &hook_payload());
     assert_eq!(
         camel.event_agent_id().map(AgentSessionId::as_str),
         Some(SESSION_ID)
@@ -174,16 +156,15 @@ fn catalog_events_without_lifecycle_signal_keep_context_identity() {
     assert_eq!(camel.routing().worktree_path(), Some("/workspace/project"));
     assert!(camel.lifecycle().cloned().is_none());
 
-    let snake = AntigravityAdapter
-        .decode_hook(
-            "PostInvocation",
-            &json!({
-                "conversation_id": SESSION_ID,
-                "conversationId": "camel-fallback",
-                "workspacePaths": ["/workspace/project"],
-            }),
-        )
-        .expect("test hook decodes");
+    let snake = hook_output(
+        &AntigravityAdapter,
+        "PostInvocation",
+        &json!({
+            "conversation_id": SESSION_ID,
+            "conversationId": "camel-fallback",
+            "workspacePaths": ["/workspace/project"],
+        }),
+    );
     assert_eq!(
         snake.event_agent_id().map(AgentSessionId::as_str),
         Some(SESSION_ID)
@@ -209,21 +190,13 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
             ],
         );
         assert!(
-            AntigravityAdapter
-                .decode_hook("Stop", &payload)
-                .expect("test hook decodes")
+            hook_output(&AntigravityAdapter, "Stop", &payload)
                 .turn_error()
                 .cloned()
                 .is_none()
         );
         assert_eq!(
-            AntigravityAdapter
-                .decode_hook("Stop", &payload)
-                .expect("test hook decodes")
-                .lifecycle()
-                .cloned()
-                .unwrap()
-                .signal,
+            hook_signal(&AntigravityAdapter, "Stop", &payload),
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
@@ -1229,25 +1202,6 @@ fn launch_resume_permissions_and_model_preset_match_agy() {
             expected
         );
     }
-    assert_eq!(
-        AntigravityAdapter
-            .spec()
-            .render_preset(&LaunchPreset {
-                model: Some("Gemini 3.5 Flash (Low)".to_owned()),
-                ..Default::default()
-            })
-            .unwrap(),
-        ["--model", "Gemini 3.5 Flash (Low)"]
-    );
-    assert!(
-        AntigravityAdapter
-            .spec()
-            .render_preset(&LaunchPreset {
-                effort: Some("high".to_owned()),
-                ..Default::default()
-            })
-            .is_err()
-    );
     for (command, expected) in [
         (
             "agy --conversation 11111111-1111-4111-8111-111111111111",

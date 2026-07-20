@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::testkit::{hook_lifecycle, hook_output};
 
 #[test]
 fn transcript_tail_drives_context_window_and_tokens() {
@@ -13,15 +14,11 @@ fn transcript_tail_drives_context_window_and_tokens() {
             "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
         )
         .unwrap();
-    let obs = ClaudeAdapter
-        .decode_hook(
-            "Stop",
-            &json!({ "session_id": "sess-1", "transcript_path": bare.to_str().unwrap() }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "Stop",
+        &json!({ "session_id": "sess-1", "transcript_path": bare.to_str().unwrap() }),
+    );
     assert_eq!(obs.usage.total_tokens, Some(100_500));
     assert_eq!(obs.usage.context_window, None);
     assert_eq!(obs.launch.model.as_deref(), Some("claude-opus-4-7"));
@@ -42,19 +39,15 @@ fn transcript_tail_drives_context_window_and_tokens() {
             "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
         )
         .unwrap();
-    let obs = ClaudeAdapter
-        .decode_hook(
-            "Stop",
-            &json!({
-                "session_id": "sess-1",
-                "model": "claude-opus-4-8[1m]",
-                "transcript_path": extended.to_str().unwrap(),
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "Stop",
+        &json!({
+            "session_id": "sess-1",
+            "model": "claude-opus-4-8[1m]",
+            "transcript_path": extended.to_str().unwrap(),
+        }),
+    );
     assert_eq!(obs.usage.context_window, Some(1_000_000));
     assert_eq!(obs.usage.total_tokens, Some(100_500));
     assert_eq!(obs.launch.model.as_deref(), Some("claude-opus-4-8[1m]"));
@@ -154,78 +147,76 @@ fn turn_interrupted_reads_the_tail_from_the_payload_path() {
 #[test]
 fn stop_failure_hook_maps_to_turn_error_marker() {
     let marker = |error: &str| {
-        ClaudeAdapter
-            .decode_hook(
-                "StopFailure",
-                &json!({
-                    "session_id": "sess-1",
-                    "error": error,
-                    "last_assistant_message": "You've hit your usage limit"
-                }),
-            )
-            .expect("test hook decodes")
-            .turn_error()
-            .cloned()
-            .expect("marker")
+        hook_output(
+            &ClaudeAdapter,
+            "StopFailure",
+            &json!({
+                "session_id": "sess-1",
+                "error": error,
+                "last_assistant_message": "You've hit your usage limit"
+            }),
+        )
+        .turn_error()
+        .cloned()
+        .expect("marker")
     };
 
     assert_eq!(marker("rate_limit").class, TurnErrorClass::PausedRateLimit);
     assert_eq!(marker("overloaded").class, TurnErrorClass::PausedOverloaded);
 
-    let transient = ClaudeAdapter
-        .decode_hook(
-            "StopFailure",
-            &json!({
-                "session_id": "sess-1",
-                "error": "api_error",
-                "last_assistant_message": "API Error: Server Error"
-            }),
-        )
-        .expect("test hook decodes")
-        .turn_error()
-        .cloned()
-        .expect("marker");
+    let transient = hook_output(
+        &ClaudeAdapter,
+        "StopFailure",
+        &json!({
+            "session_id": "sess-1",
+            "error": "api_error",
+            "last_assistant_message": "API Error: Server Error"
+        }),
+    )
+    .turn_error()
+    .cloned()
+    .expect("marker");
     assert_eq!(transient.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(transient.label.as_deref(), Some("API Error: Server Error"));
 
-    let failed = ClaudeAdapter
-        .decode_hook(
-            "StopFailure",
-            &json!({
-                "session_id": "sess-1",
-                "error": "api_error",
-                "last_assistant_message": "API Error: Bad Request"
-            }),
-        )
-        .expect("test hook decodes")
-        .turn_error()
-        .cloned()
-        .expect("marker");
+    let failed = hook_output(
+        &ClaudeAdapter,
+        "StopFailure",
+        &json!({
+            "session_id": "sess-1",
+            "error": "api_error",
+            "last_assistant_message": "API Error: Bad Request"
+        }),
+    )
+    .turn_error()
+    .cloned()
+    .expect("marker");
     assert_eq!(failed.class, TurnErrorClass::Failed);
     assert_eq!(failed.label.as_deref(), Some("API Error: Bad Request"));
 
     assert!(
-        ClaudeAdapter
-            .decode_hook("StopFailure", &json!({ "session_id": "sess-1" }))
-            .expect("test hook decodes")
-            .turn_error()
-            .cloned()
-            .is_none(),
+        hook_output(
+            &ClaudeAdapter,
+            "StopFailure",
+            &json!({ "session_id": "sess-1" })
+        )
+        .turn_error()
+        .cloned()
+        .is_none(),
         "missing error has no marker"
     );
     assert!(
-        ClaudeAdapter
-            .decode_hook(
-                "Stop",
-                &json!({
-                    "session_id": "sess-1",
-                    "error": "rate_limit"
-                }),
-            )
-            .expect("test hook decodes")
-            .turn_error()
-            .cloned()
-            .is_none(),
+        hook_output(
+            &ClaudeAdapter,
+            "Stop",
+            &json!({
+                "session_id": "sess-1",
+                "error": "rate_limit"
+            })
+        )
+        .turn_error()
+        .cloned()
+        .is_none(),
         "only StopFailure carries this marker"
     );
 }
@@ -243,15 +234,11 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
         "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n",
     )
     .unwrap();
-    let obs = ClaudeAdapter
-        .decode_hook(
-            "SessionStart",
-            &json!({ "session_id": "sess-1", "transcript_path": fresh.to_str().unwrap() }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "SessionStart",
+        &json!({ "session_id": "sess-1", "transcript_path": fresh.to_str().unwrap() }),
+    );
     assert_eq!(obs.usage.total_tokens, Some(0));
     assert_eq!(obs.usage.context_window, None);
     // The zero is a gauge baseline for the total only. Claiming four confident
@@ -262,15 +249,11 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
     assert_eq!(obs.usage.output_tokens, None);
 
     // No readable transcript means unknown (None), not a false 0%.
-    let obs = ClaudeAdapter
-        .decode_hook(
-            "SessionStart",
-            &json!({ "session_id": "sess-1", "transcript_path": "/nonexistent/session.jsonl" }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "SessionStart",
+        &json!({ "session_id": "sess-1", "transcript_path": "/nonexistent/session.jsonl" }),
+    );
     assert_eq!(obs.usage.total_tokens, None);
     assert_eq!(obs.usage.context_window, None);
 
@@ -283,15 +266,11 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
              {\"input_tokens\":100000,\"output_tokens\":500}}}\n",
     )
     .unwrap();
-    let obs = ClaudeAdapter
-        .decode_hook(
-            "SessionStart",
-            &json!({ "transcript_path": usage.to_str().unwrap() }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "SessionStart",
+        &json!({ "transcript_path": usage.to_str().unwrap() }),
+    );
     assert_eq!(obs.usage.total_tokens, None);
     assert_eq!(obs.usage.context_window, None);
 }
@@ -316,21 +295,17 @@ fn subagent_usage_comes_from_the_child_transcript_not_the_parents() {
              {\"input_tokens\":10,\"cache_read_input_tokens\":40,\"output_tokens\":7}}}\n",
     )
     .unwrap();
-    let obs = ClaudeAdapter
-        .decode_hook(
-            "SubagentStop",
-            &json!({
-                "session_id": "parent-sess",
-                "agent_id": "child-sess",
-                "agent_type": "Explore",
-                "transcript_path": parent.to_str().unwrap(),
-                "agent_transcript_path": child.to_str().unwrap(),
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "SubagentStop",
+        &json!({
+            "session_id": "parent-sess",
+            "agent_id": "child-sess",
+            "agent_type": "Explore",
+            "transcript_path": parent.to_str().unwrap(),
+            "agent_transcript_path": child.to_str().unwrap(),
+        }),
+    );
     assert_eq!(obs.usage.total_tokens, Some(57));
     assert_eq!(obs.usage.fresh_input_tokens, Some(10));
     assert_eq!(obs.usage.cache_read_input_tokens, Some(40));
@@ -349,20 +324,16 @@ fn subagent_without_its_own_transcript_reports_unknown_usage() {
              {\"input_tokens\":900000,\"output_tokens\":1000}}}\n",
     )
     .unwrap();
-    let obs = ClaudeAdapter
-        .decode_hook(
-            "SubagentStart",
-            &json!({
-                "session_id": "parent-sess",
-                "agent_id": "child-sess",
-                "agent_type": "Explore",
-                "transcript_path": parent.to_str().unwrap(),
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "SubagentStart",
+        &json!({
+            "session_id": "parent-sess",
+            "agent_id": "child-sess",
+            "agent_type": "Explore",
+            "transcript_path": parent.to_str().unwrap(),
+        }),
+    );
     assert_eq!(obs.usage.total_tokens, None);
     assert_eq!(obs.usage.fresh_input_tokens, None);
     assert_eq!(obs.launch.model.as_deref(), None);
@@ -383,15 +354,11 @@ fn transcript_tail_splits_a_cache_heavy_turn() {
               \"cache_creation_input_tokens\":7853,\"output_tokens\":491}}}\n",
     )
     .unwrap();
-    let obs = ClaudeAdapter
-        .decode_hook(
-            "Stop",
-            &json!({ "session_id": "sess-1", "transcript_path": warm.to_str().unwrap() }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "Stop",
+        &json!({ "session_id": "sess-1", "transcript_path": warm.to_str().unwrap() }),
+    );
     assert_eq!(obs.usage.fresh_input_tokens, Some(2));
     assert_eq!(obs.usage.cache_read_input_tokens, Some(226_584));
     assert_eq!(obs.usage.cache_write_input_tokens, Some(7_853));

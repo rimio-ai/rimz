@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use crate::agents::definition::{ConcernCoverage, IntegrationConcern};
 use crate::agents::{
-    AgentErr, AgentHookClass, LaunchPreset, LocalSessionObservation, LocalSessionProjection,
-    LocalSessionState, TranscriptPosition, TranscriptRole,
+    AgentErr, AgentHookClass, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
+    TranscriptPosition, TranscriptRole,
 };
 use serde_json::{Value, json};
 
@@ -608,19 +608,6 @@ fn launch_resume_and_presets_use_v3_surface() {
     assert_eq!(
         KiroAdapter.spec().launch.compact_command(),
         Some("/compact")
-    );
-    assert_eq!(
-        KiroAdapter.spec().render_preset(&LaunchPreset {
-            model: Some("auto".to_owned()),
-            effort: Some("high".to_owned()),
-            ..Default::default()
-        }),
-        Ok(vec![
-            "--model".to_owned(),
-            "auto".to_owned(),
-            "--effort".to_owned(),
-            "high".to_owned()
-        ])
     );
 }
 

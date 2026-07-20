@@ -4,6 +4,7 @@ use serde_json::json;
 
 use super::*;
 use crate::agents::AgentHookClass;
+use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 
 #[test]
 fn native_questions_and_permissions_use_distinct_hooks() {
@@ -12,28 +13,16 @@ fn native_questions_and_permissions_use_distinct_hooks() {
         "tool_name": "AskUserQuestion",
         "tool_input": {"questions":[{"question":"Ship it?","options":[],"multi_select":false}]}
     });
-    let classified = KimiAdapter
-        .decode_hook("PreToolUse", &question)
-        .expect("test hook decodes");
+    let classified = hook_output(&KimiAdapter, "PreToolUse", &question);
     assert_eq!(classified.class(), AgentHookClass::AwaitingUser);
     assert_eq!(classified.ask_kind(), Some(super::super::AskKind::Question));
 
     let plan_pre_tool = json!({"session_id":"s1","tool_name":"ExitPlanMode"});
     assert_eq!(
-        KimiAdapter
-            .decode_hook("PreToolUse", &plan_pre_tool)
-            .expect("test hook decodes")
-            .class(),
+        hook_output(&KimiAdapter, "PreToolUse", &plan_pre_tool).class(),
         AgentHookClass::Lifecycle
     );
-    assert!(
-        KimiAdapter
-            .decode_hook("PreToolUse", &plan_pre_tool)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .is_none()
-    );
+    assert!(hook_observation(&KimiAdapter, "PreToolUse", &plan_pre_tool).is_none());
 
     let plan_permission = json!({
         "session_id":"s1",
@@ -42,13 +31,7 @@ fn native_questions_and_permissions_use_distinct_hooks() {
         "action":"Exit plan mode"
     });
     assert!(matches!(
-        KimiAdapter
-            .decode_hook("PermissionRequest", &plan_permission)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
-            .signal,
+        hook_signal(&KimiAdapter, "PermissionRequest", &plan_permission),
         LifecycleSignal::AwaitingInput {
             kind: super::super::AskKind::PlanApproval,
             ..
@@ -57,32 +40,22 @@ fn native_questions_and_permissions_use_distinct_hooks() {
 
     let permission = json!({"session_id":"s1","tool_name":"Bash","action":"Run tests"});
     assert!(matches!(
-        KimiAdapter
-            .decode_hook("PermissionRequest", &permission)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
-            .signal,
+        hook_signal(&KimiAdapter, "PermissionRequest", &permission),
         LifecycleSignal::AwaitingInput {
             kind: super::super::AskKind::Permission,
             ..
         }
     ));
-    insta::assert_snapshot!(format!("{:?}", KimiAdapter.decode_hook("PermissionRequest", &Value::Null).expect("test hook decodes").json_reply().cloned()), @"None");
+    insta::assert_snapshot!(format!("{:?}", hook_output(&KimiAdapter, "PermissionRequest", &Value::Null).json_reply().cloned()), @"None");
 }
 
 #[test]
 fn permission_result_and_interrupt_clear_waiting_state() {
-    let result = KimiAdapter
-        .decode_hook(
-            "PermissionResult",
-            &json!({"session_id":"s1","tool_name":"Bash","decision":"approved"}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let result = hook_lifecycle(
+        &KimiAdapter,
+        "PermissionResult",
+        &json!({"session_id":"s1","tool_name":"Bash","decision":"approved"}),
+    );
     assert_eq!(
         result.signal,
         LifecycleSignal::ToolUsed {
@@ -92,31 +65,22 @@ fn permission_result_and_interrupt_clear_waiting_state() {
         }
     );
     assert!(matches!(
-        KimiAdapter
-            .decode_hook(
-                "Interrupt",
-                &json!({"session_id":"s1","turn_id":"t1","reason":"cancelled"})
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .unwrap()
-            .signal,
+        hook_signal(
+            &KimiAdapter,
+            "Interrupt",
+            &json!({"session_id":"s1","turn_id":"t1","reason":"cancelled"})
+        ),
         LifecycleSignal::TurnEnded { errored: false, .. }
     ));
 }
 
 #[test]
 fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
-    let failed = KimiAdapter
-        .decode_hook(
-            "PostToolUseFailure",
-            &json!({"session_id":"s1","tool_name":"AskUserQuestion"}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let failed = hook_lifecycle(
+        &KimiAdapter,
+        "PostToolUseFailure",
+        &json!({"session_id":"s1","tool_name":"AskUserQuestion"}),
+    );
     assert_eq!(
         failed.signal,
         LifecycleSignal::ToolUsed {
@@ -132,20 +96,10 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
         "tool_input":{"background":true,"questions":[{"question":"Ship it?"}]}
     });
     assert_eq!(
-        KimiAdapter
-            .decode_hook("PreToolUse", &background)
-            .expect("test hook decodes")
-            .class(),
+        hook_output(&KimiAdapter, "PreToolUse", &background).class(),
         AgentHookClass::Lifecycle
     );
-    assert!(
-        KimiAdapter
-            .decode_hook("PreToolUse", &background)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .is_none()
-    );
+    assert!(hook_observation(&KimiAdapter, "PreToolUse", &background).is_none());
 }
 
 #[test]
@@ -155,12 +109,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         "cwd":"/tmp/project",
         "prompt":[{"type":"text","text":"fix"},{"type":"image","url":"x"},{"type":"text","text":"parser"}]
     });
-    let observed = KimiAdapter
-        .decode_hook("UserPromptSubmit", &prompt)
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let observed = hook_lifecycle(&KimiAdapter, "UserPromptSubmit", &prompt);
     assert_eq!(observed.prompt.as_deref(), Some("fix\nparser"));
     assert_eq!(
         KimiAdapter
@@ -201,28 +150,12 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         KimiAdapter.spec().launch.compact_command(),
         Some("/compact")
     );
-    assert_eq!(
-        KimiAdapter
-            .spec()
-            .render_preset(&crate::agents::LaunchPreset {
-                effort: Some("high".to_owned()),
-                ..Default::default()
-            }),
-        Err(crate::agents::PresetErr::UnsupportedField {
-            agent: "kimi",
-            field: "effort",
-        })
-    );
 
-    let write = KimiAdapter
-        .decode_hook(
-            "PostToolUse",
-            &json!({"session_id":"s1","tool_name":"Write"}),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let write = hook_lifecycle(
+        &KimiAdapter,
+        "PostToolUse",
+        &json!({"session_id":"s1","tool_name":"Write"}),
+    );
     assert_eq!(
         write.signal,
         LifecycleSignal::ToolUsed {

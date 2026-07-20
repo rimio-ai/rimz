@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::agents::testkit::hook_output;
 use crate::agents::{
     HookIngressAcceptance, HookIngressDecision, HookIngressIgnoreReason, HookIngressOwner,
 };
@@ -128,45 +129,6 @@ fn codex_commands_and_permission_args_match_run_posture() {
 }
 
 #[test]
-fn codex_render_preset_maps_effort_and_system_prompt_file_to_config_overrides() {
-    let argv = CodexAdapter
-        .spec()
-        .render_preset(&crate::agents::LaunchPreset {
-            model: Some("gpt-5-codex".to_owned()),
-            effort: Some("high".to_owned()),
-            system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
-            ..Default::default()
-        })
-        .expect("codex renders model, effort, and instructions file via -c overrides");
-    assert_eq!(
-        argv,
-        vec![
-            "--model",
-            "gpt-5-codex",
-            "-c",
-            "model_reasoning_effort=high",
-            "-c",
-            "model_instructions_file=/abs/prompt.md",
-        ]
-    );
-
-    let err = CodexAdapter
-        .spec()
-        .render_preset(&crate::agents::LaunchPreset {
-            append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
-            ..Default::default()
-        })
-        .expect_err("codex has no append prompt flag");
-    assert_eq!(
-        err,
-        crate::agents::PresetErr::UnsupportedField {
-            agent: "codex",
-            field: "append-system-prompt-file",
-        }
-    );
-}
-
-#[test]
 fn codex_descriptor_declares_lazy_registration() {
     // Codex's instances can be present before a session binds (lazy
     // `SessionStart`, daemon-routed unstamped hooks), so it opts into cwd
@@ -192,22 +154,21 @@ fn codex_descriptor_declares_lazy_registration() {
 
 #[test]
 fn codex_question_summary_reads_request_user_input_questions() {
-    let questions = CodexAdapter
-        .decode_hook(
-            "PreToolUse",
-            &json!({
-                "tool_name": "request_user_input",
-                "tool_input": {
-                    "questions": [
-                        { "question": "Pick a migration path?" },
-                        { "question": "Notify users?" }
-                    ]
-                }
-            }),
-        )
-        .expect("test hook decodes")
-        .questions()
-        .to_vec();
+    let questions = hook_output(
+        &CodexAdapter,
+        "PreToolUse",
+        &json!({
+            "tool_name": "request_user_input",
+            "tool_input": {
+                "questions": [
+                    { "question": "Pick a migration path?" },
+                    { "question": "Notify users?" }
+                ]
+            }
+        }),
+    )
+    .questions()
+    .to_vec();
 
     assert_eq!(
         questions,
@@ -227,18 +188,17 @@ fn codex_question_summary_reads_request_user_input_questions() {
         ]
     );
     assert!(
-        CodexAdapter
-            .decode_hook(
-                "PreToolUse",
-                &json!({
-                    "tool_name": "shell",
-                    "tool_input": { "questions": [{ "question": "ignored" }] }
-                }),
-            )
-            .expect("test hook decodes")
-            .questions()
-            .to_vec()
-            .is_empty()
+        hook_output(
+            &CodexAdapter,
+            "PreToolUse",
+            &json!({
+                "tool_name": "shell",
+                "tool_input": { "questions": [{ "question": "ignored" }] }
+            })
+        )
+        .questions()
+        .to_vec()
+        .is_empty()
     );
 }
 

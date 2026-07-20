@@ -1,9 +1,8 @@
 use super::*;
 
 use crate::agents::lifecycle::{TurnPhase, step};
-use crate::agents::{
-    AgentErr, AgentHookClass, AgentStatus, LaunchPreset, LocalSessionProjection, PresetErr,
-};
+use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
+use crate::agents::{AgentErr, AgentStatus, LocalSessionProjection};
 use md5::{Digest as _, Md5};
 use prost::Message;
 use rusqlite::Connection;
@@ -393,25 +392,21 @@ fn pending_ask(prompt: &str, run_async: bool, sentinel: Option<&str>) -> Value {
 
 #[test]
 fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
-    let registered = CursorAdapter
-        .decode_hook(
-            "sessionStart",
-            &json!({
-                "conversation_id": "conv-1",
-                "model": "legacy-model",
-                "model_id": "cursor/model",
-                "model_params": [
-                    { "id": "context", "value": "200k" },
-                    { "id": "effort", "value": "high" },
-                    { "id": "future", "value": "kept-tolerant" }
-                ],
-                "transcript_path": "/tmp/transcript.jsonl"
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("registered observation");
+    let registered = hook_lifecycle(
+        &CursorAdapter,
+        "sessionStart",
+        &json!({
+            "conversation_id": "conv-1",
+            "model": "legacy-model",
+            "model_id": "cursor/model",
+            "model_params": [
+                { "id": "context", "value": "200k" },
+                { "id": "effort", "value": "high" },
+                { "id": "future", "value": "kept-tolerant" }
+            ],
+            "transcript_path": "/tmp/transcript.jsonl"
+        }),
+    );
     assert_eq!(registered.agent_id.as_deref(), Some("conv-1"));
     assert_eq!(registered.signal, LifecycleSignal::Registered);
     assert_eq!(registered.launch.model.as_deref(), Some("cursor/model"));
@@ -425,15 +420,11 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         AgentStatus::Idle
     );
 
-    let prompt = CursorAdapter
-        .decode_hook(
-            "beforeSubmitPrompt",
-            &json!({ "conversation_id": "conv-1", "prompt": "  fix auth  " }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("prompt observation");
+    let prompt = hook_lifecycle(
+        &CursorAdapter,
+        "beforeSubmitPrompt",
+        &json!({ "conversation_id": "conv-1", "prompt": "  fix auth  " }),
+    );
     assert_eq!(prompt.task.as_deref(), Some("fix auth"));
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
     let running = step(None, None, &prompt.signal).next;
@@ -445,14 +436,11 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         ("Shell", Some(false)),
         ("Read", None),
     ] {
-        let observation = CursorAdapter
-            .decode_hook(
-                "postToolUse",
-                &json!({ "conversation_id": "conv-1", "tool_name": tool, "cwd": "/work" }),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned();
+        let observation = hook_observation(
+            &CursorAdapter,
+            "postToolUse",
+            &json!({ "conversation_id": "conv-1", "tool_name": tool, "cwd": "/work" }),
+        );
         assert_eq!(
             observation.map(|observation| observation.signal),
             edits.map(|edits| LifecycleSignal::ToolUsed {
@@ -464,15 +452,12 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         );
     }
     assert!(
-        CursorAdapter
-            .decode_hook(
-                "postToolUseFailure",
-                &json!({ "conversation_id": "conv-1", "tool_name": "Write" }),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .is_none()
+        hook_observation(
+            &CursorAdapter,
+            "postToolUseFailure",
+            &json!({ "conversation_id": "conv-1", "tool_name": "Write" })
+        )
+        .is_none()
     );
 
     for (status, signal) in [
@@ -492,32 +477,24 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
             },
         ),
     ] {
-        let observation = CursorAdapter
-            .decode_hook(
-                "stop",
-                &json!({ "conversation_id": "conv-1", "status": status }),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .expect("stop observation");
+        let observation = hook_lifecycle(
+            &CursorAdapter,
+            "stop",
+            &json!({ "conversation_id": "conv-1", "status": status }),
+        );
         assert_eq!(observation.signal, signal);
     }
 
-    let compacting = CursorAdapter
-        .decode_hook(
-            "preCompact",
-            &json!({
-                "conversation_id": "conv-1",
-                "context_usage_percent": 83.6,
-                "context_tokens": 167200,
-                "context_window_size": 200000
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("compaction observation");
+    let compacting = hook_lifecycle(
+        &CursorAdapter,
+        "preCompact",
+        &json!({
+            "conversation_id": "conv-1",
+            "context_usage_percent": 83.6,
+            "context_tokens": 167200,
+            "context_window_size": 200000
+        }),
+    );
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
     assert_eq!(compacting.usage.context_pct, Some(84));
     assert_eq!(compacting.usage.context_window, Some(200_000));
@@ -526,42 +503,39 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     assert!(transition.next.compacting);
     assert_eq!(transition.next.status, AgentStatus::Running);
 
-    let ended = CursorAdapter
-        .decode_hook("sessionEnd", &json!({ "conversation_id": "conv-1" }))
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("session end");
+    let ended = hook_lifecycle(
+        &CursorAdapter,
+        "sessionEnd",
+        &json!({ "conversation_id": "conv-1" }),
+    );
     assert_eq!(ended.signal, LifecycleSignal::Ended);
     assert!(
-        CursorAdapter
-            .decode_hook("sessionEnd", &json!({ "conversation_id": "c1" }))
-            .expect("test hook decodes")
-            .ends_session()
+        hook_output(
+            &CursorAdapter,
+            "sessionEnd",
+            &json!({ "conversation_id": "c1" })
+        )
+        .ends_session()
     );
 }
 
 #[test]
 fn cursor_subagent_lifecycle_keeps_exact_identity_and_child_only_enrichment() {
-    let started = CursorAdapter
-        .decode_hook(
-            "subagentStart",
-            &json!({
-                "conversation_id": "parent-common",
-                "subagent_id": " child-1 ",
-                "parent_conversation_id": " parent-1 ",
-                "subagent_type": " generalPurpose ",
-                "task": "  inspect hooks  ",
-                "subagent_model": "default",
-                "git_branch": " feature/hooks ",
-                "model_id": "parent-model",
-                "transcript_path": "/tmp/parent.jsonl"
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("subagent start");
+    let started = hook_lifecycle(
+        &CursorAdapter,
+        "subagentStart",
+        &json!({
+            "conversation_id": "parent-common",
+            "subagent_id": " child-1 ",
+            "parent_conversation_id": " parent-1 ",
+            "subagent_type": " generalPurpose ",
+            "task": "  inspect hooks  ",
+            "subagent_model": "default",
+            "git_branch": " feature/hooks ",
+            "model_id": "parent-model",
+            "transcript_path": "/tmp/parent.jsonl"
+        }),
+    );
     assert_eq!(started.agent_id.as_deref(), Some("child-1"));
     assert_eq!(started.parent_agent_id.as_deref(), Some("parent-1"));
     assert_eq!(started.signal, LifecycleSignal::SubagentStarted);
@@ -572,25 +546,21 @@ fn cursor_subagent_lifecycle_keeps_exact_identity_and_child_only_enrichment() {
     assert_eq!(started.worktree_branch.as_deref(), Some("feature/hooks"));
     assert_eq!(started.transcript_path, None);
 
-    let stopped = CursorAdapter
-        .decode_hook(
-            "subagentStop",
-            &json!({
-                "conversation_id": "parent-common",
-                "subagent_id": "child-1",
-                "parent_conversation_id": "parent-1",
-                "subagent_type": "generalPurpose",
-                "status": "completed",
-                "description": "  inspect hooks fallback  ",
-                "model_id": "parent-model",
-                "transcript_path": "/tmp/parent.jsonl",
-                "agent_transcript_path": "/tmp/child-1.jsonl"
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("subagent stop");
+    let stopped = hook_lifecycle(
+        &CursorAdapter,
+        "subagentStop",
+        &json!({
+            "conversation_id": "parent-common",
+            "subagent_id": "child-1",
+            "parent_conversation_id": "parent-1",
+            "subagent_type": "generalPurpose",
+            "status": "completed",
+            "description": "  inspect hooks fallback  ",
+            "model_id": "parent-model",
+            "transcript_path": "/tmp/parent.jsonl",
+            "agent_transcript_path": "/tmp/child-1.jsonl"
+        }),
+    );
     assert_eq!(stopped.agent_id.as_deref(), Some("child-1"));
     assert_eq!(stopped.parent_agent_id.as_deref(), Some("parent-1"));
     assert_eq!(
@@ -623,12 +593,7 @@ fn cursor_subagent_stop_status_fails_closed() {
         if let Some(status) = status {
             payload["status"] = json!(status);
         }
-        let observed = CursorAdapter
-            .decode_hook("subagentStop", &payload)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .expect("valid child identity");
+        let observed = hook_lifecycle(&CursorAdapter, "subagentStop", &payload);
         assert_eq!(
             observed.signal,
             LifecycleSignal::SubagentStopped { errored },
@@ -666,11 +631,7 @@ fn cursor_subagent_malformed_identity_is_quarantined() {
     ] {
         for event in ["subagentStart", "subagentStop"] {
             assert_eq!(
-                CursorAdapter
-                    .decode_hook(event, &payload)
-                    .expect("test hook decodes")
-                    .lifecycle()
-                    .cloned(),
+                hook_observation(&CursorAdapter, event, &payload),
                 None,
                 "event={event} payload={payload}",
             );
@@ -1184,14 +1145,7 @@ fn malformed_payloads_degrade_without_losing_the_event() {
         json!({ "conversation_id": "  " }),
     ]
     .iter()
-    .map(|payload| {
-        CursorAdapter
-            .decode_hook("sessionStart", payload)
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .expect("event still maps")
-    })
+    .map(|payload| hook_lifecycle(&CursorAdapter, "sessionStart", payload))
     .collect();
     assert!(
         observations
@@ -1234,12 +1188,7 @@ fn malformed_fields_preserve_identity_response_and_token_composition() {
         "cache_write_tokens": {},
         "context_tokens": 999
     });
-    let observed = CursorAdapter
-        .decode_hook("stop", &payload)
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .expect("stop survives malformed siblings");
+    let observed = hook_lifecycle(&CursorAdapter, "stop", &payload);
     assert_eq!(observed.agent_id.as_deref(), Some("conv-1"));
     assert_eq!(observed.launch.model.as_deref(), Some("cursor/model"));
     assert_eq!(observed.launch.effort.as_deref(), Some("high"));
@@ -1250,20 +1199,17 @@ fn malformed_fields_preserve_identity_response_and_token_composition() {
     assert_eq!(observed.usage.total_tokens, None);
 
     assert_eq!(
-        CursorAdapter
-            .decode_hook(
-                "afterAgentResponse",
-                &json!({"conversation_id": "conv-1", "text": "  safe final  ", "input_tokens": 9})
-            )
-            .expect("test hook decodes")
-            .assistant_message()
-            .map(str::to_owned),
+        hook_output(
+            &CursorAdapter,
+            "afterAgentResponse",
+            &json!({"conversation_id": "conv-1", "text": "  safe final  ", "input_tokens": 9})
+        )
+        .assistant_message()
+        .map(str::to_owned),
         Some("safe final".to_owned())
     );
     assert!(
-        CursorAdapter
-            .decode_hook("stop", &json!({"text": "unsafe fallback"}))
-            .expect("test hook decodes")
+        hook_output(&CursorAdapter, "stop", &json!({"text": "unsafe fallback"}))
             .assistant_message()
             .map(str::to_owned)
             .is_none()
@@ -1272,41 +1218,33 @@ fn malformed_fields_preserve_identity_response_and_token_composition() {
 
 #[test]
 fn stop_input_total_subtracts_cache_without_underflow() {
-    let observed = CursorAdapter
-        .decode_hook(
-            "stop",
-            &json!({
-                "conversation_id": "conv-1",
-                "status": "completed",
-                "input_tokens": 22_725,
-                "output_tokens": 26,
-                "cache_read_tokens": 8_704,
-                "cache_write_tokens": 0
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let observed = hook_lifecycle(
+        &CursorAdapter,
+        "stop",
+        &json!({
+            "conversation_id": "conv-1",
+            "status": "completed",
+            "input_tokens": 22_725,
+            "output_tokens": 26,
+            "cache_read_tokens": 8_704,
+            "cache_write_tokens": 0
+        }),
+    );
     assert_eq!(observed.usage.fresh_input_tokens, Some(14_021));
     assert_eq!(observed.usage.cache_read_input_tokens, Some(8_704));
     assert_eq!(observed.usage.output_tokens, Some(26));
 
-    let malformed = CursorAdapter
-        .decode_hook(
-            "stop",
-            &json!({
-                "conversation_id": "conv-1",
-                "status": "completed",
-                "input_tokens": 3,
-                "cache_read_tokens": 4,
-                "cache_write_tokens": 5
-            }),
-        )
-        .expect("test hook decodes")
-        .lifecycle()
-        .cloned()
-        .unwrap();
+    let malformed = hook_lifecycle(
+        &CursorAdapter,
+        "stop",
+        &json!({
+            "conversation_id": "conv-1",
+            "status": "completed",
+            "input_tokens": 3,
+            "cache_read_tokens": 4,
+            "cache_write_tokens": 5
+        }),
+    );
     assert_eq!(malformed.usage.fresh_input_tokens, Some(0));
 }
 
@@ -1393,15 +1331,12 @@ fn turn_cost_prices_auto_explicit_and_fast_models() {
             .is_none()
     );
     assert!(
-        CursorAdapter
-            .decode_hook(
-                "afterAgentResponse",
-                &json!({"conversation_id": "conv-1", "input_tokens": 1}),
-            )
-            .expect("test hook decodes")
-            .lifecycle()
-            .cloned()
-            .is_none(),
+        hook_observation(
+            &CursorAdapter,
+            "afterAgentResponse",
+            &json!({"conversation_id": "conv-1", "input_tokens": 1})
+        )
+        .is_none(),
         "response pricing must not become a lifecycle or token source"
     );
 }
@@ -1642,68 +1577,20 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
 
 #[test]
 fn every_wired_event_returns_cursor_neutral_json() {
-    let neutrals: Vec<_> = CURSOR_HOOKS
-        .iter()
-        .map(|hook| {
-            (
-                hook.event,
-                CursorAdapter
-                    .decode_hook(hook.event, &Value::Null)
-                    .expect("test hook decodes")
-                    .json_reply()
-                    .cloned()
-                    .expect("wired neutral"),
-            )
-        })
-        .collect();
-    insta::assert_json_snapshot!(neutrals, @r###"
-    [
-      [
-        "sessionStart",
-        {}
-      ],
-      [
-        "beforeSubmitPrompt",
-        {}
-      ],
-      [
-        "postToolUse",
-        {}
-      ],
-      [
-        "postToolUseFailure",
-        {}
-      ],
-      [
-        "afterAgentResponse",
-        {}
-      ],
-      [
-        "stop",
-        {}
-      ],
-      [
-        "sessionEnd",
-        {}
-      ],
-      [
-        "preCompact",
-        {}
-      ],
-      [
-        "subagentStart",
-        {}
-      ],
-      [
-        "subagentStop",
-        {}
-      ]
-    ]
-    "###);
+    // Cursor's hook contract requires JSON on every wired event, so the neutral
+    // reply is `{}` — never silence, which Cursor reads as a malformed hook.
+    for hook in CURSOR_HOOKS {
+        assert_eq!(
+            hook_output(&CursorAdapter, hook.event, &Value::Null)
+                .json_reply()
+                .cloned(),
+            Some(json!({})),
+            "{}",
+            hook.event
+        );
+    }
     assert_eq!(
-        CursorAdapter
-            .decode_hook("future", &Value::Null)
-            .expect("test hook decodes")
+        hook_output(&CursorAdapter, "future", &Value::Null)
             .json_reply()
             .cloned(),
         None
@@ -1757,24 +1644,6 @@ fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
         "RimZ supervised Cursor runs stay on the interactive hook transport: {launch:?}",
     );
 
-    let preset = CursorAdapter
-        .spec()
-        .render_preset(&LaunchPreset {
-            model: Some("cursor/model".to_owned()),
-            ..Default::default()
-        })
-        .expect("model preset");
-    assert_eq!(preset, vec!["--model", "cursor/model"]);
-    assert_eq!(
-        CursorAdapter.spec().render_preset(&LaunchPreset {
-            effort: Some("high".to_owned()),
-            ..Default::default()
-        }),
-        Err(PresetErr::UnsupportedField {
-            agent: "cursor",
-            field: "effort",
-        })
-    );
     let resume = CursorAdapter
         .resume_command("conv-1", Path::new("/tmp"))
         .expect("resume command");
@@ -1966,25 +1835,4 @@ fn hook_command_preserves_parent_pid_attribution() {
     assert!(!CursorAdapter.spec().bin_names.contains(&"cursor"));
     assert!(RIMZ_HOOK_COMMAND.starts_with("RIMZ_AGENT_PID=$PPID"));
     assert!(RIMZ_HOOK_COMMAND.contains("--source cursor"));
-    assert_eq!(
-        CursorAdapter
-            .decode_hook("sessionStart", &json!({}))
-            .expect("test hook decodes")
-            .class(),
-        AgentHookClass::Lifecycle
-    );
-    assert_eq!(
-        CursorAdapter
-            .decode_hook("subagentStart", &json!({}))
-            .expect("test hook decodes")
-            .class(),
-        AgentHookClass::Lifecycle
-    );
-    assert_eq!(
-        CursorAdapter
-            .decode_hook("subagentStop", &json!({}))
-            .expect("test hook decodes")
-            .class(),
-        AgentHookClass::Lifecycle
-    );
 }
