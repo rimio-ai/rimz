@@ -55,7 +55,7 @@ Pinned to the bottom of the sidebar is one block per provider account, because a
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 5d22h
 ```
 
-When a provider has historical usage, the stats row is its account-global spend for the headline window: sessions, the token breakdown, and dollars pinned right. A provider without spend history on disk shows only `◎` with the sessions active in this room; the token and dollar positions stay absent rather than read zero. Two fleet-total rows then close the dashboard, summing every supported provider across the trailing week and month:
+When a provider has historical usage, the stats row is its account-global spend for the headline window: sessions, the token breakdown, and dollars pinned right. In `session` mode, every provider row shares one machine-global burst, opened by your prompt to any agent kind. A provider without spend history on disk shows only `◎` with the sessions active in this room; the token and dollar positions stay absent rather than read zero. Two fleet-total rows then close the dashboard, summing every supported provider across the trailing week and month:
 
 ```
   W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88
@@ -87,7 +87,7 @@ The token breakdown sums every durable session record that ran in the room's spe
 
 The window is yours to set with `[sidebar] spend_window` ([configuration](./configuration.md#sidebar-rendering)):
 
-- `session` (the default): the current burst of work, opened by your latest prompt after a five-hour idle gap. Loop-fired turns and agent-to-agent messages count inside it and keep it alive, but never open it.
+- `session` (the default): the current burst of work, opened by your latest prompt to any agent after a five-hour idle gap. Provider rows share one machine-global burst; the cockpit applies the same rule within this room's scope. Loop-fired turns and agent-to-agent messages count inside an open burst and keep it alive, but never open one.
 - `24h`: a trailing twenty-four hours.
 - `today`: since calendar midnight in your configured `timezone`.
 

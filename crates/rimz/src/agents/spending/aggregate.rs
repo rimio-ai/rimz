@@ -73,9 +73,10 @@ pub enum SpendWindowMode {
     Trailing24h,
     /// The local calendar day, using the global `timezone` when set.
     Today,
-    /// The current activity burst since the last five-hour idle gap. A recorded
-    /// user prompt opens the burst; priced activity, including loop-fired turns
-    /// and agent-to-agent messages, keeps an open burst alive.
+    /// The current activity burst since the last five-hour idle gap. For
+    /// account-global tallies, a user prompt to any agent kind opens one shared
+    /// burst for every provider; a workspace tally applies the same all-kind
+    /// rule within its scope. Priced automation keeps an open burst alive.
     #[default]
     Session,
 }
@@ -195,7 +196,7 @@ pub(crate) fn aggregate_counted_rollups(
             spending.by_provider.entry(provider.to_owned()).or_default(),
             entry,
             now_secs,
-            cutoffs.provider(provider),
+            cutoffs.total,
         );
         if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
             provider_day
@@ -245,7 +246,7 @@ pub(crate) fn aggregate_counted_rollups(
         }
     }
 
-    add_spending_sessions(&mut spending, files, cache, now_secs, &cutoffs);
+    add_spending_sessions(&mut spending, files, cache, now_secs, cutoffs.total);
     if let Some(scope) = workspace {
         add_scoped_sessions(
             &mut workspace_tally,
@@ -288,11 +289,8 @@ pub(crate) fn aggregate_counted_rollups(
 }
 
 struct CountedCutoffs {
-    uniform: Option<u64>,
     total: u64,
-    provider: HashMap<String, u64>,
     scoped: Option<u64>,
-    no_burst_cutoff: u64,
 }
 
 impl CountedCutoffs {
@@ -303,28 +301,18 @@ impl CountedCutoffs {
         now_secs: u64,
         spec: &HeadlineSpec,
     ) -> Self {
-        let uniform = uniform_headline_cutoff(spec, now_secs);
-        let no_burst_cutoff = NO_BURST_CUTOFF;
-        if let Some(cutoff) = uniform {
+        if let Some(cutoff) = uniform_headline_cutoff(spec, now_secs) {
             return Self {
-                uniform,
                 total: cutoff,
-                provider: HashMap::new(),
                 scoped: scope.map(|_| cutoff),
-                no_burst_cutoff,
             };
         }
 
         let mut total_activity = Vec::new();
-        let mut provider_activity: HashMap<String, Vec<u64>> = HashMap::new();
         let mut scoped_activity = Vec::new();
         for counted in counted {
             let ts_secs = counted.entry().ts_secs;
             total_activity.push(ts_secs);
-            provider_activity
-                .entry(counted.kind().to_owned())
-                .or_default()
-                .push(ts_secs);
             if let Some(scope) = scope
                 && counted
                     .origin()
@@ -335,17 +323,12 @@ impl CountedCutoffs {
         }
 
         let mut total_prompts = Vec::new();
-        let mut provider_prompts: HashMap<String, Vec<u64>> = HashMap::new();
         let mut scoped_prompts = Vec::new();
         for record in user_inputs {
             let Ok(ts_secs) = u64::try_from(record.at.as_second()) else {
                 continue;
             };
             total_prompts.push(ts_secs);
-            provider_prompts
-                .entry(record.kind.as_str().to_owned())
-                .or_default()
-                .push(ts_secs);
             if let Some(scope) = scope
                 && record
                     .origin
@@ -356,41 +339,14 @@ impl CountedCutoffs {
             }
         }
 
-        let providers = provider_activity
-            .keys()
-            .chain(provider_prompts.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>();
         Self {
-            uniform: None,
             total: burst_cutoff(&total_prompts, &total_activity, now_secs),
-            provider: providers
-                .into_iter()
-                .map(|provider| {
-                    let prompts = provider_prompts
-                        .get(&provider)
-                        .map(Vec::as_slice)
-                        .unwrap_or_default();
-                    let activity = provider_activity
-                        .get(&provider)
-                        .map(Vec::as_slice)
-                        .unwrap_or_default();
-                    (provider, burst_cutoff(prompts, activity, now_secs))
-                })
-                .collect(),
             scoped: scope.map(|_| burst_cutoff(&scoped_prompts, &scoped_activity, now_secs)),
-            no_burst_cutoff,
         }
     }
 
-    fn provider(&self, provider: &str) -> u64 {
-        self.uniform
-            .or_else(|| self.provider.get(provider).copied())
-            .unwrap_or(self.no_burst_cutoff)
-    }
-
     fn scoped(&self) -> u64 {
-        self.scoped.unwrap_or(self.no_burst_cutoff)
+        self.scoped.unwrap_or(NO_BURST_CUTOFF)
     }
 }
 
@@ -406,7 +362,7 @@ fn add_spending_sessions(
     files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     now_secs: u64,
-    cutoffs: &CountedCutoffs,
+    headline_cutoff: u64,
 ) {
     let mut threads: HashMap<SessionKey<'_>, (&'static str, u64)> = HashMap::new();
     for (adapter, file) in files {
@@ -422,7 +378,7 @@ fn add_spending_sessions(
         }
     }
     for (provider, youngest) in threads.values() {
-        bump_sessions(&mut spending.total, *youngest, now_secs, cutoffs.total);
+        bump_sessions(&mut spending.total, *youngest, now_secs, headline_cutoff);
         bump_sessions(
             spending
                 .by_provider
@@ -430,7 +386,7 @@ fn add_spending_sessions(
                 .or_default(),
             *youngest,
             now_secs,
-            cutoffs.provider(provider),
+            headline_cutoff,
         );
     }
 }

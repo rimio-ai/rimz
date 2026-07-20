@@ -92,7 +92,7 @@ fn token_windows_and_native_sessions_populate_public_tallies() {
 }
 
 #[test]
-fn headline_cutoffs_are_global_scoped_and_provider_local() {
+fn headline_cutoffs_are_global_and_scoped() {
     const HOUR: u64 = 3_600;
     let dir = TempDir::new().unwrap();
     let project = dir.path().join("repo");
@@ -170,7 +170,7 @@ fn headline_cutoffs_are_global_scoped_and_provider_local() {
         &session_spec,
     );
     assert!((spending.total.headline.usd - 6.0).abs() < 1e-9);
-    assert!((spending.by_provider["claude"].headline.usd - 1.0).abs() < 1e-9);
+    assert!((spending.by_provider["claude"].headline.usd - 4.0).abs() < 1e-9);
     assert!((spending.by_provider["codex"].headline.usd - 2.0).abs() < 1e-9);
 
     let idle = SpendingDiskCache {
@@ -557,7 +557,7 @@ fn autonomous_spend_inside_user_prompt_burst_counts() {
 }
 
 #[test]
-fn provider_session_cutoffs_follow_same_kind_user_inputs() {
+fn provider_headlines_share_the_machine_global_burst() {
     const HOUR: u64 = 3_600;
     let claude_file = PathBuf::from("/tmp/rimz/provider-claude.jsonl");
     let codex_file = PathBuf::from("/tmp/rimz/provider-codex.jsonl");
@@ -568,7 +568,13 @@ fn provider_session_cutoffs_follow_same_kind_user_inputs() {
     let cache = SpendingDiskCache {
         files: HashMap::from([
             cached_file(&claude_file, vec![cached_entry(NOW_SECS, 1.0, "claude")]),
-            cached_file(&codex_file, vec![cached_entry(NOW_SECS, 2.0, "codex")]),
+            cached_file(
+                &codex_file,
+                vec![
+                    cached_entry(NOW_SECS - 6 * HOUR, 4.0, "stale-codex"),
+                    cached_entry(NOW_SECS, 2.0, "current-codex"),
+                ],
+            ),
         ]),
         ..Default::default()
     };
@@ -587,7 +593,8 @@ fn provider_session_cutoffs_follow_same_kind_user_inputs() {
 
     assert!((spending.total.headline.usd - 3.0).abs() < 1e-9);
     assert!((spending.by_provider["claude"].headline.usd - 1.0).abs() < 1e-9);
-    assert_eq!(spending.by_provider["codex"].headline.usd, 0.0);
+    assert!((spending.by_provider["codex"].headline.usd - 2.0).abs() < 1e-9);
+    assert_eq!(spending.by_provider["codex"].headline.sessions, 1);
 }
 
 #[test]

@@ -27,7 +27,8 @@ use super::cache::peek_cache_version;
 /// walking transcripts. v9: daily token buckets fold in cache-read so the
 /// heatmap and `rimz stats` token totals count every token. v10: a local-day
 /// per-provider window supports account daily caps independently of headline.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 10;
+/// v11: provider session headlines share the machine-global activity burst.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 11;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
