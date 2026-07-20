@@ -131,7 +131,7 @@ Pauses overlay every source without editing durable definitions. When a timed pa
 | # | Gate | Records on refusal |
 | --- | --- | --- |
 | 1 | the task's own `--budget-per-day`, summed from this task's completed runs in the configured local day | `budget skipped` |
-| 2 | the room-fleet and provider-account [scope caps](./harness.md#dollar-budget-scopes) | `budget skipped` |
+| 2 | the room-fleet and provider-account [scope caps](./budget.md#the-fail-fast-gate) | `budget skipped` |
 | 3 | the exact managed-launch provider quota, when a binding is proven | `budget skipped` |
 | 4 | `--surplus` / `--surplus-after` forward headroom on the provider's longest window | `surplus skipped` |
 | 5 | the ping window gate, for a `<kind>-ping` cell | `skipped` |
@@ -227,7 +227,7 @@ Three park classes carry their own clock:
 
 | Class | Deadline | Armed from |
 | --- | --- | --- |
-| `Budget` | the dollar-cap park's own `resets_at`, the next local day | a RimZ [budget scope park](./harness.md#dollar-budget-scopes) on the agent, checked first and short-circuiting the provider classification |
+| `Budget` | the dollar-cap park's own `resets_at`, the next local day | a RimZ [budget scope park](./budget.md#the-park) on the agent, checked first and short-circuiting the provider classification |
 | `RateLimit` | the latest spent-window reset in an authoritative account capacity reading | a certified rate-limit or spend-limit turn error |
 | `Overloaded` | the turn-error marker time, then a lengthening backoff ramp | a certified transient overload or API error |
 
@@ -261,7 +261,8 @@ Auto-ping is the deliberate exception: it enriches its existing `loop-runs.log.j
 
 - [scripting.md](./scripting.md): the supervised run every `agent` task spawns.
 - [messaging.md](./messaging.md): the delivery path every `wake` task uses.
-- [harness.md](./harness.md): launch compilation, addressing, and the budget scopes the gate ladder reads.
+- [harness.md](./harness.md): launch compilation and addressing.
+- [budget.md](./budget.md): the dollar scopes the gate ladder reads, and the park the `Budget` class waits out.
 - [providers.md](../agents/providers.md): account windows, capacity readings, and the pricing behind recorded cost.
 - [sidebar/state.md](../sidebar/state.md#renderers-the-producer-and-consumers): how the elder is elected and what else runs on its tick.
 - [cli/loop.md](../../reference/cli/loop.md): every flag on `add`, `fire`, `list`, `show`, and `remove`.

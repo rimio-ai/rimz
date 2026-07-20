@@ -209,7 +209,7 @@ With `[resume] auto_continue = true` (off by default), the producer resumes a [p
 
 For an eligible kind, the spending walk computes a local-calendar-day `SpendWindow` independently of the configured headline, publishes it in machine-shared `provider-spending.json`, and version-gates the cache so an upgrade re-aggregates the current cursor without reparsing unchanged transcripts. The producer accepts the cache's normal short TTL staleness as rate-limit latency.
 
-The account ledger `budget.account.<kind>.json` carries a runtime raised cap, disabled state, and current park, and its cap adjustment is inert without the config on-switch. Every room evaluates the shared spend and ledger but interrupts only its own running panes, so raising or clearing from one room nudges the agents that room interrupted while other rooms stay unparked and at rest until a message or the next local day. A healthy cap stays visually quiet; while agents are parked on a crossed account cap, the dashboard turns the headline alarm-red and appends `$used of $cap/day`.
+What the engine does with that spend, from the machine-shared `budget.account.<kind>.json` ledger through the park and its waiver, is [budget.md](../harness/budget.md). The display consequence is here: a healthy cap stays visually quiet, and while agents are parked on a crossed account cap the dashboard turns the headline alarm-red and appends `$used of $cap/day`.
 
 An agent launched through an elevation wrapper as another real uid stays outside account aggregation. Its hooks and credentials live under that other user's home directory, and the current user's probe reads only the current user's account surface, so the sidebar presents it as a flagged process row and leaves it out of the provider dashboard.
 

@@ -31,20 +31,21 @@ Four rules explain most of the design. When a piece of the code surprises you, o
 5. **Create the worktree.** A marked Git worktree is added and seeded, and its name `feat-a` becomes the channel every cell is stamped with ([worktrees.md](./worktrees.md)).
 6. **Mint identities.** The store writes a provisional row per cell with its name, channel, and cohort stamps, so both agents are addressable as `@claude#feat-a` and `@codex#feat-a` before either has run a turn ([The address](#the-address)).
 7. **Open the panes.** Each cell compiles to a hidden `rimz agents exec` wrapper invocation carrying an `ExecRequest`. The wrapper validates it, then runs the stock provider CLI in the pane with the trailing prompt in its launch argv ([The exec wrapper](#the-exec-wrapper)).
-8. **The agents report themselves.** Their lifecycle hooks write durable events, which the rollup folds into the state every later command reads: messages waiting for a turn boundary ([messaging.md](./messaging.md)), supervised runs waiting to complete ([scripting.md](./scripting.md)), and budget ticks watching the spend ([Dollar budget scopes](#dollar-budget-scopes)).
+8. **The agents report themselves.** Their lifecycle hooks write durable events, which the rollup folds into the state every later command reads: messages waiting for a turn boundary ([messaging.md](./messaging.md)), supervised runs waiting to complete ([scripting.md](./scripting.md)), and budget ticks watching the spend ([budget.md](./budget.md)).
 9. **Reclaim what is left.** When a pane ends, the resident wrapper decides whether the exit was deliberate, and only then removes the worktree or closes the pane ([Reclaiming a pane](#reclaiming-a-pane)).
 
 Steps 1 through 7 are the same for every entry point. A `-p` run, a scheduled loop fire, and a reborn room all reach the panes through this path with a different request on the front.
 
 ## Where the code lives
 
-The harness is a product area, not a single Rust module. It spans four source trees, and the six pages in this folder are grouped by the job they document rather than by the crate path they point at.
+The harness is a product area, not a single Rust module. It spans four source trees, and the seven pages in this folder are grouped by the job they document rather than by the crate path they point at.
 
 | Page | Owns | Source |
 | --- | --- | --- |
-| harness.md (this page) | Spawn, address, resume, budget, reclaim | [`harness/`](../../../crates/rimz/src/harness) |
+| harness.md (this page) | Spawn, address, resume, reclaim | [`harness/`](../../../crates/rimz/src/harness) |
 | [scripting.md](./scripting.md) | Supervised `-p` runs | [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) |
 | [loops.md](./loops.md) | Scheduled tasks and unattended recovery | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) |
+| [budget.md](./budget.md) | Dollar caps and the park they produce | [`harness/budget.rs`](../../../crates/rimz/src/harness/budget.rs), [`cli/budget.rs`](../../../crates/rimz/src/cli/budget.rs) |
 | [messaging.md](./messaging.md) | Getting text into a running agent | [`message/`](../../../crates/rimz/src/message) |
 | [worktrees.md](./worktrees.md) | RimZ-owned Git worktrees | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) |
 | [trust.md](./trust.md) | Which parts of a project config may execute | [`trust.rs`](../../../crates/rimz/src/trust.rs) |
@@ -60,7 +61,7 @@ Inside `harness/` itself, start here when you are looking for where a behaviour 
 | [`petname.rs`](../../../crates/rimz/src/harness/petname.rs) | The adjective-noun instance names, their collision check, and the deterministic fallback for records written before petnames existed. |
 | [`resume.rs`](../../../crates/rimz/src/harness/resume.rs) | Resume planning for room rebirth, explicit cohort resume, and lane resume, plus `resolve_posture`, the relaunch posture seam every path shares. |
 | [`rebirth.rs`](../../../crates/rimz/src/harness/rebirth.rs) | Two-phase inspection of the previous incarnation of a room, over the shared recovery plan. |
-| [`budget.rs`](../../../crates/rimz/src/harness/budget.rs) | Dollar caps at agent, room-fleet, and provider-account scope: the ledgers, the park, the waiver, and the gate programmatic callers hit. |
+| [`budget.rs`](../../../crates/rimz/src/harness/budget.rs) | Dollar caps and their parks. See [budget.md](./budget.md). |
 | [`run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | Supervised runs. See [scripting.md](./scripting.md). |
 | [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs), [`schedule/`](../../../crates/rimz/src/harness/schedule) | Loop tasks and their runner. See [loops.md](./loops.md). |
 | [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs), [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | Unattended recovery and its audit trail. See [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs). |
@@ -80,7 +81,7 @@ Six state machines carry most of the subsystem's behaviour. Each has one owning 
 | Message lifecycle | `MessageStatus` | [messaging.md § Status lifecycle](./messaging.md#status-lifecycle) |
 | Supervised run | `RunStatus`, whose `exit_code` is the caller contract | [scripting.md § Status and exit codes](./scripting.md#status-and-exit-codes) |
 | Loop task timing and outcome | `TaskTiming`, `LoopRunResult` | [loops.md § Schedule shapes](./loops.md#schedule-shapes), [§ History, strikes, and pauses](./loops.md#history-strikes-and-pauses) |
-| Dollar budget ledger | `BudgetVerdict` | [§ Dollar budget scopes](#dollar-budget-scopes) below |
+| Dollar budget ledger | `BudgetVerdict` | [budget.md § The verdict](./budget.md#the-verdict) |
 | Worktree removal | `ProtectionSet::assess` | [worktrees.md § The assessment](./worktrees.md#the-assessment) |
 | Project trust | `TrustState` | [trust.md § States](./trust.md#states) |
 
@@ -287,45 +288,6 @@ Degradation is deliberate and asymmetric. A profile that is gone, broken, or now
 
 Resume leaves one-off launch values out: the prompt, an explicit `--model` or `--effort` typed at the original launch, and passthrough argv were a single invocation's choice, not durable configuration. `--resume` and `--continue` conflict with those launch-shaping flags for the same reason, and take cwd and channel from the matched store cohort. `--worktree` in this mode is a resume scope, not a worktree-creation flag.
 
-## Dollar budget scopes
-
-The budget engine evaluates three scopes on every producer tick. A fourth cap, the per-task daily budget a loop enforces before it fires, lives with the scheduler ([loops.md § One fire](./loops.md#one-fire)).
-
-| Scope | Ledger | Cap source |
-| --- | --- | --- |
-| Agent | per-session `budget.<digest>.json`, keyed on a hash of kind and session id | launch config: `--budget`, a profile, or a role |
-| Room fleet | `budget.fleet.json` | machine config, local-day |
-| Provider account | machine-shared `budget.account.<kind>.json` | machine config, local-day, one per provider login |
-
-An agent cap carries a `BudgetWindow`: a bare `--budget 5` caps the session, and `--budget 20/day` caps the local day against a rolling `day_baseline` that resets at midnight in the configured zone. Fleet and account caps are always local-day.
-
-`budget.scopes.json` carries the per-agent fleet and account waivers, park thresholds, and interrupt throttles. All of these are cache-class atomic files resolved from launch config, machine config, runtime overrides, and transcript-derived spend. Scope-ledger locks let a producer tick merge park state without clobbering a concurrent CLI cap change.
-
-Room and account caps use the spending walk's dedicated local-day windows rather than session baselines: the workspace cache excludes live sessions and the fold adds their current card costs back, while the shared provider cache publishes a walked per-kind day tally. A scope at or over cap stamps its park, interrupts a running pane through the hidden `agents budget-park` helper, and arms auto-continue for the next local day. Agent park display wins over fleet, which wins over account.
-
-### The ledger verdict
-
-`budget::evaluate` folds one agent's spend and its ledger into a `BudgetVerdict` on every tick. The four verdicts are the whole state machine.
-
-```text
-                    ┌── no effective cap ──────────────► Disabled
-                    │
-spend vs cap  ──────┼── under cap ─────────────────────► Under
-                    │                                    (clears any park and interrupt throttle)
-                    └── at or over cap
-                          └─ waiver check
-                               ├─ a human delivery landed after the park,
-                               │  and the current turn started after it
-                               │     ├─ turn still running ──────────► Waived
-                               │     └─ turn finished ───────────────► Park (waiver consumed,
-                               │                                        park re-stamped at now)
-                               └─ otherwise ─────────────────────────► Park
-```
-
-The waiver is the one place a human overrides a cap, and it is deliberately narrow. A delivered human message after a park stamps one waiver for that agent across the fleet and account scopes. A turn that started after the stamp proceeds, and its terminal transition consumes the waiver and re-stamps the park past that delivery, so one message cannot waive a second turn. Resume-gated and background messages never waive, which is why the `automated` flag on a message record matters here.
-
-Programmatic entry points do not accept a waiver at all. `budget::scope_gate` is a fail-fast guard read by both the supervised-run and loop-fire entry gates against the same effective ledgers and local-day caches: `agents -p` maps a refusal to exit `125`, and a loop fire appends `budget skipped`.
-
 ## Reclaiming a pane
 
 When an agent exits, the resident [exec wrapper](#the-exec-wrapper) either leaves the pane usable or reclaims what automation owns. The decision turns on one question: was this exit *deliberate*?
@@ -355,6 +317,7 @@ After the trace, the wrapper settles in three ways depending on what the launch 
 
 - [scripting.md](./scripting.md): supervised `-p` runs: the run record, the wake socket, verify and retry, output formats.
 - [loops.md](./loops.md): scheduled tasks: the task catalog, elder firing, the fire gate ladder, and the recovery automation the elder runs.
+- [budget.md](./budget.md): dollar caps: the scopes, the ledgers, the verdict, the waiver, and the gate.
 - [messaging.md](./messaging.md): how text actually reaches a pane.
 - [worktrees.md](./worktrees.md): the Git worktrees a launch can land in.
 - [trust.md](./trust.md): which parts of a launch spec can execute a command, and how a grant is proven.
