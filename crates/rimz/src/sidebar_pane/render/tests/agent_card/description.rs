@@ -273,6 +273,22 @@ fn parked_background_marker_falls_back_to_unicode() {
 }
 
 #[test]
+fn successful_parked_row_keeps_background_marker() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("done"),
+    );
+    claude.phase = crate::agents::TurnPhase::Parked;
+    let rendered = snapshot_to_screen(&snapshot_with(vec![claude]), 44, 15);
+
+    assert!(rendered.contains("⋯ bg"), "{rendered}");
+}
+
+#[test]
 fn unread_descriptor_grows_bold_without_dimming() {
     // A single actionable row leads, so it carries the 2-pole blink the lead row
     // keeps under `blink`; a non-lead unread row would settle to a steady crest.

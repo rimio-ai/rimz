@@ -329,7 +329,7 @@ fn selected_pet_action_follows_the_focused_card() {
     let parked = statuses(&[(AgentStatus::Running, crate::agents::TurnPhase::Parked)]);
     assert_eq!(
         selected_pet_action(&parked, &UiState::default()),
-        crate::sidebar_pane::pets::PetAction::Waiting
+        crate::sidebar_pane::pets::PetAction::Idle
     );
 }
 

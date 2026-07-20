@@ -215,8 +215,9 @@ impl LifecycleSignal {
 /// [`AgentStatus`]. One typed value where three independent bools (`thinking`,
 /// `parked_on_background`, and the reducer's separate parked derivation) used
 /// to live, so the illegal combinations (parked + thinking, a resting agent
-/// mid-phase) are unrepresentable. Meaningful only while `status == Running`;
-/// every other status carries [`TurnPhase::Idle`].
+/// mid-phase) are unrepresentable in the lifecycle rollup. Rollups carry a
+/// non-idle phase only while `status == Running`; the sidebar display projection
+/// deliberately retains `Parked` with `Success` while background work remains.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnPhase {
@@ -232,8 +233,8 @@ pub enum TurnPhase {
     /// reasoning never re-arms mid-turn.
     Acting,
     /// The main thread parked on still-in-flight background work after a clean
-    /// turn end (Claude Code v2.1.145+). The agent stays running; the sidebar
-    /// paints a secondary "background" marker instead of a false success.
+    /// turn end (Claude Code v2.1.145+). The rollup stays running; the sidebar
+    /// projects success while retaining a secondary "background" marker.
     Parked,
 }
 

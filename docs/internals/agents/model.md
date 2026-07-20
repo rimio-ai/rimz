@@ -104,8 +104,8 @@ running ───── turn ended ─────┬── clean ────�
  └── turn started re-enters · a mutating tool on ────────┘
      success reconciles (failed holds until a new turn)
 
- parked     : a clean end with background work in flight stays running, phase ⋯ bg;
-              a prompt wake resumes the same turn boundary
+ parked     : a clean end with background work in flight keeps the rollup running;
+              display shows ✓ ⋯ bg, and a prompt wake resumes the same boundary
  subagents  : subagent started establishes the child row in running;
               subagent stopped resolves it to success / failed, and that terminal
               verdict absorbs a reordered late start
@@ -125,7 +125,7 @@ The edges, precisely:
 | `turn_started` | any → `running` | opens the turn in the `reasoning` phase and stamps a fresh prompt boundary; a parked running row resumes and carries the prior boundary |
 | `turn_ended`, clean | `running` → `success` | the turn resolved; the phase rests |
 | `turn_ended`, errored | `running` → `failed` | the error bit always wins |
-| `turn_ended`, clean with background work in flight | `running` → `running` | the main thread parked; the phase is `parked` |
+| `turn_ended`, clean with background work in flight | `running` → `running` | the rollup parks; display projects `success` with `⋯ bg` |
 | `turn_interrupted` | any → `idle` | the provider or user canceled the turn, closing it with no result |
 | `awaiting_input` | any → `waiting` | a blocking prompt ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question) holds the row for a human; a repeat restamps it |
 | `subagent_started` | *(none)* → `running` | establishes the child row, keyed by the child's own id; a terminal `success` or `failed` child holds its verdict when a reordered start arrives late |
@@ -136,7 +136,7 @@ The edges, precisely:
 | `ended` | held, row stamped ended | the reducer records `ended_at`; reaching `step` preserves the prior lifecycle state as an ignored no-op |
 | `lost` | held | legacy `rimz.agent-lost` marker retained for log replay compatibility, reaching `step` as an ignored no-op |
 
-A `turn_ended` resolves the turn to `success`, or to `failed` on its error bit, never back to `idle`; a provider-native `turn_interrupted` closes the turn at `idle` without a result. One `turn_ended` exception keeps the row running: a clean end also carrying `parked_on_background` means the main thread parked on still-in-flight background work rather than finishing, so the row stays `running` in the `parked` phase and paints a distinct `⋯ bg` marker instead of a false `✓` (the provider-specific detection is in [claude.md](./claude.md#hooks-and-lifecycle)). A parked row quiet past the stall window settles to `success`; reawakened activity advances its heartbeat and makes the row `running` again. Claude wakes a parked parent by injecting the finished background task's notification as a `UserPromptSubmit`: folded onto a parked running row, that `turn_started` resumes the same logical turn and carries `turn_started_at` forward, so child verdicts stay visible through the delegation wave. Once the turn reaches a clean end, the next prompt stamps fresh and clears past-turn verdicts.
+A `turn_ended` resolves the turn to `success`, or to `failed` on its error bit, never back to `idle`; a provider-native `turn_interrupted` closes the turn at `idle` without a result. One `turn_ended` exception keeps the rollup running: a clean end also carrying `parked_on_background` means the main thread parked on still-in-flight background work, so lifecycle truth stays `running` in the `parked` phase while the sidebar immediately displays `success` and retains the `⋯ bg` marker (the provider-specific detection is in [claude.md](./claude.md#hooks-and-lifecycle)). Claude wakes a parked parent by injecting the finished background task's notification as a `UserPromptSubmit`: folded onto the parked running rollup, that `turn_started` resumes the same logical turn, restores the displayed row to `running`, and carries `turn_started_at` forward so child verdicts stay visible through the delegation wave. Once the turn reaches a clean end, the next prompt stamps fresh and clears past-turn verdicts.
 
 A `subagent_stopped` resolves the *child* the same way, and the sidebar keeps that `✓` or `!` through the parent's turn ([sidebar.md](../sidebar/sidebar.md#sub-agent-lists)).
 
@@ -158,7 +158,7 @@ The phase is the running turn's shape: the agent owns its status, and RimZ deriv
 turn starts ──► reasoning  ──first file-editing tool──► acting ──► turn ends
                     │                                                  ▲
                     └── a research turn that never edits a file ───────┘
-clean end with background work still in flight ──► parked (the row stays running, ⋯ bg)
+clean end with background work still in flight ──► parked (rollup running; display ✓ ⋯ bg)
 ```
 
 - A research turn stays in the thinking head end to end: searches, reads, and shell commands write no file, so a turn that answers without editing stays in `reasoning`.
@@ -166,7 +166,7 @@ clean end with background work still in flight ──► parked (the row stays r
 - Any turn boundary rests the phase. `turn_ended` and `subagent_stopped` drop it, and the next prompt re-arms it. A clean end with background work still in flight parks it instead.
 - Subagents own separate `agent_id`s, so a child observation never mutates its parent's phase. Providers with bracket-only identity fold `subagent_started` and `subagent_stopped` and keep child per-tool work on its heartbeat; Codex hooks carry distinct child identity on prompt, tool, permission, and compaction progress, so those signals fold onto the child row with rollout enrichment.
 
-A quiet `parked` row settles to `success` through the stall rung, while silent `reasoning` and `acting` rows escalate as stalled. The phase vocabulary is painted once, in [the interface legend](../../interface/sidebar.md#reading-the-glyphs).
+A `parked` row displays `success` immediately and retains its phase solely to paint `⋯ bg`, while silent `reasoning` and `acting` rows escalate as stalled. The phase vocabulary is painted once, in [the interface legend](../../interface/sidebar.md#reading-the-glyphs).
 
 ### The compaction bracket
 
@@ -200,8 +200,9 @@ The sidebar row projection ([`project_display_status`](../../../crates/rimz/src/
 | 4 | a live subagent under an otherwise calm parent | `running` |
 | 5 | a turn that completed without a `Stop` hook | `success` |
 | 6 | a turn or ask interrupted without a terminal hook | `idle` |
-| 7 | silent past the stall window | `success` when parked, `paused` on a spent window, otherwise `failed` |
-| 8 | nothing above applies | `effective_status` |
+| 7 | a clean turn parked on background work | `success`, retaining the `parked` phase |
+| 8 | silent past the stall window | `paused` on a spent window, otherwise `failed` |
+| 9 | nothing above applies | `effective_status` |
 
 Rung by rung:
 
@@ -211,12 +212,13 @@ Rung by rung:
 4. **Waiting on children.** An otherwise clean `idle`, `success`, or `running` agent with a live subagent projects to `running` and paints a quiet wave. The stall clock reads the row's displayed activity, which folds in the children's, so a child that just finished defers escalation too, and the durable resting parent status returns after the final child stops.
 5. **Turn completion.** Codex's `/review` ends on a clean rollout `task_complete` with a non-empty `last_agent_message` and no `Stop`, so the completion marker postdates `last_activity` and settles the row instead of letting the stall window misread a finished review as failed ([codex.md](./codex.md#turn-completion-marker)). A newer prompt self-clears it.
 6. **Turn interruption.** The derived marker source is provider-specific: Codex writes rollout `turn_aborted` for Esc and `/clear` mid-turn ([codex.md](./codex.md#turn-interruption-marker)); Claude writes a transcript `user` sentinel beginning `[Request interrupted by user` ([claude.md](./claude.md#turn-interruption-marker)). The marker postdates `last_activity` and settles the row as at rest with no result, instead of letting a false wait persist or the stall window misread it as failed.
-7. **Stall** is the backstop for a `running` agent silent past the configurable window. A `parked` phase settles to `success`, since that turn's clean verdict was earned and only the background chore is still humming. A kind with a spent, unreset budget window reads `paused`. Everything else escalates to the attention `!` ([Liveness and presence](#liveness-and-presence)).
-8. **The bottom rung** is `effective_status`, which is where the hookless plan-approval projection lands: a `running` Codex row whose completed planning turn rests on a rollout `Plan` item reads as `waiting`. The normal `Stop` hook records the durable plan ask, so this marker is the missed-hook backstop that keeps the row and the message-delivery gate safe without inventing an ask record ([codex.md](./codex.md#plan-approval-marker)).
+7. **Parked settle** displays a clean turn parked on background work as `success` immediately, since the turn's verdict was earned and only the background chore is still humming. The display row retains the `parked` phase so `⋯ bg` keeps that pending work legible; a wake's `turn_started` re-runs the row.
+8. **Stall** is the backstop for any other `running` agent silent past the configurable window. A kind with a spent, unreset budget window reads `paused`. Everything else escalates to the attention `!` ([Liveness and presence](#liveness-and-presence)).
+9. **The bottom rung** is `effective_status`, which is where the hookless plan-approval projection lands: a `running` Codex row whose completed planning turn rests on a rollout `Plan` item reads as `waiting`. The normal `Stop` hook records the durable plan ask, so this marker is the missed-hook backstop that keeps the row and the message-delivery gate safe without inventing an ask record ([codex.md](./codex.md#plan-approval-marker)).
 
 Each rung reads enrichment plus liveness, and each leaves the rollup holding the true lifecycle status: Claude transcript-death can leave the rollup `running` while Codex Stop-over-rollout-error records the rollup `failed`, and projection refines either display to `paused`. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test still passes.
 
-The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking head, and an open compaction bracket pulses over any base status. A projection to any non-running status drops the phase, keeping the machine's invariant true on the row too.
+The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking head, and an open compaction bracket pulses over any base status. A projection to a non-running status drops the phase except for `success` with `parked`, the one settled shape that keeps pending background work visible.
 
 ## The instance lifecycle
 

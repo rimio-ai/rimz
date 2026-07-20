@@ -117,7 +117,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `⑃ N`           | open pull requests on agent lanes awaiting you — green when every known CI verdict passes, amber while one runs, red when one fails, and the cool PR-open tone while CI is unknown; click it to filter the body to those lanes |
 | `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the store window — teal in both |
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label soft |
-| `⋯ bg`          | an agent parked on background work — a faint secondary marker after the description, so the live status above stays honest |
+| `⋯ bg`          | an agent has background work pending — a faint secondary marker after the description that rides the settled `✓` as “done, background chore still running” |
 | `⑂ name` / `⮌ name` | a group header with a git story — branch for pristine/diverged worktrees, merge for landed removable worktrees |
 | `name` (bold)   | a directory room's own pod — name-only, no git story |
 | `▎`             | the selection lane — the worktree you're in, a dim selection-tone bracket |

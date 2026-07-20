@@ -39,6 +39,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 
 ### Fixed
 
+- Sidebar: a cleanly finished turn with a background shell still running shows `✓` immediately alongside `⋯ bg`.
 - Remote: the connect panel stays visible through the attach handoff and reports it as still in flight; terminal state is restored after an SSH session and verified across reconnects; supervised SSH children stay in the foreground so password, two-factor, and host-key prompts reach you; the confirmed master socket survives a reconnect; listener reports no longer depend on link timing.
 - Sidebar: the active body filter applies in every tab, and cross-tab jumps publish their selection and viewport before the switch so the destination no longer blinks; filters and viewport still hold across card jumps and group toggles; a lone finished card stays visible and its elapsed clock heats; renderers whose panes disappeared are reaped, and panes are verified before an orphan sweep; tmux focus resolves from client views; account usage is fetched when rate-limit bars read unknown; and the sidebar no longer floods Zellij with pane probes.
 - The cockpit holds its spend figures across a workspace-spending republication. A reader whose worktree roots lagged the producer scored the published tally as unreachable and read the room as empty, so the headline spend and session count blanked for several seconds at a time.

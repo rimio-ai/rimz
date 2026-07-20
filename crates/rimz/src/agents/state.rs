@@ -168,8 +168,8 @@ pub const DEFAULT_STALL_AFTER_SECS: u32 = 30 * 60;
 /// its work is the children's heartbeats, not its own — so the projection
 /// caller suppresses this while the agent has a live child (see the sidebar's
 /// "waiting for subagents" derivation). A clean turn parked on background work
-/// remains stalled by this predicate, but the projection settles it to success
-/// instead of attention once the same window elapses.
+/// settles to success in the sidebar projection before this predicate becomes
+/// relevant.
 pub fn is_stalled(
     status: AgentStatus,
     last_activity: Timestamp,

@@ -152,9 +152,12 @@ pub(super) fn project_display_status(
             agent.turn_error_label = label;
         }
         agent.status = projected;
-        if projected != AgentStatus::Running {
-            // Phase is a head on Running — the reduced state's invariant — so a
-            // projection to a resting or attention status drops it.
+        if projected != AgentStatus::Running
+            && !(projected == AgentStatus::Success && agent.phase == TurnPhase::Parked)
+        {
+            // Phase is a head on Running, plus the settled Success/Parked shape
+            // that keeps pending background work visible. Other projections to
+            // a resting or attention status drop it.
             agent.phase = TurnPhase::Idle;
         }
     }
@@ -272,14 +275,15 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         Some(TurnSettleOutcome::PlanProposed | TurnSettleOutcome::NativeWait) | None => {}
     }
 
+    if status == AgentStatus::Running && phase == TurnPhase::Parked {
+        // A clean end parked on background work: the turn's verdict was
+        // earned; the chore hums on under the ⋯ bg marker. The wake's
+        // turn_started re-runs the row.
+        return Settled::status(AgentStatus::Success);
+    }
+
     let stalled = crate::agents::is_stalled(status, last_activity, now, stalled_after_secs);
-    if stalled && phase == TurnPhase::Parked {
-        // A clean end parked on background work that has gone quiet
-        // past the stall window: the turn's success verdict was
-        // earned, the chore is just still humming. Reawakened activity
-        // re-runs the row.
-        Settled::status(AgentStatus::Success)
-    } else if stalled && window_spent {
+    if stalled && window_spent {
         Settled::status(AgentStatus::Paused)
     } else if stalled {
         Settled::status(AgentStatus::Failed)
