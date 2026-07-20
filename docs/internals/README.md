@@ -22,7 +22,7 @@ Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem,
 | Page | What it owns |
 | --- | --- |
 | [harness.md](./harness/harness.md) | Layout IR, the address grammar, supervised `-p` runs and the run wake, and the scheduled loop tasks. |
-| [messaging.md](./harness/messaging.md) | Message routing: send modes, durable records, delivery, the channel lanes, and the transcript. |
+| [messaging.md](./harness/messaging.md) | Message routing: send modes, durable records, the delivery pipeline, reply waits, the channel lanes, the transcript, and the ask lifecycle. |
 | [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: creation, the ownership marker, seeding, and landed-work cleanup. |
 | [trust.md](./harness/trust.md) | The permission model: the executable launch surface, grants, and the stale-grant diff. |
 
