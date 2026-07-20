@@ -99,7 +99,7 @@ Add a crate only when ownership, target type, or dependency profile demands it. 
 
 The top-level `theme` module is renderer-neutral presentation policy: it resolves schemes, semantic tones, provider identity, resolved glyph vocabulary and setup probes, and shared human value formats. The CLI and native sidebar convert its `Tone` values only at their renderer edges, so the runtime ships one interface language without coupling the core to `anstyle` or ratatui ([theme.md](./docs/internals/theme.md)).
 
-`build.rs` embeds the checked-in data artifacts at compile time, network-free: the generated token-pricing snapshot (`cargo xtask pricing-refresh` regenerates it; [provider.md → Token pricing](./docs/internals/agents/providers.md#token-pricing)), the Alacritty theme catalog (`cargo xtask theme-refresh`), and the presence-plugin wasm. Hidden helper subcommands are machinery, not humans; they are marked `#[command(hide = true)]` in [`cli/mod.rs`](./crates/rimz/src/cli/mod.rs), and their protocols live in the owning internals docs.
+`build.rs` embeds the checked-in data artifacts at compile time, network-free: the generated token-pricing snapshot (`cargo xtask pricing-refresh` regenerates it; [providers.md → Token pricing](./docs/internals/agents/providers.md#token-pricing)), the Alacritty theme catalog (`cargo xtask theme-refresh`), and the presence-plugin wasm. Hidden helper subcommands are machinery, not humans; they are marked `#[command(hide = true)]` in [`cli/mod.rs`](./crates/rimz/src/cli/mod.rs), and their protocols live in the owning internals docs.
 
 ## Tests
 
