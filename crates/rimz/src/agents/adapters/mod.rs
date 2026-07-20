@@ -1,4 +1,10 @@
 //! Private built-in and process-plugin integration implementations.
+//!
+//! One directory per agent kind, each the single place that agent's protocol is
+//! normalized: native payloads, parsers, installer, probes, and the capability
+//! implementations behind them. Everything above this module consumes neutral
+//! results. See
+//! [docs/internals/agents/adapter.md](../../../../../docs/internals/agents/adapter.md).
 
 // Provider modules historically lived directly below `agents` and use
 // `super::` for neutral domain types. Keep that source vocabulary while the

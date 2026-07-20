@@ -1,4 +1,11 @@
 //! Private caller-aligned provider capability contracts.
+//!
+//! Ten traits, bundled into one [`AgentIntegration`] blanket. Every method
+//! carries a default, and that default is the single home for "this agent does
+//! not do that": an adapter writes an empty `impl` for a capability it has no
+//! behavior for, and no dispatch layer restates the gap. What each trait owns
+//! and what its defaults mean is
+//! [docs/internals/agents/adapter.md](../../../../docs/internals/agents/adapter.md).
 
 use super::*;
 
