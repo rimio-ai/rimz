@@ -20,8 +20,6 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
-use crate::agents::ProviderAccountBinding;
 use crate::agents::{
     HookPreflightErr, LongestWindowSignal, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed,
     WindowSurplus, find_definition, preflight_hooks,
@@ -126,119 +124,95 @@ struct FireContext {
 
 struct FireScope {
     kind: crate::ids::AgentKind,
-    workspace_id: WorkspaceId,
     scope_runtime: RuntimePaths,
     resolved: Option<ResolvedTaskSpec>,
     managed_launch: ManagedLaunchState,
     capacity: OnceCell<Option<ProviderCapacity>>,
-    #[cfg(test)]
-    capacity_reads: std::cell::Cell<usize>,
-    #[cfg(test)]
-    capacity_runtime: Option<RuntimePaths>,
 }
 
 impl FireScope {
     fn new(
         kind: crate::ids::AgentKind,
-        workspace_id: WorkspaceId,
         scope_runtime: RuntimePaths,
         resolved: Option<ResolvedTaskSpec>,
     ) -> Self {
         Self {
             kind,
-            workspace_id,
             scope_runtime,
             resolved,
             managed_launch: ManagedLaunchState::Unsupported,
             capacity: OnceCell::new(),
-            #[cfg(test)]
-            capacity_reads: std::cell::Cell::new(0),
-            #[cfg(test)]
-            capacity_runtime: None,
         }
     }
 
-    fn capacity(&self) -> Result<Option<&ProviderCapacity>> {
-        if self.capacity.get().is_none() {
-            #[cfg(test)]
-            self.capacity_reads.set(self.capacity_reads.get() + 1);
-            let runtime = self.capacity_runtime()?;
-            let capacity = self.managed_launch.capacity(&runtime, self.kind.as_str());
-            let _ = self.capacity.set(capacity);
-        }
-        Ok(self.capacity.get().and_then(Option::as_ref))
+    fn capacity(&self) -> Option<&ProviderCapacity> {
+        self.capacity
+            .get_or_init(|| {
+                self.managed_launch
+                    .capacity(&self.scope_runtime, self.kind.as_str())
+            })
+            .as_ref()
     }
 
-    fn capacity_runtime(&self) -> Result<RuntimePaths> {
-        #[cfg(test)]
-        if let Some(runtime) = self.capacity_runtime.clone() {
-            return Ok(runtime);
-        }
-        RuntimePaths::for_workspace(self.workspace_id.clone()).map_err(Into::into)
-    }
-
-    fn surplus_gate(&self, entry: &TaskEntry, now: Timestamp) -> Result<Option<String>> {
+    fn surplus_gate(&self, entry: &TaskEntry, now: Timestamp) -> Option<String> {
         if entry.surplus.is_none() && entry.surplus_after.is_none() {
-            return Ok(None);
+            return None;
         }
-        Ok(surplus_gate_in(
+        surplus_gate_in(
             entry,
             self.kind.as_str(),
-            self.capacity()?
+            self.capacity()
                 .and_then(|capacity| capacity.longest_window_surplus(now)),
-        ))
+        )
     }
 
-    #[cfg(test)]
-    fn window_running(&self, longest: bool, now: Timestamp) -> Result<bool> {
-        Ok(self.window_running_state(longest, now)? == Some(true))
-    }
-
-    fn window_running_state(&self, longest: bool, now: Timestamp) -> Result<Option<bool>> {
-        Ok(self.capacity()?.and_then(|capacity| {
+    fn window_running_state(&self, longest: bool, now: Timestamp) -> Option<bool> {
+        self.capacity().and_then(|capacity| {
             if longest {
                 capacity.longest_window_running(now)
             } else {
                 capacity.shortest_window_running(now)
             }
-        }))
+        })
     }
 
-    fn ping_gate_reason(&self, entry: &TaskEntry, now: Timestamp) -> Result<Option<String>> {
+    fn ping_gate_reason(&self, entry: &TaskEntry, now: Timestamp) -> Option<String> {
         let kind = self.kind.as_str();
         let binding_state = if self.managed_launch.exact_account_applies() {
             let Some(binding) = self.managed_launch.binding() else {
-                return Ok(qwen_ping_cache_reason(false, None, None));
+                return qwen_ping_cache_reason(false, None, None);
             };
-            let runtime = self.capacity_runtime()?;
-            let state = ProviderCapacity::binding_cache_matches(&runtime, kind, binding);
+            let state = ProviderCapacity::binding_cache_matches(&self.scope_runtime, kind, binding);
             if state == Some(false) {
-                return Ok(qwen_ping_cache_reason(true, state, None));
+                return qwen_ping_cache_reason(true, state, None);
             }
             state
         } else {
             None
         };
-        let running = self.window_running_state(entry.every.as_deref() == Some("reset"), now)?;
+        let running = self.window_running_state(entry.every.as_deref() == Some("reset"), now);
         if self.managed_launch.exact_account_applies() {
-            return Ok(qwen_ping_cache_reason(true, binding_state, running));
+            return qwen_ping_cache_reason(true, binding_state, running);
         }
         if entry.every.as_deref() == Some("reset")
             && self
-                .capacity()?
+                .capacity()
                 .is_some_and(ProviderCapacity::longest_window_lifted)
         {
-            return Ok(Some(format!("{kind} budget window is not enforced")));
+            return Some(format!("{kind} budget window is not enforced"));
         }
-        Ok((running == Some(true)).then(|| format!("{kind} budget window already counting down")))
+        (running == Some(true)).then(|| format!("{kind} budget window already counting down"))
     }
 
     fn refreshed_ping_window(&self) -> Option<PingWindowOutcome> {
-        let prior = self.capacity().ok().flatten().and_then(ping_window_outcome);
-        let runtime = self.capacity_runtime().ok()?;
-        let fresh = capacity_for(&runtime, self.kind.as_str(), &self.managed_launch)
-            .as_ref()
-            .and_then(ping_window_outcome)?;
+        let prior = self.capacity().and_then(ping_window_outcome);
+        let fresh = capacity_for(
+            &self.scope_runtime,
+            self.kind.as_str(),
+            &self.managed_launch,
+        )
+        .as_ref()
+        .and_then(ping_window_outcome)?;
         (prior.as_ref() != Some(&fresh)).then_some(fresh)
     }
 }
@@ -254,8 +228,7 @@ impl FireContext {
             });
         }
         let workspace = WorkspaceResolver::resolve(&root, None)?;
-        let workspace_id = workspace.workspace_id.clone();
-        let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
+        let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
         let scope = match &action {
             TaskAction::Spawn(spec) => {
                 let resolved = resolve_task_spec(spec, &workspace)?;
@@ -263,7 +236,6 @@ impl FireContext {
                     resolve_managed_spawn_state(entry, &workspace, &resolved, config)?;
                 let mut scope = FireScope::new(
                     crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
-                    workspace_id,
                     runtime,
                     Some(resolved),
                 );
@@ -273,7 +245,6 @@ impl FireContext {
             TaskAction::Deliver(target) => {
                 let mut scope = FireScope::new(
                     crate::ids::AgentKind::new_unchecked(target.kind.clone()),
-                    workspace_id,
                     runtime,
                     None,
                 );
@@ -442,7 +413,7 @@ impl<'a> TaskFire<'a> {
             return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
         }
         if let Some(scope) = &context.scope
-            && let Some(reason) = scope.surplus_gate(&self.entry, self.now)?
+            && let Some(reason) = scope.surplus_gate(&self.entry, self.now)
         {
             return Ok(Some(
                 self.record_gate(LoopRunResult::SurplusSkipped, reason),
@@ -453,7 +424,7 @@ impl<'a> TaskFire<'a> {
                 .resolved
                 .as_ref()
                 .is_some_and(|resolved| resolved.is_ping)
-            && let Some(reason) = scope.ping_gate_reason(&self.entry, self.now)?
+            && let Some(reason) = scope.ping_gate_reason(&self.entry, self.now)
         {
             let kind = scope.kind.as_str().to_owned();
             return Ok(Some(self.record_terminal_with(
@@ -1811,19 +1782,6 @@ pub(super) fn window_reset_signal_in(
     reset_signal_for_binding(runtime, kind, &managed_launch, now)
 }
 
-#[cfg(test)]
-pub(super) fn reset_signal_for_test_binding(
-    runtime: &RuntimePaths,
-    kind: &str,
-    binding: Option<&ProviderAccountBinding>,
-    now: Timestamp,
-) -> ResetSignal {
-    let managed_launch = binding.map_or(ManagedLaunchState::Unsupported, |binding| {
-        ManagedLaunchState::Bound(binding.clone())
-    });
-    reset_signal_for_binding(runtime, kind, &managed_launch, now)
-}
-
 fn capacity_for(
     runtime: &RuntimePaths,
     kind: &str,
@@ -1840,478 +1798,4 @@ fn entry_runtime(entry: &TaskEntry) -> Result<RuntimePaths> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scheduled_spawn_timeout_prefers_task_then_config_then_builtin() {
-        let task = Duration::from_secs(30);
-        let configured = Duration::from_secs(60);
-        assert_eq!(
-            effective_spawn_timeout(LoopRunMode::Scheduled, Some(task), Some(configured)),
-            Some(task)
-        );
-        assert_eq!(
-            effective_spawn_timeout(LoopRunMode::Scheduled, None, Some(configured)),
-            Some(configured)
-        );
-        assert_eq!(
-            effective_spawn_timeout(LoopRunMode::Scheduled, None, None),
-            Some(SCHEDULED_RUN_DEFAULT_TIMEOUT)
-        );
-        assert_eq!(
-            effective_spawn_timeout(LoopRunMode::Manual, None, Some(configured)),
-            None
-        );
-    }
-
-    #[test]
-    fn supervised_budget_refusal_finishes_as_a_recorded_gate() {
-        let check = CheckRecord {
-            code: Some(1),
-            timed_out: false,
-            output: "guard failed".to_owned(),
-        };
-
-        let mut record = LoopRunRecord::new(
-            "nightly",
-            LoopRunResult::Completed,
-            LoopRunMode::Scheduled,
-            12,
-        );
-        let (presentation, notice) = finish_spawn_effect(
-            &mut record,
-            SupervisedRunOutcome::BudgetExceeded {
-                reason: "room budget reached".to_owned(),
-            },
-            Some(check.clone()),
-            true,
-        );
-
-        assert_eq!(record.result, LoopRunResult::BudgetSkipped);
-        assert_eq!(record.check.as_ref(), Some(&check));
-        assert_eq!(record.error.as_deref(), Some("room budget reached"));
-        assert_eq!(presentation, LoopRunPresentation::default());
-        assert!(matches!(
-            notice,
-            TaskFireNotice::Gate { reason } if reason == "room budget reached"
-        ));
-    }
-
-    #[test]
-    fn deadline_and_lock_age_use_injected_time() {
-        let now = Timestamp::from_second(200_000).expect("now");
-        let entry = TaskEntry {
-            deadline: Some(Timestamp::from_second(199_999).expect("deadline")),
-            ..TaskEntry::default()
-        };
-        assert!(deadline_expired_at(&entry, now));
-        assert_eq!(
-            relative_age(Timestamp::from_second(198_500).expect("started"), now),
-            "25m ago"
-        );
-    }
-
-    #[test]
-    fn ping_window_gate_distinguishes_cold_and_active_cache() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-            .expect("runtime paths");
-        runtime.ensure_dirs().expect("runtime dirs");
-        let now = Timestamp::from_second(1_000_000).expect("now");
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let mut cold = FireScope::new(
-            crate::ids::AgentKind::new_unchecked("claude"),
-            workspace_id.clone(),
-            runtime.clone(),
-            None,
-        );
-        cold.capacity_runtime = Some(runtime.clone());
-        assert!(!cold.window_running(false, now).expect("cold window"));
-
-        let cache = crate::agents::account::RateLimitsCache {
-            entries: std::collections::BTreeMap::from([(
-                "claude".to_owned(),
-                crate::agents::account::RateLimitCacheEntry {
-                    limits: crate::agents::AgentRateLimits {
-                        windows: vec![crate::agents::RateLimitWindow {
-                            used_percentage: Some(1),
-                            resets_at: Some(now + jiff::SignedDuration::from_secs(300)),
-                            duration_mins: Some(300),
-                            ..Default::default()
-                        }],
-                    },
-                    ..Default::default()
-                },
-            )]),
-            ..Default::default()
-        };
-        crate::store::atomic::write_temp_then_rename_cache(
-            &runtime.shared_rate_limits_path(),
-            &cache,
-        )
-        .expect("rate-limit cache");
-        let mut active = FireScope::new(
-            crate::ids::AgentKind::new_unchecked("claude"),
-            workspace_id.clone(),
-            runtime.clone(),
-            None,
-        );
-        active.capacity_runtime = Some(runtime.clone());
-        let entry = TaskEntry {
-            surplus: Some("0.5".to_owned()),
-            ..TaskEntry::default()
-        };
-        assert_eq!(
-            active.surplus_gate(&entry, now).expect("surplus gate"),
-            None
-        );
-        assert!(active.window_running(false, now).expect("active window"));
-        assert_eq!(active.capacity_reads.get(), 1);
-
-        let lifted_cache = crate::agents::account::RateLimitsCache {
-            entries: std::collections::BTreeMap::from([(
-                "claude".to_owned(),
-                crate::agents::account::RateLimitCacheEntry {
-                    limits: crate::agents::AgentRateLimits {
-                        windows: vec![crate::agents::RateLimitWindow {
-                            duration_mins: Some(7 * 24 * 60),
-                            source: crate::agents::context::WindowSource::Authoritative,
-                            lifted: true,
-                            ..Default::default()
-                        }],
-                    },
-                    ..Default::default()
-                },
-            )]),
-            ..Default::default()
-        };
-        crate::store::atomic::write_temp_then_rename_cache(
-            &runtime.shared_rate_limits_path(),
-            &lifted_cache,
-        )
-        .expect("lifted rate-limit cache");
-        let mut lifted = FireScope::new(
-            crate::ids::AgentKind::new_unchecked("claude"),
-            workspace_id,
-            runtime.clone(),
-            None,
-        );
-        lifted.capacity_runtime = Some(runtime);
-        let reset_ping = TaskEntry {
-            every: Some("reset".to_owned()),
-            ..TaskEntry::default()
-        };
-        assert_eq!(
-            lifted
-                .ping_gate_reason(&reset_ping, now)
-                .expect("lifted reset window needs no primer"),
-            Some("claude budget window is not enforced".to_owned())
-        );
-    }
-
-    #[test]
-    fn ping_window_outcome_selects_shortest_and_longest_duration() {
-        let capacity = ProviderCapacity::from_windows(vec![
-            crate::agents::RateLimitWindow {
-                duration_mins: Some(10_080),
-                resets_at: Some(Timestamp::from_second(20_000).unwrap()),
-                ..Default::default()
-            },
-            crate::agents::RateLimitWindow {
-                duration_mins: Some(300),
-                resets_at: Some(Timestamp::from_second(10_000).unwrap()),
-                ..Default::default()
-            },
-        ]);
-
-        let outcome = ping_window_outcome(&capacity).expect("window outcome");
-        assert_eq!(outcome.shortest.unwrap().duration_mins, Some(300));
-        assert_eq!(outcome.longest.unwrap().duration_mins, Some(10_080));
-    }
-
-    #[test]
-    fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let missing_path = dir.path().join("missing.lock");
-        assert!(matches!(
-            probe_run_lock_path(&missing_path).expect("probe missing lock"),
-            RunLockState::Available
-        ));
-        assert!(
-            !missing_path.exists(),
-            "probing should not create a lock file"
-        );
-        let path = dir.path().join("task.lock");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
-            .expect("open lock");
-
-        let guard = match acquire_run_lock_file(file, &path).expect("acquire lock") {
-            RunLockAttempt::Acquired(guard) => guard,
-            RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
-        };
-        let written: RunLockInfo =
-            serde_json::from_slice(&std::fs::read(&path).expect("read lock"))
-                .expect("parse lock info");
-        assert_eq!(written.pid, std::process::id());
-
-        let contender = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .expect("open contender");
-        match acquire_run_lock_file(contender, &path).expect("contend for lock") {
-            RunLockAttempt::Held(Some(info)) => assert_eq!(info, written),
-            RunLockAttempt::Held(None) => panic!("holder metadata should be readable"),
-            RunLockAttempt::Acquired(_) => panic!("held lock should reject contender"),
-        }
-        drop(guard);
-        let before_probe = std::fs::read(&path).expect("read lock before probe");
-        let probe = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .expect("open probe");
-        assert!(matches!(
-            probe_run_lock_file(probe, &path).expect("probe available lock"),
-            RunLockState::Available
-        ));
-        assert_eq!(
-            std::fs::read(&path).expect("read lock after probe"),
-            before_probe,
-            "probing an available lock should not rewrite its metadata"
-        );
-
-        let empty_path = dir.path().join("legacy.lock");
-        let empty = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&empty_path)
-            .expect("open empty lock");
-        empty.try_lock().expect("hold empty lock");
-        let contender = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&empty_path)
-            .expect("open empty contender");
-        assert!(matches!(
-            probe_run_lock_file(contender, &empty_path).expect("probe empty lock"),
-            RunLockState::Held(None)
-        ));
-    }
-
-    #[test]
-    fn stop_ladder_cancels_then_signals_then_reports_manual_recovery() {
-        let info = RunLockInfo {
-            pid: 42,
-            started_at: Timestamp::from_second(1).expect("timestamp"),
-        };
-        assert_eq!(
-            next_stop_action(&RunLockState::Available, true, false, false),
-            StopAction::Done
-        );
-        assert_eq!(
-            next_stop_action(&RunLockState::Held(Some(info)), true, false, false),
-            StopAction::CancelRun
-        );
-        assert_eq!(
-            next_stop_action(&RunLockState::Held(Some(info)), true, true, false),
-            StopAction::Signal(info)
-        );
-        assert_eq!(
-            next_stop_action(&RunLockState::Held(Some(info)), true, true, true),
-            StopAction::Manual
-        );
-        assert_eq!(
-            next_stop_action(&RunLockState::Held(None), false, false, false),
-            StopAction::Manual
-        );
-    }
-
-    #[test]
-    fn wait_for_run_lock_release_observes_guard_drop() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("task.lock");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
-            .expect("open lock");
-        let guard = match acquire_run_lock_file(file, &path).expect("acquire lock") {
-            RunLockAttempt::Acquired(guard) => guard,
-            RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
-        };
-        let releaser = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            drop(guard);
-        });
-
-        assert!(
-            wait_for_run_lock_release_path(&path, Duration::from_secs(1))
-                .expect("wait for release")
-        );
-        releaser.join().expect("release thread");
-    }
-
-    fn surplus_entry(surplus: Option<&str>, surplus_after: Option<&str>) -> TaskEntry {
-        TaskEntry {
-            surplus: surplus.map(ToOwned::to_owned),
-            surplus_after: surplus_after.map(ToOwned::to_owned),
-            ..TaskEntry::default()
-        }
-    }
-
-    fn reading(elapsed_days: i64, headroom: f64) -> WindowSurplus {
-        WindowSurplus {
-            duration_mins: 7 * 24 * 60,
-            elapsed: jiff::SignedDuration::from_secs(elapsed_days * 86_400),
-            headroom,
-        }
-    }
-
-    #[test]
-    fn surplus_gate_covers_closed_elapsed_headroom_and_open_branches() {
-        assert_eq!(surplus_gate_in(&TaskEntry::default(), "claude", None), None);
-        assert_eq!(
-            surplus_gate_in(&surplus_entry(Some("1.5x"), None), "claude", None).as_deref(),
-            Some("no claude budget-window reading; surplus gate stays closed")
-        );
-        assert_eq!(
-            surplus_gate_in(
-                &surplus_entry(Some("1.5x"), Some("3d")),
-                "claude",
-                Some(reading(2, 2.0)),
-            )
-            .as_deref(),
-            Some("claude 7d window 2d elapsed; fires after 3d")
-        );
-        assert_eq!(
-            surplus_gate_in(
-                &surplus_entry(Some("1.5x"), Some("3d")),
-                "claude",
-                Some(reading(4, 1.4)),
-            )
-            .as_deref(),
-            Some("claude 7d window surplus 1.4x below 1.5x")
-        );
-        assert_eq!(
-            surplus_gate_in(
-                &surplus_entry(Some("1.5x"), Some("3d")),
-                "claude",
-                Some(reading(4, 1.5)),
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn surplus_after_alone_implies_sustainable_headroom() {
-        assert_eq!(
-            surplus_gate_in(
-                &surplus_entry(None, Some("3d")),
-                "codex",
-                Some(reading(4, 0.9)),
-            )
-            .as_deref(),
-            Some("codex 7d window surplus 0.9x below 1.0x")
-        );
-    }
-
-    #[test]
-    fn check_polarity_truth_table() {
-        let passed = CheckOutcome {
-            passed: true,
-            timed_out: false,
-            output: String::new(),
-            code: Some(0),
-        };
-        let failed = CheckOutcome {
-            passed: false,
-            timed_out: false,
-            output: String::new(),
-            code: Some(1),
-        };
-        let timed_out = CheckOutcome {
-            passed: false,
-            timed_out: true,
-            output: String::new(),
-            code: None,
-        };
-
-        assert!(!polarity_fires(Some(CheckOn::Fail), &passed));
-        assert!(polarity_fires(Some(CheckOn::Fail), &failed));
-        assert!(polarity_fires(Some(CheckOn::Fail), &timed_out));
-        assert!(polarity_fires(Some(CheckOn::Success), &passed));
-        assert!(!polarity_fires(Some(CheckOn::Success), &failed));
-        assert!(!polarity_fires(Some(CheckOn::Success), &timed_out));
-    }
-
-    #[test]
-    fn run_check_captures_output_and_status() {
-        let dir = tempfile::tempdir().expect("tempdir");
-
-        let passed = run_check(
-            dir.path(),
-            "printf out; printf err >&2",
-            Duration::from_secs(1),
-            CheckEcho::Capture,
-        )
-        .expect("passed check");
-        assert!(passed.passed);
-        assert_eq!(passed.code, Some(0));
-        assert!(passed.output.contains("out"));
-        assert!(passed.output.contains("err"));
-
-        let failed = run_check(
-            dir.path(),
-            "printf nope; exit 1",
-            Duration::from_secs(1),
-            CheckEcho::Capture,
-        )
-        .expect("failed check");
-        assert!(!failed.passed);
-        assert!(!failed.timed_out);
-        assert_eq!(failed.code, Some(1));
-        assert!(failed.output.contains("nope"));
-    }
-
-    #[test]
-    fn run_check_honours_timeout() {
-        let dir = tempfile::tempdir().expect("tempdir");
-
-        let outcome = run_check(
-            dir.path(),
-            "sleep 1",
-            Duration::from_millis(50),
-            CheckEcho::Capture,
-        )
-        .expect("timed-out check");
-
-        assert!(!outcome.passed);
-        assert!(outcome.timed_out);
-    }
-
-    #[test]
-    fn pipe_forward_buffers_partial_lines_and_terminates_the_tail() {
-        let mut pending = b"first".to_vec();
-        assert_eq!(take_complete_line(&mut pending), None);
-
-        pending.extend_from_slice(b" line\nsecond");
-        assert_eq!(
-            take_complete_line(&mut pending),
-            Some(b"first line\n".to_vec())
-        );
-        assert_eq!(pending, b"second");
-        assert_eq!(take_trailing_line(&mut pending), Some(b"second\n".to_vec()));
-        assert!(pending.is_empty());
-    }
-}
+mod tests;

@@ -941,4 +941,4 @@ fn cron_dow_matches(expr: &str, day: jiff::civil::Weekday) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
