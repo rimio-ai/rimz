@@ -17,6 +17,7 @@ const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
 const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 const PROFILING_RUSTFLAGS: &str = "-C force-frame-pointers=yes -C symbol-mangling-version=v0";
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
+const STABLE_CHECKOUT_BUILD_ATTEMPTS: usize = 3;
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
 const DARWIN_COREFOUNDATION_TBD: &str = r#"--- !tapi-tbd
 tbd-version:     4
@@ -460,17 +461,77 @@ fn stage_host_rimz(
     features: &[&str],
     rustflags: Option<&'static str>,
 ) -> Result<PathBuf> {
-    build_plugin(root)?;
     let envs = host_build_envs(root, profile, rustflags);
-    run_with_env(root, "cargo", host_build_args(profile, features), &envs)?;
     let profile_dir = profile.target_dir();
     let stage = stage_bin_dir(root);
-    fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
-    copy_atomically(
-        &profile_artifact(root, profile_dir, "rimz"),
-        &stage.join("rimz"),
-    )?;
-    Ok(stage)
+    build_at_stable_checkout(
+        || git_head(root),
+        || {
+            build_plugin(root)?;
+            run_with_env(root, "cargo", host_build_args(profile, features), &envs)?;
+            fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
+            copy_atomically(
+                &profile_artifact(root, profile_dir, "rimz"),
+                &stage.join("rimz"),
+            )?;
+            Ok(stage.clone())
+        },
+    )
+}
+
+fn build_at_stable_checkout<T>(
+    mut checkout_revision: impl FnMut() -> Option<String>,
+    mut build: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    for attempt in 1..=STABLE_CHECKOUT_BUILD_ATTEMPTS {
+        let before = checkout_revision();
+        let result = build();
+        let after = checkout_revision();
+        if checkout_moved(before.as_deref(), after.as_deref()) {
+            report_checkout_moved(before.as_deref(), after.as_deref());
+            if attempt == STABLE_CHECKOUT_BUILD_ATTEMPTS {
+                bail!(
+                    "the checkout changed during {STABLE_CHECKOUT_BUILD_ATTEMPTS} install build attempts; pause merges and rerun the install"
+                );
+            }
+            continue;
+        }
+        return result;
+    }
+    bail!("install build attempts exhausted without producing a stable artifact")
+}
+
+fn git_head(root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn checkout_moved(before: Option<&str>, after: Option<&str>) -> bool {
+    before != after
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "the installer reports why it is rebuilding an otherwise opaque cargo failure"
+)]
+fn report_checkout_moved(before: Option<&str>, after: Option<&str>) {
+    let revision = |revision: Option<&str>| {
+        revision
+            .map(|revision| revision.chars().take(12).collect::<String>())
+            .unwrap_or_else(|| "unavailable".to_owned())
+    };
+    eprintln!(
+        "checkout moved from {} to {} during the install build; rebuilding from one revision",
+        revision(before),
+        revision(after),
+    );
 }
 
 fn host_build_envs(

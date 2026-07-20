@@ -38,6 +38,50 @@ fn install_destination_is_home_cargo_bin() {
 }
 
 #[test]
+fn install_rebuilds_after_a_checkout_move_hides_the_mixed_build_failure() {
+    let mut revisions = std::collections::VecDeque::from([
+        Some("old".to_owned()),
+        Some("new".to_owned()),
+        Some("new".to_owned()),
+        Some("new".to_owned()),
+    ]);
+    let mut attempts = 0;
+
+    let artifact = build_at_stable_checkout(
+        || revisions.pop_front().expect("revision probe"),
+        || {
+            attempts += 1;
+            if attempts == 1 {
+                Err(anyhow::anyhow!("binary saw the new library shape"))
+            } else {
+                Ok("stable artifact")
+            }
+        },
+    )
+    .unwrap();
+
+    assert_eq!(artifact, "stable artifact");
+    assert_eq!(attempts, 2);
+}
+
+#[test]
+fn install_keeps_a_real_build_failure_from_a_stable_checkout() {
+    let mut attempts = 0;
+
+    let err = build_at_stable_checkout(
+        || Some("stable".to_owned()),
+        || {
+            attempts += 1;
+            Err::<(), _>(anyhow::anyhow!("real compiler error"))
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(err.to_string(), "real compiler error");
+    assert_eq!(attempts, 1);
+}
+
+#[test]
 fn dev_install_builds_profiling_with_the_sentry_feature() {
     let args = host_build_args(HostProfile::Profiling, &["sentry"]);
 
