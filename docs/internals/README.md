@@ -50,7 +50,7 @@ Each of these subsystems is one file at the top level.
 | [theme.md](./theme.md) | The four-layer color pipeline, the glyph catalog, provider identity, and the shared human value formats. |
 | [store.md](./store.md) | The durable state engine: the on-disk shape, the write classes, the event log, and wakeups. |
 | [multiplexers.md](./multiplexers.md) | The Zellij and tmux contracts behind the backend seam. |
-| [remote.md](./remote.md) | SSH attach, the reconnect policy, and link health. |
+| [remote.md](./remote.md) | SSH attach and aliases, the reconnect supervisor, link health, port forwarding, and bandwidth attribution. |
 | [web.md](./web.md) | Zellij and ttyd browser access. |
 | [welcome.md](./welcome.md) | The lobby room picker and `rimz stats`. |
 | [diagnostics.md](./diagnostics.md) | The diagnostics log, the frame observer, and off-box Sentry. |
