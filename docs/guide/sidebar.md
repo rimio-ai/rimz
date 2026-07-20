@@ -53,7 +53,7 @@ The top block reads the whole room in four lines:
 - **Live agents and spend.** How many agents are alive right now, an unread count like `(2)` when results or questions await you, the open-PR lane count `⑃ N`, and the room's dollar spend rolling up live as agents work. The PR chip turns red for failing CI, amber while CI runs, green when every known lane passes, and keeps its cool link tone when CI is unknown. Click the unread count to filter the cards to unread rows, or click the open-PR count to filter them to lanes whose branch has an open pull request.
 - **The make-up line.** The fleet by state: `? 3  ! 1  ⏸ 0  ✓ 8` counts who asked you something, who failed, who is parked on a provider limit, and who holds a finished result, with live capacity (`⢿` working, `○` idle) on the right.
 
-A row of zeros with no unread count means nothing needs you, so you can skip the scan entirely. Every non-zero bucket is a click target that filters the cards to that state, and when the agent that most needs you scrolls out of view, an `↑ N need you` banner appears; clicking it brings that card back.
+A row of zeros with no unread count means nothing needs you, so you can skip the scan entirely. Every non-zero bucket is a click target that filters the cards to that state in every tab of the room; clearing or replacing the lens in one tab updates them all. When the agent that most needs you scrolls out of view, an `↑ N need you` banner appears; clicking it brings that card back.
 
 ### The agent cards
 

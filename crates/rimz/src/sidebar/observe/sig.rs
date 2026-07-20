@@ -363,6 +363,7 @@ fn extract_events(event_store: &EventStore, now_ms: u64) -> EventsSig {
             | SidebarEvent::PanesChanged
             | SidebarEvent::StoreDelta { .. }
             | SidebarEvent::WidthTargetChanged
+            | SidebarEvent::BodyFilterChanged
             | SidebarEvent::PaneFramePublished { .. }
             | SidebarEvent::Notify { .. }
             | SidebarEvent::Reload => {}

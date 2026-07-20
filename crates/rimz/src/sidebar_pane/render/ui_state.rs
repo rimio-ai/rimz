@@ -119,12 +119,12 @@ pub struct UiState {
     pub(crate) meter_pixels: Option<MeterPixels>,
     /// The cockpit filter target the user picked to filter the agent-card
     /// body, or `None` for the resting show-all view.
-    /// Renderer-local display state — the producer, the store, and the
-    /// cockpit counts (always the full fleet) are untouched; only the body
-    /// iteration narrows, through one shared `VisibleRoster` projection. A
-    /// pure toggle: a click on the active target clears it, and
-    /// it auto-clears when its count drops to zero — the make-up
-    /// twin of a dashboard tab pick ending when its panel leaves.
+    /// Shared session display state persisted in room runtime and adopted by
+    /// every renderer; the producer, the store, and the cockpit counts (always
+    /// the full fleet) are untouched. Only the body iteration narrows through
+    /// one `VisibleRoster` projection. A pure toggle: a click on the active
+    /// target clears it, and it auto-clears when its count drops to zero — the
+    /// make-up twin of a dashboard tab pick ending when its panel leaves.
     pub(crate) make_up_filter: Option<BodyFilter>,
     /// Worktree groups expanded through the renderer-local `+K more` affordance.
     /// Expansion is presentation state only: the snapshot carries the full

@@ -274,6 +274,47 @@ fn width_target_event_reloads_the_override_without_a_producer_fetch() {
 }
 
 #[test]
+fn birth_seeds_the_shared_body_filter() {
+    let rig = Rig::with_filter(BodyFilter::Unread);
+
+    assert_eq!(rig.state.ui.make_up_filter, Some(BodyFilter::Unread));
+}
+
+#[test]
+fn body_filter_event_adopts_the_shared_file_and_repaints() {
+    let mut rig = Rig::new();
+    rig.state.current = agent_snapshot(&rig.ws);
+    rig.state.dirty = false;
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
+    crate::sidebar::body_filter::write(&rig.runtime, filter).expect("write shared filter");
+
+    rig.event(SidebarEvent::BodyFilterChanged);
+
+    assert_eq!(rig.state.ui.make_up_filter, Some(filter));
+    assert!(rig.state.dirty);
+    assert!(
+        rig.next_request().is_none(),
+        "filter propagation stays out of the producer path"
+    );
+}
+
+#[test]
+fn empty_body_filter_auto_clear_updates_the_shared_file() {
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Waiting);
+    let mut rig = Rig::with_filter(filter);
+    assert_eq!(
+        crate::sidebar::body_filter::load(&rig.runtime),
+        Some(filter)
+    );
+
+    let snapshot = agent_snapshot(&rig.ws);
+    rig.fold(snapshot, true);
+
+    assert_eq!(rig.state.ui.make_up_filter, None);
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), None);
+}
+
+#[test]
 fn focus_out_closes_help_popup() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());

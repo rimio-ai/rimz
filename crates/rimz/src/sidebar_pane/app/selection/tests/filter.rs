@@ -52,8 +52,15 @@ fn make_up_click_picks_switches_and_clears_the_filter() {
 
     // A bucket click filters in place — a repaint, never a jump.
     let outcome = handle_mouse_click(6, 5, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(outcome.effect, None);
+    assert_eq!(
+        outcome,
+        InputOutcome {
+            redraw: true,
+            effect: Some(InputEffect::SyncFilter(Some(BodyFilter::Status(
+                AgentStatus::Failed,
+            )))),
+        }
+    );
     assert_eq!(
         ui.make_up_filter,
         Some(BodyFilter::Status(AgentStatus::Failed))
@@ -88,8 +95,10 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         &mut ui,
         &snapshot,
     );
-    assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(outcome.effect, None);
+    assert_eq!(
+        outcome,
+        InputOutcome::sync_filter(Some(BodyFilter::Status(AgentStatus::Failed)))
+    );
     assert_eq!(
         ui.make_up_filter,
         Some(BodyFilter::Status(AgentStatus::Failed))
@@ -100,7 +109,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         &mut ui,
         &snapshot,
     );
-    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(outcome, InputOutcome::sync_filter(None));
     assert_eq!(ui.make_up_filter, None, "the active key toggles to all");
 
     let outcome = handle_key(
@@ -126,7 +135,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
     );
 
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(outcome.effect, Some(InputEffect::SyncFilter(None)));
     assert_eq!(ui.make_up_filter, None);
 
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
@@ -184,7 +193,13 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
         .interactions
         .line_for_target(&target)
         .expect("failed hit");
-    handle_mouse_click(column, row, &mut ui, &snapshot);
+    let outcome = handle_mouse_click(column, row, &mut ui, &snapshot);
+    assert_eq!(
+        outcome.effect,
+        Some(InputEffect::SyncFilter(Some(BodyFilter::Status(
+            AgentStatus::Failed,
+        ))))
+    );
     assert_eq!(
         ui.make_up_filter,
         Some(BodyFilter::Status(AgentStatus::Failed))
@@ -230,8 +245,7 @@ fn unread_count_click_toggles_the_unread_lens() {
 
     ui.interactions = composed.interactions;
     let outcome = handle_mouse_click(unread_column, unread_row, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(outcome.effect, None);
+    assert_eq!(outcome, InputOutcome::sync_filter(Some(BodyFilter::Unread)));
     assert_eq!(ui.make_up_filter, Some(BodyFilter::Unread));
     let theme = ui.theme(&snapshot.theme);
     let picked = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -257,7 +271,7 @@ fn unread_count_click_toggles_the_unread_lens() {
     );
 
     let outcome = handle_mouse_click(unread_column, unread_row, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(outcome, InputOutcome::sync_filter(None));
     assert_eq!(ui.make_up_filter, None);
 
     for row in snapshot
@@ -319,8 +333,7 @@ fn pr_count_click_toggles_the_open_pr_lens() {
 
     ui.interactions = composed.interactions;
     let outcome = handle_mouse_click(pr_column, pr_row, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(outcome.effect, None);
+    assert_eq!(outcome, InputOutcome::sync_filter(Some(BodyFilter::OpenPr)));
     assert_eq!(ui.make_up_filter, Some(BodyFilter::OpenPr));
 
     let theme = ui.theme(&snapshot.theme);
@@ -348,7 +361,7 @@ fn pr_count_click_toggles_the_open_pr_lens() {
     }
 
     let outcome = handle_mouse_click(pr_column, pr_row, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(outcome, InputOutcome::sync_filter(None));
     assert_eq!(ui.make_up_filter, None);
 
     snapshot.worktree_groups[1].pr_state = None;
@@ -486,7 +499,7 @@ fn unread_filter_narrows_to_unread_rows() {
         &mut ui,
         &snapshot,
     );
-    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(outcome, InputOutcome::sync_filter(filter));
     assert_eq!(ui.make_up_filter, filter);
 
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
@@ -504,7 +517,7 @@ fn unread_filter_narrows_to_unread_rows() {
         &mut ui,
         &snapshot,
     );
-    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(outcome, InputOutcome::sync_filter(None));
     assert_eq!(ui.make_up_filter, None);
 
     for row in snapshot
@@ -767,7 +780,7 @@ fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
             &mut ui,
             &snapshot
         ),
-        InputOutcome::redraw()
+        InputOutcome::sync_filter(Some(BodyFilter::Unread))
     );
     let theme = ui.theme(&snapshot.theme);
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);

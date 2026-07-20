@@ -7,44 +7,7 @@ use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, WorktreePrState};
 
-/// Transient cockpit lens applied only to body membership.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BodyFilter {
-    Status(AgentStatus),
-    Unread,
-    OpenPr,
-}
-
-impl BodyFilter {
-    pub(crate) fn matches(self, row: &SidebarRow, pr_open: bool) -> bool {
-        match self {
-            Self::Status(status) => row.status() == Some(status),
-            Self::Unread => row.unread,
-            Self::OpenPr => pr_open,
-        }
-    }
-
-    pub(crate) fn total(self, groups: &[SidebarWorktreeGroup]) -> usize {
-        match self {
-            Self::Status(status) => groups
-                .iter()
-                .flat_map(|group| &group.status_counts)
-                .filter(|count| count.status == status)
-                .map(|count| count.count)
-                .sum(),
-            Self::Unread => groups
-                .iter()
-                .flat_map(|group| &group.rows)
-                .filter(|row| row.unread)
-                .count(),
-            Self::OpenPr => groups
-                .iter()
-                .filter(|group| group.pr_state == Some(WorktreePrState::Open))
-                .map(|group| group.rows.len())
-                .sum(),
-        }
-    }
-}
+pub(crate) use crate::sidebar::body_filter::BodyFilter;
 
 /// Maximum calm rows painted before overflow moves behind `+K more`.
 pub const WORKTREE_ROW_CAP: usize = 6;

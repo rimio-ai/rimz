@@ -28,11 +28,15 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
-        Self::build(None)
+        Self::build(None, None)
     }
 
     fn with_own_pane(own_pane: PaneId) -> Self {
-        Self::build(Some(own_pane))
+        Self::build(Some(own_pane), None)
+    }
+
+    fn with_filter(filter: BodyFilter) -> Self {
+        Self::build(None, Some(filter))
     }
 
     /// The terminal viewport width. Only the attach-resize path cares.
@@ -41,10 +45,13 @@ impl Rig {
         self
     }
 
-    fn build(own_pane: Option<PaneId>) -> Self {
+    fn build(own_pane: Option<PaneId>, filter: Option<BodyFilter>) -> Self {
         let ws = workspace();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+        if let Some(filter) = filter {
+            crate::sidebar::body_filter::write(&runtime, filter).expect("write initial filter");
+        }
         let instance_id = SidebarInstanceId::new();
         let socket_path = sidebar_socket_path(&runtime, &instance_id);
         let read_marks = ReadMarkStore::new(runtime.clone(), instance_id);

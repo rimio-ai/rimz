@@ -208,6 +208,7 @@ The remaining files are terse by design.
 | `loop-fire.json` | The elder's loop-task arm and fire stamps for this room. |
 | `authoritative-pane-probe.json` | One single-flight winner's authoritative mux pane observation, shared by every sidebar's liveness watchdog. |
 | `sidebar-width.json` | The room-runtime sidebar width the renderer settled on. |
+| `sidebar-filter.json` | The room-runtime cockpit lens every renderer adopts. |
 | `binding.log.jsonl` | Append-only pane-bind decisions ([sidebar.md](./sidebar.md)). |
 | `diag.log.jsonl` | Typed anomaly records ([diagnostics.md](../diagnostics.md)). |
 
@@ -246,6 +247,7 @@ The store keeps one slot per key: per pane per event kind, plus a single focus s
 | `FocusIntent` | target `pane_id`, nonce | Store-less nudge: fold the durable focus anchor now, so hidden peer tabs repaint before the mux switch reveals them. | Renderer jumps |
 | `FocusStranded` | owning sidebar `pane_id`, generation, client views | Renderer focus-repair action only. The matching renderer validates its baseline as a live visible work sibling or picks the deterministic leftmost sibling; distinct client views leave focus alone because `focus-pane-id` is session-global. Dropped past `FOCUS_STRANDED_EVENT_TTL` so late delivery cannot yank focus. | Shared host presence projector, from a Zellij settled generation or a tmux window switch |
 | `WidthTargetChanged` | none | Re-read the room-runtime width override and converge only this renderer's own pane. | The renderer that settled a new width |
+| `BodyFilterChanged` | none | Re-read the room-runtime cockpit lens and adopt it without a producer fetch. | A renderer that changed or auto-cleared the lens |
 | `Notify` | `title`, `body`, target panes, `recheck_unread`, kind | Renderer action only: raise the configured desktop, bell, or command notification, gated on row-unread when `recheck_unread`. Never fused into rows ([notifications.md](./notifications.md)). | The notification path |
 | `Reload` | none | Accelerate the supervisor's durable workspace-record poll; the worker hands off or hard-refreshes. | `rimz reload` |
 

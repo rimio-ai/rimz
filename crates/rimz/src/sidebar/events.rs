@@ -114,6 +114,9 @@ pub enum SidebarEvent {
     /// The room-runtime absolute width target changed. Renderers re-read the
     /// atomically replaced override file and converge only their own pane.
     WidthTargetChanged,
+    /// The shared cockpit lens changed. Renderers re-read the atomically
+    /// replaced room-runtime filter file.
+    BodyFilterChanged,
     PaneFramePublished {
         /// The producer-side change written into the shared pane frame. Older
         /// publishers omitted this field, which safely decodes as topology.
@@ -292,6 +295,7 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         | SidebarEvent::PanesChanged
         | SidebarEvent::StoreDelta { .. }
         | SidebarEvent::WidthTargetChanged
+        | SidebarEvent::BodyFilterChanged
         | SidebarEvent::PaneFramePublished { .. }
         | SidebarEvent::Notify { .. }
         | SidebarEvent::Reload => None,
@@ -349,6 +353,7 @@ mod tests {
                 agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
             },
             SidebarEvent::WidthTargetChanged,
+            SidebarEvent::BodyFilterChanged,
             SidebarEvent::PaneFramePublished {
                 publication: PaneFramePublicationKind::Topology,
             },
@@ -422,6 +427,14 @@ mod tests {
     #[test]
     fn width_target_change_is_a_renderer_action_not_an_overlay_or_verification_request() {
         let event = SidebarEvent::WidthTargetChanged;
+
+        assert!(!event.is_overlay());
+        assert!(!event.requests_producer_verification());
+    }
+
+    #[test]
+    fn body_filter_change_is_a_renderer_action_not_an_overlay_or_verification_request() {
+        let event = SidebarEvent::BodyFilterChanged;
 
         assert!(!event.is_overlay());
         assert!(!event.requests_producer_verification());

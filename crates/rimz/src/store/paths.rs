@@ -335,6 +335,11 @@ impl RuntimePaths {
         self.root.join("sidebar-width.json")
     }
 
+    /// Shared cockpit body filter adopted by every renderer in the room.
+    pub fn sidebar_filter_path(&self) -> PathBuf {
+        self.root.join("sidebar-filter.json")
+    }
+
     /// The workspace-wide set of open unread episodes. The producer owns writes
     /// for status-derived opens and row-gone pruning; renderers and CLI commands
     /// write read receipts that derive this set back to read on the next fold.

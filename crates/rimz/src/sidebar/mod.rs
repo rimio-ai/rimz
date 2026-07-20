@@ -12,6 +12,7 @@
 //! sweep reaps a SIGKILLed instance's runtime files.
 
 pub mod agent_projection;
+pub(crate) mod body_filter;
 pub mod cache;
 pub mod consumer;
 pub mod enrich;

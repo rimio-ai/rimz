@@ -9,7 +9,7 @@ use super::lifecycle::{grow_beyond_legit, self_close_decision};
 use super::paint::FramePainter;
 use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
-use super::selection::{reconcile_selection, row_index_of_pane};
+use super::selection::{adopt_filter, reconcile_selection, row_index_of_pane};
 use super::state::{
     ApplyOutcome, FetchDiagnostics, ReadClear, RenderState, apply_manual_unread_guard,
     compute_next_state, emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row,
@@ -23,6 +23,7 @@ use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::PixelRenderCaps;
+use crate::sidebar_pane::view::BodyFilter;
 
 pub(super) struct MaintenanceContext<'a> {
     pub(super) config: &'a ServeConfig,
@@ -118,6 +119,7 @@ struct PendingFocusRepair {
 
 pub(super) struct LoopState {
     pub(super) current: SidebarSnapshot,
+    session_name: String,
     /// Full pulled truth retained only while an overlay, focus fence, or gate
     /// hold can outlive its source. The steady overlay-free path moves the pull
     /// directly into `current` and keeps only the compact projections below.
@@ -216,12 +218,14 @@ impl LoopState {
             .max_cols;
         let width_control = WidthController::new(
             read_marks.runtime().clone(),
-            session_name,
+            session_name.clone(),
             own_pane.clone(),
             mux,
             width_cap,
         );
+        let make_up_filter = crate::sidebar::body_filter::load(read_marks.runtime());
         Self {
+            session_name,
             last_focus_observation: FocusObservation::from_snapshot(&current),
             last_pulled_sig: observe::PulledFrameSig::from_snapshot(&current),
             overlay_baseline: None,
@@ -238,7 +242,10 @@ impl LoopState {
             health: Health::default(),
             gate: GateState::default(),
             self_close: SelfCloseState::default(),
-            ui: UiState::default(),
+            ui: UiState {
+                make_up_filter,
+                ..UiState::default()
+            },
             paint: FramePainter::new(pet_render_caps, pixel_wrap),
             read_marks,
             remind: RemindState::default(),
@@ -569,6 +576,14 @@ impl LoopState {
             SidebarEvent::WidthTargetChanged => {
                 let measured = terminal.size().ok().map(|size| size.width);
                 self.width_control.reload_target(measured, diag);
+            }
+            SidebarEvent::BodyFilterChanged => {
+                let filter = crate::sidebar::body_filter::load(self.read_marks.runtime());
+                if filter != self.ui.make_up_filter
+                    && adopt_filter(&mut self.ui, &self.current, filter)
+                {
+                    self.dirty = true;
+                }
             }
             // A watched renderer and the producer fold every publication now.
             // Hidden consumers coalesce topology and metrics to the cadence of
@@ -938,9 +953,30 @@ impl LoopState {
             Some(InputEffect::MarkRead(row_id)) => self.mark_row_read(fetch, &row_id, diag),
             Some(InputEffect::MarkUnread(row_id)) => self.mark_row_unread(fetch, &row_id, diag),
             Some(InputEffect::MarkAllRead) => self.mark_all_read(fetch, diag),
+            Some(InputEffect::SyncFilter(filter)) => self.persist_body_filter(filter),
             Some(InputEffect::DismissAlert) | None => {}
         }
         Ok(())
+    }
+
+    fn persist_body_filter(&self, filter: Option<BodyFilter>) {
+        let persisted = match filter {
+            Some(filter) => crate::sidebar::body_filter::write(self.read_marks.runtime(), filter)
+                .map_err(|err| err.to_string()),
+            None => crate::sidebar::body_filter::clear(self.read_marks.runtime())
+                .map_err(|err| err.to_string()),
+        };
+        if let Err(err) = persisted {
+            debug!(error = %err, "sidebar body filter write failed");
+            return;
+        }
+        if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
+            self.read_marks.runtime(),
+            Some(&self.session_name),
+            SidebarEvent::BodyFilterChanged,
+        ) {
+            debug!(error = %err, "sidebar body filter broadcast failed");
+        }
     }
 
     /// Apply an input wakeup (key/mouse/resize) to the local UI in place. Input
@@ -1553,7 +1589,11 @@ impl LoopState {
         let derived =
             focused_pane.filter(|pane| row_index_of_pane(&self.current, None, pane).is_some());
         let derived_focus_pane = derived.is_some();
+        let previous_filter = self.ui.make_up_filter;
         reconcile_selection(&mut self.ui, &self.current, derived);
+        if previous_filter.is_some() && self.ui.make_up_filter.is_none() {
+            self.persist_body_filter(None);
+        }
         // A fresh focus-register derivation that moved the highlight is an external
         // focus switch. Arm a one-shot reveal so the next paint brings the focused
         // card's worktree header on-screen with it. A sidebar jump also lands here,

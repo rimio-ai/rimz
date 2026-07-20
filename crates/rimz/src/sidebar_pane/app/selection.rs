@@ -37,6 +37,9 @@ pub(super) enum InputEffect {
     MarkRead(String),
     MarkUnread(String),
     MarkAllRead,
+    /// Persist and broadcast the shared cockpit lens from the loop, which owns
+    /// the room runtime paths.
+    SyncFilter(Option<BodyFilter>),
 }
 
 impl InputOutcome {
@@ -89,6 +92,13 @@ impl InputOutcome {
         Self {
             effect: Some(InputEffect::MarkAllRead),
             ..Self::default()
+        }
+    }
+
+    fn sync_filter(filter: Option<BodyFilter>) -> Self {
+        Self {
+            redraw: true,
+            effect: Some(InputEffect::SyncFilter(filter)),
         }
     }
 }
@@ -298,7 +308,7 @@ pub(super) fn handle_mouse_click(
         }
         Some(HitTarget::BodyFilter(filter)) => {
             if toggle_make_up_filter(ui, snapshot, filter) {
-                InputOutcome::redraw()
+                InputOutcome::sync_filter(ui.make_up_filter)
             } else {
                 InputOutcome::default()
             }
@@ -374,7 +384,7 @@ fn apply_make_up_filter(
         Some(filter) => toggle_make_up_filter(ui, snapshot, filter),
     };
     if changed {
-        InputOutcome::redraw()
+        InputOutcome::sync_filter(ui.make_up_filter)
     } else {
         InputOutcome::default()
     }
@@ -403,6 +413,14 @@ fn set_make_up_filter(
     ui.manual_scroll = None;
     anchor_selection(ui, snapshot);
     true
+}
+
+pub(super) fn adopt_filter(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    filter: Option<BodyFilter>,
+) -> bool {
+    set_make_up_filter(ui, snapshot, filter)
 }
 
 /// Jump the browse pick to the first visible row of the neighbouring worktree.
