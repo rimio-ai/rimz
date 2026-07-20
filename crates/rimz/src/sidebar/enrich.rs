@@ -269,14 +269,28 @@ pub struct FoldOpts<'a> {
 /// available this tick (no pane frame or no reap cache yet).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct RemoteControlServerHealth {
-    pub claude_host_present: Option<bool>,
+    /// A managed host pane exists *and* the provider's record shows it still
+    /// serving. Pane presence alone outlives the child that answers for it.
+    pub claude_host_serving: Option<bool>,
     pub codex_daemon_alive: Option<bool>,
+}
+
+/// Whether the Claude host counts as serving. The managed pane must exist, and
+/// an enabled host must not have left a record saying its server died — a pane
+/// outlives the child that answers for it, so presence alone reads healthy long
+/// after the host stopped working. No record keeps the answer positive.
+pub(crate) fn claude_host_serving(
+    pane_present: bool,
+    enabled: bool,
+    liveness: crate::agents::runtime_control::RuntimeControlLiveness,
+) -> bool {
+    pane_present && !(enabled && liveness.is_down())
 }
 
 impl RemoteControlServerHealth {
     fn for_kind(self, kind: &str) -> Option<bool> {
         match kind {
-            "claude" => self.claude_host_present,
+            "claude" => self.claude_host_serving,
             "codex" => self.codex_daemon_alive,
             _ => None,
         }
@@ -491,9 +505,24 @@ fn enrich_core(
     // Best-effort and fail-safe: no daemon process, absent cache, or an
     // untrusted loaded list keeps every session.
     let daemon_inputs = read_codex_daemon_reap(runtime);
+    // A managed pane keeps the joined argv as its title for its whole life, so
+    // pane presence alone cannot see a host whose child stopped serving. The
+    // provider's own record of the serving process settles it; a host with no
+    // record stays healthy, because absence of evidence is not a failure.
+    let claude_rc_enabled = machine_config.remote_control.enabled_for("claude");
     let remote_control_health = RemoteControlServerHealth {
-        claude_host_present: frame
-            .map(|frame| crate::daemon_view::claude_host_present(&frame.to_pane_refs())),
+        claude_host_serving: frame.map(|frame| {
+            let pane_present = crate::daemon_view::claude_host_present(&frame.to_pane_refs());
+            // Probe only behind a live pane on an enabled host: a disabled or
+            // paneless host has nothing the record could contradict.
+            let liveness = match snapshot.project_root.as_deref() {
+                Some(root) if claude_rc_enabled && pane_present => {
+                    crate::agents::runtime_control::host_liveness("claude", root)
+                }
+                _ => crate::agents::runtime_control::RuntimeControlLiveness::Unknown,
+            };
+            claude_host_serving(pane_present, claude_rc_enabled, liveness)
+        }),
         codex_daemon_alive: daemon_inputs
             .as_ref()
             .map(|inputs| !inputs.daemon_pids.is_empty()),

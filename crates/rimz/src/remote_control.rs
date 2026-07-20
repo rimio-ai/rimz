@@ -20,6 +20,15 @@ pub enum RemoteControlHost {
     Codex,
 }
 
+impl RemoteControlHost {
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostState {
     Disabled,
@@ -65,10 +74,7 @@ impl ReadinessSnapshot {
     }
 
     pub fn for_host(&self, host: RemoteControlHost) -> &HostState {
-        self.for_kind(match host {
-            RemoteControlHost::Claude => "claude",
-            RemoteControlHost::Codex => "codex",
-        })
+        self.for_kind(host.kind())
     }
 
     pub fn for_kind(&self, kind: &str) -> &HostState {
@@ -139,6 +145,23 @@ fn probe_codex(enabled: bool) -> HostState {
     }
 }
 
+/// Seed the provider-side preconditions an enabled host needs before it
+/// launches, so [`ReadinessSnapshot::probe`] judges each host on the state it
+/// will actually start with. Best-effort and idempotent: a provider that cannot
+/// fill its precondition reports it through readiness instead of failing here.
+pub fn prepare_hosts(config: &RemoteControlConfig) {
+    for host in [RemoteControlHost::Claude, RemoteControlHost::Codex] {
+        runtime_control::prepare(host.kind(), config.enabled_for(host.kind()));
+    }
+}
+
+/// Prepare one host as if already enabled, for a transition the config has not
+/// recorded yet. Turning a toggle on is the intent that authorizes the seed, so
+/// this runs before the gate judges whether that host can serve.
+pub fn prepare_host(host: RemoteControlHost) {
+    runtime_control::prepare(host.kind(), true);
+}
+
 /// Advisory-only provider daemon findings. These never gate `rimz start`.
 pub fn advisories(config: &RemoteControlConfig) -> Vec<String> {
     let mut out = Vec::new();
@@ -171,6 +194,7 @@ pub fn apply_runtime_toggle(
     };
 
     if host == RemoteControlHost::Claude {
+        prepare_hosts(&machine.remote_control);
         let live = LiveSessions::probe();
         let readiness = ReadinessSnapshot::probe(&machine.remote_control);
         for workspace in &workspaces {

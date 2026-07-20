@@ -153,6 +153,10 @@ fn remote_control_transition(
 }
 
 fn preflight_remote_control_toggle(host: rimz::remote_control::RemoteControlHost) -> Result<()> {
+    // Seed before the gate reads: the request to enable is the intent a host's
+    // own precondition needs, and judging the pre-transition state would refuse
+    // the very configuration this command is about to create.
+    rimz::remote_control::prepare_host(host);
     rimz::remote_control::ReadinessSnapshot::probe_transition(host)
         .start_gate()
         .map_err(Into::into)

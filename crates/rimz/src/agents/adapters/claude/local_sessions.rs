@@ -316,7 +316,7 @@ fn file_mtime(path: &Path) -> Option<Timestamp> {
     .ok()
 }
 
-fn project_directory_name(workspace: &Path) -> String {
+pub(super) fn project_directory_name(workspace: &Path) -> String {
     workspace
         .as_os_str()
         .as_encoded_bytes()

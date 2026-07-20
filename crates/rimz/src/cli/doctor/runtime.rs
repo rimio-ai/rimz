@@ -919,7 +919,9 @@ fn topology_writer_id(
 /// Per-machine remote-control auto-launch posture. Doctor separates hard
 /// `rimz start` refusals for installed-agent misconfiguration from enabled
 /// hosts whose agent is not installed; start skips those inert toggles.
-pub(super) fn collect_remote_control() -> model::RemoteControl {
+pub(super) fn collect_remote_control(
+    project_root: Option<&std::path::Path>,
+) -> model::RemoteControl {
     let config = match MachineConfig::load() {
         Ok(config) => config.remote_control,
         Err(err) => {
@@ -939,7 +941,21 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
         let (detail, ready) = match readiness
             .for_host(rimz::remote_control::RemoteControlHost::Claude)
         {
-            rimz::remote_control::HostState::Ready => ("ready".to_owned(), true),
+            // A ready host is one that *can* start. Whether one is serving right
+            // now is a separate question the provider's own record answers, and
+            // doctor is the place a stalled host should become visible.
+            rimz::remote_control::HostState::Ready => match project_root
+                .map(|root| rimz::agents::runtime_control::host_liveness("claude", root))
+            {
+                Some(rimz::agents::runtime_control::RuntimeControlLiveness::Up) => {
+                    ("ready, host serving".to_owned(), true)
+                }
+                Some(rimz::agents::runtime_control::RuntimeControlLiveness::Down) => (
+                    "ready, but the host stopped serving this project".to_owned(),
+                    false,
+                ),
+                _ => ("ready".to_owned(), true),
+            },
             rimz::remote_control::HostState::Uninstalled(_) => {
                 ("enabled, not on PATH".to_owned(), false)
             }

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use crate::agents::version::{CliVersion, probe_cli_version};
 
 use super::install::{claude_settings_path, read_existing_json};
+use super::remote_consent;
 
 pub(crate) const MIN_REMOTE_CONTROL: CliVersion = CliVersion::new(2, 1, 51);
 pub(crate) const AUTH_ENV_BLOCKS_RC_SINCE: CliVersion = CliVersion::new(2, 1, 157);
@@ -222,6 +223,8 @@ pub enum Issue {
     Uninstalled,
     TooOld { found: CliVersion },
     RemoteControlDisabled { settings_path: PathBuf },
+    ConsentPending { config_path: PathBuf },
+    ConsentRefused { config_path: PathBuf },
     AuthConflict { sources: Vec<AuthConflictSource> },
 }
 
@@ -280,6 +283,25 @@ impl std::fmt::Display for Issue {
                  `[remote_control] claude = false` to disable the Claude host.",
                 settings_path.display(),
             ),
+            Self::ConsentPending { config_path } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 `claude remote-control` still asks `Enable Remote Control? (y/n)` once per \
+                 machine, and RimZ could not record the answer in {}.\n\n\
+                 Make that file writable and re-run so RimZ can set `remoteDialogSeen`, or run \
+                 `claude remote-control` in this project once by hand and answer `y`, or set \
+                 `[remote_control] claude = false` to disable the Claude host.",
+                config_path.display(),
+            ),
+            Self::ConsentRefused { config_path } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 `remoteDialogSeen` is set to a non-`true` value in {}, which RimZ leaves \
+                 alone.\n\n\
+                 Set it to `true` or remove it, then re-run, or set \
+                 `[remote_control] claude = false` to disable the Claude host.",
+                config_path.display(),
+            ),
             Self::AuthConflict { sources } => write!(
                 f,
                 "Claude remote-control is enabled (`[remote_control] claude = true`) but \
@@ -319,9 +341,40 @@ pub fn readiness(enabled: bool) -> Readiness {
         env_value_present(ANTHROPIC_API_KEY),
         env_value_present(ANTHROPIC_AUTH_TOKEN),
         launch_endpoint_conflict(),
+        remote_consent::read_consent(),
     ) {
         Ok(host_argv) => Readiness::Ready { host_argv },
         Err(issue) => Readiness::Blocked(issue),
+    }
+}
+
+/// Record the one-time remote-control dialog answer so an unattended host pane
+/// starts serving instead of blocking on a prompt nobody is watching. The
+/// config toggle is the operator's intent; this carries it to Claude. Failures
+/// stay quiet here and surface as a refusal from [`readiness`], so a room never
+/// launches a host that will hang.
+pub fn ensure_consent(enabled: bool) {
+    if !enabled {
+        return;
+    }
+    let Some(path) = remote_consent::global_config_path() else {
+        tracing::warn!(
+            "Claude global config path unavailable; remote-control consent was not recorded",
+        );
+        return;
+    };
+    match remote_consent::seed(&path) {
+        Ok(remote_consent::ConsentState::Seeded) => {}
+        Ok(state) => tracing::warn!(
+            path = %path.display(),
+            ?state,
+            "Claude remote-control consent was not recorded",
+        ),
+        Err(err) => tracing::warn!(
+            path = %path.display(),
+            error = &err as &dyn std::error::Error,
+            "Claude remote-control consent could not be written",
+        ),
     }
 }
 
@@ -343,9 +396,24 @@ fn readiness_from(
     env_api_key: bool,
     env_auth_token: bool,
     env_endpoint_conflict: bool,
+    consent: Option<(PathBuf, remote_consent::ConsentState)>,
 ) -> Result<Vec<String>, Issue> {
     if settings.disable_remote_control {
         return Err(Issue::RemoteControlDisabled { settings_path });
+    }
+    // The dialog blocks the host before any version or auth gate matters: an
+    // unanswered prompt holds the pane open forever. An unreadable global config
+    // stays silent here — Claude owns that file and may still recover it.
+    if let Some((config_path, state)) = consent {
+        match state {
+            remote_consent::ConsentState::Seeded | remote_consent::ConsentState::Unreadable => {}
+            remote_consent::ConsentState::Unseeded => {
+                return Err(Issue::ConsentPending { config_path });
+            }
+            remote_consent::ConsentState::Refused => {
+                return Err(Issue::ConsentRefused { config_path });
+            }
+        }
     }
     let Some(found) = version else {
         tracing::warn!(
@@ -533,6 +601,12 @@ mod tests {
         Some(CliVersion::new(2, 1, patch))
     }
 
+    fn consent(
+        state: remote_consent::ConsentState,
+    ) -> Option<(PathBuf, remote_consent::ConsentState)> {
+        Some((PathBuf::from("/home/u/.claude.json"), state))
+    }
+
     fn decision(
         version: Option<CliVersion>,
         settings: ClaudeRcSettings,
@@ -546,6 +620,7 @@ mod tests {
             env_api_key,
             env_auth_token,
             false,
+            consent(remote_consent::ConsentState::Seeded),
         )
     }
 
@@ -557,6 +632,81 @@ mod tests {
             vec!["claude", "remote-control", "--spawn", "worktree"]
         );
         assert!(crate::daemon_view::command_is_host(&argv.join(" ")));
+    }
+
+    #[test]
+    fn an_unrecorded_dialog_blocks_before_any_version_or_auth_gate() {
+        // An unanswered prompt holds the pane open, so it outranks every gate
+        // that only degrades the host.
+        let blocked = readiness_from(
+            None,
+            settings_path(),
+            readiness_settings(),
+            true,
+            true,
+            true,
+            consent(remote_consent::ConsentState::Unseeded),
+        );
+        assert_eq!(
+            blocked,
+            Err(Issue::ConsentPending {
+                config_path: PathBuf::from("/home/u/.claude.json"),
+            })
+        );
+    }
+
+    #[test]
+    fn an_explicit_refusal_is_reported_rather_than_overridden() {
+        assert_eq!(
+            readiness_from(
+                v(215),
+                settings_path(),
+                readiness_settings(),
+                false,
+                false,
+                false,
+                consent(remote_consent::ConsentState::Refused),
+            ),
+            Err(Issue::ConsentRefused {
+                config_path: PathBuf::from("/home/u/.claude.json"),
+            })
+        );
+    }
+
+    #[test]
+    fn an_unreadable_global_config_leaves_the_host_launchable() {
+        // Claude owns that file and may still recover it; refusing the room
+        // over a file RimZ cannot parse would be worse than letting it try.
+        assert!(
+            readiness_from(
+                v(215),
+                settings_path(),
+                readiness_settings(),
+                false,
+                false,
+                false,
+                consent(remote_consent::ConsentState::Unreadable),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn consent_issues_keep_claude_setup_guidance() {
+        let pending = Issue::ConsentPending {
+            config_path: PathBuf::from("/home/u/.claude.json"),
+        }
+        .to_string();
+        assert!(pending.contains("[remote_control] claude"));
+        assert!(pending.contains("remoteDialogSeen"));
+        assert!(pending.contains("/home/u/.claude.json"));
+
+        let refused = Issue::ConsentRefused {
+            config_path: PathBuf::from("/home/u/.claude.json"),
+        }
+        .to_string();
+        assert!(refused.contains("[remote_control] claude"));
+        assert!(refused.contains("remoteDialogSeen"));
     }
 
     #[test]
@@ -625,11 +775,20 @@ mod tests {
                 false,
                 false,
                 true,
+                consent(remote_consent::ConsentState::Seeded),
             )
             .is_ok()
         );
         assert_eq!(
-            readiness_from(v(196), settings_path(), settings, false, false, true,),
+            readiness_from(
+                v(196),
+                settings_path(),
+                settings,
+                false,
+                false,
+                true,
+                consent(remote_consent::ConsentState::Seeded),
+            ),
             Err(Issue::AuthConflict {
                 sources: vec![
                     AuthConflictSource::EndpointEnv,

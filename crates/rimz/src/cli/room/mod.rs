@@ -408,6 +408,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             // aborts the launch here with the fix, before hook-install or session side
             // effects. An enabled host whose agent is not installed is an inert toggle,
             // skipped here so the room still starts; `rimz doctor` surfaces it.
+            rimz::remote_control::prepare_hosts(&machine_config.remote_control);
             let readiness =
                 rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control);
             readiness.start_gate()?;

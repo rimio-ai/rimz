@@ -39,10 +39,12 @@ pub(crate) fn split_into_loop_zone(
         None => {
             let machine = rimz::config::MachineConfig::load_lenient();
             let rimz_bin = rimz::proc::rimz_exe();
-            let claude_host_argv = (machine.remote_control.enabled_for("claude")
-                && which::which("claude").is_ok())
-            .then(|| rimz::agents::runtime_control::host_argv("claude"))
-            .flatten();
+            // One gate decides whether a host launches. A cheaper local check
+            // would spawn a host that stalls on its first-run prompt or a
+            // version it cannot serve from, in the one path no operator watches.
+            rimz::remote_control::prepare_hosts(&machine.remote_control);
+            let readiness = rimz::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
+            let claude_host_argv = readiness.claude_host_argv().map(<[String]>::to_vec);
             let view =
                 rimz::daemon_view::daemon_view_spec(rimz::daemon_view::DaemonViewSpecParams {
                     claude_host_argv: claude_host_argv.as_deref(),

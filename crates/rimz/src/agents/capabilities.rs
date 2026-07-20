@@ -669,6 +669,22 @@ pub trait RuntimeControlCapability: CoreCapability {
 
     fn ensure_runtime_control(&self, _enabled: bool) {}
 
+    /// Fill the preconditions this host needs before it can be launched at all —
+    /// a recorded first-run answer, a required file — without starting anything.
+    /// Readiness gates read the result, so this runs before they judge the host.
+    /// Starting a daemon belongs to [`Self::ensure_runtime_control`].
+    fn prepare_runtime_control(&self, _enabled: bool) {}
+
+    /// Report whether this host still serves `project_root` from the host's own
+    /// durable record. A provider that keeps no such record leaves the default,
+    /// so callers see "no evidence" instead of a fabricated verdict.
+    fn runtime_control_liveness(
+        &self,
+        _project_root: &std::path::Path,
+    ) -> runtime_control::RuntimeControlLiveness {
+        runtime_control::RuntimeControlLiveness::Unknown
+    }
+
     fn reconcile_runtime_control(
         &self,
         _enabled: bool,

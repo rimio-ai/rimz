@@ -87,6 +87,46 @@ fn fold_producing(
 }
 
 #[test]
+fn claude_host_serving_needs_a_pane_the_provider_still_stands_behind() {
+    use crate::agents::runtime_control::RuntimeControlLiveness::{Down, Unknown, Up};
+    use crate::sidebar::enrich::claude_host_serving;
+
+    let cases = [
+        (true, true, Up, true, "pane up and the host confirms it"),
+        (
+            true,
+            true,
+            Down,
+            false,
+            "the pane outlived the server that answered for it",
+        ),
+        (
+            true,
+            true,
+            Unknown,
+            true,
+            "no record yet is not evidence of failure",
+        ),
+        (false, true, Up, false, "no pane, no host"),
+        (
+            true,
+            false,
+            Down,
+            true,
+            "a disabled host is not judged on its record",
+        ),
+    ];
+
+    for (pane_present, enabled, liveness, expected, label) in cases {
+        assert_eq!(
+            claude_host_serving(pane_present, enabled, liveness),
+            expected,
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn remote_control_badge_follows_enablement_and_probe_health() {
     use crate::RemoteControlBadge::{Down, Healthy, Hidden};
 

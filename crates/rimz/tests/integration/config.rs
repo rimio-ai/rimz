@@ -432,6 +432,75 @@ fn remote_control_codex_config_set_applies_start_and_stop_immediately() {
     );
 }
 
+/// A `claude` on PATH that answers the version probe and nothing else. Remote
+/// control never runs here; readiness only needs the executable and its version.
+fn write_claude_version_stub(env: &Env) -> std::path::PathBuf {
+    let dir = env.home_root.join("claude-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir claude bin");
+    let stub = dir.join("claude");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.215 (Claude Code)';; *) exit 0;; esac\n",
+    )
+    .expect("write claude stub");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod claude stub");
+    dir
+}
+
+fn claude_global_config(env: &Env) -> std::path::PathBuf {
+    env.home_root.join(".claude.json")
+}
+
+#[test]
+fn remote_control_claude_config_set_records_the_first_run_dialog_answer() {
+    let env = Env::new();
+    let bin = write_claude_version_stub(&env);
+    let global = claude_global_config(&env);
+    // A machine that has run Claude but never its remote-control host: the
+    // config exists and the dialog flag does not.
+    std::fs::write(&global, "{\n  \"numStartups\": 7\n}\n").expect("write global config");
+
+    env.rimz()
+        .args(["config", "set", "remote_control.claude", "true"])
+        .env("PATH", crate::common::path_with_front(&bin))
+        .assert()
+        .success()
+        .stdout(contains("set remote_control.claude"));
+
+    let recorded = std::fs::read_to_string(&global).expect("read global config");
+    assert!(
+        recorded.contains("\"remoteDialogSeen\": true"),
+        "enabling the toggle records the dialog answer so the host serves unattended: {recorded}"
+    );
+    assert!(
+        recorded.contains("\"numStartups\": 7"),
+        "every key Claude owns survives the edit: {recorded}"
+    );
+}
+
+#[test]
+fn remote_control_claude_config_set_keeps_an_explicit_refusal() {
+    let env = Env::new();
+    let bin = write_claude_version_stub(&env);
+    let global = claude_global_config(&env);
+    let original = "{\n  \"remoteDialogSeen\": false\n}\n";
+    std::fs::write(&global, original).expect("write global config");
+
+    env.rimz()
+        .args(["config", "set", "remote_control.claude", "true"])
+        .env("PATH", crate::common::path_with_front(&bin))
+        .assert()
+        .failure()
+        .stderr(contains("remoteDialogSeen"));
+
+    assert_eq!(
+        std::fs::read_to_string(&global).expect("read global config"),
+        original,
+        "an operator's explicit refusal is reported, never overwritten",
+    );
+}
+
 #[test]
 fn config_set_rejects_unknown_keys_and_bad_values() {
     let env = Env::new();

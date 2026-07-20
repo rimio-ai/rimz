@@ -766,6 +766,11 @@ impl DaemonRepairTracker {
             crate::sidebar::timing::unix_now_ms(),
             || {
                 let machine = crate::config::MachineConfig::load_lenient();
+                // Repair keeps an enabled host serving, so it refills the host's
+                // own preconditions before judging it. Probing first would read a
+                // precondition this pass is able to restore, and tear down a
+                // working host over a gap that outlives nothing but this tick.
+                crate::remote_control::prepare_hosts(&machine.remote_control);
                 let readiness =
                     crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
                 Some(effective_daemon_view(

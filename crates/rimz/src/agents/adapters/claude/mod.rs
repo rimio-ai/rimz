@@ -23,7 +23,9 @@ mod install;
 mod local_sessions;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
+pub(crate) mod remote_consent;
 pub mod remote_control;
+pub mod remote_liveness;
 pub(crate) mod spend;
 mod statusline;
 mod subagent_statusline;
@@ -741,6 +743,22 @@ impl crate::agents::capabilities::RuntimeControlCapability for ClaudeAdapter {
 
     fn runtime_control_host_argv(&self) -> Option<Vec<String>> {
         Some(remote_control::host_argv())
+    }
+
+    fn prepare_runtime_control(&self, enabled: bool) {
+        remote_control::ensure_consent(enabled);
+    }
+
+    fn runtime_control_liveness(
+        &self,
+        project_root: &Path,
+    ) -> super::runtime_control::RuntimeControlLiveness {
+        use super::runtime_control::RuntimeControlLiveness;
+        match remote_liveness::probe(project_root) {
+            remote_liveness::HostLiveness::Unknown => RuntimeControlLiveness::Unknown,
+            remote_liveness::HostLiveness::Down => RuntimeControlLiveness::Down,
+            remote_liveness::HostLiveness::Up { .. } => RuntimeControlLiveness::Up,
+        }
     }
 
     fn runtime_control_wiring_input_path(&self) -> Option<PathBuf> {

@@ -10,6 +10,24 @@ pub enum RuntimeControlReadiness {
     Blocked(RuntimeControlIssue),
 }
 
+/// What a host's own records say about the process serving one project root.
+/// Providers that keep no such record answer `Unknown`, which readers treat as
+/// "no evidence either way" rather than as a failure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RuntimeControlLiveness {
+    #[default]
+    Unknown,
+    Down,
+    Up,
+}
+
+impl RuntimeControlLiveness {
+    /// Whether the host recorded evidence that it stopped serving.
+    pub const fn is_down(self) -> bool {
+        matches!(self, Self::Down)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeControlIssue {
     kind: &'static str,
@@ -86,9 +104,25 @@ pub fn host_argv(kind: &str) -> Option<Vec<String>> {
     super::find_definition(kind)?.runtime_control_host_argv()
 }
 
+/// Ask an enabled host whether it is still serving `project_root`. Read-only
+/// and bounded — a sidebar tick can afford it.
+pub fn host_liveness(kind: &str, project_root: &std::path::Path) -> RuntimeControlLiveness {
+    super::find_definition(kind).map_or(RuntimeControlLiveness::Unknown, |definition| {
+        definition.runtime_control_liveness(project_root)
+    })
+}
+
 pub fn ensure(kind: &str, enabled: bool) {
     if let Some(definition) = super::find_definition(kind) {
         definition.ensure_runtime_control(enabled);
+    }
+}
+
+/// Fill a host's launch preconditions without starting it, so a readiness gate
+/// judges the state the host will actually start with.
+pub fn prepare(kind: &str, enabled: bool) {
+    if let Some(definition) = super::find_definition(kind) {
+        definition.prepare_runtime_control(enabled);
     }
 }
 
