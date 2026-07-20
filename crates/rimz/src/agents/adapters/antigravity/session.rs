@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
@@ -234,6 +234,44 @@ impl DiscoveryCacheHarness {
     }
 }
 
+/// Every validated conversation directory under the CLI's `brain` store, with
+/// its preferred and fallback transcript paths resolved.
+fn enumerate_conversations(home: &Path, topology: &mut StampedPaths) -> Vec<ConversationCandidate> {
+    let brain = home.join("brain");
+    topology.record_exact(brain.clone());
+    let readable = topology
+        .iter()
+        .find(|(path, _)| *path == brain)
+        .is_some_and(|(_, stamp)| stamp.is_dir());
+    if !readable {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(&brain) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
+        .filter_map(|entry| {
+            let id = entry.file_name().into_string().ok()?;
+            if !valid_conversation_id(&id) {
+                return None;
+            }
+            let session_dir = entry.path();
+            let generated_dir = session_dir.join(".system_generated");
+            let logs_dir = generated_dir.join("logs");
+            Some(ConversationCandidate {
+                id,
+                session_dir,
+                generated_dir,
+                preferred: logs_dir.join(TRANSCRIPT_BASENAMES[0]),
+                fallback: logs_dir.join(TRANSCRIPT_BASENAMES[1]),
+                logs_dir,
+            })
+        })
+        .collect()
+}
+
 pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
     let Some(home) = home() else {
         return Vec::new();
@@ -251,39 +289,7 @@ pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
 impl AntigravityDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
         let scan = self.catalog.refresh(key.clone(), now, |topology| {
-            let brain = key.home.join("brain");
-            topology.record_exact(brain.clone());
-            let mut catalog = Vec::new();
-            if topology
-                .iter()
-                .find(|(path, _)| *path == brain)
-                .is_some_and(|(_, stamp)| stamp.is_dir())
-                && let Ok(entries) = fs::read_dir(&brain)
-            {
-                for entry in entries.filter_map(Result::ok) {
-                    if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
-                        continue;
-                    }
-                    let Ok(id) = entry.file_name().into_string() else {
-                        continue;
-                    };
-                    if !valid_conversation_id(&id) {
-                        continue;
-                    }
-                    let session_dir = entry.path();
-                    let generated_dir = session_dir.join(".system_generated");
-                    let logs_dir = generated_dir.join("logs");
-                    catalog.push(ConversationCandidate {
-                        id,
-                        session_dir,
-                        generated_dir,
-                        preferred: logs_dir.join(TRANSCRIPT_BASENAMES[0]),
-                        fallback: logs_dir.join(TRANSCRIPT_BASENAMES[1]),
-                        logs_dir,
-                    });
-                }
-            }
-            catalog
+            enumerate_conversations(&key.home, topology)
         });
         let forced = scan.attempted();
         #[cfg(test)]
@@ -291,28 +297,7 @@ impl AntigravityDiscoverySnapshot {
             self.work.full_scans += 1;
         }
 
-        let mut selected = self
-            .catalog
-            .entries()
-            .iter()
-            .cloned()
-            .filter_map(|candidate| {
-                let dependencies = StampedPaths::exact(candidate.dependencies());
-                let path = candidate.selected_path(&dependencies)?;
-                let modified = dependencies
-                    .iter()
-                    .find(|(candidate, _)| *candidate == path)
-                    .and_then(|(_, stamp)| stamp.modified);
-                Some((candidate, dependencies, modified))
-            })
-            .collect::<Vec<_>>();
-        selected.sort_by(|left, right| {
-            right
-                .2
-                .cmp(&left.2)
-                .then_with(|| left.0.id.cmp(&right.0.id))
-        });
-        selected.truncate(MAX_DISCOVERED_SESSIONS);
+        let selected = self.select_candidates();
         let conversations = selected
             .into_iter()
             .filter_map(|(candidate, dependencies, _)| {
@@ -347,6 +332,34 @@ impl AntigravityDiscoverySnapshot {
             observations.extend(workspace_observations);
         }
         observations
+    }
+
+    /// The freshest readable conversations, newest first and capped, each paired
+    /// with the stamps its selection was proved against.
+    fn select_candidates(&self) -> Vec<(ConversationCandidate, StampedPaths, Option<SystemTime>)> {
+        let mut selected = self
+            .catalog
+            .entries()
+            .iter()
+            .cloned()
+            .filter_map(|candidate| {
+                let dependencies = StampedPaths::exact(candidate.dependencies());
+                let path = candidate.selected_path(&dependencies)?;
+                let modified = dependencies
+                    .iter()
+                    .find(|(candidate, _)| *candidate == path)
+                    .and_then(|(_, stamp)| stamp.modified);
+                Some((candidate, dependencies, modified))
+            })
+            .collect::<Vec<_>>();
+        selected.sort_by(|left, right| {
+            right
+                .2
+                .cmp(&left.2)
+                .then_with(|| left.0.id.cmp(&right.0.id))
+        });
+        selected.truncate(MAX_DISCOVERED_SESSIONS);
+        selected
     }
 
     fn refresh_conversation(

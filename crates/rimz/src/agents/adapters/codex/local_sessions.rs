@@ -82,53 +82,7 @@ fn discover_cached(
 impl CodexDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
         let scan = self.catalog.refresh(key.clone(), now, |topology| {
-            let sessions = key.home.join("sessions");
-            let archive = key.home.join("archived_sessions");
-            let dates = recent_dates(key.today);
-            let cutoff = *dates.last().unwrap_or(&key.today);
-            let day_paths = dates
-                .into_iter()
-                .map(|date| {
-                    sessions
-                        .join(format!("{:04}", date.year()))
-                        .join(format!("{:02}", date.month()))
-                        .join(format!("{:02}", date.day()))
-                })
-                .collect::<Vec<_>>();
-            topology.record_exact_many([sessions.clone(), archive.clone()]);
-            topology.record_exact_many(day_paths.iter().cloned());
-            let mut catalog = Vec::new();
-            for day in day_paths {
-                let Ok(entries) = fs::read_dir(day) else {
-                    continue;
-                };
-                catalog.extend(
-                    entries
-                        .filter_map(Result::ok)
-                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-                        .map(|entry| entry.path())
-                        .filter(|path| rollout_filename(path).is_some())
-                        .map(|path| RolloutCandidate { path, active: true }),
-                );
-            }
-            if let Ok(entries) = fs::read_dir(&archive) {
-                catalog.extend(
-                    entries
-                        .filter_map(Result::ok)
-                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-                        .map(|entry| entry.path())
-                        .filter(|path| {
-                            rollout_filename(path)
-                                .and_then(rollout_filename_date)
-                                .is_some_and(|date| date >= cutoff)
-                        })
-                        .map(|path| RolloutCandidate {
-                            path,
-                            active: false,
-                        }),
-                );
-            }
-            catalog
+            enumerate_rollouts(&key, topology)
         });
         let forced = scan.attempted();
         #[cfg(test)]
@@ -136,6 +90,32 @@ impl CodexDiscoverySnapshot {
             self.work.full_scans += 1;
         }
 
+        let mut observations = self.fold_candidates(&key, forced);
+        let catalog_paths = self
+            .catalog
+            .entries()
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        self.headers
+            .retain(|candidate| catalog_paths.contains(candidate));
+        observations.sort_by(|left, right| {
+            right
+                .last_activity
+                .cmp(&left.last_activity)
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+        observations
+    }
+
+    /// Walk the ordered candidates, preferring an active rollout over its
+    /// archived twin and stopping at the examination bound, and fold each
+    /// distinct session's header into one observation.
+    fn fold_candidates(
+        &mut self,
+        key: &DiscoveryKey,
+        forced: bool,
+    ) -> Vec<LocalSessionObservation> {
         let active_session_ids = self
             .catalog
             .entries()
@@ -187,20 +167,6 @@ impl CodexDiscoverySnapshot {
                 observations.push(observation);
             }
         }
-        let catalog_paths = self
-            .catalog
-            .entries()
-            .iter()
-            .cloned()
-            .collect::<HashSet<_>>();
-        self.headers
-            .retain(|candidate| catalog_paths.contains(candidate));
-        observations.sort_by(|left, right| {
-            right
-                .last_activity
-                .cmp(&left.last_activity)
-                .then_with(|| left.session_id.cmp(&right.session_id))
-        });
         observations
     }
 
@@ -229,6 +195,56 @@ impl CodexDiscoverySnapshot {
         }
         (result.into_current().flatten(), stamp)
     }
+}
+
+/// Every rollout worth considering: each recent day directory under `sessions`,
+/// plus the archive filtered to the same cutoff. Stamps the directories it read
+/// so an unchanged topology skips the next walk.
+fn enumerate_rollouts(key: &DiscoveryKey, topology: &mut StampedPaths) -> Vec<RolloutCandidate> {
+    let sessions = key.home.join("sessions");
+    let archive = key.home.join("archived_sessions");
+    let dates = recent_dates(key.today);
+    let cutoff = *dates.last().unwrap_or(&key.today);
+    let day_paths = dates
+        .into_iter()
+        .map(|date| {
+            sessions
+                .join(format!("{:04}", date.year()))
+                .join(format!("{:02}", date.month()))
+                .join(format!("{:02}", date.day()))
+        })
+        .collect::<Vec<_>>();
+    topology.record_exact_many([sessions.clone(), archive.clone()]);
+    topology.record_exact_many(day_paths.iter().cloned());
+
+    let mut catalog = Vec::new();
+    for day in day_paths {
+        catalog.extend(rollout_files(&day).map(|path| RolloutCandidate { path, active: true }));
+    }
+    catalog.extend(
+        rollout_files(&archive)
+            .filter(|path| {
+                rollout_filename(path)
+                    .and_then(rollout_filename_date)
+                    .is_some_and(|date| date >= cutoff)
+            })
+            .map(|path| RolloutCandidate {
+                path,
+                active: false,
+            }),
+    );
+    catalog
+}
+
+/// Regular files in `dir` whose names parse as a rollout.
+fn rollout_files(dir: &Path) -> impl Iterator<Item = PathBuf> {
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.path())
+        .filter(|path| rollout_filename(path).is_some())
 }
 
 fn recent_dates(today: Date) -> Vec<Date> {
