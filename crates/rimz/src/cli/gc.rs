@@ -345,7 +345,12 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
-    let protections = rimz::worktree::protection_set_from_runtime(&panes, &snapshot.agents, None);
+    let protections = rimz::worktree::protection_set_from_runtime(
+        &panes,
+        &snapshot.agents,
+        None,
+        rimz::worktree::Occupancy::Unproven,
+    );
     spinner.set("scanning worktrees…");
     let entries = match rimz::worktree::discover_owned(&workspace.project_root) {
         Ok(entries) => entries,
@@ -1333,11 +1338,21 @@ mod tests {
             pane("terminal_empty", Some("zsh"), None),
         ];
 
-        let protections = rimz::worktree::protection_set_from_runtime(&panes, &[], None);
+        let protections = rimz::worktree::protection_set_from_runtime(
+            &panes,
+            &[],
+            None,
+            rimz::worktree::Occupancy::Unproven,
+        );
         assert!(protections.protects(std::path::Path::new("/repo-worktrees/demo")));
         assert!(
-            !rimz::worktree::protection_set_from_runtime(&panes[..1], &[], None)
-                .protects(std::path::Path::new("/repo-worktrees/demo"))
+            !rimz::worktree::protection_set_from_runtime(
+                &panes[..1],
+                &[],
+                None,
+                rimz::worktree::Occupancy::Unproven,
+            )
+            .protects(std::path::Path::new("/repo-worktrees/demo"))
         );
     }
 
@@ -1358,6 +1373,7 @@ mod tests {
             }],
             &[],
             None,
+            rimz::worktree::Occupancy::Unproven,
         );
 
         let (candidates, kept) = partition_candidates(entries, &protected);

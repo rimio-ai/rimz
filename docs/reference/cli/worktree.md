@@ -1,6 +1,6 @@
 # Worktree CLI
 
-`rimz worktree` creates, lists, and removes the isolated Git checkouts that `rimz agents --worktree` launches agents into. Each is an ordinary `git worktree` on its own branch under a directory you configure, marked so RimZ knows it owns it — it never claims a checkout you made yourself. Removal is guarded: `remove` refuses a dirty or unlanded worktree unless you pass `--force`, and [`rimz gc`](./maintenance.md#update-reload-reset-gc-and-uninstall) only ever sweeps clean, landed, RimZ-marked worktrees with no live pane inside, so unfinished work is never discarded silently. Why you isolate a layout or team this way is the [worktrees guide](../../guide/worktrees.md). For durable named lanes without a Git checkout, use [`rimz channel`](./channel.md).
+`rimz worktree` creates, lists, and removes the isolated Git checkouts that `rimz agents --worktree` launches agents into. Each is an ordinary `git worktree` on its own branch under a directory you configure, marked so RimZ knows it owns it — it never claims a checkout you made yourself. Removal is guarded: `remove` refuses a worktree that is dirty, unlanded, or still in use unless you pass `--force`, and [`rimz gc`](./maintenance.md#update-reload-reset-gc-and-uninstall) only ever sweeps clean, landed, RimZ-marked worktrees with no live pane inside, so unfinished work is never discarded silently. Why you isolate a layout or team this way is the [worktrees guide](../../guide/worktrees.md). For durable named lanes without a Git checkout, use [`rimz channel`](./channel.md).
 
 ```sh
 rimz worktree new cli-docs --base head                  # branch cli-docs from HEAD
@@ -15,6 +15,6 @@ rimz worktree remove experiment --force                  # remove anyway
 
 `list` reads only and shows RimZ-owned worktrees as the channels they are: name, display branch, the `@kind` handles working there, a dirty marker, the landed signal, and the path.
 
-`remove` refuses a dirty worktree or one whose content is not proven landed on its base; `--force` removes anyway. This is the reverse of a `--worktree` launch: it deletes the checkout and prunes the branch registration after the safety checks pass.
+`remove` refuses a dirty worktree, one whose content is not proven landed on its base, and one an agent or an open pane is still working in, naming what holds it. `--force` removes anyway, printing a warning first when the tree was in use. A stale session record from a crashed agent does not block the removal that retires it. This is the reverse of a `--worktree` launch: it deletes the checkout and prunes the branch registration after the safety checks pass.
 
 RimZ marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary checkouts. The marker, `.worktreeinclude` seeding, `.worktreelink` symlinks, and the `rimz gc` sweep are in [worktrees.md](../../internals/harness/worktrees.md).

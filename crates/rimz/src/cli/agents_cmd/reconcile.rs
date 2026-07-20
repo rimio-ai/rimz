@@ -59,9 +59,18 @@ pub(super) fn reconcile_cohort_launch(
         }
         rimz::harness::resume::CohortRelaunchState::Closed => {
             let status = rimz::worktree::status(&path, &marker)?;
-            let assessment = rimz::worktree::ProtectionSet::default().assess(&path, status);
-            if assessment == rimz::worktree::RemovalAssessment::Removable {
-                recreate_or_done(workspace, machine_config, store, name, &subject)
+            // Cohort liveness was already decided above, so Git state alone
+            // separates "recreate it" from "resume into it".
+            let protections = rimz::worktree::ProtectionSet::default();
+            if protections.assess(&path, status) == rimz::worktree::RemovalAssessment::Removable {
+                recreate_or_done(
+                    workspace,
+                    machine_config,
+                    store,
+                    name,
+                    &subject,
+                    &protections,
+                )
             } else {
                 resume_or_done(name, spec_display, &subject, &path)
             }
@@ -105,6 +114,7 @@ fn recreate_or_done(
     store: &rimz::Store,
     name: &str,
     subject: &str,
+    protections: &rimz::worktree::ProtectionSet,
 ) -> Result<Reconciled> {
     if !std::io::stdin().is_terminal() {
         writeln!(
@@ -124,6 +134,7 @@ fn recreate_or_done(
         &machine_config.agents.worktree,
         name,
         false,
+        protections,
     )?;
     let retirement = rimz::worktree::retire_removal(
         store,

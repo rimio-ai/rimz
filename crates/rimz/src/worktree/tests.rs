@@ -195,12 +195,12 @@ fn protection_set_normalizes_containment_and_excludes_own_and_sidebar_panes() {
             sidebar: false,
         },
     ];
-    let protections = ProtectionSet::from_facts(&panes, &[], Some(&own));
+    let protections = ProtectionSet::from_facts(&panes, &[], Some(&own), Occupancy::Unproven);
 
     assert!(protections.protects(Path::new("/repo-worktrees/demo")));
     assert!(!protections.protects(Path::new("/repo-worktrees/other")));
     assert!(
-        !ProtectionSet::from_facts(&panes[..2], &[], Some(&own))
+        !ProtectionSet::from_facts(&panes[..2], &[], Some(&own), Occupancy::Unproven)
             .protects(Path::new("/repo-worktrees/demo"))
     );
 }
@@ -228,6 +228,7 @@ fn protection_set_applies_agent_liveness_rules() {
                 process_cwd,
             }],
             None,
+            Occupancy::Unproven,
         );
         assert_eq!(
             protections.protects(Path::new("/repo-worktrees/demo")),
@@ -246,6 +247,7 @@ fn removal_assessment_uses_in_use_dirty_landing_precedence() {
         }],
         &[],
         None,
+        Occupancy::Unproven,
     );
     let cases = [
         (
@@ -408,6 +410,70 @@ fn discovery_returns_owned_identity_before_explicit_inspection() {
 }
 
 #[test]
+fn occupancy_policy_decides_whether_an_unproven_agent_holds_a_checkout() {
+    let worktree = Path::new("/repo-worktrees/demo");
+    let facts = [AgentProtectionFact {
+        pane_id: None,
+        liveness: AgentLiveness::Unknown,
+        stored_path: Some(worktree.to_path_buf()),
+        process_cwd: None,
+    }];
+
+    assert!(
+        ProtectionSet::from_facts(&[], &facts, None, Occupancy::Unproven).protects(worktree),
+        "automatic reclamation keeps a checkout it cannot prove free"
+    );
+    assert!(
+        !ProtectionSet::from_facts(&[], &facts, None, Occupancy::ProvenLive).protects(worktree),
+        "a stale session record never blocks an explicit removal"
+    );
+}
+
+#[test]
+fn remove_refuses_an_occupied_worktree_until_forced() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(&repo, &config, Some("demo"), None, None, false).expect("create");
+    let occupied = ProtectionSet::from_facts(
+        &[PaneProtectionFact {
+            pane_id: PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1"),
+            cwd: Some(created.marker.worktree_path.join("src")),
+            sidebar: false,
+        }],
+        &[],
+        None,
+        Occupancy::ProvenLive,
+    );
+
+    let refused = remove(&repo, &config, "demo", false, &occupied).expect_err("in-use refusal");
+
+    assert!(
+        matches!(&refused, WorktreeErr::InUse { name } if name == "demo"),
+        "an occupied checkout refuses as in use, not as dirty: {refused:?}"
+    );
+    assert!(
+        created.marker.worktree_path.exists(),
+        "refusal keeps the tree"
+    );
+
+    remove(&repo, &config, "demo", true, &occupied).expect("forced removal");
+    assert!(!created.marker.worktree_path.exists());
+}
+
+#[test]
+fn remove_accepts_a_clean_worktree_no_one_occupies() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(&repo, &config, Some("demo"), None, None, false).expect("create");
+
+    remove(&repo, &config, "demo", false, &ProtectionSet::default()).expect("remove");
+
+    assert!(!created.marker.worktree_path.exists());
+}
+
+#[test]
 fn reused_worktree_keeps_seeded_and_linked_destinations_unchanged() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_test_repo(dir.path());
@@ -468,14 +534,23 @@ fn protection_facts_filter_sidebar_own_and_count_user_panes() {
         pane("terminal_own", Some("codex"), Some(worktree)),
     ];
 
-    assert!(!protection_set_from_runtime(&panes, &[], Some(&own)).protects(worktree));
+    assert!(
+        !protection_set_from_runtime(&panes, &[], Some(&own), Occupancy::Unproven)
+            .protects(worktree)
+    );
 
     let shell_dir = worktree.join("src");
     let agent = vec![pane("terminal_agent", Some("codex"), Some(worktree))];
     let shell = vec![pane("terminal_shell", Some("zsh"), Some(&shell_dir))];
 
-    assert!(protection_set_from_runtime(&agent, &[], Some(&own)).protects(worktree));
-    assert!(protection_set_from_runtime(&shell, &[], Some(&own)).protects(worktree));
+    assert!(
+        protection_set_from_runtime(&agent, &[], Some(&own), Occupancy::Unproven)
+            .protects(worktree)
+    );
+    assert!(
+        protection_set_from_runtime(&shell, &[], Some(&own), Occupancy::Unproven)
+            .protects(worktree)
+    );
 }
 
 #[test]
@@ -494,6 +569,7 @@ fn protection_facts_apply_agent_liveness_and_own_pane() {
                 now,
             )],
             Some(&own),
+            Occupancy::Unproven,
         )
         .protects(worktree)
     );
@@ -507,6 +583,7 @@ fn protection_facts_apply_agent_liveness_and_own_pane() {
                 now,
             )],
             Some(&own),
+            Occupancy::Unproven,
         )
         .protects(worktree)
     );
@@ -520,6 +597,7 @@ fn protection_facts_apply_agent_liveness_and_own_pane() {
                 now,
             )],
             Some(&own),
+            Occupancy::Unproven,
         )
         .protects(worktree)
     );
@@ -533,6 +611,7 @@ fn protection_facts_apply_agent_liveness_and_own_pane() {
                 now - std::time::Duration::from_secs(30),
             )],
             Some(&own),
+            Occupancy::Unproven,
         )
         .protects(worktree)
     );
@@ -545,14 +624,20 @@ fn protection_facts_apply_agent_liveness_and_own_pane() {
             u32::MAX,
             None,
         ));
-        assert!(!protection_set_from_runtime(&[], &[dead], Some(&own)).protects(worktree));
+        assert!(
+            !protection_set_from_runtime(&[], &[dead], Some(&own), Occupancy::Unproven)
+                .protects(worktree)
+        );
     }
     let mut live = agent("live", Some("/repo-worktrees/demo"), None, now);
     live.runtime_owner = Some(crate::store::runtime::current_process_owner(
         crate::RuntimeOwnerKind::Agent,
         "live",
     ));
-    assert!(protection_set_from_runtime(&[], &[live], Some(&own)).protects(worktree));
+    assert!(
+        protection_set_from_runtime(&[], &[live], Some(&own), Occupancy::Unproven)
+            .protects(worktree)
+    );
     assert!(
         !protection_set_from_runtime(
             &[],
@@ -563,6 +648,7 @@ fn protection_facts_apply_agent_liveness_and_own_pane() {
                 now,
             )],
             Some(&own),
+            Occupancy::Unproven,
         )
         .protects(worktree)
     );
@@ -580,7 +666,9 @@ fn runtime_protection_includes_realtime_process_cwd() {
 
     let current = normalize_path_lexical(&std::env::current_dir().expect("current dir"));
 
-    assert!(protection_set_from_runtime(&[], &[live], None).protects(&current));
+    assert!(
+        protection_set_from_runtime(&[], &[live], None, Occupancy::Unproven).protects(&current)
+    );
 }
 
 fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> PaneRef {

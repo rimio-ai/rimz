@@ -355,6 +355,55 @@ fn worktree_remove_archives_messages_for_removed_channel() {
 }
 
 #[test]
+fn worktree_remove_refuses_while_a_live_agent_works_there() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo", "--branch", "scratch"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let live_id = AgentSessionId::from("sess-live-worker");
+    let mut live =
+        AgentLifecycleObservation::new(Some(live_id.clone()), LifecycleSignal::Registered);
+    live.worktree_path = Some(path.display().to_string());
+    live.worktree_branch = Some("scratch".to_owned());
+    live.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        live_id.as_str(),
+        std::process::id(),
+        None,
+    ));
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionStart",
+            &live,
+        ))
+        .expect("append live worktree session");
+
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("worktree `demo` is in use by @claude"))
+        .stderr(contains("use --force to remove it"));
+    assert!(path.exists(), "refusal keeps the checkout");
+
+    env.rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .assert()
+        .success()
+        .stderr(contains("warning: worktree `demo` is in use by"));
+    assert!(!path.exists(), "--force removes it anyway");
+}
+
+#[test]
 fn worktree_remove_reports_archive_failure_after_removal() {
     if git_missing() {
         return;

@@ -104,13 +104,15 @@ auth      auth    @coder   dirty  pending ~/code/query-engine-worktrees/auth
 feat-a    feat-a  -        -      yes     ~/code/query-engine-worktrees/feat-a
 
 $ rimz worktree remove auth
-Error: worktree `auth` has local changes or work not proven landed; use --force to remove it
+error: worktree `auth` is in use by @coder; use --force to remove it
 
 $ rimz worktree remove feat-a
 removed feat-a
 ```
 
-`--force` overrides the refusal when you have decided the work is disposable. `rimz gc` sweeps what automatic cleanup could not reach — trees left by a crash, or ones that became safe only after a later merge or fetch: it removes every clean, landed tree that no live pane or agent occupies, reports the disk it reclaimed, and previews with `--dry-run`. The full landed-content proof is in [the worktree internals](../internals/harness/worktrees.md#the-content-landed-ladder).
+`remove` guards three things, in that order: an agent or a shell still working in the tree, uncommitted changes, and work not proven landed. Once `@coder` is gone, the same command refuses again for the dirty tree, this time with `worktree `auth` has local changes or work not proven landed`. A stale record left behind by a crashed agent does not count as in use, so a crash never leaves you unable to reclaim the tree.
+
+`--force` overrides the refusal when you have decided the work is disposable, and warns first when it is overriding a live agent. `rimz gc` sweeps what automatic cleanup could not reach — trees left by a crash, or ones that became safe only after a later merge or fetch: it removes every clean, landed tree that no live pane or agent occupies, reports the disk it reclaimed, and previews with `--dry-run`. The full landed-content proof is in [the worktree internals](../internals/harness/worktrees.md#the-content-landed-ladder).
 
 ## Under the hood
 

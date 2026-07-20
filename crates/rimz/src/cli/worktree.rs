@@ -66,7 +66,7 @@ enum WorktreeSubcmd {
             crate::cli::complete::worktrees
         ))]
         name: String,
-        /// Remove even when the worktree is dirty or has work not proven landed.
+        /// Remove even when the worktree is in use, dirty, or has work not proven landed.
         #[arg(long)]
         force: bool,
     },
@@ -106,7 +106,9 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             branch,
         } => new_worktree(&workspace, &config, name, base, from_pr, branch),
         WorktreeSubcmd::List { json } => list_worktrees(&workspace, json),
-        WorktreeSubcmd::Remove { name, force } => remove_worktree(&workspace, &config, name, force),
+        WorktreeSubcmd::Remove { name, force } => {
+            remove_worktree(&workspace, &config, globals, name, force)
+        }
         WorktreeSubcmd::Cleanup(_) => unreachable!("cleanup returned before workspace resolution"),
     }
 }
@@ -266,7 +268,7 @@ fn append_worktree_row(
     agents: &[AgentState],
 ) {
     let path = entry.managed.path.to_string_lossy().into_owned();
-    let here = agents_for_worktree(agents, &entry.managed, &path);
+    let here = agents_in_worktree(agents, &entry.managed.path, entry.managed.branch.as_deref());
     let chips = if here.is_empty() {
         "-".to_owned()
     } else {
@@ -297,19 +299,23 @@ fn append_worktree_row(
     ]);
 }
 
-fn agents_for_worktree<'a>(
+/// The agents bound to one checkout, by recorded path or by its branch.
+///
+/// Recorded paths and the configured directory template both reach here
+/// unnormalized, so containment is compared the way `ProtectionSet` compares
+/// it rather than by string equality.
+fn agents_in_worktree<'a>(
     agents: &'a [AgentState],
-    entry: &rimz::worktree::ManagedWorktree,
-    path: &str,
+    path: &Path,
+    branch: Option<&str>,
 ) -> Vec<&'a AgentState> {
+    let target = rimz::worktree::normalize_path_lexical(path);
     agents
         .iter()
         .filter(|agent| {
-            agent.worktree_path.as_deref() == Some(path)
-                || entry
-                    .branch
-                    .as_deref()
-                    .is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
+            agent.worktree_path.as_deref().is_some_and(|recorded| {
+                rimz::worktree::normalize_path_lexical(Path::new(recorded)) == target
+            }) || branch.is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
         })
         .collect()
 }
@@ -317,11 +323,38 @@ fn agents_for_worktree<'a>(
 fn remove_worktree(
     workspace: &ResolvedWorkspace,
     config: &WorktreeConfig,
+    globals: &GlobalFlags,
     name: String,
     force: bool,
 ) -> Result<()> {
     let store = open_store(workspace)?;
-    let removed = rimz::worktree::remove(&workspace.project_root, config, &name, force)?;
+    let guard = runtime_guard(
+        &workspace.project_root,
+        globals,
+        rimz::worktree::Occupancy::ProvenLive,
+    );
+    let path = rimz::worktree::worktree_path(&workspace.project_root, config, &name)?;
+    if force && guard.protections.protects(&path) {
+        writeln!(
+            std::io::stderr().lock(),
+            "warning: worktree `{name}` is in use by {}; removing it anyway",
+            holder_summary(&guard.agents, &path)
+        )?;
+    }
+    // The domain owns the refusal; this only names who is holding the checkout.
+    let removed = match rimz::worktree::remove(
+        &workspace.project_root,
+        config,
+        &name,
+        force,
+        &guard.protections,
+    ) {
+        Err(rimz::worktree::WorktreeErr::InUse { .. }) => bail!(
+            "worktree `{name}` is in use by {}; use --force to remove it",
+            holder_summary(&guard.agents, &path)
+        ),
+        result => result?,
+    };
     let retirement = rimz::worktree::retire_removal(
         &store,
         &removed,
@@ -363,7 +396,12 @@ pub(super) fn cleanup_worktree(
     if !interactive {
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
-    let protections = runtime_protection_set(&marker, globals);
+    let protections = runtime_guard(
+        &marker.repo_root,
+        globals,
+        rimz::worktree::Occupancy::Unproven,
+    )
+    .protections;
     match protections.assess(path, status) {
         rimz::worktree::RemovalAssessment::Removable => {
             let removed = remove_for_cleanup(path, &marker, globals, false)?;
@@ -435,17 +473,26 @@ fn remove_for_cleanup(
     Ok(removed)
 }
 
-fn runtime_protection_set(
-    marker: &rimz::worktree::WorktreeMarker,
+/// The live-room facts every removal path assesses against: the normalized
+/// protection set plus the agent rows it was folded from, so a caller can name
+/// who is holding a checkout without probing the room a second time.
+struct RuntimeGuard {
+    protections: rimz::worktree::ProtectionSet,
+    agents: Vec<AgentState>,
+}
+
+fn runtime_guard(
+    repo_root: &Path,
     globals: &GlobalFlags,
-) -> rimz::worktree::ProtectionSet {
-    let workspace = match WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone()) {
+    occupancy: rimz::worktree::Occupancy,
+) -> RuntimeGuard {
+    let workspace = match WorkspaceResolver::resolve(repo_root, globals.root.clone()) {
         Ok(workspace) => Some(workspace),
         Err(err) => {
             tracing::debug!(
-                path = %marker.worktree_path.display(),
+                path = %repo_root.display(),
                 error = %err,
-                "could not resolve workspace while checking worktree cleanup roster guard",
+                "could not resolve workspace while gathering worktree protection facts",
             );
             None
         }
@@ -476,7 +523,29 @@ fn runtime_protection_set(
         Some(snapshot) => snapshot.agents,
         None => Vec::new(),
     };
-    rimz::worktree::protection_set_from_runtime(&panes, &agents, own.as_ref())
+    RuntimeGuard {
+        protections: rimz::worktree::protection_set_from_runtime(
+            &panes,
+            &agents,
+            own.as_ref(),
+            occupancy,
+        ),
+        agents,
+    }
+}
+
+/// Name what is holding a checkout, for the refusal and the `--force` warning.
+/// Falls back to the pane wording when protection came from a bare shell.
+fn holder_summary(agents: &[AgentState], path: &Path) -> String {
+    let here = agents_in_worktree(agents, path, None);
+    if here.is_empty() {
+        return "an open pane".to_owned();
+    }
+    let handles = here
+        .iter()
+        .map(|agent| rimz::harness::target::agent_handle(agent, &here, false))
+        .collect::<Vec<_>>();
+    handles.join(", ")
 }
 
 fn report_kept_branch(removed: &rimz::worktree::RemovalOutcome) {

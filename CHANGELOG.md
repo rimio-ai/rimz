@@ -33,6 +33,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 - Remote version skew is tiered by how far apart the two builds are. A patch difference warns, a minor difference requires an explicit one-shot bypass, and a major difference refuses the attach.
 - The sidebar defaults to the wide dashboard width when pets are enabled, including on narrow views and when launch geometry is unknown. Explicit width configuration and room overrides keep precedence.
 - An explicit `--model` overrides a profile's declared model silently, instead of warning about the conflict.
+- `rimz worktree remove` refuses a worktree an agent or an open pane is still working in, naming what holds it, and `--force` warns before overriding. It previously checked only Git state, so it could delete a checkout out from under a running agent. A stale session record from a crashed agent still does not block removal. → [worktrees](./docs/guide/worktrees.md#cleanup-once-work-lands)
 
 ### Fixed
 

@@ -60,6 +60,10 @@ pub enum WorktreeErr {
         "worktree `{name}` has local changes or work not proven landed; use --force to remove it"
     )]
     Dirty { name: String },
+    #[error(
+        "worktree `{name}` is in use by a live agent or an open pane; use --force to remove it"
+    )]
+    InUse { name: String },
     #[error("git command failed in {cwd}: git {args}: {stderr}")]
     Git {
         cwd: PathBuf,
@@ -243,11 +247,24 @@ pub struct ProtectionSet {
     paths: Vec<PathBuf>,
 }
 
+/// Which agent records keep a checkout occupied.
+///
+/// Automatic reclamation runs with nobody watching, so an agent it cannot
+/// prove dead still holds its tree. A person naming one tree is already the
+/// decision, so only a live process holds it and a stale session record left
+/// by a crash never blocks the command that would retire it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Occupancy {
+    Unproven,
+    ProvenLive,
+}
+
 /// Fold current pane and agent state into worktree removal protection policy.
 pub fn protection_set_from_runtime(
     panes: &[PaneRef],
     agents: &[AgentState],
     own: Option<&PaneId>,
+    occupancy: Occupancy,
 ) -> ProtectionSet {
     let pane_facts = panes
         .iter()
@@ -272,7 +289,7 @@ pub fn protection_set_from_runtime(
             }
         })
         .collect::<Vec<_>>();
-    ProtectionSet::from_facts(&pane_facts, &agent_facts, own)
+    ProtectionSet::from_facts(&pane_facts, &agent_facts, own, occupancy)
 }
 
 /// Removal policy result in fixed safety-precedence order.
@@ -290,6 +307,7 @@ impl ProtectionSet {
         panes: &[PaneProtectionFact],
         agents: &[AgentProtectionFact],
         own_pane: Option<&PaneId>,
+        occupancy: Occupancy,
     ) -> Self {
         let mut protected = Self::default();
         for pane in panes {
@@ -304,7 +322,11 @@ impl ProtectionSet {
             }
             match agent.liveness {
                 AgentLiveness::Dead => {}
-                AgentLiveness::Unknown => protected.insert(agent.stored_path.as_deref()),
+                AgentLiveness::Unknown => {
+                    if occupancy == Occupancy::Unproven {
+                        protected.insert(agent.stored_path.as_deref());
+                    }
+                }
                 AgentLiveness::Live { .. } => {
                     protected.insert(agent.stored_path.as_deref());
                     protected.insert(agent.process_cwd.as_deref());
@@ -501,11 +523,16 @@ pub fn resolve_launch_checkout(
     })
 }
 
+/// Remove one named worktree, refusing unless `force` when `protections` or the
+/// checkout's own Git state says it is unsafe. Callers pass the same
+/// [`ProtectionSet`] the wrapper and `gc` paths build, so an explicit removal
+/// answers to the live room rather than to Git alone.
 pub fn remove(
     repo_root: &Path,
     config: &WorktreeConfig,
     name: &str,
     force: bool,
+    protections: &ProtectionSet,
 ) -> Result<RemovalOutcome> {
     ensure_repo(repo_root)?;
     let path = worktree_path(repo_root, config, name)?;
@@ -514,10 +541,20 @@ pub fn remove(
         path: path.clone(),
     })?;
     let status = status(&path, &marker)?;
-    if !force && ProtectionSet::default().assess(&path, status) != RemovalAssessment::Removable {
-        return Err(WorktreeErr::Dirty {
-            name: name.to_owned(),
-        });
+    if !force {
+        match protections.assess(&path, status) {
+            RemovalAssessment::Removable => {}
+            RemovalAssessment::InUse => {
+                return Err(WorktreeErr::InUse {
+                    name: name.to_owned(),
+                });
+            }
+            RemovalAssessment::Dirty | RemovalAssessment::NotLanded => {
+                return Err(WorktreeErr::Dirty {
+                    name: name.to_owned(),
+                });
+            }
+        }
     }
     remove_marked_worktree(repo_root, &path, &marker, force)
 }

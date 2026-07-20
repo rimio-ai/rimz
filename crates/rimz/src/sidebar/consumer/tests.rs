@@ -219,16 +219,26 @@ fn cached_daemon_reap_drops_paneless_codex_ghost_before_worktree_pins() {
     let ghost = daemon_codex("ghost", &worktree, None, owner_pid);
     let snapshot = SidebarSnapshot::build_with_agents(workspace, vec![ghost], Timestamp::now());
     assert!(
-        crate::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
-            .protects(&worktree),
+        crate::worktree::protection_set_from_runtime(
+            &[],
+            &snapshot.agents,
+            None,
+            crate::worktree::Occupancy::Unproven,
+        )
+        .protects(&worktree),
     );
 
     let snapshot = reap_cached_daemon_sessions(snapshot, &runtime, "rimz-test");
 
     assert!(snapshot.agents.is_empty());
     assert!(
-        !crate::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
-            .protects(&worktree),
+        !crate::worktree::protection_set_from_runtime(
+            &[],
+            &snapshot.agents,
+            None,
+            crate::worktree::Occupancy::Unproven,
+        )
+        .protects(&worktree),
     );
 }
 

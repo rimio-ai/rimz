@@ -141,10 +141,12 @@ The CLI gathers the facts once (pane cwds from the mux, agent rows and liveness 
 
 - Panes contribute their cwd, except the sidebar's own chrome and the caller's own pane.
 - A **live** agent contributes both its recorded launch path and its real process cwd.
-- An **unknown** agent contributes its recorded launch path, because absence of proof is not proof of absence.
+- An **unknown** agent contributes its recorded launch path under the `Unproven` occupancy policy only.
 - A **dead** agent contributes nothing.
 
 A candidate checkout is protected when any of those normalized paths lies inside it. Paths are folded lexically (`.` and `..` removed) before comparison, so `/repo/../repo-worktrees/demo` and `/repo-worktrees/demo` match.
+
+`Occupancy` is what separates the two audiences for that fold. Automatic reclamation runs with nobody watching, so it uses `Unproven`: an agent RimZ cannot prove dead still holds its tree. An explicit `rimz worktree remove` uses `ProvenLive`, where only a running process or an open pane holds it, so a stale session record left by a crash never blocks the very command that would retire it.
 
 ### The assessment
 
@@ -155,9 +157,11 @@ A candidate checkout is protected when any of those normalized paths lies inside
 | Removable | Remove and delete the branch | Remove, log to stderr | Remove, count the bytes | Offer to remove, then relaunch fresh |
 | Dirty | Refuse; `--force` overrides | Prompt `keep / remove / shell` on a TTY, keep otherwise | Keep, reported as "uncommitted changes" | Offer a worktree-scoped resume |
 | NotLanded | Refuse; `--force` overrides | Same prompt | Keep, reported as "not merged yet" | Offer a worktree-scoped resume |
-| InUse | Not evaluated | Skip silently | Keep, reported as "in use" | Focus the live pane instead |
+| InUse | Refuse, naming who holds it; `--force` warns and proceeds | Skip silently | Keep, reported as "in use" | Focus the live pane instead |
 
-`rimz worktree remove` deliberately assesses against an empty protection set: a human naming one tree gets the Git safety checks, not a roster guess. The interactive `remove` answer on a dirty tree and `--force` both take Git's force path, since that is a person choosing destruction.
+The domain owns every one of those refusals. `cli/worktree.rs` only adds the handles to the message, by matching the typed `WorktreeErr::InUse` and asking `agents_in_worktree` who is bound to the checkout; when no agent matches, the holder is a bare pane and the message says so.
+
+Cohort relaunch is the one caller that assesses against an empty protection set, because it has already established that the cohort's own panes are closed, and Git state alone decides between recreating the tree and resuming into it.
 
 ### Branch deletion and retirement
 
@@ -171,7 +175,7 @@ After Git removal succeeds, `retire_removal` runs two independent durable effect
 
 Four callers enter the same domain path.
 
-**`rimz worktree remove <name>`** is the explicit one, described above.
+**`rimz worktree remove <name>`** is the explicit one, described above. It answers to the live room the same way the automatic paths do, refusing while an agent process or an open pane is inside the tree and naming what it found.
 
 **The exec wrapper** reclaims a tree an agent owned. The shape of the agent's exit decides what happens:
 
@@ -193,6 +197,7 @@ Cleanup prefers the on-disk `rimz worktree cleanup <path>` binary over its own i
 - Read the marker before acting. An unmarked checkout is a user's checkout.
 - Keep RimZ metadata out of the working tree. The marker belongs in the Git admin directory.
 - Prove a landing. Ancestry counts, branch names, and sidebar state are hints, never verdicts, and every uncertain answer keeps the tree.
+- Keep the refusals in the domain. A command may enrich the message with names it has; it may not decide removal safety for itself.
 - Keep seeding best-effort and non-executing. A launch never fails because a glob missed, and neither seed file may gain the power to run a command without entering the trust hash.
 - Keep new marker fields optional with `#[serde(default)]`, so an older tree still cleans up after an upgrade.
 - Sidebar code reads markers through `read_marker_from_checkout_metadata`, which follows the `.git` file itself and forks no Git process. Keep the projection path off `git rev-parse`.
