@@ -1048,7 +1048,7 @@ impl MuxBackend for ZellijBackend {
         // `new-tab` focuses the tab it creates. Return focus to the leading tab so
         // the imminent `attach` lands on a working pane, not this freshly-added
         // daemon tab. Best-effort: a focus hiccup never sinks a launch.
-        if let Err(err) = self.go_to_tab(session, 1) {
+        if let Err(err) = self.go_to_lead_tab(session) {
             tracing::warn!(
                 session = %session,
                 tags.operation = "zellij.focus_tab",
@@ -1062,8 +1062,9 @@ impl MuxBackend for ZellijBackend {
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {
         // Zellij always focuses `new-tab`; tmux gets unfocused opens from
         // `new-window -d`. Capture the attached client's pane and tab id first
-        // and restore both after the tab exists, falling back to the lead tab
-        // only for detached sessions where there is no client focus to restore.
+        // and restore both after the tab exists. A session that offers no single
+        // restore target falls back to the lead tab, which lands whenever a
+        // client is attached to receive it.
         let restore = (!opts.focus)
             .then(|| {
                 self.focus_restore_target(&opts.sidebar.session_name, &opts.sidebar.workspace_id)
@@ -1108,7 +1109,7 @@ impl MuxBackend for ZellijBackend {
                     &opts.sidebar.workspace_id,
                     restore,
                 ),
-                None => self.go_to_tab(&opts.sidebar.session_name, 1),
+                None => self.go_to_lead_tab(&opts.sidebar.session_name),
             };
             if let Err(err) = result {
                 tracing::warn!(

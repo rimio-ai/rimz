@@ -313,6 +313,21 @@ pub fn diagnose_log_record(
         });
     }
 
+    // Zellij keeps the pane and spawns it in the inherited directory, so the
+    // pane lives and only its directory is wrong. Keying on the path keeps two
+    // different stale directories in two groups, each naming its own fix.
+    if let Some(cwd) = missing_pane_cwd(subject) {
+        return Some(LogDiagnosis {
+            key: normalized_issue_key(&format!("missing_pane_cwd:{cwd}")),
+            state: LogState::Investigate,
+            impact: LogImpact::Warn,
+            summary: format!(
+                "a pane's configured directory is missing ({cwd}) — zellij started it in the inherited directory"
+            ),
+            sample: None,
+        });
+    }
+
     let impact = match severity {
         LogSeverity::Warn => LogImpact::Warn,
         LogSeverity::Error | LogSeverity::Panic => LogImpact::Alarm,
@@ -384,6 +399,16 @@ fn expected_lifecycle(
             None,
         ));
     }
+    // Pane-targeting actions name a pane the room listed a moment earlier, so a
+    // pane that closes inside that window resolves to nothing. The id varies per
+    // occurrence and one key groups them, because the race is the single fact.
+    if subject.starts_with("Pane with id") && subject.ends_with("not found") {
+        return Some(expected(
+            "closed_pane_action",
+            "addressed a pane that had already closed",
+            None,
+        ));
+    }
     let lower = record.text.to_ascii_lowercase();
     if lower.contains("closed terminal") && lower.contains("resize") && lower.contains("caused by")
     {
@@ -394,6 +419,16 @@ fn expected_lifecycle(
         ));
     }
     None
+}
+
+/// The directory a pane asked for and zellij could not enter, from
+/// `Failed to set CWD for new pane. '<path>' does not exist or is not a folder`.
+/// Matching the whole wording keeps a reworded upstream message falling through
+/// to the generic path rather than reporting a truncated directory.
+fn missing_pane_cwd(subject: &str) -> Option<&str> {
+    subject
+        .strip_prefix("Failed to set CWD for new pane. '")?
+        .strip_suffix("' does not exist or is not a folder")
 }
 
 /// The action zellij took too long to acknowledge, from
@@ -679,6 +714,26 @@ impl ZellijBackend {
     pub(super) fn go_to_tab_position(&self, session: &str, tab_position: u64) -> Result<()> {
         let index = u32::try_from(tab_position.saturating_add(1)).unwrap_or(u32::MAX);
         self.go_to_tab(session, index)
+    }
+
+    /// Move client focus to the leading tab, when there is a client to move.
+    ///
+    /// Zellij resolves `go-to-tab` against a client's active tab, so the action
+    /// needs an attached terminal client to land on. A session with none has no
+    /// focus to place: zellij answers the request by logging `active tab not
+    /// found` as a server ERROR, once per call. Probing first keeps that noise
+    /// out of the log a reader is scanning for real faults, and the tab this
+    /// call would have chosen is the one a fresh attach opens on anyway.
+    ///
+    /// The probe reads attachment the way the sidebar add path does, from
+    /// clients focused on a terminal pane. A client parked on a zellij plugin
+    /// UI therefore reads detached and keeps the focus it chose, which costs a
+    /// courtesy the user is not watching for.
+    pub(super) fn go_to_lead_tab(&self, session: &str) -> Result<()> {
+        if self.focused_terminal_client_ids(session).is_empty() {
+            return Ok(());
+        }
+        self.go_to_tab(session, 1)
     }
 
     pub(super) fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {

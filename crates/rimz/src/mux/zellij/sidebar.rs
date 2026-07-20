@@ -796,7 +796,7 @@ impl ZellijBackend {
         stable_client_present(&probes)
     }
 
-    fn focused_terminal_client_ids(&self, session: &str) -> BTreeSet<u32> {
+    pub(super) fn focused_terminal_client_ids(&self, session: &str) -> BTreeSet<u32> {
         self.zellij_action(session)
             .arg("list-clients")
             .run()

@@ -1138,6 +1138,73 @@ fn log_diagnosis_requires_complete_known_lifecycle_evidence() {
     );
 }
 
+/// Both records are zellij ERRORs the room provokes on its own, and neither
+/// costs the reader a pane: a pane-targeting action can always lose its target
+/// to a close, and a stale directory still yields a live pane in the inherited
+/// one. Reporting either as an alarm spends the reader's attention on nothing.
+#[test]
+fn log_diagnosis_grades_self_inflicted_pane_errors_below_alarm() {
+    use crate::mux::logtail::{LogImpact, LogState, LogicalRecord, RecordLine};
+
+    let record = |line: &str| {
+        let RecordLine::Start(start) = parse_log_line(line) else {
+            panic!("record start");
+        };
+        LogicalRecord {
+            text: start.message.clone(),
+            start,
+            truncated: false,
+        }
+    };
+
+    let closed = record(
+        "ERROR  |zellij_server::screen    | 2026-07-20 00:02:56.758 [screen] zellij-server/src/screen.rs:9730: Pane with id Terminal(336) not found",
+    );
+    let closed = diagnose_log_record(None, &closed, None).unwrap();
+    assert_eq!(closed.state, LogState::Expected);
+    assert_eq!(closed.impact, LogImpact::Info);
+
+    // The id varies per occurrence; one key keeps the race a single issue.
+    let other = record(
+        "ERROR  |zellij_server::screen    | 2026-07-20 00:02:57.758 [screen] zellij-server/src/screen.rs:9730: Pane with id Terminal(412) not found",
+    );
+    assert_eq!(
+        closed.key,
+        diagnose_log_record(None, &other, None).unwrap().key,
+    );
+
+    let cwd = record(
+        "ERROR  |zellij_server::os_input_o| 2026-07-19 23:28:54.038 [pty] zellij-server/src/os_input_output_unix.rs:216: Failed to set CWD for new pane. '/tmp/rimz-presence-probe' does not exist or is not a folder",
+    );
+    let cwd = diagnose_log_record(None, &cwd, None).unwrap();
+    assert_eq!(cwd.state, LogState::Investigate);
+    assert_eq!(cwd.impact, LogImpact::Warn);
+    assert!(
+        cwd.summary.contains("/tmp/rimz-presence-probe"),
+        "the directory to fix is the whole point of the line: {}",
+        cwd.summary
+    );
+
+    // Two stale directories are two fixes, so they stay two issues.
+    let elsewhere = record(
+        "ERROR  |zellij_server::os_input_o| 2026-07-19 23:28:55.038 [pty] zellij-server/src/os_input_output_unix.rs:216: Failed to set CWD for new pane. '/tmp/gone' does not exist or is not a folder",
+    );
+    assert_ne!(
+        cwd.key,
+        diagnose_log_record(None, &elsewhere, None).unwrap().key,
+    );
+
+    // A reworded upstream message keeps its alarm rather than reporting a
+    // truncated directory.
+    let reworded = record(
+        "ERROR  |zellij_server::os_input_o| 2026-07-19 23:28:56.038 [pty] zellij-server/src/os_input_output_unix.rs:216: Failed to set CWD for new pane. '/tmp/gone' is unreadable",
+    );
+    assert_eq!(
+        diagnose_log_record(None, &reworded, None).unwrap().impact,
+        LogImpact::Alarm,
+    );
+}
+
 #[test]
 fn logical_log_scan_groups_complete_0443_artifacts_conservatively() {
     let dir = tempfile::tempdir().unwrap();
