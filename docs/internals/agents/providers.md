@@ -94,7 +94,7 @@ Every registered adapter also exposes a display-only version probe by default: l
 
 ## Producer aggregation
 
-[`SidebarSnapshot::with_provider_aggregates`](../../../crates/rimz/src/store/snapshot/view/providers.rs) folds accounts and balances into the dashboard view-model — one [`SidebarProviderPanel`](../../../crates/rimz/src/store/snapshot/view.rs) per kind. It is **producer-only**: it needs per-machine config and the out-of-band probe the pure reducer cannot read, so the reducer leaves `providers` empty and every consumer tab reads the producer's published panel (see [sidebar.md → State access](../sidebar/sidebar.md#state-access)).
+[`SidebarSnapshot::with_provider_aggregates`](../../../crates/rimz/src/store/snapshot/view/providers.rs) folds accounts and balances into the dashboard view-model — one [`SidebarProviderPanel`](../../../crates/rimz/src/store/snapshot/view.rs) per kind. It is **producer-only**: it needs per-machine config and the out-of-band probe the pure reducer cannot read, so the reducer leaves `providers` empty and every consumer tab reads the producer's published panel (see [state.md → Projections](../sidebar/state.md#projections)).
 
 Per panel:
 

@@ -358,6 +358,6 @@ Each degradation has one owner, and none of them can produce a wrong verdict tha
 | Dead producer | Consumers keep folding the rollup and the last published caches. | Heartbeat election promotes the next-eldest renderer once the stale heartbeat ages out; pane presence waits for the handoff. |
 | Clock skew | The event TTL uses receiver time, so no event can become immortal. | A skewed sender timestamp can briefly mis-order an overlay; the verifying pull corrects it. |
 | Corrupt or stale projection | Adoption is a live-truth verdict, not a trust decision. | The consumer falls back to the full in-process fold, which needs no mux and no git. |
-| Unreadable store | The serve loop holds its last committed frame. | Sustained failure raises the sticky health alert, and a renderer degraded past `GIVE_UP_AFTER_DEGRADED` exits for supervisor respawn ([sidebar.md → Reload recovery](./sidebar.md#reload-recovery)). |
+| Unreadable store | The serve loop holds its last committed frame. | Sustained failure raises the sticky health alert, and a renderer degraded past `GIVE_UP_AFTER_DEGRADED` exits for supervisor respawn ([sidebar.md → Degraded reads and give-up](./sidebar.md#degraded-reads-and-give-up)). |
 
 Every accepted anomaly path writes a typed diagnostic before it falls back, holds, suppresses, or exits. A recurrence of flicker, duplicate rows, or a phantom external group maps to a record in `diag.log.jsonl`; `rimz doctor` shows the recent tail and [diagnostics.md](../diagnostics.md) names the taxonomy.
