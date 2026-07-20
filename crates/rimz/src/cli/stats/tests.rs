@@ -529,7 +529,13 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         .unwrap();
     assert!(state.has_frame());
     assert!(state.has_refresh_failure());
-    assert!(out.is_empty(), "a failed refresh does not repaint");
+    let frame = String::from_utf8(out.clone()).unwrap();
+    assert!(frame.contains("All time 42"), "frame was {frame:?}");
+    assert!(
+        !frame.contains("Spending refresh unavailable"),
+        "held frame must outrank the failure: {frame:?}"
+    );
+    out.clear();
 
     state
         .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out)
@@ -578,7 +584,7 @@ fn empty_dashboard_refreshes_early_until_a_frame_exists() {
 }
 
 #[test]
-fn held_stats_survives_a_first_refresh_failure_without_painting() {
+fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
     let mut state = HeldStats::new(false, panel_glyphs(), false);
     let mut out = Vec::new();
 
@@ -587,7 +593,38 @@ fn held_stats_survives_a_first_refresh_failure_without_painting() {
         .unwrap();
 
     assert!(!state.has_frame());
-    assert!(out.is_empty());
+    assert!(state.has_refresh_failure());
+    let unavailable = String::from_utf8(out.clone()).unwrap();
+    assert!(
+        unavailable.contains("Spending refresh unavailable - retrying. refresh failed"),
+        "frame was {unavailable:?}"
+    );
+    out.clear();
+    state
+        .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out)
+        .unwrap();
+    let repainted = String::from_utf8(out.clone()).unwrap();
+    assert!(
+        repainted.contains("Spending refresh unavailable - retrying. refresh failed"),
+        "repainted frame was {repainted:?}"
+    );
+
+    let today = unix_secs_now() as i64 / DAY_SECS;
+    let mut stats = Stats {
+        by_day: BTreeMap::from([(today, day(42, 0.0))]),
+        by_model: BTreeMap::new(),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+    stats.total.year.tokens = 42;
+    out.clear();
+    state.accept_refresh(Ok(stats), &mut out).unwrap();
+
+    assert!(state.has_frame());
+    assert!(!state.has_refresh_failure());
+    let frame = String::from_utf8(out).unwrap();
+    assert!(frame.contains("All time 42"), "frame was {frame:?}");
+    assert!(!frame.contains("Spending refresh unavailable"));
 }
 
 #[test]

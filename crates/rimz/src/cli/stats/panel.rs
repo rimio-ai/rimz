@@ -353,6 +353,18 @@ pub(super) fn render_panel(
     emit(w, &lines, geometry.outer, nl)
 }
 
+pub(super) fn render_unavailable(w: &mut impl Write, error: &str, nl: &str) -> Result<()> {
+    let geometry = PanelGeometry::current();
+    let mut lines = header_lines(geometry.panel_width);
+    let message = format!("Spending refresh unavailable - retrying. {error}");
+    lines.push(center(
+        &render::paint(render::palette::muted(), &message),
+        message.chars().count(),
+        geometry.panel_width,
+    ));
+    emit(w, &lines, geometry.outer, nl)
+}
+
 pub(super) fn header_lines(panel_width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     lines.push(String::new());

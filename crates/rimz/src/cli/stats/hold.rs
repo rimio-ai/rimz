@@ -88,7 +88,7 @@ pub(super) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
 
 pub(super) struct HeldStats {
     current: Option<Stats>,
-    refresh_failure_active: bool,
+    refresh_failure: Option<String>,
     active: Window,
     dollars: bool,
     glyphs: PanelGlyphs,
@@ -99,7 +99,7 @@ impl HeldStats {
     pub(super) fn new(dollars: bool, glyphs: PanelGlyphs, hold: bool) -> Self {
         Self {
             current: None,
-            refresh_failure_active: false,
+            refresh_failure: None,
             active: Window::AllTime,
             dollars,
             glyphs,
@@ -114,12 +114,12 @@ impl HeldStats {
     ) -> Result<()> {
         match result {
             Ok(stats) => {
-                self.refresh_failure_active = false;
+                self.refresh_failure = None;
                 self.current = Some(stats);
                 self.repaint(w)?;
             }
             Err(error) => {
-                if self.refresh_failure_active {
+                if self.refresh_failure.is_some() {
                     tracing::debug!(
                         error = %error,
                         "stats refresh still failing; holding the current frame"
@@ -130,7 +130,8 @@ impl HeldStats {
                         "stats refresh failed; holding the current frame"
                     );
                 }
-                self.refresh_failure_active = true;
+                self.refresh_failure = Some(error.to_string());
+                self.repaint(w)?;
             }
         }
         Ok(())
@@ -142,7 +143,7 @@ impl HeldStats {
 
     #[cfg(test)]
     pub(super) fn has_refresh_failure(&self) -> bool {
-        self.refresh_failure_active
+        self.refresh_failure.is_some()
     }
 
     pub(super) fn apply_key(&mut self, key: KeyEvent, w: &mut impl Write) -> Result<KeyOutcome> {
@@ -167,27 +168,30 @@ impl HeldStats {
     }
 
     fn repaint(&self, w: &mut impl Write) -> Result<()> {
-        let Some(stats) = self.current.as_ref() else {
-            return Ok(());
-        };
-        let today_day = unix_secs_now() as i64 / DAY_SECS;
-        let assists = AssistStats::load(&state_home(), self.active, Timestamp::now());
         let stdout = std::io::stdout();
         let choice = anstream::AutoStream::choice(&stdout);
         let mut frame = anstream::AutoStream::new(Vec::new(), choice);
-        render_panel(
-            &mut frame,
-            panel::PanelStats {
-                usage: stats,
-                assists: &assists,
-                active: Some(self.active),
-            },
-            today_day,
-            self.dollars,
-            &self.glyphs,
-            true,
-            "\n",
-        )?;
+        match (self.current.as_ref(), self.refresh_failure.as_deref()) {
+            (Some(stats), _) => {
+                let today_day = unix_secs_now() as i64 / DAY_SECS;
+                let assists = AssistStats::load(&state_home(), self.active, Timestamp::now());
+                render_panel(
+                    &mut frame,
+                    panel::PanelStats {
+                        usage: stats,
+                        assists: &assists,
+                        active: Some(self.active),
+                    },
+                    today_day,
+                    self.dollars,
+                    &self.glyphs,
+                    true,
+                    "\n",
+                )?;
+            }
+            (None, Some(error)) => panel::render_unavailable(&mut frame, error, "\n")?,
+            (None, None) => return Ok(()),
+        }
         rimz::tui::replace_frame(w, &frame.into_inner())?;
         Ok(())
     }

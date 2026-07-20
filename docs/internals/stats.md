@@ -104,6 +104,8 @@ The panel is plain strings, not widgets. `render_panel` builds a `Vec<String>` a
 
 Each cycle spawns a worker thread that loads through the elected spending service and sends back a single `Result<Stats>`; the foreground polls for keys every 100ms against a 60-second refresh deadline. A failed refresh holds the last frame and logs the failure streak's first warning rather than exiting; consecutive failures drop to debug until a refresh succeeds. A dashboard that has no frame yet retries after 5 seconds, then returns to the 60-second cadence once a refresh succeeds. Stderr logging is off for this rendered command, so warnings cannot smear its raw-mode frame; the reporting layer still receives them.
 
+Rendering follows three states. A current stats frame always wins, including while the latest refresh is failing, so a live panel gets no staleness marker. A failure before the first stats frame paints a centred unavailable message with the cause and retry status; resize and window keys repaint that same state. Before either outcome arrives, the dashboard writes nothing. The unavailable frame is identical for interactive `--refresh` and rimzd's `--refresh --hold`, and the first successful refresh replaces it in place.
+
 | Key | Outcome |
 | --- | --- |
 | `Tab` / `Shift-Tab` | Cycle the selected window, repainting from the frame already in hand with no refetch |
@@ -129,7 +131,7 @@ The line this draws is what counts as an assist. Automation that benefits the us
 | File | What it owns |
 | --- | --- |
 | `mod.rs` | `StatsArgs`, `Window`, `Stats`, the three load paths, the shared constants, and the wordmark |
-| `panel.rs` | Geometry, the `fit` degradation ladder, the heatmap, both breakdowns, insights, and `emit` |
+| `panel.rs` | Geometry, the `fit` degradation ladder, the unavailable and empty frames, the heatmap, both breakdowns, insights, and `emit` |
 | `hold.rs` | The `--refresh` loop, key handling, the reload signal and re-exec, and the cold-load spinner |
 | `assists.rs` | The assist rollup, its panel rows, and the `--assists` timeline |
 | `json.rs` | The `--json` document |
