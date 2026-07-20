@@ -143,6 +143,16 @@ impl FoldedSession {
         })
     }
 
+    pub(super) fn latest_context_tokens(&self) -> Option<u64> {
+        self.events.iter().rev().find_map(|event| match event {
+            BranchEvent::Completion(completion) => {
+                completion.usage.as_ref().map(|usage| usage.input_tokens)
+            }
+            BranchEvent::TokenSample(sample) => Some(sample.total_tokens),
+            BranchEvent::Message(_) => None,
+        })
+    }
+
     pub(super) fn latest_assistant(&self) -> Option<String> {
         self.events.iter().rev().find_map(|event| match event {
             BranchEvent::Completion(completion)
@@ -382,14 +392,16 @@ fn apply_row(folded: &mut FoldedSession, row: DecodedRow) {
     };
 
     if folded.active_prompt
-        && let Some(completion) = completion
-    {
-        folded.events.push(BranchEvent::Completion(completion));
-    }
-    if folded.active_prompt
         && let Some(token_sample) = token_sample
     {
         folded.events.push(BranchEvent::TokenSample(token_sample));
+    }
+    if folded.active_prompt
+        && let Some(completion) = completion
+    {
+        // The completed usage is the categorized occupancy for this record, so
+        // keep it after any same-record scalar in the measurement order.
+        folded.events.push(BranchEvent::Completion(completion));
     }
 }
 

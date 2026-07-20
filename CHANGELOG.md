@@ -13,7 +13,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 - `rimz update` upgrades RimZ through the install path you already used. Homebrew delegates to `brew upgrade`, Cargo delegates to `cargo install --locked rimz`, and a prebuilt install downloads the release, verifies its checksum, smoke-tests it, and atomically replaces the running binary. When the binary changes, the new build reloads your running sidebars. `--version` selects a release tag, including the rolling `latest-main`. → [maintenance](./docs/reference/cli/maintenance.md)
 - A one-line install script for verified prebuilt binaries on macOS and Linux, with no `sudo` required for a user-owned destination. Unsupported platforms report the exact `cargo install` fallback rather than failing silently. → [installation](./docs/guide/installation.md)
 - `rimz providers` reports the account picture behind the provider dashboard: login status, plan, agent CLI version, included rate-limit windows, paid and reset credits, published spend, and daily-cap state. It runs inside or outside a room, `--json` emits a stable report array for scripts, and `--refresh` bypasses the caches for one call. → [providers CLI](./docs/reference/cli/providers.md)
-- Grok Build is a first-class agent: passive hooks, rewind-aware session history, exact completed-turn dollars, and local account identity. Permission decisions stay in Grok's own TUI. → [agent support](./docs/reference/agent-support.md)
+- Grok Build is a first-class agent: passive hooks, rewind-aware session history, native or locally priced completed-turn dollars, and local account identity. Permission decisions stay in Grok's own TUI. → [agent support](./docs/reference/agent-support.md)
 - Codex redeems reset credits on its own when blocked time or an approaching expiry justifies it, and rescues credits that would otherwise expire unused.
 - Copilot reports monthly account quotas, usage history, and subagent telemetry.
 - Qwen gates managed runs on the exact account quota rather than an estimate.
@@ -40,6 +40,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 
 ### Fixed
 
+- Grok cards use completed-turn input as their context occupancy, so the fresh/cache/output detail matches the displayed total, and locally estimate dollars from model pricing when current Grok Build records omit native cost ticks.
 - Zellij presence upgrades launch background writers, so pane discovery, selection sync, and animation continue after leaving the tab that was active during `rimz reload`. Existing affected sessions self-repair on their next reload.
 - Sidebar: a cleanly finished turn with a background shell still running shows `✓` immediately alongside `⋯ bg`.
 - Provider dashboard session stats count spend from the full machine-global work burst, including providers driven through cross-provider teams.

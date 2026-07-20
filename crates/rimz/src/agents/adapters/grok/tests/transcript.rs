@@ -87,6 +87,48 @@ fn assistant_suffix_does_not_require_the_earlier_user_chunk() {
     assert_eq!(parse_assistant_suffix(&rewound), ["new branch"]);
 }
 
+#[test]
+fn context_measurement_follows_completed_and_in_progress_turn_order() {
+    let completion = serde_json::json!({
+        "timestamp": 1_700_000_001_u64,
+        "method": "_x.ai/session/update",
+        "params": {
+            "sessionId": "s1",
+            "_meta": {"totalTokens": 9},
+            "update": {
+                "sessionUpdate": "turn_completed",
+                "prompt_id": "p1",
+                "stop_reason": "end_turn",
+                "usage": {"inputTokens": 100, "outputTokens": 5}
+            }
+        }
+    })
+    .to_string();
+    let completed = [chunk("user_message_chunk", "one", Some(0)), completion].join("\n");
+    assert_eq!(fold(&completed).latest_context_tokens(), Some(100));
+
+    let in_progress = serde_json::json!({
+        "timestamp": 1_700_000_002_u64,
+        "method": "session/update",
+        "params": {
+            "sessionId": "s1",
+            "_meta": {"totalTokens": 175},
+            "update": {
+                "sessionUpdate": "agent_thought_chunk",
+                "content": {"type": "text", "text": "thinking"}
+            }
+        }
+    })
+    .to_string();
+    let second_turn = [
+        completed,
+        chunk("user_message_chunk", "two", Some(1)),
+        in_progress,
+    ]
+    .join("\n");
+    assert_eq!(fold(&second_turn).latest_context_tokens(), Some(175));
+}
+
 fn permission_event(at: &str, event_type: &str, tool_name: &str) -> String {
     serde_json::json!({
         "ts": at,

@@ -88,6 +88,16 @@ pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
             ..p(1.25e-6, 2.5e-6, 1.25e-6, 0.125e-6)
         },
     );
+    entries.insert(
+        "grok-4.5".to_owned(),
+        Pricing {
+            input_above_200k: Some(4e-6),
+            output_above_200k: Some(12e-6),
+            cache_read_above_200k: Some(1e-6),
+            max_input_tokens: Some(500_000),
+            ..p(2e-6, 6e-6, 2.5e-6, 0.5e-6)
+        },
+    );
 
     entries.insert(
         "moonshot/kimi-k2.5".to_owned(),
@@ -248,6 +258,8 @@ mod tests {
         assert_eq!(entries["gpt-5.6-sol"].cache_create, 6.25e-6);
         assert_eq!(entries["gpt-5.6-sol"].cache_read, 0.5e-6);
         assert_eq!(entries["gpt-5.6"], entries["gpt-5.6-sol"]);
+        assert_eq!(entries["grok-4.5"].max_input_tokens, Some(500_000));
+        assert_eq!(entries["grok-4.5"].input_above_200k, Some(4e-6));
         assert_eq!(entries["gemini-3-pro-preview"].output, 12e-6);
         assert_eq!(entries["gemini-3-flash-preview"].input, 0.5e-6);
         assert_eq!(entries["qwen3-coder-plus"].cache_read, 0.2e-6);

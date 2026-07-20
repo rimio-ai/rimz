@@ -343,6 +343,96 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
 }
 
 #[test]
+fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    let updates = session.join("updates.jsonl");
+    let pricing = dir.path().join("pricing-cache.json");
+    std::fs::create_dir(&session).unwrap();
+    let lines = [
+        json!({
+            "timestamp": 1_700_000_000_u64,
+            "method": "session/update",
+            "params": {
+                "sessionId": "session-1",
+                "update": {
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "ping"},
+                    "_meta": {"promptIndex": 0}
+                }
+            }
+        }),
+        json!({
+            "timestamp": 1_700_000_001_u64,
+            "method": "session/update",
+            "params": {
+                "sessionId": "session-1",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": "thinking"}
+                },
+                "_meta": {"totalTokens": 9_171, "contextWindowTokens": 500_000}
+            }
+        }),
+        json!({
+            "timestamp": 1_700_000_002_u64,
+            "method": "_x.ai/session/update",
+            "params": {
+                "sessionId": "session-1",
+                "update": {
+                    "sessionUpdate": "turn_completed",
+                    "prompt_id": "prompt-1",
+                    "stop_reason": "end_turn",
+                    "usage": {
+                        "inputTokens": 17_869,
+                        "cachedReadTokens": 0,
+                        "outputTokens": 32,
+                        "totalTokens": 17_901,
+                        "modelUsage": {
+                            "grok-4.5-build-free": {
+                                "inputTokens": 17_869,
+                                "cachedReadTokens": 0,
+                                "outputTokens": 32,
+                                "totalTokens": 17_901
+                            }
+                        }
+                    }
+                }
+            }
+        }),
+    ]
+    .map(|row| row.to_string())
+    .join("\n");
+    std::fs::write(&updates, format!("{lines}\n")).unwrap();
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "session-1",
+        model_hint: Some("grok-4.5"),
+        current_transcript_path: None,
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        prior_spend_fold: None,
+        shared_pricing_cache_path: &pricing,
+    };
+
+    let refresh = refresh_resolved_context(&updates, None, &ctx).unwrap();
+    let tokens = refresh.context.tokens.clone().into_value().unwrap();
+    assert_eq!(tokens.current_context_tokens, Some(17_869));
+    assert_eq!(tokens.used_percentage, Some(4));
+    let usage = tokens.current_usage.unwrap();
+    assert_eq!(usage.input_tokens, Some(17_869));
+    assert_eq!(usage.cache_read_input_tokens, Some(0));
+    assert_eq!(usage.output_tokens, Some(32));
+    assert!(
+        refresh
+            .context
+            .cost
+            .as_set()
+            .and_then(|cost| cost.total_cost_usd)
+            .is_some_and(|cost| cost > 0.0)
+    );
+}
+
+#[test]
 fn only_failure_hooks_contribute_turn_errors() {
     let adapter = GrokAdapter;
     assert!(

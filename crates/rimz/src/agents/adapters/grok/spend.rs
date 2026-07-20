@@ -1,15 +1,16 @@
-//! Exact-cost Grok Build completed-turn spend parsing.
+//! Exact-or-locally-priced Grok Build completed-turn spend parsing.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path};
+use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path, price_split};
 use crate::agents::{PriceBook, TokenSplit, read_transcript_lines};
 
 use super::transcript::{self, ModelUsage, TurnCompletion};
 
 const USD_TICKS_PER_USD: f64 = 10_000_000_000.0;
 
-pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, _prices: &PriceBook) -> SpendParse {
+pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);
     let Some((bytes, next)) = read_transcript_lines(path, from) else {
         return SpendParse::stalled(resume);
@@ -37,14 +38,20 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, _prices: &PriceBo
         .parent()
         .and_then(Path::file_name)
         .and_then(|value| value.to_str());
-    let entries = entries_for_completions(&completions, fallback_session_id);
+    let mut unknown_models = BTreeMap::new();
+    let entries = entries_for_completions(
+        &completions,
+        fallback_session_id,
+        prices,
+        &mut unknown_models,
+    );
     let origin =
         transcript::read_summary(path).and_then(|summary| origin_path(summary.info.cwd.as_deref()));
     SpendParse {
         entries,
         origin,
         cursor,
-        unknown_models: Default::default(),
+        unknown_models,
         replace_entries: rewound,
     }
 }
@@ -55,13 +62,19 @@ pub(super) fn cost_from_folded(
     path: &Path,
     folded: &transcript::FoldedSession,
     session_id: &str,
+    prices: &PriceBook,
 ) -> Option<crate::agents::AgentCost> {
     let fallback_session_id = path
         .parent()
         .and_then(Path::file_name)
         .and_then(|value| value.to_str());
     let completions = folded.completions().cloned().collect::<Vec<_>>();
-    let entries = entries_for_completions(&completions, fallback_session_id);
+    let entries = entries_for_completions(
+        &completions,
+        fallback_session_id,
+        prices,
+        &mut BTreeMap::new(),
+    );
     crate::agents::spending::session_cost_from_entries(&entries, session_id)
 }
 
@@ -72,22 +85,28 @@ fn folded_completions(text: &str) -> Vec<TurnCompletion> {
 fn entries_for_completions(
     completions: &[TurnCompletion],
     fallback_session_id: Option<&str>,
+    prices: &PriceBook,
+    unknown_models: &mut BTreeMap<String, u64>,
 ) -> Vec<CachedEntry> {
     completions
         .iter()
-        .flat_map(|completion| entries_for_completion(completion, fallback_session_id))
+        .flat_map(|completion| {
+            entries_for_completion(completion, fallback_session_id, prices, unknown_models)
+        })
         .collect()
 }
 
 fn entries_for_completion(
     completion: &TurnCompletion,
     fallback_session_id: Option<&str>,
+    prices: &PriceBook,
+    unknown_models: &mut BTreeMap<String, u64>,
 ) -> Vec<CachedEntry> {
-    let Some(usage) = completion.usage.as_ref().filter(|usage| {
-        !usage.usage_is_incomplete
-            && !usage.cost_is_partial
-            && usage.cost_usd_ticks.is_some_and(|ticks| ticks >= 0)
-    }) else {
+    let Some(usage) = completion
+        .usage
+        .as_ref()
+        .filter(|usage| !usage.usage_is_incomplete)
+    else {
         return Vec::new();
     };
     let session_id = completion
@@ -96,69 +115,102 @@ fn entries_for_completion(
         .or(fallback_session_id)
         .unwrap_or("unknown");
     let timestamp = completion.at_secs;
+    if let Some(aggregate_ticks) = usage.cost_usd_ticks {
+        if usage.cost_is_partial || aggregate_ticks < 0 {
+            return Vec::new();
+        }
+        return exact_entries(
+            usage,
+            session_id,
+            &completion.prompt_id,
+            timestamp,
+            aggregate_ticks,
+        );
+    }
+    if usage.cost_is_partial {
+        return Vec::new();
+    }
+    estimated_entries(
+        usage,
+        session_id,
+        &completion.prompt_id,
+        timestamp,
+        prices,
+        unknown_models,
+    )
+}
+
+fn exact_entries(
+    usage: &transcript::PromptUsage,
+    session_id: &str,
+    prompt_id: &str,
+    timestamp: u64,
+    aggregate_ticks: i64,
+) -> Vec<CachedEntry> {
     if usage.model_usage.is_empty() {
         return vec![entry(
             session_id,
-            &completion.prompt_id,
+            prompt_id,
             None,
             timestamp,
             Totals {
                 input: usage.input_tokens,
                 cache_read: usage.cached_read_tokens,
                 output: usage.output_tokens,
-                cost_ticks: usage.cost_usd_ticks.unwrap_or_default(),
             },
+            ticks_to_usd(aggregate_ticks),
         )];
     }
 
     let mut entries = Vec::new();
     let mut attributed = Totals::default();
+    let mut attributed_ticks = 0_i64;
     for (model, model_usage) in &usage.model_usage {
         let Some(cost_ticks) = trusted_model_ticks(model_usage) else {
             return vec![entry(
                 session_id,
-                &completion.prompt_id,
+                prompt_id,
                 None,
                 timestamp,
                 Totals {
                     input: usage.input_tokens,
                     cache_read: usage.cached_read_tokens,
                     output: usage.output_tokens,
-                    cost_ticks: usage.cost_usd_ticks.unwrap_or_default(),
                 },
+                ticks_to_usd(aggregate_ticks),
             )];
         };
-        attributed.add(model_usage, cost_ticks);
+        attributed.add(model_usage);
+        attributed_ticks = attributed_ticks.saturating_add(cost_ticks);
         entries.push(entry(
             session_id,
-            &completion.prompt_id,
+            prompt_id,
             Some(model),
             timestamp,
             Totals {
                 input: model_usage.input_tokens,
                 cache_read: model_usage.cached_read_tokens,
                 output: model_usage.output_tokens,
-                cost_ticks,
             },
+            ticks_to_usd(cost_ticks),
         ));
     }
-    let aggregate_ticks = usage.cost_usd_ticks.unwrap_or_default();
     if attributed.input > usage.input_tokens
         || attributed.cache_read > usage.cached_read_tokens
         || attributed.output > usage.output_tokens
-        || attributed.cost_ticks > aggregate_ticks
+        || attributed_ticks > aggregate_ticks
     {
         return vec![entry(
             session_id,
-            &completion.prompt_id,
+            prompt_id,
             None,
             timestamp,
             Totals {
                 input: usage.input_tokens,
                 cache_read: usage.cached_read_tokens,
                 output: usage.output_tokens,
-                cost_ticks: aggregate_ticks,
             },
+            ticks_to_usd(aggregate_ticks),
         )];
     }
     let residual = Totals {
@@ -167,23 +219,123 @@ fn entries_for_completion(
             .cached_read_tokens
             .saturating_sub(attributed.cache_read),
         output: usage.output_tokens.saturating_sub(attributed.output),
-        cost_ticks: aggregate_ticks.saturating_sub(attributed.cost_ticks),
     };
+    let residual_ticks = aggregate_ticks.saturating_sub(attributed_ticks);
     if residual.input > 0
         || residual.cache_read > 0
         || residual.output > 0
-        || residual.cost_ticks > 0
+        || residual_ticks > 0
         || entries.is_empty()
     {
         entries.push(entry(
             session_id,
-            &completion.prompt_id,
+            prompt_id,
             None,
             timestamp,
             residual,
+            ticks_to_usd(residual_ticks),
         ));
     }
     entries
+}
+
+fn estimated_entries(
+    usage: &transcript::PromptUsage,
+    session_id: &str,
+    prompt_id: &str,
+    timestamp: u64,
+    prices: &PriceBook,
+    unknown_models: &mut BTreeMap<String, u64>,
+) -> Vec<CachedEntry> {
+    if usage.model_usage.is_empty() {
+        return Vec::new();
+    }
+    if usage.model_usage.len() == 1 {
+        let (model, model_usage) = usage.model_usage.first_key_value().expect("length checked");
+        if model_usage.cost_is_partial {
+            return Vec::new();
+        }
+        let totals = Totals {
+            input: usage.input_tokens,
+            cache_read: usage.cached_read_tokens,
+            output: usage.output_tokens,
+        };
+        return estimated_entry(
+            session_id,
+            prompt_id,
+            model,
+            timestamp,
+            totals,
+            prices,
+            unknown_models,
+        )
+        .into_iter()
+        .collect();
+    }
+
+    let mut entries = Vec::new();
+    let mut attributed = Totals::default();
+    for (model, model_usage) in &usage.model_usage {
+        if model_usage.cost_is_partial {
+            return Vec::new();
+        }
+        let totals = Totals {
+            input: model_usage.input_tokens,
+            cache_read: model_usage.cached_read_tokens,
+            output: model_usage.output_tokens,
+        };
+        attributed.add(model_usage);
+        if let Some(entry) = estimated_entry(
+            session_id,
+            prompt_id,
+            model,
+            timestamp,
+            totals,
+            prices,
+            unknown_models,
+        ) {
+            entries.push(entry);
+        }
+    }
+    if attributed.input > usage.input_tokens
+        || attributed.cache_read > usage.cached_read_tokens
+        || attributed.output > usage.output_tokens
+    {
+        return Vec::new();
+    }
+    let residual = Totals {
+        input: usage.input_tokens.saturating_sub(attributed.input),
+        cache_read: usage
+            .cached_read_tokens
+            .saturating_sub(attributed.cache_read),
+        output: usage.output_tokens.saturating_sub(attributed.output),
+    };
+    if residual.input > 0 || residual.cache_read > 0 || residual.output > 0 {
+        entries.push(entry(session_id, prompt_id, None, timestamp, residual, 0.0));
+    }
+    entries
+}
+
+#[allow(clippy::too_many_arguments)]
+fn estimated_entry(
+    session_id: &str,
+    prompt_id: &str,
+    model: &str,
+    timestamp: u64,
+    totals: Totals,
+    prices: &PriceBook,
+    unknown_models: &mut BTreeMap<String, u64>,
+) -> Option<CachedEntry> {
+    let split = token_split(&totals);
+    let cost_usd = price_split(prices, model, split, timestamp, unknown_models)?;
+    Some(entry(
+        session_id,
+        prompt_id,
+        Some(model),
+        timestamp,
+        totals,
+        cost_usd,
+    ))
 }
 
 fn trusted_model_ticks(usage: &ModelUsage) -> Option<i64> {
@@ -197,15 +349,13 @@ struct Totals {
     input: u64,
     cache_read: u64,
     output: u64,
-    cost_ticks: i64,
 }
 
 impl Totals {
-    fn add(&mut self, usage: &ModelUsage, cost_ticks: i64) {
+    fn add(&mut self, usage: &ModelUsage) {
         self.input = self.input.saturating_add(usage.input_tokens);
         self.cache_read = self.cache_read.saturating_add(usage.cached_read_tokens);
         self.output = self.output.saturating_add(usage.output_tokens);
-        self.cost_ticks = self.cost_ticks.saturating_add(cost_ticks);
     }
 }
 
@@ -215,22 +365,29 @@ fn entry(
     model: Option<&str>,
     ts_secs: u64,
     totals: Totals,
+    cost_usd: f64,
 ) -> CachedEntry {
     let model_key = model.unwrap_or("aggregate");
-    // Grok reports `input_tokens` inclusive of the cached slice, and bills in
-    // exact ticks — the price book is never consulted.
-    let split = TokenSplit::new(
-        totals.input.saturating_sub(totals.cache_read),
-        totals.output,
-    )
-    .cached(0, totals.cache_read);
-    let cost_usd = totals.cost_ticks as f64 / USD_TICKS_PER_USD;
+    let split = token_split(&totals);
     CachedEntry {
         dedup_key: Some(format!("grok:{session_id}:{prompt_id}:{model_key}")),
         thread_id: Some(session_id.to_owned()),
         model: model.map(ToOwned::to_owned),
         ..CachedEntry::new(ts_secs, cost_usd, &split)
     }
+}
+
+fn token_split(totals: &Totals) -> TokenSplit {
+    // Grok reports `input_tokens` inclusive of the cached slice.
+    TokenSplit::new(
+        totals.input.saturating_sub(totals.cache_read),
+        totals.output,
+    )
+    .cached(0, totals.cache_read)
+}
+
+fn ticks_to_usd(ticks: i64) -> f64 {
+    ticks as f64 / USD_TICKS_PER_USD
 }
 
 #[cfg(test)]
@@ -296,10 +453,64 @@ mod tests {
         assert_eq!(parsed.entries[0].cost_usd, 0.25);
         let folded = transcript::read(&path).unwrap();
         assert_eq!(
-            cost_from_folded(&path, &folded, "s1")
+            cost_from_folded(&path, &folded, "s1", &PriceBook::embedded())
                 .unwrap()
                 .total_cost_usd,
             Some(0.25)
+        );
+    }
+
+    #[test]
+    fn missing_native_cost_uses_model_pricing_and_tracks_unknowns() {
+        let completion = serde_json::json!({
+            "timestamp": 1_700_000_000_u64,
+            "method": "_x.ai/session/update",
+            "params": {
+                "sessionId": "s1",
+                "update": {
+                    "sessionUpdate": "turn_completed",
+                    "prompt_id": "p1",
+                    "stop_reason": "end_turn",
+                    "usage": {
+                        "inputTokens": 17_869,
+                        "cachedReadTokens": 0,
+                        "outputTokens": 32,
+                        "totalTokens": 17_901,
+                        "modelUsage": {
+                            "grok-4.5-build-free": {
+                                "inputTokens": 17_869,
+                                "cachedReadTokens": 0,
+                                "outputTokens": 32,
+                                "totalTokens": 17_901
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("updates.jsonl");
+        std::fs::write(&path, with_prompt(&completion)).unwrap();
+
+        let parsed = parse(&path, None, &PriceBook::embedded());
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(
+            parsed.entries[0].model.as_deref(),
+            Some("grok-4.5-build-free")
+        );
+        let expected = 17_869.0 * 2e-6 + 32.0 * 6e-6;
+        assert!((parsed.entries[0].cost_usd - expected).abs() < 1e-12);
+        assert!(parsed.unknown_models.is_empty());
+
+        let unknown = completion.replace("grok-4.5-build-free", "grok-9-build-free");
+        std::fs::write(&path, with_prompt(&unknown)).unwrap();
+        let parsed = parse(&path, None, &PriceBook::embedded());
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].cost_usd, 0.0);
+        assert_eq!(
+            parsed.unknown_models.get("grok-9-build-free"),
+            Some(&1_700_000_000)
         );
     }
 

@@ -61,7 +61,9 @@ use super::aggregate::{
 /// their historical output tokens and cost receive one cold reprice. v19
 /// stores nanosecond-precise logical source stamps, including provider-owned
 /// companions such as OpenCode's WAL, so main-file-only cursors rebuild once.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 19;
+/// v20 locally prices Grok completions whose current wire omits native cost
+/// ticks, so finalized sessions previously cached with no entries rebuild once.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 20;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///

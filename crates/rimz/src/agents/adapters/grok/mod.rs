@@ -1,4 +1,4 @@
-//! Grok Build hooks, durable sessions, account identity, and exact spend.
+//! Grok Build hooks, durable sessions, account identity, and completed-turn spend.
 
 mod account;
 mod install;
@@ -143,7 +143,7 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "updates.jsonl + signals.json",
     },
     realtime_cost: ConcernCoverage::Partial {
-        via: "exact completed-turn turn_completed usage",
+        via: "completed-turn native ticks or local model pricing",
         gap: "no trustworthy mid-turn cost",
     },
     rich_context: ConcernCoverage::Partial {
@@ -154,7 +154,7 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "~/.grok/hooks/rimz.json",
     },
     account_spend: ConcernCoverage::Wired {
-        via: "auth.json identity + exact completed-turn dollars",
+        via: "auth.json identity + completed-turn dollars",
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "ACP and remote control are outside the stock TUI adapter",
@@ -491,6 +491,10 @@ pub(crate) fn refresh_resolved_context(
     });
     let signals = transcript::read_signals(path);
     let sample = folded.latest_token_sample();
+    let latest_usage = folded
+        .completions()
+        .rev()
+        .find_map(|completion| completion.usage.as_ref());
     let context_window_size = sample
         .and_then(|value| value.context_window_tokens)
         .or_else(|| {
@@ -498,16 +502,15 @@ pub(crate) fn refresh_resolved_context(
                 .map(|value| value.context_window_tokens)
                 .filter(|value| *value > 0)
         });
-    let current_context_tokens = sample.map(|value| value.total_tokens).or_else(|| {
+    // A completed turn's input composition is the context Grok displays and
+    // makes the card's split self-consistent. Mid-turn `_meta.totalTokens`
+    // remains the live fallback before that authoritative composition lands.
+    let current_context_tokens = folded.latest_context_tokens().or_else(|| {
         (!folded.saw_rewind)
             .then(|| signals.map(|value| value.context_tokens_used))
             .flatten()
             .or_else(|| (!folded.saw_rewind).then_some(0))
     });
-    let latest_usage = folded
-        .completions()
-        .rev()
-        .find_map(|completion| completion.usage.as_ref());
     let tokens = Some(AgentTokenUsage {
         context_window_size,
         used_percentage: current_context_tokens
@@ -531,7 +534,8 @@ pub(crate) fn refresh_resolved_context(
         .as_ref()
         .and_then(|value| value.current_model_id.clone())
         .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
-    let cost = spend::cost_from_folded(path, &folded, ctx.agent_id);
+    let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
+    let cost = spend::cost_from_folded(path, &folded, ctx.agent_id, &prices);
     Some(LocalContextRefresh {
         context: LocalContextPatch {
             session_preview: summary

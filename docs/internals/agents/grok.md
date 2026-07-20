@@ -38,7 +38,7 @@ A hook-supplied transcript path is accepted only when its canonical path is an `
 
 A `rewind_marker.target_prompt_index` truncates the active fold to that prompt boundary before later records apply. History, context, cold spend, and changed-session live cost reuse this authoritative fold, so live refresh opens `updates.jsonl` once. Final assistant extraction accepts a complete tail `turn_completed.agent_result` only when no rewind appears in that tail and otherwise falls back to the full branch fold. Incremental assistant streaming is append-only: it discards bytes before the last rewind marker in the newly read suffix, but cannot retract output already delivered before the cursor.
 
-Local context refresh stat-gates the validated session files as one aggregate. `summary.json` supplies model, reasoning effort, and stable title; the newest active-branch `_meta.totalTokens` supplies occupancy; `signals.json.contextWindowTokens` supplies the denominator and is the usage fallback before a rewind. After a rewind with no newer token sample, occupancy remains unknown rather than showing stale abandoned-branch usage. Missing or malformed companion files remove only their optional enrichment.
+Local context refresh stat-gates the validated session files as one aggregate. `summary.json` supplies model, reasoning effort, and stable title; a completed turn's `usage.inputTokens` supplies occupancy and its cache/fresh/output categories supply the matching card detail. Before completion, the newest active-branch `_meta.totalTokens` supplies the live scalar; `signals.json.contextWindowTokens` supplies the denominator and is the usage fallback before a rewind. After a rewind with no newer token sample, occupancy remains unknown rather than showing stale abandoned-branch usage. Missing or malformed companion files remove only their optional enrichment.
 
 **The permission sidecar.** The optional `events.jsonl` tail supplies one display-only permission bracket for Grok versions that persist `permission_requested` and `permission_resolved` records without firing `Notification`. RimZ matches append-ordered records by exact non-empty `tool_name`, publishes the newest unmatched request through `native_permission_wait`, and reads only the bounded record-aligned tail. This marker raises the waiting card and routes attention to Grok's pane; it creates no lifecycle wait, open ask, ask ID, or structured answer path. A later lifecycle activity timestamp self-clears a stale marker through the shared projection.
 
@@ -52,9 +52,9 @@ The adapter makes no network request and reports no billing or quota window.
 
 ## Cost
 
-Exact dollars come only from active-branch `_x.ai/session/update` `turn_completed` records. RimZ accepts `costUsdTicks` when it is nonnegative, `usageIsIncomplete` is false, and `costIsPartial` is false, then divides by 10,000,000,000 ticks per USD. Missing or rejected native cost produces no spend entry rather than `$0`.
+Native dollars take precedence on active-branch `_x.ai/session/update` `turn_completed` records. RimZ accepts `costUsdTicks` when it is nonnegative, `usageIsIncomplete` is false, and `costIsPartial` is false, then divides by 10,000,000,000 ticks per USD. When an otherwise complete record omits native cost, RimZ prices its `modelUsage` token categories through the shared price book; the guaranteed `grok-4.5` row also resolves Grok Build selectors such as `grok-4.5-build-free`. An unknown model retains its tokens at zero dollars and enters the shared pricing refresh chase.
 
-`inputTokens` includes cached reads, so the spend entry records `inputTokens - cachedReadTokens` as fresh input and keeps cache reads separate. `outputTokens` already contains reasoning and is recorded once. Trusted per-model rows carry exact attribution; any remaining aggregate tokens or cost form one residual row, while inconsistent or partial model rows fall back to the trusted aggregate.
+`inputTokens` includes cached reads, so the spend entry records `inputTokens - cachedReadTokens` as fresh input and keeps cache reads separate. `outputTokens` already contains reasoning and is recorded once. Trusted per-model rows carry exact attribution; any remaining aggregate tokens or cost form one residual row, while inconsistent or partial model rows fall back to the trusted aggregate. Locally priced single-model turns use the aggregate token counts so a sparse per-model row cannot lose usage.
 
 Ordinary refreshes resume at the file byte cursor. A rewind in the suffix triggers a cold branch fold with `replace_entries = true`, removing abandoned prompts from the spending cache. The stable dedup identity is the Grok session, prompt, and attributed model.
 
@@ -63,5 +63,5 @@ Ordinary refreshes resume at the file byte cursor. A rewind in the suffix trigge
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 
 - **No quota or billing window.** The adapter makes no network request, so the provider block carries spend without budget bars.
-- **Realtime cost is completed-turn only.** Dollars land when `turn_completed` writes them, never mid-turn.
+- **Realtime cost is completed-turn only.** Native or locally estimated dollars land when `turn_completed` writes usage, never mid-turn.
 - **Background parking, remote control, and ACP structured answers** have no native signal. Human answers stay in Grok's pane.

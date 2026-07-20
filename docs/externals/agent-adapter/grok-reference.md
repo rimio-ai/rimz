@@ -334,7 +334,7 @@ Each line is a durable update envelope:
 
 Every current ordinary ACP update carries `_meta.totalTokens`, a monotonically allocated `eventId`, and `agentTimestampMs`. `promptId`, stream/turn clocks, update descriptors, and replay/chunk fields are conditional. Extension updates carry event IDs but do not necessarily carry `totalTokens`.
 
-For live context, scan backward for the last parseable `params._meta.totalTokens`; it is the estimated active context, not cumulative usage. Bound the tail read, tolerate unknown update types, and ignore a torn final JSONL record after a crash. Rewind markers define the live branch, so transcript rendering must apply Grok's rewind semantics rather than concatenate every historic line.
+For live context before a turn completes, scan backward for the last parseable `params._meta.totalTokens`; it is an estimated active-context scalar, not cumulative usage. A completed turn's `usage.inputTokens` is the categorized occupancy Grok 0.2.103 displays and takes precedence once present; `inputTokens - cachedReadTokens` and `cachedReadTokens` form the matching fresh/cache split, while output remains outside occupancy until the next turn. Bound the tail read, tolerate unknown update types, and ignore a torn final JSONL record after a crash. Rewind markers define the live branch, so transcript rendering must apply Grok's rewind semantics rather than concatenate every historic line.
 
 `user_message_chunk` carries `_meta.promptIndex` on the update. The extension record `rewind_marker` carries `target_prompt_index`; it rewinds the logical branch to that prompt boundary while retaining the physical JSONL bytes. A consumer must truncate its folded messages, token samples, and completed turns before applying later records.
 
@@ -378,7 +378,7 @@ The durable exact-cost record is an `_x.ai/session/update` whose update has `ses
 }
 ```
 
-`inputTokens` is the full input including `cachedReadTokens`; subtract the cache category for uncached input. `outputTokens` already includes reasoning. `costUsdTicks` uses 10,000,000,000 ticks per USD. Missing, negative, partial, or incomplete cost is unknown rather than zero. Per-model rows may leave an aggregate residual, so sum trusted rows and reconcile only against the trusted aggregate.
+`inputTokens` is the full input including `cachedReadTokens`; subtract the cache category for uncached input. `outputTokens` already includes reasoning. `costUsdTicks` uses 10,000,000,000 ticks per USD. Missing native cost is unknown rather than zero at the protocol layer; a consumer may label a token-priced fallback as an estimate. Negative, partial, or incomplete native cost remains rejected. Per-model rows may leave an aggregate residual, so sum trusted rows and reconcile only against the trusted aggregate.
 
 ### `signals.json`
 
