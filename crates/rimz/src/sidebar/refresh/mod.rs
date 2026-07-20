@@ -131,13 +131,43 @@ fn current_provider_spending_cache(runtime: &RuntimePaths) -> ProviderSpendingCa
 
 fn matching_workspace_cache(runtime: &RuntimePaths, scope_hash: &str) -> WorkspaceSpendingCache {
     let cache = read_workspace_spending_cache(&runtime.workspace_spending_path(scope_hash));
-    if cache.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
-        && cache.scope_hash == scope_hash
-    {
-        cache
-    } else {
-        WorkspaceSpendingCache::default()
+    if is_current_workspace_cache(&cache, Some(scope_hash)) {
+        return cache;
     }
+    sole_published_workspace_cache(runtime).unwrap_or_default()
+}
+
+fn is_current_workspace_cache(cache: &WorkspaceSpendingCache, scope_hash: Option<&str>) -> bool {
+    cache.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
+        && scope_hash.is_none_or(|scope_hash| cache.scope_hash == scope_hash)
+}
+
+/// The producer's published tally when this reader's scope hash misses.
+///
+/// A consumer derives its scope from cached worktree roots, so it reads a hash
+/// the producer has already moved past whenever a checkout is added or removed.
+/// The producer prunes every sidecar but the live one, so a lone surviving file
+/// is that room's current publication: serving it keeps the cockpit on the
+/// figure the producer actually published, where defaulting reports an empty
+/// room. Anything other than exactly one candidate stays unknown.
+fn sole_published_workspace_cache(runtime: &RuntimePaths) -> Option<WorkspaceSpendingCache> {
+    let mut published = std::fs::read_dir(&runtime.root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with("workspace-spending.") && name.ends_with(".json")
+                })
+        });
+    let candidate = published.next()?;
+    if published.next().is_some() {
+        return None;
+    }
+    let cache = read_workspace_spending_cache(&candidate);
+    is_current_workspace_cache(&cache, None).then_some(cache)
 }
 
 fn codex_origin_overrides(snapshot: &SidebarSnapshot) -> HashMap<PathBuf, PathBuf> {
@@ -237,5 +267,82 @@ pub fn refresh_heavy_lanes(
         spending,
         accounts,
         pr_states,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::WorkspaceId;
+    use crate::agents::spending::WORKSPACE_SPENDING_VERSION;
+
+    fn runtime_root() -> (tempfile::TempDir, RuntimePaths) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        (dir, runtime)
+    }
+
+    fn publish(runtime: &RuntimePaths, scope_hash: &str, usd: f64) {
+        let mut cache = WorkspaceSpendingCache {
+            version: WORKSPACE_SPENDING_VERSION,
+            scope_hash: scope_hash.to_owned(),
+            ..WorkspaceSpendingCache::default()
+        };
+        cache.tally.year.usd = usd;
+        crate::store::atomic::write_temp_then_rename_cache(
+            &runtime.workspace_spending_path(scope_hash),
+            &cache,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn scope_hash_miss_serves_the_sole_published_tally() {
+        let (_dir, runtime) = runtime_root();
+        publish(&runtime, &"a".repeat(64), 12.5);
+
+        let served = matching_workspace_cache(&runtime, &"b".repeat(64));
+
+        assert_eq!(
+            served.tally.year.usd, 12.5,
+            "a reader whose roots lag the producer reads the published tally, not an empty room"
+        );
+    }
+
+    #[test]
+    fn scope_hash_hit_prefers_its_own_sidecar() {
+        let (_dir, runtime) = runtime_root();
+        let mine = "c".repeat(64);
+        publish(&runtime, &mine, 3.0);
+        publish(&runtime, &"d".repeat(64), 99.0);
+
+        let served = matching_workspace_cache(&runtime, &mine);
+
+        assert_eq!(served.tally.year.usd, 3.0);
+    }
+
+    #[test]
+    fn ambiguous_publications_stay_unknown() {
+        let (_dir, runtime) = runtime_root();
+        publish(&runtime, &"e".repeat(64), 7.0);
+        publish(&runtime, &"f".repeat(64), 9.0);
+
+        let served = matching_workspace_cache(&runtime, &"0".repeat(64));
+
+        assert!(
+            served.tally.is_zero(),
+            "two candidates name no single producer publication to trust"
+        );
+    }
+
+    #[test]
+    fn no_publication_stays_unknown() {
+        let (_dir, runtime) = runtime_root();
+
+        let served = matching_workspace_cache(&runtime, &"a".repeat(64));
+
+        assert!(served.tally.is_zero());
     }
 }

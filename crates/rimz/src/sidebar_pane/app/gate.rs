@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use super::state::RenderState;
-use crate::sidebar::timing::ACCEPT_REGRESSION_AFTER;
+use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, CARRY_COLLAPSED_SPEND_FOR};
 
 /// Sticky state for the last-known-good commit gate, kept beside
 /// [`Health`](super::health::Health) but deliberately orthogonal to it:
@@ -299,7 +299,7 @@ fn carry_episode(
         return None;
     }
     let since = since.unwrap_or(now);
-    (now.duration_since(since).as_secs() < ACCEPT_REGRESSION_AFTER.as_secs() as i64)
+    (now.duration_since(since).as_secs() < CARRY_COLLAPSED_SPEND_FOR.as_secs() as i64)
         .then_some(since)
 }
 

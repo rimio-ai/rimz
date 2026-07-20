@@ -303,6 +303,16 @@ pub const GIVE_UP_AFTER_DEGRADED: Duration = Duration::from_secs(30);
 /// the render loop wakes at this deadline and forces a non-skippable fold.
 pub const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(1);
 
+/// How long the gate keeps serving the last known spend tally after an
+/// incoming fold carries none. A collapsed tally means the workspace spending
+/// cache was unreadable for that fold — a scope-hash miss or a walk in
+/// flight — and the figure returns on the producer's next publication, so the
+/// carry spans two [`SPENDING_TTL`](crate::agents::spending::SPENDING_TTL)
+/// cycles. A spend total moves by entries ageing out of a trailing year, never
+/// by dropping to nothing, so carrying costs no accuracy while it keeps the
+/// cockpit's headline from blanking between publications.
+pub const CARRY_COLLAPSED_SPEND_FOR: Duration = Duration::from_secs(30);
+
 /// Consecutive refresh failures before the renderer surfaces a degraded
 /// health alert. A single transient fetch hiccup must not flash a scary
 /// banner: the loop already holds the last good frame, so the first failures

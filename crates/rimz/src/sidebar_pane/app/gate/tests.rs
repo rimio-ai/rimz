@@ -501,7 +501,7 @@ fn spend_carry_expires_each_family_without_coupling_mana_zero() {
     let base_ms = 1_700_000_000_000;
     let old = Timestamp::from_millisecond(base_ms).unwrap();
     let fresh = Timestamp::from_millisecond(
-        base_ms + i64::try_from(ACCEPT_REGRESSION_AFTER.as_millis() / 2).unwrap(),
+        base_ms + i64::try_from(CARRY_COLLAPSED_SPEND_FOR.as_millis() / 2).unwrap(),
     )
     .unwrap();
     let gate = GateState {
@@ -513,7 +513,7 @@ fn spend_carry_expires_each_family_without_coupling_mana_zero() {
         ..GateState::default()
     };
     let now = Timestamp::from_millisecond(
-        base_ms + i64::try_from(ACCEPT_REGRESSION_AFTER.as_millis()).unwrap(),
+        base_ms + i64::try_from(CARRY_COLLAPSED_SPEND_FOR.as_millis()).unwrap(),
     )
     .unwrap();
     let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
@@ -549,7 +549,7 @@ fn spend_carry_escape_hatch_commits_sustained_zero() {
         },
         ..GateState::default()
     };
-    let now = Timestamp::from_second(base + ACCEPT_REGRESSION_AFTER.as_secs() as i64).unwrap();
+    let now = Timestamp::from_second(base + CARRY_COLLAPSED_SPEND_FOR.as_secs() as i64).unwrap();
 
     let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, true, &prior, &prev_gate, now);
