@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::assert::OutputAssertExt;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 use crate::common::Env;
@@ -272,7 +273,7 @@ fn invalid_config_edit_preserves_existing_file_bytes() {
         .args(["config", "set", "theme.display.max_cols", "0"])
         .assert()
         .failure()
-        .stderr(contains("validating `theme.display.max_cols`"));
+        .stderr(contains("invalid value 0 for `theme.display.max_cols`"));
 
     assert_eq!(std::fs::read(path).expect("read theme file"), original);
 }
@@ -445,7 +446,7 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .args(["config", "set", "theme.display.max_cols", "0"])
         .assert()
         .failure()
-        .stderr(contains("validating `theme.display.max_cols`"));
+        .stderr(contains("invalid value 0 for `theme.display.max_cols`"));
 
     env.rimz()
         .args(["config", "set", "theme.scheme", "does-not-exist"])
@@ -469,7 +470,21 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .args(["config", "set", "loop.default-timeout", "forever"])
         .assert()
         .failure()
-        .stderr(contains("validating `loop.default-timeout`"));
+        .stderr(contains(
+            "invalid value \"forever\" for `loop.default-timeout`",
+        ));
+
+    let config_path = machine_config_path(&env).display().to_string();
+    env.rimz()
+        .args(["config", "set", "remote_control.claude", "flase"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "invalid value \"flase\" for `remote_control.claude`",
+        ))
+        .stderr(contains("must be a boolean (true or false)"))
+        .stderr(contains("TOML parse error").not())
+        .stderr(contains(config_path).not());
 
     let bad_scheme = env.home_root.join("bad-theme.toml");
     std::fs::write(&bad_scheme, "[colors.primary]\nbackground = 'nothex'\n")

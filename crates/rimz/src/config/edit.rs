@@ -48,11 +48,11 @@ pub enum ConfigEditErr {
         #[source]
         source: toml::ser::Error,
     },
-    #[error("validating `{key}`: {source}")]
+    #[error("invalid value {value} for `{key}`: {message}")]
     Validate {
         key: String,
-        #[source]
-        source: Box<super::ConfigErr>,
+        value: String,
+        message: String,
     },
     #[error("validating merged {path}: {source}")]
     ValidateMerged {
@@ -255,13 +255,15 @@ fn apply_logical_key(
     core_path: &Path,
 ) -> Result<()> {
     validate_set_value(logical, &value)?;
+    let value_display = value.to_string().trim().to_owned();
     set_document_value(doc, &document_key_for_set(logical), value)?;
     reject_unknown_set_key(path, logical, doc, core_path)?;
     MachineConfig::parse_text(path, &doc.to_string(), agents_home)
         .map(|_| ())
         .map_err(|source| ConfigEditErr::Validate {
             key: logical.join("."),
-            source: Box::new(source),
+            value: value_display,
+            message: source.validation_message(),
         })
 }
 

@@ -301,6 +301,19 @@ impl ConfigErr {
             | Self::RemovedTable { path, .. } => path,
         }
     }
+
+    /// The validation failure without file/location context, for callers
+    /// reporting a value error rather than a broken file.
+    pub fn validation_message(&self) -> String {
+        match self {
+            Self::Parse { source, .. } => source.message().to_owned(),
+            Self::Agents { source, .. } => source.to_string(),
+            Self::Notifications { source, .. } => source.to_string(),
+            Self::Loop { source, .. } => source.to_string(),
+            Self::AccountBudget { source, .. } => source.to_string(),
+            Self::Io { .. } | Self::RemovedTable { .. } => self.to_string(),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ConfigErr>;

@@ -335,6 +335,39 @@ fn set_context_meter_log_scale_round_trips_through_scalar_path() {
 }
 
 #[test]
+fn round_trip_validation_reports_the_logical_key_value_and_message() {
+    let mut doc = MachineConfig::template_core()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let key = parse_key("remote_control.claude").expect("key");
+    let err = apply_logical_key(
+        &mut doc,
+        std::path::Path::new("config.toml"),
+        &key,
+        parse_set_value(&key, "flase"),
+        std::path::Path::new("missing-agents-home"),
+        std::path::Path::new("config.toml"),
+    )
+    .expect_err("string toggle must fail validation");
+
+    match err {
+        ConfigEditErr::Validate {
+            key,
+            value,
+            message,
+        } => {
+            assert_eq!(key, "remote_control.claude");
+            assert_eq!(value, "\"flase\"");
+            assert_eq!(
+                message,
+                "remote-control agent kind `claude` must be a boolean (true or false)"
+            );
+        }
+        other => panic!("expected round-trip validation error, got {other:?}"),
+    }
+}
+
+#[test]
 fn collect_explicit_keys_maps_theme_colors_and_reports_unknowns() {
     let doc = r##"
 [colors.primary]

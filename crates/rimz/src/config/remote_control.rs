@@ -49,7 +49,7 @@ impl<'de> Deserialize<'de> for RemoteControlConfig {
                 // fields while treating boolean keys as agent toggles.
                 if known {
                     return Err(serde::de::Error::custom(format!(
-                        "remote-control agent kind `{kind}` must be a boolean"
+                        "remote-control agent kind `{kind}` must be a boolean (true or false)"
                     )));
                 }
                 continue;
