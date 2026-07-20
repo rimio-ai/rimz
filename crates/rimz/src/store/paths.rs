@@ -203,10 +203,9 @@ impl RuntimePaths {
     }
 
     /// Account-global runtime paths with no bound room, for readers that run
-    /// outside a workspace — the provider-dashboard pace view (`rimz stats`) and
-    /// the lobby. Only the `shared_*` accessors carry meaning here; the
-    /// per-workspace fields resolve under a reserved all-zero sentinel id and are
-    /// never created.
+    /// outside a workspace — chiefly the `rimz stats` panel. Only the `shared_*`
+    /// accessors carry meaning here; the per-workspace fields resolve under a
+    /// reserved all-zero sentinel id and are never created.
     pub fn shared() -> Self {
         let sentinel = WorkspaceId::parse("ws_000000000000000000000000")
             .expect("reserved all-zero workspace id is well-formed");

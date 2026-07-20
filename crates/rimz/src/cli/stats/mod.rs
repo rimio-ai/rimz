@@ -1,7 +1,7 @@
 //! `rimz stats` — the wordmark, the token-usage heatmap, per-model and
 //! per-agent breakdowns, and the account-global activity insights as a
-//! standalone command. The lobby embeds the same panel; here it stands alone so
-//! the figures read from inside a room, where the lobby never appears.
+//! standalone command, readable in or out of a room and in or out of a project.
+//! Internals: `docs/internals/stats.md`.
 //!
 //! Account-global: it reads the producer's published provider aggregate when
 //! available. A standalone first launch takes the same shared spending election
