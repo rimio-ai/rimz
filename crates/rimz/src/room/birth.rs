@@ -113,6 +113,13 @@ impl RoomContext {
                     "clearing room-runtime sidebar width override failed",
                 );
             }
+            if let Err(err) = crate::sidebar::body_filter::clear(&self.runtime) {
+                tracing::debug!(
+                    workspace = %self.workspace.workspace_id,
+                    error = %err,
+                    "clearing room-runtime sidebar body filter failed",
+                );
+            }
         }
 
         let (cwd, refresh_ms, rebirth, background_view, recovery, supervised) = match birth {

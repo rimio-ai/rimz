@@ -401,7 +401,7 @@ fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, filter: B
     set_make_up_filter(ui, snapshot, target)
 }
 
-fn set_make_up_filter(
+pub(super) fn set_make_up_filter(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
     filter: Option<BodyFilter>,
@@ -413,14 +413,6 @@ fn set_make_up_filter(
     ui.manual_scroll = None;
     anchor_selection(ui, snapshot);
     true
-}
-
-pub(super) fn adopt_filter(
-    ui: &mut UiState,
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-) -> bool {
-    set_make_up_filter(ui, snapshot, filter)
 }
 
 /// Jump the browse pick to the first visible row of the neighbouring worktree.

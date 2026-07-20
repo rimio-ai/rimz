@@ -9,7 +9,7 @@ use super::lifecycle::{grow_beyond_legit, self_close_decision};
 use super::paint::FramePainter;
 use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
-use super::selection::{adopt_filter, reconcile_selection, row_index_of_pane};
+use super::selection::{reconcile_selection, row_index_of_pane, set_make_up_filter};
 use super::state::{
     ApplyOutcome, FetchDiagnostics, ReadClear, RenderState, apply_manual_unread_guard,
     compute_next_state, emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row,
@@ -485,7 +485,7 @@ impl LoopState {
             FetchUpdate::Unchanged { .. } => unreachable!("handled above"),
         };
         self.fetched_at = Instant::now();
-        let rejected = self.fold_outcome(config, update, anim_start, diag);
+        let rejected = self.fold_outcome(config, update, true, anim_start, diag);
         if snapshot_ok {
             self.last_self_close_check = Instant::now();
             self.retry_pending_focus_repair(config);
@@ -549,6 +549,7 @@ impl LoopState {
                     FetchRole::Consumer
                 },
             },
+            false,
             anim_start,
             diag,
         );
@@ -579,9 +580,7 @@ impl LoopState {
             }
             SidebarEvent::BodyFilterChanged => {
                 let filter = crate::sidebar::body_filter::load(self.read_marks.runtime());
-                if filter != self.ui.make_up_filter
-                    && adopt_filter(&mut self.ui, &self.current, filter)
-                {
+                if set_make_up_filter(&mut self.ui, &self.current, filter) {
                     self.dirty = true;
                 }
             }
@@ -1345,9 +1344,11 @@ impl LoopState {
         &mut self,
         config: &ServeConfig,
         update: FetchUpdate,
+        allow_shared_filter_sync: bool,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> ApplyOutcome {
+        let snapshot_ok = matches!(&update, FetchUpdate::Snapshot { .. });
         let application = match update {
             FetchUpdate::Snapshot {
                 snapshot,
@@ -1373,6 +1374,7 @@ impl LoopState {
             }
         };
         let (prev_good, rejected, now) = self.commit_fetch(application, diag);
+        let authoritative_filter_fold = allow_shared_filter_sync && snapshot_ok && !rejected;
         let prev_selected = self.ui.selected_pane.clone();
         let (focused_pane, cleared) = self.sweep_read_receipts(now, diag);
         self.reconcile_selection_and_order(
@@ -1380,6 +1382,7 @@ impl LoopState {
             prev_selected,
             focused_pane,
             cleared,
+            authoritative_filter_fold,
             now.as_millisecond(),
         );
         self.fold_spend_rolls(anim_start);
@@ -1570,6 +1573,7 @@ impl LoopState {
         prev_selected: Option<PaneId>,
         focused_pane: Option<PaneId>,
         cleared: bool,
+        authoritative_filter_fold: bool,
         now_ms: i64,
     ) {
         // Presentation sort reorders the snapshot's full row set. The order hold
@@ -1589,9 +1593,17 @@ impl LoopState {
         let derived =
             focused_pane.filter(|pane| row_index_of_pane(&self.current, None, pane).is_some());
         let derived_focus_pane = derived.is_some();
+        if authoritative_filter_fold {
+            let shared_filter = crate::sidebar::body_filter::load(self.read_marks.runtime());
+            set_make_up_filter(&mut self.ui, &self.current, shared_filter);
+        }
         let previous_filter = self.ui.make_up_filter;
         reconcile_selection(&mut self.ui, &self.current, derived);
-        if previous_filter.is_some() && self.ui.make_up_filter.is_none() {
+        if authoritative_filter_fold
+            && !self.current.worktree_groups.is_empty()
+            && previous_filter.is_some()
+            && self.ui.make_up_filter.is_none()
+        {
             self.persist_body_filter(None);
         }
         // A fresh focus-register derivation that moved the highlight is an external
@@ -1650,10 +1662,12 @@ impl LoopState {
         &mut self,
         config: &ServeConfig,
         update: FetchUpdate,
+        allow_shared_filter_sync: bool,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> bool {
-        let applied = self.apply_fetch_outcome(config, update, anim_start, diag);
+        let applied =
+            self.apply_fetch_outcome(config, update, allow_shared_filter_sync, anim_start, diag);
         self.should_exit = applied.should_exit;
         if applied.should_exit {
             self.exit_cause = Some(if applied.tab_emptied {

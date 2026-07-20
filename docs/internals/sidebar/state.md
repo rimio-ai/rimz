@@ -310,8 +310,8 @@ Command acceptance and later native client observations resolve an intent. The p
 | --- | --- | --- |
 | `Confirmed` | Every observed client views the target pane. | The action landed; retire the intent. |
 | `Superseded` | The client map moved somewhere other than the target. | Something else took focus; drop the overlay. |
-| `Invalidated` | The session changed, the target pane left the roster, no client remains, or the client id set changed. | Detach, replacement, or pane closure; drop the overlay. |
-| `Present` | The pre-action map is unchanged and the anchor is still fresh. | Keep presenting the target. |
+| `Invalidated` | The session changed, the target pane left the roster, no client remains, the client id set changed, or a requested anchor went stale before acceptance. | Detach, replacement, pane closure, or abandoned request; drop the overlay. |
+| `Present` | A requested anchor is fresh, or an applied anchor is fresh with its pre-action map unchanged. | Keep presenting the target. |
 | `Fence` | The pre-action map is unchanged past `FOCUS_ANCHOR_FRESH`. | Yield unknown rather than restore stale evidence. |
 
 A missed `FocusIntent` wakeup delays the fold until another event or pull arrives, because the file stays authoritative until observation resolves it. Automatic repairs append an assist record at command acceptance (`AcceptedUnconfirmed`) or failure, and another when observation later confirms, supersedes, or invalidates the action.

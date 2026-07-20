@@ -329,7 +329,7 @@ impl ApplyHarness {
         diag: &crate::diag::DiagSink,
     ) -> ApplyOutcome {
         self.state
-            .apply_fetch_outcome(&self.config, outcome, std::time::Instant::now(), diag)
+            .apply_fetch_outcome(&self.config, outcome, true, std::time::Instant::now(), diag)
     }
 
     fn fail(&mut self, reason: &str) -> ApplyOutcome {

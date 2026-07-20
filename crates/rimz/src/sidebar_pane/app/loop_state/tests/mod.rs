@@ -1,6 +1,6 @@
 use super::*;
 use crate::sidebar_pane::app::fixtures::{
-    agent_snapshot, pane, serve_config, snapshot_with_panes, workspace,
+    agent_snapshot, pane, serve_config, snapshot, snapshot_with_panes, workspace,
 };
 use crate::sidebar_pane::app::input::KeyAction;
 use std::collections::HashSet;

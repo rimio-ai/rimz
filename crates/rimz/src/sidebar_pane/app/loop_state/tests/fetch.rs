@@ -299,6 +299,43 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
 }
 
 #[test]
+fn successful_fetch_converges_a_missed_body_filter_event() {
+    let mut rig = Rig::new();
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
+    crate::sidebar::body_filter::write(&rig.runtime, filter).expect("write shared filter");
+
+    let snapshot = agent_snapshot(&rig.ws);
+    rig.fold(snapshot, true);
+
+    assert_eq!(rig.state.ui.make_up_filter, Some(filter));
+}
+
+#[test]
+fn failed_or_rowless_birth_fold_does_not_publish_a_filter_clear() {
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Waiting);
+    let mut rig = Rig::with_filter(filter);
+
+    rig.deliver(FetchUpdate::Failed {
+        error: "not ready".to_owned(),
+        role: FetchRole::Producer,
+        pane_frame: PaneFrame::Held,
+    });
+    assert_eq!(rig.state.ui.make_up_filter, None);
+    assert_eq!(
+        crate::sidebar::body_filter::load(&rig.runtime),
+        Some(filter)
+    );
+
+    let rowless = snapshot(&rig.ws);
+    rig.fold(rowless, true);
+    assert_eq!(rig.state.ui.make_up_filter, None);
+    assert_eq!(
+        crate::sidebar::body_filter::load(&rig.runtime),
+        Some(filter)
+    );
+}
+
+#[test]
 fn empty_body_filter_auto_clear_updates_the_shared_file() {
     let filter = BodyFilter::Status(crate::agents::AgentStatus::Waiting);
     let mut rig = Rig::with_filter(filter);
