@@ -1,114 +1,195 @@
 # Pets
 
-## Overview
+A pet is an animated sprite on the sidebar's [provider dashboard](../../interface/sidebar.md#zone-3--the-provider-dashboard) that acts out whatever the selected card is doing. It gives the bottom panel the room's motion while the agent cards above stay steady, and it is opt-in: `[theme.pets] enabled` is off by default.
 
-Pets are renderer-local attention art for the provider dashboard. One animated companion follows the selected agent or process card, while the card rows stay stable and the bottom panel carries the extra motion.
+The subsystem lives in [`crates/rimz/src/sidebar_pane/pets/`](../../../crates/rimz/src/sidebar_pane/pets/) and owns everything expensive: network fetches, disk cache, WebP and PNG decode, frame slicing, cell-art conversion, track selection, and captions. The renderer receives one `PetView` — an optional body, a caption, and a frame interval — and copies it into the ratatui buffer like any other widget. That boundary is the design: no draw path ever blocks on IO.
 
-The renderer receives a `PetView`: one optional body, caption text, loading state, current action, and active animation track. The body is either cell art or pixel placement metadata. Network fetches, disk cache reads, WebP/PNG decode, frame slicing, animation selection, and cell-grid preparation stay in `src/sidebar_pane/pets/`; the on-screen placement contract lives with [the provider dashboard](../../interface/sidebar.md#zone-3--the-provider-dashboard).
+User-facing setup is the [pets guide](../../guide/pets.md). This page is the mechanics.
 
 ## Module map
 
 | module | job |
 | --- | --- |
-| `mod.rs` | Public pet surface for the sidebar: `PetAssets`, `PetView`, tier resolution, fixed dashboard footprints, asset lifecycle, and animation-frame selection. |
-| `catalog.rs` | Built-in pet ids and the fixed Codex/petdex sheet geometry. |
-| `asset.rs` | Selector resolution, HTTPS fetches, per-machine cache installs, local sheet reads, petdex manifest reads, offline mode, and cache eviction. |
-| `frames.rs` | WebP/PNG sheet decode, slicing into `RgbaImage` frames, and RGBA-to-PNG encode for kitty transmit. |
-| `cellart.rs` | Sextant downsampling from RGBA frames into terminal cells. |
-| `painter.rs` | Pet-sprite residency and retransmit lifecycle over the shared pixel transport. |
-| `../pixel/` | Shared kitty graphics payloads, tmux passthrough wrapping, image ids, placeholders, content-addressed meter rasters, bounded meter residency, and capability probing. |
-| `model.rs` | Pet actions, animation tracks, composed tracks, and per-track timing. |
-| `voice.rs` | Canned captions keyed by action transitions. |
-| `preview.rs` | `rimz list-pets` preview loading for cell and pixel branches. |
+| [`mod.rs`](../../../crates/rimz/src/sidebar_pane/pets/mod.rs) | `PetAssets` and its load state machine, `PetView`, tier resolution, dashboard footprints, and per-frame track selection. |
+| [`catalog.rs`](../../../crates/rimz/src/sidebar_pane/pets/catalog.rs) | The built-in pet ids and the fixed sheet geometry every source must match. |
+| [`asset.rs`](../../../crates/rimz/src/sidebar_pane/pets/asset.rs) | Selector resolution, HTTPS fetches, the per-machine cache, local and petdex reads, offline mode, and eviction. |
+| [`frames.rs`](../../../crates/rimz/src/sidebar_pane/pets/frames.rs) | Sheet decode, geometry validation, and slicing into 72 RGBA frames. |
+| [`cellart.rs`](../../../crates/rimz/src/sidebar_pane/pets/cellart.rs) | Sextant downsampling from RGBA into terminal cells, and the cell-aspect probe. |
+| [`model.rs`](../../../crates/rimz/src/sidebar_pane/pets/model.rs) | Pet actions, animation tracks, composed tracks, and per-track cadence. |
+| [`voice.rs`](../../../crates/rimz/src/sidebar_pane/pets/voice.rs) | Canned captions, keyed by action transition. |
+| [`painter.rs`](../../../crates/rimz/src/sidebar_pane/pets/painter.rs) | Pixel-sprite residency: PNG memoization, transmit, and the self-heal cadence. |
+| [`preview.rs`](../../../crates/rimz/src/sidebar_pane/pets/preview.rs) | `rimz list-pets` preview loading for both tiers. |
+| [`../pixel/`](../../../crates/rimz/src/sidebar_pane/pixel/) | The shared kitty graphics transport: payloads, tmux passthrough, image ids, placeholders, capability probing, and the pixel context meter. |
 
-## Data flow
+## One frame
 
-Each frame starts from `[theme.pets] pet`. `asset::resolve_pet_source` turns the selector into a built-in CDN asset, HTTPS URL, local sheet, or petdex install. `PetAssets` owns tier-specific load state: `loading` holds the background loader receiver, `loaded` holds either prepared cell grids or decoded pixel frames, and `failed` records an unavailable caption plus a retry cooldown.
+The serve loop drives everything from [`app/paint.rs`](../../../crates/rimz/src/sidebar_pane/app/paint.rs). Per frame:
 
-The loader path resolves bytes through `asset` and decodes and slices the WebP or PNG sheet through `frames`. Cell tier renders all 72 grids on that background thread and drops the decoded RGBA sheet before publishing `LoadedPet`; pixel tier retains the frames for PNG transmission. A pet, tier, or geometry change invalidates and asynchronously rebuilds the prepared state; cell aspect also keys cell grids, while pixel assets ignore it. A failed fetched cache entry can be removed; local user sheets are read directly. A latched failed load retries after the cooldown so a transient miss heals without a per-frame fetch storm.
+1. **Project the selection into an action.** `render::selected_pet_action` reduces the selected visible row to one of seven `PetAction` values.
+2. **Resolve the tier.** `effective_render_tier` folds the configured mode, the terminal capabilities, and this frame's paintability into `Pixel` or `Cell`.
+3. **Note newly unread rows.** `observe_unread_rows` diffs the unread row ids against the previous frame and reports whether any row became unread.
+4. **Ask for a view.** `PetAssets::view` polls the loader, starts one if the pet or preparation changed, picks the track, samples a sprite index, and returns a `PetView`.
+5. **Transmit, then draw.** For a pixel body the loop transmits the sprite image and its virtual placement *before* the draw that first references its image id; then ratatui draws the frame inside one synchronized-output bracket.
 
-The serve loop in `app.rs` projects the selected visible row into a `PetAction`, observes newly unread rows, resolves the effective render tier, passes the optional body tier and image-id base, and calls `PetAssets::view`. `PetAssets` chooses the track in `model`: action changes and newly unread rows play `jumping` once, then the steady action track takes over. The selected sprite becomes a single `PetView` body: either the indexed prepared `PetCellGrid` or a `PetPixelView` carrying the placeholder size, sprite index, and image id. Disabled pets start no loader and immediately release loaded, pending, failed, action, caption, and unread state.
+The body tier is `Some` only when pets are enabled, the dashboard is on screen, and the theme allows a body at all (`NO_COLOR` suppresses it and lets the caption carry the state). `frame_interval` tells the loop when to wake next: the animation grid while loading, the active track's frame duration while animating, and nothing when the pet is static.
 
-Rendering consumes only the resulting `PetView`. Cell art is copied into the ratatui buffer. Pixel art writes kitty placeholder cells into the same buffer; the serve loop transmits the sprite image and virtual placement before the draw that first references the image id.
+## From card state to animation
 
-## Tier decision
+`row_pet_action` in [`render/mod.rs`](../../../crates/rimz/src/sidebar_pane/render/mod.rs) does the projection. Compaction is tested first and wins over every status, so an agent compacting while waiting still reads as reviewing.
 
-`PetsGlyphMode` and `PixelRenderCaps` flow through `resolve_render_tier`, the pure mode-and-capability resolver. It returns one typed value: `PetRenderTier::Pixel` or `PetRenderTier::Cell`.
+| selected row | action | track | default caption |
+| --- | --- | --- | --- |
+| agent compacting context | `Review` | `review` | `reviewing context` |
+| agent waiting on your answer | `Ask` | `ask` | `someone needs you` |
+| agent failed, or a stuck process row | `Failed` | `failed` | `rough patch - take a look` |
+| agent paused (rate limit, API overload) | `Waiting` | `waiting` | `waiting on work` |
+| agent running but parked, or with a running subagent | `Waiting` | `waiting` | `waiting on work` |
+| agent reasoning | `Thinking` | `thinking` | `thinking it through` |
+| agent otherwise running, or a busy process row | `Running` | `running` | `room is moving` |
+| agent idle or successful, an idle process row, no selection | `Idle` | `idle` | `all caught up`, then `resting` |
 
-`effective_render_tier` folds in frame-local paintability for the live dashboard. A resolved pixel tier becomes `Cell` when pixels have no provider block to ride beside or the pet body is suppressed. Cell tiers pass through unchanged, so `glyphs = "sextant"` stays sextant when pixels cannot paint.
+Tracks index into the sheet's rows. `model.rs` holds the mapping and the cadence:
 
-Pixel capability in the live sidebar is a tmux enrichment: tmux 3.6 or newer and `allow-passthrough` set to `on` or `all` provide the pixel transport fact; an attached rendering client whose terminfo is `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty` provides the kitty-terminal fact. `glyphs = "auto"` requires both facts, while `glyphs = "pixel"` requires only the transport fact. `[theme.display] pixel = "off"` wins over either pet tier choice and also disables the pixel context meter. Zellij resolves to cell art. `rimz list-pets` can use native kitty graphics in standalone Ghostty or kitty, and wraps the same graphics stream through tmux passthrough when run inside tmux.
+| track | sheet rows | frames | fps |
+| --- | --- | --- | --- |
+| `idle` | row 0 | 6 | 1.6 |
+| `thinking` | row 2 ×3, then row 1 ×3 (run-left, run-right) | 48 | 4.0 |
+| `running` | row 7 | 6 | 4.0 |
+| `waiting` | row 6 | 6 | 3.5 |
+| `review` | row 8 | 6 | 3.5 |
+| `ask` | row 3 ×2, then row 6 (waving, waiting) | 14 | 3.5 |
+| `jumping` | row 4 | 5 | 3.5 |
+| `failed` | row 5 | 8 | 3.5 |
 
-The downgrade target is sextant because it is the portable cell-art baseline. Capability misses, Zellij, `NO_COLOR`, bodyless frames, and sessions with no provider block all converge on a cell path; a narrow rendered dashboard can still resolve to the cell path when the provider column has no usable room.
+Two composed tracks carry meaning that no single sheet row does: `thinking` paces left then right, and `ask` waves twice before settling into waiting.
 
-Geometry follows the effective tier. Pixel pets reserve `15x9` cells, and cell-art pets reserve `18x9` cells; the dashboard adds one empty row under either body.
+**The jump is the attention cue.** Any action change plays `jumping` once before the new steady track takes over, and a newly unread row plays it too even when the action holds. Motion in the corner of your eye means the room changed. The one-shot is time-boxed by the jump track's own loop duration, measured in animation phases so it tracks real time at whatever cadence the loop wakes.
 
-## Focused-card action and captions
+A `[theme.animations]` role set to `effect = "static"` quiets the matching pet action through `pet_motion_enabled`: the one-shot is skipped and the steady track freezes on its first frame.
 
-The renderer projects the selected visible row into one pet action before choosing an animation track.
+## Captions
 
-| selected card state | animation track | default caption |
-| --- | --- | --- |
-| agent ask / waiting for input | `ask` (`waving` twice, then `waiting` once) | `someone needs you` |
-| agent reasoning | `thinking` (`run-left` three loops, then `run-right` three loops) | `thinking it through` |
-| agent acting, or a busy process row | `running` | `room is moving` |
-| agent parked on background work, rate-limit/overload paused, or waiting on running subagents | `waiting` | `waiting on work` |
-| agent compacting context | `review` | `reviewing context` |
-| agent failed, or a stuck process row | `failed` | `rough patch - take a look` |
-| selected row idle, successful, empty, or an idle process row | `idle` | `all caught up` after work, then `resting` |
+`voice::caption` returns a line only on an action transition, so a caption shows once per change and then stands. Each action owns a pool of at least 100 lines and the frame phase selects one, so repeats are rare. Returning to idle draws from `caught_up` after real work and from `resting` on a cold start.
 
-Any pet-action change plays `jumping` once before switching to the new steady track. A newly unread row also plays `jumping` once, even when the selected card's action holds. Static role animation overrides skip one-shots and freeze the steady action track on its first frame.
-
-The built-in catalog follows the Codex/petdex sheet rows: row 0 `idle` (6 frames), row 1 `run-right` (8), row 2 `run-left` (8), row 3 `waving` (4), row 4 `jumping` (5), row 5 `failed` (8), row 6 `waiting` (6), row 7 `running` (6), and row 8 `review` (6). The shipped animation tracks are `idle`, `thinking`, `running`, `waiting`, `review`, `ask`, `jumping`, and `failed`; `thinking` composes repeated `run-left` and `run-right` rows, while `ask` composes the `waving` and `waiting` rows.
-
-Captions are canned renderer strings: each action owns a pool of a hundred-plus glanceable lines, and a transition draws one by the frame phase so repeats vary. `pool[0]` is the plain default in the table above. Captions read action transitions only, and `[theme.pets] voice = false` disables them; `voice.rs` tests enforce the pool contract (size, width, uniqueness).
-
-## Cell art
-
-Cell art renders as ordinary terminal cells through ratatui. Each frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the dashboard buffer like any other line.
-
-Sextant cells split a terminal cell into `2x3` subcells. The converter averages source pixels in linear light and chooses the best foreground/background split for each cell.
-
-The converter aspect-fits each frame inside the fixed cell-art footprint at sextant-subcell resolution, bottom-aligning the fitted image so the pet's feet stay planted. It reads cell height/width from the pty's `TIOCGWINSZ` pixel and cell dimensions; zero or implausible pixel reports fall back to `13/6`, the ratio where the historical `36x27` subcell sample preserves a `192x208` frame exactly.
-
-`[theme.pets] cell_aspect` overrides the probe, so the effective precedence is explicit config, pty pixel probe, then the neutral `13/6` fallback. This override supplies the missing fact under Zellij, which reports zero pty pixel dimensions; tmux 3.4 and newer can forward the terminal pixel dimensions.
-
-Cell art stays pane-local across tmux, Zellij, detached sessions, plain terminals, and color-depth modes. Under `NO_COLOR`, the body is suppressed and the caption path carries the pet state.
-
-Cell residency is the 72 compact terminal grids only. The background preparation output is byte/value-equivalent to calling the existing per-frame converter for the same grid size and `CellAspect`; RGBA remains a pixel-tier and one-shot-preview concern.
-
-## Pixel tier
-
-The pixel tier renders the same decoded frames through the kitty graphics protocol and ratatui's normal buffer diff. The renderer paints each placeholder as one styled grapheme cluster: U+10EEEE plus row and column combining marks, with the foreground RGB encoding the kitty image id.
-
-Ghostty's kitty support covers image placement while animation-frame actions (`a=f`/`a=a`) remain unavailable, so the renderer drives frames by cycling image ids. The frame painter owns synchronized output (DECSET 2026) around the image transmit and ratatui draw so each frame lands as one atomic redraw; RimZ applies `*:sync` during tmux room setup, so tmux buffers the bracketed writes and forwards the window to the terminal by default.
-
-RimZ keeps virtual placements resident for the renderer session and re-transmits image data on a bounded cadence so a dropped tmux passthrough or terminal image-store eviction self-heals. Sprite data is transmitted as PNG (`f=100`), encoded once per sprite and memoized, so the self-heal cadence re-sends compressed image bytes instead of raw RGBA. Sprite image ids are stable slots, and a pet change transmits the new sheet through the same ids so terminal image data is replaced in place; rect shifts and frame changes are ordinary ratatui cell diffs. Context meters intern each distinct quantized raster under its own image id, so value changes ride ratatui's cell diff and the self-heal cadence only re-sends identical bytes. The self-heal cadence re-sends every stale visible meter as a per-frame batch under the frame's shared synchronization bracket, while a global spacing window bounds batches across frames. Each meter transmit and placement also carries its own terminal synchronization bracket, including through tmux passthrough, so replacement is atomic at the client. An LRU window bounds meter image residency; allocation protects every id referenced by the displayed frame or the frame being composed and falls back to cell rendering when the window has no safe entry. The meter path keeps every image referenced by a visible placeholder immutable. Deletes happen at renderer teardown. Graphics APCs stay bounded because macOS terminals can re-evaluate the mouse pointer on each image update.
-
-tmux receives every graphics escape through its passthrough DCS wrapper, and placement uses kitty Unicode placeholders so redraws and pane repaints keep ownership in the sidebar pane. The live sidebar and gallery share the ratatui-buffer placeholder path, while `rimz list-pets` keeps its standalone one-shot renderer. All three use the same fixed footprints. Gallery columns paint through separate image-id ranges so one column cannot delete or ghost another column's image.
-
-`rimz list-pets` paces multi-image pixel previews inside tmux by waiting for the terminal's kitty graphics acknowledgement after each pet image transmit. The acknowledgement proves the real terminal consumed the passthrough before the next image starts, so tmux's output-discard repaint path cannot drop later pet image data. A terminal that does not answer within the short timeout falls back to the unpaced best-effort path for the rest of the command. On exit, the pacer gives any owed acknowledgement a short grace period to arrive so the terminal reply is consumed instead of leaking into the shell as typed input.
-
-The probe reads `tmux -V`, the effective pane-to-window-to-global `#{allow-passthrough}` value through `display-message -p -t <pane-or-session>`, session-scoped `list-clients -F '#{client_control_mode} #{client_termname}'`, `tmux display-message -p '#{session_name}'`, and `$TERM` for standalone preview detection. Live tmux re-probes fold failures onto the previous caps: version or passthrough command failures keep the previous transport fact, and command failures or empty rendering-client lists keep the previous kitty-terminal fact. These runtime probes stay read-only. A separate one-shot startup command raises the sidebar's own pane from `allow-passthrough on` to `all`, so graphics transmitted while its window is hidden still reach the terminal; `all` and the user opt-out `off` remain unchanged.
+The pools are constrained and tested: ascii, lowercase, at most 26 columns (the sliver beside the sprite), and unique across every pool. `pool[0]` is the plain default listed in the table above. `[theme.pets] voice = false` keeps the animation and drops the captions.
 
 ## Assets
 
-The `pet` selector resolves to one of four sources, tried in order: a built-in catalog id served from the public Codex pets CDN, an `https://` URL to a user sheet, a local WebP or PNG spritesheet path, or a petdex pet name. A built-in id wins; an `http(s)://` selector is a URL; a path-like selector (one containing `/` or `.`, or starting with `~`) is a local file or directory; and a bare slug is a petdex pet.
+The `pet` selector resolves to one of four sources, in this order:
 
-Built-ins are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`; each maps to `<id>-spritesheet-v4.webp` under `https://persistent.oaistatic.com/codex/pets/v1/`. The cache path is `$XDG_CACHE_HOME/rimz/pets/v1/assets/<file>`, falling back to `$HOME/.cache/rimz/pets/v1/assets/<file>` or a temp cache root. Writes use temp-file plus rename.
+| selector | source | example |
+| --- | --- | --- |
+| a built-in catalog id | the public Codex pets CDN, cached | `rocky` |
+| an `http(s)://` URL | fetched over HTTPS, cached | `https://example.com/pet.webp` |
+| path-like (contains `/` or `.`, or starts with `~`) | a local sheet file, or a petdex directory | `~/art/pet.png` |
+| a bare slug | a petdex install under `~/.codex/pets/<slug>/` | `wall-e` |
 
-Remote URLs use HTTPS, the same staged connect, response-header, and body-read timeouts as built-ins, the same 16 MiB byte cap, the same geometry check, and a cache key derived from the URL. A failed fetch retries up to three total attempts, so a slow large sheet can finish while a dead host still fails fast. Plain `http://` is rejected with a clear message.
+The built-ins are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`, each served as `<id>-spritesheet-v4.webp`.
 
-Petdex pets live under `~/.codex/pets/<name>/` with a `pet.json` manifest beside a `spritesheet.webp` or `spritesheet.png`. RimZ reads `spritesheetPath` and loads that sheet through the same decode pipeline. `rimz list-pets` scans petdex manifests after the built-ins and labels them by selectable slug.
+**Geometry is fixed for every source:** a `1536x1872` WebP or PNG holding an `8x9` grid of `192x208` frames, 72 in total. It is validated before caching and before decoding, so a wrong-shaped sheet fails with a geometry error rather than a garbled pet. Alpha becomes transparent terminal cells.
 
-`rimz list-pets` loads previews at most two at a time on a cold cache. A failed pet fetch leaves no cache entry, so a re-run serves successful pets from disk and re-fetches only pets still missing.
+**Fetched bytes get a cache; user files stay read-only.** The cache lives at `$XDG_CACHE_HOME/rimz/pets/v1/assets/`, falling back to `$HOME/.cache/...` and then a temp root, and writes go through temp-file plus rename. Remote URLs get a stable cache filename derived from a SHA-256 of the URL. Resolution is cache-first: a valid entry is served as-is, a corrupt one is removed and re-fetched, and a decode failure evicts only entries RimZ wrote. Local sheets and petdex installs belong to the user, so a failed decode leaves them exactly where they are.
 
-Local sheets are read directly, geometry-checked, decoded, and left untouched on decode failure. A local path that points at a directory is treated as a petdex directory.
+Fetch policy: HTTPS only (plain `http://` is refused with a clear message rather than a fetch error), staged 5s connect / 10s response / 30s body timeouts, a 16 MiB cap, and up to three attempts with linear backoff. A failed fetch writes no cache entry, so the next run retries it while cached pets still load from disk.
 
-Geometry is fixed for every source: a `1536x1872` WebP or PNG holding an `8x9` grid of `192x208` pixel frames, 72 frames total. RGBA alpha becomes transparent terminal cells; opaque sheets render filled cells.
+A petdex install is a directory holding `pet.json` beside its sheet; RimZ reads `spritesheetPath` from the manifest and ignores the rest of the metadata. `RIMZ_PETS_OFFLINE=1` serves the cache only for built-ins and URLs; petdex and local sheets already read from disk.
 
-`RIMZ_PETS_OFFLINE=1` serves the cache only for built-ins and configured URLs. Petdex and local sheets already read from disk. Pets execute no commands, so `[theme.pets]` stays outside the project trust hash; the visible security surface is asset egress to the Codex CDN or the configured HTTPS host.
+## The load state machine
 
-## Configuration
+`PetAssets` holds exactly one of three states per pet, plus the animation bookkeeping. Loads run on a named background thread and report through an `mpsc` channel the serve loop polls without blocking.
 
-User setup lives in the [pets guide](../../guide/pets.md). The config key appears in [configuration.md](../../guide/configuration.md#pets) because it is part of the generated theme template.
+```text
+                  ┌──────────┐  pet or preparation changed  ┌─────────┐
+   (none) ───────►│ loading  │◄─────────────────────────────│ loaded  │
+                  └────┬─────┘                              └─────────┘
+                       │ Ok                                      ▲
+                       ├─────────────────────────────────────────┘
+                       │ Err
+                       ▼
+                  ┌──────────┐   20s cooldown elapsed
+                  │  failed  │──────────────────────────► loading
+                  └──────────┘
+```
+
+A `PreparationKey` of `(tier, footprint, cell aspect)` keys the loaded state alongside the pet id. Changing the pet, flipping tiers, or resizing invalidates it and starts a fresh load; cell aspect participates only for the cell tier, since pixel frames ignore it. Disabling pets releases loaded, pending, failed, action, caption, and unread state in one step.
+
+The failure latch is deliberate. A first fetch can fail transiently — a cold network the moment pets are switched on, a CDN blip — and latching forever would strand the pet on `pet unavailable` for the session. A 20-second cooldown lets it self-heal without spawning a loader thread every frame.
+
+The two tiers keep different things in memory. Cell tier renders all 72 grids on the background thread and drops the decoded RGBA sheet before publishing, so the renderer holds only compact `char + fg + bg` grids. Pixel tier retains the RGBA frames, because the painter re-encodes them to PNG on demand.
+
+## Render tiers
+
+`resolve_render_tier` is the pure resolver over the configured mode and the probed capabilities:
+
+| `[theme.pets] glyphs` | needs | result |
+| --- | --- | --- |
+| `sextant` | nothing | `Cell` |
+| `pixel` | pixel transport | `Pixel`, else `Cell` |
+| `auto` (default) | pixel transport **and** a kitty-capable terminal | `Pixel`, else `Cell` |
+
+`effective_render_tier` then folds in this frame's reality: `[theme.display] pixel = "off"` forces `Cell` outright, and a resolved pixel tier downgrades to `Cell` when there is no provider block to ride beside or the body is suppressed. A cell tier always passes through unchanged, so `sextant` stays sextant.
+
+Capabilities come from [`pixel/probe.rs`](../../../crates/rimz/src/sidebar_pane/pixel/probe.rs) as two independent facts:
+
+- **Pixel transport.** Inside tmux: version 3.6 or newer *and* `allow-passthrough` set to `on` or `all` on the pane (falling back to the session). Standalone: always available. Zellij: never.
+- **Kitty terminal.** Inside tmux: every rendering client's terminfo is `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty`, with control-mode clients excluded. Standalone: `$TERM` matches the same list.
+
+Live re-probes fold failures onto the previous reading — a command that fails keeps the last known fact rather than flapping the tier — and every runtime probe only reads. One startup command writes: it raises the sidebar's own pane from `allow-passthrough on` to `all`, so graphics transmitted while the window is hidden still reach the terminal. A pane already at `all`, and a user's explicit `off`, stay as they are.
+
+Sextant is the downgrade target because it is the portable baseline. Capability misses, Zellij, `NO_COLOR`, a suppressed body, and a dashboard with no provider column all converge on it.
+
+**Geometry follows the tier.** Pixel pets reserve `15x9` cells and cell-art pets reserve `18x9`, with one empty row under either body.
+
+## Cell art
+
+Each frame downsamples into a grid of `char + fg + bg` cells that ratatui copies like any other line, so cell art survives tmux, Zellij, detached sessions, plain terminals, and every color depth.
+
+Sextants split one terminal cell into a `2x3` subcell grid. The converter averages source pixels in linear light, then picks the best foreground/background split per cell; coverage at or above the ink threshold is sprite, the rest is terminal background.
+
+Terminal cells are taller than they are wide, so a naive fit distorts the sprite. The converter aspect-fits each frame inside the footprint at subcell resolution and bottom-aligns it, keeping the pet's feet planted. The ratio resolves in a fixed precedence:
+
+1. `[theme.pets] cell_aspect`, when set.
+2. The pty probe, reading pixel and cell dimensions from `TIOCGWINSZ`.
+3. `13/6`, the neutral fallback where the historical `36x27` subcell sample preserves a `192x208` frame exactly.
+
+The explicit config exists because Zellij reports zero pty pixel dimensions; tmux 3.4 and newer forwards them. Under `NO_COLOR` the body is suppressed entirely and the caption carries the pet's state.
+
+## Pixel tier
+
+The pixel tier sends the same decoded frames through the kitty graphics protocol while staying inside ratatui's normal buffer diff. Each placeholder cell is one styled grapheme cluster — U+10EEEE plus row and column combining marks — with the foreground RGB encoding the kitty image id. Rect shifts and frame changes are then ordinary cell diffs.
+
+Ghostty's kitty support covers placement but not the animation-frame actions (`a=f`/`a=a`), so the renderer drives animation by cycling image ids instead. Sprite ids are stable slots directly above the painter's id base; a pet change re-transmits the new sheet through the same ids so terminal image data is replaced in place.
+
+Three properties keep it robust:
+
+- **Atomic frames.** The painter brackets the image transmit and the ratatui draw in synchronized output (DECSET 2026) so each frame lands as one redraw. RimZ applies `*:sync` during tmux room setup, so tmux forwards the bracket to the terminal.
+- **Self-healing residency.** Virtual placements stay resident for the renderer session, and image data re-transmits on a bounded cadence (2s staleness, 250ms minimum spacing between batches) so a dropped tmux passthrough or a terminal image-store eviction recovers on its own. Sprites are encoded to PNG once and memoized, so a re-send costs compressed bytes rather than raw RGBA.
+- **Bounded traffic.** Deletes happen at teardown only, and graphics APCs stay bounded because macOS terminals can re-evaluate the mouse pointer on every image update. `glyphs = "sextant"` is the escape hatch for anyone who wants that traffic gone entirely.
+
+tmux receives every graphics escape through its passthrough DCS wrapper, and placement uses kitty Unicode placeholders, so redraws and pane repaints keep ownership in the sidebar pane.
+
+The context meter shares this transport and this id space, interning each distinct quantized raster under its own id from a reserved offset with an LRU residency window. Its mechanics live in [`pixel/meter.rs`](../../../crates/rimz/src/sidebar_pane/pixel/meter.rs).
+
+## rimz list-pets
+
+The preview command shares the catalog, cache, tier resolver, and footprints with the live dashboard, and loads at most two pets at a time on a cold cache. Built-ins come first, then installed petdex pets labeled by selectable slug. Because a failed fetch leaves no cache entry, a re-run serves the pets that worked from disk and retries only the ones still missing.
+
+Multi-image pixel previews inside tmux are paced ([`cli/list_pets/pacing.rs`](../../../crates/rimz/src/cli/list_pets/pacing.rs)): after each pet image the command waits for the terminal's kitty graphics acknowledgement, proving the real terminal consumed the passthrough before the next image starts, so tmux's output-discard repaint path cannot drop later image data. A terminal that stays silent past a short timeout drops to the unpaced best-effort path for the rest of the command. On exit the pacer gives any owed acknowledgement a grace period, so the terminal's reply is consumed instead of leaking into the shell as typed input.
+
+The live sidebar and the gallery share the ratatui placeholder path; `rimz list-pets` keeps a standalone one-shot renderer and paints gallery columns through separate image-id ranges, so one column cannot delete or ghost another's image.
+
+## Security surface
+
+Pets execute no commands, which is why `[theme.pets]` stays outside the project trust hash. The visible surface is asset egress: a request to the Codex CDN for a built-in, or to the HTTPS host you configured. Prompts, transcripts, pane text, workspace paths, and provider credentials never leave the box on this path, and `RIMZ_PETS_OFFLINE=1` removes the egress entirely. The user-facing statement is one bullet in [security.md](../../guide/security.md#what-leaves-your-machine).
+
+## Where to make a change
+
+| you want to | change |
+| --- | --- |
+| map a card state to a different pet action | `row_pet_action` in `render/mod.rs` |
+| retime or recompose an animation track | the `ANIMATIONS` table in `model.rs` |
+| add caption lines | the matching pool in `voice.rs`; the tests enforce width, ascii, and uniqueness |
+| add a built-in pet | `BUILTIN_PETS` in `catalog.rs` |
+| accept a new selector form | `resolve_pet_source` and `PetSource` in `asset.rs` |
+| change when pixels are allowed | `resolve_render_tier` for policy, `pixel/probe.rs` for the facts |
+| change the dashboard footprint | `DASHBOARD_PIXEL_PET` / `DASHBOARD_CELL_PET` in `mod.rs`, and the dashboard layout beside it |
