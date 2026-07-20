@@ -439,11 +439,17 @@ fn ui_color_exemptions_cover_the_pipeline_and_tests() {
 }
 
 #[test]
-fn ui_glyph_exemptions_cover_glyph_tables_animation_and_tests() {
-    assert!(ui_glyph_exempt(Path::new("theme/glyphs.rs")));
+fn ui_glyph_exemptions_cover_animation_and_tests() {
+    // Animation owns the spinner frame sequences.
     assert!(ui_glyph_exempt(Path::new("animation.rs")));
+    // Tests assert rendered shapes, inline or in a tests tree.
     assert!(ui_glyph_exempt(Path::new("labels/tests/meters.rs")));
     assert!(ui_glyph_exempt(Path::new("tests/process.rs")));
+    // Ordinary render code routes through theme.glyph(GlyphRole::…), including
+    // the render-side theme module — the shipped catalog lives in the shared
+    // theme core, outside this scan.
+    assert!(!ui_glyph_exempt(Path::new("theme.rs")));
+    assert!(!ui_glyph_exempt(Path::new("theme/component.rs")));
     assert!(!ui_glyph_exempt(Path::new("labels/meters.rs")));
     assert!(!ui_glyph_exempt(Path::new("sections/provider.rs")));
 }

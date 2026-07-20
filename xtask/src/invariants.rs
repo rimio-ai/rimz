@@ -857,13 +857,13 @@ fn ensure_no_hardcoded_glyphs(root: &Path, files: &[PathBuf]) -> Result<()> {
     );
 }
 
+/// Render files allowed to write glyph literals: the animation module, which
+/// owns the spinner frame sequences, plus every test module — tests legitimately
+/// assert rendered shapes. The shipped catalog lives in the shared theme core
+/// (`crates/rimz/src/theme/glyphs.rs`), outside this scan entirely.
 fn ui_glyph_exempt(relative: &Path) -> bool {
     let file = relative.file_name().and_then(OsStr::to_str);
-    (file == Some("glyphs.rs")
-        && relative
-            .components()
-            .any(|component| component.as_os_str() == OsStr::new("theme")))
-        || file == Some("animation.rs")
+    file == Some("animation.rs")
         || path_has_tests_component(relative)
         || file.is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
 }
