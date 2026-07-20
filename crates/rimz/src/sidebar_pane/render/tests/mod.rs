@@ -50,86 +50,109 @@ fn fixed_now() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
 }
 
-fn provider_panel_lines(
-    theme: &Theme,
-    providers: &[crate::SidebarProviderPanel],
-    active_kind: Option<&str>,
+/// One dashboard render. The defaults are what nearly every test wants — the
+/// fixed clock, default budget zones, a 54-cell pane, and no pet or fleet tally
+/// — so a call site spells out only the axis under test. No test varies the
+/// clock or the zones, which is why neither is a knob here. The folded footer
+/// is likewise absent: it reaches the dashboard only through `compose_lines`,
+/// and `pets_provider_dashboard_folds_footer_left_of_pet` covers it there.
+struct Dashboard<'a> {
+    theme: &'a Theme,
+    providers: &'a [crate::SidebarProviderPanel],
+    active: Option<&'a str>,
     mode: DashboardMode,
+    fleet: Option<&'a crate::SpendTally>,
+    pet: Option<&'a crate::sidebar_pane::pets::PetView>,
     width: usize,
-    zones: &crate::config::BudgetBarConfig,
-    now: Timestamp,
-) -> (Vec<Line<'static>>, Vec<HitRegion>) {
-    let block = provider_dashboard_block(
-        theme,
-        providers,
-        active_kind,
-        mode,
-        None,
-        None,
-        None,
-        width,
-        zones,
-        now,
-    );
-    let hits = block.interactions.regions().to_vec();
-    (block.lines, hits)
+    phase: u64,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn provider_dashboard_block(
-    theme: &Theme,
-    providers: &[crate::SidebarProviderPanel],
-    active_provider: Option<&str>,
-    mode: DashboardMode,
-    fleet_tally: Option<&crate::SpendTally>,
-    pet: Option<&crate::sidebar_pane::pets::PetView>,
-    folded_footer: Option<super::chrome::FooterParts>,
-    width: usize,
-    zones: &crate::config::BudgetBarConfig,
-    now: Timestamp,
-) -> RenderedBlock {
-    dashboard_block(DashboardContext {
-        theme,
-        providers,
-        active_provider,
-        mode,
-        fleet_tally,
-        pet,
-        folded_footer,
-        width,
-        zones,
-        now,
-        animation_phase: 0,
-    })
-}
+impl<'a> Dashboard<'a> {
+    fn new(
+        theme: &'a Theme,
+        providers: &'a [crate::SidebarProviderPanel],
+        mode: DashboardMode,
+    ) -> Self {
+        Self {
+            theme,
+            providers,
+            active: None,
+            mode,
+            fleet: None,
+            pet: None,
+            width: 54,
+            phase: 0,
+        }
+    }
 
-#[allow(clippy::too_many_arguments)]
-fn provider_dashboard_parts(
-    theme: &Theme,
-    providers: &[crate::SidebarProviderPanel],
-    active_provider: Option<&str>,
-    mode: DashboardMode,
-    fleet_tally: Option<&crate::SpendTally>,
-    pet: Option<&crate::sidebar_pane::pets::PetView>,
-    folded_footer: Option<super::chrome::FooterParts>,
-    width: usize,
-    zones: &crate::config::BudgetBarConfig,
-    now: Timestamp,
-) -> (Vec<Line<'static>>, Vec<HitRegion>) {
-    let block = provider_dashboard_block(
-        theme,
-        providers,
-        active_provider,
-        mode,
-        fleet_tally,
-        pet,
-        folded_footer,
-        width,
-        zones,
-        now,
-    );
-    let hits = block.interactions.regions().to_vec();
-    (block.lines, hits)
+    fn stacked(theme: &'a Theme, providers: &'a [crate::SidebarProviderPanel]) -> Self {
+        Self::new(theme, providers, DashboardMode::Stacked)
+    }
+
+    fn tabbed(theme: &'a Theme, providers: &'a [crate::SidebarProviderPanel]) -> Self {
+        Self::new(theme, providers, DashboardMode::Tabbed)
+    }
+
+    fn pets(theme: &'a Theme, providers: &'a [crate::SidebarProviderPanel]) -> Self {
+        Self::new(theme, providers, DashboardMode::Pet)
+    }
+
+    fn active(mut self, kind: &'a str) -> Self {
+        self.active = Some(kind);
+        self
+    }
+
+    fn width(mut self, width: usize) -> Self {
+        self.width = width;
+        self
+    }
+
+    fn pet(mut self, pet: &'a crate::sidebar_pane::pets::PetView) -> Self {
+        self.pet = Some(pet);
+        self
+    }
+
+    fn fleet(mut self, fleet: &'a crate::SpendTally) -> Self {
+        self.fleet = Some(fleet);
+        self
+    }
+
+    fn phase(mut self, phase: u64) -> Self {
+        self.phase = phase;
+        self
+    }
+
+    fn block(&self) -> RenderedBlock {
+        dashboard_block(DashboardContext {
+            theme: self.theme,
+            providers: self.providers,
+            active_provider: self.active,
+            mode: self.mode,
+            fleet_tally: self.fleet,
+            pet: self.pet,
+            folded_footer: None,
+            width: self.width,
+            zones: &crate::config::BudgetBarConfig::default(),
+            now: fixed_now(),
+            animation_phase: self.phase,
+        })
+    }
+
+    fn lines(&self) -> Vec<Line<'static>> {
+        self.block().lines
+    }
+
+    fn hits(&self) -> Vec<HitRegion> {
+        self.block().interactions.regions().to_vec()
+    }
+
+    fn texts(&self) -> Vec<String> {
+        line_texts(&self.lines())
+    }
+
+    fn text(&self) -> String {
+        self.texts().join("\n")
+    }
 }
 
 fn provider_tab_kind(hit: &HitRegion) -> &str {
@@ -597,23 +620,16 @@ fn provider_panel(
 /// column drops and each row's first span is its label. Filters to the lines
 /// carrying bar glyphs.
 fn metered_bar_rows(theme: &Theme, panel: &crate::SidebarProviderPanel) -> Vec<Line<'static>> {
-    provider_panel_lines(
-        theme,
-        std::slice::from_ref(panel),
-        None,
-        DashboardMode::Stacked,
-        30,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    )
-    .0
-    .into_iter()
-    .filter(|line| {
-        line.spans
-            .iter()
-            .any(|span| span.content.contains('▰') || span.content.contains('▱'))
-    })
-    .collect()
+    Dashboard::stacked(theme, std::slice::from_ref(panel))
+        .width(30)
+        .lines()
+        .into_iter()
+        .filter(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains('▰') || span.content.contains('▱'))
+        })
+        .collect()
 }
 
 /// The label foreground, the first bar-glyph foreground, and whether the row
@@ -656,20 +672,13 @@ fn reset_time_style(line: &Line<'static>) -> Option<Style> {
 
 /// The full provider stats line (all spans joined) of one rendered panel.
 fn stats_line(theme: &Theme, panel: &crate::SidebarProviderPanel) -> String {
-    provider_panel_lines(
-        theme,
-        std::slice::from_ref(panel),
-        None,
-        DashboardMode::Stacked,
-        52,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    )
-    .0
-    .into_iter()
-    .flat_map(|line| line.spans)
-    .map(|span| span.content.into_owned())
-    .collect()
+    Dashboard::stacked(theme, std::slice::from_ref(panel))
+        .width(52)
+        .lines()
+        .into_iter()
+        .flat_map(|line| line.spans)
+        .map(|span| span.content.into_owned())
+        .collect()
 }
 
 /// Two providers on the dashboard fixture: the metered Claude (rc flag on,
@@ -697,6 +706,59 @@ fn two_provider_panels() -> Vec<crate::SidebarProviderPanel> {
             codex
         },
     ]
+}
+
+/// A cell-art pet: a `rows` × `cols` grid of one two-tone `▀` cell. The colors
+/// are vivid and unequal so a test can tell foreground from background and spot
+/// a sprite that reached the frame under `NO_COLOR`.
+fn cell_pet(rows: usize, cols: usize, caption: &str) -> crate::sidebar_pane::pets::PetView {
+    let cell = crate::sidebar_pane::pets::PetCell {
+        ch: '▀',
+        fg: Color::Rgb(200, 20, 20),
+        bg: Color::Rgb(20, 20, 200),
+    };
+    crate::sidebar_pane::pets::PetView {
+        body: Some(crate::sidebar_pane::pets::PetBody::Cell(
+            (0..rows).map(|_| vec![cell.clone(); cols]).collect(),
+        )),
+        caption: Some(caption.to_owned()),
+        frame_interval: None,
+    }
+}
+
+/// A kitty pixel pet. The image id is spelled out so a test can read it back as
+/// the `Rgb(0x12, 0x34, 0x56)` carrier color on the placeholder cells.
+fn pixel_pet() -> crate::sidebar_pane::pets::PetView {
+    crate::sidebar_pane::pets::PetView {
+        body: Some(crate::sidebar_pane::pets::PetBody::Pixel(
+            crate::sidebar_pane::pets::PetPixelView {
+                pet_id: "codex".to_owned(),
+                sprite_index: 0,
+                image_id: 0x123456,
+                size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
+            },
+        )),
+        caption: Some("ready".to_owned()),
+        frame_interval: None,
+    }
+}
+
+/// The dashboard's tabbed fixture snapshot: one running Claude agent with live
+/// context, both provider panels, and the tab rail forced on.
+fn tabbed_provider_snapshot() -> SidebarSnapshot {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    let mut snapshot = snapshot_with(vec![claude]);
+    snapshot.providers = two_provider_panels();
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot
 }
 
 /// The tab rail's text, flattened from its first line's spans.

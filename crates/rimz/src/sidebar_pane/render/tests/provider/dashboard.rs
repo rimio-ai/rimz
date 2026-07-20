@@ -35,26 +35,10 @@ fn copilot_panel() -> crate::SidebarProviderPanel {
 #[test]
 fn copilot_crest_rides_tabbed_header_without_growing_the_block() {
     let theme = Theme::fixed(false);
-    let copilot = copilot_panel();
-    let claude = provider_panel("claude", "Claude", 173, false, false, None);
-    let (copilot_lines, _) = provider_panel_lines(
-        &theme,
-        &[copilot],
-        None,
-        DashboardMode::Tabbed,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let (claude_lines, _) = provider_panel_lines(
-        &theme,
-        &[claude],
-        None,
-        DashboardMode::Tabbed,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
+    let copilot = [copilot_panel()];
+    let claude = [provider_panel("claude", "Claude", 173, false, false, None)];
+    let copilot_lines = Dashboard::tabbed(&theme, &copilot).lines();
+    let claude_lines = Dashboard::tabbed(&theme, &claude).lines();
     let texts = line_texts(&copilot_lines);
     let header = texts
         .iter()
@@ -68,16 +52,7 @@ fn copilot_crest_rides_tabbed_header_without_growing_the_block() {
 #[test]
 fn copilot_crest_uses_wide_stacked_spacer() {
     let theme = Theme::fixed(false);
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[copilot_panel()],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let texts = line_texts(&lines);
+    let texts = Dashboard::stacked(&theme, &[copilot_panel()]).texts();
     let crest = texts
         .iter()
         .position(|line| line.contains("╭─╮╭─╮"))
@@ -100,16 +75,8 @@ fn theme_supplied_narrow_art_centers_as_one_emblem() {
     panel.art = vec!["xxx".to_owned(), " x ".to_owned()];
     panel.art_tints.clear();
 
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[panel],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let texts = line_texts(&lines);
+    let texts = Dashboard::stacked(&theme, &[panel]).texts();
+
     assert!(texts.iter().any(|line| line.starts_with("   xxx   ")));
     assert!(texts.iter().any(|line| line.starts_with("    x    ")));
 }
@@ -117,50 +84,31 @@ fn theme_supplied_narrow_art_centers_as_one_emblem() {
 #[test]
 fn copilot_art_spans_use_catalog_tints_over_the_brand_tone() {
     let theme = Theme::fixed(false);
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[copilot_panel()],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
+    let lines = Dashboard::stacked(&theme, &[copilot_panel()]).lines();
     let art_spans = lines
         .iter()
         .flat_map(|line| &line.spans)
         .collect::<Vec<_>>();
-    let goggle = art_spans
-        .iter()
-        .find(|span| span.content.contains("╭─╮╭─╮"))
-        .expect("goggle span");
-    let eyes = art_spans
-        .iter()
-        .find(|span| span.content.as_ref() == "▘▝")
-        .expect("eye span");
-    let head = art_spans
-        .iter()
-        .find(|span| span.content.contains('█'))
-        .expect("head span");
+    let tint = |part: &str| {
+        art_spans
+            .iter()
+            .find(|span| span.content.contains(part))
+            .unwrap_or_else(|| panic!("{part} span"))
+            .style
+            .fg
+    };
 
-    assert_eq!(goggle.style.fg, Some(Color::Indexed(33)));
-    assert_eq!(eyes.style.fg, Some(Color::Indexed(84)));
-    assert_eq!(head.style.fg, Some(Color::Indexed(140)));
+    assert_eq!(tint("╭─╮╭─╮"), Some(Color::Indexed(33)), "goggle");
+    assert_eq!(tint("▘▝"), Some(Color::Indexed(84)), "eyes");
+    assert_eq!(tint("█"), Some(Color::Indexed(140)), "head");
 }
 
 #[test]
 fn copilot_art_stays_out_of_narrow_headers() {
     let theme = Theme::fixed(false);
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[copilot_panel()],
-        None,
-        DashboardMode::Tabbed,
-        33,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
+    let rendered = Dashboard::tabbed(&theme, &[copilot_panel()])
+        .width(33)
+        .text();
 
     assert!(!rendered.contains("╭─╮╭─╮"), "{rendered}");
     assert!(!rendered.contains("╰─╯╰─╯"), "{rendered}");
@@ -175,19 +123,7 @@ fn copilot_art_stays_out_of_narrow_headers() {
 /// other account stays a dim label resting in the rail, its block off screen.
 #[test]
 fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(vec![claude]);
-    snapshot.providers = two_provider_panels();
-    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
-    let rendered = snapshot_to_screen(&snapshot, 54, 34);
+    let rendered = snapshot_to_screen(&tabbed_provider_snapshot(), 54, 34);
 
     // The tab rail names both accounts set into the line; the active chip is a
     // styled span, so text snapshots only pin the semantic labels.
@@ -228,15 +164,7 @@ fn render_provider_dashboard_marks_a_down_rc_host_in_alarm_color() {
     let mut panel = provider_panel("claude", "Claude", 173, false, true, None);
     panel.remote_control = crate::RemoteControlBadge::Down;
 
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[panel],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
+    let lines = Dashboard::stacked(&theme, &[panel]).lines();
     let flag = lines
         .iter()
         .flat_map(|line| &line.spans)
@@ -246,52 +174,30 @@ fn render_provider_dashboard_marks_a_down_rc_host_in_alarm_color() {
     assert_eq!(flag.style, theme.alarm(Modifier::BOLD));
 }
 
+/// Regression (`fix(budget): keep daily caps config-armed and quiet`): a cap
+/// that is merely close stays out of the headline, and only a parked account
+/// spells the cap out beside the day's spend.
 #[test]
-fn provider_healthy_daily_cap_stays_quiet_on_headline_spend() {
-    let mut panels = two_provider_panels();
-    panels[0].day_budget = Some(crate::DailyBudgetView {
-        cap_usd: 10.0,
-        spend_usd: 9.5,
-        parked: false,
-    });
+fn daily_cap_details_surface_only_while_parked() {
     let theme = Theme::default();
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &panels[..1],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
-    assert!(rendered.contains("$3.50"), "{rendered}");
-    assert!(
-        !rendered.contains(" of "),
-        "healthy cap stays quiet: {rendered}"
-    );
-}
+    for (spend_usd, parked, expected) in [(9.5, false, "$3.50"), (10.25, true, "$10.25 of $10/day")]
+    {
+        let mut panels = two_provider_panels();
+        panels[0].day_budget = Some(crate::DailyBudgetView {
+            cap_usd: 10.0,
+            spend_usd,
+            parked,
+        });
+        let rendered = Dashboard::stacked(&theme, &panels[..1]).text();
 
-#[test]
-fn provider_tripped_daily_cap_renders_against_account_day_spend() {
-    let mut panels = two_provider_panels();
-    panels[0].day_budget = Some(crate::DailyBudgetView {
-        cap_usd: 10.0,
-        spend_usd: 10.25,
-        parked: true,
-    });
-    let theme = Theme::default();
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &panels[..1],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
-    assert!(rendered.contains("$10.25 of $10/day"), "{rendered}");
+        assert!(rendered.contains(expected), "{expected}: {rendered}");
+        if !parked {
+            assert!(
+                !rendered.contains(" of "),
+                "healthy cap stays quiet: {rendered}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -300,33 +206,17 @@ fn ledgerless_provider_renders_placeholder_stats_row() {
     let mut antigravity = provider_panel("antigravity", "Antigravity", 33, true, false, None);
     antigravity.active_sessions = 1;
     antigravity.spending = None;
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[antigravity],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
+    let rendered = Dashboard::stacked(&theme, &[antigravity]).text();
+
     assert!(rendered.contains("◎ 1"), "{rendered}");
     for placeholder in ["◇ –", "↘ –", "↗ –", "◌ –", "$ –"] {
         assert!(rendered.contains(placeholder), "{placeholder}: {rendered}");
     }
     assert!(!rendered.contains("$0.00"), "{rendered}");
 
-    let accounted = provider_panel("claude", "Claude", 173, true, false, None);
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[accounted],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
+    let accounted = [provider_panel("claude", "Claude", 173, true, false, None)];
+    let rendered = Dashboard::stacked(&theme, &accounted).text();
+
     assert!(rendered.contains("◎ 12"), "{rendered}");
     assert!(rendered.contains("◇ 498k"), "{rendered}");
     assert!(rendered.contains("$3.50"), "{rendered}");
@@ -339,16 +229,7 @@ fn render_provider_dashboard_pins_empty_state_template() {
     claude.active_sessions = 0;
     claude.spending = None;
     claude.window_placeholders = vec!["5h".to_owned(), "7d".to_owned()];
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[claude],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
+    let rendered = Dashboard::stacked(&theme, &[claude]).text();
 
     assert!(rendered.contains("Claude v2.1.158 · Claude Max"));
     assert!(rendered.contains("◎ 0  ◇ – ↘ – ↗ – ◌ –"));
@@ -367,18 +248,7 @@ fn render_provider_dashboard_pins_empty_state_template() {
 #[test]
 fn render_provider_dashboard_codex_tab_paints_however_derived() {
     // A manual tab pick over a selected Claude row swaps to the Codex block.
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(vec![claude]);
-    snapshot.providers = two_provider_panels();
-    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
+    let snapshot = tabbed_provider_snapshot();
     let ui = UiState {
         dashboard_tab: Some(DashboardTab {
             kind: "codex".to_owned(),
@@ -420,52 +290,60 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     );
 }
 
+/// The `↻` credit header is Codex-only and needs credits to report: a non-Codex
+/// account, a zero count, and an absent record all leave the header off.
 #[test]
-fn render_provider_dashboard_shows_codex_reset_credit_header() {
+fn codex_reset_credit_header_shows_only_when_actionable() {
     let theme = Theme::fixed(false);
+    let credits = |count| {
+        Some(crate::ResetCredits {
+            count,
+            soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
+            expiries: Vec::new(),
+        })
+    };
     let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
-    codex.reset_credits = Some(crate::ResetCredits {
-        count: 3,
-        soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
-        expiries: Vec::new(),
-    });
+    codex.reset_credits = credits(3);
+    let mut non_codex = provider_panel("claude", "Claude", 173, false, false, None);
+    non_codex.reset_credits = credits(3);
+    let mut zero = provider_panel("codex", "Codex", 33, false, false, None);
+    zero.reset_credits = credits(0);
+    let absent = provider_panel("codex", "Codex", 33, false, false, None);
 
-    let (lines, _) = provider_panel_lines(
-        &theme,
-        &[codex],
-        None,
-        DashboardMode::Stacked,
-        54,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
+    assert!(
+        Dashboard::stacked(&theme, &[codex]).text().contains("↻ 3"),
+        "a Codex account with credits shows the header"
     );
-    let rendered = line_texts(&lines).join("\n");
-
-    assert!(rendered.contains("↻ 3"), "{rendered}");
+    for (panel, why) in [
+        (non_codex, "a non-Codex account"),
+        (zero, "a zero credit count"),
+        (absent, "an absent credit record"),
+    ] {
+        let rendered = Dashboard::stacked(&theme, &[panel]).text();
+        assert!(
+            !rendered.contains('↻'),
+            "{why} hides the header:\n{rendered}"
+        );
+    }
 }
 
 #[test]
 fn codex_reset_marker_blinks_only_while_a_window_is_spent() {
     let theme = Theme::fixed(false);
-    let marker_style = |panel: &crate::SidebarProviderPanel, animation_phase| {
-        dashboard_block(DashboardContext {
-            theme: &theme,
-            providers: std::slice::from_ref(panel),
-            active_provider: None,
-            mode: DashboardMode::Stacked,
-            fleet_tally: None,
-            pet: None,
-            folded_footer: None,
-            width: 54,
-            zones: &crate::config::BudgetBarConfig::default(),
-            now: fixed_now(),
-            animation_phase,
-        })
-        .lines
-        .into_iter()
-        .flat_map(|line| line.spans)
-        .find(|span| span.content.as_ref() == "↻")
-        .map(|span| span.style)
+    let marker_style = |panel: &crate::SidebarProviderPanel, phase| {
+        Dashboard::stacked(&theme, std::slice::from_ref(panel))
+            .phase(phase)
+            .lines()
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .find(|span| span.content.as_ref() == "↻")
+            .map(|span| span.style)
+            .expect("reset marker")
+    };
+    let styles = |panel: &crate::SidebarProviderPanel| {
+        (0..32)
+            .map(|phase| marker_style(panel, phase))
+            .collect::<Vec<_>>()
     };
 
     let mut spent = provider_panel("codex", "Codex", 33, true, false, Some((100, 20)));
@@ -474,62 +352,24 @@ fn codex_reset_marker_blinks_only_while_a_window_is_spent() {
         soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
         expiries: Vec::new(),
     });
-    let blinking = (0..32)
-        .map(|phase| marker_style(&spent, phase).expect("reset marker"))
-        .collect::<Vec<_>>();
     assert!(
-        blinking.windows(2).any(|pair| pair[0] != pair[1]),
+        styles(&spent).windows(2).any(|pair| pair[0] != pair[1]),
         "spent-window marker changes style across animation phases"
     );
 
     let mut unspent = spent.clone();
     unspent.windows[0].used_percentage = Some(99);
-    let steady = (0..32)
-        .map(|phase| marker_style(&unspent, phase).expect("reset marker"))
-        .collect::<Vec<_>>();
-    assert!(steady.iter().all(|style| *style == steady[0]));
-
     let mut undated = spent;
     undated.windows[0].resets_at = None;
-    let undated_styles = (0..32)
-        .map(|phase| marker_style(&undated, phase).expect("reset marker"))
-        .collect::<Vec<_>>();
-    assert!(
-        undated_styles
-            .iter()
-            .all(|style| *style == undated_styles[0])
-    );
-}
-
-#[test]
-fn render_provider_dashboard_hides_reset_credit_header_when_not_actionable() {
-    let theme = Theme::fixed(false);
-    let mut non_codex = provider_panel("claude", "Claude", 173, false, false, None);
-    non_codex.reset_credits = Some(crate::ResetCredits {
-        count: 3,
-        soonest_expiry: None,
-        expiries: Vec::new(),
-    });
-    let mut zero = provider_panel("codex", "Codex", 33, false, false, None);
-    zero.reset_credits = Some(crate::ResetCredits {
-        count: 0,
-        soonest_expiry: None,
-        expiries: Vec::new(),
-    });
-    let absent = provider_panel("codex", "Codex", 33, false, false, None);
-
-    for panel in [non_codex, zero, absent] {
-        let (lines, _) = provider_panel_lines(
-            &theme,
-            &[panel],
-            None,
-            DashboardMode::Stacked,
-            54,
-            &crate::config::BudgetBarConfig::default(),
-            fixed_now(),
+    for (panel, why) in [
+        (unspent, "an unspent window"),
+        (undated, "an undated window"),
+    ] {
+        let steady = styles(&panel);
+        assert!(
+            steady.iter().all(|style| *style == steady[0]),
+            "{why} holds the marker steady"
         );
-        let rendered = line_texts(&lines).join("\n");
-        assert!(!rendered.contains('↻'), "{rendered}");
     }
 }
 
@@ -552,119 +392,52 @@ fn reset_expiry_heat_amount_matches_expiry_boundaries() {
     assert_amount(-1.0, 1.0);
 }
 
+/// The pets body carries the sprite and its caption, and claims no click
+/// targets. Under `NO_COLOR` the sprite drops out entirely while the caption —
+/// the part that carries meaning without color — stays.
 #[test]
-fn render_pets_dashboard_body_uses_pet_view() {
-    let theme = Theme::fixed(false);
-    let pet = crate::sidebar_pane::pets::PetView {
-        body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
-            crate::sidebar_pane::pets::PetCell {
-                ch: '▀',
-                fg: Color::Rgb(200, 20, 20),
-                bg: Color::Rgb(20, 20, 200),
-            },
-        ]])),
-        caption: Some("all caught up".to_owned()),
-        frame_interval: None,
-    };
+fn pets_dashboard_body_renders_sprite_and_caption() {
+    for (no_color, sprite_visible) in [(false, true), (true, false)] {
+        let theme = Theme::fixed(no_color);
+        let pet = cell_pet(1, 1, "all caught up");
+        let dashboard = Dashboard::pets(&theme, &[]).pet(&pet).width(24);
+        let rendered = dashboard.text();
 
-    let (lines, hits) = provider_dashboard_parts(
-        &theme,
-        &[],
-        None,
-        DashboardMode::Pet,
-        None,
-        Some(&pet),
-        None,
-        24,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
-
-    assert!(!rendered.contains("Pets"), "{rendered}");
-    assert!(rendered.contains('▀'), "sprite cells render:\n{rendered}");
-    assert!(rendered.contains("all caught up"), "{rendered}");
-    assert!(hits.is_empty());
+        assert_eq!(
+            rendered.contains('▀'),
+            sprite_visible,
+            "no_color={no_color} sprite:\n{rendered}"
+        );
+        assert!(rendered.contains("all caught up"), "{rendered}");
+        assert!(!rendered.contains("Pets"), "{rendered}");
+        assert!(dashboard.hits().is_empty());
+    }
 }
 
-#[test]
-fn render_pets_dashboard_body_drops_sprite_under_no_color() {
-    let theme = Theme::fixed(true);
-    let pet = crate::sidebar_pane::pets::PetView {
-        body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
-            crate::sidebar_pane::pets::PetCell {
-                ch: '▀',
-                fg: Color::Rgb(200, 20, 20),
-                bg: Color::Rgb(20, 20, 200),
-            },
-        ]])),
-        caption: Some("someone needs you".to_owned()),
-        frame_interval: None,
-    };
-
-    let (lines, _) = provider_dashboard_parts(
-        &theme,
-        &[],
-        None,
-        DashboardMode::Pet,
-        None,
-        Some(&pet),
-        None,
-        24,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
-
-    assert!(!rendered.contains('▀'), "sprite is omitted:\n{rendered}");
-    assert!(rendered.contains("someone needs you"), "{rendered}");
-}
-
+/// Regression (`fix(pets): render pixel placeholders in ratatui buffer`): the
+/// kitty pixel path paints placeholder clusters whose diacritics distinguish
+/// row from column, and never falls back to cell-art glyphs.
 #[test]
 fn render_provider_dashboard_pixel_pet_renders_placeholder_clusters() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
-    let pet = crate::sidebar_pane::pets::PetView {
-        body: Some(crate::sidebar_pane::pets::PetBody::Pixel(
-            crate::sidebar_pane::pets::PetPixelView {
-                pet_id: "codex".to_owned(),
-                sprite_index: 0,
-                image_id: 0x123456,
-                size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
-            },
-        )),
-        caption: Some("ready".to_owned()),
-        frame_interval: None,
-    };
-    let active = "claude".to_owned();
+    let pet = pixel_pet();
+    let rendered = Dashboard::pets(&theme, &providers)
+        .active("claude")
+        .pet(&pet)
+        .width(66)
+        .text();
 
-    let (lines, _) = provider_dashboard_parts(
-        &theme,
-        &providers,
-        Some(&active),
-        DashboardMode::Pet,
-        None,
-        Some(&pet),
-        None,
-        66,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let texts = line_texts(&lines);
-    let rendered = texts.join("\n");
-
-    assert!(
-        rendered.contains(&crate::sidebar_pane::pixel::placeholder_cluster(0, 0)),
-        "pixel placeholder cells render:\n{rendered}"
-    );
-    assert!(
-        rendered.contains(&crate::sidebar_pane::pixel::placeholder_cluster(0, 1)),
-        "placeholder columns carry distinct diacritics:\n{rendered}"
-    );
-    assert!(
-        rendered.contains(&crate::sidebar_pane::pixel::placeholder_cluster(1, 0)),
-        "placeholder rows carry distinct diacritics:\n{rendered}"
-    );
+    for (row, col, why) in [
+        (0, 0, "pixel placeholder cells render"),
+        (0, 1, "placeholder columns carry distinct diacritics"),
+        (1, 0, "placeholder rows carry distinct diacritics"),
+    ] {
+        assert!(
+            rendered.contains(&crate::sidebar_pane::pixel::placeholder_cluster(row, col)),
+            "{why}:\n{rendered}"
+        );
+    }
     assert!(
         !rendered.contains('▀'),
         "cell-art glyphs stay off pixel path:\n{rendered}"
@@ -673,32 +446,10 @@ fn render_provider_dashboard_pixel_pet_renders_placeholder_clusters() {
 
 #[test]
 fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(vec![claude]);
-    snapshot.providers = two_provider_panels();
-    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
+    let mut snapshot = tabbed_provider_snapshot();
     snapshot.theme.pets.enabled = true;
     let ui = UiState {
-        pet: Some(crate::sidebar_pane::pets::PetView {
-            body: Some(crate::sidebar_pane::pets::PetBody::Pixel(
-                crate::sidebar_pane::pets::PetPixelView {
-                    pet_id: "codex".to_owned(),
-                    sprite_index: 0,
-                    image_id: 0x123456,
-                    size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
-                },
-            )),
-            caption: Some("ready".to_owned()),
-            frame_interval: None,
-        }),
+        pet: Some(pixel_pet()),
         ..Default::default()
     };
 
@@ -729,33 +480,12 @@ fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
 fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
-    let pet = crate::sidebar_pane::pets::PetView {
-        body: Some(crate::sidebar_pane::pets::PetBody::Pixel(
-            crate::sidebar_pane::pets::PetPixelView {
-                pet_id: "codex".to_owned(),
-                sprite_index: 0,
-                image_id: 0x123456,
-                size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
-            },
-        )),
-        caption: Some("ready".to_owned()),
-        frame_interval: None,
-    };
-    let active = "claude".to_owned();
-
-    let (lines, _) = provider_dashboard_parts(
-        &theme,
-        &providers,
-        Some(&active),
-        DashboardMode::Pet,
-        None,
-        Some(&pet),
-        None,
-        66,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let texts = line_texts(&lines);
+    let pet = pixel_pet();
+    let texts = Dashboard::pets(&theme, &providers)
+        .active("claude")
+        .pet(&pet)
+        .width(66)
+        .texts();
     let total_index = texts
         .iter()
         .position(|line| line.contains("Total:"))
@@ -776,20 +506,11 @@ fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
 fn render_provider_dashboard_balances_totals_beside_pet() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
-    let cell = crate::sidebar_pane::pets::PetCell {
-        ch: '▀',
-        fg: Color::Rgb(200, 20, 20),
-        bg: Color::Rgb(20, 20, 200),
-    };
-    let pet = crate::sidebar_pane::pets::PetView {
-        body: Some(crate::sidebar_pane::pets::PetBody::Cell(
-            (0..usize::from(crate::sidebar_pane::pets::DASHBOARD_CELL_PET.rows))
-                .map(|_| vec![cell.clone(), cell.clone()])
-                .collect(),
-        )),
-        caption: Some("all caught up".to_owned()),
-        frame_interval: None,
-    };
+    let pet = cell_pet(
+        usize::from(crate::sidebar_pane::pets::DASHBOARD_CELL_PET.rows),
+        2,
+        "all caught up",
+    );
     let fleet = crate::SpendTally {
         week: crate::SpendWindow {
             usd: 44.20,
@@ -816,21 +537,13 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         },
         ..Default::default()
     };
-    let active = "claude".to_owned();
 
-    let (lines, hits) = provider_dashboard_parts(
-        &theme,
-        &providers,
-        Some(&active),
-        DashboardMode::Pet,
-        Some(&fleet),
-        Some(&pet),
-        None,
-        52,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let texts = line_texts(&lines);
+    let dashboard = Dashboard::pets(&theme, &providers)
+        .active("claude")
+        .pet(&pet)
+        .fleet(&fleet)
+        .width(52);
+    let texts = dashboard.texts();
     let rendered = texts.join("\n");
 
     assert!(!rendered.contains("Pets"), "{rendered}");
@@ -862,7 +575,11 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         "bottom row is pet breathing room:\n{rendered}"
     );
     assert_eq!(
-        hits.iter().map(provider_tab_kind).collect::<Vec<_>>(),
+        dashboard
+            .hits()
+            .iter()
+            .map(provider_tab_kind)
+            .collect::<Vec<_>>(),
         vec!["claude", "codex"]
     );
     assert!(
@@ -941,86 +658,35 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
     assert!(spend < pet_col, "$ stays left of the pet column: {stats}");
 }
 
+/// Regressions (`fix(sidebar): align pet provider dashboard rows`, `fix(pets):
+/// widen captions and move config to theme`): the caption is right-aligned with
+/// exactly three trailing cells, and a long one runs the whole dashboard row
+/// rather than being clipped to the pet column.
 #[test]
-fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
+fn pet_caption_is_right_aligned_with_three_trailing_cells() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
-    let cell = crate::sidebar_pane::pets::PetCell {
-        ch: '▀',
-        fg: Color::Rgb(200, 20, 20),
-        bg: Color::Rgb(20, 20, 200),
-    };
-    let pet = crate::sidebar_pane::pets::PetView {
-        body: Some(crate::sidebar_pane::pets::PetBody::Cell(
-            (0..3).map(|_| vec![cell.clone(); 12]).collect(),
-        )),
-        caption: Some("ready".to_owned()),
-        frame_interval: None,
-    };
-    let active = "claude".to_owned();
+    for (text, ends_with) in [
+        ("ready", "    ready   "),
+        ("rough patch - take a look", "take a look   "),
+    ] {
+        let pet = cell_pet(3, 12, text);
+        let texts = Dashboard::pets(&theme, &providers)
+            .active("claude")
+            .pet(&pet)
+            .width(66)
+            .texts();
+        let caption = texts.get(1).expect("caption line");
 
-    let (lines, _) = provider_dashboard_parts(
-        &theme,
-        &providers,
-        Some(&active),
-        DashboardMode::Pet,
-        None,
-        Some(&pet),
-        None,
-        66,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let texts = line_texts(&lines);
-    let caption = texts.get(1).expect("caption line");
-
-    assert!(
-        caption.ends_with("    ready   "),
-        "caption is right-aligned with three trailing cells:\n{caption:?}"
-    );
-}
-
-#[test]
-fn render_provider_dashboard_pet_caption_uses_full_width() {
-    let theme = Theme::fixed(false);
-    let providers = two_provider_panels();
-    let cell = crate::sidebar_pane::pets::PetCell {
-        ch: '▀',
-        fg: Color::Rgb(200, 20, 20),
-        bg: Color::Rgb(20, 20, 200),
-    };
-    let pet = crate::sidebar_pane::pets::PetView {
-        body: Some(crate::sidebar_pane::pets::PetBody::Cell(
-            (0..3).map(|_| vec![cell.clone(); 12]).collect(),
-        )),
-        caption: Some("rough patch - take a look".to_owned()),
-        frame_interval: None,
-    };
-    let active = "claude".to_owned();
-
-    let (lines, _) = provider_dashboard_parts(
-        &theme,
-        &providers,
-        Some(&active),
-        DashboardMode::Pet,
-        None,
-        Some(&pet),
-        None,
-        66,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let texts = line_texts(&lines);
-    let caption = texts.get(1).expect("caption line");
-
-    assert!(
-        caption.contains("rough patch - take a look"),
-        "caption uses the full dashboard row:\n{caption:?}"
-    );
-    assert!(
-        caption.ends_with("take a look   "),
-        "caption stays right-aligned with three trailing cells:\n{caption:?}"
-    );
+        assert!(
+            caption.contains(text),
+            "caption is not clipped:\n{caption:?}"
+        );
+        assert!(
+            caption.ends_with(ends_with),
+            "caption is right-aligned with three trailing cells:\n{caption:?}"
+        );
+    }
 }
 
 #[test]
@@ -1028,21 +694,10 @@ fn render_provider_dashboard_without_pet_uses_main_stats_body() {
     let theme = Theme::fixed(false);
     let mut providers = two_provider_panels();
     providers[0].plan = Some("Claude Max Enterprise".to_owned());
-    let active = "claude".to_owned();
-
-    let (lines, _) = provider_dashboard_parts(
-        &theme,
-        &providers,
-        Some(&active),
-        DashboardMode::Tabbed,
-        None,
-        None,
-        None,
-        52,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
+    let rendered = Dashboard::tabbed(&theme, &providers)
+        .active("claude")
+        .width(52)
+        .text();
 
     let stats = rendered
         .lines()
@@ -1061,21 +716,10 @@ fn render_provider_dashboard_narrow_hides_io_tokens_and_version() {
     let theme = Theme::fixed(false);
     let mut providers = two_provider_panels();
     providers[0].plan = Some("Claude Max Enterprise".to_owned());
-    let active = "claude".to_owned();
-
-    let (lines, _) = provider_dashboard_parts(
-        &theme,
-        &providers,
-        Some(&active),
-        DashboardMode::Pet,
-        None,
-        None,
-        None,
-        38,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
+    let rendered = Dashboard::pets(&theme, &providers)
+        .active("claude")
+        .width(38)
+        .text();
 
     assert!(
         !rendered.contains("v2.1.158"),
@@ -1136,17 +780,8 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
 /// once, separated by a blank row, with no tab rail or tab hit surface.
 #[test]
 fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(vec![claude]);
-    snapshot.providers = two_provider_panels();
+    let mut snapshot = tabbed_provider_snapshot();
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Auto;
     let rendered = snapshot_to_screen(&snapshot, 54, 40);
 
     assert!(
@@ -1182,16 +817,7 @@ fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
 /// names the provider (the one place the de-named tabbed header never applies).
 #[test]
 fn render_single_provider_dashboard_has_no_tab_rail() {
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(vec![claude]);
+    let mut snapshot = tabbed_provider_snapshot();
     snapshot.providers = vec![provider_panel(
         "claude",
         "Claude",
@@ -1213,20 +839,9 @@ fn render_single_provider_dashboard_has_no_tab_rail() {
 
 #[test]
 fn render_provider_dashboard_shows_version_placeholder_when_unknown() {
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(vec![claude]);
-    snapshot.providers = two_provider_panels();
+    let mut snapshot = tabbed_provider_snapshot();
     snapshot.providers[0].version = None;
     snapshot.providers[0].plan = None;
-    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
     assert!(

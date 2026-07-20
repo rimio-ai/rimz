@@ -20,16 +20,10 @@ fn provider_bars_share_one_front_and_end_column() {
     let lines: Vec<String> = panels
         .iter()
         .flat_map(|panel| {
-            provider_panel_lines(
-                &theme,
-                &panels,
-                Some(panel.kind.as_str()),
-                DashboardMode::Tabbed,
-                30,
-                &crate::config::BudgetBarConfig::default(),
-                fixed_now(),
-            )
-            .0
+            Dashboard::tabbed(&theme, &panels)
+                .active(panel.kind.as_str())
+                .width(30)
+                .lines()
         })
         .map(|line| {
             line.spans

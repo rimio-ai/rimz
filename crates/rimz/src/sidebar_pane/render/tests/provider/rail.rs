@@ -15,20 +15,11 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
     // Stub (2) + `─ Claude ─` (10) + gap (2) + `─ Codex ─` (9) = 23 fits in
     // 28; `─ Pi ─` would land at 31, so it drops whole and `─` fills the
     // tail.
-    let (lines, hits) = provider_panel_lines(
-        &theme,
-        &panels,
-        Some("claude"),
-        DashboardMode::Tabbed,
-        28,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let tab_line: String = lines[0]
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
+    let dashboard = Dashboard::tabbed(&theme, &panels)
+        .active("claude")
+        .width(28);
+    let tab_line = rail_text(&dashboard.lines());
+    let hits = dashboard.hits();
     assert_eq!(tab_line, "─── Claude ──── Codex ──────");
     assert_eq!(
         hits.iter().map(provider_tab_kind).collect::<Vec<_>>(),
@@ -48,16 +39,9 @@ fn tab_rail_reserves_the_active_tab_before_fitting_the_ranked_rest() {
         provider_panel("codex", "Codex", 33, false, false, None),
         provider_panel("pi", "Pi", 28, false, false, None),
     ];
-    let (lines, hits) = provider_panel_lines(
-        &theme,
-        &panels,
-        Some("pi"),
-        DashboardMode::Tabbed,
-        20,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let tab_line = rail_text(&lines);
+    let dashboard = Dashboard::tabbed(&theme, &panels).active("pi").width(20);
+    let tab_line = rail_text(&dashboard.lines());
+    let hits = dashboard.hits();
     assert_eq!(tab_line, "─── Claude ──── Pi ─");
     assert_eq!(
         hits.iter()
@@ -74,28 +58,14 @@ fn tab_rail_reserves_the_active_tab_before_fitting_the_ranked_rest() {
 fn tab_rail_keeps_every_glyph_still_across_picks() {
     let theme = Theme::fixed(false);
     let panels = two_provider_panels();
-    let zones = crate::config::BudgetBarConfig::default();
-    let now = fixed_now();
-    let (claude_lines, claude_hits) = provider_panel_lines(
-        &theme,
-        &panels,
-        Some("claude"),
-        DashboardMode::Tabbed,
-        52,
-        &zones,
-        now,
-    );
-    let (codex_lines, codex_hits) = provider_panel_lines(
-        &theme,
-        &panels,
-        Some("codex"),
-        DashboardMode::Tabbed,
-        52,
-        &zones,
-        now,
-    );
+    let claude = Dashboard::tabbed(&theme, &panels)
+        .active("claude")
+        .width(52);
+    let codex = Dashboard::tabbed(&theme, &panels).active("codex").width(52);
+    let (claude_lines, codex_lines) = (claude.lines(), codex.lines());
     assert_eq!(
-        claude_hits, codex_hits,
+        claude.hits(),
+        codex.hits(),
         "the click targets hold still as the pick moves"
     );
     let (claude_rail, codex_rail) = (rail_text(&claude_lines), rail_text(&codex_lines));
@@ -115,26 +85,14 @@ fn tab_rail_keeps_every_glyph_still_across_picks() {
 fn tab_rail_caps_mark_the_pick_under_no_color() {
     let theme = Theme::fixed(true);
     let panels = two_provider_panels();
-    let zones = crate::config::BudgetBarConfig::default();
-    let now = fixed_now();
-    let (claude_lines, _) = provider_panel_lines(
-        &theme,
-        &panels,
-        Some("claude"),
-        DashboardMode::Tabbed,
-        52,
-        &zones,
-        now,
-    );
-    let (codex_lines, _) = provider_panel_lines(
-        &theme,
-        &panels,
-        Some("codex"),
-        DashboardMode::Tabbed,
-        52,
-        &zones,
-        now,
-    );
+    let claude_lines = Dashboard::tabbed(&theme, &panels)
+        .active("claude")
+        .width(52)
+        .lines();
+    let codex_lines = Dashboard::tabbed(&theme, &panels)
+        .active("codex")
+        .width(52)
+        .lines();
     let (claude_rail, codex_rail) = (rail_text(&claude_lines), rail_text(&codex_lines));
     assert!(
         claude_rail.contains("┤ Claude ├") && !claude_rail.contains("┤ Codex ├"),
@@ -157,21 +115,9 @@ fn tab_rail_caps_mark_the_pick_under_no_color() {
 fn pets_enabled_keeps_rail_to_provider_tabs_only() {
     let theme = Theme::fixed(false);
     let panels = two_provider_panels();
-    let zones = crate::config::BudgetBarConfig::default();
-    let active = "claude".to_owned();
-    let (lines, hits) = provider_dashboard_parts(
-        &theme,
-        &panels,
-        Some(&active),
-        DashboardMode::Pet,
-        None,
-        None,
-        None,
-        40,
-        &zones,
-        fixed_now(),
-    );
-    let rail = rail_text(&lines);
+    let dashboard = Dashboard::pets(&theme, &panels).active("claude").width(40);
+    let rail = rail_text(&dashboard.lines());
+    let hits = dashboard.hits();
 
     assert!(
         !rail.contains("Pets"),

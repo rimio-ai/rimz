@@ -159,19 +159,10 @@ fn render_fleet_store_keeps_zero_rows_for_missing_or_zero_tally() {
 
     let panel = provider_panel("claude", "Claude", 173, true, true, Some((25, 40)));
     let active = panel.kind.clone();
-    let (lines, _) = provider_dashboard_parts(
-        &theme,
-        std::slice::from_ref(&panel),
-        Some(&active),
-        DashboardMode::Pet,
-        None,
-        None,
-        None,
-        40,
-        &crate::config::BudgetBarConfig::default(),
-        fixed_now(),
-    );
-    let rendered = line_texts(&lines).join("\n");
+    let rendered = Dashboard::pets(&theme, std::slice::from_ref(&panel))
+        .active(&active)
+        .width(40)
+        .text();
 
     assert!(
         rendered.contains("W: $0.00") && rendered.contains("M: $0.00"),
