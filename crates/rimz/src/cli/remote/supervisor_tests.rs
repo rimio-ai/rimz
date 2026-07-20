@@ -61,6 +61,30 @@ fn fatal_session_message_includes_a_captured_attach_error() {
 }
 
 #[test]
+fn confirmed_transport_exit_maps_filtered_farewell_to_control_drop() {
+    assert_eq!(
+        session_error_summary(
+            Some("Shared connection to dev-box closed.\n"),
+            Some(rimz::remote::SSH_TRANSPORT_EXIT),
+            true,
+        ),
+        Some("SSH control connection dropped".to_owned())
+    );
+    assert_eq!(
+        session_error_summary(
+            Some("Shared connection to dev-box closed.\n"),
+            Some(0),
+            true,
+        ),
+        None
+    );
+    assert_eq!(
+        session_error_summary(Some("Permission denied (publickey).\n"), Some(2), true,),
+        Some("Permission denied (publickey).".to_owned())
+    );
+}
+
+#[test]
 fn fatal_session_message_explains_minor_version_bypass() {
     let message = fatal_session_message(
         rimz::remote::REMOTE_VERSION_SKEW_EXIT,

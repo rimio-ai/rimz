@@ -319,6 +319,14 @@ fn attach_error_summary_filters_detach_noise_and_names_control_failures() {
         attach_error_summary("\nConnection to dev-box closed.\n"),
         None
     );
+    assert_eq!(
+        attach_error_summary("Shared connection to dev-box closed.\n"),
+        None
+    );
+    assert_eq!(
+        attach_error_summary("Connection to dev-box closed by remote host.\n"),
+        None
+    );
 }
 
 #[test]

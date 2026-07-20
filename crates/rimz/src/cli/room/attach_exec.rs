@@ -137,7 +137,7 @@ pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
     emit_attach_mark();
-    let mut command = spec.to_command();
+    let mut command = attach_command(spec);
     let err = command.exec();
     Err::<(), _>(err).with_context(|| format!("execing `{}`", spec.display_line()))
 }
@@ -145,8 +145,7 @@ pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
 #[cfg(not(unix))]
 pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
     emit_attach_mark();
-    let status = spec
-        .to_command()
+    let status = attach_command(spec)
         .status()
         .with_context(|| format!("running `{}`", spec.display_line()))?;
     if !status.success() {
@@ -171,6 +170,12 @@ fn emit_attach_mark() {
 
 fn attach_mark_enabled(value: Option<&OsStr>, stdout_is_terminal: bool) -> bool {
     stdout_is_terminal && value.is_some_and(|value| !value.is_empty())
+}
+
+fn attach_command(spec: &rimz::mux::CommandSpec) -> std::process::Command {
+    let mut command = spec.to_command();
+    command.env_remove(rimz::remote::ATTACH_MARK_ENV);
+    command
 }
 
 fn print_attach_command(spec: &rimz::mux::CommandSpec) {
@@ -223,5 +228,14 @@ mod tests {
         assert!(!attach_mark_enabled(Some(OsStr::new("")), true));
         assert!(!attach_mark_enabled(None, true));
         assert!(!attach_mark_enabled(Some(OsStr::new("1")), false));
+    }
+
+    #[test]
+    fn attach_marker_does_not_reach_the_multiplexer_environment() {
+        let command = attach_command(&rimz::mux::CommandSpec::new("mux"));
+
+        assert!(command.get_envs().any(|(key, value)| {
+            key == OsStr::new(rimz::remote::ATTACH_MARK_ENV) && value.is_none()
+        }));
     }
 }

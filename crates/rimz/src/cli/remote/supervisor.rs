@@ -155,10 +155,11 @@ pub(super) fn supervise_remote(
         }
         let mut outcome = outcome?;
         outcome.established |= confirmed_master;
-        let summary = outcome
-            .stderr
-            .as_deref()
-            .and_then(rimz::remote::attach_error_summary);
+        let summary = session_error_summary(
+            outcome.stderr.as_deref(),
+            outcome.status.code(),
+            confirmed_master,
+        );
         drop(probe);
         drop(ready_master.take());
         if outcome.established {
@@ -298,13 +299,7 @@ fn run_ssh_session(
     let mut child = command
         .spawn()
         .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)))?;
-    let stderr = child.stderr.take().map(|mut stderr| {
-        std::thread::spawn(move || {
-            let mut output = String::new();
-            let _ = stderr.read_to_string(&mut output);
-            output
-        })
-    });
+    let stderr = drain_stderr(&mut child);
     let started = Instant::now();
     let mut update = link.begin_session();
     loop {
@@ -339,6 +334,19 @@ fn run_ssh_session(
 
 fn finish_session_stderr(stderr: Option<std::thread::JoinHandle<String>>) -> Option<String> {
     stderr.map(|reader| reader.join().unwrap_or_default())
+}
+
+fn session_error_summary(
+    stderr: Option<&str>,
+    exit_code: Option<i32>,
+    confirmed_master: bool,
+) -> Option<String> {
+    stderr
+        .and_then(rimz::remote::attach_error_summary)
+        .or_else(|| {
+            (confirmed_master && exit_code == Some(rimz::remote::SSH_TRANSPORT_EXIT))
+                .then(|| "SSH control connection dropped".to_owned())
+        })
 }
 
 fn verify_zombie(
@@ -1023,13 +1031,7 @@ impl MasterAttempt {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()?;
-        let stderr = child.stderr.take().map(|mut stderr| {
-            std::thread::spawn(move || {
-                let mut output = String::new();
-                let _ = stderr.read_to_string(&mut output);
-                output
-            })
-        });
+        let stderr = drain_stderr(&mut child);
         Ok(Self {
             child: Some(child),
             stderr,
@@ -1077,6 +1079,16 @@ impl MasterAttempt {
             remove_control_path(&self.control_path);
         }
     }
+}
+
+fn drain_stderr(child: &mut Child) -> Option<std::thread::JoinHandle<String>> {
+    child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut output = String::new();
+            let _ = stderr.read_to_string(&mut output);
+            output
+        })
+    })
 }
 
 impl Drop for MasterAttempt {

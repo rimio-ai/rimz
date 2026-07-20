@@ -779,7 +779,7 @@ pub fn ssh_error_summary(stderr: &str) -> Option<String> {
 pub fn attach_error_summary(stderr: &str) -> Option<String> {
     let line = stderr.lines().rev().find(|line| {
         let line = line.trim();
-        !line.is_empty() && !(line.starts_with("Connection to ") && line.ends_with(" closed."))
+        !line.is_empty() && !is_ssh_close_notice(line)
     })?;
     let lower = line.to_ascii_lowercase();
     if lower.contains("mux_client")
@@ -789,6 +789,11 @@ pub fn attach_error_summary(stderr: &str) -> Option<String> {
         return Some("SSH control connection dropped".to_owned());
     }
     Some(summarize_ssh_line(line))
+}
+
+fn is_ssh_close_notice(line: &str) -> bool {
+    (line.starts_with("Connection to ") || line.starts_with("Shared connection to "))
+        && (line.ends_with(" closed.") || line.ends_with(" closed by remote host."))
 }
 
 fn summarize_ssh_line(line: &str) -> String {
