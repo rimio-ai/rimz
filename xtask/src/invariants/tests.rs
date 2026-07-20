@@ -421,18 +421,18 @@ fn tests_path_component_matches_nested_test_trees() {
 }
 
 #[test]
-fn ui_color_exemptions_cover_the_pipeline_and_tests() {
-    // The color pipeline owns the named-ANSI vocabulary.
+fn ui_color_exemptions_cover_the_carrier_edge_and_tests() {
+    // The render-side theme module mints ratatui carriers; ansi.rs quantizes them.
     assert!(ui_color_exempt(Path::new("theme.rs")));
     assert!(ui_color_exempt(Path::new("theme/component.rs")));
-    assert!(ui_color_exempt(Path::new("theme/semantic.rs")));
     assert!(ui_color_exempt(Path::new("ansi.rs")));
-    assert!(ui_color_exempt(Path::new("scheme.rs")));
-    assert!(ui_color_exempt(Path::new("oklab.rs")));
     // Tests assert carrier→slot mappings, inline or in a tests tree.
     assert!(ui_color_exempt(Path::new("labels/tests/meters.rs")));
     assert!(ui_color_exempt(Path::new("tests/process.rs")));
-    // Ordinary render code must name intent.
+    // Ordinary render code must name intent. Scheme parsing and OKLab math live
+    // in the shared theme core, so those names carry no exemption here.
+    assert!(!ui_color_exempt(Path::new("scheme.rs")));
+    assert!(!ui_color_exempt(Path::new("oklab.rs")));
     assert!(!ui_color_exempt(Path::new("compose.rs")));
     assert!(!ui_color_exempt(Path::new("labels/meters.rs")));
     assert!(!ui_color_exempt(Path::new("sections/agent_card/gauge.rs")));

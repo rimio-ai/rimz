@@ -625,11 +625,11 @@ fn path_has_tests_component(path: &Path) -> bool {
 /// stays the one place hue is decided. The only `Color::` path render code may
 /// write is the `Color::Reset` sentinel: the 16 named ANSI variants are intent,
 /// and `Color::Indexed`/`Color::Rgb` constructors are already-resolved emit
-/// values the theme pipeline mints, never hand-picked in render. The theme
-/// module (which owns the Raw→Semantic→Component→emit pipeline and the depth
-/// quantizer), the Alacritty parser, and the OKLab math are exempt, as are test
-/// modules — tests legitimately assert carrier→slot mappings. See
-/// docs/internals/theme.md and docs/contributing/rust-conventions.md.
+/// values the theme pipeline mints, never hand-picked in render. The render-side
+/// theme module (which resolves `Tone` into ratatui carriers) and the ANSI depth
+/// quantizer are exempt, as are test modules — tests legitimately assert
+/// carrier→slot mappings. See docs/internals/theme.md and
+/// docs/contributing/rust-conventions.md.
 fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
     let render_root = root.join("crates/rimz/src/sidebar_pane/render");
     let mut violations = Vec::new();
@@ -663,16 +663,17 @@ fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
     );
 }
 
-/// Render files that own or connect the color pipeline (theme module, depth
-/// quantizer, Alacritty parser, OKLab math), plus every test module.
+/// Render files that connect the color pipeline to the screen: the render-side
+/// theme module and its component tokens, which turn a `Tone` into a ratatui
+/// carrier, and `ansi.rs`, which quantizes that carrier down to an indexed
+/// terminal. Test modules are exempt too. Scheme parsing and the OKLab math live
+/// in the shared theme core, outside this scan entirely.
 fn ui_color_exempt(relative: &Path) -> bool {
     let file = relative.file_name().and_then(OsStr::to_str);
-    matches!(
-        file,
-        Some("theme.rs" | "ansi.rs" | "scheme.rs" | "oklab.rs")
-    ) || relative
-        .components()
-        .any(|component| component.as_os_str() == OsStr::new("theme"))
+    matches!(file, Some("theme.rs" | "ansi.rs"))
+        || relative
+            .components()
+            .any(|component| component.as_os_str() == OsStr::new("theme"))
         || path_has_tests_component(relative)
         || file.is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
 }
