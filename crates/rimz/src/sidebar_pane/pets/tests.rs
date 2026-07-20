@@ -1,6 +1,8 @@
 use super::*;
 use crate::config::{PetsGlyphMode, PixelMode};
 
+const REFRESH_MS: u16 = 100;
+
 fn frame(
     action: PetAction,
     phase: u64,
@@ -19,6 +21,19 @@ fn frame(
         motion_enabled,
         unread_triggered,
     }
+}
+
+/// The common frame: a cell-tier body at the default refresh, motion on, no
+/// unread trigger.
+fn cell_frame(action: PetAction, phase: u64) -> PetViewFrame {
+    frame(
+        action,
+        phase,
+        REFRESH_MS,
+        Some(PetRenderTier::Cell),
+        true,
+        false,
+    )
 }
 
 #[test]
@@ -74,17 +89,7 @@ fn disabled_config_clears_runtime_state() {
     };
     assert!(
         assets
-            .view(
-                &PetsConfig::default(),
-                frame(
-                    PetAction::Idle,
-                    0,
-                    100,
-                    Some(PetRenderTier::Cell),
-                    true,
-                    false,
-                ),
-            )
+            .view(&PetsConfig::default(), cell_frame(PetAction::Idle, 0))
             .is_none()
     );
     assert_eq!(assets.previous_action, None);
@@ -108,25 +113,8 @@ fn empty_pet_selector_rests_with_no_pet() {
         caption: "pet unavailable".to_owned(),
         failed_at_phase: 0,
     });
-    let config = PetsConfig {
-        enabled: true,
-        pet: "  ".to_owned(),
-        glyphs: PetsGlyphMode::Auto,
-        cell_aspect: None,
-        voice: true,
-    };
     let view = assets
-        .view(
-            &config,
-            frame(
-                PetAction::Idle,
-                0,
-                100,
-                Some(PetRenderTier::Cell),
-                true,
-                false,
-            ),
-        )
+        .view(&config_for("  "), cell_frame(PetAction::Idle, 0))
         .expect("enabled pets produce a view");
     assert_eq!(view.body, None);
     assert_eq!(view.caption.as_deref(), Some("no pet selected"));
@@ -144,32 +132,18 @@ fn empty_pet_selector_rests_with_no_pet() {
 #[test]
 fn local_pet_path_begins_loading_under_its_own_id() {
     let mut assets = PetAssets::default();
-    let config = PetsConfig {
-        enabled: true,
-        pet: "/no/such/pet/sheet.webp".to_owned(),
-        glyphs: PetsGlyphMode::Auto,
-        cell_aspect: None,
-        voice: true,
-    };
     // `poll_loader` runs before the spawn, so the first view always reports
     // loading regardless of how fast the loader thread fails the read.
     let view = assets
         .view(
-            &config,
-            frame(
-                PetAction::Idle,
-                0,
-                100,
-                Some(PetRenderTier::Cell),
-                true,
-                false,
-            ),
+            &config_for("/no/such/pet/sheet.webp"),
+            cell_frame(PetAction::Idle, 0),
         )
         .expect("enabled pets produce a view");
     assert_eq!(view.body, None);
     assert_eq!(
         view.frame_interval,
-        Some(crate::sidebar::timing::animation_frame(100)),
+        Some(crate::sidebar::timing::animation_frame(REFRESH_MS)),
         "a local-path selector uses loading cadence"
     );
     assert!(
@@ -184,16 +158,11 @@ fn local_pet_path_begins_loading_under_its_own_id() {
 #[test]
 fn missing_body_size_does_not_start_asset_loading() {
     let mut assets = PetAssets::default();
-    let config = PetsConfig {
-        enabled: true,
-        pet: "codex".to_owned(),
-        glyphs: PetsGlyphMode::Auto,
-        cell_aspect: None,
-        voice: true,
-    };
-
     let view = assets
-        .view(&config, frame(PetAction::Idle, 0, 100, None, true, false))
+        .view(
+            &enabled_config(),
+            frame(PetAction::Idle, 0, REFRESH_MS, None, true, false),
+        )
         .expect("enabled pets produce a view");
 
     assert_eq!(view.body, None);
@@ -214,26 +183,10 @@ fn failed_loader_settles_without_immediate_retry() {
         key: cell_key(),
         receiver,
     });
-    let config = PetsConfig {
-        enabled: true,
-        pet: "codex".to_owned(),
-        glyphs: PetsGlyphMode::Auto,
-        cell_aspect: None,
-        voice: true,
-    };
+    let config = enabled_config();
 
     let view = assets
-        .view(
-            &config,
-            frame(
-                PetAction::Idle,
-                0,
-                100,
-                Some(PetRenderTier::Cell),
-                true,
-                false,
-            ),
-        )
+        .view(&config, cell_frame(PetAction::Idle, 0))
         .expect("enabled pets produce a view");
     assert_eq!(view.frame_interval, None);
     assert_eq!(view.caption.as_deref(), Some("pet unavailable"));
@@ -241,17 +194,7 @@ fn failed_loader_settles_without_immediate_retry() {
     assert!(assets.failed.is_some());
 
     let view = assets
-        .view(
-            &config,
-            frame(
-                PetAction::Idle,
-                1,
-                100,
-                Some(PetRenderTier::Cell),
-                true,
-                false,
-            ),
-        )
+        .view(&config, cell_frame(PetAction::Idle, 1))
         .expect("enabled pets produce a view");
     assert_eq!(view.frame_interval, None);
     assert!(assets.loading.is_none());
@@ -271,16 +214,19 @@ fn retry_due_waits_for_cooldown_then_clears() {
 
 #[test]
 fn jump_plays_once_per_trigger_then_settles() {
-    let refresh_ms = 100;
     let config = enabled_config();
-    let body = Some(PetRenderTier::Cell);
     for (previous, action, unread_triggered, steady_track) in [
-        (PetAction::Running, PetAction::Ask, false, model::TRACK_ASK),
+        (
+            PetAction::Running,
+            PetAction::Ask,
+            false,
+            model::PetTrack::Ask,
+        ),
         (
             PetAction::Running,
             PetAction::Running,
             true,
-            model::TRACK_RUNNING,
+            model::PetTrack::Running,
         ),
     ] {
         let mut assets = loaded_cell_assets(Some(previous));
@@ -288,32 +234,36 @@ fn jump_plays_once_per_trigger_then_settles() {
         let view = assets
             .view(
                 &config,
-                frame(action, 10, refresh_ms, body, true, unread_triggered),
+                frame(
+                    action,
+                    10,
+                    REFRESH_MS,
+                    Some(PetRenderTier::Cell),
+                    true,
+                    unread_triggered,
+                ),
             )
             .expect("enabled pets produce a view");
         assert_eq!(
             view.frame_interval,
             Some(model::track_frame_duration(
                 model::PetTrack::Jumping,
-                refresh_ms
+                REFRESH_MS
             ))
         );
         assert_eq!(assets.jump_started_phase, Some(10));
 
         let jump = model::animations().get(model::PetTrack::Jumping);
         let phases = jump
-            .loop_duration(refresh_ms)
+            .loop_duration(REFRESH_MS)
             .as_millis()
-            .div_ceil(u128::from(refresh_ms));
+            .div_ceil(u128::from(REFRESH_MS));
         let view = assets
-            .view(
-                &config,
-                frame(action, 10 + phases as u64, refresh_ms, body, true, false),
-            )
+            .view(&config, cell_frame(action, 10 + phases as u64))
             .expect("enabled pets produce a view");
         assert_eq!(
             view.frame_interval,
-            Some(model::track_frame_duration(steady_track, refresh_ms))
+            Some(model::track_frame_duration(steady_track, REFRESH_MS))
         );
         assert_eq!(assets.jump_started_phase, None);
     }
@@ -328,7 +278,7 @@ fn static_mode_skips_transition_jump() {
             frame(
                 PetAction::Idle,
                 10,
-                100,
+                REFRESH_MS,
                 Some(PetRenderTier::Cell),
                 false,
                 false,
@@ -343,21 +293,18 @@ fn static_mode_skips_transition_jump() {
 #[test]
 fn pixel_view_resolves_sprite_without_cell_grid() {
     let mut assets = loaded_pixel_assets(Some(PetAction::Running));
-    let config = enabled_config();
 
     let view = assets
         .view(
-            &config,
-            PetViewFrame {
-                action: PetAction::Idle,
-                phase: 0,
-                refresh_ms: 100,
-                body: Some(PetRenderTier::Pixel),
-                pixel_id_base: 0x120000,
-                cell_aspect: CellAspect::NEUTRAL,
-                motion_enabled: true,
-                unread_triggered: false,
-            },
+            &enabled_config(),
+            frame(
+                PetAction::Idle,
+                0,
+                REFRESH_MS,
+                Some(PetRenderTier::Pixel),
+                true,
+                false,
+            ),
         )
         .expect("enabled pets produce a view");
 
@@ -369,7 +316,10 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
     assert_eq!(pixel.image_id, 0x120000 + pixel.sprite_index as u32);
     assert_eq!(
         view.frame_interval,
-        Some(model::track_frame_duration(model::PetTrack::Jumping, 100))
+        Some(model::track_frame_duration(
+            model::PetTrack::Jumping,
+            REFRESH_MS
+        ))
     );
     assert!(
         assets
@@ -445,14 +395,18 @@ fn observe_unread_rows_triggers_only_on_new_rows() {
     assert!(assets.observe_unread_rows(["agent-1".to_owned(), "agent-2".to_owned()]));
 }
 
-fn enabled_config() -> PetsConfig {
+fn config_for(pet: &str) -> PetsConfig {
     PetsConfig {
         enabled: true,
-        pet: "codex".to_owned(),
+        pet: pet.to_owned(),
         glyphs: PetsGlyphMode::Auto,
         cell_aspect: None,
         voice: true,
     }
+}
+
+fn enabled_config() -> PetsConfig {
+    config_for("codex")
 }
 
 fn cell_key() -> PreparationKey {

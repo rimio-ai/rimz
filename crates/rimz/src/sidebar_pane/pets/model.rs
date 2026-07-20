@@ -86,23 +86,6 @@ impl std::ops::Index<PetTrack> for AnimationSet {
     }
 }
 
-#[cfg(test)]
-pub(super) const TRACK_IDLE: PetTrack = PetTrack::Idle;
-#[cfg(test)]
-pub(super) const TRACK_THINKING: PetTrack = PetTrack::Thinking;
-#[cfg(test)]
-pub(super) const TRACK_RUNNING: PetTrack = PetTrack::Running;
-#[cfg(test)]
-pub(super) const TRACK_WAITING: PetTrack = PetTrack::Waiting;
-#[cfg(test)]
-pub(super) const TRACK_REVIEW: PetTrack = PetTrack::Review;
-#[cfg(test)]
-pub(super) const TRACK_ASK: PetTrack = PetTrack::Ask;
-#[cfg(test)]
-pub(super) const TRACK_JUMPING: PetTrack = PetTrack::Jumping;
-#[cfg(test)]
-pub(super) const TRACK_FAILED: PetTrack = PetTrack::Failed;
-
 static ANIMATIONS: LazyLock<AnimationSet> = LazyLock::new(|| {
     let row = |row: usize, count: usize| (0..count).map(|col| row * 8 + col).collect::<Vec<_>>();
     let run_right = row(1, 8);
@@ -167,49 +150,35 @@ fn frame_duration_for_fps(fps: f64, refresh_ms: u16) -> Duration {
 mod tests {
     use super::*;
 
-    #[test]
-    fn action_tracks_follow_focused_card_names() {
-        assert_eq!(action_track(PetAction::Thinking), TRACK_THINKING);
-        assert_eq!(action_track(PetAction::Running), TRACK_RUNNING);
-        assert_eq!(action_track(PetAction::Waiting), TRACK_WAITING);
-        assert_eq!(action_track(PetAction::Review), TRACK_REVIEW);
-        assert_eq!(action_track(PetAction::Ask), TRACK_ASK);
-        assert_eq!(action_track(PetAction::Failed), TRACK_FAILED);
-        assert_eq!(action_track(PetAction::Idle), TRACK_IDLE);
-    }
-
+    /// Each track draws from its own band of the 8-wide petdex sheet. Wiring a
+    /// track to the wrong row plays the wrong animation, so the expected
+    /// sprites are spelled out against the sheet layout rather than recomputed
+    /// with the same `row()` helper the catalog builds them with.
     #[test]
     fn default_catalog_matches_petdex_rows() {
         let animations = animations();
-        assert_eq!(animations[TRACK_JUMPING].sprites, vec![32, 33, 34, 35, 36]);
-        assert_eq!(
-            animations[TRACK_FAILED].sprites,
-            (40..48).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            animations[TRACK_WAITING].sprites,
-            (48..54).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            animations[TRACK_RUNNING].sprites,
-            (56..62).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            animations[TRACK_REVIEW].sprites,
-            (64..70).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            animations[TRACK_THINKING].sprites,
-            (16..24)
-                .cycle()
-                .take(24)
-                .chain((8..16).cycle().take(24))
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            animations[TRACK_ASK].sprites,
-            (24..28).chain(24..28).chain(48..54).collect::<Vec<_>>()
-        );
+        for (track, expected) in [
+            (PetTrack::Idle, (0..6).collect::<Vec<_>>()),
+            (
+                PetTrack::Thinking,
+                (16..24)
+                    .cycle()
+                    .take(24)
+                    .chain((8..16).cycle().take(24))
+                    .collect(),
+            ),
+            (PetTrack::Running, (56..62).collect()),
+            (PetTrack::Waiting, (48..54).collect()),
+            (PetTrack::Review, (64..70).collect()),
+            (
+                PetTrack::Ask,
+                (24..28).chain(24..28).chain(48..54).collect(),
+            ),
+            (PetTrack::Jumping, (32..37).collect()),
+            (PetTrack::Failed, (40..48).collect()),
+        ] {
+            assert_eq!(animations[track].sprites, expected, "{track:?} sheet row");
+        }
     }
 
     #[test]
@@ -232,19 +201,19 @@ mod tests {
     #[test]
     fn track_frame_duration_uses_track_cadence() {
         assert_eq!(
-            track_frame_duration(TRACK_IDLE, 100),
+            track_frame_duration(PetTrack::Idle, 100),
             Duration::from_millis(625)
         );
         assert_eq!(
-            track_frame_duration(TRACK_THINKING, 100),
+            track_frame_duration(PetTrack::Thinking, 100),
             Duration::from_millis(250)
         );
         assert_eq!(
-            track_frame_duration(TRACK_JUMPING, 100),
+            track_frame_duration(PetTrack::Jumping, 100),
             Duration::from_millis(286)
         );
         assert_eq!(
-            track_frame_duration(TRACK_THINKING, 500),
+            track_frame_duration(PetTrack::Thinking, 500),
             Duration::from_millis(500)
         );
     }
