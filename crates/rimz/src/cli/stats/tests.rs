@@ -628,6 +628,18 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
 }
 
 #[test]
+fn unavailable_message_ellipsizes_to_the_panel_width() {
+    let message = ellipsize(
+        "Spending refresh unavailable - retrying. spending service refresh already in progress",
+        80,
+    );
+
+    assert_eq!(display_width(&message), 80);
+    assert!(message.ends_with('…'));
+    assert_eq!(ellipsize("short", 80), "short");
+}
+
+#[test]
 fn refresh_result_carries_success_error_and_panic() {
     let success = refresh_result(|| {
         let mut stats = Stats {

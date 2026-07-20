@@ -356,13 +356,38 @@ pub(super) fn render_panel(
 pub(super) fn render_unavailable(w: &mut impl Write, error: &str, nl: &str) -> Result<()> {
     let geometry = PanelGeometry::current();
     let mut lines = header_lines(geometry.panel_width);
-    let message = format!("Spending refresh unavailable - retrying. {error}");
+    let message = ellipsize(
+        &format!("Spending refresh unavailable - retrying. {error}"),
+        geometry.panel_width,
+    );
     lines.push(center(
         &render::paint(render::palette::muted(), &message),
-        message.chars().count(),
+        display_width(&message),
         geometry.panel_width,
     ));
     emit(w, &lines, geometry.outer, nl)
+}
+
+pub(super) fn ellipsize(text: &str, max_cells: usize) -> String {
+    if display_width(text) <= max_cells {
+        return text.to_owned();
+    }
+    if max_cells == 0 {
+        return String::new();
+    }
+
+    let mut clipped = String::new();
+    let mut used = 0;
+    for character in text.chars() {
+        let width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used + width > max_cells - 1 {
+            break;
+        }
+        used += width;
+        clipped.push(character);
+    }
+    clipped.push('…');
+    clipped
 }
 
 pub(super) fn header_lines(panel_width: usize) -> Vec<String> {
