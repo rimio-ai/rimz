@@ -540,6 +540,10 @@ pub struct SplitPaneOptions {
     /// while foreground children churn. tmux ignores this because
     /// `pane_start_command` already preserves launch identity.
     pub title: Option<String>,
+    /// Close the pane when its command exits, matching `close_on_exit true` on
+    /// layout-born managed panes. tmux already does this with its default
+    /// `remain-on-exit off` setting.
+    pub close_on_exit: bool,
     pub env: BTreeMap<String, String>,
     pub placement: SplitPlacement,
     /// Move focus to the new pane. `false` leaves focus on the splitting pane

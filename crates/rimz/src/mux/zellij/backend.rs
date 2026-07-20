@@ -598,6 +598,9 @@ impl MuxBackend for ZellijBackend {
         if let Some(tab_id) = target_tab_id {
             spec = spec.args(["--tab-id".to_owned(), tab_id.to_string()]);
         }
+        if opts.close_on_exit {
+            spec = spec.arg("--close-on-exit");
+        }
         if let Some(title) = opts.title {
             spec = spec.args(["--name".to_owned(), title]);
         }

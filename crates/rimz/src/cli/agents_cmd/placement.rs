@@ -107,6 +107,7 @@ fn prepare_resolved(
             cwd: Some(cwd.to_string_lossy().into_owned()),
             command: Some(single_pane_argv(&panes)?),
             title: None,
+            close_on_exit: false,
             env: identity_env,
             placement: SplitPlacement::Directional(direction),
             focus: !background,

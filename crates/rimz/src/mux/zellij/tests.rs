@@ -245,6 +245,49 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn split_pane_emits_close_on_exit_only_when_requested() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+exit 0
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+
+    backend
+        .split_pane(SplitPaneOptions {
+            close_on_exit: true,
+            focus: true,
+            ..Default::default()
+        })
+        .expect("self-closing split");
+    backend
+        .split_pane(SplitPaneOptions {
+            focus: true,
+            ..Default::default()
+        })
+        .expect("default split");
+
+    let log = shim_log(&temp);
+    let mut commands = log.lines();
+    assert!(
+        commands
+            .next()
+            .is_some_and(|command| command.contains("--close-on-exit")),
+        "{log}"
+    );
+    assert!(
+        commands
+            .next()
+            .is_some_and(|command| !command.contains("--close-on-exit")),
+        "{log}"
+    );
+    assert!(commands.next().is_none(), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
 fn list_panes_uses_fresh_topology_and_honors_explicit_floor() {
     let room = TestRoom::new();
     let floor = unix_now_ms();

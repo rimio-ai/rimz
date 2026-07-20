@@ -72,6 +72,8 @@ The pass starts by refusing two situations. If no live pane carries the `rimzd` 
 
 Otherwise closes come first, then spawns, and each spawn is its own round trip: place one pane, wait for its marker to appear in a fresh listing (5 attempts, 100ms apart), and plan the next placement from that new listing. This is what lets a wholly missing runtime column rebuild as a column — the first restored pane becomes the anchor the second one places against. A pane that never settles ends the pass with `Retry`.
 
+A repaired pane carries close-on-exit like its layout-born twin, so an exited managed command removes its pane instead of leaving a held pane for the next repair pass to route around.
+
 Placement follows the spec order within a column. A missing pane is placed *below* the nearest preceding live member of its own column, falling back to any live member. When the column has no members at all, it is created to the right of its structural neighbor: content splits off the sidebar, and runtime splits off the first live content pane, or the sidebar if content is gone too.
 
 Placement is decided when a pane is created and never revisited. A pane the specification is satisfied with stays where it is, so panes an older binary placed differently keep their position until they are closed or the view is reborn.

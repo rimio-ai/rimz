@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use rimz::ids::WorkspaceId;
-use rimz::mux::{MuxBackend, ZellijBackend, zellij};
+use rimz::mux::{MuxBackend, SplitPaneOptions, SplitTarget, ZellijBackend, zellij};
 use tempfile::TempDir;
 
 use crate::common::CommandTimeoutExt;
@@ -92,6 +92,55 @@ fn sidebar_self_closes_when_its_tab_empties() {
         .join("ws_0123456789abcdef01234567")
         .join("heartbeat");
     wait_for_no_sidebar_heartbeat(&heartbeat_dir, Duration::from_secs(15));
+}
+
+#[test]
+fn split_pane_close_on_exit_removes_a_failed_command() {
+    require_zellij!();
+
+    let session = ZellijSession::spawn(unique_session_name("paneclose"));
+    let xdg = session.xdg.path();
+    let target = wait_for_pane_count(xdg, &session.name, 1)[0]
+        .pane_id
+        .clone();
+    let marker_dir = TempDir::new().expect("marker tempdir");
+    let marker = marker_dir.path().join("started");
+
+    ZellijBackend::with_runtime_dir(xdg)
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: session.name.clone(),
+                pane_id: target,
+            },
+            command: Some(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "printf started > \"$1\"; exit 7".to_owned(),
+                "rimz-close-on-exit".to_owned(),
+                marker.to_string_lossy().into_owned(),
+            ]),
+            title: Some("rimz-close-on-exit".to_owned()),
+            close_on_exit: true,
+            focus: false,
+            ..Default::default()
+        })
+        .expect("split self-closing pane");
+
+    poll_until(
+        Duration::from_secs(10),
+        || Ok::<_, String>(marker.exists()),
+        |exists| *exists,
+        "self-closing command start",
+    );
+    poll_until(
+        Duration::from_secs(10),
+        || {
+            list_panes(xdg, &session.name)
+                .map(|snapshot| snapshot.panes.iter().filter(|pane| !pane.is_plugin).count())
+        },
+        |count| *count == 1,
+        "failed split pane removal",
+    );
 }
 
 fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) {

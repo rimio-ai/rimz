@@ -534,6 +534,7 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
             cwd: Some(workspace.worktree_root.display().to_string()),
             command: None,
             title: None,
+            close_on_exit: false,
             env: rimz::room::pane_identity_env(&workspace, None, true),
             placement: SplitPlacement::Directional(direction),
             focus: true,

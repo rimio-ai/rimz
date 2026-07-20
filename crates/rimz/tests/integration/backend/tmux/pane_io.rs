@@ -20,6 +20,7 @@ fn split_pane_injects_env_vars() {
                 "printf RIMZ_TEST_VAR=$RIMZ_TEST_VAR; sleep 5".to_owned(),
             ]),
             title: None,
+            close_on_exit: false,
             env,
             placement: SplitPlacement::default(),
             focus: false,

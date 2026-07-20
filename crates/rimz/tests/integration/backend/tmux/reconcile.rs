@@ -198,6 +198,7 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
             cwd: None,
             command: Some(foreign_command),
             title: None,
+            close_on_exit: false,
             env: BTreeMap::new(),
             placement: SplitPlacement::default(),
             focus: false,

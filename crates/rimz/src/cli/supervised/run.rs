@@ -250,6 +250,7 @@ fn open_attempt_pane(
                     cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
                     command: Some(pane.argv.clone()),
                     title: None,
+                    close_on_exit: false,
                     env: rimz::room::pane_identity_env(
                         &prepared.workspace,
                         prepared.room_channel.as_deref(),

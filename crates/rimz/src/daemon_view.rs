@@ -374,6 +374,8 @@ fn split_managed_pane(
         cwd: Some(pane.cwd.to_string_lossy().into_owned()),
         command: Some(pane.argv.clone()),
         title: Some(title),
+        // Match the layout-born managed pane: an exited command leaves no pane.
+        close_on_exit: true,
         env: Default::default(),
         placement: SplitPlacement::Directional(direction),
         focus: false,

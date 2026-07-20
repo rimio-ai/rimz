@@ -136,6 +136,7 @@ pub(super) fn resume_lane(
                     command: Some(command),
                     env: rimz::room::pane_identity_env(&lane_workspace, channel.as_deref(), false),
                     title: None,
+                    close_on_exit: false,
                     placement: SplitPlacement::Directional(direction),
                     focus: !bg,
                 })?;

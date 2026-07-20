@@ -148,6 +148,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
             cwd: Some(cwd.display().to_string()),
             command: Some(argv),
             title: None,
+            close_on_exit: false,
             env,
             placement: rimz::mux::SplitPlacement::Directional(direction),
             focus: true,
