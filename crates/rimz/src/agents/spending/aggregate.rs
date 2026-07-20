@@ -1,6 +1,6 @@
 //! Window aggregation, scoped tallies, and cross-file deduplication for spending walks.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,7 @@ use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
 use super::user_input::UserInputRecord;
 
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
+type FastHashSet<K> = HashSet<K, foldhash::fast::RandomState>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendWindow {
@@ -182,9 +183,12 @@ pub(crate) fn aggregate_counted_rollups(
         .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
     let mut workspace_day = SpendWindow::default();
     let mut provider_day = BTreeMap::<String, SpendWindow>::new();
-    let mut workspace_day_sessions = BTreeSet::new();
-    let mut workspace_session_totals = BTreeMap::<SessionKey<'_>, (u64, f64)>::new();
-    let mut provider_day_sessions = BTreeMap::<String, BTreeSet<SessionKey<'_>>>::new();
+    // These collections only establish session uniqueness. Hashing avoids
+    // repeatedly ordering transcript paths while the final public maps retain
+    // their deterministic `BTreeMap` representation.
+    let mut workspace_day_sessions = FastHashSet::default();
+    let mut workspace_session_totals = FastHashMap::<SessionKey<'_>, (u64, f64)>::default();
+    let mut provider_day_sessions = BTreeMap::<String, FastHashSet<SessionKey<'_>>>::new();
     let mut days = BTreeMap::<i64, DaySpend>::new();
     let mut models = BTreeMap::<&str, SpendTally>::new();
 
@@ -364,7 +368,10 @@ fn add_spending_sessions(
     now_secs: u64,
     headline_cutoff: u64,
 ) {
-    let mut threads: HashMap<SessionKey<'_>, (&'static str, u64)> = HashMap::new();
+    let mut threads = FastHashMap::<SessionKey<'_>, (&'static str, u64)>::with_capacity_and_hasher(
+        files.len(),
+        foldhash::fast::RandomState::default(),
+    );
     for (adapter, file) in files {
         let cache_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&cache_key) else {
@@ -399,7 +406,7 @@ fn add_scoped_sessions(
     now_secs: u64,
     headline_cutoff: u64,
 ) {
-    let mut threads: HashMap<SessionKey<'_>, u64> = HashMap::new();
+    let mut threads = FastHashMap::<SessionKey<'_>, u64>::default();
     for (adapter, file) in files {
         let cache_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&cache_key) else {
@@ -477,7 +484,19 @@ impl SpendScope {
         if !origin.is_absolute() {
             return false;
         }
-        let origin = crate::worktree::normalize_path_lexical(origin);
+        // Parser and trusted-override origins are normalized when cached. Keep
+        // a defensive slow path for a hand-edited or older cache without
+        // allocating a fresh `PathBuf` for every entry in the common case.
+        let normalized;
+        let origin = if origin
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+        {
+            normalized = crate::worktree::normalize_path_lexical(origin);
+            normalized.as_path()
+        } else {
+            origin
+        };
         if !origin.is_absolute() {
             return false;
         }

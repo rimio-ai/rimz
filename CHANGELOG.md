@@ -62,6 +62,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 
 - The sidebar reuses matching consumer fold stamps, shares producer workspace projections, memoizes stable untracked line counts, and attributes fetch-fold causes, cutting repeated work on every frame.
 - The spending service buffers its socket writes, and historical store discovery is bounded.
+- Fleet spending aggregation hashes session identities instead of repeatedly ordering transcript paths, and reuses normalized workspace origins instead of allocating a path per entry, cutting the live-scale global refresh and additional-workspace folds by about 13% and 25% respectively.
 
 ## [0.3.0] (2026-07-16)
 

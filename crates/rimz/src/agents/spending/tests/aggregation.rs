@@ -727,6 +727,15 @@ fn workspace_scope_uses_roots_worktree_home_and_file_origin() {
 }
 
 #[test]
+fn workspace_scope_normalizes_parent_components_on_contains() {
+    let scope = SpendScope::from_roots(Some(Path::new("/workspace/project")), &[]);
+
+    assert!(scope.contains(Path::new("/workspace/project/src")));
+    assert!(!scope.contains(Path::new("/workspace/project/../other")));
+    assert!(!scope.contains(Path::new("workspace/project")));
+}
+
+#[test]
 fn claude_replay_dedup_collapses_before_store_and_rollups() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);

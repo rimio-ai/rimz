@@ -168,7 +168,7 @@ The deterministic gates own exact integers and run in `cargo xtask ci`:
 
 `cargo xtask perf` runs the non-gating divan tier over synthetic stores and pane frames, through the same public entry points the sidebar uses. It launches no agents and spends no tokens. Wall-clock and allocation figures stay out of `ci` so a busy runner never fails a build on timing.
 
-Allocation per op is the steadier regression signal; medians are host- and load-sensitive. The baseline below was captured on `xlab-term`, a loaded LXC on an AMD Ryzen 9 9950X with 28 online CPUs, governor `performance`. The 20k spending rows date from July 15, 2026, the live-scale rows from July 16, and the discovery and projection rows from July 18; everything else from July 5.
+Allocation per op is the steadier regression signal; medians are host- and load-sensitive. The baseline below was captured on `xlab-term`, a loaded LXC on an AMD Ryzen 9 9950X with 28 online CPUs, governor `performance`. The 20k spending rows date from July 15, 2026, the live-scale rows from July 16, the live-scale session-aggregation rows from July 20, and the discovery and projection rows from July 18; everything else from July 5.
 
 | Bench | Median | Alloc/op |
 | --- | ---: | ---: |
@@ -185,10 +185,10 @@ Allocation per op is the steadier regression signal; medians are host- and load-
 | `hotpath::spending_walk_warm_no_change` 20k entries | 7.95ms | 10.78MB |
 | `hotpath::spending_live_scale_cold_hydrate` 6k files / 102k entries | 252.3ms | 122.6MB |
 | `hotpath::spending_live_scale_cold_discovery_inclusive` 6k files / 102k entries | 173.9ms | 101.9MB |
-| `hotpath::spending_live_scale_warm_global_refresh` 6k files / 102k entries | 119.1ms | 52.54MB |
+| `hotpath::spending_live_scale_warm_global_refresh` 6k files / 102k entries | 93.5ms | 50.25MB |
 | `hotpath::spending_live_scale_warm_discovery_only` 6k files | 19.55ms | 770.9KB |
 | `hotpath::spending_live_scale_warm_discovery_inclusive` 6k files / 102k entries | 140.2ms | 99.59MB |
-| `hotpath::spending_live_scale_additional_workspace_scope` 6k files / 102k entries | 161.0ms | 59.43MB |
+| `hotpath::spending_live_scale_additional_workspace_scope` 6k files / 102k entries | 116.6ms | 58.59MB |
 
 ## Overhead at fleet scale
 
@@ -248,7 +248,7 @@ Every writer that knows about a change pushes: store and sidecar writers post a 
 
 No reader pays O(history). The rollup persists a raw fold base plus its `(generation, offset)` stamp, and catch-up seeks to the offset and folds only new frames ([`fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs)). Runtime projection, resume outcomes, and smart-compact dedupe ride the same fold instead of rescanning `events.log.jsonl`. A `(path, mtime, len)` parse cache on `snapshot.json`, `latest.json`, and `rollup.json` returns `Arc<T>` handles, so unchanged files skip both re-parse and cache-hit deep clone ([`parse_cache.rs`](../../crates/rimz/src/store/parse_cache.rs)).
 
-The fleet spend walk is incremental in three layers: the walker-owned directory index stats only active frontiers and reconciles fully every 15 minutes; the disk cache stores `(mtime, len, cursor)` per file so a grown file parses only its appended suffix; and the elected walker holds the sole parsed cache plus a generation-keyed slice of dedup winner locations, so serialized workspace requests borrow rather than clone. Rows older than 8 days compact into per-day rollups inside the same stream.
+The fleet spend walk is incremental in three layers: the walker-owned directory index stats only active frontiers and reconciles fully every 15 minutes; the disk cache stores `(mtime, len, cursor)` per file so a grown file parses only its appended suffix; and the elected walker holds the sole parsed cache plus a generation-keyed slice of dedup winner locations, so serialized workspace requests borrow rather than clone. Session uniqueness uses fast hash collections while the published maps retain deterministic ordering, so a 102k-entry aggregation does not repeatedly order filesystem paths. Workspace membership reuses normalized cache origins without allocating a `PathBuf` per entry, retaining a defensive normalization path for origins containing parent components. Rows older than 8 days compact into per-day rollups inside the same stream.
 
 ### Per-enrichment cadences
 
