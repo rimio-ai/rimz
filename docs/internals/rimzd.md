@@ -92,9 +92,9 @@ The third caller is the loop zone, which repairs the panel alone.
 
 ## The loop zone
 
-A scheduled `--agent` fire stacks its transient run pane under the loop panel, so run output lands in the runtime column instead of splitting the sidebar or a working tab ([loops.md](../guide/loops.md#what-a-task-does-on-your-machine)). `split_into_loop_zone` finds the oldest live panel and splits against it with `SplitPlacement::Stacked`.
+`split_into_loop_zone` finds the oldest live loop panel and splits the run pane against it with `SplitPlacement::Stacked`, so run output lands in the runtime column.
 
-When the panel is gone but the view survives, `ensure_loop_panel` recreates just the panel through the same placement and settle path a full repair uses, then stacks the run under it. When the view itself is gone, or the split fails, the run falls back to its own tab. Manual `rimz loop fire` never enters the zone; it splits beside the caller so its foreground stream stays local.
+Fire time is the one moment repair runs outside the elder's tick. When the panel is gone but the view survives, `ensure_loop_panel` recreates just that pane through the same placement and settle path a full repair uses, then the run stacks under it. Which fires land here, and where a run goes when the view is gone, are in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
 
 ## Where the code lives
 
