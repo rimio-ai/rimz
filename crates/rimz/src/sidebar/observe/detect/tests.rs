@@ -761,33 +761,37 @@ fn aggregate_oscillation_reports_spend_and_mana_bounces() {
         from: &'static str,
         via_committed: Option<&'static str>,
         via_pulled: Option<&'static str>,
-        expected_pulled_via: &'static str,
+        expected_via: &'static str,
+        expected_pulled_via: Option<&'static str>,
     }
 
     for case in [
         Case {
-            name: "cockpit producer published zero",
+            name: "cockpit tally went unavailable on both sides",
             key: AggregateKey::CockpitTally,
             from: "1234",
             via_committed: None,
             via_pulled: None,
-            expected_pulled_via: "0",
+            expected_via: "<none>",
+            expected_pulled_via: None,
         },
         Case {
-            name: "cockpit consumer zeroed",
+            name: "cockpit consumer lost a figure the pull still held",
             key: AggregateKey::CockpitTally,
             from: "1234",
             via_committed: None,
             via_pulled: Some("1234"),
-            expected_pulled_via: "1234",
+            expected_via: "<none>",
+            expected_pulled_via: Some("1234"),
         },
         Case {
-            name: "provider mana bounce",
+            name: "provider mana bounce through a real zero",
             key: codex_mana_key(),
             from: "88",
             via_committed: Some("0"),
             via_pulled: Some("0"),
-            expected_pulled_via: "0",
+            expected_via: "0",
+            expected_pulled_via: Some("0"),
         },
     ] {
         let mut observer = Observer::default();
@@ -829,9 +833,9 @@ fn aggregate_oscillation_reports_spend_and_mana_bounces() {
                     ..
                 } if aggregate == &case.key
                     && from == case.from
-                    && via == "0"
+                    && via == case.expected_via
                     && back == case.from
-                    && pulled_via.as_deref() == Some(case.expected_pulled_via)
+                    && pulled_via.as_deref() == case.expected_pulled_via
             )),
             "missing aggregate oscillation for {}",
             case.name

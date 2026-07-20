@@ -513,7 +513,10 @@ impl Observer {
                     via: aggregate_label(&via.committed),
                     back: aggregate_label(&back.committed),
                     span_ms: back.at_ms.saturating_sub(from.at_ms),
-                    pulled_via: Some(aggregate_label(&via.pulled)),
+                    // Carries the pulled figure as the snapshot held it, so an
+                    // absent read stays absent in the record instead of
+                    // arriving as a figure the producer never published.
+                    pulled_via: via.pulled.clone(),
                 },
                 Some(window),
             ));
@@ -683,8 +686,12 @@ fn value_label(value: &Option<String>) -> String {
     value.clone().unwrap_or_else(|| "<none>".to_owned())
 }
 
+/// Renders an aggregate sample for the record. An absent figure reads
+/// `<none>`, matching [`value_label`]: the snapshot carries `None` when the
+/// tally is unavailable, and printing that as `0` makes a missing cache read
+/// indistinguishable from a room that genuinely spent nothing.
 fn aggregate_label(value: &Option<String>) -> String {
-    value.clone().unwrap_or_else(|| "0".to_owned())
+    value.clone().unwrap_or_else(|| "<none>".to_owned())
 }
 
 fn serialize_order(order: &[String]) -> String {
