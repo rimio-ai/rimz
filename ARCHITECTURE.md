@@ -58,38 +58,30 @@ The CLI and hook subprocesses are the only writers of product truth. The sidebar
 | Agents | native UI, prompts, sandboxing, bypass behaviour | RimZ store state |
 | Host | process resurrection, OS sandboxing | workspace state |
 
-### Durable state on disk
+### State on disk
 
-State is three tiers of plain files. The path constants and their exact filenames are owned by [`store/paths.rs`](./crates/rimz/src/store/paths.rs) (`StatePaths`, `RuntimePaths`); this is the shape, not the catalog.
+State is five tiers of plain files, scoped by what each one outlives. [`store/paths.rs`](./crates/rimz/src/store/paths.rs) (`StatePaths`, `RuntimePaths`) owns the path constants, and [store.md → What is on disk](./docs/internals/store.md#what-is-on-disk) is the file-by-file catalog; this is the map.
 
 ```text
-workspace store   ~/.local/state/rimz/workspaces/<id>/
-  events.log.jsonl · snapshots/latest.json
-  runs/<run_id>.json · messages/messages.jsonl · transcript/<date>.jsonl · locks/workspace.lock
-  workspace.json · rimz (stable room executable) · channels.json · live-roster.json
-  diag.log.jsonl · diag-frames/                      durable truth
+workspace store         ~/.local/state/rimz/workspaces/<workspace_id>/
+  one room's durable truth: the framed event log and the records beside it,
+  plus the producer caches that survive a reboot
 
-per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<id>/   (or /tmp/rimz-<uid>/… )
-  sock/*.sock          per-run and sidebar wakeup sockets
-  heartbeat/ · read-marks/ · unread.json             liveness and attention
-  snapshot.json · agent-projection.json · *.json caches
-  agent_context/ · agent-activity/                   disposable enrichment
-  agent-telemetry/                                  private provider export cache
+per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<workspace_id>/  (or /tmp/rimz-<uid>/…)
+  one room's disposable tier: wakeup sockets, heartbeats, read receipts,
+  and enrichment sidecars
 
-shared persistent   ~/.local/state/rimz/shared/
-  accounts.json · rate_limits.json · credits.json
-  provider-spending.json · spending.json · pricing-cache.json
+shared persistent       ~/.local/state/rimz/shared/
+  account-global provider state: accounts, rate limits, credits, spend, pricing
 
-user-global persistent   ~/.local/state/rimz/
-  builds/<build_id>/rimz                              immutable room executable generations
-  loop-instances.json · loop-runs.log.jsonl
+shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
+  the account-global election locks and the spending service's versioned socket
 
-shared runtime      $XDG_RUNTIME_DIR/rimz/shared/
-  accounts.lock · rate_limits.lock · credits.lock · spending.lock
-  spending-service.v<wire>.c<cache>.sock · matching owner lock
+user-global persistent  ~/.local/state/rimz/
+  builds/<build_id>/rimz immutable executable generations, and the loop registry
 ```
 
-The store tier is durable truth plus reboot-surviving producer caches, written with temp-file-plus-rename and a framed event log (the durability contract is [store.md](./docs/internals/store.md)). `live-roster.json` is the sidebar producer's last live root-agent set; rebirth recovery intersects it with the audit rollup before a new session starts. Shared persistent caches survive reboot so the dashboard and pace views open warm, while runtime tiers are disposable: locks, sockets, sidecars, and per-room best-effort caches that speed the next read and die with the session.
+One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent. The store tier's durability contract — temp-file-plus-rename, the framed log, and the write classes — is [store.md](./docs/internals/store.md), the provider files are [providers.md](./docs/internals/agents/providers.md), the loop registry is [loops.md](./docs/internals/harness/loops.md), and executable staging is [sidebar.md → Build promotion](./docs/internals/sidebar/sidebar.md#build-promotion).
 
 ## Code and crate structure
 
