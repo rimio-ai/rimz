@@ -317,11 +317,10 @@ fn row_pet_action(row: &SidebarRow) -> PetAction {
             return PetAction::Waiting;
         }
         if status == AgentStatus::Running
-            && (agent.phase == TurnPhase::Parked
-                || agent
-                    .sub_agents
-                    .iter()
-                    .any(|child| child.status == AgentStatus::Running))
+            && agent
+                .sub_agents
+                .iter()
+                .any(|child| child.status == AgentStatus::Running)
         {
             return PetAction::Waiting;
         }

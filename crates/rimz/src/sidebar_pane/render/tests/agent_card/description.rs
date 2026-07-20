@@ -273,11 +273,11 @@ fn parked_background_marker_falls_back_to_unicode() {
 }
 
 #[test]
-fn successful_parked_row_keeps_background_marker() {
+fn parked_projection_renders_success_with_background_marker() {
     let mut claude = agent(
         "claude-1",
         "claude",
-        AgentStatus::Success,
+        AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
         Some("done"),
@@ -285,6 +285,7 @@ fn successful_parked_row_keeps_background_marker() {
     claude.phase = crate::agents::TurnPhase::Parked;
     let rendered = snapshot_to_screen(&snapshot_with(vec![claude]), 44, 15);
 
+    assert!(rendered.contains('✓'), "{rendered}");
     assert!(rendered.contains("⋯ bg"), "{rendered}");
 }
 

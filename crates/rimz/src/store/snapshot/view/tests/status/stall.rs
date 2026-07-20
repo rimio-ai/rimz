@@ -209,6 +209,17 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
             expect_error_label: true,
         },
         StatusRung {
+            name: "live child beats parked settle",
+            agent: agent("claude", "root", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .parked()
+                .active_ago(60),
+            with_live_child: true,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Running,
+            expect_error_label: false,
+        },
+        StatusRung {
             name: "parked settle beats stalled spent fallback",
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
