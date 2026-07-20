@@ -26,6 +26,7 @@ pub(crate) struct HostSandbox {
 impl HostSandbox {
     pub(crate) fn for_tests(workspace_root: &Path) -> Result<Self> {
         let mut sandbox = Self::new()?;
+        sandbox.trust_workspace_for_git(workspace_root)?;
         let tee_dir = workspace_root.join("target").join("xtask").join("rtk");
         std::fs::create_dir_all(&tee_dir).with_context(|| {
             format!("creating retained rtk log directory {}", tee_dir.display())
@@ -68,6 +69,26 @@ impl HostSandbox {
         .context("writing sandbox Zellij config")?;
         std::fs::write(env["HOME"].join(".zshrc"), "").context("writing sandbox zsh config")?;
         Ok(Self { _root: root, env })
+    }
+
+    fn trust_workspace_for_git(&self, workspace_root: &Path) -> Result<()> {
+        let config = self.env["HOME"].join(".gitconfig");
+        let output = Command::new("git")
+            .arg("config")
+            .arg("--file")
+            .arg(&config)
+            .args(["--add", "safe.directory"])
+            .arg(workspace_root)
+            .output()
+            .context("creating sandbox Git configuration")?;
+        if !output.status.success() {
+            bail!(
+                "creating sandbox Git configuration failed with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn command_env(&self) -> Vec<(&'static str, PathBuf)> {
@@ -280,6 +301,18 @@ mod tests {
         assert_eq!(
             sandbox.env["RTK_TEE_DIR"],
             workspace.path().join("target/xtask/rtk"),
+        );
+        let trusted = Command::new("git")
+            .arg("config")
+            .arg("--file")
+            .arg(sandbox.env["HOME"].join(".gitconfig"))
+            .args(["--get-all", "safe.directory"])
+            .output()
+            .unwrap();
+        assert!(trusted.status.success());
+        assert_eq!(
+            String::from_utf8(trusted.stdout).unwrap().trim(),
+            workspace.path().to_string_lossy(),
         );
     }
 

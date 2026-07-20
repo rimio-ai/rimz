@@ -130,7 +130,12 @@ pub(crate) fn presence_plugin_source_digest(root: &Path) -> Result<String> {
         .output()
         .with_context(|| format!("running `git ls-files` in {}", plugin_root.display()))?;
     if !output.status.success() {
-        bail!("git ls-files failed in {}", plugin_root.display());
+        bail!(
+            "git ls-files failed in {} with {}: {}",
+            plugin_root.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
 
     let mut paths: Vec<_> = String::from_utf8(output.stdout)
