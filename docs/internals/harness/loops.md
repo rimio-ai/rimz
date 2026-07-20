@@ -1,6 +1,6 @@
 # Loop scheduling
 
-> Orientation for contributors working on [`harness/schedule.rs`](../../../crates/rimz/src/harness/schedule.rs), [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), and [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd). The supervised runs a task spawns are [scripting.md](./scripting.md); the delivery path a wake uses is [messaging.md](./messaging.md); the launch machinery under both is [harness.md](./harness.md); the user-facing guide is [loops.md](../../guide/loops.md) and the flag reference is [cli/loop.md](../../reference/cli/loop.md). This doc owns the scheduler: where task definitions live, who keeps time, what one fire does, and the unattended recovery the same elder runs alongside it.
+> The scheduler: where task definitions live, who keeps time, what one fire does, and the unattended recovery the same elder runs alongside it. [harness.md](./harness.md) is the map for this area. For users, the guide is [loops.md](../../guide/loops.md) and the flag reference is [cli/loop.md](../../reference/cli/loop.md).
 
 ## What the scheduler does
 

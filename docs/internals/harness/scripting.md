@@ -1,6 +1,6 @@
 # Supervised runs
 
-> Orientation for contributors working on supervised `-p` runs: [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), and [`cli/supervised/`](../../../crates/rimz/src/cli/supervised). The launch machinery a run rides on is [harness.md](./harness.md); the scheduler that drives the same path on a clock is [loops.md](./loops.md); the delivery path verification re-prompts through is [messaging.md](./messaging.md); the user-facing guide is [scripting.md](../../guide/scripting.md) and the flag reference is [cli/agents.md](../../reference/cli/agents.md#supervised-runs--p). This doc owns one supervised turn end to end: the durable record, the completion signal, the wait, verification and retry, the output projections, and pane reclamation.
+> One supervised turn end to end: the durable record, the completion signal, the wait, verification and retry, the output projections, and pane reclamation. [harness.md](./harness.md) is the map for this area and owns the launch machinery a run rides on. For users, the guide is [scripting.md](../../guide/scripting.md) and the flag reference is [cli/agents.md](../../reference/cli/agents.md#supervised-runs--p).
 
 ## What a supervised run is
 

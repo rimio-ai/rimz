@@ -1,6 +1,6 @@
 # The message system
 
-> Orientation for contributors working on `crates/rimz/src/message/`. The agent model this subsystem reads (rollup, state machine, turn phase, liveness) is [model.md](../agents/model.md); the address grammar it resolves through is [harness.md § The address](./harness.md#the-address); the durable store beneath it is [store.md](../store.md); the user-facing commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), [cli/channel.md](../../reference/cli/channel.md), and [cli/asks.md](../../reference/cli/asks.md). This doc owns how text reaches a running agent: the durable record, the delivery decision, the pane write, the reply wait, the channel lanes that scope addressing, and the transcript that reads the conversation back.
+> How text reaches a running agent: the durable record, the delivery decision, the pane write, the reply wait, the channel lanes that scope addressing, and the transcript that reads the conversation back. The code is `crates/rimz/src/message/`; [harness.md](./harness.md) is the map for this area and owns the [address grammar](./harness.md#the-address) this module resolves through. For users, the commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), [cli/channel.md](../../reference/cli/channel.md), and [cli/asks.md](../../reference/cli/asks.md).
 
 ## What the module does
 
@@ -380,7 +380,7 @@ The sweep is single-flight through a `message-sweep.lock` file lock, so overlapp
 
 Condition evaluation inside a sweep is one transaction: it evaluates every unmet condition against one context-enriched snapshot, applies every stamp, retry floor, and watched-agent archive together, reloads the pending records, and delivers newly eligible heads from that same snapshot in the same run. New stamps emit `message.after_met` or `message.when_met`.
 
-Backoff matters here, because the elder ticks often. When a sweep cannot deliver a ready head (gate closed, ask waiting, compacting, no pane) it writes `retry_after = now + RIMZ_MESSAGE_DELIVERY_WINDOW_MS`, so the elder retries at most once per delivery window instead of every tick. `retry_after` is a wake hint and nothing more: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery.
+Backoff matters here, because the elder ticks often. When a sweep cannot deliver a ready head (gate closed, ask waiting, compacting, no pane) it writes `retry_after = now + RIMZ_MESSAGE_DELIVERY_WINDOW_MS` (30 s by default), so the elder retries at most once per delivery window instead of every tick. `retry_after` is a wake hint and nothing more: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery.
 
 A ready `Queued` head arms the stamp even with no `not_before` at all, contributing its `updated_at`. That backstop is what recovers a message to an idle agent that missed the live send path.
 

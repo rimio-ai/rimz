@@ -1,10 +1,10 @@
 # RimZ-owned worktrees
 
+> The full life of a RimZ-owned Git worktree: the ownership marker, creation and seeding, the proof that a branch's work landed, and every path that removes a tree. The code is `crates/rimz/src/worktree.rs` plus its three private submodules; [harness.md](./harness.md) is the map for this area. For users, the commands are [cli/worktree.md](../../reference/cli/worktree.md) and the guide is [worktrees.md](../../guide/worktrees.md).
+
 A worktree is one Git checkout of the repository on its own branch, and RimZ runs its whole life: create it for a line of work, seed it with the untracked files an agent needs, and reclaim it once its work has landed on the base branch. The tree's name is also a [channel](./messaging.md#channels), so `@coder#feat-a` addresses the agent working inside it.
 
-The subsystem stands on its own. `rimz worktree new`, `list`, `remove`, and the `rimz gc` sweep work whether or not an agent ever launches into a tree, and the harness calls the same entry points when it does ([harness.md](./harness.md#reclaiming-a-pane)).
-
-The code is `crates/rimz/src/worktree.rs` plus its three private submodules, despite this page living under `internals/harness/`. What agents do inside a tree belongs to [harness.md](./harness.md); the lane the tree backs belongs to [messaging.md](./messaging.md#channels); the user-facing commands are [cli/worktree.md](../../reference/cli/worktree.md) and the [worktrees guide](../../guide/worktrees.md).
+The subsystem stands on its own. `rimz worktree new`, `list`, `remove`, and the `rimz gc` sweep work whether or not an agent ever launches into a tree, and the harness calls the same entry points when it does ([harness.md](./harness.md#reclaiming-a-pane)). What agents do inside a tree belongs to [harness.md](./harness.md); the lane the tree backs belongs to [messaging.md](./messaging.md#channels).
 
 ## The one rule: RimZ touches only what it marked
 

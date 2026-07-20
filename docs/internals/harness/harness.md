@@ -1,6 +1,6 @@
 # The agent harness
 
-> Orientation for contributors working on `crates/rimz/src/harness/`. The agent *model* this subsystem drives (rollup, state machine, turn phase, liveness, adapter boundary) is [model.md](../agents/model.md); the delivery substrate it sends text through is [messaging.md](./messaging.md); the Git worktrees it launches into are [worktrees.md](./worktrees.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md). This doc owns the core: what the harness is, how it is organized, and the three jobs it does directly, which are spawning a fleet, addressing it, and reclaiming what it leaves behind. Two jobs are large enough to have their own pages: [scripting.md](./scripting.md) for supervised `-p` runs, and [loops.md](./loops.md) for the scheduled tasks that drive those runs on a clock.
+> The entry point for contributors working on the harness. This page orients you across the whole area, then owns the launch core: spawning a fleet, addressing it, resuming it, capping what it spends, and reclaiming what it leaves behind. The other five pages in this folder go deep on one job each.
 
 ## What the harness does
 
@@ -8,17 +8,48 @@ One agent in one thread is a conversation. Tens of agents across a dozen worktre
 
 It exists because RimZ has no API into the agents it runs. Every agent is a stock provider CLI in a real terminal pane, so the harness works the way a fast human would: it opens panes, types into them, watches the durable records the agents' hooks write, and closes panes when the work is done. The same machinery serves a human at the keyboard, a shell script, a CI gate, and one agent driving another.
 
-Three ideas hold the subsystem together.
+## The rules that shape it
+
+Four rules explain most of the design. When a piece of the code surprises you, one of these is usually the reason.
+
+**Durable records are the truth.** Panes are latency: they can close, renumber, or wedge. Launch identity, message queues, run outcomes, and schedule history live in the store, so recovery reads state rather than guessing from a multiplexer. Every subsystem here has one durable record at its center, and everything else is an attempt against it.
 
 **One compile target.** Every way of starting agents (an inline layout, a named team, a `-p` run, a resumed cohort, a reborn room) resolves to the same backend-neutral list of pane commands. Zellij and tmux receive identical input, so a feature written once works on both.
 
 **One name for one agent.** A member is reachable by an address, `@handle#channel`, and the renderer that prints a handle is the exact inverse of the parser that reads one. Anything RimZ shows you, you can type back.
 
-**Durable records are the truth.** Panes are latency: they can close, renumber, or wedge. Launch identity, run outcomes, and schedule history live in the store, so recovery reads state rather than guessing from a multiplexer.
+**No daemon.** Nothing in the harness runs a background service. Scheduled work, message wakeups, and unattended recovery all ride the tick of the room's elected sidebar producer, the elder. Close the room and the clock stops: nothing runs when you are not there, and nothing outlives the room you can see.
 
-## Module layout
+## One launch, end to end
 
-Start here when you are looking for where a behaviour lives.
+`rimz agents claude,codex -w feat-a "start on the parser"` touches most of the subsystem. Following it once is the fastest way to see how the pieces connect; each step links to the section that owns it.
+
+1. **Resolve the spec.** `claude,codex` parses into a `LayoutSpec` of two agent cells, with profiles and teams resolved from the effective config ([The layout IR](#the-layout-ir)).
+2. **Finalize the launch.** Permission posture, presets, budget, and passthrough argv fold into each cell ([From spec to panes](#from-spec-to-panes)).
+3. **Reconcile a prior cohort.** Because this is a multi-cell launch with an explicit `-w`, RimZ checks whether `feat-a` already held these agents, and may focus, resume, or offer to clear it instead of launching ([Cohort relaunch reconciliation](#cohort-relaunch-reconciliation)).
+4. **Choose where it lands.** Two cells plus a worktree means a new tab. Placement is decided now, before anything durable exists, so a rejected placement leaves no debris ([Placement](#placement)).
+5. **Create the worktree.** A marked Git worktree is added and seeded, and its name `feat-a` becomes the channel every cell is stamped with ([worktrees.md](./worktrees.md)).
+6. **Mint identities.** The store writes a provisional row per cell with its name, channel, and cohort stamps, so both agents are addressable as `@claude#feat-a` and `@codex#feat-a` before either has run a turn ([The address](#the-address)).
+7. **Open the panes.** Each cell compiles to a hidden `rimz agents exec` wrapper invocation carrying an `ExecRequest`. The wrapper validates it, then runs the stock provider CLI in the pane with the trailing prompt in its launch argv ([The exec wrapper](#the-exec-wrapper)).
+8. **The agents report themselves.** Their lifecycle hooks write durable events, which the rollup folds into the state every later command reads: messages waiting for a turn boundary ([messaging.md](./messaging.md)), supervised runs waiting to complete ([scripting.md](./scripting.md)), and budget ticks watching the spend ([Dollar budget scopes](#dollar-budget-scopes)).
+9. **Reclaim what is left.** When a pane ends, the resident wrapper decides whether the exit was deliberate, and only then removes the worktree or closes the pane ([Reclaiming a pane](#reclaiming-a-pane)).
+
+Steps 1 through 7 are the same for every entry point. A `-p` run, a scheduled loop fire, and a reborn room all reach the panes through this path with a different request on the front.
+
+## Where the code lives
+
+The harness is a product area, not a single Rust module. It spans four source trees, and the six pages in this folder are grouped by the job they document rather than by the crate path they point at.
+
+| Page | Owns | Source |
+| --- | --- | --- |
+| harness.md (this page) | Spawn, address, resume, budget, reclaim | [`harness/`](../../../crates/rimz/src/harness) |
+| [scripting.md](./scripting.md) | Supervised `-p` runs | [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) |
+| [loops.md](./loops.md) | Scheduled tasks and unattended recovery | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) |
+| [messaging.md](./messaging.md) | Getting text into a running agent | [`message/`](../../../crates/rimz/src/message) |
+| [worktrees.md](./worktrees.md) | RimZ-owned Git worktrees | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) |
+| [trust.md](./trust.md) | Which parts of a project config may execute | [`trust.rs`](../../../crates/rimz/src/trust.rs) |
+
+Inside `harness/` itself, start here when you are looking for where a behaviour lives.
 
 | File | Owns |
 | --- | --- |
@@ -35,6 +66,25 @@ Start here when you are looking for where a behaviour lives.
 | [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs), [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | Unattended recovery and its audit trail. See [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs). |
 
 The CLI side lives in [`cli/agents_cmd/`](../../../crates/rimz/src/cli/agents_cmd) (launch, restart, resume, fork, stop, and the hidden `exec` wrapper), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) (the run driver both `agents -p` and loop fires call), and [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd). Those handlers parse flags, execute effects, and render; the rules live here.
+
+### Where to start reading
+
+Read this page first, then the page for whatever you are changing. If you are new to the whole area, [messaging.md](./messaging.md) is the most instructive second read: it is the subsystem where the durable-record rule has the most consequences, and the delivery pipeline touches nearly everything else.
+
+### The state machines
+
+Six state machines carry most of the subsystem's behaviour. Each has one owning type and one owning section.
+
+| Machine | Type | Documented in |
+| --- | --- | --- |
+| Message lifecycle | `MessageStatus` | [messaging.md § Status lifecycle](./messaging.md#status-lifecycle) |
+| Supervised run | `RunStatus`, whose `exit_code` is the caller contract | [scripting.md § Status and exit codes](./scripting.md#status-and-exit-codes) |
+| Loop task timing and outcome | `TaskTiming`, `LoopRunResult` | [loops.md § Schedule shapes](./loops.md#schedule-shapes), [§ History, strikes, and pauses](./loops.md#history-strikes-and-pauses) |
+| Dollar budget ledger | `BudgetVerdict` | [§ Dollar budget scopes](#dollar-budget-scopes) below |
+| Worktree removal | `ProtectionSet::assess` | [worktrees.md § The assessment](./worktrees.md#the-assessment) |
+| Project trust | `TrustState` | [trust.md § States](./trust.md#states) |
+
+Two more decision trees are not enum-shaped but behave like state machines: the [deliberate-exit classification](#reclaiming-a-pane) that decides what happens when an agent process ends, and the [park class](./loops.md#recovery-the-elder-runs) that decides when a stopped agent may resume itself.
 
 ## The vocabulary
 
@@ -60,7 +110,7 @@ reach a member by @handle#channel, then:
   message --schedule 1h    →  leave a task no earlier than one hour from now
 ```
 
-Sending is [messaging.md](./messaging.md). This doc covers the two halves around it: getting a member to exist, and naming it.
+Sending is [messaging.md](./messaging.md). This page covers the two halves around it: getting a member to exist, and naming it.
 
 ## Launching a fleet
 
@@ -116,15 +166,19 @@ Each backend renders the same compiled layout into a tab, and a single non-workt
 
 **Placement resolves before the launch touches the store or creates a worktree**, so a rejected placement leaves no provisional rows or orphan worktree behind.
 
+`plan::resolve_placement` takes the explicit flags first, then falls back to the per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) policy.
+
 | Situation | Where the layout lands |
 | --- | --- |
-| `auto` default, single non-worktree cell, inside a room | the current pane: the CLI execs the wrapper argv in place, and the pane returns to its shell on exit |
-| `auto` default, named channel, multi-cell layout, or worktree | a new tab |
-| `--new-pane` | a split of the current tab; an explicit flag that cannot be honored fails fast |
 | `--new-tab`, or no ambient pane to split | a new tab |
+| `--new-pane` | a split of the current tab; an explicit flag that cannot be honored fails fast |
+| policy `auto` (the default), single non-worktree cell, inside a room | the current pane: the CLI execs the wrapper argv in place, and the pane returns to its shell on exit |
+| policy `pane`, single non-worktree cell, inside a room | a split of the current tab |
+| policy `tab` | always a new tab |
+| any policy, with a named channel, a multi-cell layout, or a worktree | a new tab |
 | `--bg`, or create-on-miss | never in-place: the caller's pane stays available, so an in-place choice downgrades to a split |
 
-The per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) key chooses the default when no flag is given. An in-place launch resolves liveness from the pane rather than from an end trace, because no wrapper stays resident to write one.
+An in-place launch resolves liveness from the pane rather than from an end trace, because no wrapper stays resident to write one.
 
 Tab titles follow the address vocabulary: a named-channel or worktree launch names its tab `#<NAME>`, a named team launch names it `team:<name>` and stamps its in-place lane as `<dir>/<team>`, and any other non-worktree launch names it `<kind>:<dir>`. Mux tab names stay display-only. They are mutable and live outside the store, so they never form an address.
 
@@ -203,7 +257,7 @@ Recovery is the other half of launching. The store remembers agents whose proces
 
 Rebirth restores a named team in its declared layout, resuming members that can resume and fresh-launching missing or unsupported agent cells so the shape stays whole; non-team lanes restore as one column. Cohort resume scopes to one exact worktree with `-w <NAME>` or the caller's current worktree, while a project-root resume keeps newest-by-spec behaviour.
 
-Lane resume reuses the rebirth team and flat split when every member is closed, plans flat resume commands beside a surviving live member for a partial lane, and selects the freshest pane when every member is live. In all cases the CLI preflights the planned provider kinds before `materialize_lane_restore` allocates fresh team identities or any mux action runs, so a missing provider binary fails before it half-rebuilds a room.
+Lane resume picks one of four actions, and `LaneResumeAction` names them: `List` when no scope was given, `Focus` on the freshest pane when every member is live, `SplitClosed` to plan flat resume commands beside a surviving live member, and `RestoreClosed` to reuse the rebirth team and flat split when every member is closed. In all cases the CLI preflights the planned provider kinds, through `LaneResumeAction::agent_kinds_needing_preflight`, before `LaneRestorePlan::materialize` allocates fresh team identities or any mux action runs, so a missing provider binary fails before it half-rebuilds a room.
 
 ### What matches what
 
@@ -215,7 +269,7 @@ Missing cells launch fresh in the matched cohort's cwd and channel, so the layou
 
 Flat resume keeps pane identity when a stamp survives: newest-first candidates sharing one pane collapse to the newest session. A rebirth boundary retires pane stamps, because pane ids renumber across a mux restart; an unstamped root stays a candidate and deduplicates by `(kind, session id)`. Subagents are excluded by their parent identity rather than by their lack of a pane.
 
-`resume.max` bounds how many agents one reborn session auto-resumes (`DEFAULT_RESUME_MAX`, 128), so a long-lived workspace cannot fork-bomb the machine on birth. Anything past the cap is reported as a skip, never silently dropped, and every `ResumeSkip` carries its reason into the start report.
+`resume.max` bounds how many agents one reborn session auto-resumes (`DEFAULT_RESUME_MAX`, 128), so a long-lived workspace cannot fork-bomb the machine on birth. Anything past the cap is reported as a skip, never silently dropped, and every `ResumeSkip` carries its reason (`no resume CLI`, `no saved conversation`, or `over the resume cap`) into the start report.
 
 ### Discovering sessions the store never saw
 
@@ -235,19 +289,40 @@ Resume leaves one-off launch values out: the prompt, an explicit `--model` or `-
 
 ## Dollar budget scopes
 
-The budget engine evaluates agent, room-fleet, and provider-account caps on every producer tick.
+The budget engine evaluates three scopes on every producer tick. A fourth cap, the per-task daily budget a loop enforces before it fires, lives with the scheduler ([loops.md § One fire](./loops.md#one-fire)).
 
 | Scope | Ledger | Cap source |
 | --- | --- | --- |
-| Agent | per-session `budget.<digest>.json` | launch config: `--budget`, a profile, or a role |
+| Agent | per-session `budget.<digest>.json`, keyed on a hash of kind and session id | launch config: `--budget`, a profile, or a role |
 | Room fleet | `budget.fleet.json` | machine config, local-day |
 | Provider account | machine-shared `budget.account.<kind>.json` | machine config, local-day, one per provider login |
+
+An agent cap carries a `BudgetWindow`: a bare `--budget 5` caps the session, and `--budget 20/day` caps the local day against a rolling `day_baseline` that resets at midnight in the configured zone. Fleet and account caps are always local-day.
 
 `budget.scopes.json` carries the per-agent fleet and account waivers, park thresholds, and interrupt throttles. All of these are cache-class atomic files resolved from launch config, machine config, runtime overrides, and transcript-derived spend. Scope-ledger locks let a producer tick merge park state without clobbering a concurrent CLI cap change.
 
 Room and account caps use the spending walk's dedicated local-day windows rather than session baselines: the workspace cache excludes live sessions and the fold adds their current card costs back, while the shared provider cache publishes a walked per-kind day tally. A scope at or over cap stamps its park, interrupts a running pane through the hidden `agents budget-park` helper, and arms auto-continue for the next local day. Agent park display wins over fleet, which wins over account.
 
-The waiver is the one place a human overrides a cap, and it is deliberately narrow. A delivered human message after a park stamps one waiver for that agent across the fleet and account scopes. A turn that started after the stamp proceeds, and its terminal transition consumes the waiver and restores the park. Resume-gated and background messages never waive.
+### The ledger verdict
+
+`budget::evaluate` folds one agent's spend and its ledger into a `BudgetVerdict` on every tick. The four verdicts are the whole state machine.
+
+```text
+                    ┌── no effective cap ──────────────► Disabled
+                    │
+spend vs cap  ──────┼── under cap ─────────────────────► Under
+                    │                                    (clears any park and interrupt throttle)
+                    └── at or over cap
+                          └─ waiver check
+                               ├─ a human delivery landed after the park,
+                               │  and the current turn started after it
+                               │     ├─ turn still running ──────────► Waived
+                               │     └─ turn finished ───────────────► Park (waiver consumed,
+                               │                                        park re-stamped at now)
+                               └─ otherwise ─────────────────────────► Park
+```
+
+The waiver is the one place a human overrides a cap, and it is deliberately narrow. A delivered human message after a park stamps one waiver for that agent across the fleet and account scopes. A turn that started after the stamp proceeds, and its terminal transition consumes the waiver and re-stamps the park past that delivery, so one message cannot waive a second turn. Resume-gated and background messages never waive, which is why the `automated` flag on a message record matters here.
 
 Programmatic entry points do not accept a waiver at all. `budget::scope_gate` is a fail-fast guard read by both the supervised-run and loop-fire entry gates against the same effective ledgers and local-day caches: `agents -p` maps a refusal to exit `125`, and a loop fire appends `budget skipped`.
 
@@ -270,13 +345,13 @@ A deliberate exit records the durable `rimz.agent-ended` trace before any slower
 
 After the trace, the wrapper settles in three ways depending on what the launch asked for.
 
-**Drop to a shell.** A clean interactive exit from a close-pane or worktree pane prints one exit and relaunch hint (`rimz agents forge.reviewer`, reconstructed from the stored identity) and execs the user's shell in that pane, so the pane stays usable and any worktree stays inspectable.
+**Drop to a shell.** A clean interactive exit from a close-pane or worktree pane prints one hint and execs the user's shell in that pane, so the pane stays usable and any worktree stays inspectable. The hint is a runnable command rebuilt from the stored identity (`rimz agents forge.reviewer`). It teaches `--resume` when the ended session can actually be redeemed, meaning a real provider session id whose adapter compiles a resume command for this directory, and a bare relaunch otherwise. Running the resume takes that same pane back over rather than opening a lane tab, which closes the loop from the hint to the recovered session.
 
 **Reclaim the worktree.** An agent launched with `--worktree-path` triggers worktree cleanup on supervised-run completion or on a deliberate signal or tab-close exit, which proves the branch's work landed before removing the tree and deleting its branch. Clean interactive quits deliberately do *not* reclaim: they drop to the idle shell and leave reclamation to `rimz gc`. Signal exits start the cleanup helper with null stdio in its own process group, so it can finish after the closing pane disappears. The helper, its decision table, and the `gc` sweep are [worktrees.md § Who triggers removal](./worktrees.md#who-triggers-removal).
 
 **Close the pane.** A run pane closes itself when the launch set `close_pane_on_exit`. The supervised-run side of pane reclamation, including background runs and cancellation, is [scripting.md § Reclaiming the run pane](./scripting.md#reclaiming-the-run-pane).
 
-## Where to go next
+## See also
 
 - [scripting.md](./scripting.md): supervised `-p` runs: the run record, the wake socket, verify and retry, output formats.
 - [loops.md](./loops.md): scheduled tasks: the task catalog, elder firing, the fire gate ladder, and the recovery automation the elder runs.

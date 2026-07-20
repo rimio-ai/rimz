@@ -18,11 +18,11 @@ Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem,
 
 ## The harness
 
-`harness/` runs the fleet: spawn, address, message, and reclaim.
+The harness runs the fleet: spawn, address, message, and reclaim. It is a product area rather than a single module, spanning `harness/`, `message/`, `worktree.rs`, and `trust.rs`. Start at [harness.md](./harness/harness.md), which maps the area and names the source tree behind each page.
 
 | Page | What it owns |
 | --- | --- |
-| [harness.md](./harness/harness.md) | The subsystem overview: the layout IR, the exec wrapper, the address grammar, resume planning, budget scopes, and pane reclamation. |
+| [harness.md](./harness/harness.md) | The area map and the launch core: the rules that shape the design, the state-machine index, the layout IR, the exec wrapper, the address grammar, resume planning, budget scopes, and pane reclamation. |
 | [scripting.md](./harness/scripting.md) | Supervised `-p` runs: the durable run record, the completion fold, the wake socket, verification and retry, and the output projections. |
 | [loops.md](./harness/loops.md) | Loop scheduling: the task catalog and its sources, elder firing, the fire gate ladder, run history, and the assist log. |
 | [messaging.md](./harness/messaging.md) | Message routing: send modes, durable records, the delivery pipeline, reply waits, the channel lanes, the transcript, and the ask lifecycle. |
