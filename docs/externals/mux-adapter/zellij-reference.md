@@ -29,7 +29,7 @@ Re-fetch these to refresh this mirror. The canonical type definitions live in th
 
 ## Plugin API
 
-Plugins are wasm32-wasip1 binaries loaded into Zellij's plugin host. RimZ ships one: [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/) ([multiplexers.md → presence channel](../../internals/multiplexers.md#zellij-presence-channel)).
+Plugins are wasm32-wasip1 binaries loaded into Zellij's plugin host. RimZ ships one: [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/) ([multiplexers.md → presence channel](../../internals/multiplexers.md#the-zellij-presence-plugin)).
 
 ### Lifecycle
 
@@ -191,7 +191,7 @@ Integer-width inconsistency to keep straight: `TabInfo.tab_id` is `usize`, `clos
 | `WriteToClipboard` | Write to the clipboard |
 | `ReadSessionEnvironmentVariables` | Read env vars present at session creation |
 
-`request_permission(&[…])` raises one floating prompt for the whole batch; the answer arrives as `PermissionRequestResult`. Zellij persists grants in `<cache-dir>/zellij/permissions.kdl`, keyed on the exact plugin path string — canonicalize before loading or the grant misses ([multiplexers.md](../../internals/multiplexers.md#zellij-presence-channel)). The KDL shape is a plugin-path node with one child node per permission:
+`request_permission(&[…])` raises one floating prompt for the whole batch; the answer arrives as `PermissionRequestResult`. Zellij persists grants in `<cache-dir>/zellij/permissions.kdl`, keyed on the exact plugin path string — canonicalize before loading or the grant misses ([multiplexers.md](../../internals/multiplexers.md#the-zellij-presence-plugin)). The KDL shape is a plugin-path node with one child node per permission:
 
 ```kdl
 "/home/user/.local/share/rimz/plugins/rimz-presence-zellij.wasm" {
@@ -233,7 +233,7 @@ PipeMessage {
 - A pipe with no explicit destination **broadcasts to all running plugins**; `--plugin <url>` targets (and launch-or-messages) one. Same URL + different `--plugin-configuration` = a **different plugin identity** for destination matching.
 - **CLI backpressure:** the piping process's STDIN buffer is released only after the plugin renders (or declines to render). `block_cli_pipe_input(id)` holds the pipeline; `unblock_cli_pipe_input(id)` resumes it; `cli_pipe_output(id, data)` writes to the CLI pipe's STDOUT independently. Several plugins can hold/feed the same pipe if they share its id.
 - Plugin → plugin: `pipe_message_to_plugin(MessageToPlugin)`; destination `zellij:OWN_URL` expands to the caller's own URL (self-replication — guard against config-keyed message loops).
-- The CLI side (`zellij pipe`) blocks while a launched plugin's permission prompt is pending — bound the call and reap only the CLI client ([multiplexers.md](../../internals/multiplexers.md#zellij-presence-channel)).
+- The CLI side (`zellij pipe`) blocks while a launched plugin's permission prompt is pending — bound the call and reap only the CLI client ([multiplexers.md](../../internals/multiplexers.md#the-zellij-presence-plugin)).
 
 ### Keybind actions
 

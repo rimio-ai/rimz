@@ -47,7 +47,7 @@ Notification handlers run a command of your choosing when a row needs attention 
 
 ### The Zellij presence plugin
 
-On Zellij, RimZ loads a small presence plugin into each session so the sidebar learns pane layout by push, and a tab switch lands back on your work instead of the sidebar ([internals](../internals/multiplexers.md#zellij-presence-channel)). Zellij normally prompts before a plugin gets permissions; RimZ seeds that grant ahead of load, keyed to the exact plugin path it materializes, so the first attach is not interrupted. The grant covers:
+On Zellij, RimZ loads a small presence plugin into each session so the sidebar learns pane layout by push, and a tab switch lands back on your work instead of the sidebar ([internals](../internals/multiplexers.md#the-zellij-presence-plugin)). Zellij normally prompts before a plugin gets permissions; RimZ seeds that grant ahead of load, keyed to the exact plugin path it materializes, so the first attach is not interrupted. The grant covers:
 
 - **Access Zellij state**: the plugin watches pane and tab shape.
 - **Run commands**: it runs the RimZ-owned `rimz sidebar wake` and `rimz sidebar focus` calls, and nothing else.

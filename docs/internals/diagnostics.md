@@ -23,7 +23,7 @@ Three surfaces carry workspace identity through one [`DiagSink`](../../crates/ri
 | `notify.log.jsonl` | state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md) |
 | `plugin-presence.log.jsonl` | state dir | Zellij presence-plugin keepalive telemetry | [below](#zellij-presence-plugin-telemetry) |
 | `binding.log.jsonl` | runtime dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
-| `topology-writer-conflict.json` | runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#zellij-presence-channel) |
+| `topology-writer-conflict.json` | runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 
 The notification trace and pane-binding logs are owned by their own subsystems; they share the rotating helper and nothing else. The rest of this doc is `diag.log.jsonl`.
 

@@ -1,6 +1,6 @@
 # Zellij session bridge
 
-Local contract for `crates/rimz-presence-zellij/` — the headless wasm bridge between Zellij's plugin APIs and the RimZ host. Extends the root [AGENTS.md](../../AGENTS.md); runtime detail lives in [multiplexers.md](../../docs/internals/multiplexers.md#zellij-presence-channel).
+Local contract for `crates/rimz-presence-zellij/` — the headless wasm bridge between Zellij's plugin APIs and the RimZ host. Extends the root [AGENTS.md](../../AGENTS.md); runtime detail lives in [multiplexers.md](../../docs/internals/multiplexers.md#the-zellij-presence-plugin).
 
 ## Boundary
 
