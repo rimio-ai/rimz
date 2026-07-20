@@ -1,4 +1,4 @@
-//! Pure accounting for `rimz remote bandwidth`.
+//! Pure accounting for `rimz pane bandwidth`.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;

@@ -5,6 +5,8 @@
 //! store snapshot modules so live-presence types do not depend on durable
 //! read/write layers.
 
+pub mod bandwidth;
+
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 

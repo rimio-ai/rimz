@@ -24,14 +24,13 @@ Start with the [remote guide](../guide/remote.md) for what a user sees and the [
 | [`remote/setup.rs`](../../crates/rimz/src/remote/setup.rs) | The `rimz remote setup` installer snippet. |
 | [`remote/tty.rs`](../../crates/rimz/src/remote/tty.rs) | Termios damage detection, flag repair, and the emulator reset byte string. |
 | [`remote/version.rs`](../../crates/rimz/src/remote/version.rs) | Client/host version-skew classification. |
-| [`remote/bandwidth.rs`](../../crates/rimz/src/remote/bandwidth.rs) | Pure accounting for `rimz remote bandwidth`. |
 | [`cli/remote.rs`](../../crates/rimz/src/cli/remote.rs) | The clap surface, alias resolution, and the print/exec/supervise fork. |
 | [`cli/remote/supervisor.rs`](../../crates/rimz/src/cli/remote/supervisor.rs) | The supervision loop: background masters, foreground attach, probe threads, reachability workers, forwards, notifications. |
 | [`cli/remote/outage_ui.rs`](../../crates/rimz/src/cli/remote/outage_ui.rs) | The alternate-screen connection panel and its plain-line fallback. |
 | [`cli/remote/web.rs`](../../crates/rimz/src/cli/remote/web.rs) | Web prep, credential relay, and tunnel supervision. |
 | [`cli/remote/link_stats.rs`](../../crates/rimz/src/cli/remote/link_stats.rs) | The remote-side `rimz remote link-stats ingest` service. |
 | [`cli/remote/tty.rs`](../../crates/rimz/src/cli/remote/tty.rs) | The `TtyGuard` that snapshots and restores local termios. |
-| [`cli/remote/bandwidth.rs`](../../crates/rimz/src/cli/remote/bandwidth.rs), [`setup.rs`](../../crates/rimz/src/cli/remote/setup.rs), [`list.rs`](../../crates/rimz/src/cli/remote/list.rs) | Sampling, install, and alias listing handlers. |
+| [`cli/remote/setup.rs`](../../crates/rimz/src/cli/remote/setup.rs), [`cli/remote/list.rs`](../../crates/rimz/src/cli/remote/list.rs) | Install and alias listing handlers. |
 
 Four collaborators sit outside the module and are easy to miss:
 
@@ -334,7 +333,7 @@ Which engine serves the room, and how tokens are minted, belongs to [web.md](./w
 
 ## Bandwidth attribution
 
-`rimz remote bandwidth --secs 5` measures what a room costs its link. It samples the room it runs in and reports each pane's Linux process write-rate, plus the SSH wire-rate when an SSH client is attached. Run it on the Linux host serving the room, as the room's user, and without `sudo`, because privilege escalation resets backend and socket resolution away from the room.
+`rimz pane bandwidth --secs 5` measures what a room costs its link. It samples the room it runs in and reports each pane's Linux process write-rate, plus the SSH wire-rate when an SSH client is attached. Run it on the Linux host serving the room, as the room's user, and without `sudo`, because privilege escalation resets backend and socket resolution away from the room. The accounting lives with the pane primitives in [`pane/bandwidth.rs`](../../crates/rimz/src/pane/bandwidth.rs), and [`cli/pane/bandwidth.rs`](../../crates/rimz/src/cli/pane/bandwidth.rs) owns sampling and presentation; the link-cost story stays here because the optional `WIRE(ssh)` rows describe the remote transport.
 
 The command resolves the current workspace session, lists panes through the selected backend, pins each pane's root process tree at the start of the window, and reads `/proc/<pid>/io` `wchar` before and after the sleep. For remote rooms it also matches the attached mux client's `SSH_CONNECTION` tuple to the room's socket and reads `ss` TCP_INFO counters (`bytes_acked`, `bytes_received`) over the same window, printed as `WIRE(ssh↑)` for egress to the client and `WIRE(ssh↓)` for ingress.
 

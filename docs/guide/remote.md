@@ -79,10 +79,10 @@ Automatic forwarding rides the supervised link probe and ControlMaster, so it is
 
 Only the screen crosses the wire. The agents, their transcripts, the git work, and the store all run on the host; SSH carries the multiplexer's rendered output one way and your keystrokes the other, the same bytes a local attach would paint. The multiplexer redraws only the focused tab and diffs each frame, and every attach turns on SSH compression, so an idle room is nearly silent and a busy pane costs about what watching it locally would.
 
-To measure the actual traffic, `rimz remote bandwidth` samples the room and attributes the output rate per pane, with the compressed SSH wire-rate alongside:
+To measure the actual traffic, `rimz pane bandwidth` samples the room and attributes the output rate per pane, with the compressed SSH wire-rate alongside:
 
 ```sh
-rimz remote bandwidth --secs 5   # per-pane output and the SSH wire-rate
+rimz pane bandwidth --secs 5   # per-pane output and the SSH wire-rate
 ```
 
 Run it on the Linux host serving the room, where the write-rate counters live, from inside the remote shell after you attach. The per-pane figures are raw producer output; the `WIRE(ssh)` rows are the compressed payload actually on the socket, normally far below the sum, because the multiplexer throttles to the focused tab before SSH compresses what is left.

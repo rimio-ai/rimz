@@ -16,7 +16,6 @@ use rimz::remote::{
     infocmp_program, remote_lineage, term_plan_from,
 };
 
-mod bandwidth;
 mod link_stats;
 mod list;
 mod outage_ui;
@@ -149,14 +148,6 @@ enum RemoteSubcmd {
         #[arg(long)]
         json: bool,
     },
-    /// Profile the current room's per-pane render output (run on the host serving the room).
-    Bandwidth {
-        /// Sampling window in seconds.
-        #[arg(long, default_value_t = 5)]
-        secs: u64,
-        #[arg(long)]
-        json: bool,
-    },
     /// Hidden remote-link stats plumbing. The SSH probe stream calls this.
     #[command(name = "link-stats", hide = true)]
     LinkStats {
@@ -201,7 +192,6 @@ impl RemoteArgs {
             RemoteSubcmd::Rm { .. } => "remote rm",
             RemoteSubcmd::Rename { .. } => "remote rename",
             RemoteSubcmd::List { .. } => "remote list",
-            RemoteSubcmd::Bandwidth { .. } => "remote bandwidth",
             RemoteSubcmd::LinkStats { .. } => "remote link-stats",
         }
     }
@@ -323,7 +313,6 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             list::print(aliases.entries(), json)?;
             Ok(())
         }
-        RemoteSubcmd::Bandwidth { secs, json } => bandwidth::run(secs, json, globals),
         RemoteSubcmd::LinkStats { command } => match command {
             LinkStatsSubcmd::Ingest(args) => link_stats::ingest(args),
         },

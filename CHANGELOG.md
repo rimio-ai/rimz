@@ -29,6 +29,7 @@ This section accrues as work lands, and ships as `v0.4`. Three themes so far: pr
 
 ### Changed
 
+- `rimz remote bandwidth` is now `rimz pane bandwidth`: the per-pane write-rate profiler is a pane primitive and works for local rooms; only the SSH `WIRE` rows are remote-specific. → [pane](./docs/reference/cli/pane.md#bandwidth)
 - RimZ runs its own tmux server at `<runtime-root>/rimz/tmux/server`, one per runtime domain, holding one session per workspace. Your default tmux server is no longer touched: RimZ's server-global options and root key bindings stay confined to it, and a server born in a directory you later delete can no longer strand new panes there. `rimz doctor` reports a same-named session left on the legacy default server and gives you the command that retires it.
 - Remote version skew is tiered by how far apart the two builds are. A patch difference warns, a minor difference requires an explicit one-shot bypass, and a major difference refuses the attach.
 - The sidebar defaults to the wide dashboard width when pets are enabled, including on narrow views and when launch geometry is unknown. Explicit width configuration and room overrides keep precedence.

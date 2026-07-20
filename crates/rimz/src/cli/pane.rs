@@ -1,4 +1,6 @@
-//! `rimz pane` — the public pane primitives: list, capture, send, focus.
+//! `rimz pane` — the public pane primitives: list, bandwidth, capture, send, focus.
+
+mod bandwidth;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -21,6 +23,15 @@ pub struct PaneArgs {
 
 #[derive(Debug, Subcommand)]
 enum PaneSubcmd {
+    /// Profile the current room's per-pane render output (run on the host serving the room).
+    Bandwidth {
+        /// Sampling window in seconds.
+        #[arg(long, default_value_t = 5)]
+        secs: u64,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// List panes known to the active multiplexer.
     List {
         /// Emit JSON.
@@ -96,6 +107,7 @@ enum PaneSubcmd {
 
 pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
+        PaneSubcmd::Bandwidth { secs, json } => bandwidth::run(secs, json, globals),
         PaneSubcmd::List { json, session_name } => {
             let mux = rimz::mux::auto_detect_backend(globals.mux)?;
             let backend = rimz::mux::backend_for(mux);

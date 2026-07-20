@@ -210,7 +210,7 @@ pub(crate) fn tmux_cmd(socket: &Path) -> CommandSpec {
 }
 
 /// Base command addressing the managed server, for the readers outside the
-/// backend — doctor, remote bandwidth, the pixel probe, uninstall.
+/// backend — doctor, pane bandwidth, the pixel probe, uninstall.
 ///
 /// Use this rather than `CommandSpec::new("tmux")`: a bare argv reaches the
 /// user's default server, where RimZ owns nothing. `cargo xtask invariants`

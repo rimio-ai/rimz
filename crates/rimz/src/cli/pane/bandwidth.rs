@@ -8,12 +8,12 @@ use anyhow::{Context, Result, bail};
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::PaneListOptions;
 use rimz::pane::PaneRef;
-use rimz::proc::ProcInfo;
-use rimz::remote::bandwidth::{
+use rimz::pane::bandwidth::{
     PaneRate, PaneSample, SshConn, children_by_parent, parse_ss_counters, parse_tmux_client_pids,
     rates, sorted_rates, ssh_conns_for_client_pids, subtree_pids, total_bps, wire_rates,
     zellij_client_pids,
 };
+use rimz::proc::ProcInfo;
 use rimz::workspace::WorkspaceResolver;
 
 use crate::cli::GlobalFlags;
@@ -21,15 +21,15 @@ use crate::cli::render;
 
 const DEFAULT_LABEL_WIDTH: usize = 56;
 const UNAVAILABLE_NOTICE: &str =
-    "rimz remote bandwidth needs Linux VFS write-rate counters on the host serving the room.";
-const NO_PANE_PIDS_NOTICE: &str = "rimz remote bandwidth could not resolve any pane root process.";
+    "rimz pane bandwidth needs Linux VFS write-rate counters on the host serving the room.";
+const NO_PANE_PIDS_NOTICE: &str = "rimz pane bandwidth could not resolve any pane root process.";
 const ZELLIJ_NO_PANE_PIDS_NOTICE: &str = concat!(
-    "rimz remote bandwidth could not resolve any pane root process. ",
+    "rimz pane bandwidth could not resolve any pane root process. ",
     "On Zellij, a pane resolves only while it runs a live, uniquely named foreground process; ",
     "idle look-alike shells are skipped."
 );
 const IO_UNREADABLE_NOTICE: &str = concat!(
-    "rimz remote bandwidth resolved pane processes but could not read /proc/<pid>/io. ",
+    "rimz pane bandwidth resolved pane processes but could not read /proc/<pid>/io. ",
     "The room may be served by another user, or the kernel lacks CONFIG_TASK_IO_ACCOUNTING."
 );
 const REPORT_CAVEAT: &str = concat!(
