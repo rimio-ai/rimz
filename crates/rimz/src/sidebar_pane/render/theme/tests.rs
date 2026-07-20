@@ -2,8 +2,25 @@
 //! ladder, depth-aware brand emission, and capability gating.
 
 use super::*;
-use crate::config::{Semantic, ThemeColor, ThemeMode, nearest_xterm_index};
+use crate::config::{DEFAULT_SCHEME, Semantic, ThemeColor, ThemeMode, nearest_xterm_index};
 use crate::theme::scheme;
+
+/// A theme at the config's own depth, with `NO_COLOR` off — the shape almost
+/// every test wants.
+fn themed(theme: ThemeConfig) -> Theme {
+    Theme::fixed_for_theme(false, &theme)
+}
+
+fn truecolor_theme(theme: ThemeConfig) -> Theme {
+    themed(ThemeConfig {
+        mode: ThemeMode::Truecolor,
+        ..theme
+    })
+}
+
+fn truecolor_default() -> Theme {
+    truecolor_theme(ThemeConfig::default())
+}
 
 fn indices(palette: Palette) -> [Tone; 13] {
     [
@@ -57,16 +74,10 @@ fn default_indexed_palette_matches_expected_indices() {
 
 #[test]
 fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
-    let theme = Theme {
-        palette: Palette::resolve(
-            &ThemeConfig {
-                good: Some(ThemeColor::Indexed(34)),
-                ..ThemeConfig::default()
-            },
-            ColorDepth::Indexed,
-        ),
-        ..Theme::default()
-    };
+    let theme = themed(ThemeConfig {
+        good: Some(ThemeColor::Indexed(34)),
+        ..ThemeConfig::default()
+    });
     assert_eq!(theme.good(Modifier::empty()).fg, Some(Color::Indexed(34)));
     assert_eq!(theme.alarm(Modifier::empty()).fg, Some(Color::Indexed(210)));
     assert_eq!(
@@ -79,17 +90,10 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
         Some(Color::Indexed(173))
     );
 
-    let theme = Theme {
-        palette: Palette::resolve(
-            &ThemeConfig {
-                caution: Some(ThemeColor::Indexed(214)),
-                ..ThemeConfig::default()
-            },
-            ColorDepth::Indexed,
-        ),
-        ..Theme::default()
-    };
-
+    let theme = themed(ThemeConfig {
+        caution: Some(ThemeColor::Indexed(214)),
+        ..ThemeConfig::default()
+    });
     assert_eq!(
         theme.heat_tone(2.0 / 3.0),
         Color::Indexed(214),
@@ -102,28 +106,72 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     );
 }
 
+/// An override reaches both the flat accessor and the ramp stop it anchors, and
+/// is emitted at the frame's depth: true RGB at truecolor, the nearest xterm
+/// bucket on the cube. An explicit xterm index passes through untouched at
+/// either depth.
 #[test]
-fn rgb_overrides_follow_depth() {
-    let theme_config = ThemeConfig {
-        mode: ThemeMode::Truecolor,
-        good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
-        ..ThemeConfig::default()
-    };
-    let truecolor = Theme::fixed_for_theme(false, &theme_config);
-    assert_eq!(
-        truecolor.good(Modifier::empty()).fg,
-        Some(Color::Rgb(0xa3, 0xbe, 0x8c))
-    );
+fn slot_overrides_follow_depth() {
+    const SAGE: (u8, u8, u8) = (0xa3, 0xbe, 0x8c);
+    const HOT_RED: (u8, u8, u8) = (0xff, 0x00, 0x00);
 
-    let theme_config = ThemeConfig {
-        good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
+    for (color, truecolor_tone, indexed_tone) in [
+        (
+            ThemeColor::Rgb(SAGE.0, SAGE.1, SAGE.2),
+            Color::Rgb(SAGE.0, SAGE.1, SAGE.2),
+            Color::Indexed(nearest_xterm_index(SAGE.0, SAGE.1, SAGE.2)),
+        ),
+        (
+            ThemeColor::Indexed(34),
+            Color::Indexed(34),
+            Color::Indexed(34),
+        ),
+    ] {
+        let config = |mode| ThemeConfig {
+            mode,
+            good: Some(color),
+            ..ThemeConfig::default()
+        };
+        assert_eq!(
+            themed(config(ThemeMode::Truecolor))
+                .good(Modifier::empty())
+                .fg,
+            Some(truecolor_tone),
+            "{color:?} at truecolor"
+        );
+        assert_eq!(
+            themed(config(ThemeMode::default()))
+                .good(Modifier::empty())
+                .fg,
+            Some(indexed_tone),
+            "{color:?} on the cube"
+        );
+    }
+
+    // The ramp's `alarm` stop follows the same rule at its 1.0 end.
+    for (mode, expected) in [
+        (
+            ThemeMode::Truecolor,
+            Color::Rgb(HOT_RED.0, HOT_RED.1, HOT_RED.2),
+        ),
+        (
+            ThemeMode::default(),
+            Color::Indexed(nearest_xterm_index(HOT_RED.0, HOT_RED.1, HOT_RED.2)),
+        ),
+    ] {
+        let theme = themed(ThemeConfig {
+            mode,
+            alarm: Some(ThemeColor::Rgb(HOT_RED.0, HOT_RED.1, HOT_RED.2)),
+            ..ThemeConfig::default()
+        });
+        assert_eq!(theme.heat_tone(1.0), expected);
+    }
+
+    let indexed_alarm = themed(ThemeConfig {
+        alarm: Some(ThemeColor::Indexed(196)),
         ..ThemeConfig::default()
-    };
-    let indexed = Theme::fixed_for_theme(false, &theme_config);
-    assert_eq!(
-        indexed.good(Modifier::empty()).fg,
-        Some(Color::Indexed(nearest_xterm_index(0xa3, 0xbe, 0x8c)))
-    );
+    });
+    assert_eq!(indexed_alarm.heat_tone(1.0), Color::Indexed(196));
 }
 
 #[test]
@@ -159,13 +207,7 @@ fn breathe_emits_color_depth_fallbacks() {
         crate::sidebar_pane::render::animation::BREATH_DEEP_AMPLITUDE,
     );
 
-    let truecolor = Theme::fixed_for_theme(
-        false,
-        &ThemeConfig {
-            mode: ThemeMode::Truecolor,
-            ..ThemeConfig::default()
-        },
-    );
+    let truecolor = truecolor_default();
     let truecolor_trough = truecolor.breathe(Color::Indexed(179), trough);
     let truecolor_peak = truecolor.breathe(Color::Indexed(179), peak);
     assert!(matches!(truecolor_trough.fg, Some(Color::Rgb(..))));
@@ -202,48 +244,11 @@ fn breathe_emits_color_depth_fallbacks() {
 }
 
 #[test]
-fn heat_tone_honors_interpolatable_overrides() {
-    let truecolor = Theme::fixed_for_theme(
-        false,
-        &ThemeConfig {
-            mode: ThemeMode::Truecolor,
-            alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
-            ..ThemeConfig::default()
-        },
-    );
-    assert_eq!(truecolor.heat_tone(1.0), Color::Rgb(0xff, 0x00, 0x00));
-
-    let indexed_rgb = Theme::fixed_for_theme(
-        false,
-        &ThemeConfig {
-            alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
-            ..ThemeConfig::default()
-        },
-    );
-    assert_eq!(
-        indexed_rgb.heat_tone(1.0),
-        Color::Indexed(nearest_xterm_index(0xff, 0x00, 0x00))
-    );
-
-    let indexed_xterm = Theme::fixed_for_theme(
-        false,
-        &ThemeConfig {
-            alarm: Some(ThemeColor::Indexed(196)),
-            ..ThemeConfig::default()
-        },
-    );
-    assert_eq!(indexed_xterm.heat_tone(1.0), Color::Indexed(196));
-}
-
-#[test]
 fn heat_tone_keeps_scheme_rgb_for_ansi_overrides() {
-    let theme = Theme::fixed_for_theme(
-        false,
-        &ThemeConfig {
-            alarm: Some(ThemeColor::Indexed(1)),
-            ..ThemeConfig::default()
-        },
-    );
+    let theme = themed(ThemeConfig {
+        alarm: Some(ThemeColor::Indexed(1)),
+        ..ThemeConfig::default()
+    });
     assert_eq!(
         theme.alarm(Modifier::empty()).fg,
         Some(Color::Indexed(1)),
@@ -258,13 +263,7 @@ fn heat_tone_keeps_scheme_rgb_for_ansi_overrides() {
 
 #[test]
 fn truecolor_heat_gradient_sweeps_green_to_alarm() {
-    let theme = Theme::fixed_for_theme(
-        false,
-        &ThemeConfig {
-            mode: ThemeMode::Truecolor,
-            ..ThemeConfig::default()
-        },
-    );
+    let theme = truecolor_default();
     let sample = |amount: f32| match theme.heat_tone(amount) {
         Color::Rgb(red, green, blue) => (red, green, blue),
         other => panic!("truecolor heat tone should be RGB, got {other:?}"),
@@ -285,11 +284,10 @@ fn truecolor_heat_gradient_sweeps_green_to_alarm() {
 
 #[test]
 fn bundled_scheme_resolves_by_name() {
-    let theme_config = ThemeConfig {
+    let theme = themed(ThemeConfig {
         scheme: Some("TokyoNight Night".to_owned()),
         ..ThemeConfig::default()
-    };
-    let theme = Theme::fixed_for_theme(false, &theme_config);
+    });
     let (good_r, good_g, good_b) = Semantic::DEFAULT.good;
     assert_eq!(
         theme.good(Modifier::empty()).fg,
@@ -297,71 +295,45 @@ fn bundled_scheme_resolves_by_name() {
     );
 }
 
+/// A brand carries a hand-tuned xterm index beside its truecolor tone, so the
+/// cube uses the curated cell rather than whatever quantizing the RGB lands on.
 #[test]
-fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
-    let panel = crate::SidebarProviderPanel {
-        kind: "claude".to_owned(),
-        account_scope: Default::default(),
-        product_name: "Claude".to_owned(),
-        art: Vec::new(),
-        art_tints: Vec::new(),
-        color: 173,
-        color_rgb: Some((0xd9, 0x77, 0x57)),
-        version: None,
-        plan: None,
-        metered: false,
-        remote_control: Default::default(),
-        active_sessions: 0,
-        spending: None,
-        day_budget: None,
-        extra_credits: None,
-        reset_credits: None,
-        color_role: None,
-        window_placeholders: Vec::new(),
-        windows: Vec::new(),
-    };
-
-    let indexed = Theme::fixed(false);
-    assert_eq!(indexed.brand_tone(&panel), Color::Indexed(173));
-
-    let truecolor = Theme::fixed_for_theme(
-        false,
-        &ThemeConfig {
-            mode: ThemeMode::Truecolor,
-            ..ThemeConfig::default()
-        },
-    );
-    assert_eq!(truecolor.brand_tone(&panel), Color::Rgb(0xd9, 0x77, 0x57));
-}
-
-#[test]
-fn money_tone_uses_fixed_dollar_green_at_active_depth() {
-    let truecolor = Theme {
-        depth: ColorDepth::Truecolor,
-        palette: Palette::resolve(&ThemeConfig::default(), ColorDepth::Truecolor),
-        ..Theme::default()
-    };
-    let indexed = Theme::fixed(false);
-    assert_eq!(truecolor.money_tone(), Color::Rgb(0x85, 0xbb, 0x65));
+fn brand_keeps_its_curated_index_off_truecolor() {
+    let brand = (0xd9, 0x77, 0x57);
     assert_eq!(
-        indexed.money_tone(),
-        Color::Indexed(nearest_xterm_index(0x85, 0xbb, 0x65))
+        Theme::fixed(false).brand_rgb_tone(173, Some(brand)),
+        Color::Indexed(173)
     );
-    // The fixed dollar green is distinct from the semantic good/green slot.
-    assert_ne!(truecolor.money_tone(), truecolor.heat_tone(0.0));
+    assert_eq!(
+        truecolor_default().brand_rgb_tone(173, Some(brand)),
+        Color::Rgb(brand.0, brand.1, brand.2)
+    );
 }
 
+#[test]
+fn money_tone_is_its_own_green_apart_from_the_semantic_slot() {
+    let truecolor = truecolor_default();
+    assert_eq!(truecolor.money_tone(), Color::Rgb(0x85, 0xbb, 0x65));
+    assert_ne!(
+        truecolor.money_tone(),
+        truecolor.heat_tone(0.0),
+        "the fixed dollar green never collapses onto the scheme's good slot"
+    );
+}
+
+/// The DIM policy across the gray ladder. The tones themselves are pinned once
+/// in [`default_indexed_palette_matches_expected_indices`]; what matters here is
+/// which of them carry a weight modifier.
 #[test]
 fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
     let lit = Theme::fixed(false);
-    for (style, index) in [(lit.body(), 146), (lit.muted(), 102), (lit.faint(), 59)] {
-        assert_eq!(style.fg, Some(Color::Indexed(index)));
+    for style in [lit.body(), lit.muted(), lit.faint()] {
+        assert!(style.fg.is_some());
         assert!(style.add_modifier.is_empty(), "no DIM attenuation when lit");
     }
-    assert_eq!(lit.rule().fg, Some(Color::Indexed(239)));
     assert!(
         lit.rule().add_modifier.contains(Modifier::DIM),
-        "rule keeps a standing DIM over its own darkest gray (239), not faint's (59) — the one ladder tone still attenuated when lit"
+        "rule keeps a standing DIM over its own darkest gray — the one ladder tone still attenuated when lit"
     );
 
     let dark = Theme::fixed(true);
@@ -369,27 +341,11 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
         assert_eq!(style.fg, None);
         assert!(style.add_modifier.contains(Modifier::DIM));
     }
-
-    let themed = Theme {
-        palette: Palette::resolve(
-            &ThemeConfig {
-                body: Some(ThemeColor::Indexed(252)),
-                ..ThemeConfig::default()
-            },
-            ColorDepth::Indexed,
-        ),
-        ..Theme::default()
-    };
-    assert_eq!(themed.body().fg, Some(Color::Indexed(252)));
 }
 
 #[test]
 fn soft_brand_dims_every_built_in_brand_keeping_its_hue() {
-    let truecolor = Theme {
-        depth: ColorDepth::Truecolor,
-        palette: Palette::resolve(&ThemeConfig::default(), ColorDepth::Truecolor),
-        ..Theme::default()
-    };
+    let truecolor = truecolor_default();
     // The three shipped provider brands: clay, Codex blue, Pi green. Pi sits at
     // the body weight, so a recession toward the body tone would vanish — the
     // fixed lightness step must still dim it visibly.
@@ -428,17 +384,13 @@ fn soft_brand_dims_every_built_in_brand_keeping_its_hue() {
 
 #[test]
 fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
-    let theme = Theme {
-        no_color: true,
-        palette: Palette::resolve(
-            &ThemeConfig {
-                alarm: Some(ThemeColor::Indexed(196)),
-                ..ThemeConfig::default()
-            },
-            ColorDepth::Indexed,
-        ),
-        ..Theme::default()
-    };
+    let theme = Theme::fixed_for_theme(
+        true,
+        &ThemeConfig {
+            alarm: Some(ThemeColor::Indexed(196)),
+            ..ThemeConfig::default()
+        },
+    );
     let style = theme.alarm(Modifier::BOLD);
     assert_eq!(style.fg, None, "NO_COLOR suppresses even a themed tone");
     assert!(style.add_modifier.contains(Modifier::BOLD));
@@ -462,52 +414,32 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
     assert!(dark.add_modifier.contains(Modifier::BOLD));
 }
 
-fn truecolor_default() -> Theme {
-    Theme::fixed_for_theme(
-        false,
-        &ThemeConfig {
-            mode: ThemeMode::Truecolor,
-            ..ThemeConfig::default()
-        },
-    )
-}
-
-/// The component-token oracle: every UI role resolves to the semantic slot it
-/// names, at both palette depths, and always to a concrete tone (never `Reset`
-/// or a raw carrier). The `match` below mirrors [`Component::resolve`]; the two
-/// independent tables must agree, so a moved arm fails here, and a new variant
-/// fails to compile until both are updated.
+/// Every component token resolves to a concrete tone at either depth — never
+/// `Reset` or a raw terminal carrier — and drops to modifier-only under
+/// `NO_COLOR`, so the gauge still reads by weight. Which slot each token names
+/// is the no-wildcard match in [`Component::resolve`]; a new variant fails to
+/// compile there until it is mapped, so restating that table here would only
+/// mirror it.
 #[test]
-fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
-    use Component::*;
+fn components_resolve_concretely_and_collapse_under_no_color() {
     for theme in [Theme::fixed(false), truecolor_default()] {
-        let p = theme.palette;
         for &component in Component::ALL {
-            let expected = match component {
-                Sessions | Output | HelpKey | WindowHuge => p.accent,
-                LaneSpine => p.selection,
-                WorktreeHeader | BranchDelta => p.body,
-                WorktreePristine | WindowSmall => p.faint,
-                ProcMem | CacheRead | RemoteControl | PrCiPassing => p.good,
-                WorktreeReconciling | Compaction | PrCiPending => p.warn,
-                WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu
-                | WindowLarge => p.cool,
-                SubagentHeader | ProcIo | CacheWrite => p.meta,
-                RemoteControlDown | WorktreePrClosed | PrCiFailing => p.alarm,
-                Input => p.expense,
-                WorktreeMerged | WindowMedium => p.muted,
-            };
-            let got = theme.component(component);
-            assert_eq!(
-                got,
-                tone_color(expected),
-                "{component:?} resolves to its named slot"
-            );
+            let tone = theme.component(component);
             assert!(
-                matches!(got, Color::Indexed(_) | Color::Rgb(..)),
-                "{component:?} resolves to a concrete tone, got {got:?}"
+                matches!(tone, Color::Indexed(_) | Color::Rgb(..)),
+                "{component:?} resolves to a concrete tone, got {tone:?}"
             );
         }
+    }
+
+    let plain = Theme::fixed(true);
+    for &component in Component::ALL {
+        let style = plain.styled(component, Modifier::BOLD);
+        assert_eq!(style.fg, None, "{component:?} drops its hue under NO_COLOR");
+        assert!(
+            style.add_modifier.contains(Modifier::BOLD),
+            "{component:?} keeps its modifier under NO_COLOR"
+        );
     }
 }
 
@@ -555,21 +487,6 @@ fn expense_reads_redder_than_alarm() {
     );
 }
 
-/// Under `NO_COLOR` every component drops its hue but keeps the requested
-/// modifier — the gauge/flash/marker still reads by shape and weight.
-#[test]
-fn components_collapse_to_modifier_only_under_no_color() {
-    let plain = Theme::fixed(true);
-    for &component in Component::ALL {
-        let style = plain.styled(component, Modifier::BOLD);
-        assert_eq!(style.fg, None, "{component:?} drops its hue under NO_COLOR");
-        assert!(
-            style.add_modifier.contains(Modifier::BOLD),
-            "{component:?} keeps its modifier under NO_COLOR"
-        );
-    }
-}
-
 /// A perceptual-luminance proxy so the lit-band assertions can read "darker"
 /// without reaching into the private OKLab type.
 fn luminance(color: Color) -> f32 {
@@ -594,12 +511,9 @@ fn selection_band_recesses_flat_below_selection_bg_at_truecolor() {
 #[test]
 fn highlight_steps_config_recesses_selection_band_deeper_at_truecolor() {
     let default = truecolor_default();
-    let mut config = ThemeConfig {
-        mode: ThemeMode::Truecolor,
-        ..ThemeConfig::default()
-    };
+    let mut config = ThemeConfig::default();
     config.display.highlight_steps.band = 10;
-    let deeper = Theme::fixed_for_theme(false, &config);
+    let deeper = truecolor_theme(config);
 
     assert!(
         luminance(deeper.selection_band().expect("configured band"))

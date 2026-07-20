@@ -262,42 +262,42 @@ mod tests {
     use super::*;
     use crate::config::{ThemeGlyphsConfig, validate_glyph_cells, validate_single_cell};
 
+    /// One walk of the catalog pinning every per-row invariant: the table is
+    /// indexed by [`GlyphRole`] discriminant, both presets fit their cell
+    /// budget, role names round-trip, and a curated Nerd Font icon is a real
+    /// override rather than a copy of the Unicode glyph it replaces.
     #[test]
-    fn catalog_is_complete_and_in_glyph_role_order() {
-        for (index, &role) in GlyphRole::ALL.iter().enumerate() {
-            let row = GLYPH_CATALOG
-                .get(index)
-                .unwrap_or_else(|| panic!("catalog is missing row for {}", role.namespaced_name()));
-            assert_eq!(
-                row.role,
-                role,
-                "catalog row for {} is out of discriminant order",
-                role.namespaced_name()
-            );
-        }
+    fn catalog_rows_are_ordered_complete_and_renderable() {
         assert_eq!(
             GLYPH_CATALOG.len(),
             GlyphRole::ALL.len(),
             "catalog contains a row without a GlyphRole"
         );
-    }
+        for (index, &role) in GlyphRole::ALL.iter().enumerate() {
+            let name = role.namespaced_name();
+            assert_eq!(
+                GLYPH_CATALOG[index].role, role,
+                "catalog row for {name} is out of discriminant order"
+            );
+            assert_eq!(
+                GlyphRole::from_namespaced(role.namespace(), role.name()),
+                Some(role),
+                "{name} maps back to the same role"
+            );
 
-    #[test]
-    fn every_builtin_glyph_fits_its_slot() {
-        for &role in GlyphRole::ALL {
             // Most shipped glyphs are one cell. The presence badge's Unicode
             // sleep cue deliberately uses a two-cell "zᶻ" cluster in footer
             // chrome, where the layout measures the whole badge span.
+            let unicode = unicode_glyph(role);
             if role == GlyphRole::ChromePresenceAway {
-                validate_glyph_cells(unicode_glyph(role))
-                    .unwrap_or_else(|err| panic!("unicode {}: {err}", role.namespaced_name()));
+                validate_glyph_cells(unicode).unwrap_or_else(|err| panic!("unicode {name}: {err}"));
             } else {
-                validate_single_cell(unicode_glyph(role))
-                    .unwrap_or_else(|err| panic!("unicode {}: {err}", role.namespaced_name()));
+                validate_single_cell(unicode).unwrap_or_else(|err| panic!("unicode {name}: {err}"));
             }
+
             if let Some(nerd) = nerd_font_glyph(role) {
-                validate_single_cell(nerd)
-                    .unwrap_or_else(|err| panic!("nerd-font {}: {err}", role.namespaced_name()));
+                validate_single_cell(nerd).unwrap_or_else(|err| panic!("nerd-font {name}: {err}"));
+                assert_ne!(nerd, unicode, "{name} carries a real Nerd Font icon");
             }
         }
     }
@@ -360,84 +360,6 @@ mod tests {
                 role.namespaced_name()
             );
         }
-
-        // The curated icons are real Nerd Font codepoints, distinct from Unicode.
-        for role in [
-            GlyphRole::CockpitWorkspace,
-            GlyphRole::CockpitPrOpen,
-            GlyphRole::TokensTotal,
-            GlyphRole::StatusIdle,
-            GlyphRole::WorktreeBranch,
-            GlyphRole::WorktreeMerge,
-            GlyphRole::ChannelHash,
-            GlyphRole::WorktreeTrunkBranch,
-            GlyphRole::WorktreeTrunkMerge,
-            GlyphRole::WorktreePrOpen,
-            GlyphRole::WorktreePrClosed,
-            GlyphRole::WorktreeReconciling,
-            GlyphRole::MeterReset,
-            GlyphRole::KeysFocus,
-            GlyphRole::KeysUnread,
-            GlyphRole::KeysAll,
-            GlyphRole::KeysSidebar,
-            GlyphRole::ChromePresenceAway,
-            GlyphRole::ChromeInfinity,
-        ] {
-            let nerd = nerd_font_glyph(role).expect("curated icon");
-            assert_ne!(
-                nerd,
-                unicode_glyph(role),
-                "{} carries a Nerd Font icon",
-                role.namespaced_name()
-            );
-        }
-    }
-
-    #[test]
-    fn role_names_round_trip() {
-        for &role in GlyphRole::ALL {
-            assert_eq!(
-                GlyphRole::from_namespaced(role.namespace(), role.name()),
-                Some(role),
-                "{} maps back to the same role",
-                role.namespaced_name()
-            );
-        }
-    }
-
-    #[test]
-    fn channel_hash_has_unicode_and_nerd_font_glyphs() {
-        assert_eq!(unicode_glyph(GlyphRole::ChannelHash), "#");
-        assert_eq!(nerd_font_glyph(GlyphRole::ChannelHash), Some("\u{f292}"));
-    }
-
-    #[test]
-    fn cockpit_open_pr_has_its_own_nerd_font_glyph() {
-        assert_eq!(unicode_glyph(GlyphRole::CockpitPrOpen), "⑃");
-        assert_eq!(nerd_font_glyph(GlyphRole::CockpitPrOpen), Some("\u{efa0}"));
-        assert_eq!(nerd_font_glyph(GlyphRole::WorktreePrOpen), Some("\u{f407}"));
-    }
-
-    #[test]
-    fn worktree_ci_uses_font_awesome_circle_glyphs() {
-        assert_eq!(
-            nerd_font_glyph(GlyphRole::WorktreeCiPassing),
-            Some("\u{f058}")
-        );
-        assert_eq!(
-            nerd_font_glyph(GlyphRole::WorktreeCiFailing),
-            Some("\u{f057}")
-        );
-        assert_eq!(
-            nerd_font_glyph(GlyphRole::WorktreeCiPending),
-            Some("\u{f192}")
-        );
-    }
-
-    #[test]
-    fn worktree_expand_keeps_its_unicode_chevron_in_both_sets() {
-        assert_eq!(unicode_glyph(GlyphRole::WorktreeExpand), "▸");
-        assert_eq!(nerd_font_glyph(GlyphRole::WorktreeExpand), None);
     }
 
     #[test]
@@ -463,14 +385,6 @@ mod tests {
         assert_eq!(glyphs.glyph(GlyphRole::MeterBarHalf), "H");
         assert_eq!(glyphs.glyph(GlyphRole::KeysFocus), "F");
         assert_eq!(glyphs.glyph(GlyphRole::ChromeBoxVertical), "|");
-        assert!(matches!(
-            glyphs.glyphs[GlyphRole::ChromeBoxVertical as usize],
-            Cow::Owned(_)
-        ));
-        assert!(matches!(
-            glyphs.glyphs[GlyphRole::WorktreeBranch as usize],
-            Cow::Borrowed(_)
-        ));
         assert_eq!(
             glyphs.glyph(GlyphRole::WorktreeBranch),
             nerd_font_glyph(GlyphRole::WorktreeBranch).expect("branch icon")

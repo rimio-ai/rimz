@@ -60,12 +60,6 @@ const SHIMMER_BOLD_THRESHOLD: f32 = 0.04;
 /// identity-adjacent tone; drops to plain bold under `no_color` like every other.
 const VALUE_FLASH_INK: Color = Color::Indexed(150);
 
-/// The scheme that ships as the default look, drawn from the bundled Alacritty
-/// catalog. `[theme] scheme` left unset resolves to this. The baked-in
-/// tones live in [`Semantic::DEFAULT`].
-#[cfg(test)]
-pub(crate) const DEFAULT_SCHEME: &str = crate::config::DEFAULT_SCHEME;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
     no_color: bool,
