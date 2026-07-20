@@ -499,6 +499,18 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .assert()
         .failure()
         .stderr(contains("colors.primary.background"));
+
+    let config_path = machine_config_path(&env);
+    write_machine_file(&config_path, "[remote_control]\ncodex = \"nope\"\n");
+    env.rimz()
+        .args(["config", "set", "remote_control.claude", "true"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "cannot set `remote_control.claude`: the existing config is invalid",
+        ))
+        .stderr(contains(config_path.display().to_string()))
+        .stderr(contains("invalid value true").not());
 }
 
 #[test]

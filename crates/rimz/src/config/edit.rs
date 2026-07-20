@@ -54,6 +54,12 @@ pub enum ConfigEditErr {
         value: String,
         message: String,
     },
+    #[error("cannot set `{key}`: the existing config is invalid")]
+    ExistingInvalid {
+        key: String,
+        #[source]
+        source: Box<super::ConfigErr>,
+    },
     #[error("validating merged {path}: {source}")]
     ValidateMerged {
         path: PathBuf,
@@ -256,15 +262,23 @@ fn apply_logical_key(
 ) -> Result<()> {
     validate_set_value(logical, &value)?;
     let value_display = value.to_string().trim().to_owned();
+    let pre_image = doc.to_string();
     set_document_value(doc, &document_key_for_set(logical), value)?;
     reject_unknown_set_key(path, logical, doc, core_path)?;
-    MachineConfig::parse_text(path, &doc.to_string(), agents_home)
-        .map(|_| ())
-        .map_err(|source| ConfigEditErr::Validate {
-            key: logical.join("."),
-            value: value_display,
-            message: source.validation_message(),
-        })
+    match MachineConfig::parse_text(path, &doc.to_string(), agents_home) {
+        Ok(_) => Ok(()),
+        Err(source) => match MachineConfig::parse_text(path, &pre_image, agents_home) {
+            Ok(_) => Err(ConfigEditErr::Validate {
+                key: logical.join("."),
+                value: value_display,
+                message: source.validation_message(),
+            }),
+            Err(source) => Err(ConfigEditErr::ExistingInvalid {
+                key: logical.join("."),
+                source: Box::new(source),
+            }),
+        },
+    }
 }
 
 fn read_existing(path: &Path) -> Result<Option<String>> {
