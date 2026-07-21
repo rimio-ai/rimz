@@ -795,9 +795,10 @@ impl AgentState {
     /// share. A live turn with an active provider park certificate reads as
     /// `paused` even when the lifecycle rollup is still `running`; native-input
     /// markers raise `waiting`, provider completion markers settle falsely-running
-    /// rows to `success`, and interruption markers settle falsely-running or
-    /// waiting rows to `idle`, which opens message delivery gates. Budget-aware
-    /// callers may still upgrade a paused projection to `failed`.
+    /// rows to `success`, interruption markers settle falsely-running or waiting
+    /// rows to `idle`, and a clean turn parked on background work reads as
+    /// `success`, which opens message delivery gates. Budget-aware callers may
+    /// still upgrade a paused projection to `failed`.
     pub fn effective_status(&self) -> AgentStatus {
         let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
         if settled == Some(TurnSettleOutcome::NativeWait) {
@@ -823,8 +824,16 @@ impl AgentState {
             Some(TurnSettleOutcome::PlanProposed) => AgentStatus::Waiting,
             Some(TurnSettleOutcome::Complete) => AgentStatus::Success,
             Some(TurnSettleOutcome::Interrupted) => AgentStatus::Idle,
-            // A native wait already returned above.
-            Some(TurnSettleOutcome::NativeWait) | None => self.status,
+            // A native wait already returned above. A clean turn end parked on
+            // still-in-flight background work reads as success: the verdict was
+            // earned, only the chore hums on (mirrors the sidebar's parked settle).
+            Some(TurnSettleOutcome::NativeWait) | None => {
+                if self.phase == TurnPhase::Parked {
+                    AgentStatus::Success
+                } else {
+                    self.status
+                }
+            }
         }
     }
 

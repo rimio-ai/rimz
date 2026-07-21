@@ -64,6 +64,18 @@ fn delivery_gates_follow_agent_lifecycle() {
     ));
     assert!(gate_open_for_agent(DeliveryGate::Any, &running, false, now));
 
+    let mut parked = agent("sess-parked", None);
+    parked.status = AgentStatus::Running;
+    parked.phase = crate::agents::TurnPhase::Parked;
+    assert!(gate_open_for_agent(DeliveryGate::Done, &parked, false, now));
+    assert!(gate_open_for_agent(DeliveryGate::Any, &parked, false, now));
+    assert!(!gate_open_for_agent(
+        DeliveryGate::Resume,
+        &parked,
+        false,
+        now
+    ));
+
     let mut plan = agent("sess-plan", None);
     plan.status = AgentStatus::Running;
     plan.phase = crate::agents::TurnPhase::Reasoning;
@@ -189,7 +201,7 @@ fn when_parser_accepts_literal_statuses_and_duration_units() {
 }
 
 #[test]
-fn delivery_checkpoint_requires_unparked_turn_end() {
+fn delivery_checkpoint_recognizes_turn_boundaries() {
     assert!(delivery_checkpoint(&LifecycleSignal::TurnInterrupted));
     assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
         errored: false,
@@ -199,7 +211,7 @@ fn delivery_checkpoint_requires_unparked_turn_end() {
         errored: true,
         parked_on_background: false,
     }));
-    assert!(!delivery_checkpoint(&LifecycleSignal::TurnEnded {
+    assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: true,
     }));

@@ -188,7 +188,7 @@ A compaction signal for a session the rollup has never seen folds to nothing. Co
 
 The rollup keeps the agent-owned truth. `snapshot.agents`, as `rimz sidebar snapshot` reports it, always holds the true lifecycle status; the *displayed* status is a projection over it, and two layers compute it.
 
-[`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap shared projection every read path uses, so `rimz pane list` and message delivery agree with the sidebar about hookless state: a still-`running` turn with an active park marker reads as `paused`, a hookless plan proposal reads as `waiting`, and a hookless completion or interruption reads as `success` or `idle`.
+[`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap shared projection every read path uses, so `rimz pane list` and message delivery agree with the sidebar about hookless state: a still-`running` turn with an active park marker reads as `paused`, a hookless plan proposal reads as `waiting`, a hookless completion or interruption reads as `success` or `idle`, and a clean end parked on background work reads as `success`.
 
 The sidebar row projection ([`project_display_status`](../../../crates/rimz/src/store/snapshot/view/aggregate/status.rs)) adds liveness and budget-aware refinements on top. The order is a pinned contract, top rung wins:
 

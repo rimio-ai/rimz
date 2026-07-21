@@ -126,7 +126,7 @@ Two flags add cross-agent gates to the boundary mode, and they compose with each
 - `--after <ADDR>` holds until that agent finishes its queued work. Each address must resolve to exactly one durable card; repeats form an all-of set. Naming the recipient itself is rejected, and so is a fan-out address.
 - `--when '@handle <status> <duration>'` holds until one agent stays continuously in a **raw** lifecycle status for the dwell. Self-reference is valid here, which is what makes keep-warm messages (`@codex --when '@codex idle 58m'`) work.
 
-The raw-versus-effective distinction is load-bearing. Delivery gates read `effective_status()`, which projects budget parks to `Paused` and settles hookless turns. `when` conditions read the stored `status` field directly, so a projection never trips a dwell the event log cannot justify.
+The raw-versus-effective distinction is load-bearing. Delivery gates read `effective_status()`, which projects budget parks to `Paused`, settles hookless turns, and reads a clean turn parked on background work as `Success` while the background chore runs. `when` conditions read the stored `status` field directly, so a projection never trips a dwell the event log cannot justify.
 
 ### The dispatch walk
 
@@ -180,7 +180,7 @@ Records that are scheduled, condition-blocked, or `Resume`-gated are filtered ou
 
 Three paths, all converging on the same one-message helper:
 
-**Lifecycle hooks.** [`delivery_checkpoint`](../../../crates/rimz/src/message.rs) admits an unparked root `TurnEnded`, `TurnInterrupted`, and `CompactionEnded`. On one of those the hook finds the FIFO head for the agent's card and spawns a detached `rimz message deliver --message-id <id>` with nulled stdio. `Registered`, subagent stops, compaction starts, and turn ends parked on background work do not check the queue.
+**Lifecycle hooks.** [`delivery_checkpoint`](../../../crates/rimz/src/message.rs) admits every root `TurnEnded`, plus `TurnInterrupted` and `CompactionEnded`. On one of those the hook finds the FIFO head for the agent's card and spawns a detached `rimz message deliver --message-id <id>` with nulled stdio. `Registered`, subagent stops, and compaction starts do not check the queue.
 
 The same hook separately nudges the sweep when this agent is *referenced* by an unmet condition: `after` conditions on delivery checkpoints, `when` conditions on a wider set that includes `Registered`, `TurnStarted`, `AwaitingInput`, and the subagent edges, because a dwell can start or break on any of them.
 

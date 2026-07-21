@@ -298,6 +298,16 @@ fn effective_status_keeps_raw_status_without_active_park() {
 }
 
 #[test]
+fn effective_status_settles_background_park_to_success() {
+    let mut parked = test_agent(AgentStatus::Running, 1_000);
+    parked.phase = TurnPhase::Parked;
+    assert_eq!(parked.effective_status(), AgentStatus::Success);
+
+    parked.phase = TurnPhase::Reasoning;
+    assert_eq!(parked.effective_status(), AgentStatus::Running);
+}
+
+#[test]
 fn waiting_and_interruption_outrank_a_budget_park() {
     let mut waiting = test_agent(AgentStatus::Waiting, 1_000);
     waiting.budget_park = Some(crate::harness::budget::BudgetPark {
