@@ -139,11 +139,13 @@ Resume covers two moments; the behavior model is [loops.md → Keep the fleet mo
 
 On a **rebirth after a reboot or multiplexer crash**, RimZ offers to recover prior agents from the durable record: the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab (empty named channels also reopen on same-boot rebirths). `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches (default 128).
 
-While the room is **live**, `auto_continue` (off by default) picks a parked turn back up by typing `auto_continue_text` through the same path as `message --steer`; first-run setup offers to enable it and `auto_redeem` together:
+While the room is **live**, `auto_continue` (off by default) picks a parked turn back up by typing `auto_continue_text` through the same path as `message --steer`:
 
 - Rate-limit and spend-limit parks fire when the account's budget window resets.
 - Overload and transient API-error parks (stalled streams, timeouts, connection drops) fire on the retry ramp: `auto_continue_backoff_secs = [180, 300]` sends the first retry three minutes after the failure, then every five minutes.
 - Every park type stops retrying after `auto_continue_max_retries` (default 12, about an hour on the default ramp), leaving the row parked for you.
+
+First-run setup offers to enable `auto_continue` and `auto_redeem` together.
 
 Codex reset-credit expiry rescue is always active within 30 minutes of a credit's expiry, and the provider-header reset marker blinks whenever a spent window makes manual redemption useful. `auto_redeem` opts into automatic redemption when a spent duration window recovers enough blocked time and also schedules partial-usage redemptions early enough to use a chain of expiring credits, pacing each scheduled attempt from the last natural or credit-driven window reset. `auto_redeem_min_gain` accepts `s`, `m`, `h`, or `d` and sets the recovered-time threshold (default `12h`); a credit that would retain less than 24 hours after the natural reset redeems regardless of the threshold, while a nearer free reset defers chain scheduling when the credit comfortably survives it.
 

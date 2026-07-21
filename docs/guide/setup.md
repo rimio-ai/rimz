@@ -23,7 +23,7 @@ cd ~/code/your-project && rimz
 
 - offers to keep an existing config and refresh it against the current templates,
 - offers one summarized install or refresh for every detected agent with missing hooks or a stale RimZ-owned whole-file integration,
-- shows separate live truecolor and Nerd Font probes, and
+- shows separate live truecolor and Nerd Font probes,
 - previews the configured sidebar pet before asking whether to enable it, and
 - offers to enable auto-continue and automatic Codex reset-credit redemption together.
 

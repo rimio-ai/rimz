@@ -464,6 +464,13 @@ mod tests {
         assert!(!at_automation.pet_enabled);
         assert!(at_automation.automation);
         assert!(rendered.contains("Enable hands-off automation?"));
+
+        let off_defaults = Defaults {
+            automation: false,
+            ..defaults
+        };
+        let (at_automation, _) = drive(off_defaults, b"n\ny\nn\n");
+        assert!(!at_automation.automation);
     }
 
     #[test]
