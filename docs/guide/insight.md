@@ -68,7 +68,7 @@ These totals are account-global, like `rimz stats`: they count every project on 
 
 The `5h` and `7d` bars measure a different thing from the dollar figures. They are the included budget of your subscription plan, draining toward the reset printed beside them (`↻ 1h47m`), and they fill with what is left. A plan like Claude Max or ChatGPT Pro refills on its duration windows automatically, so those bars are your read on pace, not a bill. An API-key account has no such window, so its block shows a single `api` budget row instead; an uncapped key is a full bar with `∞`.
 
-When a window empties mid-turn the agent parks rather than fails, and with auto-continue it resumes itself the moment the window resets ([loops, built-in recovery](./loops.md#built-in-recovery)). The exact bar tones, the reset colouring, and the not-yet-started window are drawn in the [interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard); where the readings come from is [providers internals](../internals/agents/providers.md).
+When a window empties mid-turn the agent parks rather than fails, and with auto-continue it resumes itself the moment the window resets ([loops → keep the fleet moving](./loops.md#keep-the-fleet-moving)). The exact bar tones, the reset colouring, and the not-yet-started window are drawn in the [interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard); where the readings come from is [providers internals](../internals/agents/providers.md).
 
 #### Cap the spend you read here
 
@@ -123,7 +123,7 @@ A few knobs, all plain TOML ([configuration](./configuration.md)):
 - [The sidebar](./sidebar.md): reading the cockpit and dashboard for attention, not just for spend.
 - [Budgets](./budget.md): turn the spend read into an enforced cap, per agent, task, room, or login.
 - [Agents](./fleet.md#manage-a-running-room): one agent's token split and cost with `rimz agents show`.
-- [Loops](./loops.md#built-in-recovery): auto-continue when a budget window empties mid-turn.
+- [Loops](./loops.md#keep-the-fleet-moving): auto-continue when a budget window empties mid-turn.
 - [Configuration](./configuration.md#sidebar-rendering): the spend window, timezone, and provider-display knobs.
 - [The sidebar on screen](../interface/sidebar.md#zone-3--the-provider-dashboard): every bar, tone, and glyph drawn exactly.
 - [Providers internals](../internals/agents/providers.md): accounts, budgets, spend, and the price table in depth.

@@ -141,7 +141,7 @@ With two agents you watch panes; with ten lines of work you cannot, and the side
 The tiers, by distance from your next action:
 
 1. **Blocked on you.** Asks (`?`) and failures (`!`), interleaved oldest-first: your work queue. Every minute an ask waits idles a loaded context — a whole team's, when the asker leads one — so these carry the most weight and climb as they age.
-2. **Parked (`⏸`).** Blocked on the provider, not on you. There is nothing to answer until the limit recovers, and with [auto-continue](./loops.md#built-in-recovery) on, nothing to do at all; parks rank below the queue and above every calm card.
+2. **Parked (`⏸`).** Blocked on the provider, not on you. There is nothing to answer until the limit recovers, and with [auto-continue](./loops.md#keep-the-fleet-moving) on, nothing to do at all; parks rank below the queue and above every calm card.
 3. **Delivered, awaiting your verdict.** A `done` card leads the calm cards in its line of work because it holds a result: your review queue. This queue rots while it waits — the trunk moves on and the group header's behind count (`⇣`) climbs — so the header tells you when a delivered branch is getting more expensive to land.
 4. **In flight, healthy.** Needs nothing and wants stable positions so your eyes can track it: running cards keep a flat weight and hold their place, with live cost and last-activity age as the cheap progress cues.
 5. **Idle.** Spare capacity, relevant only when you have work to hand out. It reads last, and a freshly launched agent appends at the bottom instead of reshuffling the list.

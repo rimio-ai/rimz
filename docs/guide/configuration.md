@@ -135,7 +135,7 @@ auto_redeem = false
 auto_redeem_min_gain = "12h"
 ```
 
-Resume covers two moments; the behavior model is [loops.md → Built-in recovery](./loops.md#built-in-recovery), and these are its keys.
+Resume covers two moments; the behavior model is [loops.md → Keep the fleet moving](./loops.md#keep-the-fleet-moving), and these are its keys.
 
 On a **rebirth after a reboot or multiplexer crash**, RimZ offers to recover prior agents from the durable record: the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab (empty named channels also reopen on same-boot rebirths). `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches (default 128).
 

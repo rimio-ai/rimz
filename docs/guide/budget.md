@@ -1,6 +1,6 @@
 # Budgets
 
-You already cap spend where the provider lets you: a billing alert on the API dashboard, a plan whose included usage refills on a window. Those guard the account. They know nothing about the work: no provider setting says "this experiment is worth $5", "the nightly triage loop gets $20 a day", or "this room stops at $50 a day, whatever I forgot to close before bed". Once the fleet runs unattended — [auto-continue](./loops.md#built-in-recovery) resuming parked turns, loop tasks firing at 02:00 — the gap between what you meant to spend and what the account allows is exactly where the surprise bill lives.
+You already cap spend where the provider lets you: a billing alert on the API dashboard, a plan whose included usage refills on a window. Those guard the account. They know nothing about the work: no provider setting says "this experiment is worth $5", "the nightly triage loop gets $20 a day", or "this room stops at $50 a day, whatever I forgot to close before bed". Once the fleet runs unattended — [auto-continue](./loops.md#keep-the-fleet-moving) resuming parked turns, loop tasks firing at 02:00 — the gap between what you meant to spend and what the account allows is exactly where the surprise bill lives.
 
 A budget is a dollar cap RimZ enforces at the scale you promise yourself. It can enforce one because it already computes the fleet's live spend from the transcripts your agents write ([Token Insight](./insight.md)); a budget turns that read into a stop. Crossing a cap parks the agent — the same rest state a provider rate limit produces — and a parked agent is one message away from resuming.
 
@@ -87,7 +87,7 @@ Two honest limits. Cost arrives with provider responses, so the last tool call c
 ## What resumes a parked agent
 
 - **You do.** A human message delivered after the park waives that agent's next turn, once; the waiver is consumed when the turn ends. Background and agent-to-agent deliveries stay parked, so a chatty team cannot spend through your cap.
-- **The day does.** A `/day` park reopens at the next local midnight, and with [auto-continue](./loops.md#built-in-recovery) on, the continue prompt goes to the agents RimZ interrupted — never to agents that were already at rest.
+- **The day does.** A `/day` park reopens at the next local midnight, and with [auto-continue](./loops.md#keep-the-fleet-moving) on, the continue prompt goes to the agents RimZ interrupted — never to agents that were already at rest.
 - **A raise does.** Raising or clearing a cap (`rimz agents budget @coder +5`, `rimz budget +10`) queues the configured continue prompt to the agents that cap parked in this room; add `--no-continue` to lift the cap and leave them at rest.
 - **Automation never does.** While the room or account scope has no headroom, `-p` launches exit `125` and loop fires record `budget skipped`. Interactive launches stay available, so a crossed cap never locks you out of your own room.
 
@@ -102,14 +102,14 @@ Two task flags arm the gate, and they compose:
 - `--surplus 1.5x` opens the gate only at that much headroom or more. `1.5x` means half again as much budget remains as the clock requires.
 - `--surplus-after 3d` is an elapsed floor, checked first: the task stays quiet until that much of the window has passed. A fresh window reads ahead of pace before your own heavy days have landed, so the floor keeps Monday's untouched bar from funding work that Friday will need. Used alone, it still requires `1.0x` headroom.
 
-The gate is a read, nothing more. The headroom comes from the provider's own usage reporting, the same account-scoped reading that draws the dashboard bars, cached on disk by the sessions you already run. Checking it runs no command and spends no tokens. A closed gate records `surplus skipped` in the task's run history with the reading it saw (`claude 7d window surplus 1.4x below 1.5x`), adds no [strike](./loops.md#built-in-recovery), and the schedule keeps polling until real surplus appears. It also fails closed: a missing, incomplete, expired, or not-yet-started window reading keeps the gate shut, so an API-key account, which has no subscription window to read, never fires a surplus-gated task.
+The gate is a read, nothing more. The headroom comes from the provider's own usage reporting, the same account-scoped reading that draws the dashboard bars, cached on disk by the sessions you already run. Checking it runs no command and spends no tokens. A closed gate records `surplus skipped` in the task's run history with the reading it saw (`claude 7d window surplus 1.4x below 1.5x`), adds no [strike](./loops.md#keep-the-fleet-moving), and the schedule keeps polling until real surplus appears. It also fails closed: a missing, incomplete, expired, or not-yet-started window reading keeps the gate shut, so an API-key account, which has no subscription window to read, never fires a surplus-gated task.
 
 The gate rides loop tasks only, on `--agent` and `--wake` actions, and it is evaluated before any `--check` guard, so a closed gate does not even run the check. The soak-task recipe is [loops → soak up the weekly surplus](./loops.md#soak-up-the-weekly-surplus); the exact flag grammar is the [loop reference](../reference/cli/loop.md).
 
 ## See also
 
 - [Token Insight](./insight.md) — reading the spend that budgets act on: the cockpit, the provider dashboard, and `rimz stats`.
-- [Loops](./loops.md#built-in-recovery) — auto-continue, task budgets, and hands-off recovery in one loop.
+- [Loops](./loops.md#keep-the-fleet-moving) — auto-continue, task budgets, and hands-off recovery in one loop.
 - [Scripting](./scripting.md) — the `-p` exit-code contract, including `125` for a run over budget.
 - [Configuration → daily dollar budgets](./configuration.md#daily-dollar-budgets) — the `harness.budget` and `[accounts.budget]` keys.
 - [Budget reference](../reference/cli/agents.md#inspect-and-change-a-budget) — the complete `rimz budget` and `rimz agents budget` surface.
