@@ -56,7 +56,7 @@ toml_edit = { version = "0.25", features = ["serde"] }
 # Zellij stores plugin permission grants as KDL (`permissions.kdl`). RimZ seeds
 # its own presence-plugin grant by parsing and merging that shared file instead
 # of string-splicing a format Zellij itself owns.
-kdl = "4.7.1"
+kdl = "6.7.1"
 
 # Error handling
 thiserror = "2"
