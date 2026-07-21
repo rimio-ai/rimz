@@ -354,7 +354,12 @@ fn trusted_project_task_edits_repin_trust() {
     assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
     loop_ok(&env, &["loop", "run", "second"]);
 
-    let removed = loop_ok(&env, &["loop", "remove", "second"]);
+    let renamed = loop_ok(&env, &["loop", "rename", "second", "renamed"]);
+    assert!(renamed.contains("trust: kept"), "{renamed}");
+    assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
+    loop_ok(&env, &["loop", "run", "renamed"]);
+
+    let removed = loop_ok(&env, &["loop", "remove", "renamed"]);
     assert!(removed.contains("trust: kept"), "{removed}");
     assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
     loop_ok(&env, &["loop", "run", "first"]);
