@@ -24,10 +24,11 @@
   <a href="#install">Install</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#agent-compatibility-matrix">Agents</a> ·
-  <a href="#documentation">Docs</a>
+  <a href="#documentation">Docs</a> ·
+  <a href="https://rimz.rimio.ai/llms.txt">llms.txt</a>
 </p>
 
-<p align="center"><sub><b>AI agents / LLMs:</b> read <a href="AGENTS.md"><code>/AGENTS.md</code></a>.</sub></p>
+<p align="center"><sub><b>AI agents / LLMs:</b> fetch <a href="https://rimz.rimio.ai/llms.txt">the live index</a> / <a href="https://rimz.rimio.ai/llms-full.txt">full docs blob</a>.</sub></p>
 
 ---
 
