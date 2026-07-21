@@ -1,0 +1,56 @@
+# Dependabot version updates.
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Two gates need a human on most of these PRs: `cargo xtask vet` wants an audit
+# for every new or bumped crate version, and `deny.toml` pins exact duplicate
+# versions in its skip list. Land the audit and the skip-list edit on the
+# Dependabot branch before merging.
+#
+# One crate moves in lockstep with a pin Dependabot cannot see: zellij-tile in
+# crates/rimz-presence-zellij tracks the Zellij plugin API, and the host it runs
+# against is ZELLIJ_VERSION in ci/Dockerfile. Bump both together or the plugin
+# and host disagree on protocol.
+
+version: 2
+updates:
+  # Workspace crates: root manifest carries `[workspace.dependencies]`, so one
+  # entry covers crates/rimz, crates/rimz-presence-zellij, and xtask.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "build(deps)"
+      prefix-development: "build(deps-dev)"
+    groups:
+      cargo-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Actions pinned in .github/workflows. The .gitea/workflows mirror is out of
+  # Dependabot's reach; carry the same pin bumps across by hand.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # ci/Dockerfile base image. The tool versions below the FROM line are ARGs
+  # with checksums, which Dependabot leaves alone.
+  - package-ecosystem: "docker"
+    directory: "/ci"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci(deps)"
