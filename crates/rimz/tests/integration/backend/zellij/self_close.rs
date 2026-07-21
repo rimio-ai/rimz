@@ -76,7 +76,6 @@ fn sidebar_self_closes_when_its_tab_empties() {
             wasm,
             rimz_bin: rimz,
             converge: false,
-            seed_permissions: false,
             focus_key: None,
             focus_follows_mouse: false,
             mouse_click_through: true,

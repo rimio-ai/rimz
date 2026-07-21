@@ -20,14 +20,14 @@ Start with the [remote guide](../guide/remote.md) for what a user sees and the [
 | [`remote/reachability.rs`](../../crates/rimz/src/remote/reachability.rs) | `ssh -G` endpoint discovery, TUN-route classification, and the `AttemptPacer`. |
 | [`remote/recovery.rs`](../../crates/rimz/src/remote/recovery.rs) | `RecoveryPanel` checkpoint state, panel timing, and the internet checkpoint endpoint. |
 | [`remote/forward.rs`](../../crates/rimz/src/remote/forward.rs) | Remote listener parsing from procfs and the `PortSync` diff state. |
-| [`remote/web.rs`](../../crates/rimz/src/remote/web.rs) | Argv for the web prep one-shot, the credential one-shot, and the tunnel. |
+| [`remote/web.rs`](../../crates/rimz/src/remote/web.rs) | Argv for the web prep one-shot and the tunnel. |
 | [`remote/setup.rs`](../../crates/rimz/src/remote/setup.rs) | The `rimz remote setup` installer snippet. |
 | [`remote/tty.rs`](../../crates/rimz/src/remote/tty.rs) | Termios damage detection, flag repair, and the emulator reset byte string. |
 | [`remote/version.rs`](../../crates/rimz/src/remote/version.rs) | Client/host version-skew classification. |
 | [`cli/remote.rs`](../../crates/rimz/src/cli/remote.rs) | The clap surface, alias resolution, and the print/exec/supervise fork. |
 | [`cli/remote/supervisor.rs`](../../crates/rimz/src/cli/remote/supervisor.rs) | The supervision loop: background masters, foreground attach, probe threads, reachability workers, forwards, notifications. |
 | [`cli/remote/outage_ui.rs`](../../crates/rimz/src/cli/remote/outage_ui.rs) | The alternate-screen connection panel and its plain-line fallback. |
-| [`cli/remote/web.rs`](../../crates/rimz/src/cli/remote/web.rs) | Web prep, credential relay, and tunnel supervision. |
+| [`cli/remote/web.rs`](../../crates/rimz/src/cli/remote/web.rs) | Web prep, credential display, and tunnel supervision. |
 | [`cli/remote/link_stats.rs`](../../crates/rimz/src/cli/remote/link_stats.rs) | The remote-side `rimz remote link-stats ingest` service. |
 | [`cli/remote/tty.rs`](../../crates/rimz/src/cli/remote/tty.rs) | The `TtyGuard` that snapshots and restores local termios. |
 | [`cli/remote/setup.rs`](../../crates/rimz/src/cli/remote/setup.rs), [`cli/remote/list.rs`](../../crates/rimz/src/cli/remote/list.rs) | Install and alias listing handlers. |
@@ -327,17 +327,17 @@ The baseline and active set live for the whole `rimz remote connect`, across pro
 
 ## Web tunnels
 
-`rimz remote connect <target> --web` opens the remote room in a local browser and stays in the foreground supervising the tunnel. The attach supervisor first establishes a PID-scoped ControlMaster through the connection panel; prep, credential provisioning, and the local-forward tunnel then travel as multiplexed connections over that master. Key or agent authentication gives the intended no-prompt flow. An initial connection that needs interactive authentication falls back to the direct flow once; recovery remains batch-only.
+`rimz remote connect <target> --web` opens the remote room in a local browser and stays in the foreground supervising the tunnel. The attach supervisor first establishes a PID-scoped ControlMaster through the connection panel; prep and the local-forward tunnel then travel as multiplexed connections over that master. Key or agent authentication gives the intended no-prompt flow. An initial connection that needs interactive authentication falls back to the direct flow once; recovery remains batch-only.
 
-The prep command is the fail-fast boundary. RimZ runs remote `rimz web open --print --json` as a non-PTY one-shot with stderr inherited and parses the `rimz.web.v1` payload from stdout. A remote without `rimz web`, a Zellij without the `web` subcommand, a tmux host without ttyd, or any remote room error aborts before browser access opens. A prep exit of `127` uses the same missing-binary sentinel as terminal attach, and exits `65` and `66` get the same version-mismatch presentation.
+The prep command is the fail-fast boundary. RimZ runs remote `rimz web open --print --json` as a non-PTY one-shot with stderr inherited and parses the `rimz.web.v2` payload from stdout. The payload carries the URL, session, port, and Basic-Auth credential in one round trip. A remote without `rimz web`, a host without ttyd, or any remote room error aborts before browser access opens. A prep exit of `127` uses the same missing-binary sentinel as terminal attach, and exits `65` and `66` get the same version-mismatch presentation.
 
-With the payload in hand, RimZ relays the serving machine's credential (a Zellij login token or a ttyd Basic-Auth password, minted and cached when absent), chooses a local port, installs `-L 127.0.0.1:<local>:127.0.0.1:<remote>` through `ssh -O forward` on the confirmed ControlMaster, prints the bare URL after that request succeeds, opens the browser best-effort, and waits on the master until Ctrl-C or transport exit. The control request exits after confirmation while the master owns the listener, so its clean helper exit is not a detach signal. `--web-port` pins the local origin; without it, RimZ hashes the session name into `8300..=8399` and scans forward to the next free port.
+With the payload in hand, RimZ prints the serving machine's Basic-Auth credential, chooses a local port, installs `-L 127.0.0.1:<local>:127.0.0.1:<remote>` through `ssh -O forward` on the confirmed ControlMaster, prints the bare URL after that request succeeds, opens the browser best-effort, and waits on the master until Ctrl-C or transport exit. The control request exits after confirmation while the master owns the listener, so its clean helper exit is not a detach signal. `--web-port` pins the local origin; without it, RimZ hashes the session name into `8300..=8399` and scans forward to the next free port.
 
-The confirmed master or the accepting local port marks a round established, so an SSH transport exit `255` after either proof enters the shared recovery path immediately. The recovery panel carries the Internet, Server, SSH session, and Web tunnel checkpoints while `wait_for_master` paces attempts. After a replacement master connects, RimZ re-runs web prep and credential provisioning to revive the remote server and discover a changed remote port, then opens a replacement forward on the same local port. The browser URL stays stable, and a changed credential is printed again.
+The confirmed master or the accepting local port marks a round established, so an SSH transport exit `255` after either proof enters the shared recovery path immediately. The recovery panel carries the Internet, Server, SSH session, and Web tunnel checkpoints while `wait_for_master` paces attempts. After a replacement master connects, RimZ re-runs web prep to revive the remote server and discover a changed remote port and credential, then opens a replacement forward on the same local port. The browser URL stays stable, and a changed credential is printed again.
 
-`--no-reconnect` skips the master and panel. Prep, credential provisioning, and the tunnel each use a direct SSH connection; the tunnel pins `ControlPath=none` so ambient SSH multiplexing cannot transfer ownership away from its foreground child, and the command exits when that child ends.
+`--no-reconnect` skips the master and panel. Prep and the tunnel each use a direct SSH connection; the tunnel pins `ControlPath=none` so ambient SSH multiplexing cannot transfer ownership away from its foreground child, and the command exits when that child ends.
 
-Which engine serves the room, and how tokens are minted, belongs to [web.md](./web.md).
+The shared daemon, authenticated shim, and credential lifecycle live in [web.md](./web.md).
 
 ## Bandwidth attribution
 

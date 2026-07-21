@@ -1,7 +1,7 @@
 //! Foreground remote-web preparation, SSH tunnel ownership, and browser open.
 //!
-//! Reconnecting web tunnels share the remote attach ControlMaster and recovery
-//! panel. `RemoteTunnel` owns one forwarding child at a time.
+//! One remote prep births the room, ensures ttyd, and returns its credential;
+//! the forwarding child or shared ControlMaster then owns the tunnel.
 
 use std::io::{IsTerminal, Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -159,9 +159,8 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
         bail!("preparing remote web access failed with status 255");
     };
     let payload = parse_web_payload(&prep)?;
-    let token = relay_web_token(remote, payload.engine, None);
-    let mut credential = None;
-    render_web_token(remote, token, &mut credential, true);
+    let mut previous_credential = None;
+    render_web_credential(remote, &payload.credential, &mut previous_credential, true);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
     let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
@@ -294,7 +293,6 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
                 port
             }
         };
-        let token = relay_web_token(remote, payload.engine, round_control);
         let mut tunnel = if round_control.is_some() {
             None
         } else {
@@ -349,7 +347,12 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         };
 
         held_alt.release();
-        render_web_token(remote, token, &mut last_credential, first_round);
+        render_web_credential(
+            remote,
+            &payload.credential,
+            &mut last_credential,
+            first_round,
+        );
         if first_round {
             let url = rimz::web::local_tunnel_url(&payload, local_port);
             writeln!(std::io::stdout().lock(), "{url}")?;
@@ -464,84 +467,22 @@ fn parse_web_payload(bytes: &[u8]) -> Result<rimz::web::WebOpenPayload> {
     Ok(payload)
 }
 
-enum WebTokenRelay {
-    Credential(String),
-    Error {
-        engine: rimz::web::WebEngine,
-        detail: String,
-    },
-}
-
-fn relay_web_token(
+fn render_web_credential(
     remote: &RemoteConnect,
-    engine: rimz::web::WebEngine,
-    control: Option<&Path>,
-) -> WebTokenRelay {
-    let spec = rimz::remote::web::web_token_ensure_spec(&remote.target, engine, control);
-    let output = match spec.to_command().output() {
-        Ok(output) => output,
-        Err(err) => {
-            return WebTokenRelay::Error {
-                engine,
-                detail: err.to_string(),
-            };
-        }
-    };
-    if !output.status.success() {
-        let mut detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        if detail.is_empty() {
-            detail = output.status.to_string();
-        }
-        return WebTokenRelay::Error { engine, detail };
-    }
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if token.is_empty() {
-        return WebTokenRelay::Error {
-            engine,
-            detail: "empty token".to_owned(),
-        };
-    }
-    let line = match engine {
-        rimz::web::WebEngine::Zellij => format!(
-            "rimz: login token for {}: {token}",
-            remote.target.host_display()
-        ),
-        rimz::web::WebEngine::Ttyd => format!(
-            "rimz: basic auth for {}: user rimz, password {token}",
-            remote.target.host_display()
-        ),
-    };
-    WebTokenRelay::Credential(line)
-}
-
-fn render_web_token(
-    remote: &RemoteConnect,
-    relay: WebTokenRelay,
-    previous: &mut Option<String>,
+    credential: &rimz::web::WebCredential,
+    previous: &mut Option<rimz::web::WebCredential>,
     always: bool,
 ) {
-    match relay {
-        WebTokenRelay::Credential(line) => {
-            if always || previous.as_deref() != Some(line.as_str()) {
-                let _ = writeln!(std::io::stderr().lock(), "{line}");
-            }
-            *previous = Some(line);
-        }
-        WebTokenRelay::Error { engine, detail } => {
-            write_web_token_error(remote.target.host_display(), engine, &detail);
-        }
+    if always || previous.as_ref() != Some(credential) {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "rimz: basic auth for {}: user {}, password {}",
+            remote.target.host_display(),
+            credential.username,
+            credential.secret,
+        );
     }
-}
-
-fn write_web_token_error(host: &str, engine: rimz::web::WebEngine, detail: &str) {
-    let engine = match engine {
-        rimz::web::WebEngine::Zellij => "Zellij web login token",
-        rimz::web::WebEngine::Ttyd => "ttyd basic-auth credential",
-    };
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "rimz: could not mint a {engine} on {host} ({detail}); create one with `rimz web token create` on the remote host.",
-    );
+    *previous = Some(credential.clone());
 }
 
 enum WebPrepOutcome {

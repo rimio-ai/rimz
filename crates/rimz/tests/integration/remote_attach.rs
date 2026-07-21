@@ -1237,7 +1237,7 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     );
     assert!(!browser_log.exists(), "browser waits for tunnel readiness");
 
-    let url = format!("http://127.0.0.1:{port}/rimz-project-a1b2c3");
+    let url = format!("http://127.0.0.1:{port}/?arg=rimz-project-a1b2c3");
     let browser = wait_for_notify_log(&browser_log, &[&url]);
     assert_eq!(browser.trim(), url);
     assert!(
@@ -1260,6 +1260,11 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("remote preparation started"),
         "preparation stderr stays visible"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("basic auth for dev-box: user rimz, password test-web-token"),
+        "credential rides in the preparation payload"
     );
     assert_eq!(tunnel_invocation_count(&log), 1);
 }

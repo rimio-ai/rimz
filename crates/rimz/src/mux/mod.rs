@@ -629,9 +629,6 @@ pub struct PresencePluginOptions {
     /// Also converge the session onto this identity — the explicit upgrade
     /// verb `rimz reload` passes; routine loads leave a healthy writer alone.
     pub converge: bool,
-    /// Seed the Zellij permission cache for this plugin so the sidebar poke and
-    /// web sharing work without the one-time prompt; set from `[web] enabled`.
-    pub seed_permissions: bool,
     /// The focus-key chord (`[sidebar] focus_key`, e.g. `Alt+p`) the plugin
     /// binds at load so the key reaches the sidebar from any pane; `None` when
     /// the user disabled it. tmux binds the same chord through `bind-key`
@@ -982,12 +979,6 @@ pub trait MuxBackend: Send + Sync {
     /// also retires stale instances once a current replacement proves it is
     /// publishing topology.
     fn ensure_presence_plugin(&self, _opts: &PresencePluginOptions) -> Result<()> {
-        Ok(())
-    }
-    /// Ask the session's presence plugin to enable Zellij web sharing for this
-    /// session. Zellij first loads and grants the plugin, then sends the share
-    /// pipe; tmux is a no-op because browser access is Zellij-only.
-    fn share_web_session(&self, _opts: &PresencePluginOptions) -> Result<()> {
         Ok(())
     }
     fn version(&self) -> Result<String>;

@@ -73,6 +73,21 @@ pub(crate) fn err() -> anstream::AutoStream<std::io::StderrLock<'static>> {
     anstream::AutoStream::auto(std::io::stderr().lock())
 }
 
+/// Render best-effort browser client customization warnings on stderr.
+pub(crate) fn web_warnings(warnings: &[rimz::web::WebWarning]) {
+    let mut stderr = err();
+    for warning in warnings {
+        let (surface, detail) = match warning {
+            rimz::web::WebWarning::BrowserClientSkipped(detail) => {
+                ("browser terminal fixes", detail)
+            }
+            rimz::web::WebWarning::BrowserFontSkipped(detail) => ("browser font", detail),
+            rimz::web::WebWarning::BrowserThemeSkipped(detail) => ("browser theme", detail),
+        };
+        let _ = writeln!(stderr, "rimz: skipping {surface}: {detail}");
+    }
+}
+
 /// Render a command failure for a human, suppressing source messages already
 /// embedded in their parent error. A stderr write failure cannot replace the
 /// command failure that brought us here.

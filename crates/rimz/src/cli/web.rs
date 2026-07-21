@@ -1,4 +1,4 @@
-//! `rimz web` — browser access for RimZ rooms.
+//! `rimz web` — browser access through the shared ttyd daemon.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -11,9 +11,8 @@ use super::{GlobalFlags, machine_config, open_browser_best_effort};
 use crate::cli::room;
 use rimz::ids::MuxName;
 use rimz::mux::CommandSpec;
-use rimz::web::{
-    CredentialCommand, CredentialOutcome, WebCredential, WebEngine, WebStartOptions, WebWarning,
-};
+use rimz::room::session::{LiveSessions, workspace_record_for_session};
+use rimz::web::{CredentialCommand, CredentialOutcome, WebCredential};
 
 #[derive(Debug, Args)]
 pub struct WebArgs {
@@ -25,18 +24,24 @@ pub struct WebArgs {
 enum WebSubcmd {
     /// Open the current workspace's web URL.
     Open(WebOpenArgs),
-    /// Print the current workspace's web URL without starting the server.
+    /// Print the current workspace's web URL without starting the daemon.
     Url(WebUrlArgs),
-    /// Report browser-access server status.
+    /// Report the shared ttyd daemon's status.
     Status(WebStatusArgs),
-    /// Start the Zellij web server.
-    Start(WebStartArgs),
-    /// Stop browser-access servers.
+    /// Start the shared ttyd daemon.
+    Start,
+    /// Stop the shared ttyd daemon.
     Stop,
-    /// Manage browser-access credentials.
+    /// Manage the machine-wide browser credential.
     Token {
         #[command(subcommand)]
         command: WebTokenSubcmd,
+    },
+    /// Resolve and attach a ttyd client to a managed RimZ room.
+    #[command(hide = true)]
+    Exec {
+        #[arg(value_name = "SESSION")]
+        session: Option<String>,
     },
 }
 
@@ -51,7 +56,7 @@ struct WebOpenArgs {
     /// Print the URL without launching a browser.
     #[arg(long)]
     print: bool,
-    /// Do not start the room's web engine when it is offline.
+    /// Require the shared ttyd daemon to already be online.
     #[arg(long)]
     no_start: bool,
     /// Come up empty: skip recovering prior agents when the room is reborn.
@@ -60,7 +65,7 @@ struct WebOpenArgs {
     /// Prompt for resume even when stdin is not a terminal. Internal remote-web helper.
     #[arg(long, hide = true)]
     confirm_resume: bool,
-    /// Emit the versioned `rimz.web.v1` payload.
+    /// Emit the versioned `rimz.web.v2` payload.
     #[arg(long)]
     json: bool,
 }
@@ -73,7 +78,7 @@ struct WebUrlArgs {
     /// Existing RimZ session name to print instead of resolving a path.
     #[arg(long, conflicts_with = "path")]
     session: Option<String>,
-    /// Emit the versioned `rimz.web.v1` payload.
+    /// Emit the versioned `rimz.web.v2` payload.
     #[arg(long)]
     json: bool,
 }
@@ -85,35 +90,21 @@ struct WebStatusArgs {
     json: bool,
 }
 
-#[derive(Debug, Args)]
-struct WebStartArgs {
-    #[arg(long)]
-    daemonize: bool,
-    #[arg(long)]
-    ip: Option<String>,
-    #[arg(long)]
-    port: Option<u16>,
-    #[arg(long)]
-    cert: Option<PathBuf>,
-    #[arg(long)]
-    key: Option<PathBuf>,
-}
-
 #[derive(Debug, Subcommand)]
 enum WebTokenSubcmd {
-    /// Create a login token.
+    /// Rotate the browser credential.
     Create {
-        /// Create a read-only watcher token.
+        /// Read-only credentials are unsupported by ttyd.
         #[arg(long)]
         read_only: bool,
     },
-    /// List token names and creation dates.
+    /// List the machine credential and creation date.
     List,
-    /// Revoke one token by name.
+    /// Revoke the machine credential by name.
     Revoke { name: String },
-    /// Revoke all tokens.
+    /// Revoke the machine credential.
     RevokeAll,
-    /// Provision the machine's login token if needed. Internal remote-web helper.
+    /// Provision the machine credential if needed.
     #[command(hide = true)]
     Ensure,
 }
@@ -143,9 +134,10 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
         WebSubcmd::Open(args) => open(args, globals),
         WebSubcmd::Url(args) => url(args, globals),
         WebSubcmd::Status(args) => status(args),
-        WebSubcmd::Start(args) => start(args, globals),
+        WebSubcmd::Start => start(),
         WebSubcmd::Stop => stop(),
-        WebSubcmd::Token { command } => token(command, globals),
+        WebSubcmd::Token { command } => token(command),
+        WebSubcmd::Exec { session } => exec(session.as_deref()),
     }
 }
 
@@ -163,29 +155,14 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         room::ensure_workspace_room_for_web(&path, globals, args.no_resume, args.confirm_resume)?
     };
     let session = context.session_name().to_owned();
-    let mux = context.mux_name();
-    ensure_session_addressable_for_web(mux, &session)?;
-    let engine = WebEngine::from(mux);
-    let outcome = engine.open_session(&session, &config, !args.no_start)?;
-    write_warnings(&outcome.warnings);
-    if mux == MuxName::Zellij {
-        if context.share_web() {
-            warn_if_web_sharing_unconfirmed(&session);
-        } else {
-            warn_web_sharing_unconfirmed(&session);
-        }
-    }
+    ensure_session_addressable_for_web(context.mux_name(), &session)?;
+    let outcome = rimz::web::open_session(&session, &config, !args.no_start)?;
+    crate::cli::render::web_warnings(&outcome.warnings);
     if args.json {
         return crate::cli::render::json(&outcome.payload);
     }
     print_url(&outcome.payload.url)?;
-    match outcome.credential.map_or_else(
-        || engine.ensure_credential(&config),
-        std::result::Result::Ok,
-    ) {
-        Ok(credential) => write_web_credential(&credential),
-        Err(err) => write_credential_error(&err),
-    }
+    write_web_credential(&outcome.payload.credential);
     if !args.print {
         open_browser_best_effort(&outcome.payload.url);
     }
@@ -233,30 +210,6 @@ fn ensure_session_addressable_for_web(mux: MuxName, session: &str) -> Result<()>
     }
 }
 
-fn warn_if_web_sharing_unconfirmed(session: &str) {
-    let cache_root = rimz::store::paths::cache_home();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if rimz::mux::recovery::zellij_session_web_clients_allowed_in(&cache_root, session)
-            == Some(true)
-        {
-            return;
-        }
-        if Instant::now() >= deadline {
-            warn_web_sharing_unconfirmed(session);
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn warn_web_sharing_unconfirmed(session_name: &str) {
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", check that Zellij is new enough, RimZ's presence plugin is available, and `[web] enabled = true` in `rimz config path`, then rerun `rimz web open`."
-    );
-}
-
 fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
     let context = if let Some(session) = args.session {
         room::web_room_for_session(&session, globals)?
@@ -264,8 +217,7 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
         room::existing_web_room_for_path(&path, globals)?
     };
-    let payload = WebEngine::from(context.mux_name())
-        .inspect_session(context.session_name(), &machine_config())?;
+    let payload = rimz::web::inspect_session(context.session_name(), &machine_config())?;
     if args.json {
         crate::cli::render::json(&payload)
     } else {
@@ -274,100 +226,65 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn status(args: WebStatusArgs) -> Result<()> {
-    let report = rimz::web::status()?;
+    let status = rimz::web::status(&machine_config())?;
     if args.json {
-        return crate::cli::render::json(&report.payload);
+        return crate::cli::render::json(&status);
     }
     let mut stdout = std::io::stdout().lock();
-    if report.zellij_available {
+    if let Some(pid) = status.pid {
         writeln!(
             stdout,
-            "zellij: {}",
-            if report.payload.online {
-                "online"
-            } else {
-                "offline"
-            }
+            "ttyd: online on 127.0.0.1:{} (pid {pid})",
+            status.port
         )?;
     } else {
-        writeln!(stdout, "zellij: unavailable")?;
-    }
-    if report.payload.tmux_instances.is_empty() {
-        writeln!(stdout, "ttyd: no live tmux instances")?;
-    } else {
-        for instance in report.payload.tmux_instances {
-            writeln!(
-                stdout,
-                "ttyd: {} on 127.0.0.1:{} (pid {})",
-                instance.session, instance.port, instance.pid
-            )?;
-        }
+        writeln!(stdout, "ttyd: offline (configured port {})", status.port)?;
     }
     Ok(())
 }
 
-fn start(args: WebStartArgs, globals: &GlobalFlags) -> Result<()> {
-    if rimz::mux::auto_detect_backend(globals.mux)? == MuxName::Tmux {
-        bail!("ttyd serves tmux rooms per room; run `rimz web open`");
-    }
-    let prepared = rimz::web::prepare_zellij_start(
-        &machine_config(),
-        WebStartOptions {
-            daemonize: args.daemonize,
-            ip: args.ip,
-            port: args.port,
-            cert: args.cert.map(|path| path.display().to_string()),
-            key: args.key.map(|path| path.display().to_string()),
-        },
+fn start() -> Result<()> {
+    let outcome = rimz::web::ensure_daemon(&machine_config())?;
+    crate::cli::render::web_warnings(&outcome.warnings);
+    writeln!(
+        std::io::stdout().lock(),
+        "ttyd: online on 127.0.0.1:{} (pid {})",
+        outcome.record.port,
+        outcome.record.pid
     )?;
-    write_warnings(&prepared.warnings);
-    run_inherited(prepared.command)
+    Ok(())
 }
 
 fn stop() -> Result<()> {
     let stopped = rimz::web::stop_all()?;
-    let zellij_summary = if stopped.zellij_stopped == 1 {
-        "1 Zellij server"
-    } else {
-        "0 Zellij servers"
-    };
-    let ttyd_noun = if stopped.ttyd_stopped == 1 {
-        "ttyd instance"
-    } else {
-        "ttyd instances"
-    };
     writeln!(
         std::io::stdout().lock(),
-        "stopped {zellij_summary} and {} {ttyd_noun}",
-        stopped.ttyd_stopped
+        "stopped {} ttyd daemon{}",
+        stopped.stopped,
+        if stopped.stopped == 1 { "" } else { "s" }
     )?;
     Ok(())
 }
 
-fn token(command: WebTokenSubcmd, globals: &GlobalFlags) -> Result<()> {
-    let engine = WebEngine::from(rimz::mux::auto_detect_backend(globals.mux)?);
-    render_credential_outcome(engine.credential(command.into(), &machine_config())?)
+fn token(command: WebTokenSubcmd) -> Result<()> {
+    render_credential_outcome(rimz::web::credential(command.into(), &machine_config())?)
 }
 
 fn render_credential_outcome(outcome: CredentialOutcome) -> Result<()> {
     match outcome {
-        CredentialOutcome::Raw(output) => {
-            std::io::stdout().lock().write_all(&output.stdout)?;
-            std::io::stderr().lock().write_all(&output.stderr)?;
-        }
         CredentialOutcome::Ensured(credential) => {
-            writeln!(std::io::stdout().lock(), "{}", credential.secret())?;
+            writeln!(std::io::stdout().lock(), "{}", credential.secret)?;
         }
         CredentialOutcome::Rotated {
             credential,
             restarted_instances,
             warnings,
         } => {
-            write_warnings(&warnings);
+            crate::cli::render::web_warnings(&warnings);
             write_web_credential(&credential);
             writeln!(
                 std::io::stdout().lock(),
-                "rotated ttyd credential and restarted {restarted_instances} instance(s)"
+                "rotated ttyd credential and restarted {restarted_instances} daemon(s)"
             )?;
         }
         CredentialOutcome::Listed(credentials) => {
@@ -379,56 +296,68 @@ fn render_credential_outcome(outcome: CredentialOutcome) -> Result<()> {
         CredentialOutcome::Revoked { stopped_instances } => {
             writeln!(
                 std::io::stdout().lock(),
-                "revoked ttyd credential and stopped {stopped_instances} instance(s)"
+                "revoked ttyd credential and stopped {stopped_instances} daemon(s)"
             )?;
         }
     }
     Ok(())
 }
 
-fn write_web_credential(credential: &WebCredential) {
-    let mut stderr = std::io::stderr().lock();
-    match credential {
-        WebCredential::ZellijLogin { secret } => {
-            let _ = writeln!(
-                stderr,
-                "Zellij web login token (paste into the browser's \"Security Token Required\" page): {secret}"
-            );
-        }
-        WebCredential::BasicAuth { username, secret } => {
-            let _ = writeln!(
-                stderr,
-                "ttyd basic auth for this machine (browser will show a Basic-Auth prompt): user {username}, password {secret}"
-            );
-        }
-    }
+fn exec(session: Option<&str>) -> Result<()> {
+    let live = LiveSessions::probe();
+    let target = session
+        .filter(|session| !session.is_empty())
+        .and_then(|session| {
+            workspace_record_for_session(session)
+                .ok()
+                .flatten()
+                .and_then(|_| live.mux_of(session).map(|mux| (session, mux)))
+        });
+    let Some((session, mux)) = target else {
+        bail!(web_exec_session_error(session, &live)?);
+    };
+    exec_web_command(&web_exec_spec(session, mux))
 }
 
-fn write_credential_error(err: &rimz::web::WebErr) {
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "rimz: could not mint a Zellij web login token ({err}); create one with `rimz web token create`."
+fn web_exec_session_error(session: Option<&str>, live: &LiveSessions) -> Result<String> {
+    let mut sessions = rimz::workspace::known_workspaces()
+        .context("reading RimZ workspace records")?
+        .into_iter()
+        .filter_map(|workspace| {
+            live.mux_of(&workspace.session_name)
+                .map(|mux| format!("  {} ({mux})", workspace.session_name))
+        })
+        .collect::<Vec<_>>();
+    sessions.sort();
+    let requested = session.map_or_else(
+        || "no session was provided".to_owned(),
+        |session| format!("session `{session}` is not a live RimZ room"),
     );
+    let listing = if sessions.is_empty() {
+        "  (none)".to_owned()
+    } else {
+        sessions.join("\n")
+    };
+    Ok(format!("{requested}\n\nLive RimZ sessions:\n{listing}"))
 }
 
-fn write_warnings(warnings: &[WebWarning]) {
-    let mut stderr = std::io::stderr().lock();
-    for warning in warnings {
-        match warning {
-            WebWarning::BrowserClientSkipped(detail) => {
-                let _ = writeln!(stderr, "rimz: skipping browser terminal fixes: {detail}");
-            }
-            WebWarning::BrowserFontSkipped(detail) => {
-                let _ = writeln!(stderr, "rimz: skipping browser font: {detail}");
-            }
-            WebWarning::BrowserThemeSkipped(detail) => {
-                let _ = writeln!(stderr, "rimz: skipping browser theme: {detail}");
-            }
-        }
+fn web_exec_spec(session: &str, mux: MuxName) -> CommandSpec {
+    match mux {
+        MuxName::Tmux => rimz::mux::tmux::managed_cmd().args(["attach", "-t", session]),
+        MuxName::Zellij => rimz::mux::zellij::attach_existing_command(session),
     }
 }
 
-fn run_inherited(spec: CommandSpec) -> Result<()> {
+#[cfg(unix)]
+fn exec_web_command(spec: &CommandSpec) -> Result<()> {
+    use std::os::unix::process::CommandExt as _;
+
+    let err = spec.to_command().exec();
+    Err(err).with_context(|| format!("execing `{}`", spec.display_line()))
+}
+
+#[cfg(not(unix))]
+fn exec_web_command(spec: &CommandSpec) -> Result<()> {
     let status = spec
         .to_command()
         .status()
@@ -439,7 +368,33 @@ fn run_inherited(spec: CommandSpec) -> Result<()> {
     Ok(())
 }
 
+fn write_web_credential(credential: &WebCredential) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "ttyd basic auth for this machine (browser will show a Basic-Auth prompt): user {}, password {}",
+        credential.username,
+        credential.secret
+    );
+}
+
 fn print_url(url: &str) -> Result<()> {
     writeln!(std::io::stdout().lock(), "{url}")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_exec_argv_targets_existing_session_on_each_mux() {
+        let tmux = web_exec_spec("rimz-test", MuxName::Tmux);
+        assert_eq!(
+            &tmux.args[tmux.args.len() - 3..],
+            ["attach", "-t", "rimz-test"]
+        );
+
+        let zellij = web_exec_spec("rimz-test", MuxName::Zellij);
+        assert_eq!(zellij.args, ["attach", "rimz-test"]);
+    }
 }

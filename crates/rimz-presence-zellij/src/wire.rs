@@ -12,10 +12,6 @@ use crate::policy::{self, PaneFields};
 /// pane, since a Zellij keybind cannot focus a pane by id on its own.
 pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
 
-/// The pipe message name `rimz web open` sends so this plugin asks Zellij to
-/// admit web clients to the current session.
-pub const SHARE_SESSION_PIPE: &str = "rimz:share_session";
-
 /// Pipe message name the host backend sends when it needs a topology cache
 /// newer than a local mutation. The plugin publishes one immediate `alive` wake
 /// carrying the current topology payload; the host writes the cache and stamp

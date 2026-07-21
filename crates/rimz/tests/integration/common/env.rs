@@ -218,6 +218,9 @@ impl Env {
             .env("HOME", &self.home_root)
             .env("SHELL", "/bin/sh")
             .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            // Room start probes browser access best-effort. Keep the suite off
+            // the developer's real ttyd; web tests replace this with the trace fixture.
+            .env("RIMZ_TTYD_BIN", self.home_root.join("missing-ttyd"))
             .env_remove("ENV")
             .env_remove("BASH_ENV")
             .env_remove("ZDOTDIR")
@@ -247,6 +250,7 @@ impl Env {
         cmd.env("HOME", &self.home_root);
         cmd.env("SHELL", "/bin/sh");
         cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
+        cmd.env("RIMZ_TTYD_BIN", self.home_root.join("missing-ttyd"));
         cmd.env_remove("ENV");
         cmd.env_remove("BASH_ENV");
         cmd.env_remove("ZDOTDIR");

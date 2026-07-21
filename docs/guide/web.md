@@ -1,62 +1,52 @@
 # Web
 
-A RimZ room can render in a browser instead of a terminal: the same sidebar, panes, and agents, open at one URL on either Zellij or tmux.
+A terminal attach works well while you have the right terminal open. When you need the same room from a browser, RimZ can put its existing Zellij or tmux session behind one local ttyd address without moving the room, agents, or state into another service.
 
-RimZ keeps the engine behind the command: Zellij rooms use `zellij web`, while tmux rooms use one loopback-only [ttyd](https://github.com/tsl0922/ttyd) process per room.
+## Install ttyd on the serving machine
 
-## Install the serving engine
-
-Zellij browser access needs Zellij 0.44.3 or newer with web support.
-
-tmux browser access needs ttyd on the machine serving the room:
+Both Zellij and tmux browser rooms use [ttyd](https://github.com/tsl0922/ttyd):
 
 ```sh
 brew install ttyd        # macOS or Linuxbrew
 apt install ttyd         # Debian or Ubuntu
 ```
 
-`rimz doctor` reports the detected backend's browser capability, and a tmux `rimz web open` refuses with the install commands when ttyd is missing.
+`rimz doctor` reports the resolved ttyd path and version. A normal `rimz start` still opens the terminal room when ttyd is absent; it prints the install fix because browser startup is best-effort.
 
 ## Serve a local room
 
 ```sh
-rimz web            # ensure the room and server, print URL + credential, open browser
-rimz web url        # print the existing room's URL without starting anything
-rimz web status     # report Zellij plus every live ttyd room server
-rimz web stop       # stop both engines on this machine
+rimz web            # ensure the room and shared daemon, print URL + credential, open browser
+rimz web url        # print an existing room's URL without requiring the daemon
+rimz web start      # start the machine-wide daemon without targeting a room
+rimz web status     # report the daemon's pid and configured port
+rimz web stop       # stop the daemon
 ```
 
 `rimz web` is `rimz web open`.
 
-RimZ resolves the room's live backend first when no explicit mux is selected, then follows the normal `--mux`, environment, config, and installed-backend selection.
+RimZ resolves or births the room first, confirms that its mux session is live, and ensures one ttyd daemon bound to `127.0.0.1:8200` by default. Every Zellij and tmux room on the machine shares that process.
 
-### Zellij rooms
+The printed route is `http://127.0.0.1:8200/?arg=<session>`. ttyd passes the selected session to a hidden RimZ shim, which accepts only a live session backed by a RimZ workspace record and attaches with the correct mux command. Changing the URL argument cannot run an arbitrary command.
 
-RimZ starts the machine-wide `zellij web` server when needed, enables web sharing for the room through the presence plugin, and prints the room route under the Zellij base URL.
+The browser shows a Basic-Auth prompt. Use the printed user `rimz` and password. Add `--no-start` when a supervisor owns ttyd and the command should fail rather than start it.
 
-The browser shows Zellij's “Security Token Required” page; paste the login token RimZ prints.
+With `[web] enabled = true`, every normal `rimz start` also asks for the shared daemon after the room is ready. A missing binary, occupied port, or daemon error warns on stderr and leaves the room usable in the terminal.
 
-Zellij owns the server, terminal transport, cookies, TLS, sharing policy, and token store.
+## Browser appearance and input
 
-### tmux rooms
+RimZ gives ttyd the active theme and configured browser font when the daemon starts. `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` are built-in presets: RimZ downloads verified regular and bold faces and caches them under `$XDG_CACHE_HOME/rimz/web-fonts`.
 
-RimZ starts a ttyd process bound to `127.0.0.1` for that room, with the route `/<session>` and an attached `tmux attach -t <session>` child.
+Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL. A family with no preset and no source asks the browser to resolve an installed font. `style_client = false` keeps ttyd's browser colors while retaining keyboard, cursor, clipboard, and reconnect fixes.
 
-The browser shows a Basic-Auth prompt; use the printed user `rimz` and password.
+The compatibility layer keeps the cursor steady, preserves Shift+Enter and macOS Option-as-Meta input, sends tmux copy-mode yanks and Shift-drag selections to the clipboard, and refreshes xterm after a downloaded font loads. Missing font bytes warn and fall back to monospace.
 
-ttyd servers are per room, so `rimz web start` remains a Zellij-server command; use `rimz web open` to start a tmux room server.
+Appearance is fixed when the shared daemon starts. After changing `[theme]` or web styling, run:
 
-RimZ gives ttyd the active RimZ theme and provisions the configured browser font by default. `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` are built-in presets: RimZ downloads their regular and bold faces from the pinned Nerd Fonts release, verifies them, and caches them under `$XDG_CACHE_HOME/rimz/web-fonts` (normally `~/.cache/rimz/web-fonts`). The browser loads those bytes from the generated loopback page, waits for the face before refreshing xterm's glyph atlas and cell measurements, and makes no third-party request.
-
-Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL for a font RimZ should download and cache. A `font` with no matching preset and no `font_source` names a font already installed in the browser. Set `style_client = false` to keep ttyd's browser defaults. A missing font cache or download falls back to the browser's monospace face with a warning, while the cursor and keyboard fixes remain active and offline access still starts.
-
-Styling is fixed when the room's ttyd process starts. After changing these fields or `[theme]`, run `rimz web stop` and then `rimz web open` to apply the new profile.
-
-The browser terminal keeps a steady cursor instead of xterm's rapid blink. Shift+Enter reaches the agent as a soft newline through tmux's extended-key path, matching Alt+Enter and native terminal clients.
-
-Copying in tmux copy mode or selecting browser-native text with Shift-drag writes the selection to the system clipboard.
-
-On macOS, ttyd treats Option as Meta and RimZ intercepts letter chords before the browser starts dead-key composition. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`, while chords such as `alt+n` create no trailing composed character; these input fixes remain active when client styling is disabled.
+```sh
+rimz web stop
+rimz web start
+```
 
 ## Open a remote room
 
@@ -65,67 +55,47 @@ rimz remote connect dev --web
 rimz remote connect dev --web --web-port 8443
 ```
 
-The remote room selects its own engine and returns the same `rimz.web.v1` prep payload.
+RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the Basic-Auth credential. It then forwards a local loopback port to the remote configured port and opens `http://127.0.0.1:<local-port>/?arg=<session>`.
 
-RimZ relays that engine's credential, opens an SSH local-forward from your laptop's `127.0.0.1` to the remote loopback listener, and opens `http://127.0.0.1:<local-port>/<session>`.
-
-The tunnel stays in the foreground, reconnects with the normal remote-link policy, and uses a stable port from 8300–8399 unless `--web-port` overrides it. A lost tunnel shows the same Internet/Server/SSH recovery panel as a lost terminal attach; after the connection returns, RimZ restarts a stopped remote web server when needed and restores the same local URL.
+The tunnel stays in the foreground and follows the normal remote recovery policy. Recovery repeats prep, so a stopped daemon comes back and a rotated credential is printed again; the local URL stays stable. Without `--web-port`, the local port derives from the session in 8300–8399 and scans forward when busy.
 
 ## Credentials
-
-The verbs follow the selected backend:
 
 ```sh
 rimz web token create
 rimz web token list
-rimz web token revoke <name>
+rimz web token revoke rimz
 rimz web token revoke-all
 ```
 
-Zellij keeps its normal token store; RimZ caches the current plaintext token at mode 0600 so later local and remote opens can show it again.
+One credential named `rimz` serves the whole machine. `create` rotates it and restarts the live daemon. Either revoke command stops the daemon and clears the credential.
 
-ttyd has one credential named `rimz` per serving machine; `create` rotates it and restarts live ttyd room servers, while either revoke command stops those servers and clears the credential.
+ttyd read-only mode belongs to the whole process, so `rimz web token create --read-only` is rejected rather than presenting a misleading per-user permission.
 
-`--read-only` works for Zellij tokens.
-
-ttyd read-only mode is a process policy rather than a credential policy, so this release refuses `rimz --mux tmux web token create --read-only` instead of presenting a misleading watcher credential.
-
-Credentials stay out of URLs, logs, store events, and workspace state; treat either value like an SSH private key.
+Treat the password like an SSH private key. It stays out of the URL, logs, events, and workspace records.
 
 ## Configuration
 
 ```toml
 [web]
 enabled = true
-
-[web.zellij]
-base_url = "https://devbox.example/zellij"
-auto_start = true
-font = "JetBrainsMono Nerd Font Mono"
-style_client = true
-
-[web.tmux]
-base_url = "https://devbox.example/tmux"
-auto_start = true
+port = 8200
+# base_url = "https://devbox.example/rimz"
 font = "JetBrainsMono Nerd Font Mono"
 # font_source = "/path/to/font.woff2"
 style_client = true
 ```
 
-Each `base_url` is the prefix RimZ prints when a reverse proxy mounts that engine; the room session remains the final path segment.
+`port` is the exact loopback port for the shared daemon. `base_url` changes the prefix RimZ prints when a reverse proxy fronts ttyd; the `/?arg=<session>` query remains.
 
 ## Security boundary
 
-Both engines bind to loopback by default and require authentication.
+RimZ invokes ttyd with write access, origin checks, mandatory Basic Auth, and an explicit loopback bind.
 
-RimZ invokes ttyd with write access, origin checks, mandatory Basic Auth, and an explicit loopback bind; Zellij keeps its own mandatory token gate.
-
-The browser session is shell access as the serving user, and terminal output can contain secrets even when a Zellij token is read-only.
-
-Put HTTPS and rate limiting in front before exposing either listener beyond loopback:
+The browser session is shell access as the serving user, and terminal output can contain secrets. Put HTTPS and rate limiting in front before exposing the listener beyond loopback:
 
 ```text
-browser -> HTTPS reverse proxy with rate limiting -> loopback web engine
+browser -> HTTPS reverse proxy with rate limiting -> 127.0.0.1:8200
 ```
 
 ## See also
@@ -133,5 +103,5 @@ browser -> HTTPS reverse proxy with rate limiting -> loopback web engine
 - [Remote](./remote.md) — saved aliases and reconnect behavior.
 - [Web CLI reference](../reference/cli/web.md) — every subcommand and flag.
 - [Configuration](./configuration.md#web-access) — per-machine settings.
-- [Web internals](../internals/web.md) — state files, ports, and remote relay.
-- [Troubleshooting](./troubleshooting.md) — missing engines and failed starts.
+- [Web internals](../internals/web.md) — daemon argv, state, validation, and remote wire format.
+- [Troubleshooting](./troubleshooting.md) — missing ttyd and failed starts.

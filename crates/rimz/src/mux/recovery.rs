@@ -103,40 +103,6 @@ pub fn zellij_session_cache_paths_in(cache_root: &Path, name: &str) -> Vec<PathB
     paths
 }
 
-/// Read Zellij's best-effort session metadata and report whether browser
-/// clients are allowed to attach. Missing or malformed metadata is invisible to
-/// callers because the cache is an asynchronous Zellij side channel, not RimZ's
-/// source of truth.
-pub fn zellij_session_web_clients_allowed_in(cache_root: &Path, name: &str) -> Option<bool> {
-    let mut saw_false = false;
-    for path in zellij_session_cache_paths_in(cache_root, name)
-        .into_iter()
-        .map(|path| path.join("session-metadata.kdl"))
-    {
-        let Some(allowed) = fs::read_to_string(path)
-            .ok()
-            .and_then(|raw| zellij_metadata_web_clients_allowed(&raw))
-        else {
-            continue;
-        };
-        if allowed {
-            return Some(true);
-        }
-        saw_false = true;
-    }
-    saw_false.then_some(false)
-}
-
-fn zellij_metadata_web_clients_allowed(raw: &str) -> Option<bool> {
-    raw.parse::<kdl::KdlDocument>()
-        .ok()?
-        .get("web_clients_allowed")?
-        .entries()
-        .first()?
-        .value()
-        .as_bool()
-}
-
 /// Remove a file or directory, returning whether anything was removed. A path
 /// that does not exist is not an error (the goal state is "gone").
 fn remove_path(path: &Path) -> bool {
@@ -619,47 +585,6 @@ mod tests {
         assert!(purge_zellij_session_cache_in(root, SESSION).is_empty());
         // An absent cache root is a no-op.
         assert!(purge_zellij_session_cache_in(&root.join("missing"), SESSION).is_empty());
-    }
-
-    #[test]
-    fn session_metadata_reports_web_clients_allowed_across_contract_versions() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        for (version, allowed) in [("contract_version_1", false), ("contract_version_2", true)] {
-            let entry = root
-                .join("zellij")
-                .join(version)
-                .join("session_info")
-                .join(SESSION);
-            fs::create_dir_all(&entry).expect("mkdir session metadata dir");
-            fs::write(
-                entry.join("session-metadata.kdl"),
-                format!("web_clients_allowed {allowed}\n"),
-            )
-            .expect("write metadata");
-        }
-
-        assert_eq!(
-            zellij_session_web_clients_allowed_in(root, SESSION),
-            Some(true)
-        );
-        assert_eq!(
-            zellij_session_web_clients_allowed_in(root, "missing-session"),
-            None
-        );
-    }
-
-    #[test]
-    fn session_metadata_ignores_malformed_web_clients_allowed() {
-        assert_eq!(
-            zellij_metadata_web_clients_allowed("web_clients_allowed true\n"),
-            Some(true)
-        );
-        assert_eq!(
-            zellij_metadata_web_clients_allowed("web_clients_allowed \"true\"\n"),
-            None
-        );
-        assert_eq!(zellij_metadata_web_clients_allowed("not kdl {{{\n"), None);
     }
 
     #[test]

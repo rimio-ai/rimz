@@ -82,7 +82,7 @@ Two modules outside `mux/` complete the picture. [`room/`](../../crates/rimz/src
 
 The flag and the environment short-circuit before config is even loaded, so a command run inside a live room always addresses that room.
 
-Selection is stable across worktrees: every worktree of one repository resolves to the same session on the same backend. Room identity is path-derived and shared across backends, which means a rival session under the same derived name on the other backend would share the store while its panes stayed unreachable. Four commands guard that: `rimz start`, `rimz reset`, `rimz attach`, and `rimz web` resolve through [`pick_mux_for_session`](../../crates/rimz/src/room/session.rs), so an auto-selected launch lands on the backend that already owns the live room. Start attaches to it; reset tears it down there before rebirthing on the resolved default; web selects Zellij's machine server or tmux's per-room ttyd. [`ensure_single_backend_room`](../../crates/rimz/src/room/session.rs) guards birth itself, refusing an explicit `--mux` that names a backend other than the live room's owner.
+Selection is stable across worktrees: every worktree of one repository resolves to the same session on the same backend. Room identity is path-derived and shared across backends, which means a rival session under the same derived name on the other backend would share the store while its panes stayed unreachable. Four commands guard that: `rimz start`, `rimz reset`, `rimz attach`, and `rimz web` resolve through [`pick_mux_for_session`](../../crates/rimz/src/room/session.rs), so an auto-selected launch lands on the backend that already owns the live room. Start attaches to it; reset tears it down there before rebirthing on the resolved default; web passes the resolved session to the shared ttyd daemon, whose validated shim attaches through its owning backend. [`ensure_single_backend_room`](../../crates/rimz/src/room/session.rs) guards birth itself, refusing an explicit `--mux` that names a backend other than the live room's owner.
 
 ## The `MuxBackend` trait
 
@@ -96,7 +96,7 @@ Selection is stable across worktrees: every worktree of one repository resolves 
 | Structure | `split_pane`, `open_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. |
 | Focus and geometry | `focus_pane`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_focus_key` | |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |
-| Presence | `ensure_presence_plugin`, `share_web_session` | Zellij-only; tmux inherits the no-op default because its control-mode watch already pushes. |
+| Presence | `ensure_presence_plugin` | Zellij-only; tmux inherits the no-op default because its control-mode watch already pushes. |
 
 Methods with a sensible cross-backend answer carry a default implementation, so a backend implements only what it does differently. `ensure_clean_session` and `purge_resurrection_cache` exist because Zellij resurrects sessions and tmux does not; tmux takes the no-op and the calling code stays branch-free.
 
@@ -396,7 +396,7 @@ The plugin publishes Zellij facts. The host derives every meaning.
 | Merged topology snapshots from Zellij's pane and tab manifests | Pane roles: which pane is a sidebar, which is an agent card |
 | Attached-client observations, including the settled sample after a tab switch | Focus-repair decisions and the `SidebarEvent` taxonomy |
 | Poke timing that Zellij's event model requires | Launch-chrome filtering and topology-writer authority |
-| Capabilities that need plugin-only APIs: the runtime focus keybind, mouse `reconfigure`, web-session sharing, hiding or closing itself | Durable cache publication |
+| Capabilities that need plugin-only APIs: the runtime focus keybind, mouse `reconfigure`, hiding or closing itself | Durable cache publication |
 
 The payoff is release cadence. A product-policy change (what counts as chrome, when a focus is stranded, how an event maps) ships in the `rimz` crate alone and needs no plugin release. Two corollaries follow: carry only facts that originate in Zellij's server state, since a fact derivable from the OS routes host-side through `pane_pid` (the host owns `/proc`, the plugin owns the event stream), and add a wake shape only for a fact that cannot be derived from an accepted snapshot diff.
 
@@ -415,7 +415,7 @@ The crate splits along the wasm boundary, which is what makes it testable.
 
 `engine`, `policy`, and `wire` contain no `zellij-tile` type, so they compile and unit-test on the host target inside the ordinary workspace test run. `zellij-tile` is a wasm-only dependency, since its shims call extern host functions that exist only inside Zellij's plugin host.
 
-The engine returns effects rather than performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `ShareSession`, `CloseSelf`, `Unsubscribe`, `Resubscribe`, `SetTimeout`, `ListClients`. Every decision is therefore a pure function from event to effect list, and the shell stays a projection layer.
+The engine returns effects rather than performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `CloseSelf`, `Unsubscribe`, `Resubscribe`, `SetTimeout`, `ListClients`. Every decision is therefore a pure function from event to effect list, and the shell stays a projection layer.
 
 Inside the engine, one canonical pane map is the single source of truth. Reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
 
@@ -438,13 +438,12 @@ The first manifest after load names every pre-existing pane, so the host accepts
 
 The host derives attached-client count, terminal views, and unique-live focus from `clients`. A legacy `focused_pane` field is accepted only as a fallback when `clients` is absent, and a legacy payload without `clients` keeps producer-side `client_view` fallback active.
 
-Four named pipes reach the plugin from the host:
+Three named pipes reach the plugin from the host:
 
 | Pipe | Effect |
 | --- | --- |
 | `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives and resubscribes a retired same-id clone for that publish. |
 | `rimz:focus_sidebar` | Run the focus-sidebar fork; this is what the focus keybind messages. |
-| `rimz:share_session` | Admit browser clients to this Zellij session. |
 | `rimz:retire` | Retire this instance if the payload's generation outranks it. |
 
 ### Poke discipline
@@ -469,7 +468,7 @@ Every host fork runs from `/`, which decouples the session-lifetime plugin from 
 
 Loading is RimZ-owned and never the user's `config.kdl`, because a layout cannot load plugins.
 
-The load verb is the idempotent `zellij … action pipe --plugin --skip-plugin-cache`, the one verb that works on a clientless session and carries the cache-bypass bit in Zellij 0.44. Only owner flows use it: room birth, `rimz reload` upgrade and repair, and web sharing. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
+The load verb is the idempotent `zellij … action pipe --plugin --skip-plugin-cache`, the one verb that works on a clientless session and carries the cache-bypass bit in Zellij 0.44. Only owner flows use it: room birth and `rimz reload` upgrade and repair. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
 
 Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`workspaces/<id>/rimz`), runtime mouse options, the background launch scope, the lazy-once embedded-wasm digest, and a hash of the configuration itself. Every desired identity is instantiated only through this pipe, so an identity-matching writer is background by construction and receives global pane and tab updates. Changing an identity launches another background writer; the host accepts its proof and retires the old identity.
 
@@ -482,7 +481,6 @@ RimZ seeds Zellij's `permissions.kdl` cache for its own embedded plugin so the f
 | `ReadApplicationState` | The pane, tab, session, and client manifests. |
 | `RunCommands` | The `rimz sidebar wake` fork. |
 | `Reconfigure` | Runtime mouse options and the optional focus keybind, applied without writing `config.kdl`. |
-| `StartWebServer` | Added when `[web] enabled`; lets `rimz:share_session` enable browser access. |
 
 The plugin artifact path is canonicalized because Zellij keys the grant on the exact string. The security boundary is in [security.md](../guide/security.md#the-zellij-presence-plugin).
 
@@ -496,7 +494,7 @@ The digest of that wasm is the plugin's build identity, which intentionally make
 
 The workspace record carries the staged `rimz_bin` plus its `rimz_build` digest as one verified room target. Only room owner claim and reload update the pair: `rimz start`, cwd-based `rimz attach`, and `rimz reload`. Named attach by session preserves the recorded owner, and generic CLI re-records preserve both values. Because the plugin configuration names the stable `rimz` pointer rather than the staged path, a worktree build that asks for topology leaves the configuration string unchanged.
 
-Owner flows materialize or refresh the shared embedded wasm artifact, and `rimz web open` does too because browser access depends on the runtime sharing pipe. Read-only topology refreshes use only an existing artifact or the beside-executable development fallback. The shared artifact therefore tracks the last owner build, and another session can run those bytes until its own owner refreshes them. The writer gate below makes that benign.
+Owner flows materialize or refresh the shared embedded wasm artifact. Read-only topology refreshes use only an existing artifact or the beside-executable development fallback. The shared artifact therefore tracks the last owner build, and another session can run those bytes until its own owner refreshes them. The writer gate below makes that benign.
 
 ### Writer fencing
 

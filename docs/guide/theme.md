@@ -46,7 +46,7 @@ The bundled catalog is the Alacritty export of [iTerm2-Color-Schemes](https://gi
 
 Human `rimz` command output resolves the same scheme, slot overrides, provider overrides, and color depth as the sidebar. Machine-readable output stays stable: JSON, hook decisions, pane captures, scripting values, and streams do not inherit theme styling.
 
-Zellij web rooms use the active scheme for the browser terminal when `[web.zellij] style_client` is true; see [Web CLI](../reference/cli/web.md).
+Browser rooms use the active scheme when `[web] style_client` is true; see [Web CLI](../reference/cli/web.md).
 
 To paste a palette inline instead, drop an Alacritty `[colors.*]` block at the root of `theme.toml`; an inline palette wins over `scheme`. The required keys are `colors.primary.background` / `foreground` and the six `colors.normal` hues; `colors.bright.blue` (the selection accent, falling back to `normal.blue`) and `colors.selection.background` (the selected-card band) are optional. A missing or malformed entry is named at load.
 

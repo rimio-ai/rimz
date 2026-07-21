@@ -321,7 +321,7 @@ Blank payload reads STDIN line-buffered with plugin backpressure; plugin `cli_pi
 
 ### `web`
 
-`zellij web [--start|--stop|--status] [-d/--daemonize] [--timeout seconds] [--ip] [--port]` (defaults `127.0.0.1:8082`) `[--cert/--key]` (required off-localhost). `--server-startup-timeout` controls only the Windows daemon-start poll; Unix uses a pipe. Token auth: `--create-token` (shown once) and `--create-read-only-token` (watcher-only) are clap-`exclusive(true)` creation flags and auto-name tokens as `token_N`; `--token-name` cannot accompany them. Token management uses `--revoke-token <name>`, `--revoke-all-tokens`, and `--list-tokens`. Pairs with the `web_server*` / `web_sharing` config options and `attach`'s token flags. RimZ's use lives in [web.md](../../internals/web.md).
+`zellij web [--start|--stop|--status] [-d/--daemonize] [--timeout seconds] [--ip] [--port]` (defaults `127.0.0.1:8082`) `[--cert/--key]` (required off-localhost). `--server-startup-timeout` controls only the Windows daemon-start poll; Unix uses a pipe. Token auth: `--create-token` (shown once) and `--create-read-only-token` (watcher-only) are clap-`exclusive(true)` creation flags and auto-name tokens as `token_N`; `--token-name` cannot accompany them. Token management uses `--revoke-token <name>`, `--revoke-all-tokens`, and `--list-tokens`. Pairs with the `web_server*` / `web_sharing` config options and `attach`'s token flags. RimZ browser access uses the shared ttyd daemon described in [web.md](../../internals/web.md).
 
 ### `setup` and sessions
 

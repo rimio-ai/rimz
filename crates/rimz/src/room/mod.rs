@@ -341,22 +341,6 @@ impl RoomContext {
             .attach_command(&self.workspace.session_name, &self.mux_config)
     }
 
-    /// Ask the backend to enable browser sharing for this room.
-    pub fn share_web(&self) -> bool {
-        let Some(opts) = self.presence_options(true) else {
-            tracing::debug!(
-                session = %self.workspace.session_name,
-                "presence plugin unavailable; Zellij web sharing was not requested",
-            );
-            return false;
-        };
-        if let Err(err) = self.backend.share_web_session(&opts) {
-            tracing::debug!(session = %self.workspace.session_name, error = %err, "Zellij web-sharing pipe failed");
-            return false;
-        }
-        true
-    }
-
     fn presence_options(&self, materialize_artifact: bool) -> Option<PresencePluginOptions> {
         let wasm = if materialize_artifact {
             crate::mux::zellij::ensure_presence_plugin_artifact()?
@@ -371,7 +355,6 @@ impl RoomContext {
                 .ok()?
                 .room_bin,
             converge: false,
-            seed_permissions: self.machine_config.web.enabled,
             focus_key: self
                 .machine_config
                 .sidebar

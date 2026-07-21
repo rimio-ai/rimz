@@ -28,8 +28,6 @@ pub enum Effect {
     HideSelf,
     /// Runtime `reconfigure(kdl, false)`.
     Reconfigure(String),
-    /// Admit browser clients to the current Zellij session.
-    ShareSession,
     /// Close this plugin instance.
     CloseSelf,
     /// Drop every subscription until a topology dump revives the same-id clone.
@@ -514,7 +512,6 @@ pub struct Engine {
     focus: FocusSync,
     granted: bool,
     pending_pregrant_change: bool,
-    share_requested: bool,
     timer_gate: TimerGate,
     loaded_at_ms: u64,
     retired: bool,
@@ -535,7 +532,6 @@ impl Engine {
             focus: FocusSync::default(),
             granted: false,
             pending_pregrant_change: false,
-            share_requested: false,
             timer_gate: TimerGate::default(),
             loaded_at_ms: now,
             retired: false,
@@ -566,9 +562,6 @@ impl Engine {
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         self.apply_runtime_reconfigure(&mut effects);
-        if self.share_requested {
-            effects.push(Effect::ShareSession);
-        }
         self.finish_update(now, host, effects)
     }
 
@@ -755,16 +748,6 @@ impl Engine {
         let mut effects = Vec::new();
         self.run_focus_sidebar(&mut effects);
         effects
-    }
-
-    pub fn on_share_session_pipe(&mut self) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
-        self.share_requested = true;
-        // This can be dropped while the upgraded StartWebServer grant is
-        // pending; PermissionRequestResult(Granted) replays it.
-        vec![Effect::ShareSession]
     }
 
     pub fn on_dump_topology_pipe(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {

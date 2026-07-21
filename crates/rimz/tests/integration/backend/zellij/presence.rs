@@ -27,7 +27,7 @@ pub(in crate::backend::zellij) fn seed_presence_permissions(xdg: &Path, wasm: &P
     std::fs::write(
         cache_dir.join("permissions.kdl"),
         format!(
-            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n    Reconfigure\n    StartWebServer\n}}\n",
+            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n    Reconfigure\n}}\n",
             wasm.display(),
         ),
     )
@@ -111,24 +111,6 @@ fn wait_for_focus_exec_log(log: &Path) -> String {
             );
         }
         std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn wait_for_web_clients_allowed(cache_root: &Path, name: &str) {
-    let deadline = Instant::now() + SPAWN_TIMEOUT;
-    loop {
-        if rimz::mux::recovery::zellij_session_web_clients_allowed_in(cache_root, name)
-            == Some(true)
-        {
-            return;
-        }
-        if Instant::now() > deadline {
-            panic!(
-                "session metadata never reported web_clients_allowed true for {name}; got {:?}",
-                rimz::mux::recovery::zellij_session_web_clients_allowed_in(cache_root, name),
-            );
-        }
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -370,7 +352,6 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         wasm,
         rimz_bin: rimz_shim,
         converge: false,
-        seed_permissions: false,
         focus_key: None,
         focus_follows_mouse: false,
         mouse_click_through: true,
@@ -509,7 +490,6 @@ fn presence_identity_transition_keeps_global_background_updates() {
         wasm,
         rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
         converge: false,
-        seed_permissions: false,
         focus_key: None,
         focus_follows_mouse: false,
         mouse_click_through: true,
@@ -821,7 +801,6 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             wasm,
             rimz_bin: room_bin,
             converge: true,
-            seed_permissions: false,
             focus_key: Some("Alt+p".to_owned()),
             focus_follows_mouse: false,
             mouse_click_through: true,
@@ -964,52 +943,6 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
 }
 
 #[test]
-fn share_web_session_enables_browser_clients_on_a_clientless_session() {
-    require_zellij!();
-    let Some(wasm) = presence_wasm_artifact() else {
-        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
-        return;
-    };
-    match zellij::capabilities() {
-        Ok(caps)
-            if caps
-                .parsed_version
-                .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
-        _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
-            return;
-        }
-    }
-
-    let xdg = scoped_runtime_dir();
-    let cwd = TempDir::new().expect("session cwd tempdir");
-    let name = unique_session_name("webshare");
-    create_plain_background_session(xdg.path(), &name, cwd.path(), "30");
-    wait_until_session_ready(xdg.path(), &name);
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    backend
-        .share_web_session(&rimz::mux::PresencePluginOptions {
-            session_name: name.clone(),
-            workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
-            wasm,
-            rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
-            converge: false,
-            seed_permissions: true,
-            focus_key: None,
-            focus_follows_mouse: false,
-            mouse_click_through: true,
-        })
-        .expect("share web session against a clientless Zellij session");
-
-    wait_for_web_clients_allowed(xdg.path(), &name);
-}
-
-#[test]
 fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {
@@ -1044,7 +977,6 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
             wasm,
             rimz_bin: rimz_shim,
             converge: false,
-            seed_permissions: false,
             focus_key: Some("Alt+p".to_owned()),
             focus_follows_mouse: false,
             mouse_click_through: true,

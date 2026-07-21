@@ -103,10 +103,6 @@ const FOCUS_RESTORE_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// Pipe name the presence-plugin launch sends its boot message down.
 const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";
 
-/// Pipe name `rimz web open` sends to the presence plugin; keep in sync with
-/// `crates/rimz-presence-zellij/src/wire.rs`.
-const PRESENCE_SHARE_PIPE: &str = "rimz:share_session";
-
 /// Pipe name that asks the presence plugin for an immediate topology cache
 /// publish. Keep in sync with `crates/rimz-presence-zellij/src/wire.rs`.
 const PRESENCE_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
@@ -144,6 +140,12 @@ pub fn capabilities() -> Result<ZellijCapabilities> {
         binary_version: raw,
         parsed_version: parsed,
     })
+}
+
+/// Attach to an existing session without allowing the client to create it.
+/// Browser argv reaches this only after the web shim validates a live RimZ room.
+pub fn attach_existing_command(session: &str) -> CommandSpec {
+    ZellijBackend::new().cmd().args(["attach", session])
 }
 
 pub fn log_file() -> PathBuf {

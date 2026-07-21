@@ -39,6 +39,7 @@ fn git_tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(|path| root.join(path))
+        .filter(|path| path.is_file())
         .collect())
 }
 

@@ -16,7 +16,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 - [Agents](./guide/fleet.md): run the stock CLIs in the room, shape an agent for one job with a profile, compose several into one layout, and read and drive the running fleet.
 - [Token Insight](./guide/insight.md): read what the fleet costs and how hard it is working, from the live cockpit to `rimz stats`, and how every figure is calculated.
 - [Remote](./guide/remote.md): attach to a room on another host over SSH with a self-healing link, kept alive across reboots, and answer agent asks from the providers' own mobile apps.
-- [Web](./guide/web.md): open a room in the browser, on the host or tunnelled from a server, gated by a login token.
+- [Web](./guide/web.md): open a room through the shared authenticated ttyd daemon, on the host or tunnelled from a server.
 
 ## Harness Engineering
 

@@ -84,7 +84,6 @@ pub(crate) fn presence_opts(session_name: &str, rimz_bin: &str) -> PresencePlugi
         wasm: PathBuf::from("/tmp/rimz-presence-zellij.wasm"),
         rimz_bin: PathBuf::from(rimz_bin),
         converge: false,
-        seed_permissions: false,
         focus_key: None,
         focus_follows_mouse: false,
         mouse_click_through: true,

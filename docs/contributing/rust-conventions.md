@@ -270,7 +270,7 @@ Three gates hold that surface, all in the normal test run:
 
 - **Flags** — [crates/rimz/src/cli/surface_tests.rs](../../crates/rimz/src/cli/surface_tests.rs) snapshots the built clap tree: every command, alias, and flag with its arity, defaults, accepted values, and global/hidden status, and no help prose so wording churn stays out of the diff. A failure is the review prompt. Adding a command or an optional flag is additive; renaming or removing a flag, narrowing a value set, or changing a default breaks callers and earns a CHANGELOG entry. Accept a reviewed diff with `cargo insta accept`.
 - **Commands** — `visible_commands_are_grouped_exactly_once` in [crates/rimz/src/cli/help.rs](../../crates/rimz/src/cli/help.rs) fails when a visible subcommand appears or disappears without moving its help group.
-- **Persisted and wire formats** — each format carries its own version constant (`rimz.event.v2`, `rimz.plugin.v5`, `rimz.web.v1`, `SNAPSHOT_VERSION`, and peers), independent of the crate version, and a mismatched record is rejected and rebuilt rather than migrated. The doctor integration suite pins the event-log and sidebar-plugin versions as literals, so a bump there fails a test that names the old value.
+- **Persisted and wire formats** — each format carries its own version constant (`rimz.event.v2`, `rimz.plugin.v5`, `rimz.web.v2`, `SNAPSHOT_VERSION`, and peers), independent of the crate version, and a mismatched record is rejected and rebuilt rather than migrated. The doctor integration suite pins the event-log and sidebar-plugin versions as literals, so a bump there fails a test that names the old value.
 
 ### Architectural invariants
 

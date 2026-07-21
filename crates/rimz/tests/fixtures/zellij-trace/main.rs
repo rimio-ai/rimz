@@ -12,9 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 enum Invocation<'a> {
     Version,
     ListSessions,
-    Web(WebCommand<'a>),
     ActionQuery(ActionQuery),
-    ShareSession(Option<&'a str>),
     PresenceBoot {
         session: Option<&'a str>,
         configuration: Option<&'a str>,
@@ -31,15 +29,6 @@ enum Invocation<'a> {
 enum ActionQuery {
     Clients,
     Panes,
-}
-
-enum WebCommand<'a> {
-    Help,
-    Status,
-    ListTokens,
-    Start,
-    CreateToken { flag: &'a str, has_extra_args: bool },
-    OtherMutation,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -67,9 +56,7 @@ fn main() {
     match classify_invocation(cli) {
         Invocation::Version => write_stdout("zellij 0.44.3"),
         Invocation::ListSessions => handle_list_sessions(&log_path),
-        Invocation::Web(command) => handle_web(command, &log_path),
         Invocation::ActionQuery(query) => handle_action_query(query),
-        Invocation::ShareSession(session) => handle_share_session(session),
         Invocation::PresenceBoot {
             session,
             configuration,
@@ -98,9 +85,6 @@ fn classify_leading_invocation(cli: &[String]) -> Option<Invocation<'_>> {
     if cli.first().is_some_and(|arg| arg == "list-sessions") {
         return Some(Invocation::ListSessions);
     }
-    if cli.first().is_some_and(|arg| arg == "web") {
-        return classify_web_command(&cli[1..]).map(Invocation::Web);
-    }
     None
 }
 
@@ -110,9 +94,6 @@ fn classify_nested_invocation(cli: &[String]) -> Option<Invocation<'_>> {
     }
     if has_pair(cli, "action", "list-panes") {
         return Some(Invocation::ActionQuery(ActionQuery::Panes));
-    }
-    if has_pair(cli, "--name", "rimz:share_session") {
-        return Some(Invocation::ShareSession(arg_after(cli, "--session")));
     }
     if has_pair(cli, "--name", "rimz_presence_boot") {
         return Some(Invocation::PresenceBoot {
@@ -135,22 +116,6 @@ fn classify_nested_invocation(cli: &[String]) -> Option<Invocation<'_>> {
     None
 }
 
-fn classify_web_command(cli: &[String]) -> Option<WebCommand<'_>> {
-    let (command, rest) = cli.split_first()?;
-    match command.as_str() {
-        "--help" => Some(WebCommand::Help),
-        "--status" => Some(WebCommand::Status),
-        "--list-tokens" => Some(WebCommand::ListTokens),
-        "--start" => Some(WebCommand::Start),
-        "--create-token" | "--create-read-only-token" => Some(WebCommand::CreateToken {
-            flag: command,
-            has_extra_args: !rest.is_empty(),
-        }),
-        "--stop" | "--revoke-token" | "--revoke-all-tokens" => Some(WebCommand::OtherMutation),
-        _ => None,
-    }
-}
-
 fn handle_list_sessions(log_path: &Path) {
     let scripted = env::var("RIMZ_TEST_ZELLIJ_LIST_SESSIONS").ok();
     let suppress_created = env::var_os("RIMZ_TEST_ZELLIJ_DISABLE_CREATED_SESSIONS").is_some()
@@ -169,51 +134,10 @@ fn handle_list_sessions(log_path: &Path) {
     std::process::exit(1);
 }
 
-fn handle_web(command: WebCommand<'_>, log_path: &Path) {
-    let name = match &command {
-        WebCommand::Help => "help",
-        WebCommand::Status => "status",
-        WebCommand::ListTokens => "list-tokens",
-        WebCommand::Start => "start",
-        WebCommand::CreateToken { .. } => "create-token",
-        WebCommand::OtherMutation => "mutation",
-    };
-    if env::var("RIMZ_TEST_ZELLIJ_WEB_FAIL").is_ok_and(|value| value == name) {
-        write_stderr(&format!("simulated zellij web {name} failure"));
-        std::process::exit(9);
-    }
-    match command {
-        WebCommand::Help => write_stdout("zellij-web"),
-        WebCommand::Status => write_stdout_raw(&web_status_output(log_path)),
-        WebCommand::ListTokens => write_env_raw("RIMZ_TEST_ZELLIJ_WEB_TOKENS"),
-        WebCommand::Start => write_env_raw("RIMZ_TEST_ZELLIJ_WEB_START_STDOUT"),
-        WebCommand::CreateToken {
-            flag,
-            has_extra_args: true,
-        } => {
-            write_stderr(&format!(
-                "error: The argument '{flag}' cannot be used with one or more of the other specified arguments"
-            ));
-            std::process::exit(1);
-        }
-        WebCommand::CreateToken {
-            has_extra_args: false,
-            ..
-        } => write_env_raw("RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN"),
-        WebCommand::OtherMutation => {}
-    }
-}
-
 fn handle_action_query(query: ActionQuery) {
     match query {
         ActionQuery::Clients => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_CLIENTS"),
         ActionQuery::Panes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
-    }
-}
-
-fn handle_share_session(session: Option<&str>) {
-    if let Some(session) = session {
-        write_web_clients_allowed_metadata(session);
     }
 }
 
@@ -432,41 +356,6 @@ fn arg_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2)
         .find(|window| window[0] == flag)
         .map(|window| window[1].as_str())
-}
-
-fn write_web_clients_allowed_metadata(session: &str) {
-    let path = cache_home()
-        .join("zellij")
-        .join("contract_version_1")
-        .join("session_info")
-        .join(session);
-    std::fs::create_dir_all(&path).expect("create fake session metadata dir");
-    std::fs::write(
-        path.join("session-metadata.kdl"),
-        "web_clients_allowed true\n",
-    )
-    .expect("write fake session metadata");
-}
-
-fn cache_home() -> std::path::PathBuf {
-    env::var_os("XDG_CACHE_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache")))
-        .unwrap_or_else(env::temp_dir)
-}
-
-fn web_status_output(log_path: &Path) -> String {
-    if command_seen(log_path, "web\t--start")
-        && let Ok(after_start) = env::var("RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START")
-    {
-        return after_start;
-    }
-    env::var("RIMZ_TEST_ZELLIJ_WEB_STATUS")
-        .unwrap_or_else(|_| "Web server is offline, checked: http://127.0.0.1:8082".to_owned())
-}
-
-fn command_seen(log_path: &Path, needle: &str) -> bool {
-    std::fs::read_to_string(log_path).is_ok_and(|log| log.lines().any(|line| line.contains(needle)))
 }
 
 fn write_env_raw(name: &str) {

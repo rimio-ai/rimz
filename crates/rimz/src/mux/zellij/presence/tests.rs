@@ -32,11 +32,7 @@ fn seed_presence_permissions_adds_node_to_empty_document() {
     let key = "/tmp/rimz-presence-zellij.wasm";
     let mut document = KdlDocument::new();
 
-    assert!(ensure_presence_permissions_document(
-        &mut document,
-        key,
-        false
-    ));
+    assert!(ensure_presence_permissions_document(&mut document, key));
     document.fmt();
     let rendered = document.to_string();
     rendered
@@ -67,11 +63,7 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
     .parse()
     .expect("parse starting permissions");
 
-    assert!(ensure_presence_permissions_document(
-        &mut document,
-        key,
-        true
-    ));
+    assert!(!ensure_presence_permissions_document(&mut document, key));
     document.fmt();
     document
         .to_string()
@@ -83,12 +75,7 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
     );
     assert_eq!(
         permission_children(&document, key),
-        [
-            "ReadApplicationState",
-            "RunCommands",
-            "Reconfigure",
-            "StartWebServer"
-        ]
+        ["ReadApplicationState", "RunCommands", "Reconfigure"]
     );
 }
 
@@ -96,19 +83,11 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
 fn seed_presence_permissions_is_noop_when_complete() {
     let key = "/tmp/rimz-presence-zellij.wasm";
     let mut document = KdlDocument::new();
-    assert!(ensure_presence_permissions_document(
-        &mut document,
-        key,
-        true
-    ));
+    assert!(ensure_presence_permissions_document(&mut document, key));
     document.fmt();
     let once = document.to_string();
 
-    assert!(!ensure_presence_permissions_document(
-        &mut document,
-        key,
-        true
-    ));
+    assert!(!ensure_presence_permissions_document(&mut document, key));
     document.fmt();
     assert_eq!(document.to_string(), once);
 }
@@ -239,39 +218,6 @@ fn current_presence_cleanup_retires_a_stale_loaded_id() {
     assert!(
         log.contains("--name rimz_presence_boot -- load"),
         "cleanup should heal any accepted writer closed with a same-id clone:\n{log}",
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn share_web_session_pipes_share_payload_to_presence_plugin() {
-    let (temp, shim) = logging_shim();
-    let backend = ZellijBackend::with_program_for_test(&shim);
-    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
-
-    backend
-        .share_web_session_for(&opts)
-        .expect("share session pipe");
-
-    let log = shim_log(&temp);
-    assert!(
-        log.contains(
-            "--session rimz-test action pipe --plugin file:/tmp/rimz-presence-zellij.wasm"
-        ),
-        "share should target the presence plugin by session and wasm URL:\n{log}",
-    );
-    assert_eq!(
-        log.matches("--skip-plugin-cache").count(),
-        2,
-        "every plugin-addressed load pipe should bypass the path-keyed module cache:\n{log}",
-    );
-    assert!(
-        log.contains("--name rimz_presence_boot -- load"),
-        "share should first load and grant the presence plugin:\n{log}",
-    );
-    assert!(
-        log.contains("--name rimz:share_session -- share"),
-        "share should send the runtime web-sharing pipe and payload:\n{log}",
     );
 }
 

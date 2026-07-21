@@ -14,7 +14,7 @@ use kdl::{KdlDocument, KdlNode};
 use super::backend::RawListedPane;
 use super::{
     PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_RETIRE_PROOF_TIMEOUT,
-    PRESENCE_SHARE_PIPE, PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
+    PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
 use crate::ids::PaneId;
 use crate::mux::{MuxErr, Result};
@@ -27,7 +27,6 @@ const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
 const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
 const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 3] =
     ["ReadApplicationState", "RunCommands", "Reconfigure"];
-const PRESENCE_PLUGIN_WEB_PERMISSION: &str = "StartWebServer";
 static PRESENCE_PLUGIN_BUILD: LazyLock<String> =
     LazyLock::new(|| crate::build_id::of_bytes(EMBEDDED_PRESENCE_PLUGIN));
 
@@ -292,18 +291,6 @@ impl ZellijBackend {
         }
     }
 
-    pub(super) fn share_web_session_for(
-        &self,
-        opts: &super::super::PresencePluginOptions,
-    ) -> Result<()> {
-        // Load and grant the plugin before sharing. Zellij 0.44.3 can drop
-        // share_current_session() when the same pipe also launches the plugin:
-        // the call races its permission grant, and cached grants emit no
-        // PermissionRequestResult replay.
-        self.ensure_presence_plugin_for(opts)?;
-        self.pipe_to_presence_plugin(opts, PRESENCE_SHARE_PIPE, "share")
-    }
-
     /// Ask existing presence-plugin instances to publish topology. Readers
     /// broadcast by name and degrade when none runs; only owner flows launch.
     pub(crate) fn dump_topology_for(
@@ -549,7 +536,7 @@ fn seed_presence_permissions_in(cache_root: &Path, opts: &super::super::Presence
     let Some(mut document) = read_presence_permissions_document(&path) else {
         return;
     };
-    if !ensure_presence_permissions_document(&mut document, &key, opts.seed_permissions) {
+    if !ensure_presence_permissions_document(&mut document, &key) {
         return;
     }
     document.fmt();
@@ -587,11 +574,7 @@ fn read_presence_permissions_document(path: &Path) -> Option<KdlDocument> {
     }
 }
 
-fn ensure_presence_permissions_document(
-    document: &mut KdlDocument,
-    key: &str,
-    include_web: bool,
-) -> bool {
+fn ensure_presence_permissions_document(document: &mut KdlDocument, key: &str) -> bool {
     let mut found = false;
     let mut changed = false;
     for node in document
@@ -600,26 +583,23 @@ fn ensure_presence_permissions_document(
         .filter(|node| node.name().value() == key)
     {
         found = true;
-        changed |= ensure_presence_permissions_node(node, include_web);
+        changed |= ensure_presence_permissions_node(node);
     }
     if found {
         return changed;
     }
 
     let mut node = KdlNode::new(key);
-    ensure_presence_permissions_node(&mut node, include_web);
+    ensure_presence_permissions_node(&mut node);
     document.nodes_mut().push(node);
     true
 }
 
-fn ensure_presence_permissions_node(node: &mut KdlNode, include_web: bool) -> bool {
+fn ensure_presence_permissions_node(node: &mut KdlNode) -> bool {
     let had_children = node.children().is_some();
     let children = node.ensure_children();
     let mut changed = !had_children;
-    for permission in PRESENCE_PLUGIN_BASE_PERMISSIONS
-        .into_iter()
-        .chain(include_web.then_some(PRESENCE_PLUGIN_WEB_PERMISSION))
-    {
+    for permission in PRESENCE_PLUGIN_BASE_PERMISSIONS {
         if children.get(permission).is_none() {
             children.nodes_mut().push(KdlNode::new(permission));
             changed = true;
