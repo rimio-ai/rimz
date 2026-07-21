@@ -6,6 +6,10 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ## Unreleased
 
+### Added
+
+- First-run setup asks whether to enable auto-continue and automatic Codex reset-credit redemption together, defaulting yes. → [loops](./docs/guide/loops.md)
+
 ### Changed
 
 - The compatibility promise now names its surface. RimZ is a binary, and what it supports is the binary: commands and flags, `--json` output, exit codes, config keys, and persisted formats, on the 0.x terms above. The `rimz` crate publishes a library target so the binary, tests, and benches can link the domain modules, and it carries no compatibility promise — its names, signatures, and module layout move with the implementation and every release. Install `rimz` as a command; `cargo add rimz` is unsupported.

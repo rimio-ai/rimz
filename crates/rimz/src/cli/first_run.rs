@@ -18,6 +18,7 @@ pub(crate) struct Defaults {
     truecolor: bool,
     nerd_font: bool,
     pet_enabled: bool,
+    automation: bool,
 }
 
 impl Defaults {
@@ -30,6 +31,7 @@ impl Defaults {
                 == ColorDepth::Truecolor,
             nerd_font: config.theme.glyph_set_source().as_deref() == Some("nerd_font"),
             pet_enabled: config.theme.pets.enabled,
+            automation: config.resume.auto_continue && config.resume.auto_redeem,
         }
     }
 }
@@ -40,6 +42,7 @@ pub(crate) struct Answers {
     truecolor: bool,
     nerd_font: bool,
     pet_enabled: bool,
+    automation: bool,
 }
 
 pub(crate) fn run(defaults: Defaults, pets_config: PetsConfig, intro_rendered: bool) -> Result<()> {
@@ -95,6 +98,7 @@ pub(crate) fn ask(
             truecolor: defaults.truecolor,
             nerd_font: defaults.nerd_font,
             pet_enabled: defaults.pet_enabled,
+            automation: defaults.automation,
         });
     };
     writeln!(out)?;
@@ -126,6 +130,7 @@ pub(crate) fn ask(
             truecolor,
             nerd_font: defaults.nerd_font,
             pet_enabled: defaults.pet_enabled,
+            automation: defaults.automation,
         });
     };
     writeln!(out)?;
@@ -147,6 +152,27 @@ pub(crate) fn ask(
             truecolor,
             nerd_font,
             pet_enabled: defaults.pet_enabled,
+            automation: defaults.automation,
+        });
+    };
+    writeln!(out)?;
+
+    for line in [
+        "  Auto-continue types a continue nudge into the pane after a rate limit",
+        "  or transient API error. Auto-redeem spends a Codex reset credit",
+        "  when a spent window blocks real hours. Both are traced in `rimz stats`.",
+    ] {
+        writeln!(out, "{}", render::paint(render::palette::muted(), line))?;
+    }
+    writeln!(out)?;
+
+    let Some(automation) = prompt_bool("  Enable hands-off automation?", true, input, out)? else {
+        return Ok(Answers {
+            defaults,
+            truecolor,
+            nerd_font,
+            pet_enabled,
+            automation: defaults.automation,
         });
     };
 
@@ -155,6 +181,7 @@ pub(crate) fn ask(
         truecolor,
         nerd_font,
         pet_enabled,
+        automation,
     })
 }
 
@@ -206,6 +233,16 @@ pub(crate) fn apply(answers: &Answers, out: &mut dyn Write) -> Result<()> {
     } else if answers.defaults.pet_enabled {
         editor.set("theme.pets.enabled", "false")?;
         writeln!(out, "✓ pet disabled")?;
+    }
+
+    if answers.automation && !answers.defaults.automation {
+        editor.set("resume.auto_continue", "true")?;
+        editor.set("resume.auto_redeem", "true")?;
+        writeln!(out, "✓ auto-continue + auto-redeem on")?;
+    } else if !answers.automation && answers.defaults.automation {
+        editor.set("resume.auto_continue", "false")?;
+        editor.set("resume.auto_redeem", "false")?;
+        writeln!(out, "✓ hands-off automation off")?;
     }
     Ok(())
 }
@@ -366,17 +403,21 @@ mod tests {
             truecolor: false,
             nerd_font: false,
             pet_enabled: false,
+            automation: false,
         };
 
-        let (answers, rendered) = drive(defaults, b"y\ny\nn\n");
+        let (answers, rendered) = drive(defaults, b"y\ny\nn\n\n");
 
         assert!(answers.truecolor);
         assert!(answers.nerd_font);
         assert!(!answers.pet_enabled);
+        assert!(answers.automation);
         assert!(rendered.contains("Use truecolor?"));
         assert!(rendered.contains("Use Nerd Font icons?"));
         assert!(rendered.contains("Want a pet?"));
+        assert!(rendered.contains("Enable hands-off automation?"));
         assert_eq!(rendered.matches("[y/N]").count(), 3);
+        assert_eq!(rendered.matches("[Y/n]").count(), 1);
     }
 
     #[test]
@@ -385,6 +426,7 @@ mod tests {
             truecolor: true,
             nerd_font: false,
             pet_enabled: true,
+            automation: true,
         };
 
         let (at_truecolor, rendered) = drive(defaults, b"");
@@ -395,6 +437,7 @@ mod tests {
                 truecolor: true,
                 nerd_font: false,
                 pet_enabled: true,
+                automation: true,
             }
         );
         assert!(rendered.contains("Use truecolor?"));
@@ -404,6 +447,7 @@ mod tests {
         assert!(!at_nerd_font.truecolor);
         assert!(!at_nerd_font.nerd_font);
         assert!(at_nerd_font.pet_enabled);
+        assert!(at_nerd_font.automation);
         assert!(rendered.contains("Use Nerd Font icons?"));
         assert!(!rendered.contains("Want a pet?"));
 
@@ -411,7 +455,15 @@ mod tests {
         assert!(!at_pet.truecolor);
         assert!(at_pet.nerd_font);
         assert!(at_pet.pet_enabled);
+        assert!(at_pet.automation);
         assert!(rendered.contains("Want a pet?"));
+
+        let (at_automation, rendered) = drive(defaults, b"n\ny\nn\n");
+        assert!(!at_automation.truecolor);
+        assert!(at_automation.nerd_font);
+        assert!(!at_automation.pet_enabled);
+        assert!(at_automation.automation);
+        assert!(rendered.contains("Enable hands-off automation?"));
     }
 
     #[test]
@@ -420,14 +472,16 @@ mod tests {
             truecolor: true,
             nerd_font: true,
             pet_enabled: true,
+            automation: true,
         };
 
-        let (answers, rendered) = drive(defaults, b"n\nn\nn\n");
+        let (answers, rendered) = drive(defaults, b"n\nn\nn\nn\n");
 
         assert!(!answers.truecolor);
         assert!(!answers.nerd_font);
         assert!(!answers.pet_enabled);
-        assert_eq!(rendered.matches("[Y/n]").count(), 3);
+        assert!(!answers.automation);
+        assert_eq!(rendered.matches("[Y/n]").count(), 4);
     }
 
     #[test]
@@ -439,6 +493,7 @@ mod tests {
                 truecolor: false,
                 nerd_font: false,
                 pet_enabled: false,
+                automation: false,
             }
         );
         assert!(Defaults::from_config(&fresh, true).truecolor);
@@ -451,6 +506,7 @@ mod tests {
                 truecolor: true,
                 nerd_font: true,
                 pet_enabled: false,
+                automation: false,
             }
         );
 
@@ -466,6 +522,11 @@ mod tests {
         let explicit = Defaults::from_config(&explicit_truecolor, false);
         assert!(explicit.truecolor);
         assert!(explicit.nerd_font);
+
+        explicit_truecolor.resume.auto_continue = true;
+        assert!(!Defaults::from_config(&explicit_truecolor, false).automation);
+        explicit_truecolor.resume.auto_redeem = true;
+        assert!(Defaults::from_config(&explicit_truecolor, false).automation);
     }
 
     #[test]
@@ -511,13 +572,15 @@ mod tests {
             truecolor: false,
             nerd_font: false,
             pet_enabled: false,
+            automation: false,
         };
 
-        let (_, rendered) = drive(defaults, b"\n\n\n");
+        let (_, rendered) = drive(defaults, b"\n\n\n\n");
 
         assert_eq!(rendered.matches("Use truecolor?").count(), 1);
         assert_eq!(rendered.matches("Use Nerd Font icons?").count(), 1);
         assert_eq!(rendered.matches("Want a pet?").count(), 1);
+        assert_eq!(rendered.matches("Enable hands-off automation?").count(), 1);
     }
 
     #[test]
@@ -526,15 +589,16 @@ mod tests {
             truecolor: false,
             nerd_font: false,
             pet_enabled: false,
+            automation: false,
         };
 
-        let (_, with_art) = drive_with_art(defaults, b"\n\n\n", || Some("ART\n".to_owned()));
+        let (_, with_art) = drive_with_art(defaults, b"\n\n\n\n", || Some("ART\n".to_owned()));
         let nerd = with_art.find("Use Nerd Font icons?").expect("nerd prompt");
         let art = with_art.find("ART\n\n").expect("art with blank line");
         let pet = with_art.find("Want a pet?").expect("pet prompt");
         assert!(nerd < art && art < pet);
 
-        let (_, without_art) = drive(defaults, b"\n\n\n");
+        let (_, without_art) = drive(defaults, b"\n\n\n\n");
         assert!(!without_art.contains("ART"));
         assert!(without_art.contains("[y/N] \n  Want a pet?"));
     }

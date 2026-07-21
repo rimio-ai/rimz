@@ -629,6 +629,8 @@ fn setup_without_tty_reports_and_writes_nothing() {
     assert!(!stderr.contains("Use Nerd Font icons?"));
     assert!(!stdout.contains("Want a pet?"));
     assert!(!stderr.contains("Want a pet?"));
+    assert!(!stdout.contains("Enable hands-off automation?"));
+    assert!(!stderr.contains("Enable hands-off automation?"));
 
     assert!(!machine_config_path(&env).exists());
 }
@@ -659,10 +661,18 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     assert!(!stderr.contains("Use Nerd Font icons?"));
     assert!(!stdout.contains("Want a pet?"));
     assert!(!stderr.contains("Want a pet?"));
+    assert!(!stdout.contains("Enable hands-off automation?"));
+    assert!(!stderr.contains("Enable hands-off automation?"));
 
     let text = std::fs::read_to_string(machine_config_path(&env)).expect("read setup config");
     assert!(text.contains("[resume]"));
     assert!(text.contains("# on_rebirth = true"));
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.trim() == "auto_continue = true"),
+        "--yes should not opt into auto-continue:\n{text}"
+    );
     assert!(theme_config_path(&env).exists());
     assert!(agents_config_path(&env).exists());
     assert!(loop_config_path(&env).exists());
@@ -686,14 +696,16 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
 fn setup_pty_writes_and_reruns_first_run_answers() {
     let env = Env::new();
 
-    let output = run_setup_pty(&env, "y\ny\ny\n", None, &[]);
+    let output = run_setup_pty(&env, "y\ny\ny\ny\n", None, &[]);
 
     assert!(output.contains("Use truecolor?"));
     assert!(output.contains("Use Nerd Font icons?"));
     assert!(output.contains("Want a pet?"));
+    assert!(output.contains("Enable hands-off automation?"));
     assert!(output.contains("✓ truecolor"));
     assert!(output.contains("✓ Nerd Font icons"));
     assert!(output.contains("rocky joins the room"));
+    assert!(output.contains("auto-continue + auto-redeem on"));
     let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
         text.contains("mode = \"truecolor\""),
@@ -711,17 +723,27 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
         text.contains("[theme.pets]") && text.contains("enabled = true"),
         "pet enabled:\n{text}"
     );
+    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read machine config");
+    assert!(
+        text.contains("auto_continue = true") && text.contains("auto_redeem = true"),
+        "automation enabled:\n{text}"
+    );
 
-    let output = run_setup_pty(&env, "\nn\nn\nn\n", None, &[]);
+    let output = run_setup_pty(&env, "\nn\nn\nn\nn\n", None, &[]);
 
     assert!(output.contains("Keep your current config? [Y/n]"));
     assert!(output.contains("Use truecolor?"));
     assert!(output.contains("Use Nerd Font icons?"));
     assert!(output.contains("Want a pet? It lives in the sidebar and reacts to your fleet."));
+    assert!(output.contains("Enable hands-off automation?"));
     assert!(output.matches("[Y/n]").count() >= 4);
     assert!(output.contains("256-color palette"));
     assert!(output.contains("Unicode glyphs"));
     assert!(output.contains("pet disabled"), "setup output:\n{output}");
+    assert!(
+        output.contains("hands-off automation off"),
+        "setup output:\n{output}"
+    );
     let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
         text.contains("mode = 256") || text.contains("mode = \"256\""),
@@ -739,13 +761,18 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
         text.contains("[theme.pets]") && text.contains("enabled = false"),
         "pet disabled:\n{text}"
     );
+    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read machine config");
+    assert!(
+        text.contains("auto_continue = false") && text.contains("auto_redeem = false"),
+        "automation disabled:\n{text}"
+    );
 }
 
 #[test]
 fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
     let env = Env::new();
     let files = seed_setup_agents(&env);
-    let output = run_setup_agents_pty(&env, "y\nn\nn\nn\n", &files);
+    let output = run_setup_agents_pty(&env, "y\nn\nn\nn\nn\n", &files);
 
     assert!(
         output
@@ -800,7 +827,7 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
 fn setup_pty_decline_preserves_every_hook_candidate() {
     let env = Env::new();
     let files = seed_setup_agents(&env);
-    let output = run_setup_agents_pty(&env, "n\nn\nn\nn\n", &files);
+    let output = run_setup_agents_pty(&env, "n\nn\nn\nn\nn\n", &files);
 
     assert!(
         output.contains(

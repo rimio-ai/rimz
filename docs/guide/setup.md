@@ -24,9 +24,10 @@ cd ~/code/your-project && rimz
 - offers to keep an existing config and refresh it against the current templates,
 - offers one summarized install or refresh for every detected agent with missing hooks or a stale RimZ-owned whole-file integration,
 - shows separate live truecolor and Nerd Font probes, and
-- previews the configured sidebar pet before asking whether to enable it.
+- previews the configured sidebar pet before asking whether to enable it, and
+- offers to enable auto-continue and automatic Codex reset-credit redemption together.
 
-The hook summary names every affected file and points to `rimz hooks install --dry-run` for the exact unified diff before you consent. The first `rimz` run on a terminal asks the same hook, color, glyph, and pet questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs, upgrades, trust grants, or appearance changes — which suits a server provisioning script.
+The hook summary names every affected file and points to `rimz hooks install --dry-run` for the exact unified diff before you consent. The first `rimz` run on a terminal asks the same hook, color, glyph, pet, and automation questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs, upgrades, trust grants, appearance changes, or automation opt-ins — which suits a server provisioning script.
 
 Four files carry the settings this guide touches:
 

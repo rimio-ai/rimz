@@ -139,7 +139,7 @@ Resume covers two moments; the behavior model is [loops.md → Keep the fleet mo
 
 On a **rebirth after a reboot or multiplexer crash**, RimZ offers to recover prior agents from the durable record: the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab (empty named channels also reopen on same-boot rebirths). `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches (default 128).
 
-While the room is **live**, `auto_continue` (off by default) picks a parked turn back up by typing `auto_continue_text` through the same path as `message --steer`:
+While the room is **live**, `auto_continue` (off by default) picks a parked turn back up by typing `auto_continue_text` through the same path as `message --steer`; first-run setup offers to enable it and `auto_redeem` together:
 
 - Rate-limit and spend-limit parks fire when the account's budget window resets.
 - Overload and transient API-error parks (stalled streams, timeouts, connection drops) fire on the retry ramp: `auto_continue_backoff_secs = [180, 300]` sends the first retry three minutes after the failure, then every five minutes.
