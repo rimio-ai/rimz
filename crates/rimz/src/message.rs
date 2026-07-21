@@ -866,10 +866,8 @@ pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, Stri
 pub fn delivery_checkpoint(signal: &LifecycleSignal) -> bool {
     matches!(
         signal,
-        LifecycleSignal::TurnEnded {
-            parked_on_background: false,
-            ..
-        } | LifecycleSignal::TurnInterrupted
+        LifecycleSignal::TurnEnded { .. }
+            | LifecycleSignal::TurnInterrupted
             | LifecycleSignal::CompactionEnded { .. }
     )
 }

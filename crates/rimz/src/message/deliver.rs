@@ -1024,6 +1024,14 @@ mod tests {
         assert_eq!(check.gate.status, Some(AgentStatus::Running));
         assert!(!check.gate.open);
 
+        let mut parked = receiver.clone();
+        parked.status = AgentStatus::Running;
+        parked.phase = crate::agents::TurnPhase::Parked;
+        let parked = snapshot(parked, true, now);
+        let check = explain(&candidate, std::slice::from_ref(&candidate), &parked, now);
+        assert_eq!(check.gate.status, Some(AgentStatus::Success));
+        assert!(check.gate.open);
+
         let mut waiting = receiver.clone();
         waiting.status = AgentStatus::Waiting;
         waiting.waiting_since = Some(waiting.last_activity);
