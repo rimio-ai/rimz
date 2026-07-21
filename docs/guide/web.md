@@ -69,7 +69,7 @@ The remote room selects its own engine and returns the same `rimz.web.v1` prep p
 
 RimZ relays that engine's credential, opens an SSH local-forward from your laptop's `127.0.0.1` to the remote loopback listener, and opens `http://127.0.0.1:<local-port>/<session>`.
 
-The tunnel stays in the foreground, reconnects with the normal remote-link policy, and uses a stable port from 8300–8399 unless `--web-port` overrides it.
+The tunnel stays in the foreground, reconnects with the normal remote-link policy, and uses a stable port from 8300–8399 unless `--web-port` overrides it. A lost tunnel shows the same Internet/Server/SSH recovery panel as a lost terminal attach; after the connection returns, RimZ restarts a stopped remote web server when needed and restores the same local URL.
 
 ## Credentials
 

@@ -3,6 +3,8 @@
 //! The CLI owns process I/O and supervision. This module keeps shell quoting
 //! and argv construction testable beside the existing remote attach builders.
 
+use std::path::Path;
+
 use crate::mux::CommandSpec;
 use crate::web::WebEngine;
 
@@ -19,7 +21,11 @@ pub struct WebPrepOptions {
     pub client_size: Option<(u16, u16)>,
 }
 
-pub fn web_prep_spec(target: &RemoteTarget, options: WebPrepOptions) -> CommandSpec {
+pub fn web_prep_spec(
+    target: &RemoteTarget,
+    options: WebPrepOptions,
+    control: Option<&Path>,
+) -> CommandSpec {
     let mut flags = String::from("open --print --json");
     if options.confirm_resume {
         flags.push_str(" --confirm-resume");
@@ -38,10 +44,15 @@ pub fn web_prep_spec(target: &RemoteTarget, options: WebPrepOptions) -> CommandS
         &format!("rimz web {rimz_args}"),
         options.client_size,
         options.force_version,
+        control,
     )
 }
 
-pub fn web_token_ensure_spec(target: &RemoteTarget, engine: WebEngine) -> CommandSpec {
+pub fn web_token_ensure_spec(
+    target: &RemoteTarget,
+    engine: WebEngine,
+    control: Option<&Path>,
+) -> CommandSpec {
     let mux = match engine {
         WebEngine::Zellij => "zellij",
         WebEngine::Ttyd => "tmux",
@@ -51,27 +62,35 @@ pub fn web_token_ensure_spec(target: &RemoteTarget, engine: WebEngine) -> Comman
         &format!("rimz --mux {mux} web token ensure"),
         None,
         false,
+        control,
     )
 }
 
-pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16) -> CommandSpec {
-    CommandSpec::new(ssh_program())
-        .args([
-            "-N",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-o",
-            "ServerAliveInterval=5",
-            "-o",
-            "ServerAliveCountMax=3",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "Compression=yes",
-            "-o",
-            "ControlPersist=no",
-            "-L",
-        ])
+pub fn web_tunnel_spec(
+    target: &RemoteTarget,
+    local_port: u16,
+    remote_port: u16,
+    control: Option<&Path>,
+) -> CommandSpec {
+    let mut spec = CommandSpec::new(ssh_program()).args([
+        "-N",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "Compression=yes",
+    ]);
+    if let Some(path) = control {
+        spec = spec.args(super::link::control_options(path));
+    } else {
+        spec = spec.args(["-o", "ControlPersist=no"]);
+    }
+    spec.args(["-L"])
         .arg(format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"))
         .args(["--", target.ssh_destination().as_str()])
 }
@@ -81,9 +100,12 @@ fn one_shot_spec(
     rimz: &str,
     client_size: Option<(u16, u16)>,
     force_version: bool,
+    control: Option<&Path>,
 ) -> CommandSpec {
     CommandSpec::new(ssh_program())
-        .args(["-o", "ConnectTimeout=10", "--"])
+        .args(["-o", "ConnectTimeout=10"])
+        .args(control.into_iter().flat_map(super::link::control_options))
+        .args(["--"])
         .arg(target.ssh_destination().as_str())
         .arg(web_snippet(target, rimz, client_size, force_version))
 }
@@ -123,6 +145,7 @@ mod tests {
                 force_version: true,
                 client_size: Some((180, 50)),
             },
+            None,
         );
         assert_eq!(session.args[0..3], ["-o", "ConnectTimeout=10", "--"]);
         assert_eq!(session.args[3], "dev-box");
@@ -153,6 +176,7 @@ mod tests {
         let path = web_prep_spec(
             &parse("dev-box:~/code/query-engine"),
             WebPrepOptions::default(),
+            None,
         );
         assert!(
             path.args[4]
@@ -169,7 +193,7 @@ mod tests {
 
     #[test]
     fn web_tunnel_builds_local_forward() {
-        let spec = web_tunnel_spec(&parse("dev-box:query-engine"), 8301, 8082);
+        let spec = web_tunnel_spec(&parse("dev-box:query-engine"), 8301, 8082, None);
         assert_eq!(
             spec.args,
             [
@@ -196,7 +220,7 @@ mod tests {
 
     #[test]
     fn web_token_ensure_builds_one_shot() {
-        let spec = web_token_ensure_spec(&parse("dev-box:query-engine"), WebEngine::Ttyd);
+        let spec = web_token_ensure_spec(&parse("dev-box:query-engine"), WebEngine::Ttyd, None);
         assert!(
             spec.args[4].ends_with("exec rimz --mux tmux web token ensure"),
             "{}",
@@ -206,6 +230,43 @@ mod tests {
             !spec.args[4].contains(crate::mux::CLIENT_SIZE_ENV),
             "the token one-shot does not birth a room: {}",
             spec.args[4],
+        );
+    }
+
+    #[test]
+    fn web_commands_reuse_a_control_master() {
+        let target = parse("dev-box:query-engine");
+        let control = Path::new("/tmp/rimz-web.sock");
+        let control_args = [
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            "ControlPath=/tmp/rimz-web.sock",
+            "-o",
+            "ControlPersist=no",
+        ];
+
+        let prep = web_prep_spec(&target, WebPrepOptions::default(), Some(control));
+        assert_eq!(&prep.args[2..8], &control_args);
+        assert_eq!(prep.args[8], "--");
+
+        let token = web_token_ensure_spec(&target, WebEngine::Zellij, Some(control));
+        assert_eq!(&token.args[2..8], &control_args);
+
+        let tunnel = web_tunnel_spec(&target, 8301, 8082, Some(control));
+        let control_start = tunnel
+            .args
+            .windows(control_args.len())
+            .position(|args| args == control_args)
+            .expect("control options");
+        assert!(control_start > 0);
+        assert_eq!(
+            tunnel
+                .args
+                .iter()
+                .filter(|arg| arg.as_str() == "ControlPersist=no")
+                .count(),
+            1
         );
     }
 }

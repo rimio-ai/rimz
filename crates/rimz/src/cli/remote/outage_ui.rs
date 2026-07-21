@@ -59,6 +59,7 @@ impl OutageUi {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn plain_lines(connect_stage: ConnectStage, host: impl Into<String>) -> Self {
         Self {
             connect_stage,
@@ -446,7 +447,7 @@ fn attaching_rows(frame: &RecoveryFrame, symbol: char) -> Vec<DisplayRow> {
                 if attaching { symbol } else { '✓' },
                 row.label,
                 if attaching {
-                    "attaching…".to_owned()
+                    row.detail.clone()
                 } else {
                     success_detail(row)
                 }
@@ -818,7 +819,7 @@ mod tests {
     }
 
     #[test]
-    fn attaching_rows_animate_then_freeze_the_multiplexer_stage() {
+    fn attaching_rows_animate_then_freeze_the_handoff_stage() {
         let frame = RecoveryFrame {
             connect_stage: ConnectStage::Initial,
             host: "dev-box".to_owned(),
@@ -875,6 +876,15 @@ mod tests {
         // yellow, so the eye lands on the row the wait belongs to.
         assert!(rows[3..6].iter().all(|row| row.color == Color::Green));
         assert_eq!(rows[6].color, Color::Yellow);
+
+        let mut web_frame = frame.clone();
+        let web_handoff = web_frame.rows.last_mut().expect("handoff row");
+        web_handoff.label = "Web tunnel".to_owned();
+        web_handoff.detail = "opening…".to_owned();
+        assert_eq!(
+            attaching_rows(&web_frame, '→')[6].text,
+            "→  Web tunnel   opening…"
+        );
         assert_eq!(
             success_detail(&stage(
                 RecoveryStage::Server,

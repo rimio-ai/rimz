@@ -1,17 +1,22 @@
 //! Foreground remote-web preparation, SSH tunnel ownership, and browser open.
 //!
-//! One `RemoteTunnel` owns each live child, readiness result, reconnect state,
-//! and shutdown path for the command lifetime.
+//! Reconnecting web tunnels share the remote attach ControlMaster and recovery
+//! panel. `RemoteTunnel` owns one forwarding child at a time.
 
 use std::io::{IsTerminal, Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use rimz::remote::recovery::{ConnectStage, HandoffStage};
 
 use super::RemoteConnect;
+use super::outage_ui::{OutageUi, leave_alternate_screen};
+use super::supervisor::{OutageState, WaitOutcome};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct RemoteWebOptions {
@@ -19,17 +24,9 @@ pub(super) struct RemoteWebOptions {
     pub(super) port: Option<u16>,
 }
 
-/// Foreground owner of one active SSH tunnel and its reconnect lifecycle.
+/// Foreground owner of one active SSH forwarding child.
 struct RemoteTunnel {
-    spec: rimz::mux::CommandSpec,
-    host: String,
-    reconnect: bool,
-    policy: rimz::remote::ReconnectPolicy,
-    reconnect_state: rimz::remote::ReconnectState,
-    dial_plan: Option<rimz::remote::reachability::DialPlan>,
     child: Option<rimz::child_process::SupervisedChild>,
-    started: Instant,
-    wake_tx: mpsc::Sender<()>,
     wake_rx: mpsc::Receiver<()>,
 }
 
@@ -40,29 +37,19 @@ impl Drop for RemoteTunnel {
 }
 
 impl RemoteTunnel {
-    fn start(
-        spec: rimz::mux::CommandSpec,
-        destination: String,
-        host: String,
-        reconnect: bool,
-    ) -> Result<Self> {
-        let policy = rimz::remote::ReconnectPolicy::from_env();
-        let dial_plan = super::supervisor::resolve_dial_plan(&destination);
+    fn start(spec: &rimz::mux::CommandSpec, host: &str) -> Result<Self> {
         let (wake_tx, wake_rx) = mpsc::channel();
-        let mut tunnel = Self {
-            spec,
-            host,
-            reconnect,
-            policy,
-            reconnect_state: rimz::remote::ReconnectState::new(),
-            dial_plan,
-            child: None,
-            started: Instant::now(),
-            wake_tx,
+        let child = spec
+            .to_command()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| anyhow::anyhow!("web tunnel to {host} failed to start: {err}"))?;
+        Ok(Self {
+            child: Some(rimz::child_process::SupervisedChild::adopt(child, wake_tx)),
             wake_rx,
-        };
-        tunnel.spawn_child()?;
-        Ok(tunnel)
+        })
     }
 
     fn wait_until_ready(&mut self, port: u16) -> Result<PortWait> {
@@ -76,10 +63,7 @@ impl RemoteTunnel {
                 return Ok(PortWait::Ready);
             }
             if let Some(exit_code) = self.poll_exit()? {
-                match self.settle_exit(exit_code)? {
-                    TunnelFlow::Running => {}
-                    TunnelFlow::Done => return Ok(PortWait::ExitedCleanly),
-                }
+                return Ok(PortWait::Exited(exit_code));
             }
             if Instant::now() >= deadline {
                 bail!(
@@ -91,33 +75,6 @@ impl RemoteTunnel {
                 Some((Instant::now() + Duration::from_millis(50)).min(deadline)),
             );
         }
-    }
-
-    fn run(&mut self) -> Result<()> {
-        loop {
-            let exit_code = self.wait_for_exit()?;
-            match self.settle_exit(exit_code)? {
-                TunnelFlow::Running => {}
-                TunnelFlow::Done => return Ok(()),
-            }
-        }
-    }
-
-    fn spawn_child(&mut self) -> Result<()> {
-        let child = self
-            .spec
-            .to_command()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|err| anyhow::anyhow!("web tunnel to {} failed to start: {err}", self.host))?;
-        self.started = Instant::now();
-        self.child = Some(rimz::child_process::SupervisedChild::adopt(
-            child,
-            self.wake_tx.clone(),
-        ));
-        Ok(())
     }
 
     fn poll_exit(&mut self) -> Result<Option<Option<i32>>> {
@@ -141,43 +98,6 @@ impl RemoteTunnel {
         }
     }
 
-    fn settle_exit(&mut self, exit_code: Option<i32>) -> Result<TunnelFlow> {
-        let established = self.started.elapsed() >= self.policy.gatetime;
-        match tunnel_step(
-            self.reconnect_state.settle(exit_code, established),
-            self.reconnect,
-        ) {
-            TunnelStep::Clean => Ok(TunnelFlow::Done),
-            TunnelStep::Fatal(code) => {
-                bail!(
-                    "web tunnel to {} exited with status {code}; not reconnecting",
-                    self.host
-                )
-            }
-            TunnelStep::Retry => {
-                let consecutive_failures = self.reconnect_state.consecutive_failures();
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "rimz: web tunnel to {} lost — reconnecting (attempt {consecutive_failures})",
-                    self.host,
-                );
-                match super::supervisor::wait_for_plain_attempt(
-                    self.dial_plan.as_ref(),
-                    &self.policy,
-                    &self.host,
-                    None,
-                ) {
-                    super::supervisor::PlainWaitOutcome::AttemptNow => {}
-                    super::supervisor::PlainWaitOutcome::Interrupted => {
-                        return Ok(TunnelFlow::Done);
-                    }
-                }
-                self.spawn_child()?;
-                Ok(TunnelFlow::Running)
-            }
-        }
-    }
-
     fn kill_and_reap(&mut self) {
         let Some(child) = self.child.as_mut() else {
             return;
@@ -193,67 +113,353 @@ impl RemoteTunnel {
     }
 }
 
-enum TunnelFlow {
-    Running,
-    Done,
+struct HeldAlternateScreen(bool);
+
+impl HeldAlternateScreen {
+    fn new(held: bool) -> Self {
+        Self(held)
+    }
+
+    fn release(&mut self) {
+        if std::mem::take(&mut self.0) {
+            leave_alternate_screen();
+        }
+    }
+}
+
+impl Drop for HeldAlternateScreen {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 pub(super) fn run_remote_web(
     remote: &RemoteConnect,
     client_size: Option<(u16, u16)>,
 ) -> Result<()> {
+    if remote.reconnect {
+        run_supervised_web(remote, client_size)
+    } else {
+        run_direct_web(remote, client_size)
+    }
+}
+
+fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Result<()> {
     let prep = run_web_prep(
         &rimz::remote::web::web_prep_spec(
             &remote.target,
-            rimz::remote::web::WebPrepOptions {
-                confirm_resume: std::io::stdin().is_terminal(),
-                no_resume: remote.no_resume,
-                force_version: remote.force_version,
-                client_size,
-            },
+            web_prep_options(remote, client_size, true),
+            None,
         ),
         "preparing remote web access",
         remote.target.host_display(),
         remote.origin.as_str(),
     )?;
-    let payload: rimz::web::WebOpenPayload = serde_json::from_slice(&prep)
-        .with_context(|| remote_output_context("parsing remote `rimz web open --json`", &prep))?;
-    if !payload.version_ok() {
-        bail!(
-            "remote `rimz web open --json` returned schema `{}`; upgrade the remote rimz binary",
-            payload.version
-        );
-    }
-    relay_web_token(remote, payload.engine);
+    let WebPrepOutcome::Ready(prep) = prep else {
+        bail!("preparing remote web access failed with status 255");
+    };
+    let payload = parse_web_payload(&prep)?;
+    let token = relay_web_token(remote, payload.engine, None);
+    let mut credential = None;
+    render_web_token(remote, token, &mut credential, true);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
-    let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
-    let mut tunnel = RemoteTunnel::start(
-        spec,
-        remote.target.ssh_destination().as_str().to_owned(),
-        remote.target.host_display().to_owned(),
-        remote.reconnect,
-    )?;
+    let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port, None);
+    let mut tunnel = RemoteTunnel::start(&spec, remote.target.host_display())?;
     match tunnel.wait_until_ready(local_port)? {
         PortWait::Ready => {}
-        PortWait::ExitedCleanly => {
+        PortWait::Exited(_) => {
             bail!("web tunnel exited before local port accepted connections");
         }
     }
     let url = rimz::web::local_tunnel_url(&payload, local_port);
     writeln!(std::io::stdout().lock(), "{url}")?;
     super::super::open_browser_best_effort(&url);
-    report_web_tunnel_up(remote.target.host_display(), remote.reconnect);
-    tunnel.run()
+    report_web_tunnel_up(remote.target.host_display(), false);
+    match tunnel.wait_for_exit()? {
+        Some(0) => Ok(()),
+        exit_code => bail!(
+            "web tunnel to {} exited with status {}; not reconnecting",
+            remote.target.host_display(),
+            exit_code.unwrap_or(1)
+        ),
+    }
 }
 
-fn relay_web_token(remote: &RemoteConnect, engine: rimz::web::WebEngine) {
-    let spec = rimz::remote::web::web_token_ensure_spec(&remote.target, engine);
+fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Result<()> {
+    let control = rimz::remote::link::validated_control_path()
+        .context("checking SSH ControlMaster socket path")?;
+    let plan = rimz::remote::SshAttachPlan::new(rimz::remote::SshAttachOptions {
+        target: remote.target.clone(),
+        lineage: super::local_remote_lineage(&remote.target)?,
+        force_version: remote.force_version,
+        no_resume: remote.no_resume,
+        mux: remote.mux,
+        term: super::remote_term_plan(),
+        truecolor: rimz::tui::truecolor(),
+        client_size,
+    });
+    let policy = rimz::remote::ReconnectPolicy::from_env();
+    let mut reconnect = rimz::remote::ReconnectState::new();
+    let dial_plan = super::supervisor::resolve_dial_plan(remote.target.ssh_destination().as_str());
+    let stop = AtomicBool::new(false);
+    let host = remote.target.host_display();
+    let mut initial_ui = OutageUi::auto(ConnectStage::Initial, host);
+    initial_ui.report_connecting();
+    let mut initial_outage = OutageState::new(
+        ConnectStage::Initial,
+        HandoffStage::WebTunnel,
+        host,
+        super::supervisor::internet_probe_for_wait(&initial_ui),
+        dial_plan.as_ref(),
+    );
+    let (mut master, initial_held_alt) = match super::supervisor::wait_for_master(
+        &plan,
+        &control,
+        dial_plan.as_ref(),
+        &policy,
+        &mut initial_outage,
+        &mut initial_ui,
+        Some(&stop),
+    )? {
+        WaitOutcome::Connected { master, held_alt } => (Some(master), held_alt),
+        WaitOutcome::NeedsInteractive => (None, false),
+        WaitOutcome::Interrupted => return Ok(()),
+    };
+    let mut held_alt = HeldAlternateScreen::new(initial_held_alt);
+    let mut first_round = true;
+    let mut local_port = None;
+    let mut last_credential = None;
+    let mut outage = None;
+
+    loop {
+        let master_confirmed = master.is_some();
+        let round_control = master_confirmed.then_some(control.as_path());
+        let prep = run_web_prep(
+            &rimz::remote::web::web_prep_spec(
+                &remote.target,
+                web_prep_options(remote, client_size, first_round),
+                round_control,
+            ),
+            "preparing remote web access",
+            host,
+            remote.origin.as_str(),
+        )?;
+        let prep = match prep {
+            WebPrepOutcome::Ready(prep) => prep,
+            WebPrepOutcome::TransportFailure => {
+                match web_exit_action(
+                    settle_web_exit(
+                        &mut reconnect,
+                        Some(rimz::remote::SSH_TRANSPORT_EXIT),
+                        master_confirmed,
+                        false,
+                    ),
+                    host,
+                )? {
+                    WebExitAction::Done => return Ok(()),
+                    WebExitAction::Retry => {
+                        held_alt.release();
+                        drop(master.take());
+                        let Some((next_master, next_held_alt)) = wait_for_web_recovery(
+                            &plan,
+                            &control,
+                            dial_plan.as_ref(),
+                            &policy,
+                            &stop,
+                            host,
+                            &mut outage,
+                        )?
+                        else {
+                            return Ok(());
+                        };
+                        master = Some(next_master);
+                        held_alt = HeldAlternateScreen::new(next_held_alt);
+                        continue;
+                    }
+                }
+            }
+        };
+        let payload = parse_web_payload(&prep)?;
+        let local_port = match local_port {
+            Some(port) => port,
+            None => {
+                let port = rimz::web::choose_local_port(&payload.session, remote.web.port)
+                    .context("choosing local web tunnel port")?;
+                local_port = Some(port);
+                port
+            }
+        };
+        let token = relay_web_token(remote, payload.engine, round_control);
+        let spec = rimz::remote::web::web_tunnel_spec(
+            &remote.target,
+            local_port,
+            payload.port,
+            round_control,
+        );
+        let mut tunnel = RemoteTunnel::start(&spec, host)?;
+        let port_ready = match tunnel.wait_until_ready(local_port)? {
+            PortWait::Ready => true,
+            PortWait::Exited(exit_code) => {
+                match web_exit_action(
+                    settle_web_exit(&mut reconnect, exit_code, master_confirmed, false),
+                    host,
+                )? {
+                    WebExitAction::Done => return Ok(()),
+                    WebExitAction::Retry => {
+                        held_alt.release();
+                        drop(master.take());
+                        let Some((next_master, next_held_alt)) = wait_for_web_recovery(
+                            &plan,
+                            &control,
+                            dial_plan.as_ref(),
+                            &policy,
+                            &stop,
+                            host,
+                            &mut outage,
+                        )?
+                        else {
+                            return Ok(());
+                        };
+                        master = Some(next_master);
+                        held_alt = HeldAlternateScreen::new(next_held_alt);
+                        continue;
+                    }
+                }
+            }
+        };
+
+        held_alt.release();
+        render_web_token(remote, token, &mut last_credential, first_round);
+        if first_round {
+            let url = rimz::web::local_tunnel_url(&payload, local_port);
+            writeln!(std::io::stdout().lock(), "{url}")?;
+            super::super::open_browser_best_effort(&url);
+            report_web_tunnel_up(host, true);
+            first_round = false;
+        } else {
+            let _ = writeln!(std::io::stderr().lock(), "rimz: tunnel to {host} restored");
+        }
+        outage = None;
+
+        let exit_code = tunnel.wait_for_exit()?;
+        match web_exit_action(
+            settle_web_exit(&mut reconnect, exit_code, master_confirmed, port_ready),
+            host,
+        )? {
+            WebExitAction::Done => return Ok(()),
+            WebExitAction::Retry => {
+                drop(master.take());
+                let Some((next_master, next_held_alt)) = wait_for_web_recovery(
+                    &plan,
+                    &control,
+                    dial_plan.as_ref(),
+                    &policy,
+                    &stop,
+                    host,
+                    &mut outage,
+                )?
+                else {
+                    return Ok(());
+                };
+                master = Some(next_master);
+                held_alt = HeldAlternateScreen::new(next_held_alt);
+            }
+        }
+    }
+}
+
+fn wait_for_web_recovery(
+    plan: &rimz::remote::SshAttachPlan,
+    control: &Path,
+    dial_plan: Option<&rimz::remote::reachability::DialPlan>,
+    policy: &rimz::remote::ReconnectPolicy,
+    stop: &AtomicBool,
+    host: &str,
+    outage: &mut Option<OutageState>,
+) -> Result<Option<(super::supervisor::MasterGuard, bool)>> {
+    let mut ui = OutageUi::auto(ConnectStage::Recovery, host);
+    let outage = outage.get_or_insert_with(|| {
+        if ui.is_plain() {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: web tunnel to {host} lost — reconnecting in the background; Ctrl-C stops",
+            );
+        }
+        OutageState::new(
+            ConnectStage::Recovery,
+            HandoffStage::WebTunnel,
+            host,
+            super::supervisor::internet_probe_for_wait(&ui),
+            dial_plan,
+        )
+    });
+    match super::supervisor::wait_for_master(
+        plan,
+        control,
+        dial_plan,
+        policy,
+        outage,
+        &mut ui,
+        Some(stop),
+    )? {
+        WaitOutcome::Connected { master, held_alt } => Ok(Some((master, held_alt))),
+        WaitOutcome::Interrupted => {
+            let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
+            Ok(None)
+        }
+        WaitOutcome::NeedsInteractive => {
+            unreachable!("web recovery stays in batch mode")
+        }
+    }
+}
+
+fn web_prep_options(
+    remote: &RemoteConnect,
+    client_size: Option<(u16, u16)>,
+    initial_round: bool,
+) -> rimz::remote::web::WebPrepOptions {
+    rimz::remote::web::WebPrepOptions {
+        confirm_resume: initial_round && std::io::stdin().is_terminal(),
+        no_resume: initial_round && remote.no_resume,
+        force_version: remote.force_version,
+        client_size,
+    }
+}
+
+fn parse_web_payload(bytes: &[u8]) -> Result<rimz::web::WebOpenPayload> {
+    let payload: rimz::web::WebOpenPayload = serde_json::from_slice(bytes)
+        .with_context(|| remote_output_context("parsing remote `rimz web open --json`", bytes))?;
+    if !payload.version_ok() {
+        bail!(
+            "remote `rimz web open --json` returned schema `{}`; upgrade the remote rimz binary",
+            payload.version
+        );
+    }
+    Ok(payload)
+}
+
+enum WebTokenRelay {
+    Credential(String),
+    Error {
+        engine: rimz::web::WebEngine,
+        detail: String,
+    },
+}
+
+fn relay_web_token(
+    remote: &RemoteConnect,
+    engine: rimz::web::WebEngine,
+    control: Option<&Path>,
+) -> WebTokenRelay {
+    let spec = rimz::remote::web::web_token_ensure_spec(&remote.target, engine, control);
     let output = match spec.to_command().output() {
         Ok(output) => output,
         Err(err) => {
-            write_web_token_error(remote.target.host_display(), engine, &err.to_string());
-            return;
+            return WebTokenRelay::Error {
+                engine,
+                detail: err.to_string(),
+            };
         }
     };
     if !output.status.success() {
@@ -261,13 +467,14 @@ fn relay_web_token(remote: &RemoteConnect, engine: rimz::web::WebEngine) {
         if detail.is_empty() {
             detail = output.status.to_string();
         }
-        write_web_token_error(remote.target.host_display(), engine, &detail);
-        return;
+        return WebTokenRelay::Error { engine, detail };
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if token.is_empty() {
-        write_web_token_error(remote.target.host_display(), engine, "empty token");
-        return;
+        return WebTokenRelay::Error {
+            engine,
+            detail: "empty token".to_owned(),
+        };
     }
     let line = match engine {
         rimz::web::WebEngine::Zellij => format!(
@@ -279,7 +486,26 @@ fn relay_web_token(remote: &RemoteConnect, engine: rimz::web::WebEngine) {
             remote.target.host_display()
         ),
     };
-    let _ = writeln!(std::io::stderr().lock(), "{line}");
+    WebTokenRelay::Credential(line)
+}
+
+fn render_web_token(
+    remote: &RemoteConnect,
+    relay: WebTokenRelay,
+    previous: &mut Option<String>,
+    always: bool,
+) {
+    match relay {
+        WebTokenRelay::Credential(line) => {
+            if always || previous.as_deref() != Some(line.as_str()) {
+                let _ = writeln!(std::io::stderr().lock(), "{line}");
+            }
+            *previous = Some(line);
+        }
+        WebTokenRelay::Error { engine, detail } => {
+            write_web_token_error(remote.target.host_display(), engine, &detail);
+        }
+    }
 }
 
 fn write_web_token_error(host: &str, engine: rimz::web::WebEngine, detail: &str) {
@@ -293,12 +519,17 @@ fn write_web_token_error(host: &str, engine: rimz::web::WebEngine, detail: &str)
     );
 }
 
+enum WebPrepOutcome {
+    Ready(Vec<u8>),
+    TransportFailure,
+}
+
 fn run_web_prep(
     spec: &rimz::mux::CommandSpec,
     label: &str,
     host: &str,
     setup_hint: &str,
-) -> Result<Vec<u8>> {
+) -> Result<WebPrepOutcome> {
     let mut child = spec
         .to_command()
         .stdout(Stdio::piped())
@@ -321,7 +552,10 @@ fn run_web_prep(
         .wait()
         .with_context(|| format!("{label}: waiting for remote prep"))?;
     if status.success() {
-        return Ok(stdout);
+        return Ok(WebPrepOutcome::Ready(stdout));
+    }
+    if status.code() == Some(rimz::remote::SSH_TRANSPORT_EXIT) {
+        return Ok(WebPrepOutcome::TransportFailure);
     }
     if let Some(code) = status.code()
         && matches!(
@@ -345,27 +579,33 @@ fn remote_output_context(label: &str, bytes: &[u8]) -> String {
     format!("{label}; stdout={:?}", stdout.trim())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TunnelStep {
-    Clean,
-    Fatal(i32),
+fn settle_web_exit(
+    reconnect: &mut rimz::remote::ReconnectState,
+    exit_code: Option<i32>,
+    master_confirmed: bool,
+    port_ready: bool,
+) -> rimz::remote::Verdict {
+    reconnect.settle(exit_code, master_confirmed || port_ready)
+}
+
+enum WebExitAction {
+    Done,
     Retry,
 }
 
-fn tunnel_step(verdict: rimz::remote::Verdict, reconnect: bool) -> TunnelStep {
-    use rimz::remote::Verdict;
-
+fn web_exit_action(verdict: rimz::remote::Verdict, host: &str) -> Result<WebExitAction> {
     match verdict {
-        Verdict::CleanExit => TunnelStep::Clean,
-        Verdict::Fatal { code } => TunnelStep::Fatal(code),
-        Verdict::Retry if reconnect => TunnelStep::Retry,
-        Verdict::Retry => TunnelStep::Fatal(rimz::remote::SSH_TRANSPORT_EXIT),
+        rimz::remote::Verdict::CleanExit => Ok(WebExitAction::Done),
+        rimz::remote::Verdict::Retry => Ok(WebExitAction::Retry),
+        rimz::remote::Verdict::Fatal { code } => {
+            bail!("web tunnel to {host} exited with status {code}; not reconnecting")
+        }
     }
 }
 
 enum PortWait {
     Ready,
-    ExitedCleanly,
+    Exited(Option<i32>),
 }
 
 fn report_web_tunnel_up(host: &str, reconnect: bool) {
@@ -383,13 +623,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_reconnect_turns_retry_into_fatal_tunnel_exit() {
-        let retry = rimz::remote::Verdict::Retry;
+    fn web_exit_settlement_uses_master_or_port_establishment() {
+        let settle = |exit_code, master_confirmed, port_ready| {
+            settle_web_exit(
+                &mut rimz::remote::ReconnectState::new(),
+                exit_code,
+                master_confirmed,
+                port_ready,
+            )
+        };
 
-        assert_eq!(tunnel_step(retry, true), TunnelStep::Retry);
         assert_eq!(
-            tunnel_step(retry, false),
-            TunnelStep::Fatal(rimz::remote::SSH_TRANSPORT_EXIT)
+            settle(Some(rimz::remote::SSH_TRANSPORT_EXIT), false, true),
+            rimz::remote::Verdict::Retry
+        );
+        assert_eq!(
+            settle(Some(rimz::remote::SSH_TRANSPORT_EXIT), true, false),
+            rimz::remote::Verdict::Retry
+        );
+        assert_eq!(
+            settle(Some(rimz::remote::SSH_TRANSPORT_EXIT), false, false),
+            rimz::remote::Verdict::Fatal {
+                code: rimz::remote::SSH_TRANSPORT_EXIT
+            }
+        );
+        assert_eq!(
+            settle(Some(0), false, false),
+            rimz::remote::Verdict::CleanExit
         );
     }
 }
