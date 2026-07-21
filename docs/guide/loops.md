@@ -139,7 +139,7 @@ Every agent CLI already compacts. `/compact` is the manual command: summarize th
 
 In a fleet, most prompts arrive with no human there to make that call. A reviewer sends comments back to a coder sitting at 90% context; the coder takes the message, edits two files, hits the ceiling, and the automatic summary captures a half-changed tree mid-fix. Smart compaction restores the by-hand habit at the same spot. When a `rimz message` is about to land, yours or another agent's, and the receiver's context has passed your threshold, RimZ submits the agent's own `/compact` first, the exact command you would have typed, then delivers the text against the fresh window. A message boundary is the strongest checkpoint available: the previous task has ended and the next has not begun, so the summary is a handover rather than a snapshot of work in flight.
 
-Set the default once with `harness.smart_compact`, an occupied-token count like `200k` or a percentage like `70%`, and every message send inherits it; or leave it unset and pass `--smart-compact` per send. The threshold grammar and delivery mechanics are in [messaging.md → land against a fresh window](./messaging.md#land-against-a-fresh-window).
+Set the default once with `harness.smart_compact`, an occupied-token count like `200k` or a percentage like `70%`, and every message send and scheduled wake inherits it; or leave it unset and pass `--smart-compact` per message. The threshold grammar and delivery mechanics are in [messaging.md → land against a fresh window](./messaging.md#land-against-a-fresh-window).
 
 ### Two brakes on hands-off work
 

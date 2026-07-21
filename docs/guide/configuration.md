@@ -175,7 +175,7 @@ These keys are the on-switch; `rimz budget` inspects and adjusts an armed cap at
 smart_compact = "200k"
 ```
 
-`smart_compact` sets the default threshold for compact-first `message` sends, an occupied-token count (`"200k"` or `"120000"`) or a percentage of the window (`"70%"`). When an agent's context window has reached the threshold, RimZ submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
+`smart_compact` sets the default threshold for compact-first `rimz message` sends and scheduled loop wakes, as an occupied-token count (`"200k"` or `"120000"`) or a percentage of the window (`"70%"`). When an agent's context window has reached the threshold, RimZ submits its `/compact` ahead of the text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag for messages, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
 
 ### rtk output compression
 

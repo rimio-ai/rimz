@@ -19,7 +19,7 @@ use rimz::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRun
 use rimz::harness::schedule::runner::RunLockInfo;
 use rimz::harness::schedule::strikes;
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::message::MessageStatus;
+use rimz::message::{AutoCompact, MessageStatus};
 
 #[cfg(unix)]
 use crate::common::write_fake_login_shell;
@@ -118,6 +118,7 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-live", "feature-loop");
+    loop_ok(&env, &["config", "set", "harness.smart_compact", "70%"]);
 
     let added = loop_ok(
         &env,
@@ -147,6 +148,10 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
 
     loop_ok(&env, &["loop", "run", "wake"]);
     assert_pending_message(&env, "sess-loop-live", "next step");
+    assert_eq!(
+        env.store().list_pending_messages().unwrap()[0].auto_compact,
+        Some(AutoCompact::Percent(70))
+    );
     assert_eq!(last_loop_record(&env).result, LoopRunResult::Delivered);
     let list = loop_ok(&env, &["loop", "list"]);
     let show = loop_ok(&env, &["loop", "show", "wake"]);

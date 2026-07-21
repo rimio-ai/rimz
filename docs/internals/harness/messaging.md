@@ -132,7 +132,7 @@ The raw-versus-effective distinction is load-bearing. Delivery gates read `effec
 
 [`dispatch()`](../../../crates/rimz/src/message/dispatch.rs) is the one entry point for an owned send. Its sequence:
 
-1. **Load what the decision needs.** Pending records (boundary mode only), and agent-context sidecars when the request carries `--smart-compact`, conditions, an agent sender, or `--wait`.
+1. **Load what the decision needs.** Pending records (boundary mode only), and agent-context sidecars when a smart-compact threshold applies, conditions, an agent sender, or `--wait`.
 2. **Choose a snapshot.** Producing a full resolution snapshot means talking to the multiplexer. When every target already parks (no live pane needed, no lazy-registering kind, no provisional id), `targets_all_park_without_live` proves the cached rollup is enough and dispatch skips the mux round trip entirely. This `rollup_only` path is a latency optimization; correctness never depends on it.
 3. **Resolve targets.** Live agents and live panes both, combined so one agent with a bound pane yields one target rather than two. When the live view finds nothing, the durable audit rollup is the fallback, with pane-shadowed co-resident sessions filtered out first. A multi-match without `--all` or `@all` is an ambiguity error listing the candidates.
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card. A condition that is already satisfied gets its `met_at` stamped immediately, which is why upstream work must be queued *before* the message that waits on it.
@@ -248,7 +248,7 @@ The receiver's turn-start hook parses the prefix once and writes a first-class `
 
 A long turn can hit the context ceiling mid-message. Agents compact on their own only at the ceiling (Codex around 90%), so a prompt sent past it can be cut in half by a compaction that fires mid-turn. `--smart-compact` compacts *first*, so the prompt always lands against a fresh window.
 
-Thresholds parse as `70%` (a fraction of the window), `120000` (absolute occupied tokens), or `180k` / `1m` (suffixed counts). An omitted flag falls back to the [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) config default. An unknown fill never triggers: a missing reading is not a full window, so the text sends untouched.
+Thresholds parse as `70%` (a fraction of the window), `120000` (absolute occupied tokens), or `180k` / `1m` (suffixed counts). Domain dispatch resolves an omitted threshold from the [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) config default for every caller, including scheduled loop wakes. An unknown fill never triggers: a missing reading is not a full window, so the text sends untouched.
 
 A percent threshold reads the same fill gauge the sidebar card renders (`context_fill_pct`); a token threshold reads `occupied_context_tokens`, which prefers the folded statusline breakdown, then the per-call split (cache reads plus cache writes plus fresh input), then the carried `total_tokens` gauge.
 
