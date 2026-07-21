@@ -50,6 +50,8 @@ RimZ gives ttyd the active RimZ theme and provisions the configured browser font
 
 Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL for a font RimZ should download and cache. A `font` with no matching preset and no `font_source` names a font already installed in the browser. Set `style_client = false` to keep ttyd's browser defaults. A missing font cache or download degrades to the stock ttyd page with a warning, so offline access still starts.
 
+Styling is fixed when the room's ttyd process starts. After changing these fields or `[theme]`, run `rimz web stop` and then `rimz web open` to apply the new profile.
+
 On macOS, ttyd treats Option as Meta before the browser composes characters. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`; this input fix remains active when client styling is disabled.
 
 ## Open a remote room

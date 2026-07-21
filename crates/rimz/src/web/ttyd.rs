@@ -264,13 +264,13 @@ fn start_instance_with_profile(
 }
 
 fn rotate_credential(config: &MachineConfig) -> Result<(TtydCredential, usize, Vec<WebWarning>)> {
-    let credential = mint_credential()?;
     let instances = inventory()?;
-    stop_instances(&instances)?;
     if instances.is_empty() {
-        return Ok((credential, 0, Vec::new()));
+        return Ok((mint_credential()?, 0, Vec::new()));
     }
     let profile = client_profile(config);
+    let credential = mint_credential()?;
+    stop_instances(&instances)?;
     for instance in &instances {
         start_instance_with_profile(&instance.session, &credential, &profile)?;
     }
@@ -768,6 +768,21 @@ mod tests {
             .position(|arg| arg == "tmux")
             .expect("tmux argv");
         assert_eq!(&spec.args[tmux - extra.len()..tmux], extra);
+    }
+
+    #[test]
+    fn alt_meta_option_survives_disabled_client_styling_and_web() {
+        let mut config = MachineConfig::default();
+        config.web.tmux.style_client = false;
+        let profile = client_profile(&config);
+        assert_eq!(profile.args, ["-t", "macOptionIsMeta=true"]);
+        assert!(profile.warnings.is_empty());
+
+        config.web.tmux.style_client = true;
+        config.web.enabled = false;
+        let profile = client_profile(&config);
+        assert_eq!(profile.args, ["-t", "macOptionIsMeta=true"]);
+        assert!(profile.warnings.is_empty());
     }
 
     #[test]
