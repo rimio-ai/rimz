@@ -67,6 +67,12 @@ jobs:
           # Build the exact commit CI validated; for tags/dispatch this is the
           # event's own ref.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # Checking out by SHA leaves no tag refs in the clone, and
+          # `crates/rimz/build.rs` reads `git describe --exact-match` to decide
+          # whether the binary reports a clean `0.4.0` or a `0.4.0+g<sha>` build
+          # id. Full history brings the tags along so a tagged release stamps
+          # its release version.
+          fetch-depth: 0
 
       - name: Trust checkout for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
