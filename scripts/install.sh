@@ -323,7 +323,7 @@ brew_failed() {
         restore_cursor
         cat "$tmp_dir/brew.log" >&2
     fi
-    say "Homebrew install failed; falling back to the release download"
+    say "Homebrew install failed ($brew_failure); falling back to the release download"
     return 1
 }
 
@@ -353,7 +353,7 @@ install_with_brew() {
         fi
         dl_pid=
         if [ "$brew_status" -ne 0 ]; then
-            brew_failed "brew $brew_action failed"
+            brew_failed "brew $brew_action exited unsuccessfully"
             return 1
         fi
 
@@ -362,7 +362,7 @@ install_with_brew() {
     else
         say "Installing RimZ with Homebrew"
         if ! brew "$brew_action" rimio-ai/rimz/rimz; then
-            brew_failed "brew $brew_action failed"
+            brew_failed "brew $brew_action exited unsuccessfully"
             return 1
         fi
     fi
@@ -379,6 +379,15 @@ install_with_brew() {
     fi
     dest=${installed%/*}
 
+    # Homebrew exposes formula files under `brew --prefix rimz` but links
+    # commands from its global prefix. Report that linked path when present so
+    # every user-facing path describes the command users will run.
+    brew_prefix=$(brew --prefix 2>/dev/null || true)
+    if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/bin/rimz" ]; then
+        installed=$brew_prefix/bin/rimz
+        dest=$brew_prefix/bin
+    fi
+
     if [ "$fancy" = 1 ]; then
         if installed_version=$("$installed" --version 2>&1); then
             draw_row 3 "$c_ok" '✓' install "$installed  $installed_version" ''
@@ -393,15 +402,6 @@ install_with_brew() {
             return 1
         fi
         say "Installed RimZ to $installed"
-    fi
-
-    # Homebrew exposes formula files under `brew --prefix rimz` but links
-    # commands from its global prefix. Report that linked path when present so
-    # the shared PATH and shadow checks describe the command users will run.
-    brew_prefix=$(brew --prefix 2>/dev/null || true)
-    if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/bin/rimz" ]; then
-        installed=$brew_prefix/bin/rimz
-        dest=$brew_prefix/bin
     fi
     return 0
 }
