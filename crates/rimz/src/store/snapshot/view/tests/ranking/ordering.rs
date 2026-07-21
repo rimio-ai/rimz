@@ -323,6 +323,7 @@ fn inactive_groups_sink_below_process_groups() {
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     });
     snapshot.sort_groups_for_presentation();
 
@@ -644,6 +645,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     }];
     row_snapshot.sort_groups_for_presentation();
     let row_order = row_snapshot.worktree_groups[0]

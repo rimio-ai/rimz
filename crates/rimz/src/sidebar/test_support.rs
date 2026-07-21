@@ -179,5 +179,6 @@ pub(crate) fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> Sideb
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     }
 }

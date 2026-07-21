@@ -325,6 +325,7 @@ pub(super) fn handle_mouse_click(
         Some(HitTarget::Row(index)) => active_roster(snapshot, ui)
             .pane_at_ordinal(index)
             .map_or_else(InputOutcome::default, InputOutcome::focus),
+        Some(HitTarget::Hyperlink(_)) => InputOutcome::default(),
         None => InputOutcome::default(),
     }
 }

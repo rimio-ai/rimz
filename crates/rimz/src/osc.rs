@@ -98,7 +98,7 @@ fn tmux_wrap(payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn osc_text(value: &str) -> String {
+pub(crate) fn osc_text(value: &str) -> String {
     value
         .chars()
         .filter_map(|ch| match ch {

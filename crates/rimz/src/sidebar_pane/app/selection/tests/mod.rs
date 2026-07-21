@@ -105,6 +105,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     }];
     snapshot
 }
@@ -245,6 +246,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             pr_state: None,
             pr_ci: None,
             pr_number: None,
+            pr_url: None,
         },
         crate::SidebarWorktreeGroup {
             key: "/repo/feature".to_owned(),
@@ -275,6 +277,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             pr_state: None,
             pr_ci: None,
             pr_number: None,
+            pr_url: None,
         },
     ];
     snapshot

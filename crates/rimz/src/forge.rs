@@ -25,6 +25,7 @@ pub enum ForgeCli {
     Gh,
     Tea,
 }
+#[derive(Clone, Debug)]
 pub(crate) struct RemoteRepo {
     raw: String,
     host: String,
@@ -32,6 +33,7 @@ pub(crate) struct RemoteRepo {
     transport: RemoteTransport,
 }
 
+#[derive(Clone, Debug)]
 enum RemoteTransport {
     Slash(String),
     Scp(String),
@@ -211,6 +213,16 @@ impl RemoteRepo {
     pub(crate) fn repo_key(&self, cli: ForgeCli) -> String {
         let repo = self.repo_slug.as_deref().unwrap_or(&self.raw);
         format!("{}:{}:{repo}", cli.key(), self.host())
+    }
+
+    pub(crate) fn pr_web_url(&self, number: u64) -> Option<String> {
+        let repo = self.repo_slug()?;
+        let path = match (self.forge(), self.forge_cli()) {
+            (Forge::GitLab, _) => format!("-/merge_requests/{number}"),
+            (_, Some(ForgeCli::Tea)) => format!("pulls/{number}"),
+            (Forge::GitHubStyle, _) => format!("pull/{number}"),
+        };
+        Some(format!("https://{}/{repo}/{path}", self.host()))
     }
 
     pub(crate) fn matches_target(&self, target: &PrTarget) -> bool {

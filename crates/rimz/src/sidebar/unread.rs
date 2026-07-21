@@ -476,6 +476,7 @@ mod tests {
             pr_state: None,
             pr_ci: None,
             pr_number: None,
+            pr_url: None,
         }];
         snapshot
     }

@@ -129,6 +129,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> rimz::SidebarWorktreeGroup {
         pr_state: spec.pr_state,
         pr_ci: spec.pr_ci,
         pr_number: spec.pr_number,
+        pr_url: None,
     }
 }
 

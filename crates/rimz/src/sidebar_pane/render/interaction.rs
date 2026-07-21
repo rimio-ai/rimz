@@ -13,6 +13,7 @@ pub(crate) enum HitTarget {
     BodyFilter(BodyFilter),
     ToggleGroup(String),
     UnreadBanner,
+    Hyperlink(String),
 }
 
 /// Half-open display-cell region.
@@ -58,14 +59,23 @@ impl FrameInteractions {
         self.regions
             .iter()
             .filter(|region| region.rows.contains(&row) && region.columns.contains(&column))
-            .min_by_key(|region| target_precedence(&region.target))
             .map(|region| region.target.clone())
-            .or_else(|| {
+            .chain(
                 self.row_by_line
                     .get(row)
                     .copied()
                     .flatten()
-                    .map(HitTarget::Row)
+                    .map(HitTarget::Row),
+            )
+            .min_by_key(target_precedence)
+    }
+
+    pub(crate) fn hyperlinks(&self) -> impl Iterator<Item = (&Range<usize>, &Range<u16>, &str)> {
+        self.regions
+            .iter()
+            .filter_map(|region| match &region.target {
+                HitTarget::Hyperlink(url) => Some((&region.rows, &region.columns, url.as_str())),
+                _ => None,
             })
     }
 
@@ -161,6 +171,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
         HitTarget::UnreadBanner => 2,
         HitTarget::ToggleGroup(_) => 3,
         HitTarget::Row(_) => 4,
+        HitTarget::Hyperlink(_) => 5,
     }
 }
 
@@ -282,6 +293,11 @@ mod tests {
     fn target_precedence_is_explicit_before_row_fallback() {
         let regions = vec![
             HitRegion::whole_line(0, HitTarget::ToggleGroup("group".to_owned())),
+            HitRegion::line(
+                0,
+                0..4,
+                HitTarget::Hyperlink("https://example.test/pull/91".to_owned()),
+            ),
             HitRegion::whole_line(0, HitTarget::UnreadBanner),
             HitRegion::line(
                 0,
@@ -310,6 +326,19 @@ mod tests {
         assert_eq!(
             FrameInteractions::from_parts(vec![Some(9)], Vec::new()).target_at(20, 0),
             Some(HitTarget::Row(9))
+        );
+        assert_eq!(
+            FrameInteractions::from_parts(
+                vec![Some(9)],
+                vec![HitRegion::line(
+                    0,
+                    0..4,
+                    HitTarget::Hyperlink("https://example.test/pull/91".to_owned()),
+                )],
+            )
+            .target_at(0, 0),
+            Some(HitTarget::Row(9)),
+            "a hyperlink does not shadow the row click"
         );
     }
 

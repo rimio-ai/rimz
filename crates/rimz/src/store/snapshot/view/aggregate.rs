@@ -175,6 +175,7 @@ pub(super) fn build_worktree_groups_from_rows(
                 pr_state: None,
                 pr_ci: None,
                 pr_number: None,
+                pr_url: None,
             }
         })
         .collect::<Vec<_>>();

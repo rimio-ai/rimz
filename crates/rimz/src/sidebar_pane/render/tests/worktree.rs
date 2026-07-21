@@ -275,6 +275,48 @@ fn render_pr_badge_leads_with_ci_glyph() {
 }
 
 #[test]
+fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
+    let mut linked = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    linked.worktree_groups[0].pr_number = Some(91);
+    linked.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+    let unsafe_url = "https://github.com/org/repo/pull/91\x1b]8;;https://evil.test\u{7}";
+    linked.worktree_groups[0].pr_url = Some(unsafe_url.to_owned());
+    let mut plain = linked.clone();
+    plain.worktree_groups[0].pr_url = None;
+
+    assert_eq!(
+        snapshot_to_screen(&linked, 44, 14),
+        snapshot_to_screen(&plain, 44, 14),
+        "OSC 8 metadata leaves the badge layout unchanged"
+    );
+
+    let bytes = snapshot_to_bytes_with_alert_and_ui(&linked, None, &UiState::default(), 44, 14);
+    let raw = String::from_utf8_lossy(&bytes);
+    let url = crate::osc::osc_text(unsafe_url);
+    let open_hash = format!("\x1b]8;;{url}\x1b\\#");
+    assert!(
+        raw.contains(&open_hash),
+        "raw render has no linked #: {raw:?}"
+    );
+    assert!(
+        raw.contains("\x1b]8;;\x1b\\"),
+        "raw render has no OSC 8 close: {raw:?}"
+    );
+    assert!(
+        !raw.contains("\x1b]8;;https://evil.test"),
+        "control bytes cannot inject a second hyperlink: {raw:?}"
+    );
+    assert!(
+        !raw.contains(&format!("\x1b]8;;{url}\x1b\\✓")),
+        "the adjacent CI glyph stays outside the PR link"
+    );
+    assert!(
+        !raw.contains(&format!("\x1b]8;;{url}\x1b\\ ")),
+        "the badge's leading space stays outside the PR link"
+    );
+}
+
+#[test]
 fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Merged));

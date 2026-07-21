@@ -802,6 +802,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     }];
 
     // Selecting the last row keeps it visible in the short viewport while the

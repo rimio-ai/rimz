@@ -22,6 +22,7 @@ fn pr_state_projection_uses_the_given_map() {
         PrLink {
             state: crate::WorktreePrState::Closed,
             number: Some(91),
+            url: Some("https://github.com/org/repo/pull/91".to_owned()),
             ci: Some(crate::WorktreePrCi::Failing),
             merge_sha: None,
         },
@@ -32,6 +33,10 @@ fn pr_state_projection_uses_the_given_map() {
         Some(crate::WorktreePrState::Closed)
     );
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(91));
+    assert_eq!(
+        snapshot.worktree_groups[0].pr_url.as_deref(),
+        Some("https://github.com/org/repo/pull/91")
+    );
     assert_eq!(snapshot.worktree_groups[0].pr_ci, None);
 
     states.insert(
@@ -39,6 +44,7 @@ fn pr_state_projection_uses_the_given_map() {
         PrLink {
             state: crate::WorktreePrState::Open,
             number: Some(91),
+            url: Some("https://github.com/org/repo/pull/91".to_owned()),
             ci: Some(crate::WorktreePrCi::Passing),
             merge_sha: None,
         },
@@ -54,6 +60,7 @@ fn pr_state_projection_uses_the_given_map() {
         PrLink {
             state: crate::WorktreePrState::Merged,
             number: Some(91),
+            url: Some("https://github.com/org/repo/pull/91".to_owned()),
             ci: Some(crate::WorktreePrCi::Failing),
             merge_sha: Some("merged-sha".to_owned()),
         },
@@ -68,6 +75,7 @@ fn pr_state_projection_uses_the_given_map() {
     project_pr_state_map(&mut snapshot, &BTreeMap::new(), &DiffStatsCache::default());
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(69));
+    assert_eq!(snapshot.worktree_groups[0].pr_url, None);
 }
 
 #[test]
@@ -82,6 +90,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
         PrLink {
             state: crate::WorktreePrState::Merged,
             number: Some(91),
+            url: None,
             ci: None,
             merge_sha: Some("merged-sha".to_owned()),
         },
@@ -103,6 +112,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
         PrLink {
             state: crate::WorktreePrState::Merged,
             number: Some(91),
+            url: None,
             ci: None,
             merge_sha: Some("merged-sha".to_owned()),
         },

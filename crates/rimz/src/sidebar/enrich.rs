@@ -215,8 +215,12 @@ pub fn project_pr_state_map(
                 )
             })
             .and_then(|link| link.ci);
-        if let Some(number) = states.get(path).and_then(|link| link.number) {
+        group.pr_url = None;
+        if let Some(link) = states.get(path)
+            && let Some(number) = link.number
+        {
             group.pr_number = Some(number);
+            group.pr_url = link.url.clone();
         }
     }
 }
