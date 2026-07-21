@@ -28,7 +28,7 @@ pub(crate) fn brew_formula(root: &Path) -> Result<()> {
         .with_context(|| format!("reading {}", checksums_path.display()))?;
 
     let formula = render_formula(&FormulaInputs {
-        intel_version: strip_leading_v(&version),
+        version: strip_leading_v(&version),
         homepage: &homepage,
         base_url: base_url.trim_end_matches('/'),
         arm_sha: &parse_digest(&checksums, ARM_ARCHIVE)?,
@@ -42,7 +42,7 @@ fn required_env(key: &str) -> Result<String> {
 }
 
 struct FormulaInputs<'a> {
-    intel_version: &'a str,
+    version: &'a str,
     homepage: &'a str,
     base_url: &'a str,
     arm_sha: &'a str,
@@ -61,7 +61,7 @@ fn parse_digest(checksums: &str, archive: &str) -> Result<String> {
         .with_context(|| format!("SHA256SUMS has no entry for {archive}"))
 }
 
-/// Strip the `v` tag prefix; the release URL already carries the full tag.
+/// Strip the `v` tag prefix so the formula pins a bare Homebrew version.
 fn strip_leading_v(version: &str) -> &str {
     version.strip_prefix('v').unwrap_or(version)
 }
@@ -71,6 +71,7 @@ fn render_formula(inputs: &FormulaInputs<'_>) -> String {
         r#"class Rimz < Formula
   desc "Routes your attention across a fleet of coding agents"
   homepage "{homepage}"
+  version "{version}"
   license "MIT"
 
   on_macos do
@@ -80,7 +81,6 @@ fn render_formula(inputs: &FormulaInputs<'_>) -> String {
     end
     on_intel do
       url "{base_url}/rimz-x86_64-apple-darwin.tar.gz"
-      version "{intel_version}"
       sha256 "{intel_sha}"
     end
   end
@@ -96,7 +96,7 @@ end
 "#,
         homepage = inputs.homepage,
         base_url = inputs.base_url,
-        intel_version = inputs.intel_version,
+        version = inputs.version,
         arm_sha = inputs.arm_sha,
         intel_sha = inputs.intel_sha,
     )
@@ -135,20 +135,43 @@ c33333333333333333333333333333333333333333333333333333333333333c  rimz-x86_64-un
         assert_eq!(strip_leading_v("1.2.3"), "1.2.3");
     }
 
-    #[test]
-    fn render_formula_carries_both_urls_shas_license_and_intel_version() {
-        let formula = render_formula(&FormulaInputs {
-            intel_version: "1.2.3",
+    fn sample_formula() -> String {
+        render_formula(&FormulaInputs {
+            version: "1.2.3",
             homepage: "https://host.example/rimz/rimz",
             base_url: "https://host.example/rimz/rimz/releases/download/v1.2.3",
             arm_sha: "aaaa",
             intel_sha: "bbbb",
-        });
-        assert!(formula.contains("license \"MIT\""));
-        assert!(formula.contains("on_intel do\n      url"));
-        assert!(formula.contains("version \"1.2.3\""));
+        })
+    }
+
+    /// Both architectures resolve one pinned version. Homebrew tries
+    /// filename patterns before URL patterns, and the underscore in
+    /// `x86_64` matches a stem rule that captures `64-apple-darwin` as the
+    /// version — the same value on every release, so Intel upgrades would
+    /// never fire. Apple Silicon has no underscore and falls through to the
+    /// URL rule, which needs at least two dot-separated numbers in the tag,
+    /// so a tag like `v1` would leave it with no version at all. A top-level
+    /// pin keeps both arches off those heuristics.
+    #[test]
+    fn render_formula_pins_one_version_outside_the_arch_blocks() {
+        let formula = sample_formula();
         assert_eq!(formula.matches("version \"").count(), 1);
-        assert!(formula.contains("homepage \"https://host.example/rimz/rimz\""));
+        assert!(formula.contains("version \"1.2.3\""));
+        assert!(
+            formula.contains("homepage \"https://host.example/rimz/rimz\"\n  version \"1.2.3\"")
+        );
+        assert!(formula.contains("on_arm do\n      url"));
+        assert!(formula.contains("on_intel do\n      url"));
+        // The pin sits above `on_macos`, so neither arch block carries one.
+        let (_, arch_blocks) = formula.split_once("on_macos do").expect("on_macos block");
+        assert!(!arch_blocks.contains("version \""));
+    }
+
+    #[test]
+    fn render_formula_carries_both_urls_shas_and_license() {
+        let formula = sample_formula();
+        assert!(formula.contains("license \"MIT\""));
         assert!(formula.contains(
             "url \"https://host.example/rimz/rimz/releases/download/v1.2.3/rimz-aarch64-apple-darwin.tar.gz\""
         ));
