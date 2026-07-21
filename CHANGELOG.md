@@ -1,10 +1,14 @@
 # Changelog
 
-What changed in each RimZ release, written for the people who run it. Every release is a git tag: `v0.4` tags the `0.4.0` workspace version, `v0.3` tags `0.3.0`. Each heading links to that release's full diff.
+What changed in each RimZ release, written for the people who run it. Every release is a git tag: `v0.4.1` tags the `0.4.1` workspace version, `v0.4` tags `0.4.0`, `v0.3` tags `0.3.0`. Each heading links to that release's full diff.
 
 RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output formats can change between releases while the design settles, so read the "Changed" section of a release before upgrading. Entries describe what you can do differently; the reasoning behind a change lives in the linked guide.
 
 ## Unreleased
+
+## [0.4.1] (2026-07-21)
+
+A follow-up to 0.4.0: one shared daemon serves browser access for Zellij and tmux rooms alike, those rooms get readable fonts and colors, and the agent compatibility matrix is rewritten around what you see rather than how it is wired.
 
 ### Added
 
@@ -25,7 +29,11 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 - `rimz remote connect --web` keeps its ControlMaster-owned tunnel in the foreground after opening the browser instead of treating the forward helper's clean exit as a detach.
 - A remote browser tunnel that accepts connections and then loses SSH with exit 255 now reconnects immediately instead of reporting that it was never established.
 - `rimz loop add`, `remove`, and `rename` on project tasks keep project trust when the workspace was already trusted, so your own task edit needs no re-review.
+- Broken TOML files now report the offending line, name duplicated keys when applicable, and give a concrete fix across config, setup, doctor, start, remote-alias, and project-trust surfaces. This landed after the `v0.4` tag was cut, so it reaches you first in this release.
+- `rimz setup` keeps explicit config values on their documented template lines, preserving inline field notes and avoiding commented duplicates that could become duplicate-key errors when uncommented later. This also landed after the `v0.4` tag.
 - Interrupting a Claude subagent no longer leaves its finished parent pinned to `running` in the sidebar; the next parent tool or turn boundary closes the interrupted child from Claude's durable transcript marker.
+- Tagged releases stamp a clean version again. The release job checks out by commit hash, which brought down no tags, so `v0.4` binaries reported `0.4.0+g<sha>` instead of `0.4.0` — enough to make attach's version-drift check compare against a build string no release ever published.
+- Homebrew upgrades fire on both macOS architectures. The generated formula pinned its version only inside the Intel block, and Homebrew's filename heuristic read `x86_64` as the version on every release, so `brew upgrade` never saw a new one. → [installation](./docs/guide/installation.md)
 
 ## [0.4.0] (2026-07-20)
 
@@ -64,8 +72,6 @@ Four themes: provider accounts and money become a queryable surface of their own
 
 ### Fixed
 
-- Broken TOML files now report the offending line, name duplicated keys when applicable, and give a concrete fix across config, setup, doctor, start, remote-alias, and project-trust surfaces.
-- `rimz setup` keeps explicit config values on their documented template lines, preserving inline field notes and avoiding commented duplicates that could become duplicate-key errors when uncommented later.
 - The live `rimz stats` pane stays full-screen in `rimzd`, so the mouse wheel no longer reveals terminal scrollback behind the dashboard.
 - Grok cards use completed-turn input as their context occupancy, so the fresh/cache/output detail matches the displayed total, and locally estimate dollars from model pricing when current Grok Build records omit native cost ticks.
 - Remote attach keeps the panel layout stable while a confirmed session opens, animates the Multiplexer stage, and turns its handoff arrow green as the remote session renders. SSH control-client failures now appear as a recovery cause instead of leaking raw diagnostics over the panel.
@@ -138,6 +144,7 @@ What shipped:
 - Theming and pets: bundled palettes, color-depth and slot overrides, custom themes, provider branding, and an animated companion on the provider dashboard. → [theme](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
 - `rimz doctor`, `rimz setup`, hook install and uninstall, project trust, and a documented reset and GC path. → [troubleshooting](./docs/guide/troubleshooting.md) · [security](./docs/guide/security.md)
 
+[0.4.1]: https://github.com/rimio-ai/rimz/compare/v0.4...v0.4.1
 [0.4.0]: https://github.com/rimio-ai/rimz/compare/v0.3...v0.4
 [0.3.0]: https://github.com/rimio-ai/rimz/compare/v0.2...v0.3
 [0.2.0]: https://github.com/rimio-ai/rimz/releases/tag/v0.2
