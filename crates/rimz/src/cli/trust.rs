@@ -137,6 +137,17 @@ fn trust_banner(state: TrustState) -> &'static str {
     }
 }
 
+/// Re-pin trust after a project mutation this command performed itself.
+/// Returns true when the pre-mutation state proves the delta is the user's own
+/// edit and the grant was re-pinned; false leaves review to the caller.
+pub(crate) fn regrant_own_mutation(project_root: &Path, pre_state: TrustState) -> Result<bool> {
+    if !matches!(pre_state, TrustState::Trusted | TrustState::NoConfig) {
+        return Ok(false);
+    }
+    let granted = trust::grant(project_root).context("re-pinning project trust")?;
+    Ok(granted.state == TrustState::Trusted)
+}
+
 /// Show the executable-surface change on stderr and offer to grant it inline.
 /// Returns whether the project is trusted when the offer finishes.
 pub(crate) fn offer_inline_grant(project_root: &Path, question: &str) -> Result<bool> {

@@ -338,7 +338,16 @@ fn finish_project_mutation(
     out: &mut impl Write,
     project_root: &Path,
     task_added: bool,
+    pre_state: TrustState,
 ) -> Result<()> {
+    if crate::cli::trust::regrant_own_mutation(project_root, pre_state)? {
+        if task_added {
+            writeln!(out, "trust: granted — task fires on schedule")?;
+        } else {
+            writeln!(out, "trust: kept")?;
+        }
+        return Ok(());
+    }
     if std::io::stdin().is_terminal()
         && crate::cli::trust::offer_inline_grant(project_root, "grant trust now?")?
     {
