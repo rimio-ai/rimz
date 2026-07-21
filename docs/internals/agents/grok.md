@@ -28,7 +28,7 @@ Notification classification is exact: `permission_prompt` plus `Tool permission 
 
 Interactive launches remain `grok [flags]`. A supervised prompt alone adds `-p <prompt> --output-format streaming-json`; the streaming flags never reach an interactive TUI. Resume is `--resume <id>`, fork is `--resume <id> --fork-session`, model is `--model`, reasoning effort is `--reasoning-effort`, the headless turn cap is `--max-turns`, and manual compaction sends `/compact`.
 
-Ask maps to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`. Plan adds no argv because Grok exposes interactive `/plan` but no launch flag that enforces a plan-only posture. Grok has no provider-window ping profile.
+Ask maps to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`. Plan adds no argv because Grok exposes interactive `/plan` but no launch flag that enforces a plan-only posture.
 
 ## Context and transcript
 

@@ -221,7 +221,7 @@ A provider-defined quota can use a stable scope instead of a duration:
 {"logged_out":true}
 ```
 
-`plan` feeds the provider label. `account_id` is the plugin's provider identity label. Optional `rate_limit_windows` use the normalized `RateLimitWindow` shape and feed the shared account-usage cache; canonical `context` events may also push the same windows while a session is live. A scoped window's non-empty `scope.id` is its stable fusion/cache identity and its `scope.label` is a compact presentation label clipped safely to the three-cell provider-bar slot. Omit `duration_mins` when the provider exposes no trustworthy duration: the reset may display, but rolling refill, burn pace, surplus, not-started detection, and priming remain disabled. Existing duration-only responses retain their current identity and labels unchanged.
+`plan` feeds the provider label. `account_id` is the plugin's provider identity label. Optional `rate_limit_windows` use the normalized `RateLimitWindow` shape and feed the shared account-usage cache; canonical `context` events may also push the same windows while a session is live. A scoped window's non-empty `scope.id` is its stable fusion/cache identity and its `scope.label` is a compact presentation label clipped safely to the three-cell provider-bar slot. Omit `duration_mins` when the provider exposes no trustworthy duration: the reset may display, but rolling refill, burn pace, surplus, and not-started detection remain disabled. Existing duration-only responses retain their current identity and labels unchanged.
 
 ### Version
 

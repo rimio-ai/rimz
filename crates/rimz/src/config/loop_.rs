@@ -332,7 +332,7 @@ mod tests {
         );
         assert!(
             toml.contains("every = \"weekday\""),
-            "reset cadence should round-trip through TOML: {toml}"
+            "weekday cadence should round-trip through TOML: {toml}"
         );
         assert!(toml.contains("budget = \"$5.00\""), "{toml}");
         assert!(toml.contains("budget-per-day = \"$20.00\""), "{toml}");

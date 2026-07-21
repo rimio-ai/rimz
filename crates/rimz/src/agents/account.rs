@@ -219,7 +219,7 @@ impl ProviderCapacity {
 
     /// Current observation of the longest duration-bearing window.
     pub(crate) fn longest_window_observation(&self, now: Timestamp) -> Option<RateLimitWindow> {
-        Some(self.duration_window(true)?.clone().projected_at(now))
+        Some(self.duration_window()?.clone().projected_at(now))
     }
 
     /// Latest reset among subscription windows spent now with a future reset.
@@ -244,7 +244,7 @@ impl ProviderCapacity {
 
     /// Forward budget headroom in the longest running window.
     pub(crate) fn longest_window_surplus(&self, now: Timestamp) -> Option<WindowSurplus> {
-        let window = self.duration_window(true)?.clone().projected_at(now);
+        let window = self.duration_window()?.clone().projected_at(now);
         let used_percentage = window.used_percentage?;
         let resets_at = window.resets_at?;
         let duration_mins = window.duration_mins.filter(|mins| *mins > 0)?;
@@ -276,16 +276,12 @@ impl ProviderCapacity {
             .cloned()
     }
 
-    fn duration_window(&self, longest: bool) -> Option<&RateLimitWindow> {
-        let windows = self.duration_windows();
-        if longest {
-            windows.max_by_key(|window| window.duration_mins)
-        } else {
-            windows.min_by_key(|window| window.duration_mins)
-        }
+    fn duration_window(&self) -> Option<&RateLimitWindow> {
+        self.duration_windows()
+            .max_by_key(|window| window.duration_mins)
     }
 
-    pub(crate) fn duration_windows(&self) -> impl Iterator<Item = &RateLimitWindow> {
+    fn duration_windows(&self) -> impl Iterator<Item = &RateLimitWindow> {
         self.windows.iter().filter(|window| {
             window.scope.is_none()
                 && window.duration_mins.is_some_and(|mins| {

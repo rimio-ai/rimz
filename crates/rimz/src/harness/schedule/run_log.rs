@@ -254,17 +254,6 @@ pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
     records
 }
 
-pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<LoopRunRecord> {
-    let mut records = Vec::new();
-    log(state_root, MAX_BYTES).visit_records(|record: LoopRunRecord| {
-        if since.is_none_or(|since| record.at >= since) {
-            records.push(record);
-        }
-    });
-    records.sort_by_key(|record| record.at);
-    records
-}
-
 pub fn task_spend_today(state_root: &Path, task: &str, now: &Zoned) -> f64 {
     spend_on_local_day(&task_records(state_root, task), now)
 }
@@ -552,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_folds_log_generations() {
+    fn task_records_folds_log_generations() {
         let dir = tempfile::tempdir().expect("tempdir");
         let old = record("morning", 10, LoopRunResult::Completed);
         let new = record("other", 30, LoopRunResult::Completed);
@@ -560,14 +549,8 @@ mod tests {
         log.append(&old);
         log.append(&new);
 
-        assert_eq!(
-            recent(dir.path(), Some(Timestamp::from_second(10).unwrap())),
-            vec![old, new.clone()]
-        );
-        assert_eq!(
-            recent(dir.path(), Some(Timestamp::from_second(30).unwrap())),
-            vec![new]
-        );
+        assert_eq!(task_records(dir.path(), "morning"), vec![old]);
+        assert_eq!(task_records(dir.path(), "other"), vec![new]);
     }
 
     #[test]
