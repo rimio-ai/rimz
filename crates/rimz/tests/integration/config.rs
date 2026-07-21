@@ -332,20 +332,24 @@ fn config_get_set_round_trip_preserves_template_comments() {
 
     let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
-        text.contains("## width_percent = 30"),
-        "set should preserve the commented default:\n{text}"
+        !text.contains("## width_percent = 30"),
+        "set should replace the commented default:\n{text}"
     );
     assert!(
-        text.contains("width_percent = 25"),
-        "set should write the override:\n{text}"
+        text.contains(
+            "width_percent = 25                 # fixed share; unset uses 30% above 240 cols, 25% at/below"
+        ),
+        "set should write the override with its template note:\n{text}"
     );
     assert!(
-        text.contains("## max_cols = 72"),
-        "set should preserve the commented default:\n{text}"
+        !text.contains("## max_cols = 72"),
+        "set should replace the commented default:\n{text}"
     );
     assert!(
-        text.contains("max_cols = 80"),
-        "set should write the override:\n{text}"
+        text.contains(
+            "max_cols = 80                      # live column cap for sidebar pane width"
+        ),
+        "set should write the override with its template note:\n{text}"
     );
 
     for (key, value, expected) in [

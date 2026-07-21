@@ -482,6 +482,235 @@ fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
 }
 
 #[test]
+fn merge_uncomments_section_key_on_its_template_line() {
+    let mut doc = MachineConfig::template_core()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let mut skipped = Vec::new();
+    let kept = apply_merge_keys(
+        std::path::Path::new("config.toml"),
+        &mut doc,
+        vec![PendingKey {
+            logical: parse_key("notifications.desktop").expect("key"),
+            value: Value::from("osc"),
+        }],
+        &mut skipped,
+        std::path::Path::new("missing-agents-home"),
+        std::path::Path::new("config.toml"),
+    );
+
+    assert_eq!(kept, 1);
+    assert!(skipped.is_empty());
+    let rendered = doc.to_string();
+    let desktop_lines: Vec<_> = rendered
+        .lines()
+        .filter(|line| line.contains("desktop = "))
+        .collect();
+    assert_eq!(desktop_lines.len(), 1, "{rendered}");
+    assert!(
+        desktop_lines[0].starts_with("desktop = \"osc\"")
+            && desktop_lines[0].ends_with("# \"auto\", \"osc\", or \"off\""),
+        "{rendered}"
+    );
+    let notifications = rendered.find("[notifications]").expect("notifications");
+    let desktop = rendered.find("desktop = \"osc\"").expect("desktop");
+    let sidebar = rendered.find("[sidebar]").expect("sidebar");
+    assert!(notifications < desktop && desktop < sidebar, "{rendered}");
+    assert!(!rendered.contains("# desktop = "), "{rendered}");
+}
+
+#[test]
+fn merge_uncomments_root_scalar_at_its_template_position() {
+    let template = MachineConfig::template_core();
+    let mut doc = template.parse::<DocumentMut>().expect("template parses");
+    let mut skipped = Vec::new();
+    let kept = apply_merge_keys(
+        std::path::Path::new("config.toml"),
+        &mut doc,
+        vec![PendingKey {
+            logical: parse_key("timezone").expect("key"),
+            value: Value::from("America/Los_Angeles"),
+        }],
+        &mut skipped,
+        std::path::Path::new("missing-agents-home"),
+        std::path::Path::new("config.toml"),
+    );
+
+    assert_eq!(kept, 1);
+    assert!(skipped.is_empty());
+    let rendered = doc.to_string();
+    let timezone_lines: Vec<_> = rendered
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("timezone = "))
+        .collect();
+    assert_eq!(timezone_lines.len(), 1, "{rendered}");
+    assert_eq!(
+        timezone_lines[0].0,
+        template
+            .lines()
+            .position(|line| line.starts_with("## timezone = "))
+            .expect("template timezone"),
+        "{rendered}"
+    );
+    assert_eq!(
+        timezone_lines[0].1,
+        "timezone = \"America/Los_Angeles\" # IANA zone for displayed times and scheduling; default = system local"
+    );
+    assert!(!rendered.contains("## timezone = "), "{rendered}");
+}
+
+#[test]
+fn merge_uncomments_optional_example_under_its_section() {
+    let mut doc = MachineConfig::template_core()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let mut skipped = Vec::new();
+    let kept = apply_merge_keys(
+        std::path::Path::new("config.toml"),
+        &mut doc,
+        vec![PendingKey {
+            logical: parse_key("harness.budget").expect("key"),
+            value: Value::from("50/day"),
+        }],
+        &mut skipped,
+        std::path::Path::new("missing-agents-home"),
+        std::path::Path::new("config.toml"),
+    );
+
+    assert_eq!(kept, 1);
+    assert!(skipped.is_empty());
+    let rendered = doc.to_string();
+    let harness = rendered.find("[harness]").expect("harness");
+    let budget = rendered.find("budget = \"50/day\"").expect("budget");
+    assert!(harness < budget, "{rendered}");
+    assert!(!rendered.contains("## budget = \"50/day\""), "{rendered}");
+}
+
+#[test]
+fn failed_merge_keeps_template_default_commented() {
+    let mut doc = MachineConfig::template_core()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let mut skipped = Vec::new();
+    let kept = apply_merge_keys(
+        std::path::Path::new("config.toml"),
+        &mut doc,
+        vec![PendingKey {
+            logical: parse_key("notifications.desktop").expect("key"),
+            value: Value::from(5),
+        }],
+        &mut skipped,
+        std::path::Path::new("missing-agents-home"),
+        std::path::Path::new("config.toml"),
+    );
+
+    assert_eq!(kept, 0);
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].key, "notifications.desktop");
+    assert!(
+        doc.to_string()
+            .contains("# desktop = \"auto\"                    # \"auto\", \"osc\", or \"off\""),
+        "{doc}"
+    );
+}
+
+#[test]
+fn merge_preserves_trailing_comment_on_existing_scalar() {
+    let mut doc = MachineConfig::template_core()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let mut skipped = Vec::new();
+    let kept = apply_merge_keys(
+        std::path::Path::new("config.toml"),
+        &mut doc,
+        vec![PendingKey {
+            logical: parse_key("tmux.set_clipboard").expect("key"),
+            value: Value::from("external"),
+        }],
+        &mut skipped,
+        std::path::Path::new("missing-agents-home"),
+        std::path::Path::new("config.toml"),
+    );
+
+    assert_eq!(kept, 1);
+    assert!(skipped.is_empty());
+    let line = doc
+        .to_string()
+        .lines()
+        .find(|line| line.starts_with("set_clipboard = "))
+        .expect("set_clipboard")
+        .to_owned();
+    assert!(line.starts_with("set_clipboard = \"external\""), "{line}");
+    assert!(
+        line.ends_with("# \"on\", \"external\", or \"off\""),
+        "{line}"
+    );
+}
+
+#[test]
+fn set_missing_file_uncomments_template_default_in_place() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+
+    editor
+        .set("notifications.desktop", "osc")
+        .expect("set desktop");
+
+    let rendered = std::fs::read_to_string(path).expect("read config");
+    let desktop_lines: Vec<_> = rendered
+        .lines()
+        .filter(|line| line.contains("desktop = "))
+        .collect();
+    assert_eq!(desktop_lines.len(), 1, "{rendered}");
+    assert!(desktop_lines[0].starts_with("desktop = \"osc\""));
+    assert!(!rendered.contains("# desktop = "), "{rendered}");
+}
+
+#[test]
+fn merge_defaults_is_byte_idempotent_with_kept_overrides() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"timezone = "America/Los_Angeles"
+
+[notifications]
+desktop = "osc"
+
+[tmux]
+set_clipboard = "external"
+"#,
+    )
+    .expect("seed config");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+
+    let first = editor.merge_defaults().expect("first merge");
+    let first_bytes = std::fs::read(&path).expect("first config");
+    let second = editor.merge_defaults().expect("second merge");
+    let second_bytes = std::fs::read(&path).expect("second config");
+    let first_kept = match first.files[0].action {
+        MergeAction::Merged { kept } => kept,
+        ref action => panic!("expected merged core file, got {action:?}"),
+    };
+    let second_kept = match second.files[0].action {
+        MergeAction::Merged { kept } => kept,
+        ref action => panic!("expected merged core file, got {action:?}"),
+    };
+
+    assert_eq!(first_kept, 3);
+    assert_eq!(second_kept, first_kept);
+    assert_eq!(second_bytes, first_bytes);
+}
+
+#[test]
 fn set_document_value_renders_inline_table_arrays_as_table_blocks() {
     let mut doc = r#"
 [agents.teams.forge]

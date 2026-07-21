@@ -49,6 +49,7 @@ Four themes: provider accounts and money become a queryable surface of their own
 ### Fixed
 
 - Broken TOML files now report the offending line, name duplicated keys when applicable, and give a concrete fix across config, setup, doctor, start, remote-alias, and project-trust surfaces.
+- `rimz setup` keeps explicit config values on their documented template lines, preserving inline field notes and avoiding commented duplicates that could become duplicate-key errors when uncommented later.
 - The live `rimz stats` pane stays full-screen in `rimzd`, so the mouse wheel no longer reveals terminal scrollback behind the dashboard.
 - Grok cards use completed-turn input as their context occupancy, so the fresh/cache/output detail matches the displayed total, and locally estimate dollars from model pricing when current Grok Build records omit native cost ticks.
 - Remote attach keeps the panel layout stable while a confirmed session opens, animates the Multiplexer stage, and turns its handoff arrow green as the remote session renders. SSH control-client failures now appear as a recovery cause instead of leaking raw diagnostics over the panel.

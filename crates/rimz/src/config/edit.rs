@@ -143,6 +143,13 @@ impl ConfigEditor {
                         &source,
                     )),
                 })?;
+        let doc_key = document_key_for_set(&key);
+        if item_at(&doc, &doc_key).is_none()
+            && let Some(uncommented) = uncomment_template_default(&text, &doc_key)
+            && let Ok(uncommented) = uncommented.parse::<DocumentMut>()
+        {
+            doc = uncommented;
+        }
         apply_logical_key(
             &mut doc,
             file.path(),
@@ -332,7 +339,14 @@ fn apply_merge_keys(
         let mut progressed = false;
         let mut next = Vec::new();
         for PendingKey { logical, value } in pending {
-            let mut trial = doc.clone();
+            let doc_key = document_key_for_set(&logical);
+            let mut trial = if item_at(doc, &doc_key).is_none() {
+                uncomment_template_default(&doc.to_string(), &doc_key)
+                    .and_then(|text| text.parse::<DocumentMut>().ok())
+                    .unwrap_or_else(|| doc.clone())
+            } else {
+                doc.clone()
+            };
             match apply_logical_key(
                 &mut trial,
                 path,
@@ -359,6 +373,55 @@ fn apply_merge_keys(
         pending = next.into_iter().map(|(key, _)| key).collect();
     }
     kept
+}
+
+fn uncomment_template_default(text: &str, doc_key: &[String]) -> Option<String> {
+    let (leaf, parents) = doc_key.split_last()?;
+    let mut section = Vec::new();
+    let mut rendered = String::with_capacity(text.len());
+    let mut matched = false;
+
+    for line in text.split_inclusive('\n') {
+        let (content, ending) = if let Some(content) = line.strip_suffix("\r\n") {
+            (content, "\r\n")
+        } else if let Some(content) = line.strip_suffix('\n') {
+            (content, "\n")
+        } else {
+            (line, "")
+        };
+        let trimmed = content.trim_start();
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let header = trimmed.trim_start_matches('[').trim_end_matches(']');
+            section = header.split('.').map(str::trim).collect();
+        }
+
+        let uncommented = trimmed
+            .strip_prefix('#')
+            .map(|line| line.trim_start_matches('#'))
+            .map(|line| line.strip_prefix(' ').unwrap_or(line));
+        let target = uncommented.filter(|line| {
+            !matched
+                && section
+                    .iter()
+                    .copied()
+                    .eq(parents.iter().map(String::as_str))
+                && line
+                    .split_once('=')
+                    .is_some_and(|(key, _)| key.trim() == leaf)
+        });
+
+        if let Some(uncommented) = target {
+            rendered.push_str(&content[..content.len() - trimmed.len()]);
+            rendered.push_str(uncommented);
+            matched = true;
+        } else {
+            rendered.push_str(content);
+        }
+        rendered.push_str(ending);
+    }
+
+    matched.then_some(rendered)
 }
 
 fn walk_table(
@@ -885,7 +948,13 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
             })?;
     }
     let leaf = path.last().expect("validated key has a leaf");
-    table[leaf] = value_to_item(value);
+    let mut item = value_to_item(value);
+    if let Some(old) = table.get(leaf).and_then(Item::as_value)
+        && let Item::Value(new) = &mut item
+    {
+        *new.decor_mut() = old.decor().clone();
+    }
+    table[leaf] = item;
     Ok(())
 }
 
