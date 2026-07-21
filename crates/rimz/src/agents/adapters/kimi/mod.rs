@@ -127,7 +127,6 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--yolo"],
             plan: &["--plan"],
         },
-        ping_args: Some(&[]),
         max_turn_flag: None,
         compact_command: Some("/compact"),
         presets: super::PresetMatchers {

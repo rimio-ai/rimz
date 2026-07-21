@@ -13,7 +13,6 @@ use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
 use crate::config::TaskEntry;
-use crate::harness::assist_log::AssistWindowReset;
 use crate::harness::run::RunStatus;
 use crate::harness::schedule::{pauses, strikes};
 use crate::store::paths::state_home;
@@ -103,8 +102,6 @@ pub struct LoopRunRecord {
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub window: Option<PingWindowOutcome>,
 }
 
 impl LoopRunRecord {
@@ -129,17 +126,8 @@ impl LoopRunRecord {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
-            window: None,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PingWindowOutcome {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shortest: Option<AssistWindowReset>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub longest: Option<AssistWindowReset>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,7 +166,6 @@ pub enum LoopRunResult {
     Canceled,
     Delivered,
     TargetGone,
-    SkippedWindow,
     CheckSkipped,
     Expired,
     Errored,
@@ -198,7 +185,6 @@ impl LoopRunResult {
             Self::Canceled => "canceled",
             Self::Delivered => "delivered",
             Self::TargetGone => "target gone",
-            Self::SkippedWindow => "skipped",
             Self::CheckSkipped => "skipped",
             Self::Expired => "expired",
             Self::Errored => "error",
@@ -454,7 +440,6 @@ mod tests {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
-            window: None,
         }
     }
 
@@ -487,7 +472,6 @@ mod tests {
             LoopRunResult::CheckSkipped,
             LoopRunResult::TargetGone,
             LoopRunResult::Expired,
-            LoopRunResult::SkippedWindow,
             LoopRunResult::Errored,
             LoopRunResult::Canceled,
         ] {
@@ -507,9 +491,8 @@ mod tests {
                     record.cost_usd,
                     record.input_tokens,
                     record.output_tokens,
-                    record.window,
                 ),
-                (None, None, None, None, None, None, None, None, None, None)
+                (None, None, None, None, None, None, None, None, None)
             );
         }
 
@@ -569,16 +552,9 @@ mod tests {
     }
 
     #[test]
-    fn ping_window_outcome_round_trips_and_recent_folds_generations() {
+    fn recent_folds_log_generations() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut old = record("autoping-codex", 10, LoopRunResult::Completed);
-        old.window = Some(PingWindowOutcome {
-            shortest: Some(AssistWindowReset {
-                duration_mins: Some(300),
-                resets_at: Some(Timestamp::from_second(20).expect("reset")),
-            }),
-            longest: None,
-        });
+        let old = record("morning", 10, LoopRunResult::Completed);
         let new = record("other", 30, LoopRunResult::Completed);
         let log = log(dir.path(), 1);
         log.append(&old);

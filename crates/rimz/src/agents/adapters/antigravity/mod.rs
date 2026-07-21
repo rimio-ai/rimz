@@ -207,7 +207,6 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--dangerously-skip-permissions"],
             plan: &["--mode", "plan"],
         },
-        ping_args: None,
         max_turn_flag: None,
         compact_command: None,
         presets: super::PresetMatchers {

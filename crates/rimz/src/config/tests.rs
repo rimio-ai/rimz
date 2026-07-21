@@ -902,15 +902,15 @@ fn loop_tasks_parse_and_default_empty() {
         &dir,
         "loop.toml",
         "[tasks.morning]\n\
-             agent = \"claude-ping\"\n\
-             prompt = \"ping\"\n\
+             agent = \"claude\"\n\
+             prompt = \"triage\"\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n\
              every = \"weekdays\"\n\
              worktree = \"main\"\n\
              mode = \"auto\"\n\
              effort = \"low\"\n\
-             system-prompt-file = \"/prompts/primer.md\"\n\
+             system-prompt-file = \"/prompts/triage.md\"\n\
              timeout = \"5m\"\n\
              [tasks.pr_watch]\n\
              agent = \"codex\"\n\
@@ -925,9 +925,9 @@ fn loop_tasks_parse_and_default_empty() {
     ))
     .expect("load");
     let entry = config.r#loop.tasks.0.get("morning").expect("morning task");
-    assert_eq!(entry.agent.as_deref(), Some("claude-ping"));
+    assert_eq!(entry.agent.as_deref(), Some("claude"));
     assert_eq!(entry.wake, None);
-    assert_eq!(entry.prompt.as_deref(), Some("ping"));
+    assert_eq!(entry.prompt.as_deref(), Some("triage"));
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
     assert_eq!(entry.at.as_deref(), Some("07:00"));
     assert_eq!(entry.every.as_deref(), Some("weekdays"));
@@ -936,7 +936,7 @@ fn loop_tasks_parse_and_default_empty() {
     assert_eq!(entry.effort.as_deref(), Some("low"));
     assert_eq!(
         entry.system_prompt_file.as_deref(),
-        Some(std::path::Path::new("/prompts/primer.md"))
+        Some(std::path::Path::new("/prompts/triage.md"))
     );
     assert_eq!(entry.timeout.as_deref(), Some("5m"));
     assert_eq!(entry.cron, None);

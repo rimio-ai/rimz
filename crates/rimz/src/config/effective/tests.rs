@@ -222,7 +222,7 @@ fn project_tasks_require_prompt_for_spawn_tasks() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex-ping\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wake]\nagent = \"codex\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("missing prompt");
@@ -242,7 +242,7 @@ fn project_tasks_require_prompt_for_spawn_tasks() {
 
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex-ping\"\nprompt = \"ping\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wake]\nagent = \"codex\"\nprompt = \"triage\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("prompted project task");
@@ -253,7 +253,7 @@ fn project_tasks_require_prompt_for_spawn_tasks() {
             .0
             .get("wake")
             .and_then(|entry| entry.prompt.as_deref()),
-        Some("ping")
+        Some("triage")
     );
 }
 

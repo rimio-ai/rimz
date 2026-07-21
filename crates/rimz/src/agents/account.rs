@@ -31,10 +31,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    AgentRateLimits, ProviderAccountScope, RateLimitWindow,
-    context::{FRESH_WINDOW_USAGE_FLOOR, RateLimitWindowKey},
-};
+use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
 use crate::ids::AgentKind;
 
@@ -158,16 +155,6 @@ pub struct ProviderCapacity {
     pacing_max_mins: Option<u32>,
 }
 
-/// Provider truth for whether the longest subscription window has a live
-/// countdown edge. Harness scheduling maps this provider-owned verdict onto
-/// its generic reset schedule signal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LongestWindowSignal {
-    At(Timestamp),
-    ConfirmedDown,
-    Unknown,
-}
-
 impl ProviderCapacity {
     /// Read one kind-wide capacity from the shared provider cache.
     pub fn read(runtime: &RuntimePaths, kind: &str) -> Option<Self> {
@@ -193,15 +180,6 @@ impl ProviderCapacity {
             windows: entry.limits.windows.clone(),
             pacing_max_mins: Some(7 * 24 * 60),
         })
-    }
-
-    pub(crate) fn binding_cache_matches(
-        runtime: &RuntimePaths,
-        kind: &str,
-        binding: &ProviderAccountBinding,
-    ) -> Option<bool> {
-        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-        Some(entry_matches_binding(cache.entries.get(kind)?, binding))
     }
 
     /// Read all kind-wide capacities from the shared provider cache once.
@@ -262,53 +240,6 @@ impl ProviderCapacity {
             has_known_available |= window.used_percentage.is_some() && !window.is_spent();
         }
         has_known_available
-    }
-
-    /// Whether the shortest duration-bearing window is currently running.
-    pub(crate) fn shortest_window_running(&self, now: Timestamp) -> Option<bool> {
-        window_running_verdict(self.duration_window(false)?, now)
-    }
-
-    /// Whether the longest duration-bearing window is currently running.
-    pub(crate) fn longest_window_running(&self, now: Timestamp) -> Option<bool> {
-        window_running_verdict(self.duration_window(true)?, now)
-    }
-
-    /// Whether an authoritative reading says the longest known duration is not
-    /// currently enforced, so a reset primer has no window to start.
-    pub(crate) fn longest_window_lifted(&self) -> bool {
-        self.duration_window(true)
-            .is_some_and(|window| window.lifted)
-    }
-
-    /// Authoritative state of the longest duration-bearing window without
-    /// projecting a passed reset into a synthetic future countdown.
-    pub(crate) fn longest_window_signal(&self, now: Timestamp) -> LongestWindowSignal {
-        let Some(window) = self.duration_window(true) else {
-            return LongestWindowSignal::Unknown;
-        };
-        if window.lifted {
-            return LongestWindowSignal::Unknown;
-        }
-        if window.not_started(now) {
-            return if window.source.is_authoritative() {
-                LongestWindowSignal::ConfirmedDown
-            } else {
-                LongestWindowSignal::Unknown
-            };
-        }
-        if let Some(resets_at) = window.resets_at {
-            return LongestWindowSignal::At(resets_at);
-        }
-        if window
-            .used_percentage
-            .is_some_and(|used| used <= FRESH_WINDOW_USAGE_FLOOR)
-            && window.source.is_authoritative()
-        {
-            LongestWindowSignal::ConfirmedDown
-        } else {
-            LongestWindowSignal::Unknown
-        }
     }
 
     /// Forward budget headroom in the longest running window.
@@ -417,18 +348,6 @@ pub(crate) struct WindowSurplus {
 
 fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
     window.is_spent() && window.resets_at.is_none_or(|reset| reset > now)
-}
-
-fn window_running_verdict(window: &RateLimitWindow, now: Timestamp) -> Option<bool> {
-    let projected = window.clone().projected_at(now);
-    projected.used_percentage?;
-    if projected.not_started(now) {
-        return Some(false);
-    }
-    match projected.resets_at {
-        Some(reset) if reset > now => Some(true),
-        _ => None,
-    }
 }
 
 /// Producer-published per-provider rate-limit windows.

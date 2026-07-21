@@ -985,7 +985,7 @@ impl RateLimitWindow {
     /// the reset (this also covers a spent window at 100%). An absent reset or
     /// duration can't be judged this way, so it reads as started: a known
     /// reading whose countdown is a real one. Drives the dashboard's
-    /// no-countdown "ready to start" treatment and the window-priming ping guard.
+    /// no-countdown "ready to start" treatment.
     pub fn not_started(&self, now: Timestamp) -> bool {
         if self.used_percentage > Some(FRESH_WINDOW_USAGE_FLOOR) {
             return false;

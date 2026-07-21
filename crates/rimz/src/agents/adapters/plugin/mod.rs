@@ -377,7 +377,6 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     yolo: leak_strings(&launch.permission_args.yolo),
                     plan: leak_strings(&launch.permission_args.plan),
                 },
-                ping_args: None,
                 max_turn_flag: None,
                 compact_command: launch
                     .compact_command

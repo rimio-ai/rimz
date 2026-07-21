@@ -116,13 +116,6 @@ fn codex_commands_and_permission_args_match_run_posture() {
         vec!["--dangerously-bypass-approvals-and-sandbox"]
     );
     assert_eq!(
-        CodexAdapter.ping_args(),
-        Some(vec![
-            "-c".to_owned(),
-            "model_reasoning_effort=low".to_owned()
-        ])
-    );
-    assert_eq!(
         CodexAdapter.spec().launch.compact_command(),
         Some("/compact")
     );

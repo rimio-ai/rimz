@@ -10,7 +10,6 @@ struct AddTiming {
 enum AddTaskAction {
     Spawn {
         resolved: ResolvedTaskSpec,
-        is_ping: bool,
         mode: Option<String>,
     },
     Deliver {
@@ -167,16 +166,8 @@ fn resolve_add_action(
         TaskActionKind::Spawn => {
             let spec = args.agent.as_deref().unwrap_or_default();
             let resolved = resolve_task_spec(spec, workspace)?;
-            let is_ping = args
-                .agent
-                .as_deref()
-                .is_some_and(agents_spec::virtual_ping_shape);
-            if is_ping {
-                ping_kind_supported(resolved.kind())?;
-            }
             AddTaskAction::Spawn {
                 resolved,
-                is_ping,
                 mode: None,
             }
         }
@@ -188,11 +179,6 @@ fn resolve_add_action(
         }
         TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
     };
-    if args.every.as_deref() == Some("reset")
-        && !matches!(action, AddTaskAction::Spawn { is_ping: true, .. })
-    {
-        bail!("--every reset only applies to a `<kind>-ping` agent task");
-    }
     reject_unsupported_action_flags(args, kind)?;
     if let AddTaskAction::Spawn { mode, .. } = &mut action {
         *mode = args.mode.as_deref().map(parse_mode).transpose()?;
@@ -538,7 +524,7 @@ fn write_add_feedback(
         segments.push(format!("surplus ≥ {threshold:.1}x"));
         writeln!(out, "gate: {}", segments.join(" · "))?;
     }
-    if let Some(next) = first_next_fire(entry, parsed) {
+    if let Some(next) = first_next_fire(parsed) {
         let zone = MachineConfig::load_lenient().time_zone();
         let local = next.to_zoned(zone);
         writeln!(
@@ -547,27 +533,14 @@ fn write_add_feedback(
             local.strftime("%Y-%m-%d %H:%M"),
             ui::rel_until(next, Timestamp::now())
         )?;
-    } else {
-        writeln!(out, "next fire: waiting for a provider reset reading")?;
     }
     Ok(())
 }
 
-fn first_next_fire(entry: &TaskEntry, parsed: &schedule::ParsedSchedule) -> Option<Timestamp> {
+fn first_next_fire(parsed: &schedule::ParsedSchedule) -> Option<Timestamp> {
     let now = Timestamp::now();
     let zone = MachineConfig::load_lenient().time_zone();
-    let reset_signal = match &parsed.schedule {
-        schedule::Schedule::WindowReset => entry
-            .agent
-            .as_deref()
-            .and_then(rimz::harness::spec::ping_kind)
-            .and_then(|kind| window_reset_signal(entry, kind, now).ok())
-            .unwrap_or(schedule::ResetSignal::Unknown),
-        _ => schedule::ResetSignal::Unknown,
-    };
-    parsed
-        .schedule
-        .next_after(now, &now.to_zoned(zone), reset_signal)
+    parsed.schedule.next_after(now, &now.to_zoned(zone))
 }
 
 fn resolve_deadline(raw: &str) -> Result<Timestamp> {

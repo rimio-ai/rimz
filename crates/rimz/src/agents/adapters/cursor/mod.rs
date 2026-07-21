@@ -96,7 +96,6 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--force", "--sandbox", "disabled"],
             plan: &["--mode=plan"],
         },
-        ping_args: None,
         max_turn_flag: None,
         compact_command: Some("/summarize"),
         presets: super::PresetMatchers {

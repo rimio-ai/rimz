@@ -145,7 +145,6 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         KimiAdapter.launch_command(&["--yolo".to_owned()], Some("")),
         Some(vec!["kimi".to_owned()])
     );
-    assert_eq!(KimiAdapter.ping_args(), Some(Vec::new()));
     assert_eq!(
         KimiAdapter.spec().launch.compact_command(),
         Some("/compact")

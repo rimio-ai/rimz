@@ -28,7 +28,6 @@ fn grouped_tasks<'a>(
     tasks: &'a BTreeMap<String, LoadedTask>,
     pauses: &BTreeMap<String, PauseEntry>,
     now_zoned: &jiff::Zoned,
-    retain_overlaid_next: bool,
 ) -> Vec<ObservedTaskGroup<'a>> {
     let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &LoadedTask)>> = BTreeMap::new();
     for (name, task) in tasks {
@@ -58,7 +57,6 @@ fn grouped_tasks<'a>(
                         &stamps,
                         pauses.get(name),
                         now_zoned,
-                        retain_overlaid_next,
                     ),
                 })
                 .collect();
@@ -86,7 +84,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let mut blocked_count = 0;
-    let groups = grouped_tasks(tasks, &pause_entries, &now_zoned, false);
+    let groups = grouped_tasks(tasks, &pause_entries, &now_zoned);
     for (idx, group) in groups.into_iter().enumerate() {
         if idx > 0 {
             writeln!(out)?;
@@ -244,7 +242,7 @@ fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: b
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let context = ListRowContext { stats: &stats, now };
-    let groups = grouped_tasks(catalog.visible(), &pause_entries, &now_zoned, true)
+    let groups = grouped_tasks(catalog.visible(), &pause_entries, &now_zoned)
         .into_iter()
         .map(|group| WatchGroup {
             root: group.root,
@@ -923,7 +921,6 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         &stamps,
         pause.as_ref(),
         &now_zoned,
-        false,
     );
     let records = run_log::task_records(&state_home(), &args.name);
     let show_agent_runs = has_agent_runs_section(&task);
@@ -1536,9 +1533,7 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::TargetGone
         | LoopRunResult::Overlapped
         | LoopRunResult::BudgetSkipped => ("○", ui::palette::warn()),
-        LoopRunResult::SkippedWindow
-        | LoopRunResult::CheckSkipped
-        | LoopRunResult::SurplusSkipped => ("○", ui::palette::muted()),
+        LoopRunResult::CheckSkipped | LoopRunResult::SurplusSkipped => ("○", ui::palette::muted()),
     };
     ResultMark { glyph, style }
 }
@@ -1602,60 +1597,14 @@ fn spawn_exit_code(result: LoopRunResult) -> Option<i32> {
 }
 
 fn record_note(record: &LoopRunRecord) -> Option<String> {
-    let note = record
+    record
         .error
         .as_deref()
         .map(first_line)
         .or_else(|| check_failure_line(record))
         .or_else(|| record.last_message.as_deref().map(first_line))
-        .or_else(|| record.target.as_deref().map(first_line));
-    match note {
-        Some(note) => Some(truncate_note(note, NOTE_MAX)),
-        None => record_window_label(record).map(|label| truncate_note(&label, NOTE_MAX)),
-    }
-}
-
-fn record_window_label(record: &LoopRunRecord) -> Option<String> {
-    let outcome = record.window.as_ref()?;
-    let zone = MachineConfig::load_lenient().time_zone();
-    let shortest = outcome.shortest.as_ref();
-    let longest = outcome.longest.as_ref().filter(|longest| {
-        shortest.is_none_or(|shortest| longest.duration_mins != shortest.duration_mins)
-    });
-    let mut segments = Vec::new();
-    if let Some(window) = shortest {
-        let reset = window
-            .resets_at
-            .map(|reset| reset.to_zoned(zone.clone()).strftime("%H:%M").to_string())
-            .unwrap_or_else(|| "unknown".to_owned());
-        let duration = window.duration_mins.map(window_duration_label);
-        segments.push(match duration {
-            Some(duration) => format!("window → {reset} ({duration})"),
-            None => format!("window → {reset}"),
-        });
-    }
-    if let Some(window) = longest {
-        let reset = window
-            .resets_at
-            .map(|reset| reset.to_zoned(zone.clone()).strftime("%b %-d").to_string())
-            .unwrap_or_else(|| "unknown".to_owned());
-        let duration = window
-            .duration_mins
-            .map(window_duration_label)
-            .unwrap_or_else(|| "long".to_owned());
-        segments.push(format!("{duration} → {reset}"));
-    }
-    (!segments.is_empty()).then(|| segments.join(", "))
-}
-
-fn window_duration_label(mins: u64) -> String {
-    if mins.is_multiple_of(24 * 60) {
-        format!("{}d", mins / (24 * 60))
-    } else if mins.is_multiple_of(60) {
-        format!("{}h", mins / 60)
-    } else {
-        format!("{mins}m")
-    }
+        .or_else(|| record.target.as_deref().map(first_line))
+        .map(|note| truncate_note(note, NOTE_MAX))
 }
 
 fn check_failure_line(record: &LoopRunRecord) -> Option<&str> {
@@ -1694,7 +1643,6 @@ fn record_has_detail(record: &LoopRunRecord) -> bool {
             .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
         || record.input_tokens.is_some()
         || record.output_tokens.is_some()
-        || record.window.is_some()
 }
 
 fn record_is_failure(record: &LoopRunRecord) -> bool {
@@ -1803,13 +1751,6 @@ fn write_record_forensics(
             out,
             "{}",
             ui::paint(ui::palette::muted(), &format!("  cost: {spend}"))
-        )?;
-    }
-    if let Some(window) = record_window_label(record) {
-        writeln!(
-            out,
-            "{}",
-            ui::paint(ui::palette::muted(), &format!("  window: {window}"))
         )?;
     }
     write_run_links(out, record, run_record.as_ref())

@@ -5,7 +5,7 @@
 //! cell. Agent cells optionally carry a `:role` suffix for an ad-hoc role
 //! handle. Named teams compile to one column per role unless they declare an
 //! explicit role-first layout shape. Built-ins provide `term`, every registered
-//! agent kind, and `<kind>-<mode>` / `<kind>-ping` virtual variants; per-machine
+//! agent kind, and `<kind>-<mode>` virtual variants; per-machine
 //! `[agents.profiles]` entries can specialize agent cells and `[agents.commands]`
 //! entries provide raw command panes.
 
@@ -21,7 +21,6 @@ use crate::ids::AgentKind;
 
 const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
-const PING_SUFFIX: &str = "ping";
 pub const MAX_PROFILE_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -944,7 +943,6 @@ fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig)
         || raw == "term"
         || crate::agents::find_definition(raw).is_some()
         || virtual_agent_shape(raw)
-        || virtual_ping_shape(raw)
 }
 
 pub(crate) fn split_inline_role<'a>(
@@ -994,9 +992,6 @@ fn parse_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -
         return Ok(Cell::agent(AgentKind::new_unchecked(raw)));
     }
     if let Some(cell) = virtual_agent_cell(raw, profiles)? {
-        return Ok(cell);
-    }
-    if let Some(cell) = virtual_ping_cell(raw, profiles)? {
         return Ok(cell);
     }
     Err(LayoutErr::UnknownCell {
@@ -1117,30 +1112,6 @@ fn virtual_agent_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cel
     )?))
 }
 
-fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell>> {
-    let Some(kind_name) = raw.strip_suffix("-ping") else {
-        return Ok(None);
-    };
-    if crate::agents::find_definition(kind_name).is_none() {
-        return Ok(None);
-    }
-    let (resolved, profile_name) = virtual_base(kind_name, profiles)?;
-    let Some(resolved) = resolved else {
-        return Ok(None);
-    };
-    let adapter = crate::agents::find_definition(resolved.kind.as_str())
-        .expect("resolved profile terminal kind is known");
-    let Some(ping_args) = adapter.ping_args() else {
-        return Ok(None);
-    };
-    Ok(Some(virtual_cell_from(
-        resolved,
-        profile_name,
-        ping_args,
-        None,
-    )?))
-}
-
 fn virtual_cell_from(
     resolved: ResolvedProfile,
     profile_name: Option<String>,
@@ -1190,18 +1161,6 @@ fn virtual_agent_shape(raw: &str) -> bool {
         return false;
     };
     supported_virtual_agent_args(kind, mode).is_some()
-}
-
-pub fn virtual_ping_shape(raw: &str) -> bool {
-    ping_kind(raw).is_some()
-}
-
-pub fn ping_kind(raw: &str) -> Option<&str> {
-    let kind = raw.strip_suffix("-ping")?;
-    crate::agents::find_definition(kind)?
-        .ping_args()
-        .is_some()
-        .then_some(kind)
 }
 
 fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<String>> {
@@ -1380,9 +1339,6 @@ fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
             if supported_virtual_agent_args(kind, parsed).is_some() {
                 values.insert(format!("{kind}-{mode}"));
             }
-        }
-        if crate::agents::find_definition(kind).is_some_and(|a| a.ping_args().is_some()) {
-            values.insert(format!("{kind}-{PING_SUFFIX}"));
         }
     }
     values.extend(commands.0.keys().cloned());

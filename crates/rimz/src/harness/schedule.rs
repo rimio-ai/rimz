@@ -3,9 +3,7 @@
 //! The elected sidebar elder keeps time for loop tasks while a room is open and
 //! fires `rimz loop run <name>`, which drives one configured loop wake-up.
 //! Persisted rows compile once into independent action and timing results; a
-//! malformed half remains observable without hiding the valid half. A
-//! `<kind>-ping` virtual cell is the window-priming special case; the schedule
-//! machinery stays generic by evaluating an externally resolved reset signal.
+//! malformed half remains observable without hiding the valid half.
 //!
 //! This module owns task action validation, catalog precedence and mutation,
 //! the [`runner::TaskFire`] state machine, terminal transitions, schedule
@@ -15,7 +13,6 @@
 use std::time::Duration;
 
 use crate::config::{TaskEntry, TaskTarget};
-use crate::ids::AgentKind;
 use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub mod catalog;
@@ -139,10 +136,6 @@ pub enum ScheduleErr {
         "schedule `{name}` sets conflicting schedule fields; use `cron`, `every`, or bare `at`"
     )]
     TimeConflict { name: String },
-    #[error(
-        "schedule `{name}` sets `every = \"reset\"`, which only applies to a `<kind>-ping` agent task"
-    )]
-    ResetNeedsPing { name: String },
     #[error("schedule `{name}` sets a calendar `every` value without `at`; add `at = \"HH:MM\"`")]
     EveryNeedsAt { name: String },
     #[error("schedule `{name}` has an invalid time `{value}`; use 24-hour `HH:MM`")]
@@ -150,7 +143,7 @@ pub enum ScheduleErr {
     #[error("schedule `{name}` has an invalid cron expression `{value}`; expected 5 fields")]
     BadCron { name: String, value: String },
     #[error(
-        "schedule `{name}` has an invalid `every` value `{value}`; use `reset`, a duration like `30m`, or a day mask like `weekday` or `mon,wed,fri`"
+        "schedule `{name}` has an invalid `every` value `{value}`; use a duration like `30m` or a day mask like `weekday` or `mon,wed,fri`"
     )]
     BadEvery { name: String, value: String },
     #[error("schedule name `{name}` must be non-empty and use only letters, digits, `-`, or `_`")]
@@ -162,25 +155,14 @@ pub enum ScheduleErr {
 pub struct TaskShape {
     action: Result<TaskAction, TaskActionErr>,
     schedule: Result<ParsedSchedule, ScheduleErr>,
-    reset_ping_kind: Option<AgentKind>,
     ephemeral: bool,
 }
 
 impl TaskShape {
     pub fn compile(name: &str, entry: &TaskEntry) -> Self {
-        let reset_ping_kind = (entry.every.as_deref() == Some("reset"))
-            .then(|| {
-                entry
-                    .agent
-                    .as_deref()
-                    .and_then(crate::harness::spec::ping_kind)
-            })
-            .flatten()
-            .map(AgentKind::new_unchecked);
         Self {
             action: TaskAction::from_entry(name, entry),
             schedule: parse_schedule(name, entry),
-            reset_ping_kind,
             ephemeral: ephemeral_lifetime(entry),
         }
     }
@@ -191,10 +173,6 @@ impl TaskShape {
 
     pub fn schedule(&self) -> &Result<ParsedSchedule, ScheduleErr> {
         &self.schedule
-    }
-
-    pub fn reset_ping_kind(&self) -> Option<&AgentKind> {
-        self.reset_ping_kind.as_ref()
     }
 
     pub const fn is_ephemeral(&self) -> bool {
@@ -289,31 +267,13 @@ pub enum Schedule {
     Calendar(CalendarSpec),
     Interval(IntervalSpec),
     RawCron(String),
-    WindowReset,
 }
-
-/// Externally resolved state of a provider window-reset schedule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ResetSignal {
-    At(Timestamp),
-    ConfirmedDown,
-    Unknown,
-}
-
-/// Skew margin so a reset-priming ping lands in the new provider window, never
-/// the final seconds of the old one.
-pub const RESET_PING_MARGIN: SignedDuration = SignedDuration::from_secs(60);
-
-/// Minimum interval between retries while a provider authoritatively reports
-/// that its longest window has not started.
-pub const RESET_RETRY_INTERVAL: SignedDuration = SignedDuration::from_secs(3_600);
 
 impl Schedule {
     /// A short human description for listings.
     pub fn describe(&self) -> String {
         match self {
             Schedule::RawCron(cron) => format!("cron `{cron}`"),
-            Schedule::WindowReset => "every window reset".to_owned(),
             Schedule::Calendar(spec) => {
                 let days = if spec.weekdays.is_empty() {
                     "day".to_owned()
@@ -332,7 +292,7 @@ impl Schedule {
 
     /// Whether this schedule is due now, given the last time its task was
     /// armed or fired. First-sight arming is owned by the elder firing module.
-    pub fn due(&self, last_fire: Timestamp, now: &Zoned, reset_signal: ResetSignal) -> bool {
+    pub fn due(&self, last_fire: Timestamp, now: &Zoned) -> bool {
         match self {
             Schedule::Interval(spec) => {
                 now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
@@ -341,26 +301,19 @@ impl Schedule {
             Schedule::RawCron(expr) => {
                 cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
             }
-            Schedule::WindowReset => window_reset_due(last_fire, now.timestamp(), reset_signal),
         }
     }
 
     /// First occurrence after `last_fire`, evaluated from `now` in the
     /// configured local zone. A returned timestamp may be at or before `now`,
     /// which means the elder should fire on its next tick.
-    pub fn next_after(
-        &self,
-        last_fire: Timestamp,
-        now: &Zoned,
-        reset_signal: ResetSignal,
-    ) -> Option<Timestamp> {
+    pub fn next_after(&self, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
         match self {
             Schedule::Interval(spec) => last_fire
                 .checked_add(SignedDuration::from_secs(i64::from(spec.minutes) * 60))
                 .ok(),
             Schedule::Calendar(spec) => calendar_next_after(spec, last_fire, now),
             Schedule::RawCron(expr) => cron_next_after(expr, last_fire, now),
-            Schedule::WindowReset => window_reset_next_after(last_fire, reset_signal),
         }
     }
 }
@@ -412,7 +365,6 @@ impl TaskTiming {
         last_fire: Option<Timestamp>,
         pause: Option<&pauses::PauseEntry>,
         now: &Zoned,
-        reset_signal: ResetSignal,
     ) -> Self {
         let parsed = parsed.clone();
         let active_pause = pause
@@ -422,7 +374,6 @@ impl TaskTiming {
             (Ok(parsed), Some(last_fire)) => parsed.schedule.next_after(
                 pauses::effective_last_fire(last_fire, pause, now.timestamp()),
                 now,
-                reset_signal,
             ),
             (Ok(_), None) | (Err(_), _) => None,
         };
@@ -551,24 +502,6 @@ pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, S
             Schedule::RawCron(cron.trim().to_owned())
         }
         TimingFields::Every { every, at } => match parse_every(name, every)? {
-            EverySpec::Reset => {
-                if at.is_some() {
-                    return Err(ScheduleErr::TimeConflict {
-                        name: name.to_owned(),
-                    });
-                }
-                if entry
-                    .agent
-                    .as_deref()
-                    .is_some_and(crate::harness::spec::virtual_ping_shape)
-                {
-                    Schedule::WindowReset
-                } else {
-                    return Err(ScheduleErr::ResetNeedsPing {
-                        name: name.to_owned(),
-                    });
-                }
-            }
             EverySpec::Interval(minutes) => {
                 if at.is_some() {
                     return Err(ScheduleErr::TimeConflict {
@@ -636,14 +569,10 @@ impl<'a> TimingFields<'a> {
 enum EverySpec {
     Interval(u32),
     Days(Vec<Weekday>),
-    Reset,
 }
 
 fn parse_every(name: &str, raw: &str) -> Result<EverySpec, ScheduleErr> {
     let value = raw.trim();
-    if raw == "reset" {
-        return Ok(EverySpec::Reset);
-    }
     if let Ok(minutes) = parse_interval_minutes(raw) {
         return Ok(EverySpec::Interval(minutes));
     }
@@ -760,32 +689,6 @@ fn format_minutes(minutes: u32) -> String {
         format!("{}h", minutes / 60)
     } else {
         format!("{minutes}m")
-    }
-}
-
-fn window_reset_occurrence(reset_signal: ResetSignal) -> Option<Timestamp> {
-    let ResetSignal::At(reset_at) = reset_signal else {
-        return None;
-    };
-    reset_at.checked_add(RESET_PING_MARGIN).ok()
-}
-
-fn window_reset_due(last_fire: Timestamp, now: Timestamp, reset_signal: ResetSignal) -> bool {
-    match reset_signal {
-        ResetSignal::At(_) => window_reset_occurrence(reset_signal)
-            .is_some_and(|occurrence| last_fire < occurrence && now >= occurrence),
-        ResetSignal::ConfirmedDown => now.duration_since(last_fire) >= RESET_RETRY_INTERVAL,
-        ResetSignal::Unknown => false,
-    }
-}
-
-fn window_reset_next_after(last_fire: Timestamp, reset_signal: ResetSignal) -> Option<Timestamp> {
-    match reset_signal {
-        ResetSignal::At(_) => {
-            window_reset_occurrence(reset_signal).filter(|occurrence| *occurrence > last_fire)
-        }
-        ResetSignal::ConfirmedDown => last_fire.checked_add(RESET_RETRY_INTERVAL).ok(),
-        ResetSignal::Unknown => None,
     }
 }
 

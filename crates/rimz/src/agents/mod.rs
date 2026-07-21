@@ -55,7 +55,6 @@ use crate::mux::NamedKey;
 use crate::pane::RuntimeOwnerKind;
 use crate::transcript::{AskOption, AskQuestion};
 
-pub(crate) use account::LongestWindowSignal;
 pub(crate) use account::WindowSurplus;
 #[doc(hidden)]
 pub use account::provider_budget_gate;

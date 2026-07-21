@@ -16,7 +16,6 @@ use super::{
     pauses,
 };
 use crate::RuntimePaths;
-use crate::harness::schedule;
 use crate::ids::WorkspaceId;
 use crate::store::atomic::write_temp_then_rename_cache;
 use crate::store::paths::StatePaths;
@@ -48,8 +47,7 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     let path = state_path(runtime);
     let state = read_state(&path);
     let pauses = pauses::load();
-    let reset_signals = reset_signals(runtime, &tasks, now.timestamp());
-    let (actions, next_state) = plan(&tasks, &state, &pauses, now, &reset_signals);
+    let (actions, next_state) = plan(&tasks, &state, &pauses, now);
     if next_state != state
         && let Err(err) = write_temp_then_rename_cache(&path, &next_state)
     {
@@ -88,7 +86,6 @@ fn plan(
     state: &BTreeMap<String, Timestamp>,
     pauses: &BTreeMap<String, PauseEntry>,
     now: &Zoned,
-    reset_signals: &BTreeMap<String, schedule::ResetSignal>,
 ) -> (Vec<(String, Action)>, BTreeMap<String, Timestamp>) {
     let mut actions = Vec::new();
     let mut next_state = BTreeMap::new();
@@ -119,10 +116,6 @@ fn plan(
                 if parsed.schedule.due(
                     pauses::effective_last_fire(last_fire, pause, now.timestamp()),
                     now,
-                    reset_signals
-                        .get(name)
-                        .copied()
-                        .unwrap_or(schedule::ResetSignal::Unknown),
                 ) =>
             {
                 actions.push((name.clone(), Action::Fire));
@@ -134,23 +127,6 @@ fn plan(
         }
     }
     (actions, next_state)
-}
-
-fn reset_signals(
-    runtime: &RuntimePaths,
-    tasks: &BTreeMap<String, LoadedTask>,
-    now: Timestamp,
-) -> BTreeMap<String, schedule::ResetSignal> {
-    tasks
-        .iter()
-        .filter_map(|(name, task)| {
-            let kind = task.reset_ping_kind()?;
-            Some((
-                name.clone(),
-                super::runner::window_reset_signal_in(runtime, task.entry(), kind.as_str(), now),
-            ))
-        })
-        .collect()
 }
 
 fn workspace_tasks(
@@ -207,7 +183,6 @@ mod tests {
     use super::super::tests::{seconds_before, zdt};
     use super::*;
     use crate::config::TaskEntry;
-    use schedule::ResetSignal::{At, ConfirmedDown};
 
     const NAME: &str = "task";
 
@@ -216,7 +191,7 @@ mod tests {
     }
 
     fn loaded(entry: TaskEntry) -> LoadedTask {
-        LoadedTask::new(NAME, entry, TaskSource::Config, false)
+        LoadedTask::new(NAME, entry, TaskSource::Config)
     }
 
     fn task(root: &str, every: &str) -> LoadedTask {
@@ -229,16 +204,6 @@ mod tests {
         })
     }
 
-    fn reset_task(root: &str) -> LoadedTask {
-        loaded(TaskEntry {
-            agent: Some("claude-ping".to_owned()),
-            prompt: Some("ping".to_owned()),
-            root: PathBuf::from(root),
-            every: Some("reset".to_owned()),
-            ..TaskEntry::default()
-        })
-    }
-
     fn until(stamp: Timestamp) -> PauseEntry {
         PauseEntry {
             until: Some(stamp),
@@ -247,12 +212,11 @@ mod tests {
     }
 
     /// Durable inputs for one elder tick over a single task. The default is the
-    /// never-seen, unpaused, no-reset-signal case.
+    /// never-seen, unpaused case.
     #[derive(Default)]
     struct Tick {
         state: Option<Timestamp>,
         pause: Option<PauseEntry>,
-        reset: Option<schedule::ResetSignal>,
     }
 
     impl Tick {
@@ -271,13 +235,6 @@ mod tests {
             }
         }
 
-        fn reset(self, signal: schedule::ResetSignal) -> Self {
-            Self {
-                reset: Some(signal),
-                ..self
-            }
-        }
-
         /// The task's action this tick and the stamp carried into the next one.
         fn run(self, task: &LoadedTask, now: &Zoned) -> (Option<Action>, Option<Timestamp>) {
             let (actions, next) = plan(
@@ -285,7 +242,6 @@ mod tests {
                 &self.state.map(one).unwrap_or_default(),
                 &self.pause.map(one).unwrap_or_default(),
                 now,
-                &self.reset.map(one).unwrap_or_default(),
             );
             (
                 actions.first().map(|(_, action)| *action),
@@ -353,68 +309,9 @@ mod tests {
         );
 
         // State for a task the catalog no longer holds is dropped, not carried.
-        let (actions, next) = plan(
-            &BTreeMap::new(),
-            &one(due),
-            &BTreeMap::new(),
-            &now,
-            &BTreeMap::new(),
-        );
+        let (actions, next) = plan(&BTreeMap::new(), &one(due), &BTreeMap::new(), &now);
         assert!(actions.is_empty());
         assert!(next.is_empty());
-    }
-
-    /// A window-reset row fires on the externally resolved signal: once per
-    /// observed reset, hourly while the provider reports its window down, and
-    /// never while the signal is unknown.
-    #[test]
-    fn reset_signal_drives_window_reset_firing() {
-        let task = &reset_task("/repo");
-        let reset = zdt(2026, 6, 24, 8, 0, 0).timestamp();
-        let occurrence = reset
-            .checked_add(schedule::RESET_PING_MARGIN)
-            .expect("reset occurrence");
-        let observed = occurrence.to_zoned(jiff::tz::TimeZone::UTC);
-        let at_reset = |tick: Tick| tick.reset(At(reset)).run(task, &observed);
-
-        assert_eq!(
-            at_reset(Tick::default()),
-            arm(occurrence),
-            "first sight arms"
-        );
-        let unconsumed = Tick::armed(seconds_before(occurrence, 1));
-        assert_eq!(
-            at_reset(unconsumed),
-            fire(occurrence),
-            "an unconsumed reset fires"
-        );
-        let consumed = Tick::armed(occurrence);
-        assert_eq!(
-            at_reset(consumed),
-            carry(occurrence),
-            "the same reset never fires twice"
-        );
-
-        let now = zdt(2026, 6, 24, 8, 1, 0);
-        let stamp = now.timestamp();
-        let unknown = seconds_before(stamp, 120);
-        assert_eq!(
-            Tick::armed(unknown).run(task, &now),
-            carry(unknown),
-            "an unknown signal never fires"
-        );
-
-        let retry = |ago| {
-            Tick::armed(seconds_before(stamp, ago))
-                .reset(ConfirmedDown)
-                .run(task, &now)
-        };
-        assert_eq!(
-            retry(3_599),
-            carry(seconds_before(stamp, 3_599)),
-            "inside the retry interval"
-        );
-        assert_eq!(retry(3_600), fire(stamp), "at the retry interval edge");
     }
 
     /// An ended pause becomes the effective last-fire edge, so a resumed task

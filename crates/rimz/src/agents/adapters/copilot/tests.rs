@@ -579,7 +579,6 @@ fn launch_resume_permissions_and_presets_are_pinned() {
         CopilotAdapter.launch_command(&[], None),
         Some(vec!["copilot".to_owned()])
     );
-    assert_eq!(CopilotAdapter.ping_args(), None);
     assert_eq!(
         CopilotAdapter.launch_env(),
         vec![(

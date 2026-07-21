@@ -549,19 +549,6 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
     assert_eq!(ask.launch.mode, Some(PermissionMode::Ask));
     assert_eq!(ask.args, vec!["--profile-arg".to_owned()]);
 
-    let ping = agent_cell("claude-ping", &profiles, &no_commands());
-    let mut expected_ping = vec!["--append".to_owned()];
-    expected_ping.extend(
-        crate::agents::find_definition("claude")
-            .expect("claude")
-            .ping_args()
-            .expect("claude ping"),
-    );
-    assert_eq!(ping.launch.profile.as_deref(), Some("claude"));
-    assert_eq!(ping.launch.mode, None);
-    assert_eq!(ping.args, expected_ping);
-    assert!(!ping.args.iter().any(|arg| arg == "ping"));
-
     assert!(matches!(
         parse_layout_spec("pi-yolo", &profiles, &no_commands()),
         Err(LayoutErr::UnknownCell { cell, valid })

@@ -47,7 +47,6 @@ pub(super) fn run_one(
     let source = loaded.source();
     gate_project_trust(name, &entry, source, mode)?;
     let action = loaded.action().cloned().map_err(Clone::clone)?;
-    refresh_reset_ping_usage(&loaded);
     let started = Instant::now();
     if mode == LoopRunMode::Manual {
         write_manual_header(&mut ui::out(), name, &entry, &action)?;
@@ -131,17 +130,6 @@ pub(super) fn run_one(
         std::process::exit(code);
     }
     Ok(())
-}
-
-fn refresh_reset_ping_usage(task: &LoadedTask) {
-    let Some(kind) = task.reset_ping_kind() else {
-        return;
-    };
-    let entry = task.entry();
-    let Some(runtime) = runtime_for_root(&entry.resolved_root()) else {
-        return;
-    };
-    let _ = rimz::sidebar::refresh::usage::refresh_account_usage_now(&runtime, kind.as_str());
 }
 
 fn gate_project_trust(
@@ -281,21 +269,13 @@ fn present_finished(
             }
             return Ok(());
         }
-        TaskFireNotice::PingWindow { kind } if mode == LoopRunMode::Scheduled => {
-            writeln!(
-                ui::out(),
-                "loop `{name}`: {kind} budget window already active; skipping ping"
-            )?;
-        }
         TaskFireNotice::TargetGone { handle } if mode == LoopRunMode::Scheduled => {
             writeln!(
                 ui::out(),
                 "loop `{name}`: target {handle} not alive; removing schedule"
             )?;
         }
-        TaskFireNotice::None
-        | TaskFireNotice::PingWindow { .. }
-        | TaskFireNotice::TargetGone { .. } => {}
+        TaskFireNotice::None | TaskFireNotice::TargetGone { .. } => {}
     }
     let summary = RunSummary {
         record: &finished.record,
@@ -441,7 +421,7 @@ fn write_manual_run_summary(
             summary,
         );
     }
-    if let Some((result, label)) = manual_early_verdict(summary, duration_ms) {
+    if let Some((result, label)) = manual_early_verdict(summary) {
         return write_manual_verdict(out, result, &label);
     }
 
@@ -481,24 +461,13 @@ fn write_manual_run_summary(
     Ok(())
 }
 
-fn manual_early_verdict(
-    summary: &RunSummary<'_>,
-    duration_ms: u64,
-) -> Option<(LoopRunResult, String)> {
+fn manual_early_verdict(summary: &RunSummary<'_>) -> Option<(LoopRunResult, String)> {
     let label = match summary.record.result {
         LoopRunResult::Expired => "deadline expired — task left in place".to_owned(),
         LoopRunResult::TargetGone => format!(
             "{} not alive — schedule left in place",
             summary.record.target.as_deref().unwrap_or("target")
         ),
-        LoopRunResult::SkippedWindow => {
-            let mut label = format!("skipped in {}", render::format_duration_ms(duration_ms));
-            if let Some(reason) = &summary.presentation.skip_reason {
-                label.push_str(" — ");
-                label.push_str(reason);
-            }
-            label
-        }
         _ => return None,
     };
     Some((summary.record.result, label))

@@ -112,7 +112,6 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--auto"],
             plan: &["--agent", "plan"],
         },
-        ping_args: None,
         max_turn_flag: None,
         compact_command: Some("/compact"),
         presets: super::PresetMatchers {

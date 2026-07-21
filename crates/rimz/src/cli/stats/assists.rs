@@ -3,7 +3,6 @@ use super::*;
 
 use rimz::harness::assist_log::{self, Assist, AssistRecord, AssistWindowReset};
 use rimz::harness::auto_redeem::RedeemReason;
-use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult, PingWindowOutcome};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::AutoCompact;
 use rimz::store::event::SessionDeathCause;
@@ -17,8 +16,6 @@ pub(super) struct AssistStats {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(super) struct AssistRollup {
-    pub(super) pings: usize,
-    pub(super) ping_cost_usd: f64,
     pub(super) redeems: usize,
     pub(super) resets: usize,
     pub(super) resumes: usize,
@@ -31,20 +28,8 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
-    Ping {
-        at: Timestamp,
-        kind: String,
-        task: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        window: Option<PingWindowOutcome>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cost_usd: Option<f64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        run_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        transcript_path: Option<String>,
-    },
-    AutoRedeem {
+    #[serde(rename = "auto_redeem")]
+    Redeem {
         at: Timestamp,
         kind: String,
         reason: RedeemReason,
@@ -61,7 +46,8 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    AutoContinue {
+    #[serde(rename = "auto_continue")]
+    Continue {
         at: Timestamp,
         kind: AgentKind,
         agent_id: AgentSessionId,
@@ -73,7 +59,8 @@ pub(super) enum AssistEvent {
         delivered: bool,
         message_id: String,
     },
-    AutoCompact {
+    #[serde(rename = "auto_compact")]
+    Compact {
         at: Timestamp,
         kind: AgentKind,
         agent_id: AgentSessionId,
@@ -84,7 +71,8 @@ pub(super) enum AssistEvent {
         occupied_tokens: Option<u64>,
         message_id: String,
     },
-    AutoResume {
+    #[serde(rename = "auto_resume")]
+    Resume {
         at: Timestamp,
         workspace_id: rimz::ids::WorkspaceId,
         session_name: String,
@@ -98,47 +86,25 @@ pub(super) enum AssistEvent {
 impl AssistStats {
     pub(super) fn load(state_root: &Path, window: Window, now: Timestamp) -> Self {
         let since = window.assist_since(now);
-        Self::from_records(
-            window.assist_label(),
-            assist_log::recent(state_root, since),
-            run_log::recent(state_root, since),
-        )
+        Self::from_records(window.assist_label(), assist_log::recent(state_root, since))
     }
 
-    pub(super) fn from_records(
-        window: impl Into<String>,
-        records: Vec<AssistRecord>,
-        runs: Vec<LoopRunRecord>,
-    ) -> Self {
+    pub(super) fn from_records(window: impl Into<String>, records: Vec<AssistRecord>) -> Self {
         let mut events = records
             .into_iter()
             .map(AssistEvent::from_record)
             .collect::<Vec<_>>();
-        events.extend(
-            runs.into_iter()
-                .filter(|run| {
-                    run.result == LoopRunResult::Completed
-                        && (run.task.starts_with("autoping-") || run.window.is_some())
-                })
-                .map(AssistEvent::from_ping),
-        );
         events.sort_by_key(AssistEvent::at);
         events.reverse();
 
         let mut rollup = AssistRollup::default();
         for event in &events {
             match event {
-                AssistEvent::Ping { cost_usd, .. } => {
-                    rollup.pings += 1;
-                    rollup.ping_cost_usd += cost_usd
-                        .filter(|cost| cost.is_finite() && *cost >= 0.0)
-                        .unwrap_or(0.0);
-                }
-                AssistEvent::AutoRedeem { outcome, .. } => {
+                AssistEvent::Redeem { outcome, .. } => {
                     rollup.redeems += 1;
                     rollup.resets += usize::from(outcome.as_deref() == Some("reset"));
                 }
-                AssistEvent::AutoContinue {
+                AssistEvent::Continue {
                     at,
                     parked_since,
                     delivered,
@@ -149,8 +115,8 @@ impl AssistStats {
                         rollup.recovered_secs += recovered_secs(*parked_since, *at);
                     }
                 }
-                AssistEvent::AutoCompact { .. } => rollup.compacts += 1,
-                AssistEvent::AutoResume { recovered, .. } => {
+                AssistEvent::Compact { .. } => rollup.compacts += 1,
+                AssistEvent::Resume { recovered, .. } => {
                     rollup.restores += 1;
                     rollup.restored_sessions += recovered;
                 }
@@ -182,7 +148,7 @@ impl AssistEvent {
                 windows_reset,
                 window_resets,
                 error,
-            } => Self::AutoRedeem {
+            } => Self::Redeem {
                 at: record.at,
                 kind,
                 reason,
@@ -203,7 +169,7 @@ impl AssistEvent {
                 parked_since,
                 delivered,
                 message_id,
-            } => Self::AutoContinue {
+            } => Self::Continue {
                 at: record.at,
                 kind,
                 agent_id,
@@ -220,7 +186,7 @@ impl AssistEvent {
                 threshold,
                 occupied_tokens,
                 message_id,
-            } => Self::AutoCompact {
+            } => Self::Compact {
                 at: record.at,
                 kind,
                 agent_id,
@@ -235,7 +201,7 @@ impl AssistEvent {
                 cause,
                 recovered,
                 labels,
-            } => Self::AutoResume {
+            } => Self::Resume {
                 at: record.at,
                 workspace_id,
                 session_name,
@@ -246,30 +212,12 @@ impl AssistEvent {
         }
     }
 
-    fn from_ping(record: LoopRunRecord) -> Self {
-        let kind = record
-            .task
-            .strip_prefix("autoping-")
-            .unwrap_or(&record.task)
-            .to_owned();
-        Self::Ping {
-            at: record.at,
-            kind,
-            task: record.task,
-            window: record.window,
-            cost_usd: record.cost_usd,
-            run_id: record.run_id,
-            transcript_path: record.transcript_path,
-        }
-    }
-
     fn at(&self) -> Timestamp {
         match self {
-            Self::Ping { at, .. }
-            | Self::AutoRedeem { at, .. }
-            | Self::AutoContinue { at, .. }
-            | Self::AutoCompact { at, .. }
-            | Self::AutoResume { at, .. } => *at,
+            Self::Redeem { at, .. }
+            | Self::Continue { at, .. }
+            | Self::Compact { at, .. }
+            | Self::Resume { at, .. } => *at,
         }
     }
 }
@@ -339,14 +287,7 @@ pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
 }
 
 fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
-    let mut rows = Vec::with_capacity(5);
-    if rollup.pings > 0 {
-        let mut value = rollup.pings.to_string();
-        if rollup.ping_cost_usd > 0.0 {
-            value.push_str(&format!(" (${:.2})", rollup.ping_cost_usd));
-        }
-        rows.push(("Auto-ping:", value));
-    }
+    let mut rows = Vec::with_capacity(4);
     if rollup.resumes > 0 {
         let mut value = rollup.resumes.to_string();
         if rollup.recovered_secs > 0 {
@@ -384,16 +325,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
     let at = event.at().to_zoned(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
-        AssistEvent::Ping {
-            kind, at, window, ..
-        } => {
-            let outcome = window
-                .as_ref()
-                .and_then(|window| ping_window_label(window, *at, zone))
-                .unwrap_or_else(|| "window refresh pending".to_owned());
-            format!("{time} ⚡ {kind} ping — {outcome}")
-        }
-        AssistEvent::AutoRedeem {
+        AssistEvent::Redeem {
             kind,
             reason,
             outcome,
@@ -411,7 +343,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 reason_label(*reason)
             )
         }
-        AssistEvent::AutoContinue {
+        AssistEvent::Continue {
             at,
             kind,
             label,
@@ -436,7 +368,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 span.unwrap_or_default()
             )
         }
-        AssistEvent::AutoCompact {
+        AssistEvent::Compact {
             kind,
             label,
             occupied_tokens,
@@ -453,7 +385,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .unwrap_or_default();
             format!("{time} ⌁ {agent} auto-compact{detail}")
         }
-        AssistEvent::AutoResume {
+        AssistEvent::Resume {
             cause,
             recovered,
             labels,
@@ -479,28 +411,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         .split_once(' ')
         .map_or_else(|| benefit_line(event, zone), |(_, rest)| rest.to_owned());
     match event {
-        AssistEvent::Ping {
-            task,
-            cost_usd,
-            run_id,
-            transcript_path,
-            ..
-        } => format!(
-            "{at} {benefit} · task {task}{}{}{}",
-            cost_usd
-                .filter(|cost| cost.is_finite() && *cost >= 0.0)
-                .map(|cost| format!(" · ${cost:.2}"))
-                .unwrap_or_default(),
-            run_id
-                .as_deref()
-                .map(|id| format!(" · run {id}"))
-                .unwrap_or_default(),
-            transcript_path
-                .as_deref()
-                .map(|path| format!(" · transcript {path}"))
-                .unwrap_or_default(),
-        ),
-        AssistEvent::AutoRedeem {
+        AssistEvent::Redeem {
             request_id,
             credits,
             soonest_expiry,
@@ -514,7 +425,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             timestamp_fact("natural reset", *natural_reset, zone),
             reset_facts(window_resets, zone),
         ),
-        AssistEvent::AutoContinue {
+        AssistEvent::Continue {
             agent_id,
             message_id,
             delivered,
@@ -522,7 +433,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         } => format!(
             "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
         ),
-        AssistEvent::AutoCompact {
+        AssistEvent::Compact {
             agent_id,
             message_id,
             threshold,
@@ -531,7 +442,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             "{at} {benefit} · agent {agent_id} · message {message_id} · threshold {}",
             compact_threshold(*threshold),
         ),
-        AssistEvent::AutoResume {
+        AssistEvent::Resume {
             workspace_id,
             session_name,
             ..
@@ -548,34 +459,6 @@ fn compact_threshold(threshold: AutoCompact) -> String {
         AutoCompact::Percent(percent) => format!("{percent}%"),
         AutoCompact::Tokens(tokens) => compact_token_count(tokens),
     }
-}
-
-fn ping_window_label(
-    window: &PingWindowOutcome,
-    at: Timestamp,
-    zone: &jiff::tz::TimeZone,
-) -> Option<String> {
-    let shortest = window.shortest.as_ref()?;
-    let reset = shortest.resets_at?;
-    let mut label = format!(
-        "window {}→{}",
-        at.to_zoned(zone.clone()).strftime("%H:%M"),
-        reset.to_zoned(zone.clone()).strftime("%H:%M")
-    );
-    if let Some(longest) = window.longest.as_ref()
-        && longest.duration_mins != shortest.duration_mins
-        && let Some(long_reset) = longest.resets_at
-    {
-        let duration = longest
-            .duration_mins
-            .map(duration_label)
-            .unwrap_or_else(|| "long".to_owned());
-        label.push_str(&format!(
-            " · {duration}→{}",
-            long_reset.to_zoned(zone.clone()).strftime("%b %-d")
-        ));
-    }
-    Some(label)
 }
 
 fn reset_facts(windows: &[AssistWindowReset], zone: &jiff::tz::TimeZone) -> String {

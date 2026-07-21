@@ -27,7 +27,7 @@
 # Profiles are named main agents addressed as `@<profile>`. `agent` names a
 # built-in kind or another profile; the nearest profile wins for every field,
 # including `args` (replace, not append). A profile named like a kind overrides
-# bare kind cells and virtual cells such as `claude-auto` / `claude-ping`.
+# bare kind cells and virtual cells such as `claude-auto` / `claude-plan`.
 ## [agents.profiles.claude-slim]
 ## agent = "claude"
 ## effort = "low"

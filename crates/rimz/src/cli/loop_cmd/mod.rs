@@ -3,9 +3,7 @@
 //! The elected sidebar elder keeps time while a room for the task's project is
 //! open and fires `rimz loop run <name>`, which runs an optional shell check and
 //! then drives one configured prompt through either the supervised `agents -p`
-//! seam or the message path to a pinned live session. A `<kind>-ping` virtual
-//! cell is the window-priming special case and gets the budget-window skip
-//! optimization.
+//! seam or the message path to a pinned live session.
 //!
 //! This handler parses commands, lists room-open and next-fire state, inspects
 //! run history, executes prepared supervised-run or message effects, and owns
@@ -34,8 +32,8 @@ use rimz::harness::schedule::run_log::{
 use rimz::harness::schedule::runner::{
     CheckEcho, ResolvedTaskSpec, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
     StopAction, newest_active_run, newest_active_run_for_entry, next_stop_action, parse_mode,
-    parse_task_timeout, ping_kind_supported, preflight_entry, probe_run_lock, resolve_task_spec,
-    run_lock_path, signal_run_lock_holder, wait_for_run_lock_release, window_reset_signal,
+    parse_task_timeout, preflight_entry, probe_run_lock, resolve_task_spec, run_lock_path,
+    signal_run_lock_holder, wait_for_run_lock_release,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -43,7 +41,6 @@ use rimz::harness::schedule::{
     pauses::{self, PauseEntry},
     strikes,
 };
-use rimz::harness::spec as agents_spec;
 use rimz::ids::WorkspaceId;
 use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
@@ -142,7 +139,7 @@ struct AddArgs {
     /// One-shot firing time, or calendar time paired with --every day masks.
     #[arg(long, conflicts_with_all = ["cron", "in_after"])]
     at: Option<String>,
-    /// Repeat cadence: `15m`, `day`, `weekday`, `mon,wed,fri`, or `reset`.
+    /// Repeat cadence: `15m`, `day`, `weekday`, or `mon,wed,fri`.
     #[arg(long, conflicts_with_all = ["cron", "in_after"])]
     every: Option<String>,
     /// Raw 5-field cron expression.
@@ -311,13 +308,6 @@ fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
     RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
 }
 
-fn reset_signal_for(task: &LoadedTask, now: Timestamp) -> schedule::ResetSignal {
-    let Some(kind) = task.reset_ping_kind() else {
-        return schedule::ResetSignal::Unknown;
-    };
-    window_reset_signal(task.entry(), kind.as_str(), now).unwrap_or(schedule::ResetSignal::Unknown)
-}
-
 fn observe_task_timing(
     name: &str,
     task: &LoadedTask,
@@ -325,27 +315,9 @@ fn observe_task_timing(
     stamps: &BTreeMap<String, Timestamp>,
     pause: Option<&PauseEntry>,
     now_zoned: &jiff::Zoned,
-    retain_overlaid_next: bool,
 ) -> schedule::TaskTiming {
     let last_fire = stamps.get(name).copied();
-    let active_pause = pause.is_some_and(|pause| pauses::is_active(pause, now_zoned.timestamp()));
-    let reset_signal = if (retain_overlaid_next || (blocked.is_none() && !active_pause))
-        && last_fire.is_some()
-        && task.reset_ping_kind().is_some()
-        && task.schedule().is_ok()
-    {
-        reset_signal_for(task, now_zoned.timestamp())
-    } else {
-        schedule::ResetSignal::Unknown
-    };
-    schedule::TaskTiming::evaluate(
-        task.schedule(),
-        blocked,
-        last_fire,
-        pause,
-        now_zoned,
-        reset_signal,
-    )
+    schedule::TaskTiming::evaluate(task.schedule(), blocked, last_fire, pause, now_zoned)
 }
 
 fn task_next_fire_text(
@@ -357,7 +329,7 @@ fn task_next_fire_text(
     let runtime = runtime_for_root(&task.entry().resolved_root())?;
     let stamps = schedule::last_stamps(&runtime);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    observe_task_timing(name, task, None, &stamps, pause, &now_zoned, false)
+    observe_task_timing(name, task, None, &stamps, pause, &now_zoned)
         .next_timestamp()
         .map(|next| ui::rel_until(next, now))
 }

@@ -107,7 +107,6 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         cost_usd: None,
         input_tokens: None,
         output_tokens: None,
-        window: None,
     }
 }
 
@@ -449,7 +448,6 @@ fn agent_run_predicate_counts_spawn_and_delivery_attempts() {
         LoopRunResult::CheckSkipped,
         LoopRunResult::BudgetSkipped,
         LoopRunResult::SurplusSkipped,
-        LoopRunResult::SkippedWindow,
         LoopRunResult::Overlapped,
         LoopRunResult::Expired,
     ] {
@@ -524,27 +522,6 @@ fn record_note_prefers_error_then_failed_check_output() {
 }
 
 #[test]
-fn ping_window_outcome_renders_as_a_run_note() {
-    let mut ping = record(20, LoopRunResult::Completed);
-    ping.window = Some(rimz::harness::schedule::run_log::PingWindowOutcome {
-        shortest: Some(rimz::harness::assist_log::AssistWindowReset {
-            duration_mins: Some(300),
-            resets_at: Some("2026-07-20T12:00:00Z".parse().unwrap()),
-        }),
-        longest: Some(rimz::harness::assist_log::AssistWindowReset {
-            duration_mins: Some(10_080),
-            resets_at: Some("2026-07-24T12:00:00Z".parse().unwrap()),
-        }),
-    });
-
-    let note = record_window_label(&ping).expect("window note");
-    assert!(note.contains("window →"), "{note}");
-    assert!(note.contains("(5h)"), "{note}");
-    assert!(note.contains("7d → Jul 24"), "{note}");
-    assert!(record_has_detail(&ping));
-}
-
-#[test]
 fn run_status_names_check_skipped_outcomes() {
     let mut skipped = record(10, LoopRunResult::CheckSkipped);
     skipped.check = Some(CheckRecord {
@@ -577,10 +554,6 @@ fn run_status_names_check_skipped_outcomes() {
     assert_eq!(status.label, "check timed out");
     assert_eq!(status.style, ui::palette::warn());
 
-    assert_eq!(
-        loop_result_mark(LoopRunResult::SkippedWindow).style,
-        ui::palette::muted()
-    );
     assert_eq!(
         loop_result_mark(LoopRunResult::SurplusSkipped).style,
         ui::palette::muted()
@@ -646,12 +619,6 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
             "○",
             ui::palette::warn(),
             "budget skipped",
-        ),
-        (
-            LoopRunResult::SkippedWindow,
-            "○",
-            ui::palette::muted(),
-            "skipped",
         ),
         (
             LoopRunResult::SurplusSkipped,
@@ -756,7 +723,6 @@ fn interval_timing(
         last_fire,
         pause,
         &now.to_zoned(jiff::tz::TimeZone::UTC),
-        schedule::ResetSignal::Unknown,
     )
 }
 
@@ -813,7 +779,6 @@ fn task_timing_maps_to_existing_list_and_watch_labels() {
                 Some(now),
                 None,
                 &now.to_zoned(jiff::tz::TimeZone::UTC),
-                schedule::ResetSignal::Unknown,
             ),
             RowState::NeverRun,
             "—",

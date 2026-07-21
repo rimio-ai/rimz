@@ -146,7 +146,6 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--dangerously-skip-permissions"],
             plan: &["--permission-mode", "plan"],
         },
-        ping_args: Some(&["--model", "sonnet", "--effort", "low"]),
         max_turn_flag: Some("--max-turns"),
         compact_command: Some("/compact"),
         presets: super::PresetMatchers {

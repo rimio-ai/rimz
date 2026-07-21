@@ -90,14 +90,6 @@ fn claude_commands_and_permission_args_match_run_posture() {
         vec!["--dangerously-skip-permissions"]
     );
     assert_eq!(
-        ClaudeAdapter.ping_args(),
-        Some(
-            ["--model", "sonnet", "--effort", "low"]
-                .map(ToOwned::to_owned)
-                .to_vec()
-        )
-    );
-    assert_eq!(
         ClaudeAdapter.spec().launch.compact_command(),
         Some("/compact")
     );

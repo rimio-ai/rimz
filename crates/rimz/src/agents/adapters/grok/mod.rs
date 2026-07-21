@@ -99,7 +99,6 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--yolo"],
             plan: &[],
         },
-        ping_args: None,
         max_turn_flag: Some("--max-turns"),
         compact_command: Some("/compact"),
         presets: super::PresetMatchers {

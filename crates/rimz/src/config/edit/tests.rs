@@ -213,7 +213,6 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.profiles.codex-slim.args",
         "agents.profiles.codex-slim.system-prompt-file",
         "loop.tasks.watch.agent",
-        "loop.auto-ping",
         "loop.default-timeout",
         "loop.tasks.watch.prompt",
         "loop.tasks.watch.check",

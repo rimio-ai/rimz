@@ -52,7 +52,6 @@ pub fn classify(record: &LoopRunRecord) -> Signal {
         },
         LoopRunResult::BudgetSkipped
         | LoopRunResult::SurplusSkipped
-        | LoopRunResult::SkippedWindow
         | LoopRunResult::Overlapped
         | LoopRunResult::Canceled
         | LoopRunResult::Expired
@@ -156,7 +155,6 @@ mod tests {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
-            window: None,
         }
     }
 

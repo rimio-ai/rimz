@@ -57,17 +57,15 @@ pub struct LoadedTask {
     entry: TaskEntry,
     source: TaskSource,
     shape: TaskShape,
-    synthetic: bool,
 }
 
 impl LoadedTask {
-    pub(super) fn new(name: &str, entry: TaskEntry, source: TaskSource, synthetic: bool) -> Self {
+    pub(super) fn new(name: &str, entry: TaskEntry, source: TaskSource) -> Self {
         let shape = TaskShape::compile(name, &entry);
         Self {
             entry,
             source,
             shape,
-            synthetic,
         }
     }
 
@@ -87,10 +85,6 @@ impl LoadedTask {
         self.shape.schedule()
     }
 
-    pub fn reset_ping_kind(&self) -> Option<&crate::ids::AgentKind> {
-        self.shape.reset_ping_kind()
-    }
-
     pub const fn is_ephemeral(&self) -> bool {
         self.shape.is_ephemeral()
     }
@@ -108,29 +102,26 @@ impl TaskCatalog {
     pub fn load(project_root: Option<&Path>) -> Result<Self> {
         let instances = instances::load_strict_from(&state_home())?;
         let machine = MachineConfig::load_loop().context("reading per-machine loop.toml")?;
-        let auto_ping = machine.auto_ping;
         let machine_tasks = machine.tasks;
         let project = project_root
             .map(|root| crate::config::effective::project_tasks(root, &config_home()))
             .transpose()?
             .flatten()
             .map(|project| (project.tasks, project.state));
-        Ok(Self::from_layers(instances, machine_tasks, project)
-            .with_auto_ping(auto_ping, project_root))
+        Ok(Self::from_layers(instances, machine_tasks, project))
     }
 
     /// Best-effort load for elder, doctor, and maintenance reads.
     pub fn load_lenient(project_root: Option<&Path>) -> Self {
         let instances = instances::load();
         let machine = MachineConfig::load_lenient().r#loop.clone();
-        let auto_ping = machine.auto_ping;
         let project = project_root.and_then(|root| {
             crate::config::effective::project_tasks(root, &config_home())
                 .ok()
                 .flatten()
                 .map(|project| (project.tasks, project.state))
         });
-        Self::from_layers(instances, machine.tasks, project).with_auto_ping(auto_ping, project_root)
+        Self::from_layers(instances, machine.tasks, project)
     }
 
     fn from_layers(instances: Tasks, machine: Tasks, project: Option<(Tasks, TrustState)>) -> Self {
@@ -138,7 +129,7 @@ impl TaskCatalog {
         let mut visible = runnable.clone();
         if let Some((project, state)) = project {
             let project = project.0.into_iter().map(|(name, entry)| {
-                let task = LoadedTask::new(&name, entry, TaskSource::Project { state }, false);
+                let task = LoadedTask::new(&name, entry, TaskSource::Project { state });
                 (name, task)
             });
             if state == TrustState::Trusted {
@@ -153,33 +144,6 @@ impl TaskCatalog {
             }
         }
         Self { visible, runnable }
-    }
-
-    fn with_auto_ping(mut self, enabled: bool, project_root: Option<&Path>) -> Self {
-        let Some(project_root) = project_root.filter(|_| enabled) else {
-            return self;
-        };
-        for adapter in crate::agents::registry::BUILTINS {
-            if adapter.ping_args().is_none() {
-                continue;
-            }
-            let kind = adapter.spec().kind;
-            let name = format!("autoping-{kind}");
-            if self.visible.contains_key(&name) {
-                continue;
-            }
-            let entry = TaskEntry {
-                agent: Some(format!("{kind}-ping")),
-                prompt: Some("ping".to_owned()),
-                root: project_root.to_path_buf(),
-                every: Some("reset".to_owned()),
-                ..TaskEntry::default()
-            };
-            let task = LoadedTask::new(&name, entry, TaskSource::Config, true);
-            self.visible.insert(name.clone(), task.clone());
-            self.runnable.insert(name, task);
-        }
-        self
     }
 
     pub fn visible(&self) -> &BTreeMap<String, LoadedTask> {
@@ -236,7 +200,6 @@ impl TaskCatalog {
         let Some(task) = self.visible.get(name) else {
             return Ok(TaskMutation::unchanged());
         };
-        refuse_synthetic_mutation(name, task)?;
         let changed = remove_definition(name, task)?;
         let cleared_pause = pauses::remove(name)?;
         let cleared_strikes = strikes::clear(name)?;
@@ -256,7 +219,6 @@ impl TaskCatalog {
         let Some(task) = self.visible.get(name) else {
             return Ok(TaskMutation::unchanged());
         };
-        refuse_synthetic_mutation(name, task)?;
         let changed = match task.source() {
             TaskSource::Config => {
                 config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?
@@ -381,24 +343,15 @@ fn merge_base(instances: Tasks, machine: Tasks) -> BTreeMap<String, LoadedTask> 
         .0
         .into_iter()
         .map(|(name, entry)| {
-            let task = LoadedTask::new(&name, entry, TaskSource::Instance, false);
+            let task = LoadedTask::new(&name, entry, TaskSource::Instance);
             (name, task)
         })
         .collect::<BTreeMap<_, _>>();
     tasks.extend(machine.0.into_iter().map(|(name, entry)| {
-        let task = LoadedTask::new(&name, entry, TaskSource::Config, false);
+        let task = LoadedTask::new(&name, entry, TaskSource::Config);
         (name, task)
     }));
     tasks
-}
-
-fn refuse_synthetic_mutation(name: &str, task: &LoadedTask) -> Result<()> {
-    if task.synthetic {
-        bail!(
-            "loop task `{name}` is generated by `auto-ping`; pause it with `rimz loop pause {name}` or disable generated pings with `rimz config set loop.auto-ping false`"
-        );
-    }
-    Ok(())
 }
 
 fn clear_overlays(
@@ -530,98 +483,6 @@ mod tests {
             Err(ScheduleErr::TimeConflict { .. })
         ));
         assert!(catalog.for_run("broken").is_some());
-    }
-
-    #[test]
-    fn auto_ping_synthesizes_each_ping_capable_adapter_with_a_root() {
-        let catalog = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
-            .with_auto_ping(true, Some(Path::new("/repo")));
-        let expected = crate::agents::registry::BUILTINS
-            .iter()
-            .filter(|adapter| adapter.ping_args().is_some())
-            .map(|adapter| format!("autoping-{}", adapter.spec().kind))
-            .collect::<BTreeSet<_>>();
-
-        assert_eq!(
-            catalog.visible.keys().cloned().collect::<BTreeSet<_>>(),
-            expected
-        );
-        assert_eq!(
-            catalog.runnable.keys().cloned().collect::<BTreeSet<_>>(),
-            expected
-        );
-        assert!(catalog.visible.contains_key("autoping-qwen"));
-        for (name, task) in &catalog.visible {
-            let kind = name.trim_start_matches("autoping-");
-            assert_eq!(task.source, TaskSource::Config);
-            assert_eq!(
-                task.entry.agent.as_deref(),
-                Some(format!("{kind}-ping").as_str())
-            );
-            assert_eq!(task.entry.prompt.as_deref(), Some("ping"));
-            assert_eq!(task.entry.root, Path::new("/repo"));
-            assert_eq!(task.entry.worktree, None);
-            assert_eq!(
-                task.action().unwrap(),
-                &TaskAction::Spawn(format!("{kind}-ping"))
-            );
-            assert!(matches!(
-                task.schedule().as_ref().unwrap().schedule,
-                super::super::Schedule::WindowReset
-            ));
-        }
-    }
-
-    #[test]
-    fn auto_ping_requires_enablement_and_a_project_root() {
-        let disabled = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
-            .with_auto_ping(false, Some(Path::new("/repo")));
-        let rootless = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
-            .with_auto_ping(true, None);
-
-        assert!(disabled.visible.is_empty());
-        assert!(rootless.visible.is_empty());
-    }
-
-    #[test]
-    fn user_task_shadows_synthetic_auto_ping() {
-        let user = task("user-owned");
-        let catalog = TaskCatalog::from_layers(
-            Tasks::default(),
-            Tasks(BTreeMap::from([("autoping-claude".to_owned(), user)])),
-            None,
-        )
-        .with_auto_ping(true, Some(Path::new("/repo")));
-
-        assert_eq!(
-            catalog.visible["autoping-claude"].entry.prompt.as_deref(),
-            Some("user-owned")
-        );
-        assert_eq!(
-            catalog.runnable["autoping-claude"].entry.prompt.as_deref(),
-            Some("user-owned")
-        );
-    }
-
-    #[test]
-    fn synthetic_auto_ping_refuses_definition_mutations() {
-        let catalog = TaskCatalog::from_layers(Tasks::default(), Tasks::default(), None)
-            .with_auto_ping(true, Some(Path::new("/repo")));
-
-        for error in [
-            catalog.remove("autoping-claude").unwrap_err(),
-            catalog
-                .rename("autoping-claude", "renamed-primer")
-                .unwrap_err(),
-        ] {
-            let message = error.to_string();
-            assert!(message.contains("generated by `auto-ping`"), "{message}");
-            assert!(
-                message.contains("rimz loop pause autoping-claude"),
-                "{message}"
-            );
-            assert!(message.contains("loop.auto-ping false"), "{message}");
-        }
     }
 
     #[test]

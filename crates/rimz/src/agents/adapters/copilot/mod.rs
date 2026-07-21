@@ -107,7 +107,6 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--allow-all"],
             plan: &["--plan"],
         },
-        ping_args: None,
         max_turn_flag: None,
         compact_command: Some("/compact"),
         presets: super::PresetMatchers {

@@ -21,21 +21,20 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{
-    HookPreflightErr, LongestWindowSignal, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed,
-    WindowSurplus, find_definition, preflight_hooks,
+    HookPreflightErr, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed, WindowSurplus,
+    find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
-use crate::harness::assist_log::AssistWindowReset;
 use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
+use crate::harness::schedule::TaskAction;
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
-    PingWindowOutcome, RunTransition,
+    RunTransition,
 };
-use crate::harness::schedule::{ResetSignal, TaskAction};
 use crate::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use crate::ids::WorkspaceId;
-use crate::store::paths::{RuntimePaths, StatePaths, config_home, runtime_home, state_home};
+use crate::store::paths::{RuntimePaths, StatePaths, config_home, state_home};
 use crate::workspace::WorkspaceResolver;
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -51,7 +50,6 @@ pub enum TaskFireNotice {
     None,
     Gate { reason: String },
     Overlap { detail: Option<String> },
-    PingWindow { kind: String },
     TargetGone { handle: String },
 }
 
@@ -164,56 +162,6 @@ impl FireScope {
             self.capacity()
                 .and_then(|capacity| capacity.longest_window_surplus(now)),
         )
-    }
-
-    fn window_running_state(&self, longest: bool, now: Timestamp) -> Option<bool> {
-        self.capacity().and_then(|capacity| {
-            if longest {
-                capacity.longest_window_running(now)
-            } else {
-                capacity.shortest_window_running(now)
-            }
-        })
-    }
-
-    fn ping_gate_reason(&self, entry: &TaskEntry, now: Timestamp) -> Option<String> {
-        let kind = self.kind.as_str();
-        let binding_state = if self.managed_launch.exact_account_applies() {
-            let Some(binding) = self.managed_launch.binding() else {
-                return qwen_ping_cache_reason(false, None, None);
-            };
-            let state = ProviderCapacity::binding_cache_matches(&self.scope_runtime, kind, binding);
-            if state == Some(false) {
-                return qwen_ping_cache_reason(true, state, None);
-            }
-            state
-        } else {
-            None
-        };
-        let running = self.window_running_state(entry.every.as_deref() == Some("reset"), now);
-        if self.managed_launch.exact_account_applies() {
-            return qwen_ping_cache_reason(true, binding_state, running);
-        }
-        if entry.every.as_deref() == Some("reset")
-            && self
-                .capacity()
-                .is_some_and(ProviderCapacity::longest_window_lifted)
-        {
-            return Some(format!("{kind} budget window is not enforced"));
-        }
-        (running == Some(true)).then(|| format!("{kind} budget window already counting down"))
-    }
-
-    fn refreshed_ping_window(&self) -> Option<PingWindowOutcome> {
-        let prior = self.capacity().and_then(ping_window_outcome);
-        let fresh = capacity_for(
-            &self.scope_runtime,
-            self.kind.as_str(),
-            &self.managed_launch,
-        )
-        .as_ref()
-        .and_then(ping_window_outcome)?;
-        (prior.as_ref() != Some(&fresh)).then_some(fresh)
     }
 }
 
@@ -419,25 +367,6 @@ impl<'a> TaskFire<'a> {
                 self.record_gate(LoopRunResult::SurplusSkipped, reason),
             ));
         }
-        if let Some(scope) = &context.scope
-            && scope
-                .resolved
-                .as_ref()
-                .is_some_and(|resolved| resolved.is_ping)
-            && let Some(reason) = scope.ping_gate_reason(&self.entry, self.now)
-        {
-            let kind = scope.kind.as_str().to_owned();
-            return Ok(Some(self.record_terminal_with(
-                LoopRunResult::SkippedWindow,
-                LoopRunPresentation {
-                    skip_reason: Some(reason),
-                    ..LoopRunPresentation::default()
-                },
-                TaskFireNotice::PingWindow { kind },
-                Some(self.now),
-                |_| {},
-            )));
-        }
         self.context = Some(context);
         Ok(None)
     }
@@ -479,18 +408,6 @@ impl<'a> TaskFire<'a> {
                 let mut record = self.terminal_record(LoopRunResult::Completed);
                 let (presentation, notice) =
                     finish_spawn_effect(&mut record, outcome, check, stream);
-                if record.result == LoopRunResult::Completed
-                    && let Some(scope) = self
-                        .context
-                        .as_ref()
-                        .and_then(|context| context.scope.as_ref())
-                    && scope
-                        .resolved
-                        .as_ref()
-                        .is_some_and(|resolved| resolved.is_ping)
-                {
-                    record.window = scope.refreshed_ping_window();
-                }
                 Ok(self.finish_record(record, presentation, notice, None))
             }
             (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered) => {
@@ -605,7 +522,7 @@ impl<'a> TaskFire<'a> {
         spec: String,
         fired_check: Option<FiredCheck>,
     ) -> Result<TaskFirePlan> {
-        let (resolved_kind, is_ping, managed_launch) = {
+        let managed_launch = {
             let scope = self
                 .context
                 .as_ref()
@@ -615,16 +532,11 @@ impl<'a> TaskFire<'a> {
                 .resolved
                 .as_ref()
                 .context("loop spawn context missing resolved task spec")?;
-            preflight_resolved_task(&spec, resolved)?;
-            (
-                resolved.kind.clone(),
-                resolved.is_ping,
-                scope.managed_launch.clone(),
-            )
+            preflight_resolved_task(resolved)?;
+            scope.managed_launch.clone()
         };
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
-        let request =
-            self.compile_spawn_request(spec, prompt, is_ping, &resolved_kind, managed_launch)?;
+        let request = self.compile_spawn_request(spec, prompt, managed_launch)?;
         self.consume_ephemeral()?;
         let check = fired_check.as_ref().map(|check| check.record.clone());
         let stream = self.mode == LoopRunMode::Manual;
@@ -643,8 +555,6 @@ impl<'a> TaskFire<'a> {
         &self,
         spec: String,
         prompt: String,
-        is_ping: bool,
-        resolved_kind: &str,
         managed_launch: ManagedLaunchState,
     ) -> Result<SupervisedRunRequest> {
         let system_prompt_file = self
@@ -677,12 +587,6 @@ impl<'a> TaskFire<'a> {
             .transpose()
             .map_err(anyhow::Error::msg)?;
         let timeout = effective_spawn_timeout(self.mode, task_timeout, configured_timeout);
-        let effort = self.entry.effort.clone().or_else(|| {
-            (is_ping
-                && find_definition(resolved_kind)
-                    .is_some_and(|adapter| adapter.spec().launch.presets.effort.is_some()))
-            .then(|| "low".to_owned())
-        });
         let budget = self
             .entry
             .budget
@@ -703,7 +607,7 @@ impl<'a> TaskFire<'a> {
             model: None,
             system_prompt_file,
             append_system_prompt_file: None,
-            effort,
+            effort: self.entry.effort.clone(),
             budget,
             max_turns: None,
             timeout,
@@ -841,25 +745,6 @@ impl<'a> TaskFire<'a> {
     }
 }
 
-fn ping_window_outcome(capacity: &ProviderCapacity) -> Option<PingWindowOutcome> {
-    let shortest = capacity
-        .duration_windows()
-        .min_by_key(|window| window.duration_mins)
-        .map(assist_window_reset);
-    let longest = capacity
-        .duration_windows()
-        .max_by_key(|window| window.duration_mins)
-        .map(assist_window_reset);
-    (shortest.is_some() || longest.is_some()).then_some(PingWindowOutcome { shortest, longest })
-}
-
-fn assist_window_reset(window: &crate::agents::RateLimitWindow) -> AssistWindowReset {
-    AssistWindowReset {
-        duration_mins: window.duration_mins.map(u64::from),
-        resets_at: window.resets_at,
-    }
-}
-
 fn finish_spawn_effect(
     record: &mut LoopRunRecord,
     effect: SupervisedRunOutcome,
@@ -948,7 +833,6 @@ pub struct ResolvedTaskSpec {
     kind: String,
     args: Vec<String>,
     model: Option<String>,
-    is_ping: bool,
 }
 
 impl ResolvedTaskSpec {
@@ -1001,19 +885,7 @@ fn single_agent_cell(spec: &str, layout: &LayoutSpec) -> Result<ResolvedTaskSpec
         kind: cell.kind.as_str().to_owned(),
         args: cell.args.clone(),
         model: cell.launch.model.clone(),
-        is_ping: agents_spec::virtual_ping_shape(spec),
     })
-}
-
-pub fn ping_kind_supported(kind: &str) -> Result<()> {
-    let adapter =
-        find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-    if adapter.ping_args().is_none() {
-        anyhow::bail!(
-            "agent kind `{kind}` does not support a ping turn; use `claude`, `codex`, `qwen`, or `kimi`"
-        );
-    }
-    Ok(())
 }
 
 pub fn preflight_entry(action: &TaskAction, resolved: Option<&ResolvedTaskSpec>) -> Result<()> {
@@ -1021,7 +893,7 @@ pub fn preflight_entry(action: &TaskAction, resolved: Option<&ResolvedTaskSpec>)
         TaskAction::Spawn(spec) => {
             let resolved = resolved
                 .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
-            preflight_resolved_task(spec, resolved)?;
+            preflight_resolved_task(resolved)?;
         }
         TaskAction::Deliver(target) => preflight_kind(&target.kind)?,
         TaskAction::CheckOnly => {}
@@ -1029,10 +901,7 @@ pub fn preflight_entry(action: &TaskAction, resolved: Option<&ResolvedTaskSpec>)
     Ok(())
 }
 
-fn preflight_resolved_task(spec: &str, resolved: &ResolvedTaskSpec) -> Result<()> {
-    if agents_spec::virtual_ping_shape(spec) {
-        ping_kind_supported(&resolved.kind)?;
-    }
+fn preflight_resolved_task(resolved: &ResolvedTaskSpec) -> Result<()> {
     preflight_kind(&resolved.kind)
 }
 
@@ -1616,25 +1485,6 @@ fn drain_pipe(
     })
 }
 
-/// Resolve the exact provider account a fresh ping task would launch with.
-fn managed_ping_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState {
-    let config = MachineConfig::load_lenient();
-    let result = (|| -> Result<ManagedLaunchState> {
-        let workspace = WorkspaceResolver::resolve(entry.resolved_root(), None)?;
-        let resolved = resolve_task_spec(&format!("{kind}-ping"), &workspace)?;
-        if resolved.kind() != kind {
-            return Ok(ManagedLaunchState::Unsupported);
-        }
-        resolve_managed_spawn_state(entry, &workspace, &resolved, &config)
-    })();
-    result
-        .inspect_err(|err| {
-            tracing::debug!(kind, error = %err, "managed ping account binding skipped: launch resolution failed");
-        })
-        .ok()
-        .unwrap_or_else(|| unresolved_managed_state(entry, kind))
-}
-
 fn unresolved_managed_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState {
     let Some(adapter) = find_definition(kind) else {
         return ManagedLaunchState::Unsupported;
@@ -1649,24 +1499,6 @@ fn unresolved_managed_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState
         state
     } else {
         ManagedLaunchState::Unresolved
-    }
-}
-
-fn qwen_ping_cache_reason(
-    binding_resolved: bool,
-    binding_state: Option<bool>,
-    running: Option<bool>,
-) -> Option<String> {
-    if !binding_resolved {
-        return Some("Qwen launch has no exact Alibaba account binding".to_owned());
-    }
-    match (binding_state, running) {
-        (Some(false), _) => {
-            Some("Qwen cached quota belongs to a different Alibaba account".to_owned())
-        }
-        (Some(true), None) => Some("matching Qwen budget-window reading is incomplete".to_owned()),
-        (_, Some(true)) => Some("qwen budget window already counting down".to_owned()),
-        _ => None,
     }
 }
 
@@ -1748,53 +1580,6 @@ fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
     } else {
         format!("{mins}m")
     }
-}
-
-fn reset_signal_for_binding(
-    runtime: &RuntimePaths,
-    kind: &str,
-    managed_launch: &ManagedLaunchState,
-    now: Timestamp,
-) -> ResetSignal {
-    match capacity_for(runtime, kind, managed_launch)
-        .as_ref()
-        .map(|capacity| capacity.longest_window_signal(now))
-    {
-        Some(LongestWindowSignal::At(reset_at)) => ResetSignal::At(reset_at),
-        Some(LongestWindowSignal::ConfirmedDown) => ResetSignal::ConfirmedDown,
-        Some(LongestWindowSignal::Unknown) | None => ResetSignal::Unknown,
-    }
-}
-
-/// Reset signal for `entry`'s provider longest budget window.
-pub fn window_reset_signal(entry: &TaskEntry, kind: &str, now: Timestamp) -> Result<ResetSignal> {
-    let runtime = entry_runtime(entry)?;
-    Ok(window_reset_signal_in(&runtime, entry, kind, now))
-}
-
-pub(super) fn window_reset_signal_in(
-    runtime: &RuntimePaths,
-    entry: &TaskEntry,
-    kind: &str,
-    now: Timestamp,
-) -> ResetSignal {
-    let managed_launch = managed_ping_state(entry, kind);
-    reset_signal_for_binding(runtime, kind, &managed_launch, now)
-}
-
-fn capacity_for(
-    runtime: &RuntimePaths,
-    kind: &str,
-    managed_launch: &ManagedLaunchState,
-) -> Option<ProviderCapacity> {
-    managed_launch.capacity(runtime, kind)
-}
-
-fn entry_runtime(entry: &TaskEntry) -> Result<RuntimePaths> {
-    let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve(&root, None)
-        .with_context(|| format!("resolving project root at {}", root.display()))?;
-    RuntimePaths::under(workspace.workspace_id, &runtime_home()).context("locating runtime")
 }
 
 #[cfg(test)]

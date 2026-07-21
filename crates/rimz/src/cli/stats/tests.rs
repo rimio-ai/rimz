@@ -1409,11 +1409,8 @@ fn fmt_day_reads_month_and_day() {
 
 #[test]
 fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
-    use rimz::harness::assist_log::{Assist, AssistRecord, AssistWindowReset};
+    use rimz::harness::assist_log::{Assist, AssistRecord};
     use rimz::harness::auto_redeem::RedeemReason;
-    use rimz::harness::schedule::run_log::{
-        LoopRunMode, LoopRunRecord, LoopRunResult, PingWindowOutcome,
-    };
     use rimz::ids::{AgentKind, AgentSessionId};
 
     let ts = |second| jiff::Timestamp::from_second(second).unwrap();
@@ -1479,29 +1476,11 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             },
         },
     ];
-    let mut ping = LoopRunRecord::new(
-        "autoping-codex",
-        LoopRunResult::Completed,
-        LoopRunMode::Scheduled,
-        10,
-    );
-    ping.at = ts(5_000);
-    ping.cost_usd = Some(0.09);
-    ping.window = Some(PingWindowOutcome {
-        shortest: Some(AssistWindowReset {
-            duration_mins: Some(300),
-            resets_at: Some(ts(23_000)),
-        }),
-        longest: None,
-    });
-
-    let stats = AssistStats::from_records("7d", records, vec![ping]);
+    let stats = AssistStats::from_records("7d", records);
 
     assert_eq!(
         stats.rollup,
         AssistRollup {
-            pings: 1,
-            ping_cost_usd: 0.09,
             redeems: 1,
             resets: 1,
             resumes: 1,
@@ -1511,7 +1490,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             restored_sessions: 2,
         }
     );
-    assert_eq!(stats.events.len(), 6, "every assist outcome stays forensic");
+    assert_eq!(stats.events.len(), 5, "every assist outcome stays forensic");
     let categories = category_rows(&stats.rollup)
         .into_iter()
         .map(|row| strip_ansi(&row))
@@ -1523,11 +1502,6 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         .iter()
         .map(|event| benefit_line(event, &zone))
         .collect::<Vec<_>>();
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("codex ping — window"))
-    );
     assert!(
         lines
             .iter()
@@ -1567,7 +1541,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
 
     let json = serde_json::to_value(&stats).unwrap();
     assert_eq!(json["rollup"]["resumes"], 1);
-    assert_eq!(json["events"][0]["assist"], "ping");
+    assert_eq!(json["events"][0]["assist"], "auto_resume");
 }
 
 #[test]
@@ -1579,8 +1553,6 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     let stats = AssistStats {
         window: "7d".to_owned(),
         rollup: AssistRollup {
-            pings: 9,
-            ping_cost_usd: 0.09,
             redeems: 2,
             resets: 1,
             resumes: 5,
@@ -1598,7 +1570,6 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     assert_eq!(
         rows,
         [
-            "Auto-ping: 9 ($0.09)",
             "Auto-continue: 5 (+6.2h)",
             "Auto-compact: 4",
             "Auto-redeem: 2 (1 reset)",
@@ -1606,14 +1577,12 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
         ]
     );
     panel_lines(&mut lines, &stats, 80);
-    assert_eq!(lines.len(), 4, "header plus three paired count rows");
+    assert_eq!(lines.len(), 3, "header plus two paired count rows");
     let panel = strip_ansi(&lines.join("\n"));
     assert!(panel.contains("Assists"));
-    assert!(panel.contains("Auto-ping: 9 ($0.09)"));
     assert!(panel.contains("Auto-resume: 2 (7 agents)"));
 
     let bare_counts = AssistRollup {
-        pings: 1,
         redeems: 1,
         resumes: 1,
         compacts: 1,
@@ -1633,7 +1602,7 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     let failed_only = AssistStats {
         window: "7d".to_owned(),
         rollup: AssistRollup::default(),
-        events: vec![AssistEvent::AutoContinue {
+        events: vec![AssistEvent::Continue {
             at: jiff::Timestamp::from_second(1).unwrap(),
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
             agent_id: rimz::ids::AgentSessionId::from("session-1"),
@@ -1650,10 +1619,9 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
 }
 
 #[test]
-fn assists_load_scopes_both_logs_to_the_selected_window() {
+fn assists_load_scopes_the_log_to_the_selected_window() {
     use rimz::harness::assist_log::{self, Assist, AssistRecord};
     use rimz::harness::auto_redeem::RedeemReason;
-    use rimz::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
 
     let dir = tempfile::tempdir().unwrap();
     let now = jiff::Timestamp::from_second(10 * DAY_SECS).unwrap();
@@ -1695,22 +1663,8 @@ fn assists_load_scopes_both_logs_to_the_selected_window() {
     )
     .unwrap();
 
-    let mut recent_ping = LoopRunRecord::new(
-        "autoping-codex",
-        LoopRunResult::Completed,
-        LoopRunMode::Scheduled,
-        10,
-    );
-    recent_ping.at = now;
-    std::fs::write(
-        run_log::log_path(dir.path()),
-        format!("{}\n", serde_json::to_string(&recent_ping).unwrap()),
-    )
-    .unwrap();
-
     let stats = AssistStats::load(dir.path(), Window::Week, now);
-    assert_eq!(stats.rollup.pings, 1);
     assert_eq!(stats.rollup.redeems, 0);
     assert_eq!(stats.rollup.compacts, 1);
-    assert_eq!(stats.events.len(), 2);
+    assert_eq!(stats.events.len(), 1);
 }

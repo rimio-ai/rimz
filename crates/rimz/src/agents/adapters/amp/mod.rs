@@ -87,7 +87,6 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
         }),
         fork: None,
         permission: super::LaunchPermissionArgs::EMPTY,
-        ping_args: None,
         max_turn_flag: None,
         compact_command: None,
         presets: super::PresetMatchers {

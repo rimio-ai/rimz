@@ -129,7 +129,6 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
             after_id: &[],
         }),
         permission: super::LaunchPermissionArgs::EMPTY,
-        ping_args: None,
         max_turn_flag: None,
         compact_command: Some("/compact"),
         presets: super::PresetMatchers {

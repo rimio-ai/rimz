@@ -232,7 +232,6 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--dangerously-bypass-approvals-and-sandbox"],
             plan: &[],
         },
-        ping_args: Some(&["-c", "model_reasoning_effort=low"]),
         max_turn_flag: None,
         compact_command: Some("/compact"),
         presets: super::PresetMatchers {

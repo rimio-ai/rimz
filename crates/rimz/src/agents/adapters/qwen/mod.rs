@@ -112,7 +112,6 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             yolo: &["--approval-mode", "yolo"],
             plan: &["--approval-mode", "plan"],
         },
-        ping_args: Some(&[]),
         max_turn_flag: Some("--max-session-turns"),
         compact_command: Some("/compress"),
         presets: super::PresetMatchers {

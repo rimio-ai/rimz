@@ -250,16 +250,6 @@ pub trait LaunchCapability: CoreCapability {
         self.spec().launch.resume_command(_session_id)
     }
 
-    /// Extra launch argv for the built-in `-ping` virtual profile: lowest
-    /// effort setting plus the word `"ping"` as the initial prompt. Returns
-    /// `None` when the adapter does not support ping.
-    fn ping_args(&self) -> Option<Vec<String>> {
-        self.spec()
-            .launch
-            .ping_args
-            .map(|args| args.iter().map(|arg| (*arg).to_owned()).collect())
-    }
-
     /// The argv that launches a fresh interactive session of this agent in the
     /// pane's cwd. `extra_args` are direct agent CLI arguments from the chosen
     /// tab layout; `prompt`, when present, is passed as the agent's positional

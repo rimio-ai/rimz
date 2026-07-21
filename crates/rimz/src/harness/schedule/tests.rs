@@ -1,7 +1,6 @@
 use super::*;
 use jiff::civil::date;
 
-use ResetSignal::{At, ConfirmedDown, Unknown};
 use Weekday::{Fri, Mon, Wed};
 
 const DURATION_SMHD: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
@@ -38,13 +37,6 @@ fn entry(at: Option<&str>, every: Option<&str>, cron: Option<&str>) -> TaskEntry
         every: every.map(ToOwned::to_owned),
         cron: cron.map(ToOwned::to_owned),
         ..TaskEntry::default()
-    }
-}
-
-fn reset_entry(agent: Option<&str>) -> TaskEntry {
-    TaskEntry {
-        agent: agent.map(ToOwned::to_owned),
-        ..entry(None, Some("reset"), None)
     }
 }
 
@@ -188,47 +180,23 @@ fn task_action_from_entry_maps_field_combinations() {
 }
 
 /// A row compiles into independent action and timing halves, so a malformed
-/// schedule leaves the action observable. Reset identity is an exact match on
-/// both the `every` value and a `<kind>-ping` agent.
+/// schedule leaves the action observable.
 #[test]
-fn task_shape_compiles_action_reset_kind_and_timing_independently() {
+fn task_shape_compiles_action_and_timing_independently() {
     let shape = TaskShape::compile(
-        "primer",
+        "morning",
         &TaskEntry {
             cron: Some("0 7 * * *".to_owned()),
-            ..reset_entry(Some("claude-ping"))
+            every: Some("weekday".to_owned()),
+            agent: Some("claude".to_owned()),
+            ..TaskEntry::default()
         },
     );
-    assert_eq!(
-        shape.action(),
-        Ok(&TaskAction::Spawn("claude-ping".to_owned()))
-    );
+    assert_eq!(shape.action(), Ok(&TaskAction::Spawn("claude".to_owned())));
     assert!(matches!(
         shape.schedule(),
         Err(ScheduleErr::TimeConflict { .. })
     ));
-    assert_eq!(
-        shape.reset_ping_kind().map(AgentKind::as_str),
-        Some("claude")
-    );
-
-    for (every, agent, expected) in [
-        ("reset", "claude-ping", Some("claude")),
-        ("Reset", "claude-ping", None),
-        (" reset ", "claude-ping", None),
-        ("reset", "amp-ping", None),
-    ] {
-        let entry = TaskEntry {
-            every: Some(every.to_owned()),
-            ..reset_entry(Some(agent))
-        };
-        let shape = TaskShape::compile("primer", &entry);
-        assert_eq!(
-            shape.reset_ping_kind().map(AgentKind::as_str),
-            expected,
-            "{every} {agent}"
-        );
-    }
 }
 
 /// Every accepted `(at, every, cron)` shape and the line a listing renders.
@@ -294,10 +262,6 @@ fn parse_schedule_accepts_every_timing_form() {
         schedule_of(&entry(None, None, Some("0 7 * * 1-5"))),
         Schedule::RawCron("0 7 * * 1-5".to_owned())
     );
-    let reset = parse_schedule("w", &reset_entry(Some("claude-ping"))).expect("reset ping");
-    assert_eq!(reset.schedule, Schedule::WindowReset);
-    assert_eq!(reset.describe(), "every window reset");
-
     // Only a bare `at` is a one-shot; a repeat cadence always outlives its fire.
     for (at, every, cron, once) in [
         (Some("07:00"), None, None, true),
@@ -309,14 +273,11 @@ fn parse_schedule_accepts_every_timing_form() {
     }
 }
 
-/// Every `ScheduleErr` variant with a field combination that raises it. `reset`
-/// is matched untrimmed and case-sensitively, so `Reset` and ` reset ` are not
-/// window-reset schedules but unrecognised day masks.
+/// Every `ScheduleErr` variant with a field combination that raises it.
 #[test]
 fn parse_schedule_rejects_invalid_timing_fields() {
     let name = || "m".to_owned();
     let conflict = || ScheduleErr::TimeConflict { name: name() };
-    let needs_ping = || ScheduleErr::ResetNeedsPing { name: name() };
     let bad_time = |value: &str| ScheduleErr::BadTime {
         name: name(),
         value: value.to_owned(),
@@ -345,6 +306,7 @@ fn parse_schedule_rejects_invalid_timing_fields() {
         (Some("07:00"), Some("funday"), None, bad_every("funday")),
         (None, Some("0m"), None, bad_every("0m")),
         (None, Some("later"), None, bad_every("later")),
+        (None, Some("reset"), None, bad_every("reset")),
         (None, Some("Reset"), None, bad_every("Reset")),
         (None, Some(" reset "), None, bad_every(" reset ")),
         (None, None, Some("0 7 * *"), bad_cron("0 7 * *")),
@@ -354,34 +316,6 @@ fn parse_schedule_rejects_invalid_timing_fields() {
             parse_schedule("m", &entry(at, every, cron)),
             Err(expected),
             "{label}"
-        );
-    }
-
-    // `every = "reset"` needs a `<kind>-ping` agent; no other action qualifies,
-    // and it carries the firing time itself so an explicit `at` conflicts.
-    let check_only = TaskEntry {
-        check: Some("true".to_owned()),
-        ..reset_entry(None)
-    };
-    let wake = TaskEntry {
-        wake: Some(wake_target()),
-        ..reset_entry(None)
-    };
-    let timed = TaskEntry {
-        at: Some("07:00".to_owned()),
-        ..reset_entry(Some("claude-ping"))
-    };
-    for (label, entry, expected) in [
-        ("plain agent", reset_entry(Some("claude")), needs_ping()),
-        ("no agent", reset_entry(None), needs_ping()),
-        ("check-only task", check_only, needs_ping()),
-        ("wake task", wake, needs_ping()),
-        ("explicit time", timed, conflict()),
-    ] {
-        assert_eq!(
-            parse_schedule("m", &entry),
-            Err(expected),
-            "reset with {label}"
         );
     }
 }
@@ -396,7 +330,6 @@ fn schedule_due_at_occurrence_edges() {
     let every_wed = schedule_of(&entry(Some("07:30"), Some("wed"), None));
     let every_mon = schedule_of(&entry(Some("07:30"), Some("mon"), None));
     let daily = schedule_of(&entry(Some("07:30"), None, None));
-    let window = Schedule::WindowReset;
 
     let boundary = zdt(2026, 6, 24, 8, 15, 0);
     let wed_0730 = zdt(2026, 6, 24, 7, 30, 0);
@@ -405,76 +338,35 @@ fn schedule_due_at_occurrence_edges() {
     let sat_0700 = zdt(2026, 6, 27, 7, 0, 0);
     let quarter = zdt(2026, 6, 24, 8, 30, 12);
     let off_minute = zdt(2026, 6, 24, 8, 31, 0);
-    let hourly = zdt(2026, 6, 24, 8, 0, 0);
-    let retry = RESET_RETRY_INTERVAL.as_secs();
-
     // Was `schedule` due at `now`, given a fire `ago` seconds earlier?
-    let due =
-        |schedule: &Schedule, now: &Zoned, ago, signal| schedule.due(before(now, ago), now, signal);
+    let due = |schedule: &Schedule, now: &Zoned, ago| schedule.due(before(now, ago), now);
 
+    assert!(!due(&interval, &boundary, 899), "interval a second early");
+    assert!(due(&interval, &boundary, 900), "interval at the boundary");
+    assert!(due(&every_wed, &wed_0730, 60), "calendar at its occurrence");
     assert!(
-        !due(&interval, &boundary, 899, Unknown),
-        "interval a second early"
-    );
-    assert!(
-        due(&interval, &boundary, 900, Unknown),
-        "interval at the boundary"
-    );
-    assert!(
-        due(&every_wed, &wed_0730, 60, Unknown),
-        "calendar at its occurrence"
-    );
-    assert!(
-        !due(&every_wed, &wed_0730, 0, Unknown),
+        !due(&every_wed, &wed_0730, 0),
         "calendar already fired today"
     );
     assert!(
-        !due(&every_mon, &wed_0730, 86_400, Unknown),
+        !due(&every_mon, &wed_0730, 86_400),
         "calendar off its weekday"
     );
+    assert!(!due(&daily, &wed_0729, 86_400), "calendar a second early");
     assert!(
-        !due(&daily, &wed_0729, 86_400, Unknown),
-        "calendar a second early"
-    );
-    assert!(
-        due(&quarter_hour, &quarter, 60, Unknown),
+        due(&quarter_hour, &quarter, 60),
         "cron on a matching minute"
     );
     assert!(
-        !due(&quarter_hour, &quarter, 1, Unknown),
+        !due(&quarter_hour, &quarter, 1),
         "cron already fired this minute"
     );
+    assert!(!due(&quarter_hour, &off_minute, 60), "cron off its minute");
+    assert!(due(&weekday_cron, &wed_0700, 60), "cron on a weekday");
     assert!(
-        !due(&quarter_hour, &off_minute, 60, Unknown),
-        "cron off its minute"
-    );
-    assert!(
-        due(&weekday_cron, &wed_0700, 60, Unknown),
-        "cron on a weekday"
-    );
-    assert!(
-        !due(&weekday_cron, &sat_0700, 60, Unknown),
+        !due(&weekday_cron, &sat_0700, 60),
         "cron gated off the weekend"
     );
-    assert!(
-        !due(&window, &hourly, retry - 1, ConfirmedDown),
-        "inside the retry interval"
-    );
-    assert!(
-        due(&window, &hourly, retry, ConfirmedDown),
-        "at the retry interval edge"
-    );
-
-    // A window reset comes due one margin past the provider's reported reset,
-    // exactly once, and only while a reset time is actually known.
-    let reset = hourly.timestamp();
-    let margin = zdt(2026, 6, 24, 8, 1, 0);
-    let occurrence = margin.timestamp();
-    let a_second_early = zdt(2026, 6, 24, 8, 0, 59);
-    assert!(!window.due(seconds_before(reset, 60), &a_second_early, At(reset)));
-    assert!(window.due(seconds_before(occurrence, 60), &margin, At(reset)));
-    assert!(!window.due(occurrence, &margin, At(reset)));
-    assert!(!window.due(seconds_before(occurrence, 60), &margin, Unknown));
 }
 
 /// `next_after` for every schedule variant, including the bounded cron walk that
@@ -486,68 +378,45 @@ fn schedule_next_after_reports_the_following_occurrence() {
     let yearly = Schedule::RawCron("0 0 1 1 *".to_owned());
     let every_mon = schedule_of(&entry(Some("07:30"), Some("mon"), None));
     let daily = schedule_of(&entry(Some("07:30"), None, None));
-    let window = Schedule::WindowReset;
 
     let morning = zdt(2026, 6, 24, 8, 0, 0);
     let ten_past = zdt(2026, 6, 24, 8, 10, 0);
     let before_quarter = zdt(2026, 6, 24, 8, 14, 12);
     let on_quarter = zdt(2026, 6, 24, 8, 30, 12);
     let jan_second = zdt(2026, 1, 2, 0, 0, 0);
-    let retry = RESET_RETRY_INTERVAL.as_secs();
-
     // The next occurrence at `now`, given a fire `ago` seconds earlier.
-    let next = |schedule: &Schedule, now: &Zoned, ago, signal| {
-        schedule.next_after(before(now, ago), now, signal)
-    };
+    let next = |schedule: &Schedule, now: &Zoned, ago| schedule.next_after(before(now, ago), now);
 
     let interval_last = before(&ten_past, 60);
     assert_eq!(
-        next(&interval, &ten_past, 60, Unknown),
+        next(&interval, &ten_past, 60),
         Timestamp::from_second(interval_last.as_second() + 900).ok(),
         "interval counts from the last fire"
     );
     assert_eq!(
-        next(&window, &morning, retry, ConfirmedDown),
-        Some(morning.timestamp()),
-        "confirmed down retries an hour on"
-    );
-    assert_eq!(
-        next(&every_mon, &morning, 2 * 86_400 + 1_800, Unknown),
+        next(&every_mon, &morning, 2 * 86_400 + 1_800),
         Some(zdt(2026, 6, 29, 7, 30, 0).timestamp()),
         "calendar crosses the week from Mon Jun 22"
     );
     assert_eq!(
-        next(&daily, &morning, 86_400 + 1_800, Unknown),
+        next(&daily, &morning, 86_400 + 1_800),
         Some(zdt(2026, 6, 24, 7, 30, 0).timestamp()),
         "calendar reports today's missed occurrence"
     );
     assert_eq!(
-        next(&quarter_hour, &before_quarter, 60, Unknown),
+        next(&quarter_hour, &before_quarter, 60),
         Some(zdt(2026, 6, 24, 8, 15, 0).timestamp()),
         "cron walks to the next matching minute"
     );
     assert_eq!(
-        next(&quarter_hour, &on_quarter, 60, Unknown),
+        next(&quarter_hour, &on_quarter, 60),
         Some(on_quarter.timestamp()),
         "cron reports its current matching minute once"
     );
     assert_eq!(
-        next(&yearly, &jan_second, 60, Unknown),
+        next(&yearly, &jan_second, 60),
         None,
         "cron gives up past the search cap"
-    );
-
-    // A known reset is reported until it is consumed, and never without a signal.
-    let reset = morning.timestamp();
-    let occurrence = reset.checked_add(RESET_PING_MARGIN).expect("occurrence");
-    assert_eq!(
-        window.next_after(seconds_before(occurrence, 1), &morning, At(reset)),
-        Some(occurrence)
-    );
-    assert_eq!(window.next_after(occurrence, &morning, At(reset)), None);
-    assert_eq!(
-        window.next_after(seconds_before(occurrence, 1), &morning, Unknown),
-        None
     );
 }
 
@@ -558,7 +427,6 @@ struct Timing {
     blocked: Option<crate::trust::TrustState>,
     last_fire: Option<Timestamp>,
     pause: Option<pauses::PauseEntry>,
-    reset: Option<ResetSignal>,
 }
 
 impl Timing {
@@ -584,13 +452,6 @@ impl Timing {
         }
     }
 
-    fn reset(self, signal: ResetSignal) -> Self {
-        Self {
-            reset: Some(signal),
-            ..self
-        }
-    }
-
     fn state(self, entry: &TaskEntry, now: &Zoned) -> TaskTimingState {
         TaskTiming::evaluate(
             &parse_schedule("task", entry),
@@ -598,7 +459,6 @@ impl Timing {
             self.last_fire,
             self.pause.as_ref(),
             now,
-            self.reset.unwrap_or(Unknown),
         )
         .state()
     }
@@ -651,9 +511,13 @@ fn task_timing_state_precedence_and_classification() {
             .state(&interval, &now),
         Upcoming(after(&now, 10 * 60)),
     );
-    // A window reset with no signal has no computable occurrence at all.
+    // A sparse cron expression outside the bounded search has no computable
+    // occurrence.
     assert_eq!(
-        Timing::fired(60, &now).state(&reset_entry(Some("claude-ping")), &now),
+        Timing::fired(60, &zdt(2026, 1, 2, 0, 0, 0)).state(
+            &entry(None, None, Some("0 0 1 1 *")),
+            &zdt(2026, 1, 2, 0, 0, 0)
+        ),
         NoOccurrence,
     );
 
@@ -674,11 +538,6 @@ fn task_timing_state_precedence_and_classification() {
             "cron",
             entry(None, None, Some("10 8 * * *")),
             Timing::fired(60, &now),
-        ),
-        (
-            "reset",
-            reset_entry(Some("claude-ping")),
-            Timing::fired(60, &now).reset(At(before(&now, 60))),
         ),
     ] {
         assert!(matches!(timing.state(&entry, &now), Due(_)), "{label}");
