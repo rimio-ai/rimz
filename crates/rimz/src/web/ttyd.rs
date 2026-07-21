@@ -93,26 +93,25 @@ pub(super) fn open_session(
             return Err(WebErr::TtydOffline);
         };
         let Some(credential) = read_credential()? else {
-            return Err(WebErr::TtydOffline);
+            return Err(WebErr::TtydCredentialMissing);
         };
         (record, basic_auth(&credential), Vec::new())
     };
     let base_url = normalized_base_url(config.web.base_url.as_deref(), record.port);
     Ok(WebAccessOutcome {
-        payload: WebOpenPayload::for_session(session, base_url, record.port, credential),
+        payload: WebOpenPayload::for_session(session, base_url, record.port, Some(credential)),
         warnings,
     })
 }
 
 pub(super) fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
     let _guard = acquire_daemon_lock()?;
-    let credential = ensure_credential()?;
-    let base_url = normalized_base_url(config.web.base_url.as_deref(), config.web.port);
+    let daemon = daemon_status_locked()?;
+    let port = daemon.map_or(config.web.port, |record| record.port);
+    let credential = read_credential()?.map(|credential| basic_auth(&credential));
+    let base_url = normalized_base_url(config.web.base_url.as_deref(), port);
     Ok(WebOpenPayload::for_session(
-        session,
-        base_url,
-        config.web.port,
-        basic_auth(&credential),
+        session, base_url, port, credential,
     ))
 }
 
@@ -151,9 +150,6 @@ pub(super) fn credential(
         CredentialCommand::RevokeAll => Ok(CredentialOutcome::Revoked {
             stopped_instances: revoke_credential()?,
         }),
-        CredentialCommand::Ensure => Ok(CredentialOutcome::Ensured(basic_auth(
-            &ensure_credential()?,
-        ))),
     }
 }
 
@@ -358,7 +354,9 @@ fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
         return Ok(None);
     };
     let processes = crate::proc::list_processes();
-    if processes.iter().any(|process| process.pid == record.pid)
+    if processes
+        .iter()
+        .any(|process| process.pid == record.pid && is_ttyd_process(process))
         && TcpStream::connect(("127.0.0.1", record.port)).is_ok()
     {
         return Ok(Some(record));
@@ -410,6 +408,7 @@ fn terminate_record(record: &DaemonRecord) {
                 let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
             }
         }
+        wait_for_port_close(record.port, Duration::from_secs(1));
     }
 }
 

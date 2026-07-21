@@ -104,9 +104,6 @@ enum WebTokenSubcmd {
     Revoke { name: String },
     /// Revoke the machine credential.
     RevokeAll,
-    /// Provision the machine credential if needed.
-    #[command(hide = true)]
-    Ensure,
 }
 
 impl From<WebTokenSubcmd> for CredentialCommand {
@@ -116,7 +113,6 @@ impl From<WebTokenSubcmd> for CredentialCommand {
             WebTokenSubcmd::List => Self::List,
             WebTokenSubcmd::Revoke { name } => Self::Revoke { name },
             WebTokenSubcmd::RevokeAll => Self::RevokeAll,
-            WebTokenSubcmd::Ensure => Self::Ensure,
         }
     }
 }
@@ -162,7 +158,13 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         return crate::cli::render::json(&outcome.payload);
     }
     print_url(&outcome.payload.url)?;
-    write_web_credential(&outcome.payload.credential);
+    write_web_credential(
+        outcome
+            .payload
+            .credential
+            .as_ref()
+            .context("shared ttyd daemon returned no credential")?,
+    );
     if !args.print {
         open_browser_best_effort(&outcome.payload.url);
     }
@@ -272,9 +274,6 @@ fn token(command: WebTokenSubcmd) -> Result<()> {
 
 fn render_credential_outcome(outcome: CredentialOutcome) -> Result<()> {
     match outcome {
-        CredentialOutcome::Ensured(credential) => {
-            writeln!(std::io::stdout().lock(), "{}", credential.secret)?;
-        }
         CredentialOutcome::Rotated {
             credential,
             restarted_instances,

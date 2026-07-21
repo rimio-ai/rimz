@@ -54,7 +54,7 @@ The bootstrap refreshes xterm after fonts load, keeps the cursor steady across r
 
 `rimz web open` resolves or births the room, confirms the session is addressable, ensures the shared daemon, and returns its URL and credential. `--no-start` requires an already-live daemon.
 
-`rimz web url` reads the room identity and computes the configured URL without requiring the daemon to run. `start`, `status`, and `stop` act on the one machine daemon and need no room target.
+`rimz web url` reads the room identity, existing credential, and live daemon state without changing the daemon or credential. It uses the live port when the daemon runs and the configured port otherwise; its v2 JSON omits `credential` when none exists. `start`, `status`, and `stop` act on the one machine daemon and need no room target.
 
 After a normal `rimz start` makes the room ready, `[web] enabled = true` asks RimZ to ensure the daemon. This path is deliberately best-effort: missing ttyd, a port collision, or a start failure prints a warning and never refuses the room.
 
@@ -78,6 +78,6 @@ The local port derives from the session in 8300–8399 and scans on collision. R
 
 The production listener binds to loopback and requires authentication.
 
-Credentials stay out of URLs, logs, store events, and workspace records. The v2 credential appears only in the explicit JSON prep response and the human stderr relay.
+Credentials stay out of URLs, logs, store events, and workspace records. The v2 credential appears only in explicit JSON output that reports a saved credential and the human stderr relay.
 
 The browser session is shell access as the serving user. A reverse proxy that exposes the listener provides HTTPS and rate limiting.

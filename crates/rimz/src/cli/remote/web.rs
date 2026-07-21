@@ -158,9 +158,9 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
     let WebPrepOutcome::Ready(prep) = prep else {
         bail!("preparing remote web access failed with status 255");
     };
-    let payload = parse_web_payload(&prep)?;
+    let (payload, credential) = parse_web_payload(&prep)?;
     let mut previous_credential = None;
-    render_web_credential(remote, &payload.credential, &mut previous_credential, true);
+    render_web_credential(remote, &credential, &mut previous_credential, true);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
     let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
@@ -283,7 +283,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
                 }
             }
         };
-        let payload = parse_web_payload(&prep)?;
+        let (payload, credential) = parse_web_payload(&prep)?;
         let local_port = match local_port {
             Some(port) => port,
             None => {
@@ -347,12 +347,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         };
 
         held_alt.release();
-        render_web_credential(
-            remote,
-            &payload.credential,
-            &mut last_credential,
-            first_round,
-        );
+        render_web_credential(remote, &credential, &mut last_credential, first_round);
         if first_round {
             let url = rimz::web::local_tunnel_url(&payload, local_port);
             writeln!(std::io::stdout().lock(), "{url}")?;
@@ -455,7 +450,9 @@ fn web_prep_options(
     }
 }
 
-fn parse_web_payload(bytes: &[u8]) -> Result<rimz::web::WebOpenPayload> {
+fn parse_web_payload(
+    bytes: &[u8],
+) -> Result<(rimz::web::WebOpenPayload, rimz::web::WebCredential)> {
     let payload: rimz::web::WebOpenPayload = serde_json::from_slice(bytes)
         .with_context(|| remote_output_context("parsing remote `rimz web open --json`", bytes))?;
     if !payload.version_ok() {
@@ -464,7 +461,11 @@ fn parse_web_payload(bytes: &[u8]) -> Result<rimz::web::WebOpenPayload> {
             payload.version
         );
     }
-    Ok(payload)
+    let credential = payload
+        .credential
+        .clone()
+        .context("remote `rimz web open --json` omitted the ttyd credential")?;
+    Ok((payload, credential))
 }
 
 fn render_web_credential(
