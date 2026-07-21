@@ -257,22 +257,14 @@ const WEB_ADDRESSABLE_TIMEOUT: Duration = Duration::from_secs(5);
 pub fn ensure_session_addressable(mux: MuxName, session: &str) -> Result<()> {
     let backend = crate::mux::backend_for(mux);
     let deadline = Instant::now() + web_addressable_timeout();
-    let mut last_error = None;
     loop {
         match backend.list_sessions() {
             Ok(sessions) if sessions.iter().any(|name| name == session) => return Ok(()),
             Ok(_) if Instant::now() >= deadline => {
-                return Err(last_error.map_or_else(
-                    || WebErr::SessionNotAddressable {
-                        mux,
-                        session: session.to_owned(),
-                    },
-                    |detail| WebErr::SessionAddressabilityProbe {
-                        mux,
-                        session: session.to_owned(),
-                        detail,
-                    },
-                ));
+                return Err(WebErr::SessionNotAddressable {
+                    mux,
+                    session: session.to_owned(),
+                });
             }
             Err(err) if Instant::now() >= deadline => {
                 return Err(WebErr::SessionAddressabilityProbe {
@@ -281,11 +273,7 @@ pub fn ensure_session_addressable(mux: MuxName, session: &str) -> Result<()> {
                     detail: err.to_string(),
                 });
             }
-            Err(err) => {
-                last_error = Some(err.to_string());
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Ok(_) => std::thread::sleep(Duration::from_millis(100)),
+            Ok(_) | Err(_) => std::thread::sleep(Duration::from_millis(100)),
         }
     }
 }
