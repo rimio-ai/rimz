@@ -174,6 +174,12 @@ enum RestingTurnOutcome {
     Died(AgentTurnError),
 }
 
+#[derive(Clone, Copy)]
+enum TranscriptScope<'a> {
+    Root,
+    Subagent(&'a str),
+}
+
 /// Detect a turn that died on a provider API error with no `Stop` hook to
 /// record it. Claude aborts such a turn by writing an `assistant` transcript
 /// entry flagged `isApiErrorMessage: true` (followed by a `system` /
@@ -187,7 +193,7 @@ enum RestingTurnOutcome {
 /// Non-conversation records (`system`, `file-history-snapshot`, `summary`),
 /// sidechain replay, and unparseable lines are passed over, never decisive.
 pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
-    match detect_resting_turn_outcome(tail) {
+    match detect_resting_turn_outcome(tail, TranscriptScope::Root) {
         Some(RestingTurnOutcome::Died(error)) => Some(error),
         Some(RestingTurnOutcome::Interrupted(_)) | None => None,
     }
@@ -198,13 +204,26 @@ pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
 /// user` for both ordinary and tool-use interruptions. The entry's timestamp
 /// anchors the same self-clear guard the display projection uses for Codex.
 pub(crate) fn detect_turn_interrupted(tail: &str) -> Option<Timestamp> {
-    match detect_resting_turn_outcome(tail) {
+    match detect_resting_turn_outcome(tail, TranscriptScope::Root) {
         Some(RestingTurnOutcome::Interrupted(at)) => Some(at),
         Some(RestingTurnOutcome::Died(_)) | None => None,
     }
 }
 
-fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
+/// Prove that one child transcript ended at Claude's interruption marker.
+/// Child records are sidechains by construction, so identity replaces the
+/// root scan's sidechain exclusion and keeps nested-child replay out.
+pub(super) fn detect_subagent_interrupted(tail: &str, agent_id: &str) -> bool {
+    matches!(
+        detect_resting_turn_outcome(tail, TranscriptScope::Subagent(agent_id)),
+        Some(RestingTurnOutcome::Interrupted(_))
+    )
+}
+
+fn detect_resting_turn_outcome(
+    tail: &str,
+    scope: TranscriptScope<'_>,
+) -> Option<RestingTurnOutcome> {
     for line in tail.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
@@ -214,8 +233,16 @@ fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        // Subagent replay never decides the parent's turn.
-        if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        let in_scope = match scope {
+            // Subagent replay never decides the parent's turn.
+            TranscriptScope::Root => {
+                value.get("isSidechain").and_then(Value::as_bool) != Some(true)
+            }
+            TranscriptScope::Subagent(agent_id) => {
+                value.get("agentId").and_then(Value::as_str) == Some(agent_id)
+            }
+        };
+        if !in_scope {
             continue;
         }
         let entry_type = value.get("type").and_then(Value::as_str);
@@ -688,6 +715,18 @@ mod tests {
 
         let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{sidechain}\nnot-json\n");
         assert!(detect_turn_interrupted(&tail).is_none());
+    }
+
+    #[test]
+    fn subagent_interruption_scan_accepts_only_the_named_sidechain() {
+        let child = r#"{"type":"user","isSidechain":true,"agentId":"child","timestamp":"2026-06-04T03:02:00.000Z","message":{"content":"[Request interrupted by user for tool use]"}}"#;
+        assert!(detect_subagent_interrupted(child, "child"));
+        assert!(detect_turn_interrupted(child).is_none());
+
+        let nested = r#"{"type":"assistant","isSidechain":true,"agentId":"nested","timestamp":"2026-06-04T03:03:00.000Z","message":{"content":[{"type":"text","text":"still running"}]}}"#;
+        let tail = format!("{child}\n{nested}\n");
+        assert!(detect_subagent_interrupted(&tail, "child"));
+        assert!(!detect_subagent_interrupted(&tail, "nested"));
     }
 
     #[test]

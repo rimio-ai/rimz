@@ -9,6 +9,7 @@ mod context;
 mod install;
 mod install_statusline;
 mod lifecycle;
+mod subagents;
 
 #[test]
 fn hook_ingress_ignores_remote_control_and_preserves_ordinary_owner() {

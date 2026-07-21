@@ -29,6 +29,7 @@ pub mod remote_liveness;
 pub(crate) mod spend;
 mod statusline;
 mod subagent_statusline;
+mod subagents;
 
 pub(crate) use crate::agents::capabilities::*;
 
@@ -66,9 +67,10 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AgentHookClass, AgentLifecycleObservation, AgentTurnError, HookOutput, HookRouting, Result,
-    RootIdentity, SessionOrigin, SubagentIdentity, SubagentObservation, TranscriptMessage,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    RootIdentity, SessionOrigin, SpawnedSubagent, SubagentIdentity, SubagentObservation,
+    SubagentSpawnInput, TranscriptMessage, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::agents::{TurnErrorClass, TurnSettle, TurnSettleOutcome};
 use crate::transcript::AskQuestion;
@@ -179,7 +181,7 @@ const CLAUDE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "PreCompact/PostCompact/SessionStart:compact",
     },
     subagents: ConcernCoverage::Wired {
-        via: "SubagentStart/SubagentStop/statusline",
+        via: "SubagentStart/SubagentStop + interrupt-derived close",
     },
     background_parking: ConcernCoverage::Wired {
         via: "Stop.background_tasks/session_crons",
@@ -589,6 +591,12 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
         Ok(decoded)
     }
 
+    fn spawned_subagents(&self, input: SubagentSpawnInput<'_>) -> Vec<SpawnedSubagent> {
+        input
+            .parent_transcript_path
+            .map_or_else(Vec::new, subagents::spawned_subagents_under)
+    }
+
     fn ask_options(&self, kind: AskKind) -> Option<Vec<crate::transcript::AskOption>> {
         match kind {
             AskKind::Permission => Some(ask::permission_options()),
@@ -974,6 +982,7 @@ fn build_claude_observation(
     };
     let usage = usage_path
         .as_deref()
+        .map(Path::new)
         .map(usage_from_transcript)
         .unwrap_or_default();
     let payload_model = parts
@@ -1154,8 +1163,8 @@ fn context_window_for(model: Option<&str>) -> Option<u64> {
 /// Reads a bounded tail and takes the most recent assistant `message.usage`.
 /// Best-effort: any IO or parse failure yields empty fields (enrichment, never
 /// correctness).
-fn usage_from_transcript(path: &str) -> TranscriptUsage {
-    let Some(text) = read_transcript_tail(Path::new(path)) else {
+fn usage_from_transcript(path: &Path) -> TranscriptUsage {
+    let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
     };
     // Newest-first: the last assistant usage record wins. A truncated leading

@@ -108,7 +108,7 @@ pub struct SubagentSpawnInput<'a> {
     pub parent_workspace: Option<&'a Path>,
 }
 
-/// One child recovered from validated provider-owned spawn evidence.
+/// One settled child recovered from validated provider-owned evidence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpawnedSubagent {
     pub child_agent_id: AgentSessionId,

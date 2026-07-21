@@ -359,7 +359,10 @@ fn append_reconciliation(
         .usage
         .total_tokens
         .is_some_and(|tokens| child_state.usage.total_tokens != Some(tokens));
-    if !model_changed && !tokens_changed {
+    // Provider-settled truth closes a child the rollup still holds running,
+    // even when the provider has no new metadata to carry with the close.
+    // Once terminal, the metadata delta remains the reconciliation dedupe.
+    if child_state.status != AgentStatus::Running && !model_changed && !tokens_changed {
         return;
     }
     observation.agent_name = None;
@@ -798,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn spawned_child_reconciliation_is_metadata_sensitive_and_idempotent() {
+    fn spawned_child_reconciliation_closes_running_then_dedupes_by_metadata() {
         let (_dir, store) = test_store();
         let kind = AgentKind::new_unchecked("copilot");
         let pane = PaneId::from_parts(MuxName::Tmux, "%1");
@@ -818,7 +821,7 @@ mod tests {
             .unwrap();
         let mut child = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("child")),
-            LifecycleSignal::SubagentStopped { errored: false },
+            LifecycleSignal::SubagentStarted,
         );
         child.parent_agent_id = Some(AgentSessionId::from("parent"));
         child.task = Some("child task".to_owned());
@@ -829,7 +832,7 @@ mod tests {
             .append_agent_lifecycle(AgentLifecycleIntent {
                 session_name: "rimz-test",
                 agent_kind: kind.clone(),
-                event_name: "SubagentStop",
+                event_name: "SubagentStart",
                 observation: &child,
                 spawned_subagents: &[],
             })
@@ -849,6 +852,7 @@ mod tests {
             total_tokens: Some(total_tokens),
         };
         for (facts, expected) in [
+            (spawned("old-model", 10), 1),
             (spawned("old-model", 10), 0),
             (spawned("new-model", 20), 1),
             (spawned("new-model", 20), 0),
@@ -873,6 +877,7 @@ mod tests {
             .unwrap();
         assert_eq!(state.model.as_deref(), Some("new-model"));
         assert_eq!(state.usage.total_tokens, Some(20));
+        assert_eq!(state.status, AgentStatus::Success);
     }
 
     #[test]

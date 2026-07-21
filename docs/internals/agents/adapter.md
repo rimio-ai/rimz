@@ -76,7 +76,7 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | Trait | Owns | The default means |
 | --- | --- | --- |
 | `CoreCapability` | `spec()`, plus the test-only conformance fixtures | required, no default |
-| `HookCapability` | `decode_hook`, `hook_ingress`, ask options and answer plans, subagent correlation | no native decoder: every event classifies unknown and records nothing |
+| `HookCapability` | `decode_hook`, `hook_ingress`, ask options and answer plans, subagent correlation and provider-settled child recovery | no native decoder: every event classifies unknown and records nothing |
 | `InstallationCapability` | `managed_integration` and the install, preview, uninstall, detection, trust, and statusline-wrap surface it drives | hook installation is unavailable for this agent |
 | `LaunchCapability` | `is_interactive_process`, `launch_command`, `resume_command`, `launch_env`, `room_env`, version probing | render argv straight from the spec's `launch` block |
 | `SessionCapability` | local-session discovery, resume-identity parsing, daemon evidence, turn-death refinement | no provider-owned session store to read |

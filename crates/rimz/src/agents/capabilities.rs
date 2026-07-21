@@ -61,10 +61,9 @@ pub trait HookCapability: CoreCapability {
         None
     }
 
-    /// Enumerate child lifecycle metadata observed through provider-owned
-    /// durable records. The shared hook path adopts children whose earlier
-    /// hooks arrived before that evidence was readable and reconciles exact
-    /// model/token metadata that became available after adoption.
+    /// Enumerate children proven settled by provider-owned durable records.
+    /// The shared hook path adopts a missing stopped child or closes an
+    /// existing child bracket, then reconciles exact model/token metadata.
     fn spawned_subagents(&self, _input: SubagentSpawnInput<'_>) -> Vec<SpawnedSubagent> {
         Vec::new()
     }
