@@ -23,8 +23,11 @@ fn macos_latest_install_delegates_to_homebrew_and_falls_back_on_failure() {
     list)
         [ -f "$RIMZ_TEST_FORMULA_PREFIX/bin/rimz" ]
         ;;
+    update)
+        printf '%s\n' "$*" >> "$RIMZ_TEST_BREW_LOG"
+        ;;
     install|upgrade)
-        printf '%s\n' "$*" > "$RIMZ_TEST_BREW_LOG"
+        printf '%s\n' "$*" >> "$RIMZ_TEST_BREW_LOG"
         if [ "${RIMZ_TEST_BREW_FAIL:-0}" = 1 ]; then
             printf 'simulated brew failure\n' >&2
             exit 42
@@ -89,11 +92,12 @@ esac
         "install rimio-ai/rimz/rimz\n"
     );
 
+    fs::write(&brew_log, "").expect("reset brew log");
     let output = run_installer(false);
     assert!(output.status.success());
     assert_eq!(
         fs::read_to_string(&brew_log).expect("brew upgrade log"),
-        "upgrade rimio-ai/rimz/rimz\n"
+        "update\nupgrade rimio-ai/rimz/rimz\n"
     );
 
     fs::remove_file(brew_root.join("bin/rimz")).expect("remove linked rimz");
