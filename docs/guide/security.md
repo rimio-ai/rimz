@@ -26,7 +26,7 @@ A cloned repository can ship a `.rimz/config.toml` that names agents, profiles, 
 
 A first interactive `rimz start` in an untrusted workspace offers the grant, and the interactive `rimz loop fire` and project-task edit surfaces offer it inline with the surface diff when their trust gate is closed. Declining leaves the workspace inert; only the first-start prompt stays suppressed until `.rimz/config.toml` changes.
 
-`rimz trust grant` pins a single hash over every command-running field in that config. Each later read re-hashes the live file. Edit one of those fields, or let an agent in the room edit the file, and the hash drifts: the workspace flips to `stale`, command execution turns back off, and `rimz trust status` prints a field-level diff of what changed before you re-grant. There is no background sweep. `rimz trust status` and `rimz doctor` both re-hash on the spot.
+`rimz trust grant` pins a single hash over every command-running field in that config. Each later read re-hashes the live file. Edits outside RimZ's project-task commands, including direct file edits by an agent in the room, make the hash drift: the workspace flips to `stale`, command execution turns back off, and `rimz trust status` prints a field-level diff of what changed before you re-grant. When `rimz loop add`, `remove`, or `rename` performs the edit from a trusted workspace or creates the first config, it re-pins the grant whether invoked interactively, by a script, or by an agent; an untrusted or stale pre-state keeps the review flow. There is no background sweep. `rimz trust status` and `rimz doctor` both re-hash on the spot.
 
 The hashed surface is every field that can cause a process to run:
 

@@ -286,20 +286,13 @@ fn build_task_entry(
 
 pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
     let catalog = task_catalog(globals)?;
-    let project_pre_state = match catalog.visible().get(name) {
-        Some(task) if matches!(task.source(), TaskSource::Project { .. }) => {
-            Some(trust::status(&task.entry().root)?.state)
-        }
-        _ => None,
-    };
+    let project_mutation = project_mutation_pre_state(&catalog, name)?;
     let mutation = catalog.remove(name)?;
     let mut out = ui::out();
     if mutation.changed() {
         writeln!(out, "removed loop task `{name}`")?;
-        if let Some(root) = mutation.project_root() {
-            let pre_state = project_pre_state
-                .context("project trust state missing before loop task removal")?;
-            finish_project_mutation(&mut out, root, false, pre_state)?;
+        if let Some((root, pre_state)) = project_mutation {
+            finish_project_mutation(&mut out, &root, false, pre_state)?;
         }
     } else {
         writeln!(out, "no loop task named `{name}`")?;
@@ -313,25 +306,34 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
         bail!("new loop task name must differ from `{name}`");
     }
     let catalog = task_catalog(globals)?;
-    let project_pre_state = match catalog.visible().get(name) {
-        Some(task) if matches!(task.source(), TaskSource::Project { .. }) => {
-            Some(trust::status(&task.entry().root)?.state)
-        }
-        _ => None,
-    };
+    let project_mutation = project_mutation_pre_state(&catalog, name)?;
     let mutation = catalog.rename(name, new_name)?;
     let mut out = ui::out();
     if mutation.changed() {
         writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
-        if let Some(root) = mutation.project_root() {
-            let pre_state =
-                project_pre_state.context("project trust state missing before loop task rename")?;
-            finish_project_mutation(&mut out, root, false, pre_state)?;
+        if let Some((root, pre_state)) = project_mutation {
+            finish_project_mutation(&mut out, &root, false, pre_state)?;
         }
     } else {
         writeln!(out, "no loop task named `{name}`")?;
     }
     Ok(())
+}
+
+fn project_mutation_pre_state(
+    catalog: &TaskCatalog,
+    name: &str,
+) -> Result<Option<(PathBuf, TrustState)>> {
+    let Some(task) = catalog
+        .visible()
+        .get(name)
+        .filter(|task| matches!(task.source(), TaskSource::Project { .. }))
+    else {
+        return Ok(None);
+    };
+    let root = task.entry().root.clone();
+    let state = trust::status(&root)?.state;
+    Ok(Some((root, state)))
 }
 
 pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
