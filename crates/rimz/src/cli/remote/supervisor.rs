@@ -20,7 +20,8 @@ use rimz::remote::reachability::{
     parse_dial_plan, ssh_config_query_spec,
 };
 use rimz::remote::recovery::{
-    ConnectStage, INTERNET_PROBE_TIMEOUT, InternetProbe, RecoveryPanel, internet_probe_from_env,
+    ConnectStage, HandoffStage, INTERNET_PROBE_TIMEOUT, InternetProbe, RecoveryPanel,
+    internet_probe_from_env,
 };
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
@@ -34,7 +35,7 @@ const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTO_FORWARD_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 
-struct OutageState {
+pub(super) struct OutageState {
     connect_stage: ConnectStage,
     started: Instant,
     internet_probe: Option<InternetProbe>,
@@ -43,13 +44,20 @@ struct OutageState {
 }
 
 impl OutageState {
-    fn new(
+    pub(super) fn new(
         connect_stage: ConnectStage,
+        handoff_stage: HandoffStage,
         host: &str,
         internet_probe: Option<InternetProbe>,
         server: Option<&DialPlan>,
     ) -> Self {
-        let mut panel = RecoveryPanel::new(connect_stage, host, internet_probe.as_ref(), server);
+        let mut panel = RecoveryPanel::new(
+            connect_stage,
+            handoff_stage,
+            host,
+            internet_probe.as_ref(),
+            server,
+        );
         panel.note_attempt(1);
         Self {
             connect_stage,
@@ -97,6 +105,7 @@ pub(super) fn supervise_remote(
     initial_ui.report_connecting();
     let mut initial_outage = OutageState::new(
         ConnectStage::Initial,
+        HandoffStage::Multiplexer,
         host,
         internet_probe_for_wait(&initial_ui),
         dial_plan.as_ref(),
@@ -198,6 +207,7 @@ pub(super) fn supervise_remote(
         let outage = outage.get_or_insert_with(|| {
             OutageState::new(
                 ConnectStage::Recovery,
+                HandoffStage::Multiplexer,
                 host,
                 internet_probe_for_wait(&ui),
                 dial_plan.as_ref(),
@@ -444,7 +454,7 @@ pub(super) enum WaitOutcome {
     Interrupted,
 }
 
-fn internet_probe_for_wait(ui: &OutageUi) -> Option<InternetProbe> {
+pub(super) fn internet_probe_for_wait(ui: &OutageUi) -> Option<InternetProbe> {
     if ui.is_plain() {
         None
     } else {
@@ -452,37 +462,7 @@ fn internet_probe_for_wait(ui: &OutageUi) -> Option<InternetProbe> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PlainWaitOutcome {
-    AttemptNow,
-    Interrupted,
-}
-
-pub(super) fn wait_for_plain_attempt(
-    dial_plan: Option<&DialPlan>,
-    policy: &rimz::remote::ReconnectPolicy,
-    host: &str,
-    stop: Option<&AtomicBool>,
-) -> PlainWaitOutcome {
-    let started = Instant::now();
-    let mut reachability = ReachabilityDriver::new(*policy, started, None, dial_plan, false);
-    reachability.note_attempt_failed(started);
-    let ui = OutageUi::plain_lines(ConnectStage::Recovery, host);
-    loop {
-        let now = Instant::now();
-        reachability.poll(now).present(None, &ui);
-        if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
-            return PlainWaitOutcome::Interrupted;
-        }
-        reachability.schedule_probes(now);
-        if reachability.attempt_due(now) {
-            return PlainWaitOutcome::AttemptNow;
-        }
-        sleep_retry_wait(PANEL_TICK, stop);
-    }
-}
-
-fn wait_for_master(
+pub(super) fn wait_for_master(
     plan: &SshAttachPlan,
     control_path: &Path,
     dial_plan: Option<&DialPlan>,

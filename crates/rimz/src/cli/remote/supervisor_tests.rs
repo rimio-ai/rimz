@@ -114,38 +114,10 @@ fn fatal_session_message_keeps_major_version_refusal_hard() {
 }
 
 #[test]
-fn plain_retry_wait_reports_interruption() {
-    let stop = AtomicBool::new(true);
-
-    assert_eq!(
-        wait_for_plain_attempt(
-            None,
-            &rimz::remote::ReconnectPolicy::default(),
-            "dev-box",
-            Some(&stop),
-        ),
-        PlainWaitOutcome::Interrupted
-    );
-}
-
-#[test]
 fn plain_retry_wait_omits_the_internet_checkpoint() {
     let ui = OutageUi::plain_lines(ConnectStage::Recovery, "dev-box");
 
     assert_eq!(internet_probe_for_wait(&ui), None);
-}
-
-#[test]
-fn settled_retry_wait_returns_only_attach_or_interrupted() {
-    let policy = rimz::remote::ReconnectPolicy {
-        reachable_retry: Duration::ZERO,
-        ..rimz::remote::ReconnectPolicy::default()
-    };
-
-    assert_eq!(
-        wait_for_plain_attempt(None, &policy, "dev-box", None,),
-        PlainWaitOutcome::AttemptNow
-    );
 }
 
 #[test]

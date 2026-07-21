@@ -310,7 +310,15 @@ fn tunnel_invocation_count(log: &Path) -> usize {
     std::fs::read_to_string(log)
         .unwrap_or_default()
         .lines()
-        .filter(|line| line.split('\t').any(|arg| arg == "-N"))
+        .filter(|line| line.split('\t').any(|arg| arg == "-L"))
+        .count()
+}
+
+fn web_prep_invocation_count(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("rimz web open"))
         .count()
 }
 
@@ -361,8 +369,7 @@ fn http_204_probe() -> (String, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
 
 fn remote_web_command(env: &Env, log: &Path, port: u16) -> Command {
     let mut cmd = remote_connect_command(env, log);
-    cmd.args(["--web", "--web-port", &port.to_string()])
-        .env("RIMZ_REMOTE_GATETIME_MS", "0");
+    cmd.args(["--web", "--web-port", &port.to_string()]);
     cmd
 }
 
@@ -1163,7 +1170,7 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
 }
 
 #[test]
-fn remote_web_missing_binary_points_at_setup_without_extra_ssh() {
+fn remote_web_missing_binary_points_at_setup_after_supervised_master() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let port = reserve_local_port();
@@ -1182,7 +1189,9 @@ fn remote_web_missing_binary_points_at_setup_without_extra_ssh() {
         stderr.contains("rimz remote setup dev-box:query-engine"),
         "{stderr}"
     );
-    assert_eq!(shim_invocations(&log).len(), 1, "preparation only");
+    assert_eq!(master_invocation_count(&log), 1, "one supervised master");
+    assert_eq!(web_prep_invocation_count(&log), 1, "one preparation");
+    assert_eq!(tunnel_invocation_count(&log), 0, "no tunnel opens");
 }
 
 #[test]
@@ -1269,8 +1278,37 @@ fn remote_web_reconnects_once_after_established_transport_exit() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(tunnel_invocation_count(&log), 2);
+    assert_eq!(master_invocation_count(&log), 2);
+    assert_eq!(web_prep_invocation_count(&log), 2);
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("web tunnel to dev-box lost — reconnecting"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn remote_web_no_reconnect_stays_a_direct_one_shot() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("tunnel.plan");
+    let port = reserve_local_port();
+    std::fs::write(&plan, "255\n0\n").expect("write tunnel plan");
+
+    let out = remote_web_command(&env, &log, port)
+        .arg("--no-reconnect")
+        .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
+        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "80")
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
+        .bounded_output()
+        .expect("run one-shot remote web tunnel");
+
+    assert!(!out.status.success());
+    assert_eq!(master_invocation_count(&log), 0);
+    assert_eq!(web_prep_invocation_count(&log), 1);
+    assert_eq!(tunnel_invocation_count(&log), 1);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("exited with status 255; not reconnecting"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );

@@ -54,6 +54,29 @@ pub enum ConnectStage {
     Recovery,
 }
 
+/// The action that takes over after the SSH master is ready.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandoffStage {
+    Multiplexer,
+    WebTunnel,
+}
+
+impl HandoffStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Multiplexer => "Multiplexer",
+            Self::WebTunnel => "Web tunnel",
+        }
+    }
+
+    fn opening_detail(self) -> &'static str {
+        match self {
+            Self::Multiplexer => "attaching…",
+            Self::WebTunnel => "opening…",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StageFrame {
     pub stage: RecoveryStage,
@@ -84,6 +107,7 @@ struct Checkpoint {
 /// Checkpoint state for one transport outage.
 pub struct RecoveryPanel {
     connect_stage: ConnectStage,
+    handoff_stage: HandoffStage,
     host: String,
     grace: Duration,
     min_display: Duration,
@@ -101,12 +125,14 @@ pub struct RecoveryPanel {
 impl RecoveryPanel {
     pub fn new(
         connect_stage: ConnectStage,
+        handoff_stage: HandoffStage,
         host: impl Into<String>,
         internet: Option<&InternetProbe>,
         server: Option<&DialPlan>,
     ) -> Self {
         Self::with_timing(
             connect_stage,
+            handoff_stage,
             host,
             internet,
             server,
@@ -117,6 +143,7 @@ impl RecoveryPanel {
 
     fn with_timing(
         connect_stage: ConnectStage,
+        handoff_stage: HandoffStage,
         host: impl Into<String>,
         internet: Option<&InternetProbe>,
         server: Option<&DialPlan>,
@@ -125,6 +152,7 @@ impl RecoveryPanel {
     ) -> Self {
         Self {
             connect_stage,
+            handoff_stage,
             host: host.into(),
             grace,
             min_display,
@@ -273,9 +301,9 @@ impl RecoveryPanel {
             } else {
                 StageStatus::Waiting
             },
-            label: "Multiplexer".to_owned(),
+            label: self.handoff_stage.label().to_owned(),
             detail: if self.master_ready {
-                "attaching…".to_owned()
+                self.handoff_stage.opening_detail().to_owned()
             } else {
                 "waiting".to_owned()
             },
@@ -366,6 +394,7 @@ mod tests {
     fn panel(server: Option<&DialPlan>) -> RecoveryPanel {
         RecoveryPanel::with_timing(
             ConnectStage::Recovery,
+            HandoffStage::Multiplexer,
             "dev-box",
             Some(&internet()),
             server,
@@ -386,6 +415,7 @@ mod tests {
     fn initial_frame_carries_its_connection_stage() {
         let panel = RecoveryPanel::with_timing(
             ConnectStage::Initial,
+            HandoffStage::Multiplexer,
             "dev-box",
             None,
             None,
@@ -619,6 +649,26 @@ mod tests {
             StageStatus::Checking
         );
         assert_eq!(row(&frame, RecoveryStage::Multiplexer).detail, "attaching…");
+    }
+
+    #[test]
+    fn web_handoff_names_the_tunnel_opening_stage() {
+        let mut panel = RecoveryPanel::with_timing(
+            ConnectStage::Initial,
+            HandoffStage::WebTunnel,
+            "dev-box",
+            None,
+            None,
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+        panel.note_master_ready();
+
+        let frame = panel.frame(Duration::ZERO, FooterPhase::Connecting);
+        let handoff = row(&frame, RecoveryStage::Multiplexer);
+
+        assert_eq!(handoff.label, "Web tunnel");
+        assert_eq!(handoff.detail, "opening…");
     }
 
     #[test]
