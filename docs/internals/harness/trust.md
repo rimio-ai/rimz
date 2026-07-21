@@ -93,6 +93,8 @@ rimz trust [status|grant|revoke] [--json]
 
 `status` is the default. `grant` renders the surface diff when a prior record exists, then pins the live hash and surface. `revoke` deletes the record, reverting the workspace to `untrusted` (or `no_config` when `.rimz/config.toml` is absent). `rimz doctor` surfaces the trust state alongside its protocol checks. The full command surface is in the [reference](../../reference/cli/hooks-trust.md#project-trust).
 
+A loop task command that writes the project store itself re-pins the resulting surface when the pre-mutation state was `trusted` or `no_config`. An `untrusted` or `stale` pre-state keeps the review flow, so the command never blesses project edits that this machine has not reviewed.
+
 A fresh interactive `rimz start` on an `untrusted` workspace offers the grant before room birth. The prompt is scoped to never-granted repos; `stale` remains a re-grant flow through `rimz trust grant`. A decline writes `birth-prompt.toml` for the current surface hash, so RimZ asks again only after the executable surface changes. Attach, web starts, supervised runs, and non-TTY starts skip the prompt, and prompt errors log a warning rather than blocking the room.
 
 ## Adding a command-running field

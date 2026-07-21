@@ -20,6 +20,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 ### Fixed
 
 - A remote browser tunnel that accepts connections and then loses SSH with exit 255 now reconnects immediately instead of reporting that it was never established.
+- `rimz loop add`, `remove`, and `rename` on project tasks keep project trust when the workspace was already trusted, so your own task edit needs no re-review.
 - Interrupting a Claude subagent no longer leaves its finished parent pinned to `running` in the sidebar; the next parent tool or turn boundary closes the interrupted child from Claude's durable transcript marker.
 
 ## [0.4.0] (2026-07-20)

@@ -327,6 +327,89 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
 }
 
 #[test]
+fn trusted_project_task_edits_repin_trust() {
+    let env = Env::new();
+    write_project_config(&env, "[tasks.first]\ncheck = \"true\"\nevery = \"15m\"\n");
+    grant_project_trust(&env);
+
+    let added = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "second",
+            "--project",
+            "--check",
+            "true",
+            "--every",
+            "15m",
+        ],
+    );
+    assert!(
+        added.contains("trust: granted — task fires on schedule")
+            && !added.contains("stay inert")
+            && !added.contains("grant trust now"),
+        "{added}"
+    );
+    assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
+    loop_ok(&env, &["loop", "run", "second"]);
+
+    let removed = loop_ok(&env, &["loop", "remove", "second"]);
+    assert!(removed.contains("trust: kept"), "{removed}");
+    assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
+    loop_ok(&env, &["loop", "run", "first"]);
+}
+
+#[test]
+fn first_project_task_grants_fresh_config() {
+    let env = Env::new();
+    assert!(!env.project_root.join(".rimz/config.toml").exists());
+
+    let added = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "fresh",
+            "--project",
+            "--check",
+            "true",
+            "--every",
+            "15m",
+        ],
+    );
+    assert!(
+        added.contains("trust: granted — task fires on schedule"),
+        "{added}"
+    );
+    assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
+}
+
+#[test]
+fn project_task_edit_does_not_grant_foreign_change() {
+    let env = Env::new();
+    write_project_config(
+        &env,
+        "[tasks.remove-me]\ncheck = \"true\"\nevery = \"15m\"\n",
+    );
+    grant_project_trust(&env);
+    write_project_config(
+        &env,
+        "[tasks.remove-me]\ncheck = \"true\"\nevery = \"15m\"\n\n\
+         [[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
+    );
+
+    let removed = loop_ok(&env, &["loop", "remove", "remove-me"]);
+    assert!(
+        removed
+            .contains("trust: stale — project tasks stay inert until you run `rimz trust grant`")
+            && !removed.contains("trust: kept"),
+        "{removed}"
+    );
+    assert!(loop_ok(&env, &["trust"]).contains("trust: stale"));
+}
+
+#[test]
 fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     let env = Env::new();
     write_loop_config(
