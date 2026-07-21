@@ -184,7 +184,7 @@ nix = { version = "0.31", features = ["feature", "fs", "hostname", "net", "poll"
 # unsafe code into the binary; rustix 1.x is already in the dependency tree.
 rustix = "1"
 # Held on 0.3 because `crossterm` 0.29 (via ratatui) requires `^0.3.17`; bump when that line moves.
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 # Process detection
 which = "8"
