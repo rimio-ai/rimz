@@ -41,20 +41,16 @@ deny = [
     { name = "fs2", reason = "unmaintained; use std `File` locking instead" },
 ]
 skip = [
-    # `tungstenite`'s WebSocket handshake uses `sha1` 0.10, whose RustCrypto
-    # stack trails the workspace's `sha2` 0.11 line; drop when sha1 updates.
-    { crate = "block-buffer@0.10.4", reason = "tungstenite's sha1 0.10 handshake stack trails workspace sha2 0.11" },
-    { crate = "cpufeatures@0.2.17", reason = "tungstenite's sha1 0.10 handshake stack trails workspace sha2 0.11" },
-    { crate = "crypto-common@0.1.7", reason = "tungstenite's sha1 0.10 handshake stack trails workspace sha2 0.11" },
-    { crate = "digest@0.10.7", reason = "tungstenite's sha1 0.10 handshake stack trails workspace sha2 0.11" },
     # The `ring` crypto backend reached via `ureq`/`rustls` pins older support
     # crates than the rest of the tree; isolated to the TLS stack, drop when ring
     # catches up. (The former wit-bindgen and windows-sys skips left with the
     # graph's target scoping — wasm and windows triples are no longer audited.)
     { crate = "getrandom@0.2.17", reason = "ring pins getrandom 0.2; workspace otherwise on 0.3/0.4" },
-    # `sentry-core`'s `rand 0.9` (event sampling) pins getrandom 0.3 into the
-    # shipped graph, where `uuid` otherwise carries 0.4; drop when they converge.
-    { crate = "getrandom@0.3.4", reason = "sentry-core's rand 0.9 pins getrandom 0.3; uuid carries 0.4" },
+    # `proptest` and `sentry-core` still carry rand 0.9 after tungstenite moved
+    # to rand 0.10; drop these when both roots follow.
+    { crate = "getrandom@0.3.4", reason = "proptest and sentry-core's rand 0.9 pin getrandom 0.3; uuid and tungstenite carry 0.4" },
+    { crate = "rand@0.9.4", reason = "proptest and sentry retain rand 0.9; tungstenite carries rand 0.10" },
+    { crate = "rand_core@0.9.5", reason = "proptest and sentry's rand 0.9 pins rand_core 0.9; tungstenite carries 0.10" },
     # `thiserror-impl` 2.0.19 leads the proc-macro stack onto syn 3; every other
     # derive crate still carries syn 2. Drop when the rest follow.
     { crate = "syn@3.0.2", reason = "thiserror-impl 2.0.19 pins syn 3; the rest of the proc-macro stack carries syn 2" },

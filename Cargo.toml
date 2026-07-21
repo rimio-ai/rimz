@@ -117,7 +117,7 @@ url = "2"
 # fragmentation state machine over any `Read + Write`; hand-rolling that would
 # put protocol correctness on RimZ for a transport that must fail safe. Default
 # features are enough here; TLS stays out because the stream is UDS-local.
-tungstenite = "0.29"
+tungstenite = "0.30"
 
 # Off-box error/event reporting. RimZ `warn!`/`error!` and observed agent
 # rate-limit/overload conditions surface in a Sentry project an operator can
