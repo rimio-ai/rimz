@@ -33,6 +33,7 @@ c_dim=
 c_head=
 c_spin=
 c_bold=
+c_warn=
 
 if [ "$fancy" = 1 ]; then
     reset="${esc}[0m"
@@ -41,6 +42,7 @@ if [ "$fancy" = 1 ]; then
     c_head="${esc}[1;97m"
     c_spin="${esc}[38;2;122;162;247m"
     c_bold="${esc}[1m"
+    c_warn="${esc}[38;2;224;175;104m"
     case "${COLORTERM:-}" in
         *[Tt][Rr][Uu][Ee][Cc][Oo][Ll][Oo][Rr]*|*24[Bb][Ii][Tt]*)
             row1="${esc}[38;2;122;162;247m"
@@ -60,6 +62,7 @@ if [ "$fancy" = 1 ]; then
             c_ok="${esc}[32m"
             c_dim="${esc}[2m"
             c_spin="${esc}[34m"
+            c_warn="${esc}[33m"
             ;;
     esac
 fi
@@ -67,6 +70,9 @@ fi
 cursor_hidden=0
 tmp_dir=
 dl_pid=
+banner_drawn=0
+ladder_rows=4
+brew_action=
 
 say() {
     printf '%s\n' "$*" >&2
@@ -106,6 +112,38 @@ cleanup() {
         wait "$dl_pid" 2>/dev/null || true
     fi
     [ -z "$tmp_dir" ] || rm -rf "$tmp_dir"
+}
+
+finish_install() {
+    if [ "$fancy" = 1 ]; then
+        printf '\n' >&2
+    fi
+
+    if ! path_contains "$dest"; then
+        if [ "$fancy" = 1 ]; then
+            printf '%sAdd RimZ to your PATH:%s\n' "$c_dim" "$reset" >&2
+            printf '%s  export PATH="%s:$PATH"%s\n' "$c_dim" "$dest" "$reset" >&2
+        else
+            say "Add RimZ to your PATH:"
+            printf '  export PATH="%s:$PATH"\n' "$dest" >&2
+        fi
+    fi
+
+    resolved=$(command -v rimz 2>/dev/null || true)
+    if [ -n "$resolved" ] && [ "$resolved" != "$installed" ]; then
+        if [ "$fancy" = 1 ]; then
+            printf '%sNote: %s currently shadows %s%s\n' "$c_dim" "$resolved" "$installed" "$reset" >&2
+        else
+            say "Note: $resolved currently shadows $installed"
+        fi
+    fi
+
+    if [ "$fancy" = 1 ]; then
+        printf '%sNext: rimz doctor%s\n' "$c_bold" "$reset" >&2
+        restore_cursor
+    else
+        say "Next step: rimz doctor"
+    fi
 }
 
 banner_line1='  ██████╗ ██╗███╗   ███╗███████╗'
@@ -184,7 +222,7 @@ print_row() {
 }
 
 draw_row() {
-    draw_offset=$((5 - $1))
+    draw_offset=$((ladder_rows + 1 - $1))
     shift
     printf '\033[%sA\r\033[K' "$draw_offset" >&2
     print_row "$@"
@@ -232,18 +270,6 @@ verify_archive() {
     fi
 }
 
-require curl
-require tar
-require install
-
-if command -v sha256sum >/dev/null 2>&1; then
-    checksum_tool=sha256sum
-elif command -v shasum >/dev/null 2>&1; then
-    checksum_tool=shasum
-else
-    die "sha256sum or shasum is required; install coreutils and retry"
-fi
-
 system=$(uname -s)
 machine=$(uname -m)
 
@@ -271,16 +297,138 @@ case "$system:$machine" in
         ;;
 esac
 
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
+tmp_dir=$(mktemp -d)
+
+use_brew() {
+    [ "$system" = Darwin ] || return 1
+    [ "$version" = latest ] || return 1
+    [ -z "$install_dir" ] || return 1
+    [ "${RIMZ_NO_BREW:-0}" != 1 ] || return 1
+    command -v brew >/dev/null 2>&1 || return 1
+
+    brew_action=install
+    if brew list --versions rimz >/dev/null 2>&1; then
+        brew_action=upgrade
+    elif command -v rimz >/dev/null 2>&1; then
+        return 1
+    fi
+}
+
+brew_failed() {
+    brew_failure=$1
+    if [ "$fancy" = 1 ]; then
+        draw_row 2 "$c_warn" '✗' homebrew "$brew_failure" ''
+        restore_cursor
+        cat "$tmp_dir/brew.log" >&2
+    fi
+    say "Homebrew install failed; falling back to the release download"
+    return 1
+}
+
+install_with_brew() {
+    ladder_rows=3
+    if [ "$fancy" = 1 ]; then
+        animate_banner
+        banner_drawn=1
+
+        print_row "$c_ok" '✓' platform "$target" ''; printf '\n' >&2
+        print_row "$c_spin" '⠋' homebrew "$brew_action rimz" ''; printf '\n' >&2
+        print_row "$c_dim" '·' install '' "$c_dim"; printf '\n' >&2
+
+        brew "$brew_action" rimio-ai/rimz/rimz > "$tmp_dir/brew.log" 2>&1 &
+        dl_pid=$!
+        spinner_frame=0
+        while kill -0 "$dl_pid" 2>/dev/null; do
+            spinner=$(spinner_glyph "$spinner_frame")
+            draw_row 2 "$c_spin" "$spinner" homebrew "$brew_action rimz" ''
+            spinner_frame=$(((spinner_frame + 1) % 10))
+            sleep 0.08
+        done
+        if wait "$dl_pid"; then
+            brew_status=0
+        else
+            brew_status=$?
+        fi
+        dl_pid=
+        if [ "$brew_status" -ne 0 ]; then
+            brew_failed "brew $brew_action failed"
+            return 1
+        fi
+
+        draw_row 2 "$c_ok" '✓' homebrew "brew $brew_action complete" ''
+        draw_row 3 "$c_spin" '⠋' install 'resolving binary' ''
+    else
+        say "Installing RimZ with Homebrew"
+        if ! brew "$brew_action" rimio-ai/rimz/rimz; then
+            brew_failed "brew $brew_action failed"
+            return 1
+        fi
+    fi
+
+    brew_formula_prefix=$(brew --prefix rimz 2>/dev/null || true)
+    if [ -n "$brew_formula_prefix" ] && [ -f "$brew_formula_prefix/bin/rimz" ]; then
+        installed=$brew_formula_prefix/bin/rimz
+    else
+        installed=$(command -v rimz 2>/dev/null || true)
+    fi
+    if [ -z "$installed" ] || [ ! -f "$installed" ]; then
+        brew_failed 'installed binary not found'
+        return 1
+    fi
+    dest=${installed%/*}
+
+    if [ "$fancy" = 1 ]; then
+        if installed_version=$("$installed" --version 2>&1); then
+            draw_row 3 "$c_ok" '✓' install "$installed  $installed_version" ''
+        else
+            printf '%s\n' "$installed_version" >> "$tmp_dir/brew.log"
+            brew_failed 'version check failed'
+            return 1
+        fi
+    else
+        if ! "$installed" --version >&2; then
+            brew_failed 'version check failed'
+            return 1
+        fi
+        say "Installed RimZ to $installed"
+    fi
+
+    # Homebrew exposes formula files under `brew --prefix rimz` but links
+    # commands from its global prefix. Report that linked path when present so
+    # the shared PATH and shadow checks describe the command users will run.
+    brew_prefix=$(brew --prefix 2>/dev/null || true)
+    if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/bin/rimz" ]; then
+        installed=$brew_prefix/bin/rimz
+        dest=$brew_prefix/bin
+    fi
+    return 0
+}
+
+if use_brew && install_with_brew; then
+    finish_install
+    exit 0
+fi
+
+require curl
+require tar
+require install
+
+if command -v sha256sum >/dev/null 2>&1; then
+    checksum_tool=sha256sum
+elif command -v shasum >/dev/null 2>&1; then
+    checksum_tool=shasum
+else
+    die "sha256sum or shasum is required; install coreutils and retry"
+fi
+
 archive="rimz-$target.tar.gz"
 if [ "$version" = latest ]; then
     base_url=https://github.com/rimio-ai/rimz/releases/latest/download
 else
     base_url="https://github.com/rimio-ai/rimz/releases/download/$version"
 fi
-
-trap cleanup 0
-trap 'exit 1' HUP INT TERM
-tmp_dir=$(mktemp -d)
 
 (
     download_child=
@@ -317,7 +465,13 @@ tmp_dir=$(mktemp -d)
 dl_pid=$!
 
 if [ "$fancy" = 1 ]; then
-    animate_banner
+    ladder_rows=4
+    if [ "$banner_drawn" = 0 ]; then
+        animate_banner
+    else
+        printf '%s' "${esc}[?25l" >&2
+        cursor_hidden=1
+    fi
 
     print_row "$c_ok" '✓' platform "$target" ''; printf '\n' >&2
     print_row "$c_spin" '⠋' download "rimz $version" ''; printf '\n' >&2
@@ -416,32 +570,4 @@ else
     say "Installed RimZ to $installed"
 fi
 
-if [ "$fancy" = 1 ]; then
-    printf '\n' >&2
-fi
-
-if ! path_contains "$dest"; then
-    if [ "$fancy" = 1 ]; then
-        printf '%sAdd RimZ to your PATH:%s\n' "$c_dim" "$reset" >&2
-        printf '%s  export PATH="%s:$PATH"%s\n' "$c_dim" "$dest" "$reset" >&2
-    else
-        say "Add RimZ to your PATH:"
-        printf '  export PATH="%s:$PATH"\n' "$dest" >&2
-    fi
-fi
-
-resolved=$(command -v rimz 2>/dev/null || true)
-if [ -n "$resolved" ] && [ "$resolved" != "$installed" ]; then
-    if [ "$fancy" = 1 ]; then
-        printf '%sNote: %s currently shadows %s%s\n' "$c_dim" "$resolved" "$installed" "$reset" >&2
-    else
-        say "Note: $resolved currently shadows $installed"
-    fi
-fi
-
-if [ "$fancy" = 1 ]; then
-    printf '%sNext: rimz doctor%s\n' "$c_bold" "$reset" >&2
-    restore_cursor
-else
-    say "Next step: rimz doctor"
-fi
+finish_install
