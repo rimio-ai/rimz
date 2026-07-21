@@ -10,14 +10,23 @@ fn remote_lineage_reap_kills_only_the_matching_attached_client() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
+    let cwd = tempfile::tempdir().expect("session cwd");
     let name = unique_session_name("reap");
     let _cleanup = ScopedSessionCleanup {
         name: name.clone(),
         xdg: xdg.path().to_path_buf(),
     };
-    let client =
+    // Birth the session in the background and prove it answers actions before
+    // any client attaches. A PTY `attach --create` births and attaches in one
+    // unchecked step, and a starved host lets that client sit forever against a
+    // server that never came up — the session under test has to exist on a
+    // checked command.
+    create_plain_background_session(xdg.path(), &name, cwd.path(), "600");
+    wait_until_session_ready(xdg.path(), &name);
+
+    let mut client =
         AttachedClient::attach_with_lineage(xdg.path(), &name, "0123456789abcdef", 120, 40);
-    wait_for_client_count(xdg.path(), &name, 1);
+    wait_for_client_count(xdg.path(), &name, 1, &mut client);
     let client_pid = client.pid();
     wait_for_attached_lineage_client(client_pid, &name, "0123456789abcdef");
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
@@ -26,7 +35,7 @@ fn remote_lineage_reap_kills_only_the_matching_attached_client() {
         .expect("other-lineage reap");
     assert!(other.killed_pids.is_empty(), "other lineage: {other:?}");
     assert!(other.settled, "other lineage is a settled no-op: {other:?}");
-    wait_for_client_count(xdg.path(), &name, 1);
+    wait_for_client_count(xdg.path(), &name, 1, &mut client);
 
     let same = zellij::reap_lineage_clients(&backend, &name, "0123456789abcdef")
         .expect("same-lineage reap");
@@ -69,7 +78,12 @@ fn wait_for_attached_lineage_client(pid: u32, session: &str, lineage: &str) {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn wait_for_client_count(xdg: &std::path::Path, session: &str, want: usize) {
+fn wait_for_client_count(
+    xdg: &std::path::Path,
+    session: &str,
+    want: usize,
+    client: &mut AttachedClient,
+) {
     let backend = ZellijBackend::with_runtime_dir(xdg);
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let mut consecutive_matches = 0;
@@ -100,6 +114,14 @@ fn wait_for_client_count(xdg: &std::path::Path, session: &str, want: usize) {
                 last_error = err.to_string();
                 consecutive_matches = 0;
             }
+        }
+        // A client that exited takes the count with it, so name that cause
+        // directly rather than spending the whole deadline on a count that can
+        // no longer move.
+        if let Some(status) = client.exit_status() {
+            panic!(
+                "attached client for {session} exited with {status} while waiting for {want} clients; last count {last_count:?}; last error: {last_error}"
+            );
         }
         assert!(
             Instant::now() < deadline,

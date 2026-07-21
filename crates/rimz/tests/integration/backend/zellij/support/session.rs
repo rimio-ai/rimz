@@ -263,6 +263,10 @@ impl AttachedClient {
         Self::attach_inner(xdg, name, cols, rows, None, false)
     }
 
+    /// Attach carrying a remote lineage, under the exact `attach --create
+    /// <session>` argv a production remote attach spawns — the reaper selects
+    /// its victims on that argv, so the fixture reproduces it. Birth the
+    /// session first; `--create` here attaches to what already exists.
     pub(in crate::backend::zellij) fn attach_with_lineage(
         xdg: &Path,
         name: &str,
@@ -339,6 +343,13 @@ impl AttachedClient {
 
     pub(in crate::backend::zellij) fn pid(&self) -> u32 {
         self.child.process_id().expect("attached client process id")
+    }
+
+    /// The client's exit status once it has stopped, and `None` while it runs.
+    /// A wait that depends on this client being registered with the server can
+    /// end the moment the client is gone.
+    pub(in crate::backend::zellij) fn exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
+        self.child.try_wait().ok().flatten()
     }
 
     pub(in crate::backend::zellij) fn go_to_tab(&mut self, tab: u8) {
@@ -476,9 +487,15 @@ pub(in crate::backend::zellij) fn capture_pty_output_until(
     output
 }
 
+/// A session name no concurrent test can also draw. The leading 48 bits of a v7
+/// UUID are its millisecond clock, so a name cut from the front alone repeats
+/// across tests that start in the same millisecond — and a repeat is visible to
+/// anything that scans the process table by session name rather than by runtime
+/// dir, the reaper included. Pair the clock tail with random bytes so the name
+/// stays roughly time-ordered and still unique.
 pub(in crate::backend::zellij) fn unique_session_name(prefix: &str) -> String {
     let id = uuid::Uuid::now_v7().simple().to_string();
-    format!("rimz-{prefix}-{}", &id[..12])
+    format!("rimz-{prefix}-{}-{}", &id[6..12], &id[26..32])
 }
 
 pub(in crate::backend::zellij) fn sidebar_command_stub() -> (TempDir, PathBuf) {
