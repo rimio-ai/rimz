@@ -201,6 +201,18 @@ pub struct GalleryColumn<'a> {
     pub ui: &'a mut UiState,
 }
 
+/// Terminal width above which the gallery packs a fourth fixture column.
+const GALLERY_FOUR_COLUMN_MIN_WIDTH: u16 = 240;
+
+/// Returns the number of gallery columns that fit at the launch width.
+pub fn gallery_column_cap(width: u16) -> usize {
+    if width > GALLERY_FOUR_COLUMN_MIN_WIDTH {
+        4
+    } else {
+        3
+    }
+}
+
 pub fn draw_gallery_to_terminal<B: Backend>(
     terminal: &mut Terminal<B>,
     columns: &mut [GalleryColumn<'_>],

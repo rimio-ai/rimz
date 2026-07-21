@@ -49,12 +49,21 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
     Ok(())
 }
 
-pub fn serve_gallery(columns: Vec<(SidebarSnapshot, usize)>, refresh_ms: u16) -> super::Result<()> {
+pub fn serve_gallery(
+    mut columns: Vec<(SidebarSnapshot, usize)>,
+    refresh_ms: u16,
+) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
+
+    let cap = terminal
+        .size()
+        .map(|size| render::gallery_column_cap(size.width))
+        .unwrap_or(3);
+    columns.truncate(cap);
 
     let (caps, wrap_pixels) = detect_pixel_render_env();
     let id_base = PixelPainter::runtime_id_base();
