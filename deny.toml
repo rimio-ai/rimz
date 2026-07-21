@@ -55,6 +55,9 @@ skip = [
     # `sentry-core`'s `rand 0.9` (event sampling) pins getrandom 0.3 into the
     # shipped graph, where `uuid` otherwise carries 0.4; drop when they converge.
     { crate = "getrandom@0.3.4", reason = "sentry-core's rand 0.9 pins getrandom 0.3; uuid carries 0.4" },
+    # `thiserror-impl` 2.0.19 leads the proc-macro stack onto syn 3; every other
+    # derive crate still carries syn 2. Drop when the rest follow.
+    { crate = "syn@3.0.2", reason = "thiserror-impl 2.0.19 pins syn 3; the rest of the proc-macro stack carries syn 2" },
     # `toml_edit`/`indexmap` has moved to hashbrown 0.17 while the ratatui
     # stack still carries 0.16; drop when either upstream converges.
     { crate = "hashbrown@0.17.1", reason = "toml_edit/indexmap pins hashbrown 0.17; ratatui stack pins 0.16" },

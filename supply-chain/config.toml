@@ -50,7 +50,7 @@ version = "3.0.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.anyhow]]
-version = "1.0.103"
+version = "1.0.104"
 criteria = "safe-to-deploy"
 
 [[exemptions.approx]]
@@ -138,11 +138,11 @@ version = "3.2.25"
 criteria = "safe-to-run"
 
 [[exemptions.clap]]
-version = "4.6.1"
+version = "4.6.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_builder]]
-version = "4.6.0"
+version = "4.6.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_complete]]
@@ -158,7 +158,7 @@ version = "3.2.25"
 criteria = "safe-to-run"
 
 [[exemptions.clap_derive]]
-version = "4.6.1"
+version = "4.6.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_lex]]
@@ -381,10 +381,6 @@ criteria = "safe-to-deploy"
 version = "2.4.1"
 criteria = "safe-to-run"
 
-[[exemptions.fdeflate]]
-version = "0.3.7"
-criteria = "safe-to-deploy"
-
 [[exemptions.filedescriptor]]
 version = "0.8.3"
 criteria = "safe-to-deploy"
@@ -558,11 +554,15 @@ version = "1.0.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.jiff]]
-version = "0.2.31"
+version = "0.2.34"
+criteria = "safe-to-deploy"
+
+[[exemptions.jiff-core]]
+version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.jiff-static]]
-version = "0.2.31"
+version = "0.2.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.jiff-tzdb]]
@@ -739,10 +739,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.num_threads]]
 version = "0.1.7"
-criteria = "safe-to-deploy"
-
-[[exemptions.objc2-core-foundation]]
-version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.objc2-io-kit]]
@@ -1030,27 +1026,27 @@ version = "1.0.28"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry]]
-version = "0.48.3"
+version = "0.48.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-backtrace]]
-version = "0.48.3"
+version = "0.48.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-core]]
-version = "0.48.3"
+version = "0.48.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-panic]]
-version = "0.48.3"
+version = "0.48.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-tracing]]
-version = "0.48.3"
+version = "0.48.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-types]]
-version = "0.48.3"
+version = "0.48.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_ignored]]
@@ -1058,7 +1054,7 @@ version = "0.1.14"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_json]]
-version = "1.0.150"
+version = "1.0.151"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_spanned]]
@@ -1068,10 +1064,6 @@ criteria = "safe-to-deploy"
 [[exemptions.serial2]]
 version = "0.2.37"
 criteria = "safe-to-run"
-
-[[exemptions.sha1]]
-version = "0.10.6"
-criteria = "safe-to-deploy"
 
 [[exemptions.sha2]]
 version = "0.11.0"
@@ -1185,8 +1177,12 @@ criteria = "safe-to-deploy"
 version = "2.0.118"
 criteria = "safe-to-deploy"
 
+[[exemptions.syn]]
+version = "3.0.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.sysinfo]]
-version = "0.39.5"
+version = "0.39.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.tar]]
@@ -1214,11 +1210,11 @@ version = "0.23.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror]]
-version = "2.0.18"
+version = "2.0.19"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror-impl]]
-version = "2.0.18"
+version = "2.0.19"
 criteria = "safe-to-deploy"
 
 [[exemptions.thread-id]]
@@ -1242,7 +1238,7 @@ version = "0.2.31"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio]]
-version = "1.52.3"
+version = "1.53.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-macros]]
@@ -1330,7 +1326,7 @@ version = "0.8.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.23.4"
+version = "1.24.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.valuable]]
@@ -1418,7 +1414,7 @@ version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.which]]
-version = "8.0.4"
+version = "8.0.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.widestring]]
