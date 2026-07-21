@@ -92,7 +92,9 @@ style_client = true
 
 RimZ invokes ttyd with write access, origin checks, mandatory Basic Auth, and an explicit loopback bind.
 
-The browser session is shell access as the serving user, and terminal output can contain secrets. Put HTTPS and rate limiting in front before exposing the listener beyond loopback:
+The one machine credential authenticates the shared listener, so it grants access to every live RimZ room on that machine rather than only the room named in the first URL. An authenticated client can submit another session argument, and a missing or rejected argument lists the live RimZ rooms. A remote `--web` tunnel forwards this same machine-wide surface through its local port.
+
+The browser session is shell access as the serving user, and terminal output can contain secrets. Treat the credential as machine-wide shell access. Put HTTPS and rate limiting in front before exposing the listener beyond loopback:
 
 ```text
 browser -> HTTPS reverse proxy with rate limiting -> 127.0.0.1:8200

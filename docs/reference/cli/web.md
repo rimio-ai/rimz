@@ -24,17 +24,19 @@ rimz web token revoke-all
 | `--print` | Skip the browser launch. |
 | `--no-start` | Require the shared daemon to already be online. |
 | `--no-resume` | Skip recovering the room's prior agents. |
-| `--json` | Emit the `rimz.web.v2` payload on stdout; the credential is inside the payload. |
+| `--json` | Emit the `rimz.web.v2` payload on stdout; `open` includes the credential. |
 
-`url` requires an existing workspace record and computes its route without birthing a room or starting the daemon. JSON output provisions the machine credential when absent because the v2 payload includes it.
+`url` requires an existing workspace record and inspects its route without birthing a room, starting the daemon, or creating a credential. A live daemon's port wins over a changed configured port; offline inspection uses `[web] port`. JSON output includes the saved credential when one exists and omits `credential` otherwise.
 
 `start`, `status`, and `stop` act on the one machine daemon and do not need a room. The port comes from `[web] port`; command-line listener and TLS overrides are not supported.
 
-The JSON `open` and `url` payload is:
+The JSON `open` payload is:
 
 ```json
 {"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?arg=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8200,"credential":{"username":"rimz","secret":"..."}}
 ```
+
+The `url --json` payload has the same fields, with optional `credential`.
 
 `status --json` emits `version`, `online`, `pid`, and `port`.
 

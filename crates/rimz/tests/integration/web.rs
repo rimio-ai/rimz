@@ -86,6 +86,7 @@ struct WebFixture {
     env: Env,
     workspace: rimz::ResolvedWorkspace,
     bin_dir: PathBuf,
+    ttyd_bin: PathBuf,
     tmux_log: PathBuf,
     ttyd_log: PathBuf,
 }
@@ -98,11 +99,14 @@ impl WebFixture {
         let workspace =
             rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
         let (bin_dir, tmux_log) = tmux_shim(&env);
+        let ttyd_bin = bin_dir.join("ttyd");
+        std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
         let ttyd_log = env.project_root.join(log_name);
         Self {
             env,
             workspace,
             bin_dir,
+            ttyd_bin,
             tmux_log,
             ttyd_log,
         }
@@ -116,7 +120,7 @@ impl WebFixture {
         let mut command = self.env.rimz();
         command
             .env("PATH", &self.bin_dir)
-            .env("RIMZ_TTYD_BIN", ttyd_shim())
+            .env("RIMZ_TTYD_BIN", &self.ttyd_bin)
             .env("RIMZ_TEST_TTYD_LOG", &self.ttyd_log)
             .env("RIMZ_WEB_FONTS_OFFLINE", "1")
             .env("RIMZ_TEST_TMUX_LOG", &self.tmux_log)
@@ -175,7 +179,15 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
             fixture.workspace.session_name
         )
     );
-    assert_eq!(url["credential"]["username"], "rimz");
+    assert!(url.get("credential").is_none());
+    assert!(
+        !fixture
+            .env
+            .state_root()
+            .join("rimz/web-ttyd-credential.json")
+            .exists(),
+        "URL inspection persisted a credential"
+    );
 
     let status = fixture
         .command()
@@ -203,6 +215,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         fixture.workspace.session_name, second.session_name
     );
 
+    let mut shared_secret = None;
     for workspace in [&fixture.workspace, &second] {
         let open = fixture
             .command_with_sessions(&sessions)
@@ -220,6 +233,14 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
             format!("http://127.0.0.1:8200/?arg={}", workspace.session_name)
         );
         assert_eq!(payload["credential"]["username"], "rimz");
+        let secret = payload["credential"]["secret"]
+            .as_str()
+            .expect("shared credential secret");
+        if let Some(first) = &shared_secret {
+            assert_eq!(secret, first);
+        } else {
+            shared_secret = Some(secret.to_owned());
+        }
     }
 
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read ttyd log");
@@ -248,6 +269,43 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     assert_eq!(status["online"], true);
     assert_eq!(status["port"], 8200);
     assert!(status["pid"].as_u64().is_some());
+
+    write_machine_config(&fixture.env, "[web]\nport = 9123\n");
+    let url = fixture
+        .command_with_sessions(&sessions)
+        .args(["--mux", "tmux", "web", "url", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .arg("--json")
+        .bounded_output()
+        .expect("inspect live shared daemon");
+    let url = success_json(&url, "live shared URL");
+    assert_eq!(url["port"], 8200, "live port wins over changed config");
+    assert_eq!(
+        url["credential"]["secret"],
+        shared_secret.expect("first shared credential")
+    );
+    write_machine_config(&fixture.env, "[web]\nport = 8200\n");
+
+    std::fs::remove_file(
+        fixture
+            .env
+            .state_root()
+            .join("rimz/web-ttyd-credential.json"),
+    )
+    .expect("remove shared credential");
+    let no_start = fixture
+        .command_with_sessions(&sessions)
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--print", "--no-start"])
+        .bounded_output()
+        .expect("open live daemon without credential");
+    assert!(!no_start.status.success());
+    assert!(
+        String::from_utf8_lossy(&no_start.stderr).contains("daemon credential is missing"),
+        "{}",
+        String::from_utf8_lossy(&no_start.stderr)
+    );
 
     let rotate = fixture
         .command_with_sessions(&sessions)
@@ -316,8 +374,6 @@ fn concurrent_start_calls_create_one_shared_daemon() {
 #[cfg(unix)]
 #[test]
 fn first_shared_start_reaps_legacy_ttyd_before_binding_its_port() {
-    use std::os::unix::fs::symlink;
-
     let _guard = daemon_test_guard();
     let fixture = WebFixture::new("ttyd-legacy.log");
     let port = std::net::TcpListener::bind(("127.0.0.1", 0))
@@ -326,9 +382,7 @@ fn first_shared_start_reaps_legacy_ttyd_before_binding_its_port() {
         .expect("legacy port address")
         .port();
     write_machine_config(&fixture.env, &format!("[web]\nport = {port}\n"));
-    let legacy_program = fixture.bin_dir.join("ttyd");
-    symlink(ttyd_shim(), &legacy_program).expect("link legacy ttyd fixture");
-    let mut legacy = Command::new(&legacy_program)
+    let mut legacy = Command::new(&fixture.ttyd_bin)
         .args(["-p", &port.to_string(), "sh"])
         .env("RIMZ_TEST_TTYD_LOG", &fixture.ttyd_log)
         .stdin(Stdio::null())
@@ -404,6 +458,69 @@ fn no_start_requires_an_online_daemon() {
 
 #[cfg(unix)]
 #[test]
+fn stale_daemon_record_never_signals_a_reused_non_ttyd_pid() {
+    let env = Env::new();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind foreign listener");
+    let port = listener
+        .local_addr()
+        .expect("foreign listener address")
+        .port();
+    let mut unrelated = Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("spawn unrelated process");
+    let state = env.state_root().join("rimz");
+    std::fs::create_dir_all(&state).expect("mkdir web state");
+    std::fs::write(
+        state.join("web-ttyd.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "pid": unrelated.id(),
+            "port": port
+        }))
+        .expect("serialize stale daemon state"),
+    )
+    .expect("write stale daemon state");
+
+    let stop = env
+        .rimz()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop stale daemon record");
+    assert_success(&stop, "discard stale daemon record");
+    assert!(String::from_utf8_lossy(&stop.stdout).contains("stopped 0 ttyd daemons"));
+    assert!(
+        unrelated
+            .try_wait()
+            .expect("query unrelated process")
+            .is_none(),
+        "stale daemon record signalled unrelated process"
+    );
+    unrelated.kill().expect("kill unrelated fixture");
+    unrelated.wait().expect("reap unrelated fixture");
+}
+
+#[cfg(unix)]
+#[test]
+fn web_exec_rejects_unknown_session_and_lists_live_rimz_rooms() {
+    let fixture = WebFixture::new("ttyd-exec-reject.log");
+    let output = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "exec", "not-a-rimz-room"])
+        .bounded_output()
+        .expect("reject unknown web session");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("session `not-a-rimz-room` is not a live RimZ room"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Live RimZ sessions:"), "{stderr}");
+    assert!(stderr.contains(&fixture.workspace.session_name), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
 fn custom_font_is_inlined_into_the_shared_client_index() {
     let _guard = daemon_test_guard();
     let fixture = WebFixture::new("ttyd-custom-font.log");
@@ -467,12 +584,16 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
     let ttyd_log = env.project_root.join("ttyd-zellij.log");
     let zellij_log = env.project_root.join("zellij-web.log");
+    let ttyd_bin = env.home_root.join("zellij-web-bin/ttyd");
+    std::fs::create_dir_all(ttyd_bin.parent().expect("ttyd fixture parent"))
+        .expect("mkdir ttyd fixture parent");
+    std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
     let output = env
         .rimz()
         .args(["--mux", "zellij", "web", "open", "--session"])
         .arg(&workspace.session_name)
         .args(["--print", "--json"])
-        .env("RIMZ_TTYD_BIN", ttyd_shim())
+        .env("RIMZ_TTYD_BIN", &ttyd_bin)
         .env("RIMZ_TEST_TTYD_LOG", &ttyd_log)
         .env("RIMZ_WEB_FONTS_OFFLINE", "1")
         .env("RIMZ_ZELLIJ_BIN", zellij_shim())

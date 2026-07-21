@@ -43,6 +43,10 @@ pub enum WebErr {
     #[error("the shared ttyd daemon is offline; run `rimz web start` or omit `--no-start`")]
     TtydOffline,
     #[error(
+        "the shared ttyd daemon credential is missing; run `rimz web token create`, then retry"
+    )]
+    TtydCredentialMissing,
+    #[error(
         "the shared ttyd daemon did not accept connections on 127.0.0.1:{port} within 5 seconds"
     )]
     TtydStartTimeout { port: u16 },
@@ -72,7 +76,8 @@ pub struct WebOpenPayload {
     pub url: String,
     pub session: String,
     pub port: u16,
-    pub credential: WebCredential,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<WebCredential>,
 }
 
 impl WebOpenPayload {
@@ -80,7 +85,7 @@ impl WebOpenPayload {
         session: impl Into<String>,
         base_url: impl Into<String>,
         port: u16,
-        credential: WebCredential,
+        credential: Option<WebCredential>,
     ) -> Self {
         let session = session.into();
         let base_url = base_url.into();
@@ -144,7 +149,6 @@ pub enum CredentialCommand {
     List,
     Revoke { name: String },
     RevokeAll,
-    Ensure,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,7 +159,6 @@ pub struct CredentialSummary {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialOutcome {
-    Ensured(WebCredential),
     Rotated {
         credential: WebCredential,
         restarted_instances: usize,
@@ -314,13 +317,19 @@ mod tests {
             "rimz-test-a1b2c3",
             "http://127.0.0.1:8200/",
             8200,
-            WebCredential {
+            Some(WebCredential {
                 username: "rimz".to_owned(),
                 secret: "secret".to_owned(),
-            },
+            }),
         );
         assert_eq!(payload.url, "http://127.0.0.1:8200/?arg=rimz-test-a1b2c3");
-        assert_eq!(payload.credential.username, "rimz");
+        assert_eq!(
+            payload
+                .credential
+                .as_ref()
+                .map(|credential| credential.username.as_str()),
+            Some("rimz")
+        );
 
         let json = serde_json::to_vec(&payload).expect("json");
         let parsed: WebOpenPayload = serde_json::from_slice(&json).expect("parse");
