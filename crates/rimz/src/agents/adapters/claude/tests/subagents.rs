@@ -76,7 +76,7 @@ fn interrupted_child_recovers_identity_and_usage() {
         child.with_extension("meta.json"),
         json!({
             "agentType": " general-purpose ",
-            "description": " inspect lifecycle ",
+            "description": "<user_query> inspect lifecycle </user_query>",
             "toolUseId": "tool-1",
             "spawnDepth": 1
         })
@@ -166,12 +166,27 @@ fn malformed_files_degrade_independently() {
 #[test]
 fn nested_replay_cannot_close_the_outer_child() {
     let (_dir, parent, children) = legacy_session();
+    let mut nested_usage = assistant("nested", "tool_use");
+    nested_usage["message"]["model"] = json!("nested-model");
+    nested_usage["message"]["usage"]["input_tokens"] = json!(999);
     write_records(
         &children.join("agent-outer.jsonl"),
+        &[
+            assistant("outer", "tool_use"),
+            interrupted("outer"),
+            nested_usage,
+        ],
+    );
+    write_records(
+        &children.join("agent-only-nested.jsonl"),
         &[interrupted("nested")],
     );
 
-    assert!(spawned_subagents_under(&parent).is_empty());
+    let found = spawned_subagents_under(&parent);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].child_agent_id, "outer");
+    assert_eq!(found[0].model.as_deref(), Some("claude-sonnet-4-5"));
+    assert_eq!(found[0].total_tokens, Some(26));
     assert!(
         ClaudeAdapter
             .spawned_subagents(SubagentSpawnInput {

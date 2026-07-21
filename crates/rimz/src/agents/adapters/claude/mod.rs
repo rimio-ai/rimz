@@ -1167,6 +1167,10 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
     };
+    usage_from_transcript_tail(&text, None)
+}
+
+fn usage_from_transcript_tail(text: &str, agent_id: Option<&str>) -> TranscriptUsage {
     // Newest-first: the last assistant usage record wins. A truncated leading
     // line from the tail seek simply fails to parse and is skipped.
     for line in text.lines().rev() {
@@ -1177,6 +1181,11 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if agent_id
+            .is_some_and(|agent_id| value.get("agentId").and_then(Value::as_str) != Some(agent_id))
+        {
+            continue;
+        }
         let message = value.get("message");
         let Some(usage) = message.and_then(|m| m.get("usage")) else {
             continue;
