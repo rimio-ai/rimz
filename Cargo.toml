@@ -31,6 +31,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# ttyd custom pages inline cached fonts as data URLs. `base64` is already in
+# the dependency graph through Sentry; making it direct avoids another local
+# codec on a browser-input boundary.
+base64 = "0.22"
 dotenvy = "0.15"
 # `rimz config` probes unknown keys through the serde model so the editable key
 # surface stays derived from the real config structs instead of a hand-mirrored

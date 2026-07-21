@@ -9,6 +9,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 ### Added
 
 - First-run setup asks whether to enable auto-continue and automatic Codex reset-credit redemption together, defaulting yes. → [loops](./docs/guide/loops.md)
+- tmux browser rooms provision a verified JetBrainsMono or CaskaydiaCove Nerd Font, accept a local or HTTPS custom font, and use the active RimZ terminal colors. macOS Option chords now reach tmux as Meta input instead of composing browser characters. → [web](./docs/guide/web.md#tmux-rooms)
 
 ### Changed
 

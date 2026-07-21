@@ -35,10 +35,16 @@ tmux uses one ttyd process per room.
 The process argv is structurally fixed:
 
 ```text
-ttyd -W -O -c rimz:<secret> -i 127.0.0.1 -p <port> -b /<session> tmux attach -t <session>
+ttyd -W -O -c rimz:<secret> -i 127.0.0.1 -p <port> -b /<session> -t macOptionIsMeta=true [client styling] tmux -S <socket> attach -t <session>
 ```
 
-`-W` enables terminal input, `-O` enforces origin checks, `-c` makes Basic Auth mandatory, `-i` keeps the listener on loopback, and `-b` gives both engines the uniform `<base>/<session>` URL.
+`-W` enables terminal input, `-O` enforces origin checks, `-c` makes Basic Auth mandatory, `-i` keeps the listener on loopback, and `-b` gives both engines the uniform `<base>/<session>` URL. `macOptionIsMeta=true` keeps macOS Option chords on the terminal input path rather than letting the browser compose them into characters.
+
+Client styling passes `fontFamily` and the shared `WebClientColors` palette as ttyd `-t` preferences. The palette projects to xterm.js `ITheme` keys, keeping Zellij and ttyd browser colors aligned.
+
+The two built-in Nerd Font families resolve to SHA-256-pinned regular and bold faces from a pinned Nerd Fonts tag. HTTPS custom sources use a URL-hashed cache entry, local custom sources are read directly, and all font inputs require a `.ttf`, `.otf`, `.woff`, or `.woff2` extension. Font bytes live under `$XDG_CACHE_HOME/rimz/web-fonts`; `RIMZ_WEB_FONTS_OFFLINE` makes resolution cache-only.
+
+ttyd serves no additional static-file route, so RimZ generates a custom index for resolved font bytes. A cache miss starts a throwaway loopback ttyd from the same binary, fetches its stock `/` page with temporary Basic Auth, stops the process, injects base64 `@font-face` rules immediately before `</head>`, and writes the result atomically under `$XDG_CACHE_HOME/rimz/web-ttyd`. The cache key covers the ttyd version, family, face weights and formats, and font content hashes. Missing fonts, network failures, an unreadable index, or a stock page without `</head>` return a warning and start the room with ttyd's stock page.
 
 The ttyd binary resolves from `RIMZ_TTYD_BIN`, then `PATH`; a missing binary returns the Homebrew and apt install fix before a room server can start.
 
@@ -72,9 +78,9 @@ Token verbs operate on Zellij's token store or ttyd's single machine credential;
 
 `[web.zellij]` carries `base_url`, `auto_start`, `font`, and `style_client`.
 
-`[web.tmux]` carries `base_url` and `auto_start`.
+`[web.tmux]` carries `base_url`, `auto_start`, `font`, `font_source`, and `style_client`.
 
-Both sections are per-machine and stay outside the trust hash because no field executes a command.
+Both sections are per-machine and stay outside the trust hash because no field executes a command; `font_source` is a read-only local path or HTTPS URL.
 
 ## Remote rooms
 

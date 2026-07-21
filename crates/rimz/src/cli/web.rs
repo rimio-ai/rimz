@@ -179,10 +179,10 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         return crate::cli::render::json(&outcome.payload);
     }
     print_url(&outcome.payload.url)?;
-    match outcome
-        .credential
-        .map_or_else(|| engine.ensure_credential(), std::result::Result::Ok)
-    {
+    match outcome.credential.map_or_else(
+        || engine.ensure_credential(&config),
+        std::result::Result::Ok,
+    ) {
         Ok(credential) => write_web_credential(&credential),
         Err(err) => write_credential_error(&err),
     }
@@ -346,7 +346,7 @@ fn stop() -> Result<()> {
 
 fn token(command: WebTokenSubcmd, globals: &GlobalFlags) -> Result<()> {
     let engine = WebEngine::from(rimz::mux::auto_detect_backend(globals.mux)?);
-    render_credential_outcome(engine.credential(command.into())?)
+    render_credential_outcome(engine.credential(command.into(), &machine_config())?)
 }
 
 fn render_credential_outcome(outcome: CredentialOutcome) -> Result<()> {
@@ -361,7 +361,9 @@ fn render_credential_outcome(outcome: CredentialOutcome) -> Result<()> {
         CredentialOutcome::Rotated {
             credential,
             restarted_instances,
+            warnings,
         } => {
+            write_warnings(&warnings);
             write_web_credential(&credential);
             writeln!(
                 std::io::stdout().lock(),
@@ -413,6 +415,9 @@ fn write_warnings(warnings: &[WebWarning]) {
     let mut stderr = std::io::stderr().lock();
     for warning in warnings {
         match warning {
+            WebWarning::BrowserFontSkipped(detail) => {
+                let _ = writeln!(stderr, "rimz: skipping browser font: {detail}");
+            }
             WebWarning::BrowserThemeSkipped(detail) => {
                 let _ = writeln!(stderr, "rimz: skipping browser theme: {detail}");
             }

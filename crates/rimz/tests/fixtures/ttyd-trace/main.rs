@@ -2,8 +2,11 @@
 
 use std::env;
 use std::fs::OpenOptions;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
+use std::time::Duration;
+
+const INDEX: &str = "<html><head></head><body></body></html>";
 
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -25,8 +28,23 @@ fn main() {
         .expect("ttyd -p port");
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind ttyd trace port");
     for stream in listener.incoming() {
-        if stream.is_err() {
-            break;
-        }
+        let Ok(mut stream) = stream else { break };
+        std::thread::spawn(move || {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .expect("set request timeout");
+            let mut request = [0_u8; 8192];
+            let Ok(read) = stream.read(&mut request) else {
+                return;
+            };
+            if read == 0 || !request[..read].starts_with(b"GET ") {
+                return;
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{INDEX}",
+                INDEX.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
     }
 }

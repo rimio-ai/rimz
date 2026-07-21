@@ -8,10 +8,11 @@ use kdl::{KdlDocument, KdlEntry, KdlNode};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::config::{InlinePalette, MachineConfig, parse_hex};
+use crate::config::MachineConfig;
 use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
+use super::colors::WebClientColors;
 use super::{
     CredentialCommand, CredentialOutcome, RawCommandOutput, Result, WebAccessOutcome,
     WebCredential, WebEngine, WebErr, WebOpenPayload, WebStartOptions, WebWarning,
@@ -54,72 +55,6 @@ impl Default for ZellijWebEndpoint {
             ip: DEFAULT_IP.to_owned(),
             port: DEFAULT_PORT,
         }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WebClientColors {
-    pub background: (u8, u8, u8),
-    pub foreground: (u8, u8, u8),
-    pub cursor: (u8, u8, u8),
-    pub cursor_accent: (u8, u8, u8),
-    pub normal: [(u8, u8, u8); 8],
-    pub bright: [(u8, u8, u8); 8],
-    pub selection_background: Option<(u8, u8, u8)>,
-    pub selection_foreground: Option<(u8, u8, u8)>,
-}
-
-impl WebClientColors {
-    /// Build Zellij web-client colors from an Alacritty palette. Missing
-    /// optional colors fall back to terminal conventions; malformed provided
-    /// colors return `None` so callers can skip browser theming without
-    /// discarding the user's Zellij config.
-    fn from_palette(palette: &InlinePalette) -> Option<Self> {
-        let primary = palette.primary.as_ref()?;
-        let normal = palette.normal.as_ref()?;
-        let background = parse_required_color(primary.background.as_deref())?;
-        let foreground = parse_required_color(primary.foreground.as_deref())?;
-        let normal = [
-            parse_optional_color(normal.black.as_deref())?.unwrap_or(background),
-            parse_required_color(normal.red.as_deref())?,
-            parse_required_color(normal.green.as_deref())?,
-            parse_required_color(normal.yellow.as_deref())?,
-            parse_required_color(normal.blue.as_deref())?,
-            parse_required_color(normal.magenta.as_deref())?,
-            parse_required_color(normal.cyan.as_deref())?,
-            parse_optional_color(normal.white.as_deref())?.unwrap_or(foreground),
-        ];
-        let bright = match palette.bright.as_ref() {
-            Some(bright) => [
-                parse_optional_color(bright.black.as_deref())?.unwrap_or(normal[0]),
-                parse_optional_color(bright.red.as_deref())?.unwrap_or(normal[1]),
-                parse_optional_color(bright.green.as_deref())?.unwrap_or(normal[2]),
-                parse_optional_color(bright.yellow.as_deref())?.unwrap_or(normal[3]),
-                parse_optional_color(bright.blue.as_deref())?.unwrap_or(normal[4]),
-                parse_optional_color(bright.magenta.as_deref())?.unwrap_or(normal[5]),
-                parse_optional_color(bright.cyan.as_deref())?.unwrap_or(normal[6]),
-                parse_optional_color(bright.white.as_deref())?.unwrap_or(normal[7]),
-            ],
-            None => normal,
-        };
-        let cursor = palette.cursor.as_ref();
-        let cursor_color =
-            parse_optional_color(cursor.and_then(|c| c.cursor.as_deref()))?.unwrap_or(foreground);
-        let cursor_accent =
-            parse_optional_color(cursor.and_then(|c| c.text.as_deref()))?.unwrap_or(background);
-        let selection = palette.selection.as_ref();
-        Some(Self {
-            background,
-            foreground,
-            cursor: cursor_color,
-            cursor_accent,
-            normal,
-            bright,
-            selection_background: parse_optional_color(
-                selection.and_then(|s| s.background.as_deref()),
-            )?,
-            selection_foreground: parse_optional_color(selection.and_then(|s| s.text.as_deref()))?,
-        })
     }
 }
 
@@ -244,7 +179,10 @@ pub(super) fn stop() -> Result<()> {
         })
 }
 
-pub(super) fn credential(command: CredentialCommand) -> Result<CredentialOutcome> {
+pub(super) fn credential(
+    command: CredentialCommand,
+    _config: &MachineConfig,
+) -> Result<CredentialOutcome> {
     if command == CredentialCommand::Ensure {
         return Ok(CredentialOutcome::Ensured(WebCredential::ZellijLogin {
             secret: ensure_login_token()?,
@@ -611,17 +549,6 @@ fn push_color_node(document: &mut KdlDocument, name: &str, (red, green, blue): (
     node.push(KdlEntry::new(i64::from(green)));
     node.push(KdlEntry::new(i64::from(blue)));
     document.nodes_mut().push(node);
-}
-
-fn parse_required_color(value: Option<&str>) -> Option<(u8, u8, u8)> {
-    parse_hex(value?).ok()
-}
-
-fn parse_optional_color(value: Option<&str>) -> Option<Option<(u8, u8, u8)>> {
-    match value {
-        Some(value) => parse_hex(value).ok().map(Some),
-        None => Some(None),
-    }
 }
 
 const NORMAL_WEB_COLOR_NAMES: [&str; 8] = [

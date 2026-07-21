@@ -133,6 +133,7 @@ workspace = true
 [dependencies]
 anstream.workspace = true
 anstyle.workspace = true
+base64.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 colorchoice.workspace = true

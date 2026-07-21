@@ -91,6 +91,9 @@
 # reverse proxy serves the per-room ttyd process under a public host or path.
 ## base_url = "https://devbox.example/tmux"
 # auto_start = true                   # `rimz web open` starts ttyd for the room when needed
+# font = "JetBrainsMono Nerd Font Mono" # browser terminal font; built-in JetBrainsMono and CaskaydiaCove Nerd Font Mono presets download automatically
+## font_source = "/path/to/font.woff2" # optional local font file or https URL; declared under the configured font family
+# style_client = true                 # style ttyd from [theme] and provision the configured browser font
 
 [mux]
 ## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux
