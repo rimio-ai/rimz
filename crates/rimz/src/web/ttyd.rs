@@ -588,12 +588,16 @@ waitForTerminal().then(term=>{{
     if(core&&typeof core.triggerDataEvent==="function"){{core.triggerDataEvent(data,true);return true;}}
     return false;
   }};
+  const writeClipboard=text=>{{
+    if(!text)return;
+    try{{navigator.clipboard.writeText(text).catch(()=>{{}});}}catch(_){{}}
+  }};
   const altKeyChar=event=>{{
     if(/^Key[A-Z]$/.test(event.code)){{
       const ch=event.code.slice(3);
       return event.shiftKey?ch:ch.toLowerCase();
     }}
-    if(/^Digit[0-9]$/.test(event.code))return event.code.slice(5);
+    if(/^Digit[0-9]$/.test(event.code)&&!event.shiftKey)return event.code.slice(5);
     return null;
   }};
   const keyHandler=event=>{{
@@ -615,14 +619,11 @@ waitForTerminal().then(term=>{{
     try{{
       const bytes=Uint8Array.from(atob(payload),ch=>ch.charCodeAt(0));
       const text=new TextDecoder().decode(bytes);
-      if(text)navigator.clipboard.writeText(text).catch(()=>{{}});
+      writeClipboard(text);
     }}catch(_){{}}
     return true;
   }});
-  term.onSelectionChange(()=>{{
-    const selection=term.getSelection();
-    if(selection)navigator.clipboard.writeText(selection).catch(()=>{{}});
-  }});
+  term.onSelectionChange(()=>writeClipboard(term.getSelection()));
   const updateOverlay=node=>{{
     const element=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
     if(!element)return;
@@ -972,6 +973,7 @@ mod tests {
         assert!(rendered.contains("registerOscHandler(52"));
         assert!(rendered.contains("onSelectionChange"));
         assert!(rendered.contains("event.altKey"));
+        assert!(rendered.contains("/^Digit[0-9]$/.test(event.code)&&!event.shiftKey"));
         assert!(rendered.contains("element.classList.add(\"rimz-overlay\")"));
         assert!(rendered.contains("Press Enter to reconnect"));
         assert!(rendered.contains("sendInput(\"\\u001b[13;2u\")"));
@@ -985,6 +987,10 @@ mod tests {
         let head = rendered.find("</head>").unwrap();
         assert!(style < overlay_rule && overlay_rule < head);
         assert!(rendered.find("rimz-web-client").unwrap() < rendered.find("</body>").unwrap());
+        let default_style =
+            inject_client_profile("<html><head></head><body></body></html>", None, &faces)
+                .expect("document markers");
+        assert!(default_style.contains("font:500 13px/1.4 monospace !important"));
         assert_eq!(
             inject_client_profile("<html></html>", Some("font"), &faces),
             None

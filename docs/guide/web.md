@@ -56,7 +56,7 @@ The browser terminal keeps a steady cursor instead of xterm's rapid blink. Shift
 
 Copying in tmux copy mode or selecting browser-native text with Shift-drag writes the selection to the system clipboard.
 
-On macOS, ttyd treats Option as Meta and RimZ intercepts letter and digit chords before the browser starts dead-key composition. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`, while chords such as `alt+n` create no trailing composed character; these input fixes remain active when client styling is disabled.
+On macOS, ttyd treats Option as Meta and RimZ intercepts letter chords before the browser starts dead-key composition. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`, while chords such as `alt+n` create no trailing composed character; these input fixes remain active when client styling is disabled.
 
 ## Open a remote room
 
