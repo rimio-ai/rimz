@@ -568,14 +568,34 @@ fn tmux_open_rotate_revoke_reopen_and_stop() {
         fixture.workspace.session_name
     );
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read ttyd log");
-    assert_eq!(log.lines().count(), 1, "{log}");
-    assert!(log.contains("\t-t\tmacOptionIsMeta=true"), "{log}");
-    assert!(
-        log.contains("\t-t\tfontFamily=JetBrainsMono Nerd Font Mono,monospace"),
-        "{log}"
+    assert_eq!(
+        log.lines().count(),
+        2,
+        "stock-index fetch plus room ttyd: {log}"
     );
-    assert!(log.contains("\t-t\ttheme={"), "{log}");
-    assert!(!log.contains("\t-I\t"), "{log}");
+    let room_argv = log
+        .lines()
+        .find(|line| line.contains("\ttmux\t-S\t"))
+        .expect("room ttyd argv");
+    assert!(
+        room_argv.contains("\t-t\tmacOptionIsMeta=true"),
+        "{room_argv}"
+    );
+    assert!(room_argv.contains("\t-t\tcursorBlink=false"), "{room_argv}");
+    assert!(
+        room_argv.contains("\t-t\tfontFamily=JetBrainsMono Nerd Font Mono,monospace"),
+        "{room_argv}"
+    );
+    assert!(room_argv.contains("\t-t\ttheme={"), "{room_argv}");
+    let args = room_argv.split('\t').collect::<Vec<_>>();
+    let index = args
+        .windows(2)
+        .find(|pair| pair[0] == "-I")
+        .map(|pair| PathBuf::from(pair[1]))
+        .expect("generated -I path");
+    let index = std::fs::read_to_string(index).expect("read generated ttyd index");
+    assert!(index.contains("term.options.cursorBlink=false"), "{index}");
+    assert!(index.contains("sendInput(\"\\u001b[13;2u\")"), "{index}");
 
     let rotate = fixture
         .command()
@@ -588,12 +608,15 @@ fn tmux_open_rotate_revoke_reopen_and_stop() {
             .contains("rotated ttyd credential and restarted 1 instance(s)")
     );
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read rotated ttyd log");
-    assert_eq!(log.lines().count(), 2, "{log}");
+    assert_eq!(log.lines().count(), 3, "{log}");
     assert!(
         log.lines()
+            .filter(|line| line.contains("\ttmux\t-S\t"))
             .all(|line| line.contains("\t-t\tmacOptionIsMeta=true")
+                && line.contains("\t-t\tcursorBlink=false")
                 && line.contains("\t-t\tfontFamily=JetBrainsMono Nerd Font Mono,monospace")
-                && line.contains("\t-t\ttheme={")),
+                && line.contains("\t-t\ttheme={")
+                && line.contains("\t-I\t")),
         "credential rotation must preserve styled ttyd args: {log}"
     );
 
@@ -633,7 +656,7 @@ fn tmux_open_rotate_revoke_reopen_and_stop() {
     let reopen = success_json(&reopen, "tmux web reopen");
     assert_eq!(reopen["session"], fixture.workspace.session_name);
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read reopened ttyd log");
-    assert_eq!(log.lines().count(), 3, "{log}");
+    assert_eq!(log.lines().count(), 4, "{log}");
 
     let stop = fixture
         .command()
@@ -694,6 +717,8 @@ fn tmux_custom_font_generates_and_uses_an_inlined_index() {
         index.contains("data:font/woff2;base64,cmlteiBicm93c2VyIGZvbnQgZml4dHVyZQo="),
         "{index}"
     );
+    assert!(index.contains("term.clearTextureAtlas()"), "{index}");
+    assert!(index.contains("sendInput(\"\\u001b[13;2u\")"), "{index}");
 
     let stop = fixture
         .command()

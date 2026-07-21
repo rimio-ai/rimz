@@ -32,6 +32,7 @@ const START_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
+const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v2";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct TtydCredential {
@@ -359,58 +360,68 @@ fn stop_instances(instances: &[TtydInstance]) -> Result<()> {
 
 fn client_profile(config: &MachineConfig) -> TtydClientProfile {
     let mut profile = TtydClientProfile {
-        args: vec!["-t".to_owned(), "macOptionIsMeta=true".to_owned()],
+        args: vec![
+            "-t".to_owned(),
+            "macOptionIsMeta=true".to_owned(),
+            "-t".to_owned(),
+            "cursorBlink=false".to_owned(),
+        ],
         warnings: Vec::new(),
     };
-    if !config.web.enabled || !config.web.tmux.style_client {
+    if !config.web.enabled {
         return profile;
     }
 
-    let family = &config.web.tmux.font;
-    profile
-        .args
-        .extend(["-t".to_owned(), format!("fontFamily={family},monospace")]);
-    match WebClientColors::from_palette(&crate::config::resolve_inline_palette(&config.theme)) {
-        Some(colors) => match serde_json::to_string(&colors.to_xterm_theme()) {
-            Ok(theme) => profile
-                .args
-                .extend(["-t".to_owned(), format!("theme={theme}")]),
-            Err(err) => profile
+    let mut font_family = None;
+    let mut font_faces = Vec::new();
+    if config.web.tmux.style_client {
+        let family = &config.web.tmux.font;
+        profile
+            .args
+            .extend(["-t".to_owned(), format!("fontFamily={family},monospace")]);
+        match WebClientColors::from_palette(&crate::config::resolve_inline_palette(&config.theme)) {
+            Some(colors) => match serde_json::to_string(&colors.to_xterm_theme()) {
+                Ok(theme) => profile
+                    .args
+                    .extend(["-t".to_owned(), format!("theme={theme}")]),
+                Err(err) => profile
+                    .warnings
+                    .push(WebWarning::BrowserThemeSkipped(format!(
+                        "could not serialize browser theme: {err}"
+                    ))),
+            },
+            None => profile.warnings.push(WebWarning::BrowserThemeSkipped(
+                "scheme palette is incomplete or malformed".to_owned(),
+            )),
+        }
+
+        let resolution = super::fonts::resolve(family, config.web.tmux.font_source.as_deref());
+        profile.warnings.extend(
+            resolution
                 .warnings
-                .push(WebWarning::BrowserThemeSkipped(format!(
-                    "could not serialize browser theme: {err}"
-                ))),
-        },
-        None => profile.warnings.push(WebWarning::BrowserThemeSkipped(
-            "scheme palette is incomplete or malformed".to_owned(),
-        )),
-    }
-
-    let resolution = super::fonts::resolve(family, config.web.tmux.font_source.as_deref());
-    profile.warnings.extend(
-        resolution
-            .warnings
-            .into_iter()
-            .map(WebWarning::BrowserFontSkipped),
-    );
-    if resolution.faces.is_empty() {
-        return profile;
+                .into_iter()
+                .map(WebWarning::BrowserFontSkipped),
+        );
+        if !resolution.faces.is_empty() {
+            font_family = Some(family.as_str());
+            font_faces = resolution.faces;
+        }
     }
 
     let index = program()
         .and_then(|program| version_at(&program).map(|version| (program, version)))
         .map_err(|err| err.to_string())
         .and_then(|(program, version)| {
-            ensure_custom_index(&program, &version, family, &resolution.faces)
+            ensure_custom_index(&program, &version, font_family, &font_faces)
         });
     match index {
         Ok(Some(path)) => profile
             .args
             .extend(["-I".to_owned(), path.display().to_string()]),
-        Ok(None) => profile.warnings.push(WebWarning::BrowserFontSkipped(
-            "stock ttyd index has no </head> marker".to_owned(),
+        Ok(None) => profile.warnings.push(WebWarning::BrowserClientSkipped(
+            "stock ttyd index has no </head> or </body> marker".to_owned(),
         )),
-        Err(err) => profile.warnings.push(WebWarning::BrowserFontSkipped(err)),
+        Err(err) => profile.warnings.push(WebWarning::BrowserClientSkipped(err)),
     }
     profile
 }
@@ -418,7 +429,7 @@ fn client_profile(config: &MachineConfig) -> TtydClientProfile {
 fn ensure_custom_index(
     program: &Path,
     ttyd_version: &str,
-    family: &str,
+    family: Option<&str>,
     faces: &[FontFace],
 ) -> std::result::Result<Option<PathBuf>, String> {
     let key = custom_index_key(ttyd_version, family, faces);
@@ -430,7 +441,7 @@ fn ensure_custom_index(
     }
 
     let stock = fetch_stock_index(program)?;
-    let Some(rendered) = inject_font_faces(&stock, family, faces) else {
+    let Some(rendered) = inject_client_profile(&stock, family, faces) else {
         return Ok(None);
     };
     atomic::write_cache_bytes_atomically(&path, rendered.as_bytes()).map_err(|err| {
@@ -498,10 +509,11 @@ fn get_stock_index(port: u16, secret: &str) -> std::result::Result<String, Strin
     String::from_utf8(bytes).map_err(|err| format!("stock ttyd index is not UTF-8: {err}"))
 }
 
-fn custom_index_key(ttyd_version: &str, family: &str, faces: &[FontFace]) -> String {
+fn custom_index_key(ttyd_version: &str, family: Option<&str>, faces: &[FontFace]) -> String {
     let mut hasher = Sha256::new();
+    hash_index_part(&mut hasher, CUSTOM_INDEX_SCHEMA.as_bytes());
     hash_index_part(&mut hasher, ttyd_version.as_bytes());
-    hash_index_part(&mut hasher, family.as_bytes());
+    hash_index_part(&mut hasher, family.unwrap_or_default().as_bytes());
     for face in faces {
         hash_index_part(&mut hasher, face.extension.as_bytes());
         hash_index_part(&mut hasher, &face.weight.to_le_bytes());
@@ -515,24 +527,87 @@ fn hash_index_part(hasher: &mut Sha256, value: &[u8]) {
     hasher.update(value);
 }
 
-fn inject_font_faces(stock: &str, family: &str, faces: &[FontFace]) -> Option<String> {
-    let marker = stock.find("</head>")?;
-    let family = css_string(family);
+fn inject_client_profile(stock: &str, family: Option<&str>, faces: &[FontFace]) -> Option<String> {
+    let head_marker = stock.find("</head>")?;
+    let body_marker = stock.rfind("</body>")?;
+    if body_marker < head_marker {
+        return None;
+    }
+
     let mut style = String::from("<style id=\"rimz-web-fonts\">");
-    for face in faces {
-        let payload = base64::engine::general_purpose::STANDARD.encode(&face.bytes);
-        style.push_str(&format!(
-            "@font-face{{font-family:\"{family}\";font-style:normal;font-weight:{};src:url(data:font/{};base64,{payload})}}",
-            face.weight, face.extension
-        ));
+    if let Some(family) = family {
+        let family = css_string(family);
+        for face in faces {
+            let payload = base64::engine::general_purpose::STANDARD.encode(&face.bytes);
+            style.push_str(&format!(
+                "@font-face{{font-family:\"{family}\";font-style:normal;font-weight:{};font-display:block;src:url(data:font/{};base64,{payload})}}",
+                face.weight, face.extension
+            ));
+        }
     }
     style.push_str("</style>");
+    let bootstrap = client_bootstrap(family);
 
-    let mut rendered = String::with_capacity(stock.len() + style.len());
-    rendered.push_str(&stock[..marker]);
+    let mut rendered = String::with_capacity(stock.len() + style.len() + bootstrap.len());
+    rendered.push_str(&stock[..head_marker]);
     rendered.push_str(&style);
-    rendered.push_str(&stock[marker..]);
+    rendered.push_str(&stock[head_marker..body_marker]);
+    rendered.push_str(&bootstrap);
+    rendered.push_str(&stock[body_marker..]);
     Some(rendered)
+}
+
+fn client_bootstrap(family: Option<&str>) -> String {
+    let family = family.map_or_else(|| "null".to_owned(), js_string);
+    format!(
+        r#"<script id="rimz-web-client">(()=>{{
+"use strict";
+const fontFamily={family};
+const waitForTerminal=()=>new Promise(resolve=>{{
+  let attempts=0;
+  const find=()=>{{
+    if(window.term&&window.term.element)resolve(window.term);
+    else if(attempts++<1200)window.setTimeout(find,25);
+  }};
+  find();
+}});
+const loadFont=fontFamily&&document.fonts
+  ?Promise.all([400,700].map(weight=>document.fonts.load(`${{weight}} 13px ${{JSON.stringify(fontFamily)}}`))).catch(()=>{{}})
+  :Promise.resolve();
+waitForTerminal().then(term=>{{
+  const sendInput=data=>{{
+    if(typeof term.input==="function"){{term.input(data,true);return true;}}
+    const core=term._core&&term._core.coreService;
+    if(core&&typeof core.triggerDataEvent==="function"){{core.triggerDataEvent(data,true);return true;}}
+    return false;
+  }};
+  const keyHandler=event=>{{
+    if(event.type!=="keydown"||event.key!=="Enter"||!event.shiftKey||event.altKey||event.ctrlKey||event.metaKey)return true;
+    if(!sendInput("\u001b[13;2u"))return true;
+    event.preventDefault();
+    event.stopPropagation();
+    return false;
+  }};
+  const install=()=>{{
+    term.options.cursorBlink=false;
+    term.attachCustomKeyEventHandler(keyHandler);
+  }};
+  install();
+  const reset=term.reset.bind(term);
+  term.reset=(...args)=>{{const result=reset(...args);install();return result;}};
+  if(fontFamily)loadFont.then(()=>{{
+    const configured=`${{fontFamily}},monospace`;
+    term.options.fontFamily="monospace";
+    window.requestAnimationFrame(()=>{{
+      term.options.fontFamily=configured;
+      term.clearTextureAtlas();
+      term.refresh(0,term.rows-1);
+      if(typeof term.fit==="function")term.fit();
+    }});
+  }});
+}});
+}})();</script>"#
+    )
 }
 
 fn css_string(value: &str) -> String {
@@ -548,6 +623,35 @@ fn css_string(value: &str) -> String {
             ch => escaped.push(ch),
         }
     }
+    escaped
+}
+
+fn js_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '<' => escaped.push_str("\\u003c"),
+            '\u{2028}' => escaped.push_str("\\u2028"),
+            '\u{2029}' => escaped.push_str("\\u2029"),
+            ch if ch <= '\u{1f}' => {
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let value = ch as usize;
+                escaped.push_str("\\u00");
+                escaped.push(HEX[value >> 4] as char);
+                escaped.push(HEX[value & 0x0f] as char);
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
     escaped
 }
 
@@ -772,41 +876,56 @@ mod tests {
     }
 
     #[test]
-    fn alt_meta_option_survives_disabled_client_styling_and_web() {
+    fn browser_safety_options_survive_disabled_web() {
         let mut config = MachineConfig::default();
-        config.web.tmux.style_client = false;
-        let profile = client_profile(&config);
-        assert_eq!(profile.args, ["-t", "macOptionIsMeta=true"]);
-        assert!(profile.warnings.is_empty());
-
-        config.web.tmux.style_client = true;
         config.web.enabled = false;
         let profile = client_profile(&config);
-        assert_eq!(profile.args, ["-t", "macOptionIsMeta=true"]);
+        assert_eq!(
+            profile.args,
+            ["-t", "macOptionIsMeta=true", "-t", "cursorBlink=false"]
+        );
         assert!(profile.warnings.is_empty());
     }
 
     #[test]
-    fn custom_index_key_is_stable_and_font_faces_inject_before_head_close() {
+    fn custom_index_injects_fonts_and_browser_behavior_at_document_edges() {
         let faces = vec![FontFace {
             bytes: b"font bytes".to_vec(),
             extension: "woff2".to_owned(),
             weight: 400,
         }];
-        let key = custom_index_key("ttyd 1.7.7", "RimZ \"Font\"", &faces);
-        assert_eq!(key, custom_index_key("ttyd 1.7.7", "RimZ \"Font\"", &faces));
-        assert_ne!(key, custom_index_key("ttyd 1.7.8", "RimZ \"Font\"", &faces));
+        let family = "RimZ \"Font\" </style></script>\n";
+        let key = custom_index_key("ttyd 1.7.7", Some(family), &faces);
+        assert_eq!(key, custom_index_key("ttyd 1.7.7", Some(family), &faces));
+        assert_ne!(key, custom_index_key("ttyd 1.7.8", Some(family), &faces));
+        assert_ne!(key, custom_index_key("ttyd 1.7.7", None, &faces));
 
-        let rendered = inject_font_faces(
+        let rendered = inject_client_profile(
             "<html><head><title>ttyd</title></head><body></body></html>",
-            "RimZ \"Font\" </style>",
+            Some(family),
             &faces,
         )
-        .expect("head marker");
-        assert!(rendered.contains("font-family:\"RimZ \\\"Font\\\" \\3c /style>\""));
+        .expect("document markers");
+        assert!(
+            rendered.contains("font-family:\"RimZ \\\"Font\\\" \\3c /style>\\3c /script>\\a \"")
+        );
         assert!(rendered.contains("data:font/woff2;base64,Zm9udCBieXRlcw=="));
+        assert!(rendered.contains("font-display:block"));
+        assert!(
+            rendered.contains(
+                "const fontFamily=\"RimZ \\\"Font\\\" \\u003c/style>\\u003c/script>\\n\""
+            )
+        );
+        assert!(rendered.contains("term.options.cursorBlink=false"));
+        assert!(rendered.contains("term.attachCustomKeyEventHandler(keyHandler)"));
+        assert!(rendered.contains("sendInput(\"\\u001b[13;2u\")"));
+        assert!(rendered.contains("term.clearTextureAtlas()"));
         assert!(rendered.find("rimz-web-fonts").unwrap() < rendered.find("</head>").unwrap());
-        assert_eq!(inject_font_faces("<html></html>", "font", &faces), None);
+        assert!(rendered.find("rimz-web-client").unwrap() < rendered.find("</body>").unwrap());
+        assert_eq!(
+            inject_client_profile("<html></html>", Some("font"), &faces),
+            None
+        );
     }
 
     #[test]

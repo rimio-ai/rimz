@@ -46,13 +46,15 @@ The browser shows a Basic-Auth prompt; use the printed user `rimz` and password.
 
 ttyd servers are per room, so `rimz web start` remains a Zellij-server command; use `rimz web open` to start a tmux room server.
 
-RimZ gives ttyd the active RimZ theme and provisions the configured browser font by default. `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` are built-in presets: RimZ downloads their regular and bold faces from the pinned Nerd Fonts release, verifies them, and caches them under `$XDG_CACHE_HOME/rimz/web-fonts` (normally `~/.cache/rimz/web-fonts`). The browser loads those bytes from the generated loopback page and makes no third-party request.
+RimZ gives ttyd the active RimZ theme and provisions the configured browser font by default. `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` are built-in presets: RimZ downloads their regular and bold faces from the pinned Nerd Fonts release, verifies them, and caches them under `$XDG_CACHE_HOME/rimz/web-fonts` (normally `~/.cache/rimz/web-fonts`). The browser loads those bytes from the generated loopback page, waits for the face before refreshing xterm's glyph atlas and cell measurements, and makes no third-party request.
 
-Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL for a font RimZ should download and cache. A `font` with no matching preset and no `font_source` names a font already installed in the browser. Set `style_client = false` to keep ttyd's browser defaults. A missing font cache or download degrades to the stock ttyd page with a warning, so offline access still starts.
+Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL for a font RimZ should download and cache. A `font` with no matching preset and no `font_source` names a font already installed in the browser. Set `style_client = false` to keep ttyd's browser defaults. A missing font cache or download falls back to the browser's monospace face with a warning, while the cursor and keyboard fixes remain active and offline access still starts.
 
 Styling is fixed when the room's ttyd process starts. After changing these fields or `[theme]`, run `rimz web stop` and then `rimz web open` to apply the new profile.
 
-On macOS, ttyd treats Option as Meta before the browser composes characters. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`; this input fix remains active when client styling is disabled.
+The browser terminal keeps a steady cursor instead of xterm's rapid blink. Shift+Enter reaches the agent as a soft newline through tmux's extended-key path, matching Alt+Enter and native terminal clients.
+
+On macOS, ttyd treats Option as Meta before the browser composes characters. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`; these input fixes remain active when client styling is disabled.
 
 ## Open a remote room
 

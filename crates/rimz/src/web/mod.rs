@@ -219,6 +219,7 @@ pub struct WebStatusPayload {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WebWarning {
+    BrowserClientSkipped(String),
     BrowserFontSkipped(String),
     BrowserThemeSkipped(String),
 }

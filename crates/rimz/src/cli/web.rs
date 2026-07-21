@@ -415,6 +415,9 @@ fn write_warnings(warnings: &[WebWarning]) {
     let mut stderr = std::io::stderr().lock();
     for warning in warnings {
         match warning {
+            WebWarning::BrowserClientSkipped(detail) => {
+                let _ = writeln!(stderr, "rimz: skipping browser terminal fixes: {detail}");
+            }
             WebWarning::BrowserFontSkipped(detail) => {
                 let _ = writeln!(stderr, "rimz: skipping browser font: {detail}");
             }
