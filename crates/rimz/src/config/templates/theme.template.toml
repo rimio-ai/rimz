@@ -16,19 +16,19 @@
 ## scheme = "Catppuccin Mocha"
 # Slot overrides accept palette roles ("green", "cyan", "bright_blue"),
 # 256-color indexes, or "#rrggbb"; omitted slots use the selected scheme.
-## good = "green"                     # ANSI green
-## warn = "yellow"                    # ANSI yellow
+## good = "green"                     # defaults to ANSI green
+## warn = "yellow"                    # defaults to ANSI yellow
 ## caution = "#e0915c"                # derived amber by default
-## alarm = "red"                      # ANSI red
-## accent = "cyan"                    # ANSI cyan
-## cool = "blue"                      # ANSI blue
-## meta = "magenta"                   # ANSI magenta
+## alarm = "red"                      # defaults to ANSI red
+## accent = "cyan"                    # defaults to ANSI cyan
+## cool = "blue"                      # defaults to ANSI blue
+## meta = "magenta"                   # defaults to ANSI magenta
 ## body = "#a6a19a"                   # derived foreground ladder by default
 ## muted = "#767168"
 ## faint = "#45423d"
 ## rule = "#343230"
-## selection = "bright_blue"          # colors.bright.blue, falling back to normal.blue
-## selection_bg = "#2a2723"           # derived from colors.selection.background
+## selection = "bright_blue"          # defaults to colors.bright.blue, then normal.blue
+## selection_bg = "#2a2723"           # defaults to colors.selection.background
 
 [theme.display]
 # Sidebar render preferences - cadence, sizing, and dashboard layout. All optional.
