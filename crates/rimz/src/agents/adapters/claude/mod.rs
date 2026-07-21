@@ -56,9 +56,9 @@ use super::RemoteControlStatus;
 #[cfg(test)]
 use super::StatusLineChange;
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -118,6 +118,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: CLAUDE_COVERAGE,
+    user_coverage: CLAUDE_USER_COVERAGE,
     lifecycle_hooks: CLAUDE_LIFECYCLE_HOOKS,
     default_context_window: Some(200_000),
     default_model: None,
@@ -203,6 +204,27 @@ const CLAUDE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Wired {
         via: "pane/background",
+    },
+};
+
+const CLAUDE_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card opens at session start, follows every turn, and clears when Claude exits",
+    },
+    live: CapabilityLevel::Full {
+        note: "Claude's statusline keeps context fill, the token split, and the dollar current mid-turn",
+    },
+    history: CapabilityLevel::Full {
+        note: "every past session reads end to end, each turn priced for stats and the dashboard",
+    },
+    account: CapabilityLevel::Full {
+        note: "login, plan, and the 5h and 7d windows with their fill, reset, and extra credits",
+    },
+    ask: CapabilityLevel::Full {
+        note: "permissions, plans, and questions raise Waiting and reach rimz asks with their options",
+    },
+    subagents: CapabilityLevel::Full {
+        note: "Task children nest under the parent as they start, with task, model, and tokens",
     },
 };
 

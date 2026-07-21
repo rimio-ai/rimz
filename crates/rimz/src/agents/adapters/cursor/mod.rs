@@ -24,9 +24,9 @@ use serde_json::json as test_json;
 use serde_json::{Value, json};
 
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -76,6 +76,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: CURSOR_COVERAGE,
+    user_coverage: CURSOR_USER_COVERAGE,
     lifecycle_hooks: CURSOR_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -157,6 +158,32 @@ const CURSOR_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
+    },
+};
+
+const CURSOR_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card tracks every turn, including interruption, to session end",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "context fill, token composition, and a priced session total",
+        limit: "the price is RimZ's local estimate rather than Cursor billing",
+    },
+    history: CapabilityLevel::Partial {
+        shows: "past conversations read end to end from the local chats store",
+        limit: "no usage ledger, so past spend stays out of rimz stats",
+    },
+    account: CapabilityLevel::Partial {
+        shows: "identity, plan, and CLI version",
+        limit: "no usage counted against the plan",
+    },
+    ask: CapabilityLevel::Partial {
+        shows: "an open question or plan approval raises Waiting and routes you to the pane",
+        limit: "the question stays in Cursor's own UI, so rimz asks stays empty",
+    },
+    subagents: CapabilityLevel::Partial {
+        shows: "children nest under the parent card with their detail",
+        limit: "the installed CLI reports them late, often only at parent turn end",
     },
 };
 

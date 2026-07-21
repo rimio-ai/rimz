@@ -49,7 +49,7 @@ Each adapter is a private unit struct under [`adapters/<kind>/`](../../../crates
 | Process | `process_names` (kernel `comm` candidates, including launchers), `bin_names` (`$PATH` probe order), `extra_bin_dirs` |
 | Vocabulary | `tools.mutating`, `tools.editing` (a validated subset of mutating), `tools.blocking` (tool name paired with its [`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs)) |
 | Policy | `capabilities` (below) |
-| Claims | `coverage`, `lifecycle_hooks` ([declared coverage](#declared-coverage)) |
+| Claims | `coverage`, `user_coverage`, `lifecycle_hooks` ([declared coverage](#declared-coverage)) |
 | Defaults | `default_model`, `default_context_window`, `sub_providers`, `thread_key` |
 | Launch | `launch`: program, fixed args, prompt style, resume and fork argv, per-mode permission args, ping args, max-turn flag, compact command, preset matchers |
 
@@ -205,13 +205,21 @@ The tail reader is provider-agnostic ([`read_transcript_tail`](../../../crates/r
 
 ## Declared coverage
 
-Every adapter declares what it supports, in two compile-time-complete records on its spec. Named fields make an omission a compile error, and [`conformance.rs`](../../../crates/rimz/src/agents/conformance.rs) cross-checks each claim against the adapter's capabilities, installed hook events, classification corpus, and spend fixture. `rimz coverage` prints both matrices with a reason on every cell:
+Every adapter declares what it supports, in three compile-time-complete records on its spec. Named fields make an omission a compile error, and [`conformance.rs`](../../../crates/rimz/src/agents/conformance.rs) cross-checks each claim against the adapter's capabilities, installed hook events, classification corpus, and spend fixture. `rimz coverage` leads with the user-facing capability grid and `rimz coverage --wiring` adds the mechanism beneath it, every cell carrying its reason:
 
 ```console
-$ rimz coverage
+$ rimz coverage --wiring
 RimZ coverage
 
-AGENT COVERAGE
+WHAT EACH AGENT GIVES YOU
+AGENT        state  live  history  account  ask  subagents
+claude       ✓      ✓     ✓        ✓        ✓    ✓
+antigravity  ✓      !     !        ✓        !    !
+...
+kiro         !      !     !        ✗        !    ✗
+  legend ✓ full   ! partial   ✗ unsupported
+
+WIRING — INTEGRATION CONCERNS
 AGENT        turn  perm  plan  ask  answer  compact  sub  bg  end  idle  usage  live$  rich  install  spend  remote
 claude       ✓     ✓     ✓     ✓    ✓       ✓        ✓    ✓   ✓    ✓     ✓      ✓      ✓     ✓        ✓      ✓
 codex        ✓     ✓     ✓     ✓    ✓       ✓        ✓    ✗   !    !     ✓      ✓      ✓     ✓        ✓      ✓
@@ -231,6 +239,30 @@ kiro         !     !     ✗     ✗    ✗       ✗        ✗    ✗   !    !
 `LifecycleAnnotations` does the same for the eleven `LifecycleSignalKind`s, with arms `Native { event }`, `Derived { via, gap }`, and `Absent { reason }`.
 
 Reserve `Partial` for a surface the user can still see is missing something. A value RimZ reconciles to its authoritative figure at every turn boundary is `Wired` even without a continuous native push, which is why Pi and OpenCode both claim `live$` wired: the extension pushes a running cost and the turn-end signal settles it to the session spend sum. Codex claims `end` and `idle` partial because no per-session end or idle hook exists, so pane liveness plus the reaper reconstruct end, and turn boundaries plus the ask path plus the stall window cover the attention slice of idle. Cursor claims `compact` partial because `preCompact` opens natively and the next lifecycle signal derives the close.
+
+### The user-capability declaration
+
+`CoverageAnnotations` answers what the adapter reads. [`UserCoverage`](../../../crates/rimz/src/agents/definition.rs) answers what the person watching the sidebar gets: one field per `UserCapability`, six in all — `state`, `live`, `history`, `account`, `ask`, `subagents` — and these are the marks the [compatibility matrix](../../reference/agent-support.md#the-compatibility-matrix) prints. Each reads:
+
+| Arm | Meaning | Prints |
+| --- | --- | --- |
+| `Full { note }` | complete and live; the capability reads the way it does on Claude Code | the note |
+| `Partial { shows, limit }` | a working version with a stated limit: part of the detail, or the whole of it a beat late | the limit |
+| `Unsupported { reason }` | nothing to render for this capability | the reason |
+
+How RimZ obtains the figure stays out of the mark. A value folded from a transcript tail and a value pushed by a native hook both read `Full` when the surface is complete and current, and a native signal carrying half the story reads `Partial`. The four strings print verbatim to end users through `rimz coverage`, so they carry product language — lowercase, no trailing period, roughly six to fourteen words, phrased in what the card shows. The rubric that fixes the meaning of each mark per capability is [agent-support.md](../../reference/agent-support.md#what-the-marks-mean); write against its ladders rather than inventing a rung.
+
+`user_capabilities_are_complete_and_grounded` in [`conformance.rs`](../../../crates/rimz/src/agents/conformance.rs) links the two records one-directionally, through the concerns behind each capability:
+
+| Capability | Backing concerns |
+| --- | --- |
+| `state` | `turn_lifecycle` |
+| `live` | `context_usage`, `realtime_cost` |
+| `history` | `account_spend` |
+| `ask` | `permission`, `plan_approval`, `user_question` — any one suffices |
+| `subagents` | `subagents` |
+
+A `Full` mark needs its backing concerns wired — `ask` needs only one of its three, since a single blocking path reaching `rimz asks` is the whole user-visible claim — and an `Unsupported` mark needs every backing concern unsupported. Wired mechanism leaves the roll-up to the adapter's judgement: mark `Partial` when the user-visible result is still incomplete or lands late, and name which in `limit`. `account` carries no concern mapping, since its truth is the provider probe covered by the account fixtures ([providers.md](./providers.md)). Every mark carries non-empty text in every arm, and `Partial` names what does land alongside what is missing.
 
 The value of honesty here is that a declared absence renders as a declared absence, in the sidebar and in `rimz doctor`, rather than as an accidental gap someone debugs for an hour.
 

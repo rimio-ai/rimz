@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::registry::BUILTINS;
 use super::{
-    AdapterConformance, AgentDefinition, AgentHookClass, AskReply, ClassificationSample,
-    ClassifiedHook, ConcernCoverage, DerivedAskFixture, HookCoverage, IntegrationConcern,
-    LaunchPreset, PresetArgMatcher, PresetField, PriceBook, SpendFixture, SpendFixtureBody,
+    AdapterConformance, AgentDefinition, AgentHookClass, AskReply, CapabilityLevel,
+    ClassificationSample, ClassifiedHook, ConcernCoverage, DerivedAskFixture, HookCoverage,
+    IntegrationConcern, LaunchPreset, PresetArgMatcher, PresetField, PriceBook, SpendFixture,
+    SpendFixtureBody, UserCapability,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
@@ -413,6 +414,79 @@ fn coverage_is_complete_and_honest() {
                 );
             }
             assert_coverage_honest(adapter, &conformance, &native_events, concern, coverage);
+        }
+    }
+}
+
+/// The six user-facing marks are the compatibility matrix a person reads before
+/// picking an agent. They answer what lands on screen and when, so a mark may
+/// sit below its mechanism — a wired concern that still arrives late or
+/// incomplete rolls up to partial. It may never sit above it: a full mark
+/// always rests on wired mechanism, and an unsupported mark always rests on
+/// unsupported mechanism. Those two directions are what this pins.
+#[test]
+fn user_capabilities_are_complete_and_grounded() {
+    for adapter in BUILTINS {
+        let spec = adapter.spec();
+        let kind = spec.kind;
+        let coverage = spec.coverage;
+
+        for (capability, level) in spec.user_coverage.iter() {
+            let label = capability.short_label();
+            assert!(
+                !level.detail().trim().is_empty(),
+                "{kind} {label} must say what the user gets, what it still lacks, or why it is empty"
+            );
+            if let CapabilityLevel::Partial { shows, .. } = level {
+                assert!(
+                    !shows.trim().is_empty(),
+                    "{kind} {label} partial must name what does land, not only what is missing"
+                );
+            }
+        }
+
+        let backing: [(UserCapability, &[ConcernCoverage]); 5] = [
+            (UserCapability::State, &[coverage.turn_lifecycle]),
+            (
+                UserCapability::Live,
+                &[coverage.context_usage, coverage.realtime_cost],
+            ),
+            (UserCapability::History, &[coverage.account_spend]),
+            (
+                UserCapability::Ask,
+                &[
+                    coverage.permission,
+                    coverage.plan_approval,
+                    coverage.user_question,
+                ],
+            ),
+            (UserCapability::Subagents, &[coverage.subagents]),
+        ];
+
+        for (capability, concerns) in backing {
+            let level = spec.user_coverage.get(capability);
+            let label = capability.short_label();
+            if level.is_full() {
+                // Ask is satisfied by any one blocking-prompt concern; the rest
+                // need every concern behind them wired.
+                let grounded = if matches!(capability, UserCapability::Ask) {
+                    concerns.iter().any(|concern| concern.is_wired())
+                } else {
+                    concerns.iter().all(|concern| concern.is_wired())
+                };
+                assert!(
+                    grounded,
+                    "{kind} claims full {label} without wired mechanism behind it"
+                );
+            }
+            if level.is_unsupported() {
+                assert!(
+                    concerns
+                        .iter()
+                        .all(|concern| matches!(concern, ConcernCoverage::Unsupported { .. })),
+                    "{kind} claims unsupported {label} while mechanism behind it still reports"
+                );
+            }
         }
     }
 }

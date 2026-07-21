@@ -26,9 +26,9 @@ use serde_json::Value;
 #[cfg(test)]
 use super::AgentHookClass;
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
-    SamePaneSessionPolicy, ThreadKey, ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_entry};
 use super::lifecycle::LifecycleSignal;
@@ -187,6 +187,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: ANTIGRAVITY_COVERAGE,
+    user_coverage: ANTIGRAVITY_USER_COVERAGE,
     lifecycle_hooks: ANTIGRAVITY_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -270,6 +271,31 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no CLI remote-control host is documented",
+    },
+};
+
+const ANTIGRAVITY_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card tracks every turn from session start to session end",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "context fill, token composition, and a priced dollar figure",
+        limit: "the dollar figure covers the current turn rather than a session total",
+    },
+    history: CapabilityLevel::Partial {
+        shows: "past sessions read end to end with per-turn detail",
+        limit: "no dollars, so Antigravity sessions stay out of rimz stats spend",
+    },
+    account: CapabilityLevel::Full {
+        note: "plan tier plus 5h and weekly quota windows with fill and reset",
+    },
+    ask: CapabilityLevel::Partial {
+        shows: "the card raises Waiting and routes you to the pane",
+        limit: "the question stays in Antigravity's own UI, so rimz asks stays empty",
+    },
+    subagents: CapabilityLevel::Partial {
+        shows: "children nest under the parent card with name, task, and tokens",
+        limit: "they often land only once the parent turn ends",
     },
 };
 

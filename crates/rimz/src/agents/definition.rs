@@ -288,6 +288,11 @@ pub struct AgentSpec {
     /// cross-check the declaration against the definition and classification
     /// corpus.
     pub coverage: CoverageAnnotations,
+    /// Declared user-facing capability checklist — the six marks the
+    /// compatibility matrix prints. Every [`UserCapability`] appears exactly
+    /// once as full, partial, or unsupported, phrased in what the user sees;
+    /// conformance cross-checks each mark against the concerns backing it.
+    pub user_coverage: UserCoverage,
     /// Declared lifecycle-hook checklist. Every [`LifecycleSignalKind`] appears
     /// exactly once as native, derived, or absent; conformance checks the
     /// native event names against the installed hook events and classification
@@ -383,6 +388,10 @@ impl AgentDefinition {
 
     pub fn lifecycle_coverage(&self, signal: LifecycleSignalKind) -> HookCoverage {
         self.core.spec().lifecycle_hooks.get(signal)
+    }
+
+    pub fn capability_level(&self, capability: UserCapability) -> CapabilityLevel {
+        self.core.spec().user_coverage.get(capability)
     }
 }
 
@@ -683,6 +692,126 @@ impl CoverageAnnotations {
         IntegrationConcern::ALL
             .into_iter()
             .map(move |concern| (concern, self.get(concern)))
+    }
+}
+
+/// The six capabilities the user-facing compatibility matrix names. These are
+/// the questions a person asks before picking an agent, coarser than
+/// [`IntegrationConcern`] and phrased in what they can see rather than what the
+/// adapter reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UserCapability {
+    /// The card tracks the agent's whole life: start, working, waiting, idle, end.
+    State,
+    /// What the card shows mid-turn: context fill, token breakdown, live dollars.
+    Live,
+    /// Past sessions read end to end, with per-turn tokens and dollars.
+    History,
+    /// Login, plan, and each usage window with its fill and reset.
+    Account,
+    /// A blocked agent raising Waiting, and its question reaching `rimz asks`.
+    Ask,
+    /// Child agents nested under the parent card while they work.
+    Subagents,
+}
+
+impl UserCapability {
+    pub const ALL: [Self; 6] = [
+        Self::State,
+        Self::Live,
+        Self::History,
+        Self::Account,
+        Self::Ask,
+        Self::Subagents,
+    ];
+
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::State => "state",
+            Self::Live => "live",
+            Self::History => "history",
+            Self::Account => "account",
+            Self::Ask => "ask",
+            Self::Subagents => "subagents",
+        }
+    }
+}
+
+/// What a user gets for one capability. The mark answers what they see and when
+/// they see it; how RimZ obtains the figure stays out of it. A value folded from
+/// a transcript tail and a value pushed by a native hook both read [`Full`] when
+/// the surface is complete and current, and a native signal carrying half the
+/// story reads [`Partial`].
+///
+/// [`Full`]: CapabilityLevel::Full
+/// [`Partial`]: CapabilityLevel::Partial
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapabilityLevel {
+    /// Complete and live: the capability reads the way it does on Claude Code.
+    /// `note` names what the user gets, in their own terms.
+    Full { note: &'static str },
+    /// A working version with a stated limit — part of the detail, or the whole
+    /// of it a beat late. `shows` is what lands, `limit` what the user can still
+    /// see is missing.
+    Partial {
+        shows: &'static str,
+        limit: &'static str,
+    },
+    /// Nothing to render for this capability; `reason` says why.
+    Unsupported { reason: &'static str },
+}
+
+impl CapabilityLevel {
+    pub const fn is_full(self) -> bool {
+        matches!(self, Self::Full { .. })
+    }
+
+    pub const fn is_unsupported(self) -> bool {
+        matches!(self, Self::Unsupported { .. })
+    }
+
+    /// The text the matrix prints after the capability label: what a full cell
+    /// gives, what a partial cell still lacks, why an unsupported cell is empty.
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::Full { note } => note,
+            Self::Partial { limit, .. } => limit,
+            Self::Unsupported { reason } => reason,
+        }
+    }
+}
+
+/// Compile-time-complete user-facing capability claims for one adapter. Every
+/// [`UserCapability`] appears exactly once; conformance checks each mark against
+/// the [`CoverageAnnotations`] that back it, so a full claim always rests on
+/// wired mechanism while a wired mechanism may still roll up to partial when the
+/// user-visible result is incomplete or late.
+#[derive(Clone, Copy, Debug)]
+pub struct UserCoverage {
+    pub state: CapabilityLevel,
+    pub live: CapabilityLevel,
+    pub history: CapabilityLevel,
+    pub account: CapabilityLevel,
+    pub ask: CapabilityLevel,
+    pub subagents: CapabilityLevel,
+}
+
+impl UserCoverage {
+    pub const fn get(self, capability: UserCapability) -> CapabilityLevel {
+        match capability {
+            UserCapability::State => self.state,
+            UserCapability::Live => self.live,
+            UserCapability::History => self.history,
+            UserCapability::Account => self.account,
+            UserCapability::Ask => self.ask,
+            UserCapability::Subagents => self.subagents,
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = (UserCapability, CapabilityLevel)> {
+        UserCapability::ALL
+            .into_iter()
+            .map(move |capability| (capability, self.get(capability)))
     }
 }
 

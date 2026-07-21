@@ -85,9 +85,9 @@ use super::AskKind;
 use super::TranscriptRole;
 use super::context::AgentContext;
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -198,6 +198,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: CODEX_COVERAGE,
+    user_coverage: CODEX_USER_COVERAGE,
     lifecycle_hooks: CODEX_LIFECYCLE_HOOKS,
     default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
     default_model: Some(DEFAULT_MODEL),
@@ -297,6 +298,27 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Wired {
         via: "pane/background",
+    },
+};
+
+const CODEX_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card opens at startup, follows every turn, and clears once the session is gone",
+    },
+    live: CapabilityLevel::Full {
+        note: "the live thread keeps context fill, the token split, and the dollar current mid-turn",
+    },
+    history: CapabilityLevel::Full {
+        note: "active and archived threads read end to end, each turn priced for stats",
+    },
+    account: CapabilityLevel::Full {
+        note: "plan plus both rate-limit windows with their fill, reset, and credit balance",
+    },
+    ask: CapabilityLevel::Full {
+        note: "approvals, plans, and questions raise Waiting and reach rimz asks with their options",
+    },
+    subagents: CapabilityLevel::Full {
+        note: "child threads nest under the parent as they start, with name, role, model, and tokens",
     },
 };
 

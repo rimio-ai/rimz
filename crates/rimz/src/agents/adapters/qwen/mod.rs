@@ -22,9 +22,9 @@ use self::payloads::{
     parse_subagent, parse_tool_use, parse_user_prompt_submit,
 };
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal};
@@ -84,6 +84,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: QWEN_COVERAGE,
+    user_coverage: QWEN_USER_COVERAGE,
     lifecycle_hooks: QWEN_LIFECYCLE_HOOKS,
     default_context_window: None,
     // Qwen routes across multiple provider protocols, each with its own model
@@ -167,6 +168,30 @@ const QWEN_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "ACP/daemon mode is outside the pane-first adapter",
+    },
+};
+
+const QWEN_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card tracks the session from start through every turn to close",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "context fill, token counts, and a priced dollar figure mid-turn",
+        limit: "off-book models price at zero and multi-provider billing stays unmodeled",
+    },
+    history: CapabilityLevel::Partial {
+        shows: "past sessions read end to end, with per-turn tokens and dollars",
+        limit: "multi-provider billing is unmodeled and pruned sidechain branches stay uncounted",
+    },
+    account: CapabilityLevel::Partial {
+        shows: "provider identity and Alibaba Coding Plan usage windows",
+        limit: "the quota is experimental and display-only, and other providers report nothing",
+    },
+    ask: CapabilityLevel::Full {
+        note: "permission prompts, plan approvals, and questions all reach rimz asks",
+    },
+    subagents: CapabilityLevel::Full {
+        note: "children nest live under the parent card with name, task, and tokens",
     },
 };
 

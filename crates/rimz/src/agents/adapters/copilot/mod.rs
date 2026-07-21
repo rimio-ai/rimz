@@ -30,9 +30,9 @@ use serde_json::Value;
 use serde_json::json;
 
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -84,6 +84,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: COPILOT_COVERAGE,
+    user_coverage: COPILOT_USER_COVERAGE,
     lifecycle_hooks: COPILOT_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -169,6 +170,31 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "remote-control preflight is not wired",
+    },
+};
+
+const COPILOT_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card tracks every turn from session start to session end",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "context fill, current-call composition, session tokens, and a dollar figure",
+        limit: "dollars are estimated at the resolved model rather than billed premium requests",
+    },
+    history: CapabilityLevel::Partial {
+        shows: "per-session tokens and dollars in rimz stats",
+        limit: "the dollars are a local estimate rather than a billing ledger",
+    },
+    account: CapabilityLevel::Partial {
+        shows: "plan plus named monthly credit and chat windows",
+        limit: "no 5h or 7d windows, and account dollars stay unavailable",
+    },
+    ask: CapabilityLevel::Full {
+        note: "permission requests and agent questions reach rimz asks with their options",
+    },
+    subagents: CapabilityLevel::Partial {
+        shows: "children appear at start with their model and finish with exact tokens",
+        limit: "child tool and permission activity stays invisible",
     },
 };
 

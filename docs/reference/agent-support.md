@@ -11,39 +11,122 @@ rimz coverage          # the wired / partial / unsupported grid, per agent, with
 rimz coverage --json   # the same, machine-readable
 ```
 
-## The coverage matrix
+## What the marks mean
 
-`rimz coverage` scores each agent against sixteen product concerns. A cell reads **wired** (✓, native signals carry the full concern), **partial** (◐, native coverage is incomplete and RimZ reconstructs the rest from another signal or state), or **unsupported** (✗, unreachable from the agent's current protocol). A partial cell still shows you a live figure, and the command names the exact gap that derivation leaves.
+A mark answers one question: **what do you see, and when do you see it?** Two tests settle every cell.
 
-One row per agent, ordered by support tier — Claude and Codex, then the alpha and experimental sets; `rimz coverage` prints them in registry order.
+- **Complete** — the whole capability arrives, rather than a usable slice of it.
+- **Live** — it arrives while the agent works, rather than after the turn lands.
+
+| Mark | Meaning |
+| :--: | --- |
+| ● **full** | Complete and live. The capability reads the way it does on Claude Code. |
+| ◐ **partial** | You get a working version with a stated limit: part of the detail, or the whole of it a beat late. The matrix names which. |
+| ✗ **unsupported** | The agent surfaces nothing RimZ can render for this capability. |
+
+How RimZ obtains a figure stays out of the mark. A value read from a wrapped statusline and a value read from a transcript tail both count as full when the card shows the same complete, live result; a native hook that reports half the story counts as partial. The mechanism behind each mark is the [wiring matrix](#the-wiring-matrix) below.
+
+## The six capabilities
+
+**State** — the sidebar card tracks the agent's whole life. It appears when a session starts, follows working, waiting, and idle as the agent moves, and clears when the session ends. This is the baseline every other capability sits on: attention routing, card ranking, and message delivery all read it.
+
+- ● Every transition lands, and the card matches the pane.
+- ◐ The card is usually right and drifts at some transitions — a lifecycle read out of a local store rather than reported, so a cancel or a failure can read as an ordinary stop.
+- ✗ No live state; the pane renders as a plain process row.
+
+What separates the two is whether the agent reports its transitions or RimZ infers them. Several agents publish no session-end event, and their card clears on the next sidebar refresh once the pane is gone; that final tombstone rides the same tick every card already refreshes on, so it stays full. A lifecycle RimZ has to reconstruct wholesale is the partial case.
+
+**Live** — what the card shows while a turn runs: context-window fill, the token breakdown behind it (input, output, cache), and a dollar figure for the work in flight.
+
+- ● All three, moving during the turn.
+- ◐ Some of it: a fill percentage without token counts, totals without the breakdown, an estimated price rather than a billed one, or figures that settle only at the turn boundary.
+- ✗ Nothing live; the card carries state without numbers.
+
+**History** — everything the agent already did: past sessions readable end to end, with per-turn tokens and dollars feeding [`rimz stats`](../guide/insight.md), the provider dashboard, and the heatmap.
+
+- ● Transcripts, tokens, and dollars, complete across sessions and counted in the spend dashboard.
+- ◐ Part of the record: past sessions read back fine while the dollars are estimated locally rather than billed, or absent entirely so the agent contributes nothing to the `rimz stats` totals.
+- ✗ The agent keeps no archive RimZ can read.
+
+A partial here is the one users notice most, because it splits reading from accounting: `rimz agents logs` and `rimz agents history` still replay the session, while the provider dashboard shows that agent's session count with the token and dollar positions left blank.
+
+**Account** — who you are signed in as, which plan you are on, and how much of it remains: the named windows (a 5-hour and weekly pair, monthly credits, a prepaid balance) with their fill and reset time.
+
+- ● Plan and windows together, with usage counted against them.
+- ◐ Identity and plan with no usage, windows with no plan, or a quota the provider publishes as display-only.
+- ✗ No readable account surface.
+
+**Ask** — the moment an agent stops and needs you. The card raises Waiting and the cockpit counts it, so the fleet tells you someone is blocked.
+
+- ● The question itself travels: its text and options reach [`rimz asks`](./cli/asks.md) and the card, so you read what is being asked without opening the pane.
+- ◐ The card raises Waiting and routes you to the pane, where the agent's own UI holds the question; `rimz asks` stays empty.
+- ✗ A blocked agent looks like a working one.
+
+Answering is a separate surface. Every agent takes its answer in its own UI, and `rimz answer` adds an out-of-band path only where the agent exposes one safely ([asks](./cli/asks.md)).
+
+**Subagents** — child agents nested under the parent's card, so a fan-out reads as one block instead of a mystery pause.
+
+- ● Children appear as they start and update as they work, each carrying its name, task, and model.
+- ◐ Children arrive late — often only when the parent's turn ends — or land without part of that detail.
+- ✗ Children stay invisible; the parent shows a long turn with no explanation.
+
+Claude Code is the richest of these: its children also carry a running token count and an elapsed clock, and the child row paints both wherever an agent reports them.
+
+## The compatibility matrix
+
+One row per agent, ordered by support tier — Claude and Codex, then the alpha and experimental sets.
+
+| Agent | State | Live | History | Account | Ask | Subagents |
+| --- | :--: | :--: | :--: | :--: | :--: | :--: |
+| Claude Code | ● | ● | ● | ● | ● | ● |
+| Codex | ● | ● | ● | ● | ● | ● |
+| Pi | ● | ● | ● | ● | ● | ● |
+| OpenCode | ● | ● | ● | ● | ● | ● |
+| Antigravity | ● | ◐ | ◐ | ● | ◐ | ◐ |
+| Copilot | ● | ◐ | ◐ | ◐ | ● | ◐ |
+| Droid | ● | ◐ | ◐ | ✗ | ◐ | ✗ |
+| Cursor | ● | ◐ | ◐ | ◐ | ◐ | ◐ |
+| Amp | ● | ◐ | ◐ | ◐ | ● | ✗ |
+| Kiro | ◐ | ◐ | ◐ | ✗ | ◐ | ✗ |
+| Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
+| Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
+| Grok | ● | ◐ | ● | ◐ | ● | ● |
+
+<sub>● full · ◐ partial · ✗ unsupported. Run `rimz coverage` for the same grid with the exact limit spelled out on every ◐ and ✗ cell.</sub>
+
+Claude Code is the reference integration and reads full across all six; each other agent exposes less of itself to a local observer. Breadth here is independent of support tier — an experimental agent can carry a wide surface, and a daily driver can leave a cell partial by choice. A ✗ is a declared absence the sidebar and `rimz doctor` read from the same place, so a missing surface renders as a stated gap rather than a silent bug.
+
+## The wiring matrix
+
+Under the six capabilities sits the mechanism: sixteen integration concerns naming what each adapter reads from its agent. This is the grid to consult when a capability reads partial and you want the specific reason, or when you are [building an adapter](../contributing/agent-adapters.md).
+
+A cell reads **wired** (✓, the concern reaches a user-complete state), **partial** (◐, coverage is incomplete and the adapter names the gap), or **unsupported** (✗, unreachable from the agent's current protocol).
 
 | Agent | `turn` | `perm` | `plan` | `ask` | `answer` | `compact` | `sub` | `bg` | `end` | `idle` | `usage` | `live$` | `rich` | `install` | `spend` | `remote` |
 | --- | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: |
 | Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Pi | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
-| OpenCode | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
+| OpenCode | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
 | Antigravity | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ◐ | ✓ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ |
-| Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ◐ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ |
+| Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ◐ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ |
 | Droid | ✓ | ✗ | ✗ | ◐ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ◐ | ✗ | ✓ | ◐ | ✗ |
 | Kiro | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ |
-| Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ |
+| Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
 
-<sub>✓ wired · ◐ partial (derived) · ✗ unsupported. Run `rimz coverage` for the live grid with the exact reason printed on every ◐ and ✗ cell.</sub>
+<sub>✓ wired · ◐ partial (derived) · ✗ unsupported. `rimz coverage --wiring` prints this grid with the exact gap on every cell.</sub>
 
-What each concern column drives: `turn` live status (session start and every turn boundary), `perm` permission prompts routed to your keyboard, `plan` a plan-approval gate raising a waiting row, `ask` the agent's ask-the-user tool raising a waiting row, `answer` structured answers driving supported native prompt actions, `compact` context compaction on the card, `sub` the subagent tree as nested rows, `bg` a turn parked on background work, `end` the card tombstoning when the session closes, `idle` an idle nudge when the agent goes quiet, `usage` context-window fill and token counts, `live$` the live dollar figure, `rich` provider extras (official model labels, account windows), `install` RimZ installing the reporting hooks, `spend` account spend for the [token-insight](../guide/insight.md) dashboard, and `remote` driving or spawning a session with no local pane.
-
-Claude Code is the reference integration and carries every concern natively; each other agent exposes less of its internals to a local observer. How much a given agent exposes is independent of how much it has been dogfooded — some early-tier agents wire up a wide surface, and some higher-tier ones deliberately leave cells derived. A ✗ is an honest declared absence — the sidebar and `rimz doctor` read the same declaration, so a missing surface renders as a stated gap rather than a silent bug.
+What each concern drives: `turn` live status (session start and every turn boundary), `perm` permission prompts routed to your keyboard, `plan` a plan-approval gate raising a waiting row, `ask` the agent's ask-the-user tool raising a waiting row, `answer` structured answers driving supported native prompt actions, `compact` context compaction on the card, `sub` the subagent tree as nested rows, `bg` a turn parked on background work, `end` the card tombstoning when the session closes, `idle` an idle nudge when the agent goes quiet, `usage` context-window fill and token counts, `live$` the live dollar figure, `rich` provider extras (official model labels, account windows), `install` RimZ installing the reporting hooks, `spend` account spend for the [token-insight](../guide/insight.md) dashboard, and `remote` driving or spawning a session with no local pane.
 
 ### Notes on the alpha and experimental set
 
 The gaps you will actually feel, per agent. Each agent's [mapping doc](#per-agent-mappings) carries the full rationale.
 
-- **Antigravity** keeps permissions and questions in its own UI: RimZ deliberately installs no permission hook, so an open prompt raises the waiting card and routes you to the pane, nothing more. Child hooks join to the parent's ordered `invoke_subagent` transcript records, which keeps asynchronous and nested children under the root card through completion; the join is partial because the parent-result record is verified in 1.1.2 but not documented as a stable wire contract. Live model and context ride a wrapped statusline, and the account's `5h`/`7d` bars come from a read-only local service. Every Antigravity error stop is terminal, so a supervised run does not survive a provider limit and auto-continue never arms. `rimz hooks install antigravity --dry-run` previews the changes before consent, and uninstall restores the prior statusline.
+- **Antigravity** reads full on State and Account and carries a wide surface for an experimental agent: lifecycle is fully hooked, and plan plus the `5h` and weekly bars come from a read-only local service. Its four partials are each one specific limit. Permissions and questions stay in Antigravity's own UI, because RimZ deliberately installs no permission hook, so an open prompt raises the waiting card and routes you to the pane. Live context and tokens run current off a wrapped statusline while the dollar figure prices the current turn rather than a session total, which also keeps it out of room spend and budget caps. History replays every past session, and contributes no dollars to `rimz stats`. Children join to the parent's ordered `invoke_subagent` transcript records, which the CLI flushes late, so a fan-out often lands as the parent's turn ends. Every Antigravity error stop is terminal, so a supervised run does not survive a provider limit and auto-continue never arms. `rimz hooks install antigravity --dry-run` previews the changes before consent, and uninstall restores the prior statusline.
 - **Copilot** reports the concrete auto-selected model, effort, occupied-window tokens, current-call composition, and normalized cumulative session tokens through its wrapped statusline; those totals produce an estimated live dollar figure at the same resolved model, while metadata-only OTel remains the fallback when the bridge is absent or replaced. Finalized shutdown history adds per-model tokens and locally estimated dollars to `rimz stats` and the provider dashboard without claiming an authoritative billing ledger. Singular and batched ask hooks raise Waiting, and every post-tool completion clears it immediately after the native answer. Standard child prompt/stop hooks join to the parent's transcript records by exact task-call ID, publishing the model at start and the exact total after completion; child tools and permissions remain unavailable. Its bounded account query adds the plan and named monthly `cr`/`cht` plus genuine `prm` bars without inventing 5h/7d windows; statusline `ai_used`, IDE completions, extra credits, authoritative account dollars, and remote control remain unsupported. Install previews and manages both the hook file and `$COPILOT_HOME/settings.json` and restores a prior user statusline on uninstall.
 - **Cursor** exposes its official `AskQuestion` and plan-approval UIs without corresponding hooks. RimZ derives an open synchronous question or **Ready to build?** plan proposal from Cursor's version-pinned local state, raises a pane-only waiting card, and routes you to the existing pane; `rimz asks` stays empty and `rimz answer` remains unsupported because the native UI is the only safe answer surface. A later conversation message clears the plan wait, while dismissing it with Esc or `p` leaves the waiting card until the next turn because Cursor writes no store change. Subagents are partial: the pinned CLI defines and accepts `subagentStart`/`subagentStop` hooks but never issues those requests, so RimZ derives exact child/parent lifecycle from the chats store and child transcript when the next parent hook feeds, often only at turn end. Live context rides its statusline, and RimZ prices each generation locally; that running session total counts toward live agent and room [budgets](../guide/budget.md), while provider billing, account spend, and `rimz stats` stay unavailable. The install manages `~/.cursor/hooks.json` and the statusline in `~/.cursor/cli-config.json`, shows both diffs before consent, and restores the prior statusline on uninstall.
 - **Droid** misses the same ask wire, but RimZ derives the waiting card from the transcript's active `AskUser` call; the answer still happens in Droid's pane. Its locally priced session total reaches the card and live budgets the way Cursor's does, while provider dollars, historical spend, and quota stay unavailable.
@@ -61,7 +144,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Claude | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Codex | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest`; `Stop` + rollout `Plan` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
 | Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | `tool_call` | `subagent_started` | `subagent_stopped` | `session_before_compact` | `session_compact` | `session_shutdown` | ◐ derived |
-| OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`; `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | ◐ derived | ◐ derived |
+| OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`; `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | `session_ended` | ◐ derived |
 | Antigravity | ◐ first `PreInvocation` identity + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker + transcript question | ◐ child `PreInvocation` + parent transcript join | ◐ child `Stop` + parent transcript join | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ◐ child `userPromptSubmitted` + parent transcript join | ◐ child `agentStop` + parent transcript join | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ transcript `AskUser` | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
@@ -72,7 +155,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ `SubagentStart` + durable child join | ◐ `SubagentStop` + durable child join | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `Notification` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
-`lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode, Antigravity, Amp, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
+`lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, Antigravity, Amp, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
 ## Per-agent mappings
 

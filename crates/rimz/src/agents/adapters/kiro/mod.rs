@@ -21,9 +21,9 @@ pub(crate) use crate::agents::capabilities::*;
 use std::path::{Path, PathBuf};
 
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::{
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalSessionObservation,
@@ -69,6 +69,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: KIRO_COVERAGE,
+    user_coverage: KIRO_USER_COVERAGE,
     lifecycle_hooks: KIRO_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -155,6 +156,31 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no stock-TUI remote-control surface",
+    },
+};
+
+const KIRO_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Partial {
+        shows: "the card follows turns from Kiro's own session store",
+        limit: "state is read rather than reported, so cancels can read as ordinary stops",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "a context-fill percentage",
+        limit: "no token counts, no context-window size, and no dollar figure",
+    },
+    history: CapabilityLevel::Partial {
+        shows: "past sessions read end to end from Kiro's own store",
+        limit: "no tokens or dollars, so Kiro stays out of rimz stats",
+    },
+    account: CapabilityLevel::Unsupported {
+        reason: "Kiro publishes no readable login, plan, or credit ledger",
+    },
+    ask: CapabilityLevel::Partial {
+        shows: "a pending tool approval raises Waiting and routes you to the pane",
+        limit: "the prompt stays in Kiro's own UI, so rimz asks stays empty",
+    },
+    subagents: CapabilityLevel::Unsupported {
+        reason: "Kiro publishes no child lifecycle",
     },
 };
 

@@ -20,6 +20,7 @@ Produce the mapping worksheet from the reference before writing Rust; every late
 
 - **Lifecycle signals.** Each of the eleven [`LifecycleSignalKind`](../../crates/rimz/src/agents/lifecycle.rs)s gets a verdict: which native event carries it (*Native*), which derivation reconstructs it with what gap (*Derived*), or why it has no signal (*Absent*). Which native event means what is the lifecycle part of `decode_hook`; [model.md → The state machine](../internals/agents/model.md#the-state-machine) defines what each signal does.
 - **Integration concerns.** Each of the sixteen [`IntegrationConcern`](../../crates/rimz/src/agents/definition.rs)s gets *Wired*, *Partial* (with the gap named), or *Unsupported* (with the reason). Conformance later cross-checks every claim, so honesty here is cheaper than honesty under test failure.
+- **User capabilities.** Roll those concerns up into the six [`UserCapability`](../../crates/rimz/src/agents/definition.rs) marks the compatibility matrix prints — state, live, history, account, ask, subagents — each *Full*, *Partial* (what lands, and the limit), or *Unsupported*. Answer from the sidebar card rather than the protocol: what a person sees, and when they see it. The rubric is [agent-support.md → The six capabilities](../reference/agent-support.md#the-six-capabilities).
 - **Blocking asks.** Which native events block, each one's [`AskKind`](../../crates/rimz/src/agents/lifecycle.rs), whether the agent draws its own ask UI, and — verified, never assumed — what an empty hook response means for *this* agent: neutral semantics diverge per agent ([adapter.md → Adding an agent](../internals/agents/adapter.md#adding-an-agent)).
 - **Tool vocabularies.** The mutating tool set and its file-editing subset; the editing set drives the `reasoning → acting` phase edge.
 - **Session identity.** Where the session id comes from, standalone vs daemon-routed hooks, lazy registration, the resume command shape, and what `/clear` or `/new` does to identity ([model.md → The instance lifecycle](../internals/agents/model.md#the-instance-lifecycle)).
@@ -42,9 +43,18 @@ Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agent
 
 ## Step 4 — Declare the definition
 
-`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, coverage annotations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add optional curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); kinds without an entry render the shared fallback.
+`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, both coverage declarations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add optional curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); kinds without an entry render the shared fallback.
 
-[`pi/mod.rs`](../../crates/rimz/src/agents/adapters/pi/mod.rs) is the canonical filled-in example. [Conformance](../../crates/rimz/src/agents/conformance.rs) auto-enrolls every registered definition and cross-checks coverage, native events, classification samples, behavioral fixtures, and decoded lifecycle output.
+Two coverage declarations sit side by side and answer different questions:
+
+- `CoverageAnnotations` — **mechanism**: what the adapter reads from its agent. One mark per `IntegrationConcern`, sixteen in all, each `Wired { via }`, `Partial { via, gap }`, or `Unsupported { reason }`. This is the worksheet's concern column transcribed.
+- `UserCoverage` — **behavior**: what the user sees, and when. One mark per `UserCapability`, six in all, each `Full { note }`, `Partial { shows, limit }`, or `Unsupported { reason }`. `ANTIGRAVITY_USER_COVERAGE` in [`antigravity/mod.rs`](../../crates/rimz/src/agents/adapters/antigravity/mod.rs) is the worked example that splits both ways.
+
+Conformance links the two one-directionally: a **full** mark rests on wired mechanism, and an **unsupported** mark rests on unsupported mechanism. Between those ends the roll-up is your judgement — mechanism that reports still reads **partial** when the user-visible result is incomplete or arrives late. Cursor's subagent hooks exist and the children land only when the parent's turn ends; Antigravity's dollar figure is live and covers the current turn rather than a session total. Name that limit in the mark.
+
+Write the six marks in product language. `note`, `shows`, `limit`, and `reason` print verbatim to end users through `rimz coverage`, so keep each one lowercase, without a trailing period, roughly six to fourteen words, and phrased in what the card shows rather than which hook carries it. Pick the rung that already exists: [agent-support.md → What the marks mean](../reference/agent-support.md#what-the-marks-mean) defines full, partial, and unsupported, and [The six capabilities](../reference/agent-support.md#the-six-capabilities) spells out each ladder per capability.
+
+[`pi/mod.rs`](../../crates/rimz/src/agents/adapters/pi/mod.rs) is the canonical filled-in example. [Conformance](../../crates/rimz/src/agents/conformance.rs) auto-enrolls every registered definition and cross-checks concern coverage, capability grounding, native events, classification samples, behavioral fixtures, and decoded lifecycle output.
 
 ## Step 5 — Implement the hook wire and install
 
@@ -90,17 +100,17 @@ Conformance, definition validation, and registry uniqueness tests enroll the ada
 
 - Write `docs/internals/agents/<kind>.md` on the per-kind skeleton — *Hooks and lifecycle* (the native event → signal table is its core), *Context and transcript*, *Account and balance*, *Cost* — with [pi.md](../internals/agents/pi.md) as the small template and [claude.md](../internals/agents/claude.md) showing where marker subsections earn their place.
 - Link it everywhere the existing kinds are linked: the per-kind list in [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), the per-provider table in [providers.md](../internals/agents/providers.md#per-provider-mapping), the root [AGENTS.md](../../AGENTS.md) documentation map, and the [internals index](../internals/README.md).
-- Update [agent-support.md](../reference/agent-support.md): a coverage-matrix row, a per-agent detail section, and removal from *Agents not yet supported*.
-- Update the [README](../../README.md) agent compatibility matrix.
+- Update [agent-support.md](../reference/agent-support.md): a row in the six-capability compatibility matrix, a row in the wiring matrix, a per-agent detail section, and removal from *Agents not yet supported*.
+- Update the [README](../../README.md) agent compatibility matrix with the same six marks. The `published_matrices_match_the_declared_capabilities` integration test reads both published tables against `rimz coverage --json`, so a hand-edited cell that drifts from the declaration fails CI.
 
 ## Step 11 — Gate it
 
-Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, fast tests); `rimz coverage` shows the kind with its wired/partial/unsupported rows reading true; `rimz doctor` reports the hook install state; and `rimz agents <kind>` launches the stock CLI into a pane whose row registers, runs, asks, and settles in the sidebar. Escalate to the journey and live-backend tiers when the change touches their surfaces ([AGENTS.md → Testing requirements](../../AGENTS.md#testing-requirements)).
+Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, fast tests); `rimz coverage` shows the kind's six capability marks reading true and `rimz coverage --wiring` its concern and lifecycle-hook rows; `rimz doctor` reports the hook install state; and `rimz agents <kind>` launches the stock CLI into a pane whose row registers, runs, asks, and settles in the sidebar. Escalate to the journey and live-backend tiers when the change touches their surfaces ([AGENTS.md → Testing requirements](../../AGENTS.md#testing-requirements)).
 
 ## The deliverables checklist
 
 - [ ] `docs/externals/agent-adapter/<kind>-reference.md` — upstream protocol reference, pinned to sources
-- [ ] Mapping worksheet: 11 lifecycle signals, 16 concerns, asks, tools, identity, context sources, spend, launch argv
+- [ ] Mapping worksheet: 11 lifecycle signals, 16 concerns, 6 user capabilities, asks, tools, identity, context sources, spend, launch argv
 - [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, every capability trait (empty where unsupported)
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
@@ -111,5 +121,5 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
 - [ ] The step-9 test set, stdout shapes as inline `insta` goldens
 - [ ] `docs/internals/agents/<kind>.md` + links in the module contract, the providers table, and the root documentation map
-- [ ] `agent-support.md` row and section · README matrix
-- [ ] `cargo xtask gate` green · `rimz coverage` honest · `rimz doctor` reporting
+- [ ] `agent-support.md` detail section and wiring-matrix row · the six-capability row in `agent-support.md` and the README, kept true by the `published_matrices_match_the_declared_capabilities` integration test
+- [ ] `cargo xtask gate` green · `rimz coverage` capability marks honest · `rimz coverage --wiring` mechanism grids honest · `rimz doctor` reporting

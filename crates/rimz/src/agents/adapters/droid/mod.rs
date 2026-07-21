@@ -23,9 +23,9 @@ use self::payloads::{parse_session_start, parse_user_prompt_submit};
 #[cfg(test)]
 use super::AgentHookClass;
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -76,6 +76,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: DROID_COVERAGE,
+    user_coverage: DROID_USER_COVERAGE,
     lifecycle_hooks: DROID_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -162,6 +163,30 @@ const DROID_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
+    },
+};
+
+const DROID_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card follows the session from start through every turn to close",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "context fill against the exact model capacity, tokens, and dollars",
+        limit: "the dollar figure is RimZ's estimate rather than provider billing",
+    },
+    history: CapabilityLevel::Partial {
+        shows: "past sessions read end to end from Droid's own session store",
+        limit: "no account spend, so Droid stays out of the rimz stats dollars",
+    },
+    account: CapabilityLevel::Unsupported {
+        reason: "Droid publishes no readable login, plan, or quota",
+    },
+    ask: CapabilityLevel::Partial {
+        shows: "a live question raises Waiting and routes you to the pane",
+        limit: "the question stays in Droid's own UI, so rimz asks stays empty",
+    },
+    subagents: CapabilityLevel::Unsupported {
+        reason: "Droid's subagent signal carries no child identity to nest",
     },
 };
 

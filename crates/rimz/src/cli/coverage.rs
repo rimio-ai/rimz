@@ -1,6 +1,13 @@
 //! Static adapter coverage matrices. The report is workspace-independent:
-//! adapter descriptors declare integration-concern and lifecycle-hook coverage,
-//! and this command renders the registry as a developer-facing checklist.
+//! adapter descriptors declare what they give the user and how it is wired, and
+//! this command renders the registry from that declaration.
+//!
+//! The default report is the six user-facing capabilities — the same grid the
+//! README and [agent support] print, with each cell's limit spelled out.
+//! `--wiring` adds the mechanism beneath it: the integration-concern grid and
+//! the lifecycle-hook grid, which is what an adapter author reads.
+//!
+//! [agent support]: ../../../../docs/reference/agent-support.md
 
 use std::io::{self, Write};
 
@@ -10,7 +17,8 @@ use serde::Serialize;
 
 use crate::cli::render::{Cell, Table, cell, paint, palette};
 use rimz::agents::{
-    AgentDefinition, ConcernCoverage, HookCoverage, IntegrationConcern, LifecycleSignalKind,
+    AgentDefinition, CapabilityLevel, ConcernCoverage, HookCoverage, IntegrationConcern,
+    LifecycleSignalKind, UserCapability,
 };
 
 use super::GlobalFlags;
@@ -21,12 +29,19 @@ pub struct CoverageArgs {
     /// Emit machine-readable JSON instead of the human report.
     #[arg(long)]
     json: bool,
+    /// Add the mechanism grids: integration concerns and the lifecycle hooks
+    /// behind each capability.
+    #[arg(long)]
+    wiring: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct CoverageReport {
-    coverage: CoverageMatrix,
-    hooks_matrix: CoverageMatrix,
+    capabilities: CoverageMatrix,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage: Option<CoverageMatrix>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hooks_matrix: Option<CoverageMatrix>,
 }
 
 /// A cross-adapter coverage grid: rows are concerns or lifecycle signals,
@@ -82,8 +97,9 @@ impl MatrixCell {
 
 pub fn run(args: CoverageArgs, _globals: &GlobalFlags) -> Result<()> {
     let report = CoverageReport {
-        coverage: collect_coverage(),
-        hooks_matrix: collect_hook_matrix(),
+        capabilities: collect_capabilities(),
+        coverage: args.wiring.then(collect_coverage),
+        hooks_matrix: args.wiring.then(collect_hook_matrix),
     };
 
     if args.json {
@@ -91,6 +107,30 @@ pub fn run(args: CoverageArgs, _globals: &GlobalFlags) -> Result<()> {
     }
     render_human(&report, &mut ui::out())?;
     Ok(())
+}
+
+/// Cross-adapter user-facing capability coverage — the six marks the
+/// compatibility matrix prints, in the language a person reads them in.
+fn collect_capabilities() -> CoverageMatrix {
+    let agents = matrix_agents();
+    let mut rows = Vec::new();
+    for capability in UserCapability::ALL {
+        let mut cells = Vec::new();
+        for agent in rimz::agents::all_definitions() {
+            match agent.capability_level(capability) {
+                CapabilityLevel::Full { note } => cells.push(MatrixCell::ok(note)),
+                CapabilityLevel::Partial { shows, limit } => {
+                    cells.push(MatrixCell::partial(format!("{shows} — {limit}")));
+                }
+                CapabilityLevel::Unsupported { reason } => cells.push(MatrixCell::absent(reason)),
+            }
+        }
+        rows.push(MatrixRow {
+            label: capability.short_label().to_owned(),
+            cells,
+        });
+    }
+    CoverageMatrix { agents, rows }
 }
 
 /// Cross-adapter integration-concern coverage.
@@ -159,18 +199,30 @@ fn render_human(report: &CoverageReport, w: &mut impl Write) -> io::Result<()> {
     writeln!(w, "{}", paint(palette::header(), "RimZ coverage"))?;
     render_matrix(
         w,
-        "AGENT COVERAGE",
-        "CONCERN",
-        ["wired", "partial", "unsupported"],
-        &report.coverage,
+        "WHAT EACH AGENT GIVES YOU",
+        "CAPABILITY",
+        ["full", "partial", "unsupported"],
+        &report.capabilities,
     )?;
-    render_matrix(
-        w,
-        "HOOKS MATRIX",
-        "SIGNAL",
-        ["native", "derived", "absent"],
-        &report.hooks_matrix,
-    )
+    if let Some(coverage) = &report.coverage {
+        render_matrix(
+            w,
+            "WIRING — INTEGRATION CONCERNS",
+            "CONCERN",
+            ["wired", "partial", "unsupported"],
+            coverage,
+        )?;
+    }
+    if let Some(hooks) = &report.hooks_matrix {
+        render_matrix(
+            w,
+            "WIRING — LIFECYCLE HOOKS",
+            "SIGNAL",
+            ["native", "derived", "absent"],
+            hooks,
+        )?;
+    }
+    Ok(())
 }
 
 fn section(w: &mut impl Write, title: &str) -> io::Result<()> {
@@ -609,7 +661,11 @@ mod tests {
     #[test]
     fn human_report_renders_grid_legend_and_detail() {
         let report = CoverageReport {
-            coverage: CoverageMatrix {
+            capabilities: CoverageMatrix {
+                agents: Vec::new(),
+                rows: Vec::new(),
+            },
+            coverage: Some(CoverageMatrix {
                 agents: vec!["codex".to_owned(), "pi".to_owned()],
                 rows: vec![
                     MatrixRow {
@@ -634,11 +690,8 @@ mod tests {
                         ],
                     },
                 ],
-            },
-            hooks_matrix: CoverageMatrix {
-                agents: Vec::new(),
-                rows: Vec::new(),
-            },
+            }),
+            hooks_matrix: None,
         };
 
         let out = strip(|w| render_human(&report, w));
@@ -675,11 +728,12 @@ mod tests {
     #[test]
     fn human_report_renders_hook_legend_words() {
         let report = CoverageReport {
-            coverage: CoverageMatrix {
+            capabilities: CoverageMatrix {
                 agents: Vec::new(),
                 rows: Vec::new(),
             },
-            hooks_matrix: CoverageMatrix {
+            coverage: None,
+            hooks_matrix: Some(CoverageMatrix {
                 agents: vec!["claude".to_owned(), "codex".to_owned()],
                 rows: vec![MatrixRow {
                     label: "ended".to_owned(),
@@ -688,11 +742,11 @@ mod tests {
                         MatrixCell::partial("pane liveness + reaper — no SessionEnd hook"),
                     ],
                 }],
-            },
+            }),
         };
 
         let out = strip(|w| render_human(&report, w));
-        assert!(out.contains("HOOKS MATRIX"), "{out}");
+        assert!(out.contains("WIRING — LIFECYCLE HOOKS"), "{out}");
         assert!(out.contains("SIGNAL"), "{out}");
         assert!(
             out.contains("legend ✓ native   ! derived   ✗ absent"),

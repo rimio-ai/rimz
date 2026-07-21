@@ -47,9 +47,9 @@ use super::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage,
 };
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -108,6 +108,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: PI_COVERAGE,
+    user_coverage: PI_USER_COVERAGE,
     lifecycle_hooks: PI_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -191,6 +192,27 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
+    },
+};
+
+const PI_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card opens with the pi session, follows every turn, and clears at shutdown",
+    },
+    live: CapabilityLevel::Full {
+        note: "pi pushes context fill, the token split, and the running dollar as they change",
+    },
+    history: CapabilityLevel::Full {
+        note: "past sessions read end to end, carrying pi's own per-turn tokens and dollars",
+    },
+    account: CapabilityLevel::Full {
+        note: "login and plan with the backing provider's windows, their fill, reset, and credits",
+    },
+    ask: CapabilityLevel::Full {
+        note: "the questionnaire raises Waiting and its question and choices reach rimz asks",
+    },
+    subagents: CapabilityLevel::Full {
+        note: "child pi sessions nest under the parent, with label, context, tokens, and cost",
     },
 };
 

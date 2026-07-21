@@ -26,10 +26,10 @@ use super::AskKind;
 use super::LaunchPreset;
 use super::account::AccountProbe;
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LaunchPermissionArgs, LaunchSpec, LifecycleAnnotations, PlanLabel, PresetMatchers, PromptStyle,
-    RealtimeUsageChannel, RemoteControlCapability, StaticPresetMatcher, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LaunchPermissionArgs, LaunchSpec, LifecycleAnnotations, PlanLabel,
+    PresetMatchers, PromptStyle, RealtimeUsageChannel, RemoteControlCapability,
+    StaticPresetMatcher, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
@@ -354,6 +354,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
         setup_doc.display()
     ));
     let coverage = derive_coverage(manifest, hook_reason);
+    let user_coverage = derive_user_coverage(manifest, &coverage);
     let lifecycle_hooks = derive_lifecycle_hooks(manifest);
     let launch = manifest
         .launch
@@ -428,6 +429,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
             },
         },
         coverage,
+        user_coverage,
         lifecycle_hooks,
         default_context_window: None,
         default_model: None,
@@ -518,6 +520,80 @@ fn derive_coverage(manifest: &PluginManifest, hook_reason: &'static str) -> Cove
         ),
         remote_control: ConcernCoverage::Unsupported {
             reason: "plugin remote control is not supported",
+        },
+    }
+}
+
+/// The six user-facing marks for a plugin, derived from the same manifest the
+/// concern grid reads. A plugin owns its own payload detail, so the capabilities
+/// whose completeness depends on what it chooses to send stay partial by
+/// construction; the bundle's own docs are the authority on what it publishes.
+fn derive_user_coverage(manifest: &PluginManifest, coverage: &CoverageAnnotations) -> UserCoverage {
+    let has = |name: &str| manifest.emits.iter().any(|event| event == name);
+    UserCoverage {
+        state: match coverage.turn_lifecycle {
+            ConcernCoverage::Wired { .. } => CapabilityLevel::Full {
+                note: "the plugin reports session start and every turn boundary",
+            },
+            ConcernCoverage::Partial { .. } => CapabilityLevel::Partial {
+                shows: "turns land as the plugin reports them",
+                limit: "part of the canonical turn protocol stays undeclared",
+            },
+            ConcernCoverage::Unsupported { .. } => CapabilityLevel::Unsupported {
+                reason: "the plugin declares no canonical turn events",
+            },
+        },
+        live: if has("context") {
+            CapabilityLevel::Partial {
+                shows: "the context, token, and dollar figures the plugin publishes",
+                limit: "how much detail lands depends on what the plugin sends",
+            }
+        } else {
+            CapabilityLevel::Unsupported {
+                reason: "the plugin declares no context event",
+            }
+        },
+        history: if manifest.probes.spend.is_some() {
+            CapabilityLevel::Partial {
+                shows: "past sessions with the tokens and dollars its spend probe reports",
+                limit: "history reaches back only as far as the plugin's own records",
+            }
+        } else {
+            CapabilityLevel::Unsupported {
+                reason: "the plugin declares no spend probe",
+            }
+        },
+        account: if manifest.probes.account.is_some() {
+            CapabilityLevel::Partial {
+                shows: "the identity and plan its account probe reports",
+                limit: "usage windows depend on what the plugin sends",
+            }
+        } else {
+            CapabilityLevel::Unsupported {
+                reason: "the plugin declares no account probe",
+            }
+        },
+        ask: if has("awaiting_input") && manifest.capabilities.native_ask_ui {
+            CapabilityLevel::Partial {
+                shows: "a blocked agent raises Waiting and routes you to its pane",
+                limit: "the prompt stays in the agent's own UI, rimz asks stays empty",
+            }
+        } else {
+            CapabilityLevel::Unsupported {
+                reason: "the plugin declares no awaiting-input event",
+            }
+        },
+        subagents: if manifest.capabilities.subagents
+            && has("subagent_start")
+            && has("subagent_end")
+        {
+            CapabilityLevel::Full {
+                note: "children nest under the parent card as the plugin starts and stops them",
+            }
+        } else {
+            CapabilityLevel::Unsupported {
+                reason: "the plugin declares no subagent lifecycle",
+            }
         },
     }
 }

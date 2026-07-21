@@ -33,9 +33,9 @@ use serde_json::json;
 
 use super::AskKind;
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -86,6 +86,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: OPENCODE_COVERAGE,
+    user_coverage: OPENCODE_USER_COVERAGE,
     lifecycle_hooks: OPENCODE_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -170,6 +171,27 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
+    },
+};
+
+const OPENCODE_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card opens with the session, follows every turn, and clears when it ends",
+    },
+    live: CapabilityLevel::Full {
+        note: "each message lands the token split, and the dollar is OpenCode's own session total",
+    },
+    history: CapabilityLevel::Full {
+        note: "stored sessions read end to end, with OpenCode's recorded per-turn tokens and dollars",
+    },
+    account: CapabilityLevel::Full {
+        note: "login and plan with the backing provider's windows, their fill, reset, and credits",
+    },
+    ask: CapabilityLevel::Full {
+        note: "permissions, plans, and questions raise Waiting and reach rimz asks with their options",
+    },
+    subagents: CapabilityLevel::Full {
+        note: "child sessions nest under the parent as they start, with their task and usage",
     },
 };
 

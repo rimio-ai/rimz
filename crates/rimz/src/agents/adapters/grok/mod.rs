@@ -15,9 +15,9 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
-    SamePaneSessionPolicy, ThreadKey, ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal};
@@ -70,6 +70,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: GROK_COVERAGE,
+    user_coverage: GROK_USER_COVERAGE,
     lifecycle_hooks: GROK_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -158,6 +159,29 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "ACP and remote control are outside the stock TUI adapter",
+    },
+};
+
+const GROK_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card tracks the session from start through every turn to close",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "context fill and token counts throughout the turn",
+        limit: "the dollar figure lands at each completed turn rather than mid-turn",
+    },
+    history: CapabilityLevel::Full {
+        note: "past sessions read end to end, with per-turn tokens and dollars in rimz stats",
+    },
+    account: CapabilityLevel::Partial {
+        shows: "signed-in identity and dollars from completed turns",
+        limit: "no plan tier or usage window",
+    },
+    ask: CapabilityLevel::Full {
+        note: "permission, plan, diff-review, and question prompts all reach rimz asks",
+    },
+    subagents: CapabilityLevel::Full {
+        note: "children nest live under the parent card with name, task, and tokens",
     },
 };
 

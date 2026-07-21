@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -66,6 +66,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: AMP_COVERAGE,
+    user_coverage: AMP_USER_COVERAGE,
     lifecycle_hooks: AMP_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
@@ -151,6 +152,30 @@ const AMP_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "readiness is not detectable",
+    },
+};
+
+const AMP_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card follows every turn and clears when the pane goes away",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "token totals and an estimated dollar figure, refreshed every 60 seconds",
+        limit: "no context-window fill, and unknown models show no dollars",
+    },
+    history: CapabilityLevel::Partial {
+        shows: "past threads read end to end with tokens and estimated dollars",
+        limit: "estimates do not reconcile against Amp credits or workspace billing",
+    },
+    account: CapabilityLevel::Partial {
+        shows: "your Amp identity and estimated thread spend",
+        limit: "no plan tier and no usage window",
+    },
+    ask: CapabilityLevel::Full {
+        note: "a thread waiting on approval raises Waiting and reaches rimz asks",
+    },
+    subagents: CapabilityLevel::Unsupported {
+        reason: "Amp's events expose no durable child identity",
     },
 };
 

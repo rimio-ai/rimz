@@ -12,6 +12,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ### Changed
 
+- The agent compatibility matrix reads in behaviour rather than plumbing. Each of the six capabilities — State, Live, History, Account, Ask, Subagents — now answers what you see and when you see it: full means complete and live, partial means a working version whose limit the matrix names, unsupported means nothing to render. Every adapter declares its own six marks, so `rimz coverage` leads with that grid and prints each cell's limit in plain terms, `rimz coverage --wiring` keeps the integration-concern and lifecycle-hook grids for adapter work, and a test holds the published tables to what the adapters declare. Several marks moved as a result, Antigravity's State and Copilot's Subagents up, Cursor's Subagents and the History column for Amp, Qwen, and Kimi down. → [agent support](./docs/reference/agent-support.md)
 - The compatibility promise now names its surface. RimZ is a binary, and what it supports is the binary: commands and flags, `--json` output, exit codes, config keys, and persisted formats, on the 0.x terms above. The `rimz` crate publishes a library target so the binary, tests, and benches can link the domain modules, and it carries no compatibility promise — its names, signatures, and module layout move with the implementation and every release. Install `rimz` as a command; `cargo add rimz` is unsupported.
 
 ## [0.4.0] (2026-07-20)

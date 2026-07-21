@@ -19,9 +19,9 @@ use tracing::debug;
 
 use super::context::{AgentCurrentUsage, AgentTokenUsage};
 use super::definition::{
-    AgentSpec, Brand, Capabilities, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -104,6 +104,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
         },
     },
     coverage: KIMI_COVERAGE,
+    user_coverage: KIMI_USER_COVERAGE,
     lifecycle_hooks: KIMI_LIFECYCLE_HOOKS,
     default_context_window: Some(262_144),
     default_model: None,
@@ -186,6 +187,30 @@ const KIMI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
+    },
+};
+
+const KIMI_USER_COVERAGE: UserCoverage = UserCoverage {
+    state: CapabilityLevel::Full {
+        note: "the card tracks the session from start through every turn to close",
+    },
+    live: CapabilityLevel::Partial {
+        shows: "token totals and a priced dollar figure throughout the turn",
+        limit: "kimi-code omits the exact context ratio, so the fill gauge is derived",
+    },
+    history: CapabilityLevel::Partial {
+        shows: "past sessions read end to end, with per-turn tokens and dollars",
+        limit: "provider attribution and non-USD balances stay unresolved",
+    },
+    account: CapabilityLevel::Full {
+        note: "managed OAuth identity, plan, and every quota window with fill and reset",
+    },
+    ask: CapabilityLevel::Full {
+        note: "permission prompts, plan approvals, and questions all reach rimz asks",
+    },
+    subagents: CapabilityLevel::Partial {
+        shows: "children nest under the parent card with their own lifecycle",
+        limit: "resumed and concurrently started children surface only when they stop",
     },
 };
 
