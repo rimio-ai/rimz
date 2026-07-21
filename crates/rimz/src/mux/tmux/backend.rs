@@ -180,6 +180,10 @@ impl MuxBackend for TmuxBackend {
         name: &str,
         _config: &crate::config::MultiplexerConfig,
     ) -> CommandSpec {
+        self.attach_existing_command(name)
+    }
+
+    fn attach_existing_command(&self, name: &str) -> CommandSpec {
         self.cmd().args(["attach", "-t", name])
     }
 

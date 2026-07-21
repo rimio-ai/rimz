@@ -2,17 +2,13 @@
 
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::{GlobalFlags, machine_config, open_browser_best_effort};
 use crate::cli::room;
-use rimz::ids::MuxName;
-use rimz::mux::CommandSpec;
-use rimz::room::session::{LiveSessions, workspace_record_for_session};
-use rimz::web::{CredentialCommand, CredentialOutcome, WebCredential};
+use rimz::web::WebCredential;
 
 #[derive(Debug, Args)]
 pub struct WebArgs {
@@ -106,17 +102,6 @@ enum WebTokenSubcmd {
     RevokeAll,
 }
 
-impl From<WebTokenSubcmd> for CredentialCommand {
-    fn from(command: WebTokenSubcmd) -> Self {
-        match command {
-            WebTokenSubcmd::Create { read_only } => Self::Create { read_only },
-            WebTokenSubcmd::List => Self::List,
-            WebTokenSubcmd::Revoke { name } => Self::Revoke { name },
-            WebTokenSubcmd::RevokeAll => Self::RevokeAll,
-        }
-    }
-}
-
 pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command.unwrap_or(WebSubcmd::Open(WebOpenArgs {
         path: None,
@@ -151,7 +136,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         room::ensure_workspace_room_for_web(&path, globals, args.no_resume, args.confirm_resume)?
     };
     let session = context.session_name().to_owned();
-    ensure_session_addressable_for_web(context.mux_name(), &session)?;
+    rimz::web::ensure_session_addressable(context.mux_name(), &session)?;
     let outcome = rimz::web::open_session(&session, &config, !args.no_start)?;
     crate::cli::render::web_warnings(&outcome.warnings);
     if args.json {
@@ -169,47 +154,6 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         open_browser_best_effort(&outcome.payload.url);
     }
     Ok(())
-}
-
-const WEB_ADDRESSABLE_TIMEOUT: Duration = Duration::from_secs(5);
-
-fn web_addressable_timeout() -> Duration {
-    let Some(value) =
-        std::env::var_os("RIMZ_TEST_WEB_ADDRESSABLE_MS").filter(|value| !value.is_empty())
-    else {
-        return WEB_ADDRESSABLE_TIMEOUT;
-    };
-    value
-        .to_str()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(WEB_ADDRESSABLE_TIMEOUT)
-}
-
-fn ensure_session_addressable_for_web(mux: MuxName, session: &str) -> Result<()> {
-    let backend = rimz::mux::backend_for(mux);
-    let deadline = Instant::now() + web_addressable_timeout();
-    loop {
-        match backend.list_sessions() {
-            Ok(sessions) if sessions.iter().any(|name| name == session) => return Ok(()),
-            Ok(_) => {
-                if Instant::now() >= deadline {
-                    bail!(
-                        "{mux} session `{session}` is not addressable after web preparation. Run `rimz reset` from the workspace, then retry `rimz web open`."
-                    );
-                }
-            }
-            Err(err) => {
-                let detail = err.to_string();
-                if Instant::now() >= deadline {
-                    bail!(
-                        "{mux} session `{session}` is not addressable after web preparation: {detail}. Run `rimz reset` from the workspace, then retry `rimz web open`."
-                    );
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
@@ -251,120 +195,63 @@ fn start() -> Result<()> {
     writeln!(
         std::io::stdout().lock(),
         "ttyd: online on 127.0.0.1:{} (pid {})",
-        outcome.record.port,
-        outcome.record.pid
+        outcome.port,
+        outcome.pid
     )?;
     Ok(())
 }
 
 fn stop() -> Result<()> {
-    let stopped = rimz::web::stop_all()?;
+    let stopped = usize::from(rimz::web::stop_daemon()?);
     writeln!(
         std::io::stdout().lock(),
         "stopped {} ttyd daemon{}",
-        stopped.stopped,
-        if stopped.stopped == 1 { "" } else { "s" }
+        stopped,
+        if stopped == 1 { "" } else { "s" }
     )?;
     Ok(())
 }
 
 fn token(command: WebTokenSubcmd) -> Result<()> {
-    render_credential_outcome(rimz::web::credential(command.into(), &machine_config())?)
-}
-
-fn render_credential_outcome(outcome: CredentialOutcome) -> Result<()> {
-    match outcome {
-        CredentialOutcome::Rotated {
-            credential,
-            restarted_instances,
-            warnings,
-        } => {
-            crate::cli::render::web_warnings(&warnings);
-            write_web_credential(&credential);
+    match command {
+        WebTokenSubcmd::Create { read_only } => {
+            let outcome = rimz::web::rotate_credential(&machine_config(), read_only)?;
+            let restarted = usize::from(outcome.restarted);
+            crate::cli::render::web_warnings(&outcome.warnings);
+            write_web_credential(&outcome.credential);
             writeln!(
                 std::io::stdout().lock(),
-                "rotated ttyd credential and restarted {restarted_instances} daemon(s)"
+                "rotated ttyd credential and restarted {restarted} daemon(s)"
             )?;
         }
-        CredentialOutcome::Listed(credentials) => {
-            let mut stdout = std::io::stdout().lock();
-            for credential in credentials {
+        WebTokenSubcmd::List => {
+            if let Some(credential) = rimz::web::credential_summary()? {
+                let mut stdout = std::io::stdout().lock();
                 writeln!(stdout, "{}: {}", credential.name, credential.created_at)?;
             }
         }
-        CredentialOutcome::Revoked { stopped_instances } => {
-            writeln!(
-                std::io::stdout().lock(),
-                "revoked ttyd credential and stopped {stopped_instances} daemon(s)"
-            )?;
+        WebTokenSubcmd::Revoke { name } => {
+            render_revoked(rimz::web::revoke_credential(Some(&name))?)?;
+        }
+        WebTokenSubcmd::RevokeAll => {
+            render_revoked(rimz::web::revoke_credential(None)?)?;
         }
     }
+    Ok(())
+}
+
+fn render_revoked(stopped: bool) -> Result<()> {
+    let stopped = usize::from(stopped);
+    writeln!(
+        std::io::stdout().lock(),
+        "revoked ttyd credential and stopped {stopped} daemon(s)"
+    )?;
     Ok(())
 }
 
 fn exec(session: Option<&str>) -> Result<()> {
-    let live = LiveSessions::probe();
-    let target = session
-        .filter(|session| !session.is_empty())
-        .and_then(|session| {
-            workspace_record_for_session(session)
-                .ok()
-                .flatten()
-                .and_then(|_| live.mux_of(session).map(|mux| (session, mux)))
-        });
-    let Some((session, mux)) = target else {
-        bail!(web_exec_session_error(session, &live)?);
-    };
-    exec_web_command(&web_exec_spec(session, mux))
-}
-
-fn web_exec_session_error(session: Option<&str>, live: &LiveSessions) -> Result<String> {
-    let mut sessions = rimz::workspace::known_workspaces()
-        .context("reading RimZ workspace records")?
-        .into_iter()
-        .filter_map(|workspace| {
-            live.mux_of(&workspace.session_name)
-                .map(|mux| format!("  {} ({mux})", workspace.session_name))
-        })
-        .collect::<Vec<_>>();
-    sessions.sort();
-    let requested = session.map_or_else(
-        || "no session was provided".to_owned(),
-        |session| format!("session `{session}` is not a live RimZ room"),
-    );
-    let listing = if sessions.is_empty() {
-        "  (none)".to_owned()
-    } else {
-        sessions.join("\n")
-    };
-    Ok(format!("{requested}\n\nLive RimZ sessions:\n{listing}"))
-}
-
-fn web_exec_spec(session: &str, mux: MuxName) -> CommandSpec {
-    match mux {
-        MuxName::Tmux => rimz::mux::tmux::managed_cmd().args(["attach", "-t", session]),
-        MuxName::Zellij => rimz::mux::zellij::attach_existing_command(session),
-    }
-}
-
-#[cfg(unix)]
-fn exec_web_command(spec: &CommandSpec) -> Result<()> {
-    use std::os::unix::process::CommandExt as _;
-
-    let err = spec.to_command().exec();
-    Err(err).with_context(|| format!("execing `{}`", spec.display_line()))
-}
-
-#[cfg(not(unix))]
-fn exec_web_command(spec: &CommandSpec) -> Result<()> {
-    let status = spec
-        .to_command()
-        .status()
-        .with_context(|| format!("running `{}`", spec.display_line()))?;
-    if !status.success() {
-        bail!("command `{}` exited with {status}", spec.display_line());
-    }
-    Ok(())
+    let spec = rimz::web::existing_session_attach_command(session)?;
+    room::exec_attach_command(&spec)
 }
 
 fn write_web_credential(credential: &WebCredential) {
@@ -379,21 +266,4 @@ fn write_web_credential(credential: &WebCredential) {
 fn print_url(url: &str) -> Result<()> {
     writeln!(std::io::stdout().lock(), "{url}")?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn web_exec_argv_targets_existing_session_on_each_mux() {
-        let tmux = web_exec_spec("rimz-test", MuxName::Tmux);
-        assert_eq!(
-            &tmux.args[tmux.args.len() - 3..],
-            ["attach", "-t", "rimz-test"]
-        );
-
-        let zellij = web_exec_spec("rimz-test", MuxName::Zellij);
-        assert_eq!(zellij.args, ["attach", "rimz-test"]);
-    }
 }

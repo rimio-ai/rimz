@@ -452,6 +452,10 @@ impl MuxBackend for ZellijBackend {
             .args(self.zellij_options_args_probed(&config.zellij))
     }
 
+    fn attach_existing_command(&self, name: &str) -> CommandSpec {
+        self.cmd().args(["attach", name])
+    }
+
     fn detach(&self, _name: &str) -> Result<()> {
         self.cmd().args(["action", "detach"]).run().map(|_| ())
     }

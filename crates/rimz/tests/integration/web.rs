@@ -43,6 +43,15 @@ fn materialized_room_panes_json() -> &'static str {
     r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#
 }
 
+#[cfg(unix)]
+fn free_loopback_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind test web port")
+        .local_addr()
+        .expect("test web address")
+        .port()
+}
+
 fn write_machine_config(env: &Env, text: &str) {
     let path = env.config_root().join("rimz").join("config.toml");
     std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config parent");
@@ -87,6 +96,7 @@ struct WebFixture {
     workspace: rimz::ResolvedWorkspace,
     bin_dir: PathBuf,
     ttyd_bin: PathBuf,
+    web_port: u16,
     tmux_log: PathBuf,
     ttyd_log: PathBuf,
 }
@@ -102,11 +112,14 @@ impl WebFixture {
         let ttyd_bin = bin_dir.join("ttyd");
         std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
         let ttyd_log = env.project_root.join(log_name);
+        let web_port = free_loopback_port();
+        write_machine_config(&env, &format!("[web]\nport = {web_port}\n"));
         Self {
             env,
             workspace,
             bin_dir,
             ttyd_bin,
+            web_port,
             tmux_log,
             ttyd_log,
         }
@@ -203,9 +216,93 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
 
 #[cfg(unix)]
 #[test]
+fn offline_token_operations_keep_one_singular_credential() {
+    let fixture = WebFixture::new("ttyd-offline-token.log");
+    let credential_path = fixture
+        .env
+        .state_root()
+        .join("rimz/web-ttyd-credential.json");
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+
+    let empty = fixture
+        .command()
+        .args(["web", "token", "list"])
+        .bounded_output()
+        .expect("list offline token");
+    assert_success(&empty, "empty offline token list");
+    assert!(empty.stdout.is_empty());
+    assert!(!credential_path.exists());
+    assert!(!daemon_path.exists());
+
+    let create = fixture
+        .command()
+        .args(["web", "token", "create"])
+        .bounded_output()
+        .expect("create offline token");
+    assert_success(&create, "offline token creation");
+    assert_eq!(
+        String::from_utf8_lossy(&create.stdout),
+        "rotated ttyd credential and restarted 0 daemon(s)\n"
+    );
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&credential_path).expect("saved credential"))
+            .expect("credential JSON");
+    assert_eq!(saved["name"], "rimz");
+    assert!(!daemon_path.exists());
+
+    let list = fixture
+        .command()
+        .args(["web", "token", "list"])
+        .bounded_output()
+        .expect("list saved offline token");
+    assert_success(&list, "saved offline token list");
+    assert_eq!(
+        String::from_utf8_lossy(&list.stdout),
+        format!(
+            "rimz: {}\n",
+            saved["created_at"].as_str().expect("timestamp")
+        )
+    );
+
+    let revoke_all = fixture
+        .command()
+        .args(["web", "token", "revoke-all"])
+        .bounded_output()
+        .expect("revoke all offline tokens");
+    assert_success(&revoke_all, "offline revoke-all");
+    assert_eq!(
+        String::from_utf8_lossy(&revoke_all.stdout),
+        "revoked ttyd credential and stopped 0 daemon(s)\n"
+    );
+
+    assert_success(
+        &fixture
+            .command()
+            .args(["web", "token", "create"])
+            .bounded_output()
+            .expect("recreate offline token"),
+        "offline token recreation",
+    );
+    let revoke_named = fixture
+        .command()
+        .args(["web", "token", "revoke", "rimz"])
+        .bounded_output()
+        .expect("revoke named offline token");
+    assert_success(&revoke_named, "offline named revoke");
+    assert_eq!(revoke_named.stdout, revoke_all.stdout);
+    assert!(!credential_path.exists());
+    assert!(!daemon_path.exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     let _guard = daemon_test_guard();
     let fixture = WebFixture::new("ttyd-shared.log");
+    write_machine_config(
+        &fixture.env,
+        &format!("[web]\nport = {}\nstyle_client = false\n", fixture.web_port),
+    );
     let second_root = fixture.env.project_root.join("second-room");
     std::fs::create_dir_all(&second_root).expect("mkdir second room");
     fixture.env.record(&second_root);
@@ -227,10 +324,13 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         let payload = success_json(&open, "shared web open");
         assert_eq!(payload["version"], "rimz.web.v2");
         assert_eq!(payload["session"], workspace.session_name);
-        assert_eq!(payload["port"], 8200);
+        assert_eq!(payload["port"], fixture.web_port);
         assert_eq!(
             payload["url"],
-            format!("http://127.0.0.1:8200/?arg={}", workspace.session_name)
+            format!(
+                "http://127.0.0.1:{}/?arg={}",
+                fixture.web_port, workspace.session_name
+            )
         );
         assert_eq!(payload["credential"]["username"], "rimz");
         let secret = payload["credential"]["secret"]
@@ -258,7 +358,13 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         "{daemon_argv}"
     );
     assert!(!daemon_argv.contains("\t-b\t"), "{daemon_argv}");
-    assert!(daemon_argv.contains("\t-p\t8200\t"), "{daemon_argv}");
+    assert!(daemon_argv.contains("\t-I\t"), "{daemon_argv}");
+    assert!(!daemon_argv.contains("fontFamily="), "{daemon_argv}");
+    assert!(!daemon_argv.contains("theme="), "{daemon_argv}");
+    assert!(
+        daemon_argv.contains(&format!("\t-p\t{}\t", fixture.web_port)),
+        "{daemon_argv}"
+    );
 
     let status = fixture
         .command_with_sessions(&sessions)
@@ -267,8 +373,34 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         .expect("status shared daemon");
     let status = success_json(&status, "shared daemon status");
     assert_eq!(status["online"], true);
-    assert_eq!(status["port"], 8200);
+    assert_eq!(status["port"], fixture.web_port);
     assert!(status["pid"].as_u64().is_some());
+
+    let credential_path = fixture
+        .env
+        .state_root()
+        .join("rimz/web-ttyd-credential.json");
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let credential_before = std::fs::read(&credential_path).expect("credential before bad revoke");
+    let daemon_before = std::fs::read(&daemon_path).expect("daemon before bad revoke");
+    let bad_revoke = fixture
+        .command_with_sessions(&sessions)
+        .args(["web", "token", "revoke", "other"])
+        .bounded_output()
+        .expect("reject unknown credential name");
+    assert!(!bad_revoke.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad_revoke.stderr)
+            .contains("ttyd credential `other` does not exist")
+    );
+    assert_eq!(
+        std::fs::read(&credential_path).expect("credential after bad revoke"),
+        credential_before
+    );
+    assert_eq!(
+        std::fs::read(&daemon_path).expect("daemon after bad revoke"),
+        daemon_before
+    );
 
     write_machine_config(&fixture.env, "[web]\nport = 9123\n");
     let url = fixture
@@ -279,12 +411,18 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         .bounded_output()
         .expect("inspect live shared daemon");
     let url = success_json(&url, "live shared URL");
-    assert_eq!(url["port"], 8200, "live port wins over changed config");
+    assert_eq!(
+        url["port"], fixture.web_port,
+        "live port wins over changed config"
+    );
     assert_eq!(
         url["credential"]["secret"],
         shared_secret.expect("first shared credential")
     );
-    write_machine_config(&fixture.env, "[web]\nport = 8200\n");
+    write_machine_config(
+        &fixture.env,
+        &format!("[web]\nport = {}\n", fixture.web_port),
+    );
 
     std::fs::remove_file(
         fixture
@@ -326,11 +464,14 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
 
     let stop = fixture
         .command_with_sessions(&sessions)
-        .args(["web", "stop"])
+        .args(["web", "token", "revoke", "rimz"])
         .bounded_output()
-        .expect("stop shared daemon");
-    assert_success(&stop, "stop shared daemon");
-    assert!(String::from_utf8_lossy(&stop.stdout).contains("stopped 1 ttyd daemon"));
+        .expect("revoke shared credential");
+    assert_success(&stop, "revoke shared credential");
+    assert_eq!(
+        String::from_utf8_lossy(&stop.stdout),
+        "revoked ttyd credential and stopped 1 daemon(s)\n"
+    );
 }
 
 #[cfg(unix)]
@@ -503,20 +644,78 @@ fn stale_daemon_record_never_signals_a_reused_non_ttyd_pid() {
 #[test]
 fn web_exec_rejects_unknown_session_and_lists_live_rimz_rooms() {
     let fixture = WebFixture::new("ttyd-exec-reject.log");
+    let hostile = "not-a-rimz-room;--create";
     let output = fixture
         .command()
-        .args(["--mux", "tmux", "web", "exec", "not-a-rimz-room"])
+        .args(["--mux", "tmux", "web", "exec", hostile])
         .bounded_output()
         .expect("reject unknown web session");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("session `not-a-rimz-room` is not a live RimZ room"),
+        stderr.contains(&format!("session `{hostile}` is not a live RimZ room")),
         "{stderr}"
     );
     assert!(stderr.contains("Live RimZ sessions:"), "{stderr}");
     assert!(stderr.contains(&fixture.workspace.session_name), "{stderr}");
+    let log = std::fs::read_to_string(&fixture.tmux_log).expect("read tmux trace");
+    assert!(!log.lines().any(|line| line.contains("attach")), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn web_exec_rejects_known_stopped_session_before_attach() {
+    let fixture = WebFixture::new("ttyd-exec-stopped.log");
+    let stopped_root = fixture.env.project_root.join("stopped-room");
+    std::fs::create_dir_all(&stopped_root).expect("mkdir stopped room");
+    fixture.env.record(&stopped_root);
+    let stopped =
+        rimz::WorkspaceResolver::resolve(&stopped_root, None).expect("resolve stopped workspace");
+    let second_live_root = fixture.env.project_root.join("second-live-room");
+    std::fs::create_dir_all(&second_live_root).expect("mkdir second live room");
+    fixture.env.record(&second_live_root);
+    let second_live = rimz::WorkspaceResolver::resolve(&second_live_root, None)
+        .expect("resolve second live workspace");
+    let live_sessions = format!(
+        "{}\\n{}",
+        second_live.session_name, fixture.workspace.session_name
+    );
+
+    let output = fixture
+        .command_with_sessions(&live_sessions)
+        .args(["--mux", "tmux", "web", "exec"])
+        .arg(&stopped.session_name)
+        .bounded_output()
+        .expect("reject stopped web session");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "session `{}` is not a live RimZ room",
+            stopped.session_name
+        )),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&fixture.workspace.session_name), "{stderr}");
+    assert!(stderr.contains(&second_live.session_name), "{stderr}");
+    assert!(
+        !stderr.contains(&format!("  {} (", stopped.session_name)),
+        "{stderr}"
+    );
+    let mut sorted = [
+        fixture.workspace.session_name.as_str(),
+        second_live.session_name.as_str(),
+    ];
+    sorted.sort_unstable();
+    assert!(
+        stderr.find(sorted[0]).expect("first live session")
+            < stderr.find(sorted[1]).expect("second live session"),
+        "{stderr}"
+    );
+    let log = std::fs::read_to_string(&fixture.tmux_log).expect("read tmux trace");
+    assert!(!log.lines().any(|line| line.contains("attach")), "{log}");
 }
 
 #[cfg(unix)]
@@ -532,7 +731,10 @@ fn custom_font_is_inlined_into_the_shared_client_index() {
     .expect("copy dummy font under sandbox HOME");
     write_machine_config(
         &fixture.env,
-        "[web]\nfont = \"RimZ Test Font\"\nfont_source = \"~/custom-font.woff2\"\n",
+        &format!(
+            "[web]\nport = {}\nfont = \"RimZ Test Font\"\nfont_source = \"~/custom-font.woff2\"\n",
+            fixture.web_port
+        ),
     );
 
     let open = fixture
@@ -588,6 +790,8 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
     std::fs::create_dir_all(ttyd_bin.parent().expect("ttyd fixture parent"))
         .expect("mkdir ttyd fixture parent");
     std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
+    let web_port = free_loopback_port();
+    write_machine_config(&env, &format!("[web]\nport = {web_port}\n"));
     let output = env
         .rimz()
         .args(["--mux", "zellij", "web", "open", "--session"])
@@ -613,7 +817,10 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
     assert_eq!(payload["session"], workspace.session_name);
     assert_eq!(
         payload["url"],
-        format!("http://127.0.0.1:8200/?arg={}", workspace.session_name)
+        format!(
+            "http://127.0.0.1:{web_port}/?arg={}",
+            workspace.session_name
+        )
     );
 
     let ttyd_log = std::fs::read_to_string(&ttyd_log).expect("read ttyd log");

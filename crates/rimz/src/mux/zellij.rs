@@ -142,12 +142,6 @@ pub fn capabilities() -> Result<ZellijCapabilities> {
     })
 }
 
-/// Attach to an existing session without allowing the client to create it.
-/// Browser argv reaches this only after the web shim validates a live RimZ room.
-pub fn attach_existing_command(session: &str) -> CommandSpec {
-    ZellijBackend::new().cmd().args(["attach", session])
-}
-
 pub fn log_file() -> PathBuf {
     env::temp_dir()
         .join(format!("zellij-{}", nix::unistd::Uid::current().as_raw()))

@@ -33,6 +33,14 @@ fn managed_endpoint_prefixes_every_command() {
 }
 
 #[test]
+fn existing_session_attach_targets_the_managed_server() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let spec = backend.attach_existing_command("rimz-test");
+
+    assert_eq!(verb_args(&spec), ["attach", "-t", "rimz-test"]);
+}
+
+#[test]
 fn the_managed_endpoint_needs_no_workspace_to_reconstruct() {
     // Any caller rebuilds the same endpoint from the runtime domain alone —
     // this is what keeps `backend_for(MuxName)` free of a workspace argument.
