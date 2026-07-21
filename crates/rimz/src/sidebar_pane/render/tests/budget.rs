@@ -194,6 +194,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 pr_state: None,
                 pr_ci: None,
                 pr_number: None,
+                pr_url: None,
             })
             .collect(),
         agents: Vec::new(),

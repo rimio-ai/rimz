@@ -115,6 +115,7 @@ fn row_snapshot_at(
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     }];
     if focused {
         snap.own_view = Some(crate::SidebarOwnView {
@@ -170,6 +171,7 @@ fn snapshot_in_group(
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     };
     let mut snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(std::path::Path::new("/repo")),

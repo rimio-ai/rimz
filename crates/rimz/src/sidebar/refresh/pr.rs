@@ -51,6 +51,8 @@ pub struct PrLink {
     #[serde(default)]
     pub number: Option<u64>,
     #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
     pub ci: Option<WorktreePrCi>,
     #[serde(default)]
     pub merge_sha: Option<String>,
@@ -316,6 +318,7 @@ struct Target {
     forge_cli: ForgeCli,
     repo_key: String,
     repo_slug: Option<String>,
+    remote: forge::RemoteRepo,
     worktree: PathBuf,
     head_sha: Option<String>,
 }
@@ -326,6 +329,31 @@ struct RepoGroup {
     repo_slug: Option<String>,
     worktree: PathBuf,
     targets: Vec<Target>,
+}
+
+impl Target {
+    fn pr_link(
+        &self,
+        state: WorktreePrState,
+        number: u64,
+        ci: Option<WorktreePrCi>,
+        merge_sha: Option<String>,
+    ) -> PrLink {
+        PrLink {
+            state,
+            number: Some(number),
+            url: self.remote.pr_web_url(number),
+            ci,
+            merge_sha,
+        }
+    }
+
+    fn stamp_pr_url(&self, mut link: PrLink) -> PrLink {
+        link.url = link
+            .number
+            .and_then(|number| self.remote.pr_web_url(number));
+        link
+    }
 }
 
 fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> {
@@ -351,6 +379,7 @@ fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> 
             forge_cli,
             repo_key: remote.repo_key(forge_cli),
             repo_slug,
+            remote,
             worktree: worktree.to_path_buf(),
             head_sha: target_head_sha(diff_cache, path).map(str::to_owned),
         });
@@ -488,16 +517,15 @@ fn assign_states(
         if let Some(candidate) = open_map.get(&target.branch) {
             states.insert(
                 target.path.clone(),
-                PrLink {
-                    state: WorktreePrState::Open,
-                    number: Some(candidate.number),
-                    ci: candidate.ci,
-                    merge_sha: None,
-                },
+                target.pr_link(WorktreePrState::Open, candidate.number, candidate.ci, None),
             );
             continue;
         }
-        if let Some(link) = prior.get(&target.path).cloned() {
+        if let Some(link) = prior
+            .get(&target.path)
+            .cloned()
+            .map(|link| target.stamp_pr_url(link))
+        {
             match link.state {
                 WorktreePrState::Merged
                     if matches!(link.ci, Some(WorktreePrCi::Passing | WorktreePrCi::Failing))
@@ -680,12 +708,7 @@ struct ProbeState {
 fn probe_transition(target: &Target, number: Option<u64>) -> ProbeState {
     match target.forge_cli {
         ForgeCli::Gh => probe_github(target, number),
-        ForgeCli::Tea => probe_tea(
-            &target.worktree,
-            &target.branch,
-            target.repo_slug.as_deref(),
-            number,
-        ),
+        ForgeCli::Tea => probe_tea(target, number),
     }
 }
 
@@ -767,12 +790,7 @@ fn github_candidate_state(target: &Target, candidate: forge::PrCandidate) -> Pro
         None
     };
     ProbeState {
-        state: Some(PrLink {
-            state: candidate.state,
-            number: Some(candidate.number),
-            ci,
-            merge_sha: candidate.merge_sha,
-        }),
+        state: Some(target.pr_link(candidate.state, candidate.number, ci, candidate.merge_sha)),
         ok: true,
     }
 }
@@ -810,15 +828,13 @@ fn tea_pr_detail_args(number: u64, repo: &str) -> Vec<String> {
     vec!["api".to_owned(), format!("repos/{repo}/pulls/{number}")]
 }
 
-fn probe_tea(
-    worktree: &Path,
-    branch: &str,
-    repo: Option<&str>,
-    prior_number: Option<u64>,
-) -> ProbeState {
+fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
+    let worktree = &target.worktree;
+    let branch = &target.branch;
+    let repo = target.repo_slug.as_deref();
     if let Some(number) = prior_number
         && let Some(repo) = repo
-        && let Some(link) = probe_tea_detail(worktree, repo, number)
+        && let Some(link) = probe_tea_detail(target, repo, number)
     {
         return ProbeState {
             state: Some(link),
@@ -854,7 +870,7 @@ fn probe_tea(
         candidate.state,
         WorktreePrState::Closed | WorktreePrState::Merged
     ) && let Some(repo) = repo
-        && let Some(link) = probe_tea_detail(worktree, repo, candidate.number)
+        && let Some(link) = probe_tea_detail(target, repo, candidate.number)
     {
         return ProbeState {
             state: Some(link),
@@ -862,17 +878,13 @@ fn probe_tea(
         };
     }
     ProbeState {
-        state: Some(PrLink {
-            state: candidate.state,
-            number: Some(candidate.number),
-            ci: None,
-            merge_sha: None,
-        }),
+        state: Some(target.pr_link(candidate.state, candidate.number, None, None)),
         ok: true,
     }
 }
 
-fn probe_tea_detail(worktree: &Path, repo: &str, number: u64) -> Option<PrLink> {
+fn probe_tea_detail(target: &Target, repo: &str, number: u64) -> Option<PrLink> {
+    let worktree = &target.worktree;
     let detail_args = tea_pr_detail_args(number, repo);
     let refs = detail_args.iter().map(String::as_str).collect::<Vec<_>>();
     let output = command_stdout(worktree, "tea", &refs)?;
@@ -903,12 +915,7 @@ fn probe_tea_detail(worktree: &Path, repo: &str, number: u64) -> Option<PrLink> 
                 })
         })
         .flatten();
-    Some(PrLink {
-        state,
-        number: Some(number),
-        ci,
-        merge_sha,
-    })
+    Some(target.pr_link(state, number, ci, merge_sha))
 }
 
 fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<WorktreePrCi> {

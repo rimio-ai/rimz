@@ -182,6 +182,19 @@ fn snapshot_to_screen_with_alert_and_ui(
     width: u16,
     height: u16,
 ) -> String {
+    let bytes = snapshot_to_bytes_with_alert_and_ui(snapshot, alert, ui, width, height);
+    let mut parser = vt100::Parser::new(height, width, 0);
+    parser.process(&bytes);
+    parser.screen().contents()
+}
+
+fn snapshot_to_bytes_with_alert_and_ui(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    ui: &UiState,
+    width: u16,
+    height: u16,
+) -> Vec<u8> {
     let mut bytes = Vec::new();
     let backend = CrosstermBackend::new(&mut bytes);
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
@@ -190,9 +203,7 @@ fn snapshot_to_screen_with_alert_and_ui(
     let mut ui = fixed_theme_ui(snapshot, ui);
     draw_to_terminal_with_ui(&mut terminal, snapshot, alert, &mut ui).unwrap();
     drop(terminal);
-    let mut parser = vt100::Parser::new(height, width, 0);
-    parser.process(&bytes);
-    parser.screen().contents()
+    bytes
 }
 
 fn fixed_theme_ui(snapshot: &SidebarSnapshot, ui: &UiState) -> UiState {

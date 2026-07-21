@@ -247,6 +247,40 @@ fn builds_sibling_repo_urls() {
 }
 
 #[test]
+fn builds_pull_request_web_urls() {
+    for (remote, expected) in [
+        (
+            "https://github.com/org/repo.git",
+            "https://github.com/org/repo/pull/91",
+        ),
+        (
+            "git@github.com:org/repo.git",
+            "https://github.com/org/repo/pull/91",
+        ),
+        (
+            "git@gitea.example.test:org/repo.git",
+            "https://gitea.example.test/org/repo/pulls/91",
+        ),
+        (
+            "git@gitlab.com:org/repo.git",
+            "https://gitlab.com/org/repo/-/merge_requests/91",
+        ),
+    ] {
+        assert_eq!(
+            RemoteRepo::parse(remote)
+                .and_then(|repo| repo.pr_web_url(91))
+                .as_deref(),
+            Some(expected),
+            "{remote}"
+        );
+    }
+    assert_eq!(
+        RemoteRepo::parse("https://github.com/repo.git").and_then(|repo| repo.pr_web_url(91)),
+        None
+    );
+}
+
+#[test]
 fn parses_gh_pr_state_json_with_priority() {
     assert_eq!(
         parse_gh_pr_state_json(r#"[{"number":1,"state":"CLOSED"},{"number":2,"state":"OPEN"}]"#)

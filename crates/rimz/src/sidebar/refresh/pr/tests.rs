@@ -91,6 +91,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         PrLink {
             state: WorktreePrState::Merged,
             number: Some(80),
+            url: None,
             ci: Some(WorktreePrCi::Failing),
             merge_sha: Some("terminal-sha".to_owned()),
         },
@@ -100,6 +101,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         PrLink {
             state: WorktreePrState::Merged,
             number: Some(77),
+            url: None,
             ci: None,
             merge_sha: Some("no-ci-sha".to_owned()),
         },
@@ -109,6 +111,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         PrLink {
             state: WorktreePrState::Merged,
             number: Some(79),
+            url: None,
             ci: Some(WorktreePrCi::Pending),
             merge_sha: Some("pending-sha".to_owned()),
         },
@@ -118,6 +121,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         PrLink {
             state: WorktreePrState::Merged,
             number: Some(78),
+            url: None,
             ci: None,
             merge_sha: None,
         },
@@ -127,6 +131,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         PrLink {
             state: WorktreePrState::Open,
             number: Some(81),
+            url: None,
             ci: Some(WorktreePrCi::Pending),
             merge_sha: None,
         },
@@ -136,6 +141,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         PrLink {
             state: WorktreePrState::Closed,
             number: Some(82),
+            url: None,
             ci: None,
             merge_sha: None,
         },
@@ -148,6 +154,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         Some(&PrLink {
             state: WorktreePrState::Open,
             number: Some(91),
+            url: Some("https://github.com/org/repo/pull/91".to_owned()),
             ci: Some(WorktreePrCi::Passing),
             merge_sha: None,
         })
@@ -157,6 +164,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         Some(&PrLink {
             state: WorktreePrState::Merged,
             number: Some(80),
+            url: Some("https://github.com/org/repo/pull/80".to_owned()),
             ci: Some(WorktreePrCi::Failing),
             merge_sha: Some("terminal-sha".to_owned()),
         })
@@ -166,6 +174,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         Some(&PrLink {
             state: WorktreePrState::Merged,
             number: Some(77),
+            url: Some("https://github.com/org/repo/pull/77".to_owned()),
             ci: None,
             merge_sha: Some("no-ci-sha".to_owned()),
         })
@@ -175,6 +184,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         Some(&PrLink {
             state: WorktreePrState::Closed,
             number: Some(82),
+            url: Some("https://github.com/org/repo/pull/82".to_owned()),
             ci: None,
             merge_sha: None,
         })
@@ -255,6 +265,7 @@ fn legacy_pr_link_without_ci_defaults_to_unknown() {
 
     assert_eq!(link.ci, None);
     assert_eq!(link.merge_sha, None);
+    assert_eq!(link.url, None);
 }
 
 #[test]
@@ -282,6 +293,7 @@ fn pending_ci_keeps_repo_on_hot_ttl() {
             PrLink {
                 state,
                 number: Some(91),
+                url: None,
                 ci: Some(WorktreePrCi::Pending),
                 merge_sha: (state == WorktreePrState::Merged).then(|| "merged-sha".to_owned()),
             },
@@ -395,6 +407,7 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
         PrLink {
             state: WorktreePrState::Open,
             number: Some(91),
+            url: None,
             ci: None,
             merge_sha: None,
         },
@@ -545,7 +558,23 @@ fn target(path: &str, branch: &str) -> Target {
         forge_cli: ForgeCli::Gh,
         repo_key: "gh:github.com:org/repo".to_owned(),
         repo_slug: Some("org/repo".to_owned()),
+        remote: forge::RemoteRepo::parse("git@github.com:org/repo.git").unwrap(),
         worktree: PathBuf::from("/repo"),
         head_sha: Some("sha".to_owned()),
     }
+}
+
+#[test]
+fn tea_targets_stamp_gitea_pull_urls() {
+    let mut target = target("/repo/tea", "feature");
+    target.forge_cli = ForgeCli::Tea;
+    target.repo_key = "tea:gitea.example.test:org/repo".to_owned();
+    target.remote = forge::RemoteRepo::parse("git@gitea.example.test:org/repo.git").unwrap();
+
+    let link = target.pr_link(WorktreePrState::Open, 91, None, None);
+
+    assert_eq!(
+        link.url.as_deref(),
+        Some("https://gitea.example.test/org/repo/pulls/91")
+    );
 }

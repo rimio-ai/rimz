@@ -49,6 +49,7 @@ pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
+use std::num::NonZeroU16;
 
 use crate::agents::AgentStatus;
 use crate::agents::TurnPhase;
@@ -57,6 +58,7 @@ use crate::sidebar_pane::pets::PetAction;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend};
+use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Rect;
 use ratatui::text::Text;
 use ratatui::widgets::{Clear, Paragraph, Wrap};
@@ -126,6 +128,7 @@ fn draw_into(
     ui.focus_group_reveal = false;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+    paint_hyperlinks(frame, &ui.interactions, area);
     if ui.help_visible {
         draw_help_overlay(
             frame,
@@ -135,6 +138,40 @@ fn draw_into(
             area,
             (top_height, bottom_height),
         );
+    }
+}
+
+fn paint_hyperlinks(frame: &mut Frame<'_>, interactions: &FrameInteractions, area: Rect) {
+    for (rows, columns, url) in interactions.hyperlinks() {
+        let url = crate::osc::osc_text(url);
+        if url.is_empty() {
+            continue;
+        }
+        for row in rows.clone() {
+            let Ok(row) = u16::try_from(row) else {
+                continue;
+            };
+            if row >= area.height {
+                continue;
+            }
+            for column in columns.clone() {
+                if column >= area.width {
+                    continue;
+                }
+                let Some(cell) = frame
+                    .buffer_mut()
+                    .cell_mut((area.x.saturating_add(column), area.y.saturating_add(row)))
+                else {
+                    continue;
+                };
+                if cell.diff_option == CellDiffOption::Skip || cell.symbol().is_empty() {
+                    continue;
+                }
+                let symbol = cell.symbol().to_owned();
+                cell.set_symbol(&format!("\x1b]8;;{url}\x1b\\{symbol}\x1b]8;;\x1b\\"));
+                cell.set_diff_option(CellDiffOption::ForcedWidth(NonZeroU16::MIN));
+            }
+        }
     }
 }
 

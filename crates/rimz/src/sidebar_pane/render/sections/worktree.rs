@@ -82,9 +82,15 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     // otherwise), and its dotted `┄` seal shows only then, so an unselected
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
-    let header = group_header(ctx.theme, group, ctx.width, group_selected);
+    let (header, header_link) = group_header(ctx.theme, group, ctx.width, group_selected);
     let collapses = group.collapses();
     let header_hit = collapses.then(|| (0..u16::MAX, HitTarget::ToggleGroup(group.key.clone())));
+    let header_link = header_link.map(|(columns, url)| {
+        (
+            columns.start.saturating_add(1)..columns.end.saturating_add(1),
+            HitTarget::Hyperlink(url),
+        )
+    });
     // A collapsing worktree's name toggles its roster. Every other worktree's
     // name lands on the first row — the adjacent agent — while the `external`
     // divider stays inert chrome.
@@ -93,7 +99,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     block.push_with_regions(
         with_gutter(ctx.theme, header, lane, None, ctx.width),
         header_target,
-        header_hit,
+        header_hit.into_iter().chain(header_link),
     );
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
@@ -333,11 +339,11 @@ fn group_header(
     group: &SidebarWorktreeGroup,
     width: usize,
     sealed: bool,
-) -> Line<'static> {
+) -> (Line<'static>, Option<(std::ops::Range<u16>, String)>) {
     // The catch-all is not a worktree — render it as a dim divider, not a bold
     // pod header, so out-of-project sessions read as "outside the project."
     if group.kind == SidebarWorktreeKind::External {
-        return external_divider(theme, group, width);
+        return (external_divider(theme, group, width), None);
     }
     // The lane spine (added by the caller) opens the header, so the label leads
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
@@ -415,6 +421,23 @@ fn group_header(
         }
     };
     let left = ellipsize(&label_with_prefix, label_width);
+    let hyperlink = badge.as_ref().and_then(|(badge, ci)| {
+        let url = group.pr_url.as_ref()?;
+        let badge_text = badge.trim_start();
+        let badge_lead = text_width(badge).saturating_sub(text_width(badge_text));
+        let ci_width = ci
+            .as_ref()
+            .map(|(glyph, _)| text_width(glyph))
+            .unwrap_or_default();
+        let start = text_width(&left)
+            .saturating_add(ci_width)
+            .saturating_add(badge_lead);
+        let end = start.saturating_add(text_width(badge_text));
+        Some((
+            u16::try_from(start).ok()?..u16::try_from(end).ok()?,
+            url.clone(),
+        ))
+    });
     // The dotted `┄` seal caps only the *selected* worktree's header, so the lane
     // reads as one bracketed block; every other header is just its bold label and
     // right-pinned stats, with plain space filling the gap. Sized to land the line
@@ -463,7 +486,7 @@ fn group_header(
     }
     spans.push(Span::styled(fill, fill_style));
     spans.extend(right);
-    Line::from(spans)
+    (Line::from(spans), hyperlink)
 }
 
 /// The header's right-pinned git cluster. A known PR verdict (merged/closed/open)

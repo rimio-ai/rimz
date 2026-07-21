@@ -107,6 +107,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     }];
     assert!(is_animating(&slow, &UiState::default(), 0, false));
     assert_eq!(
@@ -666,6 +667,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             pr_state: None,
             pr_ci: None,
             pr_number: None,
+            pr_url: None,
         }];
         snap
     };

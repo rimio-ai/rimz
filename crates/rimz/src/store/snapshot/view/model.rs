@@ -184,6 +184,9 @@ pub struct SidebarWorktreeGroup {
     /// branch, else the worktree marker's `--from-pr` provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_number: Option<u64>,
+    /// Best-effort web URL for the forge-resolved pull request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
 }
 
 impl SidebarWorktreeGroup {

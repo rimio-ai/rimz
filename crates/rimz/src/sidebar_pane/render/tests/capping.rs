@@ -875,6 +875,7 @@ fn group(rows: Vec<crate::SidebarRow>) -> crate::SidebarWorktreeGroup {
         pr_state: None,
         pr_ci: None,
         pr_number: None,
+        pr_url: None,
     }
 }
 
