@@ -1,4 +1,4 @@
-FROM node:24-trixie
+FROM node:26-trixie
 
 ARG ZELLIJ_VERSION=0.44.3
 ARG TMUX_VERSION=3.7
