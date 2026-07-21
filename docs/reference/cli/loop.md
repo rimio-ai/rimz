@@ -1,17 +1,16 @@
 # Loop CLI
 
-`rimz loop` puts agent turns on a clock. A task is a durable schedule: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires tasks while a room for the task's project is open. Nothing fires when no room is open, and `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, prime budget windows, and guard with watchdogs is the [loops guide](../../guide/loops.md).
+`rimz loop` puts agent turns on a clock. A task is a durable schedule: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires tasks while a room for the task's project is open. Nothing fires when no room is open, and `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, guard them with watchdogs, and pace them against the provider's window is the [loops guide](../../guide/loops.md).
 
 ```sh
-rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
-rimz loop add weekly-prime --agent claude-ping --prompt ping --every reset
+rimz loop add morning --agent claude --prompt "summarize what landed on main overnight" --every weekday --at 07:00
 rimz loop add pr-watch --agent codex --prompt "check CI on the release PR" --every 15m --mode auto --root .
 rimz loop add nightly --agent codex --prompt "triage issues" --every day --at 02:00 --budget 5 --budget-per-day 15
 rimz loop add self-wake --wake @planner --prompt "resume the review and fix the next blocking comment" --in 30m --root .
 rimz loop add watchdog --check "cargo test" --on fail --agent codex --prompt "fix the failing test" --every 15m
 rimz loop add auth-fix --agent codex --prompt "fix auth" --verify "cargo xtask test auth" --max-attempts 3 --every day --at 02:00
 rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --wake @planner --prompt "CI is green; merge"
-rimz loop add repo-prime --project --agent codex-ping --prompt ping --every day --at 08:00
+rimz loop add repo-audit --project --agent codex --prompt "audit the dependency lockfile for advisories" --every day --at 08:00
 rimz loop fire pr-watch
 rimz loop rename pr-watch ci-watch
 rimz loop pause pr-watch --for 2h
@@ -25,9 +24,7 @@ rimz loop remove pr-watch
 
 ## Schedule shapes
 
-Schedules repeat only with `--every` or `--cron`. Shapes are: one-shot (`--at 07:00` or `--in 30m`), interval (`--every 15m`), calendar (`--every weekday --at 07:00`), raw cron (`--cron`), window-reset (`--every reset` on a `<kind>-ping` agent), and poll-until (`--every`, `--check`, `--on`, `--until`, plus an agent action). Calendar, cron, `--in`, and `--until` resolution use the top-level `timezone`, falling back to the system zone when unset.
-
-A `<kind>-ping` agent is the window-primer: the run skips when the provider's window is already counting down. `--every reset` fires that ping one minute after the provider's longest observed budget window resets; an authoritative not-started reading retries hourly, and the run refreshes provider account usage before spawning. `qwen-ping` binds a fresh managed launch to its exact Alibaba region and API key, permits a cold matching cache so that account can start its own window, suppresses a running 5-hour window, and uses the matching 7-day reset; a missing binding or mismatched cache fails closed. Set `auto-ping = true` in machine `loop.toml` to synthesize one visible `autoping-<kind>` reset task per ping-capable adapter and open project room.
+Schedules repeat only with `--every` or `--cron`. Shapes are: one-shot (`--at 07:00` or `--in 30m`), interval (`--every 15m`), calendar (`--every weekday --at 07:00`), raw cron (`--cron`), and poll-until (`--every`, `--check`, `--on`, `--until`, plus an agent action). Calendar, cron, `--in`, and `--until` resolution use the top-level `timezone`, falling back to the system zone when unset.
 
 `--budget <AMOUNT[/day]>` caps each spawned agent run. `--budget-per-day <AMOUNT>` requires a per-run budget, sums that task's cost-bearing run records in the configured local day, and records a skip when the remaining amount cannot fund the next run's cap. `loop list` prints today's spend in its COST column, suffixed by the daily cap when configured. For a check-gated agent or wake task, `loop show` keeps the `spend` line focused on today's daily-cap progress and puts all-record total and average cost in `AGENT RUNS`; other task shapes keep the last-run and rolling ten-run average on `spend`.
 

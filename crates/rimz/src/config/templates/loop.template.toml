@@ -7,17 +7,14 @@
 # Supervised scheduled turns without a task-specific timeout use two hours.
 # default-timeout = "2h"
 
-# Keep each provider's longest budget window running with autoping-<kind> tasks.
-# auto-ping = false
-
 # Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
 # fired by the sidebar elder while a room for the task's project is open. Use
 # either `agent` to spawn a supervised turn or `wake` to wake one pinned live
 # session. Edit entries here or with `rimz loop add`; a running room fires them.
 # [tasks]
 ## [tasks.morning]
-## agent = "claude-ping"               # `<kind>-ping` primes the provider window
-## prompt = "ping"
+## agent = "claude"                    # kind, profile, or virtual single-agent cell
+## prompt = "summarize what landed on main since yesterday"
 ## root = "/home/you/code/app"         # absolute project root whose room hosts the turn
 ## at = "07:00"                        # 24h firing time in the configured timezone
 ## every = "weekday"                   # "day", "weekday", "weekend", or "mon,wed,fri"

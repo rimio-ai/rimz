@@ -26,7 +26,7 @@ Produce the mapping worksheet from the reference before writing Rust; every late
 - **Session identity.** Where the session id comes from, standalone vs daemon-routed hooks, lazy registration, the resume command shape, and what `/clear` or `/new` does to identity ([model.md → The instance lifecycle](../internals/agents/model.md#the-instance-lifecycle)).
 - **Context sources.** Which of the three gauge sources the agent offers: a transcript tail, a rich out-of-band transport, or a gauge stamped onto a RimZ-authored hook wire ([adapter.md → Context sources](../internals/agents/adapter.md#context-sources)).
 - **Account and spend.** The auth surface (OAuth, API key, keyring), where per-turn usage records live, and whether they carry dollars (used verbatim) or tokens (priced through the price book) — the worksheet rows for [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider).
-- **Launch surface.** Argv for the `auto`/`ask`/`yolo`/`plan` permission modes, the compact command, ping args for budget-window priming, and model/effort flags.
+- **Launch surface.** Argv for the `auto`/`ask`/`yolo`/`plan` permission modes, the compact command, and model/effort flags.
 
 ## Step 3 — Scaffold and register
 
@@ -39,7 +39,7 @@ Create `crates/rimz/src/agents/adapters/<kind>/` on the established anatomy:
 - The install surface: return one [`ManagedIntegration`](../../crates/rimz/src/agents/managed_source.rs) from the adapter. Use `ManagedSource` for a JSON hook merge like Claude/Droid/Qwen or a RimZ-authored whole file like Pi/OpenCode; implement the same Interface in the provider's `install.rs` for TOML or multi-file transactions such as Codex and Cursor (step 5).
 - The `tests` module (step 9); past the size gate it becomes a sibling `tests.rs` or `tests/` dir.
 
-Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agents/adapters/mod.rs), then name one `AgentDefinition` in [`registry::BUILTINS`](../../crates/rimz/src/agents/registry.rs). Implement every capability trait on the adapter: real behavior where the agent has it, an empty `impl` where it does not. That entry is the whole hookup — kind resolution, the `<kind>-auto`/`-ask`/`-yolo`/`-plan` permission variants, and `<kind>-ping` all derive from the definition, so no consumer grows a provider match. The one optional extra is the `BUILTIN_PEER` default-layout string in [`harness/spec.rs`](../../crates/rimz/src/harness/spec.rs) when the kind belongs in the zero-config room.
+Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agents/adapters/mod.rs), then name one `AgentDefinition` in [`registry::BUILTINS`](../../crates/rimz/src/agents/registry.rs). Implement every capability trait on the adapter: real behavior where the agent has it, an empty `impl` where it does not. That entry is the whole hookup — kind resolution and the `<kind>-auto`/`-ask`/`-yolo`/`-plan` permission variants all derive from the definition, so no consumer grows a provider match. The one optional extra is the `BUILTIN_PEER` default-layout string in [`harness/spec.rs`](../../crates/rimz/src/harness/spec.rs) when the kind belongs in the zero-config room.
 
 ## Step 4 — Declare the definition
 
@@ -66,7 +66,7 @@ Install is the visible security step ([adapter.md → Hook install](../internals
 
 ## Step 6 — Wire launch, resume, and presets
 
-From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command or a documented registry exception when the agent only compacts automatically), `ping_args` (returning `Some` is what lights up `<kind>-ping`), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping.
+From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command or a documented registry exception when the agent only compacts automatically), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping.
 
 ## Step 7 — Wire context enrichment
 
@@ -116,7 +116,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
 - [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed`
-- [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` · `ping_args`
+- [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
 - [ ] The step-9 test set, stdout shapes as inline `insta` goldens

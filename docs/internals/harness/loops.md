@@ -21,7 +21,7 @@ Three rules follow from having no daemon, and they explain most of the module.
 | File | Owns |
 | --- | --- |
 | [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs) | The vocabulary: `TaskAction`, `Schedule` and its parsing, `ParsedSchedule`, due evaluation, next-occurrence calculation, `TaskTiming` display states, and the `TaskShape` compile. |
-| [`schedule/catalog.rs`](../../../crates/rimz/src/harness/schedule/catalog.rs) | The task catalog: the three sources, visible and runnable precedence, synthesized auto-ping rows, source-aware mutation, and scheduled consumption. |
+| [`schedule/catalog.rs`](../../../crates/rimz/src/harness/schedule/catalog.rs) | The task catalog: the three sources, visible and runnable precedence, source-aware mutation, and scheduled consumption. |
 | [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) | The elder's side: arm-on-first-sight, due planning, `loop-fire.json`, and spawning the detached `rimz loop run <name>`. |
 | [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) | `TaskFire`: the ordered gate ladder, the run lock, the check, prompt preparation, the prepared effect, and the one terminal history transition. |
 | [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) | `LoopRunRecord`, `LoopRunResult`, the user-global JSONL history, cost rollups, and the daily-budget gate. |
@@ -43,7 +43,7 @@ A task is a name, one action, and one firing shape. `TaskAction::from_entry` der
 
 `agent` and `wake` conflict; one of `agent`, `wake`, or `check` is required. `verify` requires `agent`, because verification needs a supervised run to re-prompt. `max-attempts` requires `verify` and must be at least 1.
 
-A `Spawn` task names exactly one agent cell: a built-in kind, a profile, or an adapter-supported virtual cell such as `claude-auto`, `codex-yolo`, or `claude-ping`. Teams, multi-cell layouts, and command cells are rejected at add time, because a scheduled task owns exactly one supervised pane.
+A `Spawn` task names exactly one agent cell: a built-in kind, a profile, or an adapter-supported virtual cell such as `claude-auto` or `codex-yolo`. Teams, multi-cell layouts, and command cells are rejected at add time, because a scheduled task owns exactly one supervised pane.
 
 `TaskShape::compile` compiles each persisted row once into an action result and a timing result **independently**. That independence is the point: a row with a valid action and a malformed schedule stays visible and manually fireable while scheduled firing skips it, instead of one bad field hiding the whole task.
 
@@ -80,7 +80,6 @@ So during the untrusted window you see the project task and keep running the mac
 | Interval | `every = "15m"` | measured elapsed time since the last arm or fire crosses the interval |
 | Calendar | `every = "weekday"` plus `at = "07:00"` | the first tick at or after the wall-clock time on a matching day, at most once that day |
 | Raw cron | `cron = "*/15 * * * *"` | an in-process five-field matcher matches the current minute, and the last fire was in an earlier minute |
-| Window-reset | `every = "reset"` on a `<kind>-ping` agent | an externally resolved `ResetSignal` says so ([below](#window-priming-pings)) |
 | Poll-until | `every = "2m"` with `check`, `on`, an agent action, and `deadline` | the interval elapses, until the check trips the action or the deadline passes |
 
 The day mask accepts `day`, `weekday`, `weekend`, a range like `mon-fri`, or a list `mon,wed,fri`. Calendar times, cron, `--in`, and `--until` all evaluate in the configured `timezone`, falling back to the system zone when unset.
@@ -97,7 +96,7 @@ The arming stamp sets the edge each shape reads, which produces one behaviour wo
 | `Unarmed` | no room has seen it yet |
 | `Upcoming(t)` | the next occurrence, still in the future |
 | `Due(t)` | the next occurrence is at or before now; the elder fires it on its next tick |
-| `NoOccurrence` | parsed, armed, but the shape yields no next time (a `ResetSignal::Unknown` ping) |
+| `NoOccurrence` | parsed, armed, but the shape yields no next time, such as a cron expression whose field combination never matches a real date |
 
 ## Elder firing
 
@@ -105,9 +104,8 @@ The arming stamp sets the edge each shape reads, which produces one behaviour wo
 
 1. Load the runnable catalog for the room's project root, dropping untrusted project rows.
 2. Keep only tasks whose normalized `root` maps to this room's `WorkspaceId`, so each room fires only its own tasks. `rimz loop add` writes a canonical absolute root; a hand-edited `~` or relative root is expanded and canonicalized before the ownership check, display, and execution.
-3. Resolve a `ResetSignal` for each window-reset ping.
-4. Plan every task against `loop-fire.json`, a per-room map of task name to last-fire `Timestamp` in the workspace runtime dir.
-5. Write the new state, then spawn a detached `rimz loop run <name>` with fresh null stdio for each fire.
+3. Plan every task against `loop-fire.json`, a per-room map of task name to last-fire `Timestamp` in the workspace runtime dir.
+4. Write the new state, then spawn a detached `rimz loop run <name>` with fresh null stdio for each fire.
 
 The plan is a four-way decision per task:
 
@@ -134,10 +132,9 @@ Pauses overlay every source without editing durable definitions. When a timed pa
 | 2 | the room-fleet and provider-account [scope caps](./budget.md#the-fail-fast-gate) | `budget skipped` |
 | 3 | the exact managed-launch provider quota, when a binding is proven | `budget skipped` |
 | 4 | `--surplus` / `--surplus-after` forward headroom on the provider's longest window | `surplus skipped` |
-| 5 | the ping window gate, for a `<kind>-ping` cell | `skipped` |
-| 6 | the per-task advisory run lock | `overlapped` |
-| 7 | the poll-until `deadline` | `expired` |
-| 8 | the `check` command and its polarity | `skipped`, or a check-only terminal result |
+| 5 | the per-task advisory run lock | `overlapped` |
+| 6 | the poll-until `deadline` | `expired` |
+| 7 | the `check` command and its polarity | `skipped`, or a check-only terminal result |
 
 Only then does the action run. `TaskFirePlan` returns `Done` (a gate already produced the terminal record), `Spawn` (a prepared `SupervisedRunRequest`), or `Deliver` (a prepared target and prompt). The CLI executes it and calls `finish`, which maps the outcome to a `LoopRunResult` and appends the record. All gates apply in both scheduled and manual modes, so `rimz loop fire` tests the real policy.
 
@@ -171,39 +168,19 @@ On fire, the runner resolves the recorded root, confirms the pinned root session
 
 Self-paced loops are ordinary one-shots: an agent schedules its next `--in` wake at the end of the current one, and the instance row is removed before delivery, so the next one exists only while work remains.
 
-## Window-priming pings
-
-An `agent` value ending in `<kind>-ping` is a virtual cell that starts a provider's budget window at a time you choose. It runs at the lowest effort unless configured otherwise, and Claude's ping pins Sonnet so a flagship account does not prime at the flagship rate. The task declares its prompt explicitly, usually `prompt = "ping"`.
-
-The window is account-scoped and shared by every session of a provider kind ([providers.md § Window fusion](../agents/providers.md#window-fusion)), so one ping primes the whole account. Ping turns count in spend totals, but the session spend-window detector treats them as loop-fired automation rather than human activity.
-
-Before spawning, the runner reads the shared rate-limit cache and skips when the relevant window is already counting down. The read is best-effort: an unknown or cold cache falls through to the ping, since missing a window start defeats the feature while an occasional extra token is cheap.
-
-`every = "reset"` lets a ping follow the provider's longest observed window through a three-state signal:
-
-| `ResetSignal` | Source | Next occurrence |
-| --- | --- | --- |
-| `At(resets_at)` | a cached reset stamp | that stamp plus a one-minute margin, so the ping lands in the new window rather than the last seconds of the old one; a passed reset stays a catch-up edge |
-| `ConfirmedDown` | an authoritative not-started or known reset-less reading | retry from the last fire stamp, at most hourly |
-| `Unknown` | a cold cache, a logged-out account, a lifted limit, or a best-effort-only reading | nothing is scheduled |
-
-Immediately before a reset-shaped ping, the CLI forces one bounded provider account-usage refresh through the normal nonce-guarded claim and publication path, then re-reads the longest window and records `skipped` if it is already running. An unavailable refresh keeps the cached gate, and a successful ping's own account reading supplies the next edge.
-
-**Auto-ping** is the zero-configuration form. With `auto-ping = true` in machine `loop.toml`, catalog loading synthesizes an `autoping-<kind>` task (`agent = "<kind>-ping"`, `prompt = "ping"`, `every = "reset"`) for every built-in adapter that exposes ping arguments, scoped to the room's project root. Explicit instance, machine, or project definitions with the same name shadow the synthesized row, and a rootless catalog read synthesizes nothing. Generated rows have no stored definition to remove or rename: pause one with `rimz loop pause autoping-<kind>`, or turn them all off with `loop.auto-ping false`.
-
 ## History, strikes, and pauses
 
 Every fire appends a `LoopRunRecord` to the user-global `~/.local/state/rimz/loop-runs.log.jsonl`. Loop config is per-machine but the log is per-user, so history survives a task being edited or removed.
 
-The record carries the result, mode (`scheduled` or `manual`), duration, error chain, check evidence (exit code, timeout flag, capped output), delivery target, supervised run id and transcript path, last message, cost, fresh input and output tokens, and, for a ping, the refreshed window outcome. `rimz loop show` reads it for a health verdict plus a separate agent-run rollup for check-gated work; `rimz loop logs` prints the stored forensics in full.
+The record carries the result, mode (`scheduled` or `manual`), duration, error chain, check evidence (exit code, timeout flag, capped output), delivery target, supervised run id and transcript path, last message, cost, and fresh input and output tokens. `rimz loop show` reads it for a health verdict plus a separate agent-run rollup for check-gated work; `rimz loop logs` prints the stored forensics in full.
 
-`LoopRunResult` has fifteen variants, and `strikes::classify` sorts them into three signals:
+`LoopRunResult` has fourteen variants, and `strikes::classify` sorts them into three signals:
 
 | Signal | Results |
 | --- | --- |
 | Strike | `failed`, `verify failed`, `timed out`, `error`, `budget exceeded`; also `completed` or `delivered` whose check still shows the world broken |
 | Reset | `completed` or `delivered` with a passing or absent check; `skipped` from a check that passed |
-| Neutral | `budget skipped`, `surplus skipped`, ping `skipped`, `overlapped`, `canceled`, `expired`, `target gone` |
+| Neutral | `budget skipped`, `surplus skipped`, `overlapped`, `canceled`, `expired`, `target gone` |
 
 That table encodes the judgement calls. A turn that completed but left its check red is a failure, because the task is not doing its job. A gate that declined to spend money is not a failure at all.
 
@@ -252,9 +229,7 @@ Four `Assist` variants live in the log today:
 | `auto_compact` | the message delivery path after a compact command lands | target session, display handle, threshold, occupied context when known, and the durable compact-command message id |
 | `auto_resume` | rebirth recovery after materialization restores at least one pane | workspace, session, death cause, recovered pane count, and planned tab labels |
 
-Auto-ping is the deliberate exception: it enriches its existing `loop-runs.log.jsonl` row instead of duplicating a record. A completed ping compares run-scoped pre-turn capacity against a fresh post-turn cache read and stores the shortest and longest window durations and reset stamps only when the reading changed.
-
-`rimz stats` folds both assist-log generations together with completed ping rows, scoped to the active dashboard window, and publishes one rollup: ping count and cost; delivered continues and their summed `recorded_at - parked_since` recovered time; compact commands sent; redeem attempts and `reset` outcomes; and rebirths plus restored panes. The dashboard shows those five non-zero categories, `rimz stats --assists` renders the merged newest-first event stream, and `rimz stats --json` publishes both.
+`rimz stats` folds both assist-log generations together, scoped to the active dashboard window, and publishes one rollup: delivered continues and their summed `recorded_at - parked_since` recovered time; compact commands sent; redeem attempts and `reset` outcomes; and rebirths plus restored panes. The dashboard shows those four non-zero categories, `rimz stats --assists` renders the merged newest-first event stream, and `rimz stats --json` publishes both.
 
 **Shipping a new smart strategy is one accountable slice**: define its typed trigger, evidence, and outcome record; append it from a writer outside the sidebar import graph; fold it into the Assists stats surface; and add its variant and writer to the table above.
 

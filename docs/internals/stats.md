@@ -121,7 +121,7 @@ Rendering follows three states. A current stats frame always wins, including whi
 
 `--assists` (`assists.rs`) prints the complete newest-first assist timeline instead of the dashboard, one line per event with its forensics. It conflicts with `--json` and `--refresh`.
 
-Assists come from two durable logs, `harness::assist_log` and the loop run log in `harness::schedule::run_log`, folded into an `AssistRollup` of five categories: auto-ping with its cost, auto-continue with resumes and recovered time, auto-compact with its count, auto-redeem with attempts and resets, and auto-resume with restores and the sessions they brought back. The panel prints only the categories with a non-zero count; the timeline prints everything.
+Assists come from the durable `harness::assist_log`, folded into an `AssistRollup` of four categories: auto-continue with resumes and recovered time, auto-compact with its count, auto-redeem with attempts and resets, and auto-resume with restores and the sessions they brought back. The panel prints only the categories with a non-zero count; the timeline prints everything.
 
 The line this draws is what counts as an assist. Automation that benefits the user earns a record here; RimZ repairing its own mux state does not, which is why focus repair keeps a durable record in the [diagnostics log](./diagnostics.md) rather than a row in this panel. A new smart strategy adds its record here when it acts for the user.
 

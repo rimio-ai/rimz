@@ -127,7 +127,7 @@ claude-auto,codex-yolo     → agent cells with adapter-owned permission posture
 claude:planner,codex:coder → agent cells with ad-hoc `@planner` and `@coder` handles
 ```
 
-Each cell is one of: the built-in `term`, a registered agent kind, a virtual `<kind>-<mode>` or `<kind>-ping` variant, a configured profile, or a configured command ([configuration.md](../../guide/configuration.md#agent-profiles-commands-and-teams)). An agent cell may carry an ad-hoc role as `<cell>:<role>`; inline roles follow team-role naming and addressing rules, stay unique within the spec, and apply only to agent cells.
+Each cell is one of: the built-in `term`, a registered agent kind, a virtual `<kind>-<mode>` variant, a configured profile, or a configured command ([configuration.md](../../guide/configuration.md#agent-profiles-commands-and-teams)). An agent cell may carry an ad-hoc role as `<cell>:<role>`; inline roles follow team-role naming and addressing rules, stay unique within the spec, and apply only to agent cells.
 
 A named team is an ordered role list. It opens as one column per role unless it declares its own `layout`, which uses the same row and column grammar and resolves declared role names before falling through to roleless cells. Team layout strings keep roles inside the team's declared list and do not accept the inline `:role` suffix. `<team>.<role>` launches one declared role with its team identity, placed like any single-agent launch.
 

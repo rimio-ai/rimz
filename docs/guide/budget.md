@@ -4,7 +4,7 @@ You already cap spend where the provider lets you: a billing alert on the API da
 
 A budget is a dollar cap RimZ enforces at the scale you promise yourself. It can enforce one because it already computes the fleet's live spend from the transcripts your agents write ([Token Insight](./insight.md)); a budget turns that read into a stop. Crossing a cap parks the agent — the same rest state a provider rate limit produces — and a parked agent is one message away from resuming.
 
-One term collision to clear first: the `5h` and `7d` bars on the provider dashboard are also called budgets. Those are your subscription plan's included usage, metered by the provider and read-only to you ([budget is not spend](./insight.md#budget-is-not-spend)), though a [scheduled ping](./loops.md#prime-the-budget-window) can start those windows on your clock. Most of this page is about the dollar caps you set; the [last section](#spend-the-provider-surplus) reads the provider's budget instead, releasing scheduled work only when the week has surplus to spend.
+One term collision to clear first: the `5h` and `7d` bars on the provider dashboard are also called budgets. Those are your subscription plan's included usage, metered by the provider and read-only to you ([budget is not spend](./insight.md#budget-is-not-spend)). Most of this page is about the dollar caps you set; the [last section](#spend-the-provider-surplus) reads the provider's budget instead, releasing scheduled work only when the week has surplus to spend.
 
 ## One model, four scopes
 
@@ -19,7 +19,7 @@ A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`, which 
 
 Every scope is checked independently, so the first cap crossed is the one that parks.
 
-Qwen's experimental Alibaba Coding Plan reading adds a launch-only provider quota boundary beside those four dollar scopes. A fresh managed supervised or loop launch binds its final Qwen process to the exact official region and an opaque fingerprint of the selected API key, then reads only that account's cached `5h`, `7d`, and `30d` windows. An exhausted window exits `125` or records `budget skipped` before a run record, pane, or loop `--check` command exists. Missing quota data permits an ordinary fresh launch; surplus and priming require complete data for that exact account and fail closed. Interactive hand launches, resume, fork, wake, and mid-run auto-continue stay outside this boundary.
+Qwen's experimental Alibaba Coding Plan reading adds a launch-only provider quota boundary beside those four dollar scopes. A fresh managed supervised or loop launch binds its final Qwen process to the exact official region and an opaque fingerprint of the selected API key, then reads only that account's cached `5h`, `7d`, and `30d` windows. An exhausted window exits `125` or records `budget skipped` before a run record, pane, or loop `--check` command exists. Missing quota data permits an ordinary fresh launch; the surplus gate requires complete data for that exact account and fails closed. Interactive hand launches, resume, fork, wake, and mid-run auto-continue stay outside this boundary.
 
 ### Cap one agent
 

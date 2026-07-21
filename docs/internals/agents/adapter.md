@@ -51,9 +51,9 @@ Each adapter is a private unit struct under [`adapters/<kind>/`](../../../crates
 | Policy | `capabilities` (below) |
 | Claims | `coverage`, `user_coverage`, `lifecycle_hooks` ([declared coverage](#declared-coverage)) |
 | Defaults | `default_model`, `default_context_window`, `sub_providers`, `thread_key` |
-| Launch | `launch`: program, fixed args, prompt style, resume and fork argv, per-mode permission args, ping args, max-turn flag, compact command, preset matchers |
+| Launch | `launch`: program, fixed args, prompt style, resume and fork argv, per-mode permission args, max-turn flag, compact command, preset matchers |
 
-The launch block is declarative on purpose. Because permission argv, resume shape, and preset flag spellings are data, one registry entry is what lights up `<kind>-auto`, `<kind>-ask`, `<kind>-plan`, `<kind>-yolo`, `<kind>-ping`, `rimz agents restart`, and `agents.toml` profile rendering for the new agent, with no code elsewhere.
+The launch block is declarative on purpose. Because permission argv, resume shape, and preset flag spellings are data, one registry entry is what lights up `<kind>-auto`, `<kind>-ask`, `<kind>-plan`, `<kind>-yolo`, `rimz agents restart`, and `agents.toml` profile rendering for the new agent, with no code elsewhere.
 
 `capabilities` is the operational policy that no coverage claim can derive:
 
@@ -78,7 +78,7 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | `CoreCapability` | `spec()`, plus the test-only conformance fixtures | required, no default |
 | `HookCapability` | `decode_hook`, `hook_ingress`, ask options and answer plans, subagent correlation | no native decoder: every event classifies unknown and records nothing |
 | `InstallationCapability` | `managed_integration` and the install, preview, uninstall, detection, trust, and statusline-wrap surface it drives | hook installation is unavailable for this agent |
-| `LaunchCapability` | `is_interactive_process`, `launch_command`, `resume_command`, `ping_args`, `launch_env`, `room_env`, version probing | render argv straight from the spec's `launch` block |
+| `LaunchCapability` | `is_interactive_process`, `launch_command`, `resume_command`, `launch_env`, `room_env`, version probing | render argv straight from the spec's `launch` block |
 | `SessionCapability` | local-session discovery, resume-identity parsing, daemon evidence, turn-death refinement | no provider-owned session store to read |
 | `TranscriptCapability` | `parse_transcript_messages`, streaming pages, source positions | no transcript surface; JSONL adapters inherit the byte-cursor implementation |
 | `ContextCapability` | `observe_context`, `local_context_refresh`, `context_refresh_spawn`, local turn pricing | no out-of-band context source |

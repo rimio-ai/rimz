@@ -30,43 +30,6 @@ rimz loop add deps --agent codex --worktree deps --every mon --at 09:00 \
 
 That one line stands in for a cron entry, the guard script around it, and the terminal you would have left open to watch it. It runs Codex in an isolated [worktree](./worktrees.md) every Monday at 09:00, and if a bump breaks the build the agent stops and asks instead of forcing it through: the question reaches you like any other waiting card. Every launch-shaping flag from [the agents guide](./fleet.md) rides along, so `--worktree`, `--mode`, `--effort`, `--system-prompt-file`, and `--timeout` shape a scheduled turn the same way they shape an interactive one ([full list below](#every-schedule-shape)). What the agent then does with the turn is bounded only by the prompt: a one-line check, or the whole [fleet that works nights](#a-fleet-that-works-nights).
 
-### Prime the budget window
-
-One scheduled turn earns its keep doing no project work at all: opening a provider's budget window before you need it.
-
-Subscription providers meter usage in rolling windows: five hours that start with your first message and reset when they expire. Left to chance, the window lands at the worst offset from your day. Sit down at 9:00 and your first prompt opens a 9:00 to 14:00 window; on a heavy morning the budget is gone by 11:30, and you stall until 14:00, dead hours in the middle of the day.
-
-A `<kind>-ping` virtual agent opens the window before you arrive when that adapter supplies a generic low-cost priming command:
-
-```sh
-rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
-```
-
-Every weekday at 07:00 the task runs one lowest-effort turn, and the window runs 07:00 to 12:00. (Claude's ping pins Sonnet, so a flagship account does not prime at the flagship rate.) You sit down at 9:00 against an almost untouched budget, the reset lands at noon instead of mid-afternoon, and the next window carries you to 17:00. Same subscription, same limits. The resets just stop landing in the middle of your deep work.
-
-The ping stays cheap even on a day you never needed it. Before it fires, RimZ reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex.
-
-A `<kind>-ping` exists only where the adapter has a low-cost priming command RimZ has verified, which today means `claude-ping`, `codex-ping`, `qwen-ping`, and `kimi-ping`. Any other kind is refused when you add the task, so a provider without one fails at `rimz loop add` rather than quietly burning a full-price turn every morning.
-
-To keep the windows back-to-back all day, let the window set its own schedule:
-
-```sh
-rimz loop add prime --agent claude-ping --prompt ping --every reset
-```
-
-`--every reset` fires one minute after the provider's longest pacing window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes. The shape requires a supported `<kind>-ping`.
-
-To keep the longest window running for every supported provider without defining each task, enable the machine-level loop flag:
-
-```toml
-# ~/.config/rimz/loop.toml
-auto-ping = true
-```
-
-RimZ synthesizes a visible `autoping-<kind>` reset task for each ping-capable adapter in every open project room. When an authoritative provider reading says the longest window is down, the task retries within an hour; immediately before each ping, RimZ checks the provider's OAuth usage API again and skips if the window has started elsewhere. An officially cleared limit (full bars, no active reset countdown) enters the same retry path, while a logged-out provider or unknown reading stays idle.
-
-Pause one generated provider with `rimz loop pause autoping-<kind>`, or disable all generated pings with `rimz config set loop.auto-ping false`. Generated rows have no stored task definition to remove or rename; define a task with the same name when you want an explicit replacement.
-
 ## Wake a running agent
 
 An agent's work often ends in a wait. CI has twenty minutes left, a reviewer owes comments, a deploy is baking. The agent has nothing to do until then, and the follow-up falls to you: remember to check CI, then tell the agent to merge. You become the reminder service for your own fleet.
@@ -130,7 +93,7 @@ There is no scheduler daemon; the room keeps time. While a room for the task's p
 
 A scheduled `--agent` fire lands in the `rimzd` loop zone: the runtime column's live loop panel stays open, and transient run panes stack under it instead of splitting the sidebar or a working tab. If the panel pane was closed while the `rimzd` view remains, RimZ recreates the panel at fire time and stacks the run under it; if the whole view is gone or the split fails, it falls back to a new run tab. Manual `rimz loop fire` keeps splitting beside the caller so its foreground stream stays local.
 
-A fire leaves two things behind: whatever the task did (one transient supervised pane for `--agent`, one delivered message for `--wake`), and one line of run history. A successful budget-window ping also records the refreshed shortest and longest window reset outcome on that line. `rimz loop show <name>` gives that history a health verdict and, for check-gated work, a separate agent-run rollup; `rimz loop logs <name>` prints the complete stored forensics. Everything reverses in one move. `rimz loop remove <name>` deletes the entry; a project removal shows the surface diff and offers the refreshed grant in a terminal, or prints the review and approve commands elsewhere. Both files are plain TOML you can read and edit by hand.
+A fire leaves two things behind: whatever the task did (one transient supervised pane for `--agent`, one delivered message for `--wake`), and one line of run history. `rimz loop show <name>` gives that history a health verdict and, for check-gated work, a separate agent-run rollup; `rimz loop logs <name>` prints the complete stored forensics. Everything reverses in one move. `rimz loop remove <name>` deletes the entry; a project removal shows the surface diff and offers the refreshed grant in a terminal, or prints the review and approve commands elsewhere. Both files are plain TOML you can read and edit by hand.
 
 ## Keep the fleet moving
 
@@ -162,14 +125,13 @@ Two brakes keep hands-off bounded.
 
 ## Every schedule shape
 
-The loops above are points in a small grammar. Each task names one action: `--agent` (a kind, a profile, or a virtual cell like `codex-yolo` or `claude-ping`) for a fresh supervised pane, or `--wake @<handle>` for a running session. It carries a `--prompt` or `--prompt-file`, and it picks one firing shape. The rule from the top of the page decides whether each shape repeats: only `--every` or `--cron` makes it recur.
+The loops above are points in a small grammar. Each task names one action: `--agent` (a kind, a profile, or a virtual cell like `codex-yolo`) for a fresh supervised pane, or `--wake @<handle>` for a running session. It carries a `--prompt` or `--prompt-file`, and it picks one firing shape. The rule from the top of the page decides whether each shape repeats: only `--every` or `--cron` makes it recur.
 
 | Shape | Flags | Repeats? | Example |
 | --- | --- | --- | --- |
 | One-shot | a bare `--at HH:MM`, or `--in <delay>` | fires once, then the task removes itself | `--in 30m` |
 | Interval | `--every <duration>`, measured from the last fire | yes | `--every 15m` |
 | Calendar | `--every <days> --at HH:MM`, where days is `day`, `weekday`, `weekend`, a range `mon-fri`, or a list `mon,wed,fri` | on each matching day | `--every weekday --at 07:00` |
-| Window-reset | `--every reset` on a `<kind>-ping` agent ([above](#prime-the-budget-window)) | after every budget-window reset | `--agent claude-ping --every reset` |
 | Raw cron | `--cron`, a five-field expression | per the expression | `--cron "*/15 * * * *"` |
 | Poll-until | `--every <duration>` plus `--check`, `--on`, `--until`, and an agent action ([above](#guard-a-turn-with-a-check)) | until the check trips or the deadline passes | `--check "gh run watch --exit-status" --on success --until 30m --every 2m` |
 
@@ -217,9 +179,6 @@ A hands-off room composes four layers, from least to most involved: [the recover
 [Scripting](./scripting.md) turns an agent into a shell command, and a loop puts that command on a clock. Because a scheduled turn is a full room citizen, it reaches every other primitive: `-p` subagents, teams, worktrees, messages. Stacked, they turn routine work into standing tasks.
 
 ```sh
-# 07:00 every day: the budget windows are running before you sit down
-rimz loop add prime --agent claude-ping --prompt ping --every day --at 07:00
-
 # every 15m: CI on the release PR fixes itself
 rimz loop add ci-fix --check "gh run watch --exit-status" --on fail \
     --agent codex --prompt "CI failed on the release PR; read the failing job's logs and fix it" --every 15m

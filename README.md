@@ -203,11 +203,12 @@ rimz agents wait swift-otter --stream
 rimz agents wait otter fox --any
 ```
 
-**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. A `<kind>-ping` task primes budget windows: a lowest-effort turn starts the provider's window on your clock and skips when one is already counting down. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; add `--budget 20/day` to bound what hands-off work costs.
+**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; add `--budget 20/day` to bound what hands-off work costs.
 
 ```sh
-# Prime the provider's 5h budget window each weekday morning
-rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
+# 07:00 every weekday: overnight changes, summarized before you sit down
+rimz loop add standup --agent claude --every weekday --at 07:00 \
+    --prompt "Summarize what landed on main since yesterday and flag anything that needs review"
 
 # One-shot wake after a delay
 rimz loop add nudge --wake @planner --prompt "resume the review" --in 30m
@@ -293,7 +294,7 @@ rimz config set remote_control.codex true
 What each group does, with the depth one link away:
 
 - The modern look wants a truecolor terminal (Ghostty, WezTerm, Kitty, Alacritty) and a Nerd Font, inside RimZ tmux rooms and over `rimz remote` too. The color scheme defaults to TokyoNight Night; `rimz config set theme "Catppuccin Mocha"` picks any bundled scheme from `rimz list-themes`. Pets render as crisp pixels in Ghostty and kitty (tmux additionally needs 3.6+ with `allow-passthrough on`) and as cell art everywhere else, Zellij included. → [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
-- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction sends `/compact` ahead of your text once context passes the threshold, so a long turn lands on a fresh window. Add a [scheduled ping](#everyday-moves) and the fleet only needs you for real decisions; cap what that freedom costs with `rimz config set harness.budget 50/day`. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
+- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction sends `/compact` ahead of your text once context passes the threshold, so a long turn lands on a fresh window. Between them the interruptions that would have stalled the fleet until morning clear themselves, and you are left with the decisions that actually need you; cap what that freedom costs with `rimz config set harness.budget 50/day`. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
 - The remote-control toggles are the [answer-from-your-phone move](#everyday-moves) above; the [remote guide](./docs/guide/remote.md#answer-asks-from-your-phone) shows exactly what each one runs.
 
 The [setup guide](./docs/guide/setup.md) walks the whole first pass, including agent hooks and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md); the full key catalog is the [configuration guide](./docs/guide/configuration.md).

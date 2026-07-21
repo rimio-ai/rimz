@@ -371,7 +371,7 @@ A **metered account** drains one "mana" bar per included budget window toward it
 
 These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
 
-A named quota with no reported duration does not participate in sliding-window detection, burn pace, surplus, priming, temporal hierarchy, or reset-to-max roll-forward. Its provider-reported reset remains visible in the quiet tone and can arm a genuinely exhausted turn; `∞` remains visible for an explicitly unlimited named quota.
+A named quota with no reported duration does not participate in sliding-window detection, burn pace, surplus, temporal hierarchy, or reset-to-max roll-forward. Its provider-reported reset remains visible in the quiet tone and can arm a genuinely exhausted turn; `∞` remains visible for an explicitly unlimited named quota.
 
 When the provider temporarily lifts a previously reported limit, its row stays visible as a full bar with `∞` in the countdown marker slot; unlike a not-started window's blank slot, this explicitly reads as unlimited until the provider reports the window again.
 

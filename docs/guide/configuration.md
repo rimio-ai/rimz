@@ -374,7 +374,7 @@ A profile is a named agent preset, addressable as `@<name>` once it is running. 
 
 Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field, including `args`**: a child that sets `args` replaces the base `args` rather than appending. `system-prompt-file` gives the profile its own voice; `append-system-prompt-file` keeps the adapter's base prompt and adds rules where the adapter supports it. A `~` expands to home and a relative path roots at the declaring config file, so a role in a drop-in `team.toml` can name a prompt beside that fragment and keep pointing at it wherever the team launches; each file must exist at launch, and a missing one fails with the path to fix. A field the resolved adapter has no flag for fails the launch and names the field to remove. Command-line `--model`, `--effort`, `--budget`, `--system-prompt-file`, and `--append-system-prompt-file` render after the profile and override it for that launch.
 
-A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, for profiles that set `agent = "claude"`, and for virtual cells like `claude-auto` and `claude-ping`.
+A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, for profiles that set `agent = "claude"`, and for virtual cells like `claude-auto`.
 
 #### Commands
 
@@ -392,7 +392,9 @@ An inline spec like `rimz agents "claude,codex+term"` keeps the same shape gramm
 2. `[agents.profiles]`,
 3. built-in `term`,
 4. registered agent kinds,
-5. adapter-supported virtual `<kind>-<mode>` and `<kind>-ping` cells (`claude-auto`, `codex-ask`, `codex-yolo`, `claude-ping`, …).
+5. adapter-supported virtual `<kind>-<mode>` cells (`claude-auto`, `codex-ask`, `codex-yolo`, …).
+
+The [agents CLI reference](../reference/cli/agents.md) lists the built-in virtual cells in full.
 
 Profiles and roles become addressable handles, so they must not shadow `@all`, agent kinds (`@claude`), kind ordinals (`@claude-2`), or the pane and channel sigils (`:`, `#`). Profile, command, and team names also reserve the `agents` subcommand verbs `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`. A config that still uses a removed table fails fast naming the rename rather than silently dropping it: `[tab]` (with its `[tab.keywords]`/`[tab.layouts]` children) → `placement` under `[agents]` plus `[agents.teams]`; `[agents.aliases]` → `[agents.profiles]` and `[agents.commands]`; `[agents.layouts]` → `[agents.teams]`. The room degrades to defaults with a warning while `rimz config` and `rimz doctor` print the precise rename.
 
@@ -420,12 +422,11 @@ base = "fresh"
 ### Loop tasks
 
 ```toml
-auto-ping = true            # keep each provider's longest window running
 default-timeout = "2h"   # scheduled agent turns without a task timeout
 
 [tasks.morning]
-agent = "claude-ping"     # `<kind>-ping` primes a provider window
-prompt = "ping"
+agent = "claude"
+prompt = "summarize what landed on main since yesterday"
 root = "/home/you/code/app"
 at = "07:00"             # 24h time in the configured timezone
 every = "weekday"        # day | weekday | weekend | mon,wed,fri
@@ -468,15 +469,13 @@ session = "sess-abc123"
 handle = "@planner"
 ```
 
-Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. The scheduling model (shapes, watchdogs, pings, self-wakes) is [loops.md](./loops.md); this section is the field shape.
-
-`auto-ping = true` synthesizes one machine-source `autoping-<kind>` reset task per ping-capable provider in each open project room. The tasks stay visible in `rimz loop`, and an explicit task with the same name wins. Each task keeps the provider's longest window running, rechecks authoritative account usage before a ping, and retries a confirmed-down window at most once per hour; [loops.md → Prime the budget window](./loops.md#prime-the-budget-window) covers the workflow.
+Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. The scheduling model (shapes, watchdogs, self-wakes) is [loops.md](./loops.md); this section is the field shape.
 
 `default-timeout` bounds scheduled supervised turns whose task omits `timeout`; it accepts positive `s`, `m`, `h`, and `d` durations and defaults to `2h`. Set it with `rimz config set loop.default-timeout 3h`. Task-specific `timeout` wins, and a manual `rimz loop fire` without one remains unbounded.
 
 Each task chooses `agent`, `wake`, `check`, or `check` plus one agent action:
 
-- `agent` drives one supervised turn for a single agent cell on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` agent is the window-primer: it skips when that provider's budget window is already counting down, and takes a short prompt like any spawn task.
+- `agent` drives one supervised turn for a single agent cell on a calendar, interval, cron, or one-shot schedule.
 - `[tasks.<name>.wake]` pins delivery to one live agent session through the message path: `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only.
 - `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, `on = "success"` on zero exit. Check output is appended to the agent prompt when the guard fires.
 - `verify` runs a shell command after a spawned agent turn and re-prompts that same supervised session on failure; `max-attempts` is the total agent-turn cap and defaults to `3`.
@@ -542,9 +541,9 @@ env = { CLAUDE_CODE_DISABLE_AGENT_VIEW = "1" }
 event = "PreToolUse"
 command = "notify-send rimz"
 
-[tasks.morning-codex-ping]
-agent = "codex-ping"
-prompt = "ping"
+[tasks.morning-triage]
+agent = "codex"
+prompt = "triage yesterday's failing CI runs and open one issue per distinct cause"
 at = "08:00"
 every = "day"
 ```

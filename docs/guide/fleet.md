@@ -292,8 +292,6 @@ rimz agents claude --yolo   # the same mode as a flag
 
 Not every provider defines every mode: the built-in set is `claude-{auto,ask,plan,yolo}`, `codex-{auto,ask,plan,yolo}`, `cursor-{auto,ask,plan,yolo}`, `antigravity-{auto,ask,plan,yolo}`, `grok-{auto,ask,plan,yolo}`, `opencode-{plan,yolo}`, and `pi-{ask,plan}`, and a mode a given provider has no equivalent for keeps that provider's default behavior. Cursor's Auto posture uses its classifier-backed `--auto-review` mode; Antigravity maps Auto to `--mode accept-edits` and keeps sandboxing a separate provider flag. Grok maps Ask to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`; Grok Plan adds no argv because `/plan` is interactive rather than an enforced launch posture. On the command line the same choice is a flag, `--ask` or `--yolo`, and in a profile it is the `mode` field. The exact flag each mode becomes, per provider, is in [agent support](../reference/agent-support.md).
 
-One more suffix sits outside permissions: `-ping` opens the agent at its lowest effort to warm the provider's budget window, the building block behind scheduled window-priming ([loops](./loops.md)). The built-in pings are `claude-ping` and `codex-ping`.
-
 ## See also
 
 - [Worktrees](./worktrees.md) — isolate a layout on its own branch so several agents run in parallel.

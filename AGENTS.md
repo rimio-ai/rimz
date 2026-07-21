@@ -120,7 +120,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [remote.md](./docs/guide/remote.md) — attaching to a room on another host over SSH: a multiplexer attach, the self-healing link, continuity across reboots, and the provider mobile-app remote-control toggles.
 - [web.md](./docs/guide/web.md) — browser access: the local Zellij web server, remote `--web` tunnels, and login tokens.
 - [scripting.md](./docs/guide/scripting.md) — supervised `-p` runs: exit codes, JSON and streaming output, background runs and wait, and the orchestration primitives.
-- [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, budget-window priming, agent self-wakes, and the unattended permission posture.
+- [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, agent self-wakes, and the unattended permission posture.
 - [notifications.md](./docs/guide/notifications.md) — off-screen attention: desktop banners, unread nudges, and handlers that push to your channels or clear routine prompts.
 - [theme.md](./docs/guide/theme.md) — sidebar theming: palettes, color depth and slot overrides, custom themes, animations, provider branding.
 - [pets.md](./docs/guide/pets.md) — the dashboard pet: what it acts out, built-in and petdex pets, bring-your-own sheets, pixel vs cell-art tiers, offline and privacy.
