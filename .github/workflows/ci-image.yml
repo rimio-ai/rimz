@@ -66,7 +66,13 @@ jobs:
             export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
             echo "$TOKEN" | docker login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
           fi
-          docker build --pull -f ci/Dockerfile -t "$IMAGE" -t "$LATEST_IMAGE" .
+          # The token reaches cargo-binstall as a build secret, lifting its
+          # GitHub API resolution off the 60-per-hour anonymous quota that
+          # shared runner egress addresses exhaust. A secret mount keeps it out
+          # of image history, where --build-arg would leave it.
+          docker build --pull -f ci/Dockerfile \
+            --secret id=github_token,env=TOKEN \
+            -t "$IMAGE" -t "$LATEST_IMAGE" .
           if [ "$PUSH" = "true" ]; then
             docker push "$IMAGE"
             docker push "$LATEST_IMAGE"

@@ -14,6 +14,13 @@ ARG APPLE_CODESIGN_VERSION=0.29.0
 ARG APPLE_CODESIGN_SHA256=dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
 ARG CARGO_VET_VERSION=0.10.2
 ARG SCCACHE_VERSION=0.16.0
+ARG BINSTALL_VERSION=1.21.0
+ARG CARGO_NEXTEST_VERSION=0.9.140
+ARG CARGO_DENY_VERSION=0.20.2
+ARG CARGO_MACHETE_VERSION=0.9.2
+ARG CARGO_LLVM_COV_VERSION=0.8.7
+ARG CARGO_SEMVER_CHECKS_VERSION=0.49.0
+ARG CARGO_ZIGBUILD_VERSION=0.23.0
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -35,11 +42,37 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-
  && rustup target add wasm32-wasip1 aarch64-apple-darwin x86_64-apple-darwin \
  && rustc -V && cargo -V
 
-RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
-      https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
- && cargo binstall -y --no-symlinks \
-      cargo-nextest cargo-deny cargo-machete cargo-llvm-cov cargo-semver-checks cargo-zigbuild sccache@${SCCACHE_VERSION} \
- && cargo install --locked cargo-vet@${CARGO_VET_VERSION}
+# Gate plugins arrive as prebuilt binaries. binstall resolves them through the
+# GitHub REST API, which allows 60 requests per hour per IP unauthenticated —
+# a quota shared CI egress addresses exhaust — so mount a token when the
+# builder supplies one. `--disable-strategies compile` keeps a failed download
+# reported here, naming the artifact it could not fetch, instead of falling
+# through to a source build that omits `--locked` and dies twelve minutes later
+# inside cargo-nextest's `locked-tripwire`. Every version is pinned so a clean
+# rebuild resolves the same tools as the last one. cargo-vet stays on
+# `cargo install` because its crates.io releases run ahead of its GitHub
+# binaries (0.10.2 has no prebuilt asset). The mount stays optional so the
+# podman full-rebuild path, which supplies no secret, still builds.
+RUN --mount=type=secret,id=github_token,required=false \
+    set -eu; \
+    if [ -s /run/secrets/github_token ]; then \
+      GITHUB_TOKEN="$(cat /run/secrets/github_token)"; \
+      export GITHUB_TOKEN; \
+    fi; \
+    curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+      https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
+      -o /tmp/install-binstall.sh; \
+    BINSTALL_VERSION="${BINSTALL_VERSION}" bash /tmp/install-binstall.sh; \
+    rm -f /tmp/install-binstall.sh; \
+    cargo binstall -y --locked --no-symlinks --disable-strategies compile \
+      cargo-nextest@${CARGO_NEXTEST_VERSION} \
+      cargo-deny@${CARGO_DENY_VERSION} \
+      cargo-machete@${CARGO_MACHETE_VERSION} \
+      cargo-llvm-cov@${CARGO_LLVM_COV_VERSION} \
+      cargo-semver-checks@${CARGO_SEMVER_CHECKS_VERSION} \
+      cargo-zigbuild@${CARGO_ZIGBUILD_VERSION} \
+      sccache@${SCCACHE_VERSION}; \
+    cargo install --locked cargo-vet@${CARGO_VET_VERSION}
 
 # Bake a warm RustSec advisory DB so the Gitea deny gate reads it locally
 # (`cargo deny --offline check`) instead of cloning per run. The per-run
