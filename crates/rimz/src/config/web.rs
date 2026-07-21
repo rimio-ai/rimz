@@ -3,10 +3,10 @@ use serde::{Deserialize, Serialize};
 /// Browser-access preferences for host-local room access.
 ///
 /// These are per-machine preferences: base URLs can name private hostnames,
-/// loopback tunnels, or reverse-proxy paths, and no field executes a command;
-/// `enabled` gates auto-granting RimZ's presence-plugin permissions and
-/// enabling browser sharing. The section therefore stays outside the project
-/// trust hash.
+/// loopback tunnels, or reverse-proxy paths, font sources name read-only paths
+/// or HTTPS URLs, and no field executes a command; `enabled` gates
+/// auto-granting RimZ's presence-plugin permissions and enabling browser
+/// sharing. The section therefore stays outside the project trust hash.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WebPrefs {
@@ -32,6 +32,10 @@ pub struct TmuxWebPrefs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     pub auto_start: bool,
+    pub font: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_source: Option<String>,
+    pub style_client: bool,
 }
 
 impl Default for TmuxWebPrefs {
@@ -39,6 +43,9 @@ impl Default for TmuxWebPrefs {
         Self {
             base_url: None,
             auto_start: true,
+            font: "JetBrainsMono Nerd Font Mono".to_owned(),
+            font_source: None,
+            style_client: true,
         }
     }
 }

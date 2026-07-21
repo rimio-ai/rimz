@@ -13,6 +13,8 @@ use crate::ids::MuxName;
 use crate::mux::{CommandSpec, MuxErr};
 use crate::store::atomic;
 
+mod colors;
+mod fonts;
 mod ttyd;
 mod zellij;
 
@@ -134,15 +136,19 @@ impl WebEngine {
         }
     }
 
-    pub fn credential(self, command: CredentialCommand) -> Result<CredentialOutcome> {
+    pub fn credential(
+        self,
+        command: CredentialCommand,
+        config: &MachineConfig,
+    ) -> Result<CredentialOutcome> {
         match self {
-            Self::Zellij => zellij::credential(command),
-            Self::Ttyd => ttyd::credential(command),
+            Self::Zellij => zellij::credential(command, config),
+            Self::Ttyd => ttyd::credential(command, config),
         }
     }
 
-    pub fn ensure_credential(self) -> Result<WebCredential> {
-        match self.credential(CredentialCommand::Ensure)? {
+    pub fn ensure_credential(self, config: &MachineConfig) -> Result<WebCredential> {
+        match self.credential(CredentialCommand::Ensure, config)? {
             CredentialOutcome::Ensured(credential) => Ok(credential),
             // Concrete engine dispatch maps Ensure to this one outcome.
             _ => unreachable!("ensure command returns an ensured credential"),
@@ -213,6 +219,7 @@ pub struct WebStatusPayload {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WebWarning {
+    BrowserFontSkipped(String),
     BrowserThemeSkipped(String),
 }
 
@@ -301,6 +308,7 @@ pub enum CredentialOutcome {
     Rotated {
         credential: WebCredential,
         restarted_instances: usize,
+        warnings: Vec<WebWarning>,
     },
     Listed(Vec<CredentialSummary>),
     Revoked {

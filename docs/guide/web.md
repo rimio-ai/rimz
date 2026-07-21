@@ -46,6 +46,12 @@ The browser shows a Basic-Auth prompt; use the printed user `rimz` and password.
 
 ttyd servers are per room, so `rimz web start` remains a Zellij-server command; use `rimz web open` to start a tmux room server.
 
+RimZ gives ttyd the active RimZ theme and provisions the configured browser font by default. `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` are built-in presets: RimZ downloads their regular and bold faces from the pinned Nerd Fonts release, verifies them, and caches them under `$XDG_CACHE_HOME/rimz/web-fonts` (normally `~/.cache/rimz/web-fonts`). The browser loads those bytes from the generated loopback page and makes no third-party request.
+
+Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL for a font RimZ should download and cache. A `font` with no matching preset and no `font_source` names a font already installed in the browser. Set `style_client = false` to keep ttyd's browser defaults. A missing font cache or download degrades to the stock ttyd page with a warning, so offline access still starts.
+
+On macOS, ttyd treats Option as Meta before the browser composes characters. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`; this input fix remains active when client styling is disabled.
+
 ## Open a remote room
 
 ```sh
@@ -95,6 +101,9 @@ style_client = true
 [web.tmux]
 base_url = "https://devbox.example/tmux"
 auto_start = true
+font = "JetBrainsMono Nerd Font Mono"
+# font_source = "/path/to/font.woff2"
+style_client = true
 ```
 
 Each `base_url` is the prefix RimZ prints when a reverse proxy mounts that engine; the room session remains the final path segment.

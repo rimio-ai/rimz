@@ -202,6 +202,7 @@ impl TmuxWebFixture {
             .env("PATH", &self.bin_dir)
             .env("RIMZ_TTYD_BIN", ttyd_shim())
             .env("RIMZ_TEST_TTYD_LOG", &self.ttyd_log)
+            .env("RIMZ_WEB_FONTS_OFFLINE", "1")
             .env("RIMZ_TEST_TMUX_LOG", &self.tmux_log)
             .env("RIMZ_TEST_TMUX_SESSION", &self.workspace.session_name)
             .env("RIMZ_TEST_TMUX_CWD", &self.env.project_root);
@@ -540,6 +541,12 @@ fn tmux_open_rotate_revoke_reopen_and_stop() {
         .args(["--print", "--json"])
         .bounded_output()
         .expect("open tmux web");
+    let open_stderr = String::from_utf8_lossy(&open.stderr);
+    assert!(
+        open_stderr.contains("skipping browser font")
+            && open_stderr.contains("RIMZ_WEB_FONTS_OFFLINE"),
+        "{open_stderr}"
+    );
     let open = success_json(&open, "tmux web open");
     assert_eq!(open["engine"], "ttyd");
     assert_eq!(open["session"], fixture.workspace.session_name);
@@ -562,6 +569,13 @@ fn tmux_open_rotate_revoke_reopen_and_stop() {
     );
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read ttyd log");
     assert_eq!(log.lines().count(), 1, "{log}");
+    assert!(log.contains("\t-t\tmacOptionIsMeta=true"), "{log}");
+    assert!(
+        log.contains("\t-t\tfontFamily=JetBrainsMono Nerd Font Mono,monospace"),
+        "{log}"
+    );
+    assert!(log.contains("\t-t\ttheme={"), "{log}");
+    assert!(!log.contains("\t-I\t"), "{log}");
 
     let rotate = fixture
         .command()
@@ -575,6 +589,13 @@ fn tmux_open_rotate_revoke_reopen_and_stop() {
     );
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read rotated ttyd log");
     assert_eq!(log.lines().count(), 2, "{log}");
+    assert!(
+        log.lines()
+            .all(|line| line.contains("\t-t\tmacOptionIsMeta=true")
+                && line.contains("\t-t\tfontFamily=JetBrainsMono Nerd Font Mono,monospace")
+                && line.contains("\t-t\ttheme={")),
+        "credential rotation must preserve styled ttyd args: {log}"
+    );
 
     let revoke = fixture
         .command()
@@ -621,6 +642,66 @@ fn tmux_open_rotate_revoke_reopen_and_stop() {
         .expect("stop ttyd");
     assert_success(&stop, "ttyd web stop");
     assert!(String::from_utf8_lossy(&stop.stdout).contains("1 ttyd instance"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_custom_font_generates_and_uses_an_inlined_index() {
+    let fixture = TmuxWebFixture::new("ttyd-custom-font.log");
+    let font = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/dummy-font.woff2")
+        .canonicalize()
+        .expect("dummy font path");
+    write_machine_config(
+        &fixture.env,
+        &format!(
+            "[web.tmux]\nfont = \"RimZ Test Font\"\nfont_source = \"{}\"\n",
+            font.display()
+        ),
+    );
+
+    let open = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("open tmux web with custom font");
+    success_json(&open, "tmux custom-font web open");
+
+    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read ttyd log");
+    assert_eq!(
+        log.lines().count(),
+        2,
+        "stock-index fetch plus room ttyd: {log}"
+    );
+    let room_argv = log
+        .lines()
+        .find(|line| line.contains("\ttmux\t-S\t"))
+        .expect("room ttyd argv");
+    assert!(
+        room_argv.contains("\t-t\tfontFamily=RimZ Test Font,monospace"),
+        "{room_argv}"
+    );
+    let args = room_argv.split('\t').collect::<Vec<_>>();
+    let index = args
+        .windows(2)
+        .find(|pair| pair[0] == "-I")
+        .map(|pair| PathBuf::from(pair[1]))
+        .expect("generated -I path");
+    let index = std::fs::read_to_string(&index).expect("read generated ttyd index");
+    assert!(index.contains("font-family:\"RimZ Test Font\""), "{index}");
+    assert!(
+        index.contains("data:font/woff2;base64,cmlteiBicm93c2VyIGZvbnQgZml4dHVyZQo="),
+        "{index}"
+    );
+
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop custom-font ttyd");
+    assert_success(&stop, "stop custom-font ttyd");
 }
 
 #[cfg(unix)]
