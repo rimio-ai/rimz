@@ -218,7 +218,7 @@ pub(crate) fn ensure_workspace_room_for_web(
         MissingSessionReport::Silent,
     ))?;
     render::room::print_notices(ensure_single_backend_room(mux, &workspace.session_name)?)?;
-    preflight_web_engine(mux)?;
+    preflight_web_engine()?;
     setup::ensure_default_config()?;
     let ready = prepare_room(
         RoomEntry::StartWeb {
@@ -260,7 +260,7 @@ pub(crate) fn ensure_session_room_for_web(
         MissingSessionReport::Silent,
     ))?;
     let record = workspace_record_for_web_session(session, mux)?;
-    preflight_web_engine(mux)?;
+    preflight_web_engine()?;
     let ready = prepare_room(
         RoomEntry::WebSession {
             record: &record,
@@ -327,10 +327,8 @@ fn workspace_record_for_web_session(session: &str, mux: MuxName) -> Result<Works
     Ok(record)
 }
 
-fn preflight_web_engine(mux: MuxName) -> Result<()> {
-    if mux == MuxName::Tmux {
-        rimz::web::WebEngine::from(mux).preflight()?;
-    }
+fn preflight_web_engine() -> Result<()> {
+    rimz::web::preflight()?;
     Ok(())
 }
 
@@ -610,6 +608,18 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             }
         },
     };
+
+    if matches!(&entry, RoomEntry::Start { .. }) && machine_config.web.enabled {
+        match rimz::web::ensure_daemon(&machine_config) {
+            Ok(outcome) => render::web_warnings(&outcome.warnings),
+            Err(err) => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: browser daemon was not started: {err}"
+                );
+            }
+        }
+    }
 
     Ok(ready)
 }

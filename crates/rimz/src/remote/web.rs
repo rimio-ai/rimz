@@ -6,7 +6,6 @@
 use std::path::Path;
 
 use crate::mux::CommandSpec;
-use crate::web::WebEngine;
 
 use super::{
     REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV, RemoteSpec, RemoteTarget,
@@ -44,24 +43,6 @@ pub fn web_prep_spec(
         &format!("rimz web {rimz_args}"),
         options.client_size,
         options.force_version,
-        control,
-    )
-}
-
-pub fn web_token_ensure_spec(
-    target: &RemoteTarget,
-    engine: WebEngine,
-    control: Option<&Path>,
-) -> CommandSpec {
-    let mux = match engine {
-        WebEngine::Zellij => "zellij",
-        WebEngine::Ttyd => "tmux",
-    };
-    one_shot_spec(
-        target,
-        &format!("rimz --mux {mux} web token ensure"),
-        None,
-        false,
         control,
     )
 }
@@ -245,21 +226,6 @@ mod tests {
     }
 
     #[test]
-    fn web_token_ensure_builds_one_shot() {
-        let spec = web_token_ensure_spec(&parse("dev-box:query-engine"), WebEngine::Ttyd, None);
-        assert!(
-            spec.args[4].ends_with("exec rimz --mux tmux web token ensure"),
-            "{}",
-            spec.args[4]
-        );
-        assert!(
-            !spec.args[4].contains(crate::mux::CLIENT_SIZE_ENV),
-            "the token one-shot does not birth a room: {}",
-            spec.args[4],
-        );
-    }
-
-    #[test]
     fn web_commands_reuse_a_control_master() {
         let target = parse("dev-box:query-engine");
         let control = Path::new("/tmp/rimz-web.sock");
@@ -275,9 +241,6 @@ mod tests {
         let prep = web_prep_spec(&target, WebPrepOptions::default(), Some(control));
         assert_eq!(&prep.args[2..8], &control_args);
         assert_eq!(prep.args[8], "--");
-
-        let token = web_token_ensure_spec(&target, WebEngine::Zellij, Some(control));
-        assert_eq!(&token.args[2..8], &control_args);
 
         let forward = web_control_forward_spec(&target, 8301, 8082, control);
         assert_eq!(

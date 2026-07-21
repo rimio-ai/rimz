@@ -1,6 +1,6 @@
 # Architecture
 
-RimZ is a single Rust binary that turns a Zellij or tmux session into a control room for coding agents. It owns no daemon and no database: it builds on the multiplexer you already run, a directory of flat files for durable state, and one CLI that every event flows through.
+RimZ is a single Rust binary that turns a Zellij or tmux session into a control room for coding agents. It owns no database or always-on state service: it builds on the multiplexer you already run, a directory of flat files for durable state, and one CLI that every event flows through. Optional browser access adds one machine-wide ttyd process as terminal transport.
 
 One invariant ties the runtime together:
 
@@ -23,7 +23,7 @@ Detail lives in four places, narrowing as you go:
 
 ## Runtime shape
 
-There is no RimZ daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process.
+There is no general RimZ daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process.
 
 ```text
 terminal emulator
@@ -43,6 +43,8 @@ rimz CLI and hook subprocesses
 workspace store (a directory of flat files)
 ```
 
+When browser access is enabled, one authenticated ttyd daemon binds the configured loopback port for every Zellij and tmux room. Each connection supplies a session argument to the hidden `rimz web exec` shim; the shim validates durable workspace ownership and live mux state before it attaches, so ttyd owns transport but no session authority ([web.md](./docs/internals/web.md)).
+
 The spending service is a private thread inside whichever host-eligible long-lived RimZ process wins its persistent/discovery-namespace lifetime lock; one-shot inspection commands connect or fall back directly without becoming the warm owner. Its schema- and namespace-versioned Unix socket accepts clients concurrently while one try-locked walker owns stale work, so a slow request cannot queue another workspace's refresh tick. `spending.json`, provider/workspace publications, and their atomic-write and downgrade guards remain truth. Process exit discards the service and the next eligible client re-elects an owner, so this warm-cache optimization introduces no RimZ daemon.
 
 The CLI and hook subprocesses are the only writers of product truth. The sidebar reads the store read-only and writes its own runtime caches and read receipts; `rimz sidebar snapshot` is the one-shot inspection surface over the same pipeline. The per-instance sidebar socket is the wakeup channel of record — backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)). The producer/consumer split, push channels, and timing cadences are in [state.md](./docs/internals/sidebar/state.md).
@@ -55,6 +57,7 @@ The CLI and hook subprocesses are the only writers of product truth. The sidebar
 | RimZ store | events, agent state, messages, runs, snapshots | terminal rendering, pane mechanics |
 | CLI / hook subprocesses | durable writes, supervised-run waiters, mux command calls | UI presentation |
 | Sidebar | rendering, focus affordances, human actions through the CLI | durable state files |
+| ttyd browser daemon | authenticated loopback terminal transport | workspace identity, session validation, durable state |
 | Agents | native UI, prompts, sandboxing, bypass behaviour | RimZ store state |
 | Host | process resurrection, OS sandboxing | workspace state |
 
@@ -78,7 +81,8 @@ shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
   the account-global election locks and the spending service's versioned socket
 
 user-global persistent  ~/.local/state/rimz/
-  builds/<build_id>/rimz immutable executable generations, and the loop registry
+  builds/<build_id>/rimz immutable executable generations, the loop registry,
+  and the shared browser daemon pid/port record and credential
 ```
 
 One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent. The store tier's durability contract — temp-file-plus-rename, the framed log, and the write classes — is [store.md](./docs/internals/store.md), the provider files are [providers.md](./docs/internals/agents/providers.md), the loop registry is [loops.md](./docs/internals/harness/loops.md), and executable staging is [sidebar.md → Build promotion](./docs/internals/sidebar/sidebar.md#build-promotion).

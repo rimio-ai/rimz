@@ -52,7 +52,7 @@ Each of these subsystems is one file at the top level.
 | [multiplexers.md](./multiplexers.md) | The `MuxBackend` seam: backend selection, pane and view identity, presence and focus, sidebar repair, session lifecycle, the Zellij and tmux backends, and the Zellij presence plugin. |
 | [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes, how they are identified, and how they are repaired. |
 | [remote.md](./remote.md) | SSH attach and aliases, the reconnect supervisor, link health, port forwarding, and bandwidth attribution. |
-| [web.md](./web.md) | Zellij and ttyd browser access. |
+| [web.md](./web.md) | Shared ttyd browser access for Zellij and tmux rooms. |
 | [stats.md](./stats.md) | The `rimz stats` panel: the spend cache it reads, the window model, the render ladder, and the held dashboard. |
 | [diagnostics.md](./diagnostics.md) | The diagnostics log, the frame observer, and off-box Sentry. |
 | [performance.md](./performance.md) | The performance model: threads and clocks, the cost map, the principles, and fleet overhead. |

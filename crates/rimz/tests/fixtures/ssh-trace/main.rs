@@ -60,10 +60,6 @@ fn main() {
         exit_web_prep();
     }
 
-    if argv.iter().any(|arg| arg.contains("web token ensure")) {
-        exit_web_token();
-    }
-
     if argv.iter().any(|arg| arg == "-M") {
         run_control_master();
     }
@@ -127,7 +123,7 @@ fn exit_web_prep() -> ! {
         stream.flush().expect("flush prep stderr");
     }
     let output = env::var("RIMZ_TEST_SSH_WEB_PREP_OUTPUT").unwrap_or_else(|_| {
-        r#"{"version":"rimz.web.v1","engine":"zellij","url":"http://127.0.0.1:8082/rimz-project-a1b2c3","session":"rimz-project-a1b2c3","base_url":"http://127.0.0.1:8082","ip":"127.0.0.1","port":8082,"token_count":1}"#.to_owned()
+        r#"{"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?arg=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8200,"credential":{"username":"rimz","secret":"test-web-token"}}"#.to_owned()
     });
     let mut stdout = std::io::stdout().lock();
     stdout
@@ -135,21 +131,6 @@ fn exit_web_prep() -> ! {
         .expect("write prep stdout");
     stdout.flush().expect("flush prep stdout");
     let code = env::var("RIMZ_TEST_SSH_WEB_PREP_STATUS")
-        .ok()
-        .and_then(|value| value.parse::<i32>().ok())
-        .unwrap_or(0);
-    std::process::exit(code);
-}
-
-fn exit_web_token() -> ! {
-    let output = env::var("RIMZ_TEST_SSH_WEB_TOKEN_OUTPUT")
-        .unwrap_or_else(|_| "test-web-token\n".to_owned());
-    let mut stdout = std::io::stdout().lock();
-    stdout
-        .write_all(output.as_bytes())
-        .expect("write token stdout");
-    stdout.flush().expect("flush token stdout");
-    let code = env::var("RIMZ_TEST_SSH_WEB_TOKEN_STATUS")
         .ok()
         .and_then(|value| value.parse::<i32>().ok())
         .unwrap_or(0);

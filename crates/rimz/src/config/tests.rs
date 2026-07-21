@@ -97,15 +97,16 @@ fn assert_sentry_config(config: &MachineConfig) {
     assert_eq!(config.sentry.environment.as_deref(), Some("dev"));
 }
 
-fn assert_zellij_web_config(config: &MachineConfig) {
+fn assert_web_config(config: &MachineConfig) {
     assert!(!config.web.enabled);
     assert_eq!(
-        config.web.zellij.base_url.as_deref(),
-        Some("https://devbox.example/zellij")
+        config.web.base_url.as_deref(),
+        Some("https://devbox.example/rimz")
     );
-    assert!(!config.web.zellij.auto_start);
-    assert_eq!(config.web.zellij.font, "FiraCode Nerd Font Mono");
-    assert!(!config.web.zellij.style_client);
+    assert_eq!(config.web.port, 9123);
+    assert_eq!(config.web.font, "FiraCode Nerd Font Mono");
+    assert_eq!(config.web.font_source.as_deref(), Some("/tmp/font.woff2"));
+    assert!(!config.web.style_client);
 }
 
 fn assert_remote_control_config(config: &MachineConfig) {
@@ -1611,6 +1612,7 @@ fn notifications_parse_per_machine_preferences() {
 #[test]
 fn web_enabled_defaults_on_and_parses_off() {
     assert!(WebPrefs::default().enabled);
+    assert_eq!(WebPrefs::default().port, 8200);
 
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(&dir, "[web]\nenabled = false\n")).expect("load");
@@ -1629,12 +1631,12 @@ fn scalar_sections_parse_non_default_values() {
         (
             "[web]\n\
              enabled = false\n\
-             [web.zellij]\n\
-             base_url = \"https://devbox.example/zellij\"\n\
-             auto_start = false\n\
+             port = 9123\n\
+             base_url = \"https://devbox.example/rimz\"\n\
              font = \"FiraCode Nerd Font Mono\"\n\
+             font_source = \"/tmp/font.woff2\"\n\
              style_client = false\n",
-            assert_zellij_web_config,
+            assert_web_config,
         ),
         (
             "[remote_control]\n\

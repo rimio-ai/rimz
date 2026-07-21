@@ -1081,17 +1081,6 @@ fn retire_pipe_ignores_equal_newer_and_invalid_generations() {
 }
 
 #[test]
-fn share_pipe_runs_immediately_and_replays_on_explicit_grant() {
-    let host = FakeHost::default();
-    let mut engine = Engine::new(0, config());
-
-    assert_eq!(engine.on_share_session_pipe(), vec![Effect::ShareSession]);
-    let effects = engine.on_permission_granted(10, &host);
-
-    assert!(effects.contains(&Effect::ShareSession));
-}
-
-#[test]
 fn timers_arm_once_supersede_earlier_deadlines_and_dispatch_due_pokes() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());

@@ -1,12 +1,12 @@
 # Web CLI
 
-`rimz web` opens a RimZ room in the browser through the room's backend: `zellij web` for Zellij and ttyd for tmux.
+`rimz web` opens any RimZ room in the browser through one machine-wide ttyd daemon.
 
 ```sh
 rimz web open [PATH] [--session <name>] [--print] [--no-start] [--no-resume] [--json]
 rimz web url [PATH] [--session <name>] [--json]
 rimz web status [--json]
-rimz web start [--daemonize] [--ip <ip>] [--port <port>] [--cert <path>] [--key <path>]
+rimz web start
 rimz web stop
 rimz web token create [--read-only]
 rimz web token list
@@ -16,32 +16,30 @@ rimz web token revoke-all
 
 `rimz web` is `rimz web open`.
 
-`open` resolves or births the room, verifies that its session is addressable on the selected backend, starts the backend's web engine when allowed, prints the URL and credential, and opens the browser.
+`open` resolves or births the room, verifies that its session is addressable on the selected backend, ensures the shared daemon, prints the URL and credential, and opens the browser.
 
 | Flag | Effect |
 | --- | --- |
-| `--session <name>` | Target an existing RimZ workspace session by exact name |
-| `--print` | Skip the browser launch |
-| `--no-start` | Refuse when the engine is offline |
-| `--no-resume` | Skip recovering the room's prior agents |
-| `--json` | Emit `rimz.web.v1` without printing the credential |
+| `--session <name>` | Target an existing RimZ workspace session by exact name. |
+| `--print` | Skip the browser launch. |
+| `--no-start` | Require the shared daemon to already be online. |
+| `--no-resume` | Skip recovering the room's prior agents. |
+| `--json` | Emit the `rimz.web.v2` payload on stdout; the credential is inside the payload. |
 
-`url` requires an existing workspace record and prints its route without birthing a room, starting a server, or provisioning a credential.
+`url` requires an existing workspace record and computes its route without birthing a room or starting the daemon. JSON output provisions the machine credential when absent because the v2 payload includes it.
 
-`status` and `stop` are machine-wide across both engines.
+`start`, `status`, and `stop` act on the one machine daemon and do not need a room. The port comes from `[web] port`; command-line listener and TLS overrides are not supported.
 
-`start` controls the machine-wide Zellij server; under tmux selection it directs the user to `rimz web open` because ttyd servers are per room.
+The JSON `open` and `url` payload is:
 
-Token commands dispatch through normal mux selection.
+```json
+{"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?arg=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8200,"credential":{"username":"rimz","secret":"..."}}
+```
 
-Zellij supports named read/write or read-only tokens.
+`status --json` emits `version`, `online`, `pid`, and `port`.
 
-ttyd exposes one credential named `rimz`; `create` rotates it and restarts live instances, `list` prints its creation time, and revoke stops live instances before clearing it.
+The one credential is named `rimz`. `create` rotates it and restarts the live daemon, `list` prints its creation time, and either revoke verb stops the daemon before clearing it.
 
-ttyd read-only credentials are refused because ttyd's read-only setting belongs to the whole process.
+`--read-only` is rejected because ttyd's read-only setting belongs to the whole process.
 
-JSON `open` and `url` payloads include `version`, `engine`, `url`, `session`, `base_url`, `ip`, `port`, and `token_count`; a missing `engine` from an older peer defaults to `zellij`.
-
-`status --json` adds `tmux_instances`, whose rows contain `session`, `pid`, and `port`.
-
-Configure public URL prefixes under `[web.zellij]` and `[web.tmux]`; see the [web guide](../../guide/web.md) and [configuration guide](../../guide/configuration.md#web-access).
+Configure the daemon under `[web]`; see the [web guide](../../guide/web.md) and [configuration guide](../../guide/configuration.md#web-access).

@@ -14,6 +14,7 @@ rimz                       # open the room and drop in
 | Start or reattach a room for a path | `rimz start [PATH]` |
 | Attach by directory or exact session name | `rimz attach [SESSION]` |
 | Find known rooms and their live backend | `rimz list` |
+| Open the current room in a browser | `rimz web open` |
 | Bootstrap this machine's config | `rimz setup` |
 | Diagnose backend, hook, trust, and room health | `rimz doctor` |
 | Connect to a room on another host | `rimz remote connect <alias-or-target> [--force-version]` |
@@ -29,6 +30,8 @@ rimz attach [SESSION] [same flags]
 ```
 
 `rimz` is `rimz start .`. `rimz start [PATH]` resolves the workspace root, creates or reattaches the Zellij or tmux session, launches the sidebar, and enters the room; `PATH` defaults to `.`. Nothing is destroyed on the way in — an existing session is reattached, not replaced.
+
+When `[web] enabled = true`, room start also ensures the shared ttyd browser daemon best-effort. A missing ttyd or occupied `[web] port` prints a warning and leaves the room available; use [`rimz web`](./web.md) to inspect or control browser access directly.
 
 `rimz attach` with no `SESSION` uses the current directory's room. `rimz attach <SESSION>` targets an exact session name; when RimZ has a workspace record for it, it restores the room's sidebar and recovery state before attaching.
 

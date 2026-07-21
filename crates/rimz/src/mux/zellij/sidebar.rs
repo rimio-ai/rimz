@@ -219,7 +219,6 @@ impl ZellijBackend {
                 .state_paths_for_workspace(opts.workspace_id.clone())?
                 .room_bin,
             converge: false,
-            seed_permissions: machine_config.web.enabled,
             focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
             focus_follows_mouse: opts.config.zellij.focus_follows_mouse,
             mouse_click_through: opts.config.zellij.mouse_click_through,

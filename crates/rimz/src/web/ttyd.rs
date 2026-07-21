@@ -1,9 +1,8 @@
-//! ttyd-backed browser access for tmux rooms.
+//! Shared ttyd daemon for browser access to every RimZ room.
 
 use std::fs;
 use std::io;
 use std::net::{TcpListener, TcpStream};
-use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -18,16 +17,16 @@ use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
 use super::{
-    CredentialCommand, CredentialOutcome, CredentialSummary, Result, TtydStatusInstance,
-    WebAccessOutcome, WebCredential, WebEngine, WebErr, WebOpenPayload, WebWarning, derive_port,
-    normalized_base_url, port_scan,
+    CredentialCommand, CredentialOutcome, CredentialSummary, DaemonRecord, Result,
+    WebAccessOutcome, WebCredential, WebErr, WebOpenPayload, WebWarning, normalized_base_url,
 };
 use super::{colors::WebClientColors, fonts::FontFace};
 
 const TTYD_BIN_ENV: &str = "RIMZ_TTYD_BIN";
-const TTYD_PORT_RANGE: RangeInclusive<u16> = 8200..=8299;
 const CREDENTIAL_FILE: &str = "web-ttyd-credential.json";
-const INSTANCE_DIR: &str = "web-ttyd";
+const DAEMON_FILE: &str = "web-ttyd.json";
+const DAEMON_LOCK_FILE: &str = "web-ttyd.lock";
+const LEGACY_INSTANCE_DIR: &str = "web-ttyd";
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
@@ -35,14 +34,14 @@ const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
 const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v3";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct TtydCredential {
+pub(super) struct TtydCredential {
     name: String,
     created_at: Timestamp,
     secret: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct TtydInstance {
+#[derive(Debug, Deserialize)]
+struct LegacyTtydInstance {
     session: String,
     pid: u32,
     port: u16,
@@ -86,38 +85,34 @@ pub(super) fn open_session(
     config: &MachineConfig,
     may_start: bool,
 ) -> Result<WebAccessOutcome> {
-    preflight()?;
-    let (instance, credential, warnings) = ensure_instance(session, config, may_start)?;
-    let fallback = format!("http://127.0.0.1:{}", instance.port);
-    let base_url = normalized_base_url(config.web.tmux.base_url.as_deref(), None, &fallback);
+    let (record, credential, warnings) = if may_start {
+        ensure_daemon(config)?
+    } else {
+        let _guard = acquire_daemon_lock()?;
+        let Some(record) = daemon_status_locked()? else {
+            return Err(WebErr::TtydOffline);
+        };
+        let Some(credential) = read_credential()? else {
+            return Err(WebErr::TtydOffline);
+        };
+        (record, basic_auth(&credential), Vec::new())
+    };
+    let base_url = normalized_base_url(config.web.base_url.as_deref(), record.port);
     Ok(WebAccessOutcome {
-        payload: WebOpenPayload::for_session(
-            WebEngine::Ttyd,
-            session,
-            base_url,
-            "127.0.0.1",
-            instance.port,
-            1,
-        ),
-        credential: Some(basic_auth(&credential)),
+        payload: WebOpenPayload::for_session(session, base_url, record.port, credential),
         warnings,
     })
 }
 
 pub(super) fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
-    let instance = inventory()?
-        .into_iter()
-        .find(|instance| instance.session == session);
-    let port = instance.map_or_else(|| derive_instance_port(session), |instance| instance.port);
-    let fallback = format!("http://127.0.0.1:{port}");
-    let base_url = normalized_base_url(config.web.tmux.base_url.as_deref(), None, &fallback);
+    let _guard = acquire_daemon_lock()?;
+    let credential = ensure_credential()?;
+    let base_url = normalized_base_url(config.web.base_url.as_deref(), config.web.port);
     Ok(WebOpenPayload::for_session(
-        WebEngine::Ttyd,
         session,
         base_url,
-        "127.0.0.1",
-        port,
-        usize::from(read_credential()?.is_some()),
+        config.web.port,
+        basic_auth(&credential),
     ))
 }
 
@@ -125,6 +120,7 @@ pub(super) fn credential(
     command: CredentialCommand,
     config: &MachineConfig,
 ) -> Result<CredentialOutcome> {
+    let _guard = acquire_daemon_lock()?;
     match command {
         CredentialCommand::Create { read_only: true } => Err(WebErr::TtydReadOnlyCredential),
         CredentialCommand::Create { read_only: false } => {
@@ -161,29 +157,8 @@ pub(super) fn credential(
     }
 }
 
-pub(super) fn status_instances() -> Result<Vec<TtydStatusInstance>> {
-    Ok(inventory()?
-        .into_iter()
-        .map(|instance| TtydStatusInstance {
-            session: instance.session,
-            pid: instance.pid,
-            port: instance.port,
-        })
-        .collect())
-}
-
-pub(super) fn stop_all() -> Result<usize> {
-    let instances = inventory()?;
-    stop_instances(&instances)?;
-    Ok(instances.len())
-}
-
-fn derive_instance_port(session: &str) -> u16 {
-    derive_port(session, &TTYD_PORT_RANGE)
-}
-
 fn basic_auth(credential: &TtydCredential) -> WebCredential {
-    WebCredential::BasicAuth {
+    WebCredential {
         username: credential.name.clone(),
         secret: credential.secret.clone(),
     }
@@ -211,123 +186,216 @@ fn clear_credential() -> Result<bool> {
     remove_optional(&credential_path())
 }
 
-fn ensure_instance(
-    session: &str,
+pub(super) fn ensure_daemon(
     config: &MachineConfig,
-    may_start: bool,
-) -> Result<(TtydInstance, TtydCredential, Vec<WebWarning>)> {
-    let credential = ensure_credential()?;
-    if let Some(instance) = inventory()?
-        .into_iter()
-        .find(|instance| instance.session == session)
+) -> Result<(DaemonRecord, WebCredential, Vec<WebWarning>)> {
+    let _guard = acquire_daemon_lock()?;
+    reap_legacy_instances();
+    let daemon = daemon_status_locked()?;
+    if let Some(record) = &daemon
+        && record.port == config.web.port
+        && let Some(credential) = read_credential()?
     {
-        return Ok((instance, credential, Vec::new()));
+        return Ok((record.clone(), basic_auth(&credential), Vec::new()));
     }
-    if !may_start {
-        return Err(WebErr::TtydOffline(session.to_owned()));
+    preflight()?;
+    if daemon
+        .as_ref()
+        .is_none_or(|record| record.port != config.web.port)
+    {
+        ensure_port_available(config.web.port)?;
     }
-    let (instance, warnings) = start_instance(session, &credential, config)?;
-    Ok((instance, credential, warnings))
-}
-
-fn start_instance(
-    session: &str,
-    credential: &TtydCredential,
-    config: &MachineConfig,
-) -> Result<(TtydInstance, Vec<WebWarning>)> {
+    if let Some(record) = daemon {
+        stop_record(&record)?;
+    }
+    let credential = ensure_credential()?;
     let profile = client_profile(config);
-    let instance = start_instance_with_profile(session, credential, &profile)?;
-    Ok((instance, profile.warnings))
+    let record = start_daemon_with_profile(config.web.port, &credential, &profile)?;
+    Ok((record, basic_auth(&credential), profile.warnings))
 }
 
-fn start_instance_with_profile(
-    session: &str,
+fn reap_legacy_instances() {
+    let dir = legacy_instance_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return,
+        Err(err) => {
+            tracing::debug!(path = %dir.display(), error = %err, "legacy ttyd state directory unreadable");
+            remove_legacy_instance_dir(&dir);
+            return;
+        }
+    };
+    let processes = crate::proc::list_processes();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                tracing::debug!(path = %dir.display(), error = %err, "legacy ttyd state entry unreadable");
+                continue;
+            }
+        };
+        let path = entry.path();
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::debug!(path = %path.display(), error = %err, "legacy ttyd state record unreadable");
+                continue;
+            }
+        };
+        let instance = match serde_json::from_slice::<LegacyTtydInstance>(&bytes) {
+            Ok(instance) => instance,
+            Err(err) => {
+                tracing::debug!(path = %path.display(), error = %err, "legacy ttyd state record invalid");
+                continue;
+            }
+        };
+        let owned = processes
+            .iter()
+            .any(|process| process.pid == instance.pid && is_ttyd_process(process));
+        if owned {
+            terminate_legacy_instance(&instance);
+        } else {
+            tracing::debug!(
+                session = %instance.session,
+                pid = instance.pid,
+                port = instance.port,
+                "legacy ttyd process absent or pid belongs to another program"
+            );
+        }
+    }
+    remove_legacy_instance_dir(&dir);
+}
+
+fn is_ttyd_process(process: &crate::proc::ProcInfo) -> bool {
+    crate::proc::command::program_label(&process.cmdline) == "ttyd"
+}
+
+fn terminate_legacy_instance(instance: &LegacyTtydInstance) {
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+
+        let result = i32::try_from(instance.pid)
+            .map(Pid::from_raw)
+            .map_err(|err| err.to_string())
+            .and_then(|pid| kill(pid, Signal::SIGTERM).map_err(|err| err.to_string()));
+        match result {
+            Ok(()) => {
+                wait_for_port_close(instance.port, Duration::from_secs(1));
+                tracing::debug!(
+                    session = %instance.session,
+                    pid = instance.pid,
+                    port = instance.port,
+                    "signalled legacy ttyd process"
+                );
+            }
+            Err(err) => tracing::debug!(
+                session = %instance.session,
+                pid = instance.pid,
+                port = instance.port,
+                error = %err,
+                "signalling legacy ttyd process failed"
+            ),
+        }
+    }
+}
+
+fn remove_legacy_instance_dir(dir: &Path) {
+    match fs::remove_dir_all(dir) {
+        Ok(()) => tracing::debug!(path = %dir.display(), "removed legacy ttyd state directory"),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            tracing::debug!(path = %dir.display(), error = %err, "removing legacy ttyd state directory failed")
+        }
+    }
+}
+
+fn start_daemon_with_profile(
+    port: u16,
     credential: &TtydCredential,
     profile: &TtydClientProfile,
-) -> Result<TtydInstance> {
-    let port = choose_instance_port(session)?;
-    let spec = spawn_spec(session, port, &credential.secret, &profile.args)?;
+) -> Result<DaemonRecord> {
+    let spec = spawn_spec(port, &credential.secret, &profile.args)?;
     let pid = spawn_detached(spec)?;
-    let instance = TtydInstance {
-        session: session.to_owned(),
-        pid,
-        port,
-    };
+    let record = DaemonRecord { pid, port };
     if !wait_for_port(port, START_TIMEOUT) {
-        let _ = stop_instances(std::slice::from_ref(&instance));
-        return Err(WebErr::TtydStartTimeout {
-            session: session.to_owned(),
-            port,
-        });
+        let _ = stop_record(&record);
+        return Err(WebErr::TtydStartTimeout { port });
     }
-    write_instance(&instance)?;
-    Ok(instance)
+    write_daemon(&record)?;
+    Ok(record)
 }
 
 fn rotate_credential(config: &MachineConfig) -> Result<(TtydCredential, usize, Vec<WebWarning>)> {
-    let instances = inventory()?;
-    if instances.is_empty() {
+    let Some(daemon) = daemon_status_locked()? else {
         return Ok((mint_credential()?, 0, Vec::new()));
+    };
+    if daemon.port != config.web.port {
+        ensure_port_available(config.web.port)?;
     }
     let profile = client_profile(config);
     let credential = mint_credential()?;
-    let instances = inventory()?;
-    stop_instances(&instances)?;
-    for instance in &instances {
-        start_instance_with_profile(&instance.session, &credential, &profile)?;
-    }
-    Ok((credential, instances.len(), profile.warnings))
+    stop_record(&daemon)?;
+    start_daemon_with_profile(config.web.port, &credential, &profile)?;
+    Ok((credential, 1, profile.warnings))
 }
 
 fn revoke_credential() -> Result<usize> {
-    let instances = inventory()?;
-    stop_instances(&instances)?;
+    let stopped = usize::from(stop_daemon_locked()?);
     clear_credential()?;
-    Ok(instances.len())
+    Ok(stopped)
 }
 
-fn inventory() -> Result<Vec<TtydInstance>> {
-    let dir = instance_dir();
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => return Err(WebErr::Io { path: dir, source }),
+pub(super) fn daemon_status() -> Result<Option<DaemonRecord>> {
+    let _guard = acquire_daemon_lock()?;
+    daemon_status_locked()
+}
+
+fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
+    let path = daemon_path();
+    let Some(record) = read_json_optional::<DaemonRecord>(&path)? else {
+        return Ok(None);
     };
     let processes = crate::proc::list_processes();
-    let mut live = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|source| WebErr::Io {
-            path: dir.clone(),
-            source,
-        })?;
-        let path = entry.path();
-        let Some(instance) = read_json_optional::<TtydInstance>(&path)? else {
-            continue;
-        };
-        if processes.iter().any(|process| process.pid == instance.pid)
-            && TcpStream::connect(("127.0.0.1", instance.port)).is_ok()
-        {
-            live.push(instance);
-        } else {
-            let _ = fs::remove_file(path);
-        }
+    if processes.iter().any(|process| process.pid == record.pid)
+        && TcpStream::connect(("127.0.0.1", record.port)).is_ok()
+    {
+        return Ok(Some(record));
     }
-    live.sort_by(|a, b| a.session.cmp(&b.session));
-    Ok(live)
+    remove_optional(&path)?;
+    Ok(None)
 }
 
-fn stop_instances(instances: &[TtydInstance]) -> Result<()> {
+pub(super) fn stop_daemon() -> Result<bool> {
+    let _guard = acquire_daemon_lock()?;
+    stop_daemon_locked()
+}
+
+fn stop_daemon_locked() -> Result<bool> {
+    let Some(record) = daemon_status_locked()? else {
+        return Ok(false);
+    };
+    stop_record(&record)?;
+    Ok(true)
+}
+
+fn stop_record(record: &DaemonRecord) -> Result<()> {
+    terminate_record(record);
+    remove_optional(&daemon_path())?;
+    Ok(())
+}
+
+fn terminate_record(record: &DaemonRecord) {
     #[cfg(unix)]
     {
         use nix::sys::signal::{Signal, kill};
         use nix::unistd::Pid;
 
         let mut survivors = Vec::new();
-        for instance in instances {
-            if let Ok(raw) = i32::try_from(instance.pid) {
-                let _ = kill(Pid::from_raw(raw), Signal::SIGTERM);
-                survivors.push(instance.pid);
-            }
+        if let Ok(raw) = i32::try_from(record.pid) {
+            let _ = kill(Pid::from_raw(raw), Signal::SIGTERM);
+            survivors.push(record.pid);
         }
         let deadline = Instant::now() + Duration::from_secs(1);
         while !survivors.is_empty() && Instant::now() < deadline {
@@ -342,19 +410,6 @@ fn stop_instances(instances: &[TtydInstance]) -> Result<()> {
                 let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
             }
         }
-    }
-
-    let mut first_error = None;
-    for instance in instances {
-        if let Err(err) = remove_optional(&instance_path(&instance.session))
-            && first_error.is_none()
-        {
-            first_error = Some(err);
-        }
-    }
-    match first_error {
-        Some(err) => Err(err),
-        None => Ok(()),
     }
 }
 
@@ -374,8 +429,8 @@ fn client_profile(config: &MachineConfig) -> TtydClientProfile {
 
     let mut font_family = None;
     let mut font_faces = Vec::new();
-    if config.web.tmux.style_client {
-        let family = &config.web.tmux.font;
+    if config.web.style_client {
+        let family = &config.web.font;
         profile
             .args
             .extend(["-t".to_owned(), format!("fontFamily={family},monospace")]);
@@ -395,7 +450,7 @@ fn client_profile(config: &MachineConfig) -> TtydClientProfile {
             )),
         }
 
-        let resolution = super::fonts::resolve(family, config.web.tmux.font_source.as_deref());
+        let resolution = super::fonts::resolve(family, config.web.font_source.as_deref());
         profile.warnings.extend(
             resolution
                 .warnings
@@ -454,32 +509,24 @@ fn ensure_custom_index(
 }
 
 fn fetch_stock_index(program: &Path) -> std::result::Result<String, String> {
-    let session = "rimz-stock-index";
-    let port = choose_instance_port(session).map_err(|err| err.to_string())?;
+    let port = choose_ephemeral_port().map_err(|err| err.to_string())?;
     let secret = random_secret();
     let spec = CommandSpec::new(program.display().to_string())
         .args(["-c", &format!("rimz:{secret}"), "-i", "127.0.0.1", "-p"])
         .arg(port.to_string())
         .arg("sh");
     let pid = spawn_detached(spec).map_err(|err| err.to_string())?;
-    let instance = TtydInstance {
-        session: session.to_owned(),
-        pid,
-        port,
-    };
+    let record = DaemonRecord { pid, port };
     if !wait_for_port(port, START_TIMEOUT) {
-        let _ = stop_instances(std::slice::from_ref(&instance));
+        terminate_record(&record);
         return Err(format!(
             "stock ttyd did not accept connections on 127.0.0.1:{port} within 5 seconds"
         ));
     }
 
     let fetched = get_stock_index(port, &secret);
-    let stopped = stop_instances(std::slice::from_ref(&instance)).map_err(|err| err.to_string());
-    match (fetched, stopped) {
-        (Ok(index), Ok(())) => Ok(index),
-        (Err(err), _) | (Ok(_), Err(err)) => Err(err),
-    }
+    terminate_record(&record);
+    fetched
 }
 
 fn get_stock_index(port: u16, secret: &str) -> std::result::Result<String, String> {
@@ -707,44 +754,34 @@ fn js_string(value: &str) -> String {
     escaped
 }
 
-fn spawn_spec(
-    session: &str,
-    port: u16,
-    secret: &str,
-    extra_args: &[String],
-) -> Result<CommandSpec> {
+fn spawn_spec(port: u16, secret: &str, extra_args: &[String]) -> Result<CommandSpec> {
     Ok(spawn_spec_for(
         &program()?,
-        session,
+        &std::env::current_exe().map_err(|source| WebErr::Io {
+            path: PathBuf::from("/proc/self/exe"),
+            source,
+        })?,
         port,
         secret,
-        &crate::mux::tmux::managed_server_socket_path(),
         extra_args,
     ))
 }
 
-/// ttyd's child attaches to the managed room, so it addresses the managed
-/// socket explicitly — ttyd runs detached with no inherited `$TMUX` to follow.
 fn spawn_spec_for(
     program: &Path,
-    session: &str,
+    rimz_exe: &Path,
     port: u16,
     secret: &str,
-    tmux_socket: &Path,
     extra_args: &[String],
 ) -> CommandSpec {
     CommandSpec::new(program.display().to_string())
-        .args(["-W", "-O", "-c"])
+        .args(["-W", "-O", "-a", "-c"])
         .arg(format!("rimz:{secret}"))
         .args(["-i", "127.0.0.1", "-p"])
         .arg(port.to_string())
-        .args(["-b"])
-        .arg(format!("/{session}"))
         .args(extra_args.iter().cloned())
-        .args(["tmux", "-S"])
-        .arg(tmux_socket.display().to_string())
-        .args(["attach", "-t"])
-        .arg(session.to_owned())
+        .arg(rimz_exe.display().to_string())
+        .args(["web", "exec"])
 }
 
 fn spawn_detached(spec: CommandSpec) -> Result<u32> {
@@ -766,14 +803,15 @@ fn spawn_detached(spec: CommandSpec) -> Result<u32> {
     })
 }
 
-fn choose_instance_port(session: &str) -> Result<u16> {
-    let preferred = derive_instance_port(session);
-    for port in port_scan(preferred, &TTYD_PORT_RANGE) {
-        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return Ok(port);
-        }
-    }
-    Err(WebErr::NoFreeTtydPort)
+fn ensure_port_available(port: u16) -> Result<()> {
+    TcpListener::bind(("127.0.0.1", port))
+        .map(|_| ())
+        .map_err(|_| WebErr::ConfiguredPortInUse { port })
+}
+
+fn choose_ephemeral_port() -> io::Result<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    listener.local_addr().map(|address| address.port())
 }
 
 fn wait_for_port(port: u16, timeout: Duration) -> bool {
@@ -787,21 +825,29 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
     false
 }
 
+#[cfg(unix)]
+fn wait_for_port_close(port: u16, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline && TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn credential_path() -> PathBuf {
     paths::state_home().join("rimz").join(CREDENTIAL_FILE)
 }
 
-fn instance_dir() -> PathBuf {
-    paths::state_home().join("rimz").join(INSTANCE_DIR)
+fn daemon_path() -> PathBuf {
+    paths::state_home().join("rimz").join(DAEMON_FILE)
 }
 
-fn instance_path(session: &str) -> PathBuf {
-    let encoded = session
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    instance_dir().join(format!("{encoded}.json"))
+fn legacy_instance_dir() -> PathBuf {
+    paths::state_home().join("rimz").join(LEGACY_INSTANCE_DIR)
+}
+
+fn acquire_daemon_lock() -> Result<crate::store::lock::WorkspaceLock> {
+    let path = paths::state_home().join("rimz").join(DAEMON_LOCK_FILE);
+    Ok(crate::store::lock::WorkspaceLock::acquire(&path)?)
 }
 
 fn random_secret() -> String {
@@ -818,12 +864,12 @@ fn write_credential_at(path: &Path, credential: &TtydCredential) -> Result<()> {
     Ok(())
 }
 
-fn write_instance(instance: &TtydInstance) -> Result<()> {
-    write_instance_at(&instance_path(&instance.session), instance)
+fn write_daemon(record: &DaemonRecord) -> Result<()> {
+    write_daemon_at(&daemon_path(), record)
 }
 
-fn write_instance_at(path: &Path, instance: &TtydInstance) -> Result<()> {
-    atomic::write_temp_then_rename_cache(path, instance)?;
+fn write_daemon_at(path: &Path, record: &DaemonRecord) -> Result<()> {
+    atomic::write_temp_then_rename_cache(path, record)?;
     Ok(())
 }
 
@@ -864,13 +910,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn argv_uses_loopback_auth_origin_and_tmux_attach() {
+    fn argv_uses_loopback_auth_url_args_and_rimz_shim() {
         let spec = spawn_spec_for(
             Path::new("/tmp/ttyd"),
-            "rimz-project-a1b2c3",
+            Path::new("/opt/rimz/bin/rimz"),
             8201,
             "secret",
-            Path::new("/run/user/1000/rimz/tmux/server"),
             &["-t".to_owned(), "macOptionIsMeta=true".to_owned()],
         );
         assert_eq!(
@@ -878,28 +923,24 @@ mod tests {
             [
                 "-W",
                 "-O",
+                "-a",
                 "-c",
                 "rimz:secret",
                 "-i",
                 "127.0.0.1",
                 "-p",
                 "8201",
-                "-b",
-                "/rimz-project-a1b2c3",
                 "-t",
                 "macOptionIsMeta=true",
-                "tmux",
-                "-S",
-                "/run/user/1000/rimz/tmux/server",
-                "attach",
-                "-t",
-                "rimz-project-a1b2c3"
+                "/opt/rimz/bin/rimz",
+                "web",
+                "exec"
             ]
         );
     }
 
     #[test]
-    fn styled_argv_keeps_all_client_options_before_tmux() {
+    fn styled_argv_keeps_all_client_options_before_rimz_shim() {
         let extra = vec![
             "-t".to_owned(),
             "macOptionIsMeta=true".to_owned(),
@@ -912,19 +953,18 @@ mod tests {
         ];
         let spec = spawn_spec_for(
             Path::new("/tmp/ttyd"),
-            "room",
+            Path::new("/opt/rimz/bin/rimz"),
             8202,
             "secret",
-            Path::new("/tmp/tmux.sock"),
             &extra,
         );
 
-        let tmux = spec
+        let shim = spec
             .args
             .iter()
-            .position(|arg| arg == "tmux")
-            .expect("tmux argv");
-        assert_eq!(&spec.args[tmux - extra.len()..tmux], extra);
+            .position(|arg| arg == "/opt/rimz/bin/rimz")
+            .expect("shim argv");
+        assert_eq!(&spec.args[shim - extra.len()..shim], extra);
     }
 
     #[test]
@@ -998,10 +1038,9 @@ mod tests {
     }
 
     #[test]
-    fn port_derivation_is_stable_and_in_range() {
-        let first = derive_instance_port("rimz-project-a1b2c3");
-        assert_eq!(first, derive_instance_port("rimz-project-a1b2c3"));
-        assert!(TTYD_PORT_RANGE.contains(&first));
+    fn ephemeral_port_is_bindable() {
+        let port = choose_ephemeral_port().expect("ephemeral port");
+        TcpListener::bind(("127.0.0.1", port)).expect("port released after selection");
     }
 
     #[test]
@@ -1022,20 +1061,27 @@ mod tests {
     }
 
     #[test]
-    fn instance_state_reads_legacy_timestamp_and_stale_pid_is_not_in_inventory() {
+    fn daemon_state_roundtrips() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("instance.json");
-        let instance = TtydInstance {
-            session: "rimz-project-a1b2c3".to_owned(),
+        let path = dir.path().join("daemon.json");
+        let daemon = DaemonRecord {
             pid: u32::MAX,
-            port: 8299,
+            port: 8200,
         };
-        let mut legacy = serde_json::to_value(&instance).expect("instance json");
-        legacy["started_at"] = serde_json::json!("2023-11-14T22:13:20Z");
-        atomic::write_temp_then_rename_cache(&path, &legacy).expect("write legacy state");
-        assert_eq!(
-            read_json_optional(&path).expect("read state"),
-            Some(instance)
-        );
+        write_daemon_at(&path, &daemon).expect("write daemon state");
+        assert_eq!(read_json_optional(&path).expect("read state"), Some(daemon));
+    }
+
+    #[test]
+    fn legacy_pid_guard_requires_ttyd_as_the_program() {
+        let process = |cmdline: &str| crate::proc::ProcInfo {
+            pid: 42,
+            ppid: 1,
+            real_uid: 1000,
+            cmdline: cmdline.to_owned(),
+        };
+        assert!(is_ttyd_process(&process("/usr/bin/ttyd -p 8200 sh")));
+        assert!(!is_ttyd_process(&process("/usr/bin/ttyd-trace -p 8200")));
+        assert!(!is_ttyd_process(&process("sh -c ttyd -p 8200")));
     }
 }

@@ -14,9 +14,7 @@ mod shell {
         Effect, Engine, EngineConfig, Host, ProjectedClientFocus, ProjectedPaneId,
     };
     use rimz_presence_zellij::policy::{self, PaneFields, RawStablePaneFields};
-    use rimz_presence_zellij::wire::{
-        self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, RETIRE_PIPE, SHARE_SESSION_PIPE,
-    };
+    use rimz_presence_zellij::wire::{self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, RETIRE_PIPE};
     use zellij_tile::prelude::*;
 
     #[derive(Default)]
@@ -69,7 +67,6 @@ mod shell {
                 PermissionType::ReadApplicationState,
                 PermissionType::RunCommands,
                 PermissionType::Reconfigure,
-                PermissionType::StartWebServer,
             ];
             request_permission(&permissions);
             subscribe(&subscribed_events());
@@ -198,10 +195,6 @@ mod shell {
                 execute(engine.on_focus_sidebar_pipe());
                 return false;
             }
-            if pipe_message.name == SHARE_SESSION_PIPE {
-                execute(engine.on_share_session_pipe());
-                return false;
-            }
             if pipe_message.name == DUMP_TOPOLOGY_PIPE {
                 let host = ShellHost {
                     commands: self.commands,
@@ -245,7 +238,6 @@ mod shell {
                 }
                 Effect::HideSelf => hide_self(),
                 Effect::Reconfigure(kdl) => reconfigure(kdl, false),
-                Effect::ShareSession => share_current_session(),
                 Effect::CloseSelf => close_self(),
                 Effect::Unsubscribe => unsubscribe(&subscribed_events()),
                 Effect::Resubscribe => subscribe(&subscribed_events()),

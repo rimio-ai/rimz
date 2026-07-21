@@ -1,6 +1,6 @@
 # Remote CLI
 
-`rimz remote` attaches to a room on another host over SSH. `remote connect` builds a guarded `ssh -t` command on your machine and runs the remote host's own `rimz`, so your `~/.ssh/config`, keys, ports, and jump hosts apply through normal SSH resolution. RimZ adds no daemon; a supervised connection opens loopback-only local forwards when it detects new remote dev-server listeners. It changes nothing on the remote host until you ask: `remote setup` is the only subcommand that installs a binary there, and aliases are plain lines in `~/.config/rimz/remote.toml` you remove with `remote rm`. Why you attach this way, and how the link heals itself, is the [remote guide](../../guide/remote.md).
+`rimz remote` attaches to a room on another host over SSH. `remote connect` builds a guarded `ssh -t` command on your machine and runs the remote host's own `rimz`, so your `~/.ssh/config`, keys, ports, and jump hosts apply through normal SSH resolution. An ordinary terminal attach adds no daemon; `--web` ensures the remote host's shared ttyd daemon. A supervised connection opens loopback-only local forwards when it detects new remote dev-server listeners. It changes nothing on the remote host until you ask: `remote setup` is the only subcommand that installs a binary there, and aliases are plain lines in `~/.config/rimz/remote.toml` you remove with `remote rm`. Why you attach this way, and how the link heals itself, is the [remote guide](../../guide/remote.md).
 
 ## Remote rooms
 
@@ -42,9 +42,9 @@ The details that matter in practice:
 `rimz remote connect <target> --web` opens the remote room in your local browser instead of your terminal. The sequence:
 
 1. Runs remote `rimz web open --print --json` over a prep connection, asking the recovery prompt there when your terminal is interactive.
-2. Selects Zellij or ttyd from the remote room mux and relays its login token or Basic-Auth credential.
-3. Starts a supervised SSH local-forward tunnel to the selected remote web engine.
-4. Prints the bare `http://127.0.0.1:<port>/<session>` URL and opens your local browser best-effort.
+2. Reads the shared ttyd port and Basic-Auth credential from that prep response and prints the credential on stderr.
+3. Starts a supervised SSH local-forward tunnel to the remote ttyd port.
+4. Prints the bare `http://127.0.0.1:<port>/?arg=<session>` URL and opens your local browser best-effort.
 5. Stays in the foreground until Ctrl-C, which tears the tunnel down.
 
 `--web-port <port>` pins the local browser origin; otherwise RimZ derives a stable port from the session name in `8300..8399`. The room itself is [`rimz web`](./web.md).
