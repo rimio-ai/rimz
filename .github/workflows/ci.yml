@@ -97,9 +97,8 @@ jobs:
     # `deny` runs offline: advisories and the canonical crates.io index come
     # from the image, then `cargo fetch --locked` pulls only lock-drift rows and
     # merges them back to the canonical index path cargo-deny reads from
-    # Cargo.lock. `vet` and `semver` fetch the crates.io index/baseline
-    # directly, bypass the mirror, and retry transient egress. All three gates
-    # block the job.
+    # Cargo.lock. `vet` fetches the crates.io index directly, bypasses the
+    # mirror, and retries transient egress. Both gates block the job.
     container:
       image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
       options: --init
@@ -127,7 +126,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Cargo registry cache
-        # A warm registry/index feeds deny local yanked data and trims vet/semver egress.
+        # A warm registry/index feeds deny local yanked data and trims vet egress.
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target/ci"
@@ -186,20 +185,12 @@ jobs:
             sleep 10
           done
 
-      - name: cargo xtask semver
-        run: |
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          # Retry transient crates.io egress failures rather than failing the run.
-          n=0
-          until mold -run cargo xtask semver; do
-            n=$((n+1))
-            if [ "$n" -ge 3 ]; then
-              echo "::error::semver checks failed after 3 attempts"
-              exit 1
-            fi
-            echo "::warning::semver attempt $n failed; retrying in 10s"
-            sleep 10
-          done
+      # `cargo xtask semver` is not a CI step. It reads the `rimz` crate's Rust
+      # API, which is not a supported surface: the lib target exists so the
+      # binary, tests, and benches can link the domain modules. It fires on
+      # internal refactors and is blind to the flags, output, exit codes,
+      # config keys, and persisted formats callers depend on. Those are gated
+      # by the CLI surface snapshot in the `tests` job.
 
       - name: sccache stats
         if: always()

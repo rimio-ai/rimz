@@ -108,6 +108,24 @@ pub(crate) fn vet(root: &Path) -> Result<()> {
     run(root, "cargo", ["vet", "--locked"])
 }
 
+/// Report Rust API drift against the published baseline. Advisory, and out of
+/// every blocking gate on purpose.
+///
+/// RimZ ships as a binary. The `rimz` crate publishes a `lib` target so the
+/// binary, tests, and benches can link the domain modules, and crates.io
+/// carries it so `cargo install rimz` works — neither makes its Rust API a
+/// supported surface, and no document offers one. `cargo semver-checks` reads
+/// exactly that surface: it fires on internal refactors (renaming an error
+/// enum's field) while staying blind to what callers actually depend on —
+/// flags, output, exit codes, config keys, and persisted formats. Gating on it
+/// would price every internal rename as a major release and make the version
+/// number describe the library instead of the product.
+///
+/// The binary's contract has its own gates: the flag-surface snapshot in
+/// `crates/rimz/src/cli/surface_tests.rs`, the visible-command guard in
+/// `crates/rimz/src/cli/help.rs`, and the schema-version assertions in the
+/// doctor integration suite. Run this task when a release note wants the API
+/// delta, not to decide whether a change may land.
 pub(crate) fn semver(root: &Path) -> Result<()> {
     if workspace_version(root)? == "0.0.0" {
         return Ok(());
@@ -178,11 +196,11 @@ const COVERAGE_LCOV_PATH: &str = "target/ci/coverage/lcov.info";
 //      builds only serialize on the target-dir lock, so parallelizing them buys
 //      nothing.
 //
-// `deny`, `vet`, and `semver` stay out of `checks`: `deny` runs offline against
-// the baked advisory DB and a local index at the canonical crates.io cache path,
-// while `vet` and `semver` fetch the crates.io index/baseline directly and
-// bypass a `[source.crates-io]` mirror. They run in their own `externals` task
-// and a standalone CI job (see `externals`).
+// `deny` and `vet` stay out of `checks`: `deny` runs offline against the baked
+// advisory DB and a local index at the canonical crates.io cache path, while
+// `vet` fetches the crates.io index directly and bypasses a
+// `[source.crates-io]` mirror. They run in their own `externals` task and a
+// standalone CI job (see `externals`). `semver` is advisory and gates nothing.
 type Gate = fn(&Path) -> Result<()>;
 
 type CompactGate = fn(&Path, &mut dyn FnMut(&str)) -> Result<GateResult>;
@@ -351,16 +369,19 @@ pub(crate) fn checks(root: &Path) -> Result<()> {
 
 // Supply-chain checks that sit outside `checks`. `deny` runs offline against the
 // baked advisory DB and a local index at the canonical crates.io cache path.
-// `vet` fetches the registry index to resolve its audit set, and `semver`
-// fetches the published baseline; both bypass a `[source.crates-io]` mirror, so
-// they run as a standalone CI job where transient egress failures can be retried
-// without failing `checks`. All run so a single pass reports every signal; the
-// first error is returned.
+// `vet` fetches the registry index to resolve its audit set and bypasses a
+// `[source.crates-io]` mirror, so they run as a standalone CI job where
+// transient egress failures can be retried without failing `checks`. Both run
+// so a single pass reports every signal; the first error is returned.
+//
+// `semver` is deliberately absent: it reads the crate's Rust API, which RimZ
+// does not support as a surface, and the binary's contract is gated by the CLI
+// surface snapshot in the test suite instead. See `semver`.
 pub(crate) fn externals(root: &Path) -> Result<()> {
     let externals_start = Instant::now();
     let mut timings: Vec<(String, Duration)> = Vec::new();
     let mut first_err: Option<anyhow::Error> = None;
-    for (name, gate) in [("deny", deny as Gate), ("vet", vet), ("semver", semver)] {
+    for (name, gate) in [("deny", deny as Gate), ("vet", vet)] {
         let (name, elapsed, result) = timed(name, || gate(root));
         timings.push((name, elapsed));
         if let Err(err) = result {

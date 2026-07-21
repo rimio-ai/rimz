@@ -133,13 +133,13 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "semver",
-        summary: "Run semver checks for published versions.",
+        summary: "Report Rust API drift against the published crate (advisory; gates nothing).",
         runs: "cargo semver-checks",
     },
     TaskInfo {
         name: "externals",
         summary: "Run supply-chain checks that reach crates.io directly.",
-        runs: "cargo deny check, cargo vet, then cargo semver-checks",
+        runs: "cargo deny check, then cargo vet",
     },
     TaskInfo {
         name: "perf",

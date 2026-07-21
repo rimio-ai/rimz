@@ -3,6 +3,19 @@
 //! Read [`crate::agents`] for normalized agent state and [`crate::store`] for
 //! durability rules. The product contract lives in the repo's `DESIGN.md`;
 //! this crate is its implementation.
+//!
+//! # Internal API
+//!
+//! RimZ ships as a binary, and this library target exists so that binary, the
+//! test suite, and the benches can link the domain modules. Its items are
+//! public to each other, not to dependents: names, signatures, and module
+//! layout move with the implementation and every release, without a
+//! deprecation cycle or a major version bump.
+//!
+//! What RimZ supports is the binary's surface — commands and flags, `--json`
+//! output, exit codes, config keys, and persisted formats — on the terms
+//! `CHANGELOG.md` states. Build against `rimz` the command; treat `cargo add
+//! rimz` as unsupported.
 
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]

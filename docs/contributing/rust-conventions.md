@@ -241,10 +241,10 @@ Every PR gate runs in CI with warnings treated as errors; each has a local `carg
 
 - `cargo xtask gate` — the pre-PR default: `cargo fmt --all` in fix mode, then invariants, docs-links, all-feature and install-host lint, and `cargo nextest run --profile gate --workspace --all-features --locked`. It captures each step's output, prints one compact success line per step, and fails fast with a trimmed excerpt plus a `NEXT:` hint.
 - `cargo xtask checks` — the registry-free non-test gates, ordered for speed: the instant text gates (`fmt` in check mode, `invariants`, `docs-links`) run first and fail fast; `deps` overlaps the compile gates on its own thread; the compile gates run sequentially (`build-plugin`, then `lint`) because concurrent cargo builds serialize on the target-dir lock. Prints a per-gate timing summary to stderr.
-- `cargo xtask externals` — the gates that talk to the crates.io registry: `deny`, `vet`, `semver`. All three run so a single pass reports every signal.
+- `cargo xtask externals` — the gates that talk to the crates.io registry: `deny` and `vet`. Both run so a single pass reports every signal.
 - `cargo xtask ci` — `checks` plus plain `cargo nextest run --workspace --all-features --locked`; the local full stack when a change calls for full validation.
 
-Escalate past `gate` when the change touches the matching surface: `cargo xtask test -P live` for live-backend and deep-mux-smoke coverage, `cargo xtask test -P journey` for rendered journeys, `cargo xtask externals` when dependencies or the public API change, and `cargo xtask ci` for both checks and the full suite.
+Escalate past `gate` when the change touches the matching surface: `cargo xtask test -P live` for live-backend and deep-mux-smoke coverage, `cargo xtask test -P journey` for rendered journeys, `cargo xtask externals` when dependencies change, and `cargo xtask ci` for both checks and the full suite.
 
 The individual gates:
 
@@ -259,8 +259,18 @@ The individual gates:
 - `cargo deny check -D warnings` — license, advisory, ban, and yanked-crate check. In CI it runs offline (`RIMZ_DENY_OFFLINE=1` adds the global `--offline` option) against the image's baked advisory DB and a local crates.io index prepared at the canonical cache path.
 - `cargo machete` — unused-dependency check (the `deps` task).
 - `cargo vet --locked` — supply-chain audit; fetches the crates.io index directly, bypassing the runners' nexus mirror.
-- `cargo semver-checks` — API check against the published baseline; skips only while the workspace version is `0.0.0` or while crates.io has no published `rimz` baseline to compare against.
+- `cargo semver-checks` — Rust API drift against the published baseline. Advisory: it is in no gate and no CI job, and it never blocks a change. RimZ ships as a binary, and the `rimz` lib target exists so the binary, tests, and benches can link the domain modules; its Rust API carries no compatibility promise ([lib.rs](../../crates/rimz/src/lib.rs) states this). The check reads exactly that surface, so it fires on internal refactors — renaming an error enum's field reads as a major break — while staying blind to the flags, output, exit codes, config keys, and persisted formats callers actually depend on. Gating on it would price every internal rename as a major release and make the version number describe the library rather than the product. Run it on demand when a release note wants the API delta. It skips while the workspace version is `0.0.0` or while crates.io has no published `rimz` baseline.
 - `cargo xtask coverage` — instrumented coverage (`cargo llvm-cov nextest --workspace --all-features --locked`), run off the PR hot path by the nightly/dispatch `coverage.yml` workflow, which uploads `target/ci/coverage/lcov.info`. The CI image provides tmux and Zellij, so the same pass exercises the live-backend tests.
+
+### The compatibility surface
+
+RimZ ships as a binary, so the surface that carries a compatibility promise is the one a user or a script touches: commands and flags, `--json` output, exit codes, config keys, and persisted formats. [CHANGELOG.md](../../CHANGELOG.md) states the terms — on the 0.x line these can change between releases, and a release's "Changed" section is where a break is announced. The `rimz` crate's Rust API is not part of that promise; see the [semver note](#quality-gates) above.
+
+Three gates hold that surface, all in the normal test run:
+
+- **Flags** — [crates/rimz/src/cli/surface_tests.rs](../../crates/rimz/src/cli/surface_tests.rs) snapshots the built clap tree: every command, alias, and flag with its arity, defaults, accepted values, and global/hidden status, and no help prose so wording churn stays out of the diff. A failure is the review prompt. Adding a command or an optional flag is additive; renaming or removing a flag, narrowing a value set, or changing a default breaks callers and earns a CHANGELOG entry. Accept a reviewed diff with `cargo insta accept`.
+- **Commands** — `visible_commands_are_grouped_exactly_once` in [crates/rimz/src/cli/help.rs](../../crates/rimz/src/cli/help.rs) fails when a visible subcommand appears or disappears without moving its help group.
+- **Persisted and wire formats** — each format carries its own version constant (`rimz.event.v2`, `rimz.plugin.v5`, `rimz.web.v1`, `SNAPSHOT_VERSION`, and peers), independent of the crate version, and a mismatched record is rejected and rebuilt rather than migrated. The doctor integration suite pins the event-log and sidebar-plugin versions as literals, so a bump there fails a test that names the old value.
 
 ### Architectural invariants
 
@@ -271,7 +281,7 @@ The individual gates:
 CI lives in two workflow trees: `.gitea/workflows/` for the Gitea origin and `.github/workflows/` for the GitHub mirror. Both run the same gates inside the `rimz-ci` image; GitHub pulls `ghcr.io/<owner>/rimz-ci:latest` with the built-in `GITHUB_TOKEN`, while Gitea pulls the configured `RIMZ_CI_IMAGE` with its registry token. Both pipelines run three job groups in parallel:
 
 - `checks` — `cargo xtask checks`.
-- `externals` — the `deny`, `vet`, and `semver` gates as separate steps (locally: `cargo xtask externals`). They sit apart from `checks` because deny reads the baked advisory DB offline while vet and semver fetch crates.io directly, bypassing the runners' nexus mirror, so transient egress retries stay out of the main jobs.
+- `externals` — the `deny` and `vet` gates as separate steps (locally: `cargo xtask externals`). They sit apart from `checks` because deny reads the baked advisory DB offline while vet fetches crates.io directly, bypassing the runners' nexus mirror, so transient egress retries stay out of the main jobs.
 - `tests` — compile the suite once, then run the `gate`, `live`, and `journey` nextest profiles from that one build so each tier's timing reflects test execution, not the shared compile.
 
 The `tests` job compiles the suite (`cargo xtask test --no-run`) and runs the three profile steps in the same container with profile-defined terse reporting and a three-failure cap; default success semantics stop the job at the first failed tier and leave its final failure recap at the log tail. The `tests` job is the branch-protection check on both forges.

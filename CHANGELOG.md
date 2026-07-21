@@ -4,6 +4,12 @@ What changed in each RimZ release, written for the people who run it. Every rele
 
 RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output formats can change between releases while the design settles, so read the "Changed" section of a release before upgrading. Entries describe what you can do differently; the reasoning behind a change lives in the linked guide.
 
+## Unreleased
+
+### Changed
+
+- The compatibility promise now names its surface. RimZ is a binary, and what it supports is the binary: commands and flags, `--json` output, exit codes, config keys, and persisted formats, on the 0.x terms above. The `rimz` crate publishes a library target so the binary, tests, and benches can link the domain modules, and it carries no compatibility promise — its names, signatures, and module layout move with the implementation and every release. Install `rimz` as a command; `cargo add rimz` is unsupported.
+
 ## [0.4.0] (2026-07-20)
 
 Four themes: provider accounts and money become a queryable surface of their own, remote attach gains port forwarding and honest reconnect reporting, RimZ updates itself, and a broad correctness and performance pass steadies the sidebar, Zellij presence, and spend accounting while cutting the work behind each frame.
