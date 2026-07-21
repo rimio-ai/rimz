@@ -3,7 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
@@ -127,7 +127,6 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
     let shim = FakeZellij::new().with_tmux();
 
-    let started = Instant::now();
     let output = env
         .rimz()
         .args(["--tmux", "start", "--no-attach"])
@@ -135,11 +134,14 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
-        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "10")
+        // Keep the shim asleep beyond the outer harness deadline. Returning
+        // from `rimz` with the timeout notice therefore proves the inner mux
+        // deadline fired without comparing whole-process wall time, which is
+        // scheduler-sensitive when nextest runs the gate under load.
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "60")
         .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
-        .bounded_output_within(Duration::from_secs(10))
+        .bounded_output_within(Duration::from_secs(30))
         .expect("run rimz start");
-    let elapsed = started.elapsed();
 
     assert!(
         output.status.success(),
@@ -159,10 +161,6 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
         stdout.contains("tmux -S") && stdout.contains("attach"),
         "start --no-attach should print a socket-scoped tmux attach command, got: {stdout}",
     );
-    assert!(
-        elapsed < Duration::from_secs(5),
-        "wedged rival probe should be bounded, elapsed: {elapsed:?}",
-    );
 }
 
 #[test]
@@ -171,7 +169,6 @@ fn zellij_start_fails_fast_when_selected_session_probe_wedges() {
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
     let shim = FakeZellij::new().with_tmux();
 
-    let started = Instant::now();
     let output = env
         .rimz()
         .args(["--zellij", "start", "--no-attach"])
@@ -179,11 +176,13 @@ fn zellij_start_fails_fast_when_selected_session_probe_wedges() {
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
-        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "10")
+        // The shim cannot finish naturally before the harness deadline. The
+        // recovery error below is the deterministic evidence that both mux
+        // probe deadlines ran and killed their children.
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "60")
         .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
-        .bounded_output_within(Duration::from_secs(10))
+        .bounded_output_within(Duration::from_secs(30))
         .expect("run rimz start");
-    let elapsed = started.elapsed();
 
     assert!(
         !output.status.success(),
@@ -193,10 +192,6 @@ fn zellij_start_fails_fast_when_selected_session_probe_wedges() {
     assert!(
         stderr.contains("zellij is not responding") && stderr.contains("rimz --tmux"),
         "stderr should explain recovery, got: {stderr}",
-    );
-    assert!(
-        elapsed < Duration::from_secs(5),
-        "selected probe failure should be bounded, elapsed: {elapsed:?}",
     );
 }
 
