@@ -1200,6 +1200,7 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     let log = env.project_root.join("ssh-trace.log");
     let stdout_path = env.project_root.join("stdout.log");
     let tunnel_plan = env.project_root.join("tunnel.plan");
+    let master_exit_plan = env.project_root.join("master-exit.plan");
     let port = reserve_local_port();
     let (browser_bin, browser_log) = write_browser_shim(&env);
     let ambient_path = std::env::var_os("PATH").unwrap_or_default();
@@ -1208,6 +1209,7 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     )
     .expect("browser PATH");
     std::fs::write(&tunnel_plan, "0\n").expect("write tunnel plan");
+    std::fs::write(&master_exit_plan, "0\n").expect("write master exit plan");
     let stdout = std::fs::File::create(&stdout_path).expect("create stdout log");
 
     let mut child = remote_web_command(&env, &log, port)
@@ -1215,10 +1217,10 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
             "RIMZ_TEST_SSH_WEB_PREP_STDERR",
             "remote preparation started\n",
         )
-        .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
         .env("RIMZ_TEST_SSH_TUNNEL_READY_MS", "300")
-        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "150")
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "900")
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_PLAN", &master_exit_plan)
         .env("RIMZ_TEST_BROWSER_LOG", &browser_log)
         .env("PATH", path)
         .stdout(stdout)
@@ -1235,21 +1237,26 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     );
     assert!(!browser_log.exists(), "browser waits for tunnel readiness");
 
+    let url = format!("http://127.0.0.1:{port}/rimz-project-a1b2c3");
+    let browser = wait_for_notify_log(&browser_log, &[&url]);
+    assert_eq!(browser.trim(), url);
+    assert!(
+        child.try_wait().expect("poll remote web connect").is_none(),
+        "browser open must leave the ControlMaster-owned tunnel in the foreground"
+    );
+
     let out = child.wait_with_output().expect("wait remote web connect");
     assert!(
         out.status.success(),
         "stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let url = format!("http://127.0.0.1:{port}/rimz-project-a1b2c3");
     assert_eq!(
         std::fs::read_to_string(&stdout_path)
             .expect("read stdout")
             .trim(),
         url
     );
-    let browser = wait_for_notify_log(&browser_log, &[&url]);
-    assert_eq!(browser.trim(), url);
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("remote preparation started"),
         "preparation stderr stays visible"
@@ -1261,14 +1268,16 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
 fn remote_web_reconnects_once_after_established_transport_exit() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
-    let plan = env.project_root.join("tunnel.plan");
+    let tunnel_plan = env.project_root.join("tunnel.plan");
+    let master_exit_plan = env.project_root.join("master-exit.plan");
     let port = reserve_local_port();
-    std::fs::write(&plan, "255\n0\n").expect("write tunnel plan");
+    std::fs::write(&tunnel_plan, "0\n0\n").expect("write tunnel plan");
+    std::fs::write(&master_exit_plan, "255\n0\n").expect("write master exit plan");
 
     let out = remote_web_command(&env, &log, port)
-        .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
-        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "80")
-        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "500")
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_PLAN", &master_exit_plan)
         .bounded_output()
         .expect("run reconnecting remote web tunnel");
 
@@ -1338,7 +1347,7 @@ fn remote_web_fatal_exit_before_readiness_emits_no_url() {
 }
 
 #[test]
-fn remote_web_clean_exit_before_readiness_is_an_error() {
+fn remote_web_direct_clean_exit_before_readiness_is_an_error() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("tunnel.plan");
@@ -1346,6 +1355,7 @@ fn remote_web_clean_exit_before_readiness_is_an_error() {
     std::fs::write(&plan, "0\n").expect("write tunnel plan");
 
     let out = remote_web_command(&env, &log, port)
+        .arg("--no-reconnect")
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
         .bounded_output()
         .expect("run clean remote web tunnel exit before readiness");
@@ -1359,6 +1369,7 @@ fn remote_web_clean_exit_before_readiness_is_an_error() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(tunnel_invocation_count(&log), 1);
+    assert_eq!(master_invocation_count(&log), 0);
 }
 
 #[test]

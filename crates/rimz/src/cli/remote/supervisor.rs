@@ -1083,6 +1083,29 @@ pub(super) struct MasterGuard {
     control_path: PathBuf,
 }
 
+impl MasterGuard {
+    /// Wait for the owning ControlMaster. Master-owned forwards remain live
+    /// until this child exits, so remote web uses this as its foreground wait.
+    pub(super) fn wait_for_exit(&mut self) -> Result<Option<i32>> {
+        let mut child = self
+            .child
+            .take()
+            .context("SSH ControlMaster is not running")?;
+        let status = match child.wait() {
+            Ok(status) => status,
+            Err(err) => {
+                self.child = Some(child);
+                return Err(err).context("waiting for SSH ControlMaster");
+            }
+        };
+        if let Some(reader) = self.stderr.take() {
+            let _ = reader.join();
+        }
+        remove_control_path(&self.control_path);
+        Ok(status.code())
+    }
+}
+
 impl Drop for MasterGuard {
     fn drop(&mut self) {
         if let Some(child) = &mut self.child {

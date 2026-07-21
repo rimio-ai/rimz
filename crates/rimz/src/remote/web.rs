@@ -66,33 +66,55 @@ pub fn web_token_ensure_spec(
     )
 }
 
-pub fn web_tunnel_spec(
+pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16) -> CommandSpec {
+    CommandSpec::new(ssh_program())
+        .args([
+            "-N",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "Compression=yes",
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+            "-o",
+            "ControlPersist=no",
+            "-L",
+        ])
+        .arg(format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"))
+        .args(["--", target.ssh_destination().as_str()])
+}
+
+/// Add the browser forward to an established ControlMaster. The control
+/// command exits after the master confirms the listener; the master owns the
+/// forward for the rest of its lifetime.
+pub fn web_control_forward_spec(
     target: &RemoteTarget,
     local_port: u16,
     remote_port: u16,
-    control: Option<&Path>,
+    control: &Path,
 ) -> CommandSpec {
-    let mut spec = CommandSpec::new(ssh_program()).args([
-        "-N",
-        "-o",
-        "ExitOnForwardFailure=yes",
-        "-o",
-        "ServerAliveInterval=5",
-        "-o",
-        "ServerAliveCountMax=3",
-        "-o",
-        "ConnectTimeout=10",
-        "-o",
-        "Compression=yes",
-    ]);
-    if let Some(path) = control {
-        spec = spec.args(super::link::control_options(path));
-    } else {
-        spec = spec.args(["-o", "ControlPersist=no"]);
-    }
-    spec.args(["-L"])
-        .arg(format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"))
-        .args(["--", target.ssh_destination().as_str()])
+    CommandSpec::new(ssh_program()).args([
+        "-S".to_owned(),
+        control.display().to_string(),
+        "-O".to_owned(),
+        "forward".to_owned(),
+        "-o".to_owned(),
+        "ExitOnForwardFailure=yes".to_owned(),
+        "-L".to_owned(),
+        format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
+        "-o".to_owned(),
+        "BatchMode=yes".to_owned(),
+        "--".to_owned(),
+        target.ssh_destination().as_str().to_owned(),
+    ])
 }
 
 fn one_shot_spec(
@@ -193,7 +215,7 @@ mod tests {
 
     #[test]
     fn web_tunnel_builds_local_forward() {
-        let spec = web_tunnel_spec(&parse("dev-box:query-engine"), 8301, 8082, None);
+        let spec = web_tunnel_spec(&parse("dev-box:query-engine"), 8301, 8082);
         assert_eq!(
             spec.args,
             [
@@ -208,6 +230,10 @@ mod tests {
                 "ConnectTimeout=10",
                 "-o",
                 "Compression=yes",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ControlPath=none",
                 "-o",
                 "ControlPersist=no",
                 "-L",
@@ -253,20 +279,23 @@ mod tests {
         let token = web_token_ensure_spec(&target, WebEngine::Zellij, Some(control));
         assert_eq!(&token.args[2..8], &control_args);
 
-        let tunnel = web_tunnel_spec(&target, 8301, 8082, Some(control));
-        let control_start = tunnel
-            .args
-            .windows(control_args.len())
-            .position(|args| args == control_args)
-            .expect("control options");
-        assert!(control_start > 0);
+        let forward = web_control_forward_spec(&target, 8301, 8082, control);
         assert_eq!(
-            tunnel
-                .args
-                .iter()
-                .filter(|arg| arg.as_str() == "ControlPersist=no")
-                .count(),
-            1
+            forward.args,
+            [
+                "-S",
+                "/tmp/rimz-web.sock",
+                "-O",
+                "forward",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-L",
+                "127.0.0.1:8301:127.0.0.1:8082",
+                "-o",
+                "BatchMode=yes",
+                "--",
+                "dev-box",
+            ]
         );
     }
 }
