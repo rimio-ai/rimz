@@ -64,13 +64,14 @@ pub fn run(args: UpdateArgs, _globals: &GlobalFlags) -> Result<()> {
 fn update_homebrew(version: Option<&str>, reported_exe: &Path) -> Result<PathBuf> {
     if let Some(tag) = version {
         bail!(
-            "Homebrew cannot pin RimZ to `{tag}`; reinstall the standalone build with `RIMZ_VERSION={tag}` or let `brew upgrade rimz` select the release"
+            "Homebrew cannot pin RimZ to `{tag}`; reinstall the standalone build with `RIMZ_VERSION={tag}` or let `brew upgrade rimio-ai/rimz/rimz` select the release"
         );
     }
     writeln!(render::out(), "Updating RimZ with Homebrew…")?;
+    run_inherited(Command::new("brew").arg("update"), "brew update")?;
     run_inherited(
-        Command::new("brew").args(["upgrade", "rimz"]),
-        "brew upgrade rimz",
+        Command::new("brew").args(["upgrade", "rimio-ai/rimz/rimz"]),
+        "brew upgrade rimio-ai/rimz/rimz",
     )?;
 
     Ok(homebrew_prefix_binary().unwrap_or_else(|| reported_exe.to_path_buf()))

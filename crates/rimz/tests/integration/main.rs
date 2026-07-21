@@ -51,6 +51,8 @@ mod transcript;
 mod transcript_watch;
 mod trust;
 mod uninstall;
+#[cfg(unix)]
+mod update_homebrew;
 mod wakeup_pipe;
 mod web;
 mod workspace;

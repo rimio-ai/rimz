@@ -6,6 +6,10 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ## Unreleased
 
+### Fixed
+
+- Homebrew upgrades through `rimz update` and the install script refresh formula data first, so a stale tap no longer skips a released build. → [installation](./docs/guide/installation.md)
+
 ## [0.4.1] (2026-07-21)
 
 A follow-up to 0.4.0: one shared daemon serves browser access for Zellij and tmux rooms alike, those rooms get readable fonts and colors, and the agent compatibility matrix is rewritten around what you see rather than how it is wired.

@@ -327,6 +327,13 @@ brew_failed() {
     return 1
 }
 
+run_brew() {
+    if [ "$brew_action" = upgrade ]; then
+        brew update || return
+    fi
+    brew "$brew_action" rimio-ai/rimz/rimz
+}
+
 install_with_brew() {
     ladder_rows=3
     if [ "$fancy" = 1 ]; then
@@ -337,7 +344,7 @@ install_with_brew() {
         print_row "$c_spin" '⠋' homebrew "$brew_action rimz" ''; printf '\n' >&2
         print_row "$c_dim" '·' install '' "$c_dim"; printf '\n' >&2
 
-        brew "$brew_action" rimio-ai/rimz/rimz > "$tmp_dir/brew.log" 2>&1 &
+        run_brew > "$tmp_dir/brew.log" 2>&1 &
         dl_pid=$!
         spinner_frame=0
         while kill -0 "$dl_pid" 2>/dev/null; do
@@ -361,7 +368,7 @@ install_with_brew() {
         draw_row 3 "$c_spin" '⠋' install 'resolving binary' ''
     else
         say "Installing RimZ with Homebrew"
-        if ! brew "$brew_action" rimio-ai/rimz/rimz; then
+        if ! run_brew; then
             brew_failed "brew $brew_action exited unsuccessfully"
             return 1
         fi
