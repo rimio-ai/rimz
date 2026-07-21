@@ -74,7 +74,7 @@ RUN --mount=type=secret,id=github_token,required=false \
       sccache@${SCCACHE_VERSION}; \
     cargo install --locked cargo-vet@${CARGO_VET_VERSION}
 
-# Bake a warm RustSec advisory DB so the Gitea deny gate reads it locally
+# Bake a warm RustSec advisory DB so the deny gate reads it locally
 # (`cargo deny --offline check`) instead of cloning per run. The per-run
 # clone is the source of flaky FETCH_HEAD failures. CARGO_HOME above puts it at
 # /usr/local/cargo/advisory-dbs, where the runtime gate resolves it.
@@ -130,7 +130,7 @@ RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
  && uv python install "${PYTHON_VERSION}" --default \
  && python3 --version
 
-# Bake the Cargo registry/index into the image so Gitea PR jobs can skip a
+# Bake the Cargo registry/index into the image so PR jobs can skip a
 # shared writable rust-cache restore and fetch only lockfile drift.
 COPY Cargo.toml Cargo.lock /tmp/registry-warm/
 COPY crates/ /tmp/registry-warm/crates/
