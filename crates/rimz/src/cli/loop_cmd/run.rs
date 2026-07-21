@@ -314,6 +314,7 @@ fn execute_prepared_delivery(
                 enter: true,
                 gate: DeliveryGate::Done,
                 force: false,
+                // Domain dispatch resolves this from [harness] smart_compact.
                 auto_compact: None,
                 not_before: None,
                 after: Vec::new(),

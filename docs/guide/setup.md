@@ -147,7 +147,7 @@ A turn that dies mid-flight — a rate limit, a spend limit, a provider overload
 smart_compact = "200k"   # occupied-token count; a percentage of the window such as "70%" works too
 ```
 
-`smart_compact` makes `rimz message` compact-first: when the target agent's context window has reached the threshold, RimZ submits the agent's `/compact` ahead of your text so the prompt lands against a fresh window instead of dying at the context ceiling. Unset, compaction stays opt-in per send through `rimz message --smart-compact`. The mechanics are in [message internals → Smart compaction](../internals/harness/messaging.md#smart-compaction).
+`smart_compact` makes `rimz message` sends and scheduled loop wakes compact-first: when the target agent's context window has reached the threshold, RimZ submits the agent's `/compact` ahead of the text so the prompt lands against a fresh window instead of dying at the context ceiling. Unset, compaction stays opt-in per message through `rimz message --smart-compact`. The mechanics are in [message internals → Smart compaction](../internals/harness/messaging.md#smart-compaction).
 
 ### Put a turn on a schedule
 

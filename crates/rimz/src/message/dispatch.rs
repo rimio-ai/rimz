@@ -40,12 +40,16 @@ pub enum DispatchMode {
     Steer {
         enter: bool,
         force: bool,
+        /// An explicit threshold for this dispatch; `None` inherits the
+        /// `[harness] smart_compact` machine default in [`dispatch`].
         auto_compact: Option<AutoCompact>,
     },
     Boundary {
         enter: bool,
         gate: DeliveryGate,
         force: bool,
+        /// An explicit threshold for this dispatch; `None` inherits the
+        /// `[harness] smart_compact` machine default in [`dispatch`].
         auto_compact: Option<AutoCompact>,
         not_before: Option<Timestamp>,
         after: Vec<String>,
@@ -69,6 +73,13 @@ impl DispatchMode {
         match self {
             Self::Steer { force, .. } | Self::Boundary { force, .. } => *force,
         }
+    }
+
+    fn resolve_auto_compact(&mut self, default: Option<AutoCompact>) {
+        let auto_compact = match self {
+            Self::Steer { auto_compact, .. } | Self::Boundary { auto_compact, .. } => auto_compact,
+        };
+        *auto_compact = (*auto_compact).or(default);
     }
 
     fn needs_agent_context(&self) -> bool {
@@ -207,8 +218,13 @@ pub enum DispatchErr {
 pub fn dispatch(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    request: DispatchRequest,
+    mut request: DispatchRequest,
 ) -> Result<DispatchResult> {
+    request.mode.resolve_auto_compact(
+        crate::config::MachineConfig::load_lenient()
+            .harness
+            .smart_compact,
+    );
     let boundary = !request.mode.steer();
     let mut pending = if boundary {
         store.list_messages()?

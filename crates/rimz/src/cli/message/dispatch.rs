@@ -139,7 +139,6 @@ fn dispatch_mode(
     smart_compact: Option<AutoCompact>,
 ) -> Result<DispatchMode> {
     let machine_config = crate::cli::machine_config();
-    let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
     let SendKind::Boundary {
         gate,
         schedule,
@@ -150,7 +149,7 @@ fn dispatch_mode(
         return Ok(DispatchMode::Steer {
             enter,
             force,
-            auto_compact,
+            auto_compact: smart_compact,
         });
     };
     if create {
@@ -169,7 +168,7 @@ fn dispatch_mode(
         enter,
         gate,
         force,
-        auto_compact,
+        auto_compact: smart_compact,
         not_before: schedule
             .as_deref()
             .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))

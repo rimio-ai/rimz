@@ -119,8 +119,8 @@ pub struct HarnessConfig {
     /// Default local-calendar-day cap for one room's whole agent fleet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<DayCap>,
-    /// Compact before `message` sends when the agent's context window
-    /// has reached this threshold. Unset keeps compact-first sends opt-in.
+    /// Compact before messages and scheduled loop wakes when the agent's
+    /// context window has reached this threshold. Unset keeps compaction opt-in.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

@@ -11,7 +11,8 @@ use rimz::agents::{
 };
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
 use rimz::message::{
-    DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus, WhenCondition,
+    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
+    WhenCondition,
 };
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
 
@@ -2025,6 +2026,27 @@ fn steer_auto_compact_runs_before_a_full_window() {
             ..
         } if kind.as_str() == "claude" && agent_id == "sess-ac" && label == "@claude"
     ));
+}
+
+#[test]
+fn message_inherits_smart_compact_default() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-ac-default", "feature-ac-default", &[]);
+    run_success(
+        env.rimz()
+            .args(["config", "set", "harness.smart_compact", "70%"]),
+        "set smart compact default",
+    );
+
+    queue_add(&env, "@claude", "inherit compact threshold");
+
+    let messages = env
+        .store()
+        .list_pending_messages()
+        .expect("pending messages");
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0].auto_compact, Some(AutoCompact::Percent(70)));
 }
 
 #[test]
