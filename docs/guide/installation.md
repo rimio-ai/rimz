@@ -31,7 +31,7 @@ Pass `RIMZ_INSTALL_DIR` or `RIMZ_VERSION` to the `sh` command on the right side 
 brew install rimio-ai/rimz/rimz
 ```
 
-Homebrew adds the `rimio-ai/rimz` tap automatically. `brew upgrade rimz` picks up new releases. The install script reaches this path automatically on macOS when its Homebrew delegation conditions hold.
+Homebrew adds the `rimio-ai/rimz` tap automatically. Run `rimz update` to refresh formula data and upgrade `rimio-ai/rimz/rimz`. The install script reaches this path automatically on macOS when its Homebrew delegation conditions hold.
 
 ## Install a prebuilt binary
 
