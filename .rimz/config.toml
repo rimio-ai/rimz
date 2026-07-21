@@ -1,18 +1,3 @@
-# RimZ's own scheduled loops - shared, trust-hashed project loop tasks.
-# `rimz trust grant` applies them; the sidebar elder fires them while a room
-# for this repo is open. Reference: docs/guide/configuration.md.
-
-[tasks.morning-claude-ping]
-agent = "claude-ping"
-prompt = "ping"
-at = "08:00"
-every = "day"
-
-[tasks.morning-codex-ping]
-agent = "codex-ping"
-prompt = "ping"
-at = "08:00"
-every = "day"
 
 # Keeps main synced with origin; assumes push rights on the remote.
 [tasks.sync-repo-rimz]
