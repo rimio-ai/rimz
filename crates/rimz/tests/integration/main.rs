@@ -24,6 +24,8 @@ mod doctor;
 mod examples;
 mod gc;
 mod hooks;
+#[cfg(unix)]
+mod install_script;
 mod journey;
 mod list;
 mod list_pets;

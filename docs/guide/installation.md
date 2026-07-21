@@ -19,7 +19,9 @@ The multiplexer needs no configuration for RimZ: every room sets its own options
 curl -fsSL https://raw.githubusercontent.com/rimio-ai/rimz/main/scripts/install.sh | sh
 ```
 
-The script detects the platform, downloads the latest release, verifies it against `SHA256SUMS`, and installs RimZ to `/usr/local/bin` when that directory is writable or `~/.local/bin` otherwise. Interactive terminals show a short control-room boot animation; non-interactive terminals, redirected output, `NO_COLOR`, and `TERM=dumb` use the same plain progress output.
+The script detects the platform. On macOS, a latest-release install delegates to the Homebrew tap when `brew` is available, which puts RimZ on the same package-manager path as future upgrades and removal. A `RIMZ_VERSION` other than `latest`, `RIMZ_INSTALL_DIR`, an existing non-Homebrew `rimz` on `PATH`, or `RIMZ_NO_BREW=1` keeps the direct-download path; a failed Homebrew install also falls back to the release download.
+
+The direct path downloads the release, verifies it against `SHA256SUMS`, and installs RimZ to `/usr/local/bin` when that directory is writable or `~/.local/bin` otherwise. Interactive terminals show a short control-room boot animation; non-interactive terminals, redirected output, `NO_COLOR`, and `TERM=dumb` use the same plain progress output.
 
 Pass `RIMZ_INSTALL_DIR` or `RIMZ_VERSION` to the `sh` command on the right side of the pipe to choose the destination or install a specific tag such as `v0.3` or the rolling `latest-main` build. Unsupported prebuilt platforms, including ARM Linux and musl Linux, are directed to the [Cargo install](#install-with-cargo).
 
@@ -29,7 +31,7 @@ Pass `RIMZ_INSTALL_DIR` or `RIMZ_VERSION` to the `sh` command on the right side 
 brew install rimio-ai/rimz/rimz
 ```
 
-Homebrew adds the `rimio-ai/rimz` tap automatically. `brew upgrade rimz` picks up new releases.
+Homebrew adds the `rimio-ai/rimz` tap automatically. `brew upgrade rimz` picks up new releases. The install script reaches this path automatically on macOS when its Homebrew delegation conditions hold.
 
 ## Install a prebuilt binary
 
@@ -82,7 +84,7 @@ Whichever install path you chose, update it from the same command:
 rimz update
 ```
 
-`rimz update` detects the current binary's install path. A Homebrew install runs `brew upgrade rimz`, and a Cargo install runs `cargo install --locked rimz`. Script and manually installed prebuilt binaries download the matching release archive, verify it against `SHA256SUMS`, extract only the RimZ binary, require its `--version` smoke test to pass, then atomically replace the current binary in place. When the binary changes, the new build runs `rimz reload` so live sidebars and held stats dashboards converge immediately.
+`rimz update` detects the current binary's install path. A Homebrew install, including a macOS script install that delegated to Homebrew, runs `brew upgrade rimz`, and a Cargo install runs `cargo install --locked rimz`. Direct-download script and manually installed prebuilt binaries download the matching release archive, verify it against `SHA256SUMS`, extract only the RimZ binary, require its `--version` smoke test to pass, then atomically replace the current binary in place. When the binary changes, the new build runs `rimz reload` so live sidebars and held stats dashboards converge immediately.
 
 Pass `--version <TAG>` to install a standalone release such as `v0.3.1`, roll back to an older tag, or follow the rolling `latest-main` build. Cargo accepts numbered release tags and normalizes short tags such as `v0.3` to `0.3.0`; crates.io has no `latest-main` build. Homebrew owns its selected formula version, so pin a standalone install through the install script instead.
 

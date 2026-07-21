@@ -120,6 +120,8 @@ rimz agents 'vim,claude+term' --worktree=feat-y  # editor, agent, shell in one t
 rimz remote connect dev-box:~/code/query-engine
 ```
 
+On macOS, the default latest-release script install uses Homebrew automatically when `brew` is available.
+
 Hooks install on the first `rimz` run, with your consent and a diff preview. → [set up your machine](./docs/guide/setup.md) · [enable dynamic shell completion](./docs/guide/setup.md#shell-completion)
 
 ## Everyday moves
@@ -245,6 +247,8 @@ Both are off by default, and setting one back to `false` undoes it. The [remote 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/rimio-ai/rimz/main/scripts/install.sh | sh
 ```
+
+On macOS, the default latest-release script install uses Homebrew automatically when `brew` is available.
 
 `homebrew`:
 
