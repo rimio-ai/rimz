@@ -4,6 +4,14 @@ use ratatui::backend::TestBackend;
 use super::*;
 
 #[test]
+fn gallery_column_cap_uses_launch_width_boundary() {
+    assert_eq!(gallery_column_cap(0), 3);
+    assert_eq!(gallery_column_cap(240), 3);
+    assert_eq!(gallery_column_cap(241), 4);
+    assert_eq!(gallery_column_cap(300), 4);
+}
+
+#[test]
 fn render_gallery_draws_delimiters_between_columns() {
     let alpha = gallery_snapshot("alpha-room", "agent-alpha", "claude");
     let bravo = gallery_snapshot("bravo-room", "agent-bravo", "codex");
