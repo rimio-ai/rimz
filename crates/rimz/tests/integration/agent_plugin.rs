@@ -50,7 +50,7 @@ fn plugin_scaffold_registry_doctor_and_start_validation_work_end_to_end() {
     assert!(output.status.success(), "coverage failed");
     let report: Value = serde_json::from_slice(&output.stdout).expect("coverage json");
     assert!(
-        report["coverage"]["agents"]
+        report["capabilities"]["agents"]
             .as_array()
             .is_some_and(|agents| agents.iter().any(|kind| kind == "testbot")),
         "plugin missing from coverage: {report}"
