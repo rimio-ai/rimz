@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -96,16 +97,11 @@ pub(in crate::backend::zellij) fn focus_attached_client_pane_until(
     }
 }
 
-/// How long the client view has to name the target pane. A repair restores
-/// focus by dispatching `focus-pane-id` through its own Zellij client and
-/// returns without waiting for the attached client to catch up, so the view
-/// settles some time after the reconcile call does.
-const FOCUS_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a typed marker has to surface in the target pane's buffer.
 const INPUT_DELIVERY_TIMEOUT: Duration = Duration::from_secs(10);
-/// Cadence for re-reading the client view and retyping the marker. Each read
-/// spawns a `zellij action list-clients` client of its own, so sample on a
-/// human-scale beat rather than on every capture poll.
+/// Cadence for re-reading the client view and retyping the marker. Requiring a
+/// second delivery after this interval proves that routing settled rather than
+/// merely crossing the target during the relayout.
 const MARKER_RETYPE_INTERVAL: Duration = Duration::from_millis(500);
 /// Capture depth for the marker search. A `stack-panes` repair leaves every
 /// unfocused stack member one row tall, which pushes an already-echoed marker
@@ -114,12 +110,12 @@ const MARKER_CAPTURE_LINES: u16 = 200;
 
 /// Assert that what the attached client types lands in `want`.
 ///
-/// Delivery is a two-stage property, and each stage settles on the mux's own
-/// clock: the client view has to name the pane, and a keystroke typed into the
-/// PTY has to reach that pane's buffer. Wait for the view first so a marker is
-/// only ever typed at a pane the client is actually focused on, then retype it
-/// while that holds — a single keystroke racing a relayout is delivered to
-/// whichever pane the repair left focused, and is unrecoverable once lost.
+/// Routed input and target capture are the decision channel. Zellij can route a
+/// `focus-pane-id` action before `list-clients` publishes a causally matching
+/// view, so the client view is advisory: it keeps test text away from sidebar
+/// panes and supplies failure context, but it does not gate on naming `want`.
+/// Two captured markers separated by [`MARKER_RETYPE_INTERVAL`] prove that the
+/// client settled on the target instead of crossing it during the relayout.
 pub(in crate::backend::zellij) fn assert_client_input_reaches_pane(
     xdg: &Path,
     session: &str,
@@ -129,46 +125,55 @@ pub(in crate::backend::zellij) fn assert_client_input_reaches_pane(
 ) {
     let pane_id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{want}"));
     let backend = ZellijBackend::with_runtime_dir(xdg);
-    super::actions::poll_until(
-        FOCUS_SETTLE_TIMEOUT,
-        || client_viewed_panes(&backend, session),
-        |viewed| viewed.contains(&pane_id),
-        &format!("the client view in {session} to settle on {context} ({pane_id})"),
-    );
+    let work_panes: HashSet<_> = super::panes::PaneSnapshot::expect(xdg, session)
+        .panes
+        .iter()
+        .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+        .map(|pane| pane.pane_ref(session).pane_id)
+        .collect();
 
     let deadline = Instant::now() + INPUT_DELIVERY_TIMEOUT;
     let marker = format!("rimz-routed-{}", uuid::Uuid::now_v7().simple());
-    send_line(&marker);
-    let mut sampled_at = Instant::now();
+    let markers = [marker.clone(), format!("{marker}-confirmed")];
+    let mut marker_index = 0;
+    let mut next_sample_at = Instant::now();
     let mut last_capture = String::new();
     let mut last_view = Vec::new();
-    let mut last_error = String::new();
+    let mut last_capture_error = String::new();
+    let mut last_view_error = String::new();
     loop {
+        if Instant::now() >= next_sample_at {
+            next_sample_at = Instant::now() + MARKER_RETYPE_INTERVAL;
+            match client_viewed_panes(&backend, session) {
+                Ok(viewed) => {
+                    if viewed.iter().any(|pane| work_panes.contains(pane)) {
+                        send_line(&markers[marker_index]);
+                    }
+                    last_view = viewed;
+                    last_view_error.clear();
+                }
+                Err(err) => last_view_error = err,
+            }
+        }
         match backend.capture_pane(&pane_id, Some(MARKER_CAPTURE_LINES), false) {
             Ok(capture) => {
-                if capture.raw_text.contains(&marker) {
-                    return;
+                if capture.raw_text.contains(&markers[marker_index]) {
+                    if marker_index + 1 == markers.len() {
+                        return;
+                    }
+                    marker_index += 1;
+                    next_sample_at = Instant::now() + MARKER_RETYPE_INTERVAL;
                 }
                 last_capture = capture.raw_text;
+                last_capture_error.clear();
             }
-            Err(err) => last_error = err.to_string(),
+            Err(err) => last_capture_error = err.to_string(),
         }
         if Instant::now() >= deadline {
             panic!(
-                "attached input did not reach {context} ({pane_id}) in {session}; marker: {marker}; last client view: {last_view:?}; last capture: {last_capture:?}; last error: {last_error}"
+                "attached input did not settle on {context} ({pane_id}) in {session}; pending marker: {}; last client view: {last_view:?}; last capture: {last_capture:?}; last view error: {last_view_error}; last capture error: {last_capture_error}",
+                markers[marker_index],
             );
-        }
-        if sampled_at.elapsed() >= MARKER_RETYPE_INTERVAL {
-            sampled_at = Instant::now();
-            match client_viewed_panes(&backend, session) {
-                Ok(viewed) => {
-                    if viewed.contains(&pane_id) {
-                        send_line(&marker);
-                    }
-                    last_view = viewed;
-                }
-                Err(err) => last_error = err,
-            }
         }
         std::thread::sleep(Duration::from_millis(50));
     }
