@@ -68,18 +68,18 @@ A `--check` with no agent action is still worth having. It is a scheduled comman
 
 `--check` gates firing; `--verify` gates completion. Add `--verify "cargo test"` to a scheduled `--agent` task when the command is the definition of done: a red result returns its evidence to the same live session, up to `--max-attempts` total turns, before the fire records `verify failed`. It behaves exactly as it does on a hand-run `-p`, described in full under [verify and retry](./scripting.md#verify-and-retry).
 
-## Soak up the weekly surplus
+## Gate a task on surplus
 
-The weekly subscription window expires whether you use it or not: whatever is left on the `7d` bar at the weekly reset is capacity you paid for and gave back. A recurring background task can absorb it: refactoring, filling test gaps, and dependency triage are all real work with no deadline. Scheduled blindly, though, that task drains the same window your daytime sessions run on. It should fire only when the week is ahead of pace.
+Recurring background work is the natural fill for a loop: refactor the next rough module, close test gaps, triage dependencies. All of it is real work, and none of it is urgent, which is exactly why it must never crowd out the work that is. A background task draws on the same subscription window as your own sessions, and a schedule cannot tell a flush week from a crunch: fired blindly through a heavy week, the 03:00 task spends the budget your Tuesday afternoon needed. So the safe habit has been to run background work by hand, after a glance at the `7d` bar shows slack, or to not schedule it at all.
 
-`--surplus` is that condition. Before each fire, RimZ reads the provider's longest pacing window and computes forward headroom, how far ahead of the sustainable pace the window is running: `1.0x` is exactly on pace, and `1.5x` means half again as much budget remains as the clock requires. Which window counts as the pacing window is per provider, and the headroom model, a worked example, and the fail-closed rules live in [budgets → spend the provider surplus](./budget.md#spend-the-provider-surplus).
+`--surplus` puts that glance in the schedule, so the task runs only on budget your own work will not miss. Before each fire, RimZ reads the provider's pacing window and computes forward headroom, how far ahead of the sustainable pace the window is running: `1.0x` is exactly on pace, and `1.5x` means half again as much budget remains as the clock requires. Which window counts as the pacing window is per provider, and the headroom model, a worked example, and the fail-closed rules live in [budgets → the surplus gate](./budget.md#the-surplus-gate).
 
 ```sh
-rimz loop add refactor-soak --agent claude --prompt "Refactor the next rough module and leave the branch green" \
+rimz loop add refactor --agent claude --prompt "Refactor the next rough module and leave the branch green" \
     --every 4h --surplus 1.5x --surplus-after 3d
 ```
 
-`--surplus 1.5x` opens the gate only at that headroom or above; `--surplus-after 3d` keeps the task quiet until three days of the window have elapsed, so an untouched early week is not spent before your own heavy days land (used alone, it still requires `1.0x`). The gate guards `--agent` and `--wake` actions alike and runs before any `--check` guard, so a closed gate runs nothing and costs nothing: the fire records `surplus skipped` without adding a strike, and the recurring schedule keeps polling until real surplus appears. An account without a window reading (an API key, or a window that has not started) keeps the gate closed.
+`--surplus 1.5x` opens the gate only at that headroom or above; `--surplus-after 3d` keeps the task quiet until three days of the window have elapsed, so an untouched early week is not spent before your own heavy days land (used alone, it still requires `1.0x`). The gate guards `--agent` and `--wake` actions alike and runs before any `--check` guard, so a closed gate runs nothing and costs nothing: the fire records `surplus skipped` without adding a strike, and the recurring schedule keeps polling until real slack appears. An account without a window reading (an API key, or a window that has not started) keeps the gate closed, so when RimZ cannot see your headroom, the background task yields.
 
 ## What a task does on your machine
 
@@ -109,7 +109,7 @@ rimz config set harness.smart_compact 200k    # compact before a message once co
 
 ### Auto-continue
 
-A turn that dies on a rate limit or an API failure parks its agent: the card shows `⏸`, and the work waits for someone to type `continue`. Auto-continue is that someone. Its policy is three decisions: what counts as evidence, which clock schedules the resume, and when to stop trying.
+A turn that dies on a rate limit or an API failure parks its agent: the card shows `⏸`, and the work stops until someone types `continue`. At your desk that is one keystroke. Away from it, it is a vigil: you check the panes every so often to catch the park, or find at breakfast that the fleet has been idle since 1 a.m. Auto-continue stands that vigil for you, and its policy is three decisions: what counts as evidence, which clock schedules the resume, and when to stop trying.
 
 The evidence is a provider-certified marker: the structured per-turn failure record the agent's own CLI writes when a turn dies, naming the cause. That marker is the one input the decision reads, so every automatic resume traces back to the provider's own account of why the agent stopped, and every other kind of stop stays parked for your judgment. The marker comes from each agent's adapter, which makes auto-continue a per-agent capability; [agent support](../reference/agent-support.md#notes-on-the-alpha-and-experimental-set) states it per agent.
 
@@ -124,7 +124,7 @@ The ramp and retry keys are in [configuration.md → Resume](./configuration.md#
 
 ### Auto-redeem
 
-A Codex plan grants reset credits, and redeeming one instantly refills a spent usage window. Their value is all timing: redeemed just before the window's natural reset, a credit buys minutes; redeemed the moment a spent window blocks a night of work, it buys hours. Auto-redeem makes that timing call by four rules, and each redemption's record (`rimz stats --assists`) names the rule that fired, in the same words as below:
+A Codex plan grants reset credits: redeem one and a spent usage window refills on the spot. Managed by hand, they leak value at both ends. A credit you forget expires unspent, capacity paid for and lost; a credit you hold while a spent window parks the fleet is a night of work standing still. And the timing that separates a good redemption from a wasted one is a real judgment call: redeemed just before the window's natural reset, a credit buys minutes; redeemed the moment a spent window blocks a night of work, it buys hours. Auto-redeem makes that call by four rules, and each redemption's record (`rimz stats --assists`) names the rule that fired, in the same words as below:
 
 - Expiry rescue. A credit within thirty minutes of expiring is spent rather than lost. This is the one rule that runs even with `auto_redeem` off: the capacity is already paid for.
 - Blocked gain. A window is spent and its natural reset is at least `resume.auto_redeem_min_gain` away (twelve hours by default). A credit now recovers those hours, so it redeems immediately; a nearer reset means waiting is cheaper than spending.
@@ -135,7 +135,11 @@ The reflex fails closed and paces itself. Every rule starts from a credit in han
 
 ### Smart compaction
 
-Past the threshold you set, RimZ submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact` (a token count like `200k` or a percentage like `70%`), or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
+Every agent CLI already compacts. `/compact` is the manual command: summarize the conversation and carry on against a fresh window. Auto-compaction is its fallback, firing on its own when the context window hits the ceiling, wherever the work happens to stand. Driving one agent by hand, you preempt the fallback without thinking about it: a task wraps up, you type `/compact` at the clean boundary, and the summary hands a finished state to whatever comes next.
+
+In a fleet, most prompts arrive with no human there to make that call. A reviewer sends comments back to a coder sitting at 90% context; the coder takes the message, edits two files, hits the ceiling, and the automatic summary captures a half-changed tree mid-fix. Smart compaction restores the by-hand habit at the same spot. When a `rimz message` is about to land, yours or another agent's, and the receiver's context has passed your threshold, RimZ submits the agent's own `/compact` first, the exact command you would have typed, then delivers the text against the fresh window. A message boundary is the strongest checkpoint available: the previous task has ended and the next has not begun, so the summary is a handover rather than a snapshot of work in flight.
+
+Set the default once with `harness.smart_compact`, an occupied-token count like `200k` or a percentage like `70%`, and every message send inherits it; or leave it unset and pass `--smart-compact` per send. The threshold grammar and delivery mechanics are in [messaging.md → land against a fresh window](./messaging.md#land-against-a-fresh-window).
 
 ### Two brakes on hands-off work
 
@@ -159,7 +163,7 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 
 Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
 
-The turn itself takes the launch-shaping flags you already know from [the agents guide](./fleet.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--surplus` and `--surplus-after` gate fires on the provider's window headroom ([above](#soak-up-the-weekly-surplus)), `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. A scheduled agent turn without `--timeout` receives the machine's `loop.default-timeout`, two hours by default; manual `rimz loop fire` remains unbounded unless the task sets its own timeout. Inspect, test, and manage tasks with the rest of the surface:
+The turn itself takes the launch-shaping flags you already know from [the agents guide](./fleet.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--surplus` and `--surplus-after` gate fires on the provider's window headroom ([above](#gate-a-task-on-surplus)), `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. A scheduled agent turn without `--timeout` receives the machine's `loop.default-timeout`, two hours by default; manual `rimz loop fire` remains unbounded unless the task sets its own timeout. Inspect, test, and manage tasks with the rest of the surface:
 
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run
