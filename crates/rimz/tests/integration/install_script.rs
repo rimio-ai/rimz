@@ -78,6 +78,10 @@ esac
     let stderr = String::from_utf8(output.stderr).expect("utf-8 installer output");
     assert!(stderr.contains("Installing RimZ with Homebrew"));
     assert!(stderr.contains("rimz 0.5.0"));
+    assert!(stderr.contains(&format!(
+        "Installed RimZ to {}/bin/rimz",
+        brew_root.display()
+    )));
     assert!(!stderr.contains("Downloading RimZ"));
     assert!(!stderr.contains("Add RimZ to your PATH"));
     assert_eq!(
@@ -98,7 +102,9 @@ esac
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("utf-8 fallback output");
     assert!(stderr.contains("simulated brew failure"));
-    assert!(stderr.contains("Homebrew install failed; falling back to the release download"));
+    assert!(stderr.contains(
+        "Homebrew install failed (brew install exited unsuccessfully); falling back to the release download"
+    ));
     assert!(stderr.contains("Downloading RimZ latest for aarch64-apple-darwin"));
 }
 
