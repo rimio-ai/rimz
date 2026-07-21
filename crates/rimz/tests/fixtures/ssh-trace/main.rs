@@ -13,6 +13,8 @@
 //! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
 //! `$RIMZ_TEST_SSH_MASTER_READY_PLAN` controls whether each successful master
 //! publishes the control socket marker before parking.
+//! `$RIMZ_TEST_SSH_MASTER_EXIT_PLAN` and `$RIMZ_TEST_SSH_MASTER_EXIT_MS`
+//! script established ControlMaster exits.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -39,6 +41,9 @@ fn main() {
     }
 
     if is_forward_control(&argv) {
+        if env::var_os("RIMZ_TEST_SSH_TUNNEL_PLAN").is_some() {
+            run_web_control_forward();
+        }
         return;
     }
 
@@ -178,6 +183,15 @@ fn run_web_tunnel(argv: &[String]) -> ! {
     exit_from_plan("RIMZ_TEST_SSH_TUNNEL_PLAN");
 }
 
+fn run_web_control_forward() -> ! {
+    if let Ok(ms) = env::var("RIMZ_TEST_SSH_TUNNEL_READY_MS")
+        && let Ok(ms) = ms.parse::<u64>()
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+    exit_from_plan("RIMZ_TEST_SSH_TUNNEL_PLAN");
+}
+
 fn run_control_master() -> ! {
     if let Ok(stderr) = env::var("RIMZ_TEST_SSH_MASTER_STDERR") {
         let mut stream = std::io::stderr().lock();
@@ -195,6 +209,12 @@ fn run_control_master() -> ! {
         .unwrap_or(true);
     if publish_ready {
         publish_control_master_if_requested();
+    }
+    if let Ok(ms) = env::var("RIMZ_TEST_SSH_MASTER_EXIT_MS")
+        && let Ok(ms) = ms.parse::<u64>()
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        exit_from_plan("RIMZ_TEST_SSH_MASTER_EXIT_PLAN");
     }
     loop {
         std::thread::park_timeout(std::time::Duration::from_secs(60));

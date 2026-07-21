@@ -164,7 +164,7 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
     render_web_token(remote, token, &mut credential, true);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
-    let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port, None);
+    let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
     let mut tunnel = RemoteTunnel::start(&spec, remote.target.host_display())?;
     match tunnel.wait_until_ready(local_port)? {
         PortWait::Ready => {}
@@ -295,17 +295,29 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
             }
         };
         let token = relay_web_token(remote, payload.engine, round_control);
-        let spec = rimz::remote::web::web_tunnel_spec(
-            &remote.target,
-            local_port,
-            payload.port,
-            round_control,
-        );
-        let mut tunnel = RemoteTunnel::start(&spec, host)?;
-        let port_ready = match tunnel.wait_until_ready(local_port)? {
+        let mut tunnel = if round_control.is_some() {
+            None
+        } else {
+            let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
+            Some(RemoteTunnel::start(&spec, host)?)
+        };
+        let readiness = match (round_control, tunnel.as_mut()) {
+            (Some(control), None) => establish_control_forward(
+                &rimz::remote::web::web_control_forward_spec(
+                    &remote.target,
+                    local_port,
+                    payload.port,
+                    control,
+                ),
+                host,
+            )?,
+            (None, Some(tunnel)) => tunnel.wait_until_ready(local_port)?,
+            _ => unreachable!("web tunnel kind follows ControlMaster availability"),
+        };
+        let port_ready = match readiness {
             PortWait::Ready => true,
             PortWait::Exited(exit_code) => {
-                if exit_code == Some(0) {
+                if exit_code == Some(0) && !master_confirmed {
                     bail!("web tunnel exited before local port accepted connections");
                 }
                 match web_exit_action(
@@ -349,7 +361,13 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         }
         outage = None;
 
-        let exit_code = tunnel.wait_for_exit()?;
+        let exit_code = match tunnel.as_mut() {
+            Some(tunnel) => tunnel.wait_for_exit()?,
+            None => master
+                .as_mut()
+                .context("remote web ControlMaster is not running")?
+                .wait_for_exit()?,
+        };
         match web_exit_action(
             settle_web_exit(&mut reconnect, exit_code, master_confirmed, port_ready),
             host,
@@ -529,6 +547,20 @@ fn write_web_token_error(host: &str, engine: rimz::web::WebEngine, detail: &str)
 enum WebPrepOutcome {
     Ready(Vec<u8>),
     TransportFailure,
+}
+
+fn establish_control_forward(spec: &rimz::mux::CommandSpec, host: &str) -> Result<PortWait> {
+    let status = spec
+        .to_command()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .status()
+        .with_context(|| format!("starting web tunnel to {host}"))?;
+    if status.success() {
+        Ok(PortWait::Ready)
+    } else {
+        Ok(PortWait::Exited(status.code()))
+    }
 }
 
 fn run_web_prep(
