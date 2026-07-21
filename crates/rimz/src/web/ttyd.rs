@@ -7,20 +7,18 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::config::MachineConfig;
 use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
-use super::{
-    CredentialCommand, CredentialOutcome, CredentialSummary, DaemonRecord, Result,
-    WebAccessOutcome, WebCredential, WebErr, WebOpenPayload, WebWarning, normalized_base_url,
-};
-use super::{colors::WebClientColors, fonts::FontFace};
+use super::{CredentialSummary, Result, WebCredential, WebErr, WebWarning};
+
+mod client;
+
+use client::ClientProfile;
 
 const TTYD_BIN_ENV: &str = "RIMZ_TTYD_BIN";
 const CREDENTIAL_FILE: &str = "web-ttyd-credential.json";
@@ -28,10 +26,6 @@ const DAEMON_FILE: &str = "web-ttyd.json";
 const DAEMON_LOCK_FILE: &str = "web-ttyd.lock";
 const LEGACY_INSTANCE_DIR: &str = "web-ttyd";
 const START_TIMEOUT: Duration = Duration::from_secs(5);
-const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
-const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
-const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
-const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v3";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct TtydCredential {
@@ -40,17 +34,35 @@ pub(super) struct TtydCredential {
     secret: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct DaemonRecord {
+    pub(super) pid: u32,
+    pub(super) port: u16,
+}
+
+pub(super) struct RunningDaemon {
+    pub(super) pid: u32,
+    pub(super) port: u16,
+    pub(super) credential: WebCredential,
+    pub(super) warnings: Vec<WebWarning>,
+}
+
+pub(super) struct DaemonInspection {
+    pub(super) port: u16,
+    pub(super) credential: Option<WebCredential>,
+}
+
+pub(super) struct CredentialRotation {
+    pub(super) credential: WebCredential,
+    pub(super) restarted: bool,
+    pub(super) warnings: Vec<WebWarning>,
+}
+
 #[derive(Debug, Deserialize)]
 struct LegacyTtydInstance {
     session: String,
     pid: u32,
     port: u16,
-}
-
-#[derive(Clone, Debug, Default)]
-struct TtydClientProfile {
-    args: Vec<String>,
-    warnings: Vec<WebWarning>,
 }
 
 pub(super) fn preflight() -> Result<()> {
@@ -80,13 +92,9 @@ pub(super) fn version_at(program: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(text).trim().to_owned())
 }
 
-pub(super) fn open_session(
-    session: &str,
-    config: &MachineConfig,
-    may_start: bool,
-) -> Result<WebAccessOutcome> {
-    let (record, credential, warnings) = if may_start {
-        ensure_daemon(config)?
+pub(super) fn open_daemon(config: &MachineConfig, may_start: bool) -> Result<RunningDaemon> {
+    if may_start {
+        ensure_daemon(config)
     } else {
         let _guard = acquire_daemon_lock()?;
         let Some(record) = daemon_status_locked()? else {
@@ -95,62 +103,24 @@ pub(super) fn open_session(
         let Some(credential) = read_credential()? else {
             return Err(WebErr::TtydCredentialMissing);
         };
-        (record, basic_auth(&credential), Vec::new())
-    };
-    let base_url = normalized_base_url(config.web.base_url.as_deref(), record.port);
-    Ok(WebAccessOutcome {
-        payload: WebOpenPayload::for_session(session, base_url, record.port, Some(credential)),
-        warnings,
-    })
+        Ok(running_daemon(record, credential, Vec::new()))
+    }
 }
 
-pub(super) fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
+pub(super) fn inspect_daemon(config: &MachineConfig) -> Result<DaemonInspection> {
     let _guard = acquire_daemon_lock()?;
     let daemon = daemon_status_locked()?;
     let port = daemon.map_or(config.web.port, |record| record.port);
     let credential = read_credential()?.map(|credential| basic_auth(&credential));
-    let base_url = normalized_base_url(config.web.base_url.as_deref(), port);
-    Ok(WebOpenPayload::for_session(
-        session, base_url, port, credential,
-    ))
+    Ok(DaemonInspection { port, credential })
 }
 
-pub(super) fn credential(
-    command: CredentialCommand,
-    config: &MachineConfig,
-) -> Result<CredentialOutcome> {
+pub(super) fn credential_summary() -> Result<Option<CredentialSummary>> {
     let _guard = acquire_daemon_lock()?;
-    match command {
-        CredentialCommand::Create { read_only: true } => Err(WebErr::TtydReadOnlyCredential),
-        CredentialCommand::Create { read_only: false } => {
-            let (credential, restarted_instances, warnings) = rotate_credential(config)?;
-            Ok(CredentialOutcome::Rotated {
-                credential: basic_auth(&credential),
-                restarted_instances,
-                warnings,
-            })
-        }
-        CredentialCommand::List => Ok(CredentialOutcome::Listed(
-            read_credential()?
-                .into_iter()
-                .map(|credential| CredentialSummary {
-                    name: credential.name,
-                    created_at: credential.created_at,
-                })
-                .collect(),
-        )),
-        CredentialCommand::Revoke { name } => {
-            if name != "rimz" {
-                return Err(WebErr::TtydCredentialNotFound { name });
-            }
-            Ok(CredentialOutcome::Revoked {
-                stopped_instances: revoke_credential()?,
-            })
-        }
-        CredentialCommand::RevokeAll => Ok(CredentialOutcome::Revoked {
-            stopped_instances: revoke_credential()?,
-        }),
-    }
+    Ok(read_credential()?.map(|credential| CredentialSummary {
+        name: credential.name,
+        created_at: credential.created_at,
+    }))
 }
 
 fn basic_auth(credential: &TtydCredential) -> WebCredential {
@@ -182,9 +152,7 @@ fn clear_credential() -> Result<bool> {
     remove_optional(&credential_path())
 }
 
-pub(super) fn ensure_daemon(
-    config: &MachineConfig,
-) -> Result<(DaemonRecord, WebCredential, Vec<WebWarning>)> {
+pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<RunningDaemon> {
     let _guard = acquire_daemon_lock()?;
     reap_legacy_instances();
     let daemon = daemon_status_locked()?;
@@ -192,9 +160,9 @@ pub(super) fn ensure_daemon(
         && record.port == config.web.port
         && let Some(credential) = read_credential()?
     {
-        return Ok((record.clone(), basic_auth(&credential), Vec::new()));
+        return Ok(running_daemon(record.clone(), credential, Vec::new()));
     }
-    preflight()?;
+    let program = program()?;
     if daemon
         .as_ref()
         .is_none_or(|record| record.port != config.web.port)
@@ -205,9 +173,22 @@ pub(super) fn ensure_daemon(
         stop_record(&record)?;
     }
     let credential = ensure_credential()?;
-    let profile = client_profile(config);
-    let record = start_daemon_with_profile(config.web.port, &credential, &profile)?;
-    Ok((record, basic_auth(&credential), profile.warnings))
+    let profile = client::profile(config, &program);
+    let record = start_daemon_with_profile(&program, config.web.port, &credential, &profile)?;
+    Ok(running_daemon(record, credential, profile.warnings))
+}
+
+fn running_daemon(
+    record: DaemonRecord,
+    credential: TtydCredential,
+    warnings: Vec<WebWarning>,
+) -> RunningDaemon {
+    RunningDaemon {
+        pid: record.pid,
+        port: record.port,
+        credential: basic_auth(&credential),
+        warnings,
+    }
 }
 
 fn reap_legacy_instances() {
@@ -308,11 +289,12 @@ fn remove_legacy_instance_dir(dir: &Path) {
 }
 
 fn start_daemon_with_profile(
+    program: &Path,
     port: u16,
     credential: &TtydCredential,
-    profile: &TtydClientProfile,
+    profile: &ClientProfile,
 ) -> Result<DaemonRecord> {
-    let spec = spawn_spec(port, &credential.secret, &profile.args)?;
+    let spec = spawn_spec(program, port, &credential.secret, &profile.args)?;
     let pid = spawn_detached(spec)?;
     let record = DaemonRecord { pid, port };
     if !wait_for_port(port, START_TIMEOUT) {
@@ -323,22 +305,37 @@ fn start_daemon_with_profile(
     Ok(record)
 }
 
-fn rotate_credential(config: &MachineConfig) -> Result<(TtydCredential, usize, Vec<WebWarning>)> {
+pub(super) fn rotate_credential(config: &MachineConfig) -> Result<CredentialRotation> {
+    let _guard = acquire_daemon_lock()?;
+    rotate_credential_locked(config)
+}
+
+fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation> {
     let Some(daemon) = daemon_status_locked()? else {
-        return Ok((mint_credential()?, 0, Vec::new()));
+        return Ok(CredentialRotation {
+            credential: basic_auth(&mint_credential()?),
+            restarted: false,
+            warnings: Vec::new(),
+        });
     };
     if daemon.port != config.web.port {
         ensure_port_available(config.web.port)?;
     }
-    let profile = client_profile(config);
+    let program = program()?;
+    let profile = client::profile(config, &program);
     let credential = mint_credential()?;
     stop_record(&daemon)?;
-    start_daemon_with_profile(config.web.port, &credential, &profile)?;
-    Ok((credential, 1, profile.warnings))
+    start_daemon_with_profile(&program, config.web.port, &credential, &profile)?;
+    Ok(CredentialRotation {
+        credential: basic_auth(&credential),
+        restarted: true,
+        warnings: profile.warnings,
+    })
 }
 
-fn revoke_credential() -> Result<usize> {
-    let stopped = usize::from(stop_daemon_locked()?);
+pub(super) fn revoke_credential() -> Result<bool> {
+    let _guard = acquire_daemon_lock()?;
+    let stopped = stop_daemon_locked()?;
     clear_credential()?;
     Ok(stopped)
 }
@@ -412,350 +409,14 @@ fn terminate_record(record: &DaemonRecord) {
     }
 }
 
-fn client_profile(config: &MachineConfig) -> TtydClientProfile {
-    let mut profile = TtydClientProfile {
-        args: vec![
-            "-t".to_owned(),
-            "macOptionIsMeta=true".to_owned(),
-            "-t".to_owned(),
-            "cursorBlink=false".to_owned(),
-        ],
-        warnings: Vec::new(),
-    };
-    if !config.web.enabled {
-        return profile;
-    }
-
-    let mut font_family = None;
-    let mut font_faces = Vec::new();
-    if config.web.style_client {
-        let family = &config.web.font;
-        profile
-            .args
-            .extend(["-t".to_owned(), format!("fontFamily={family},monospace")]);
-        match WebClientColors::from_palette(&crate::config::resolve_inline_palette(&config.theme)) {
-            Some(colors) => match serde_json::to_string(&colors.to_xterm_theme()) {
-                Ok(theme) => profile
-                    .args
-                    .extend(["-t".to_owned(), format!("theme={theme}")]),
-                Err(err) => profile
-                    .warnings
-                    .push(WebWarning::BrowserThemeSkipped(format!(
-                        "could not serialize browser theme: {err}"
-                    ))),
-            },
-            None => profile.warnings.push(WebWarning::BrowserThemeSkipped(
-                "scheme palette is incomplete or malformed".to_owned(),
-            )),
-        }
-
-        let resolution = super::fonts::resolve(family, config.web.font_source.as_deref());
-        profile.warnings.extend(
-            resolution
-                .warnings
-                .into_iter()
-                .map(WebWarning::BrowserFontSkipped),
-        );
-        if !resolution.faces.is_empty() {
-            font_family = Some(family.as_str());
-            font_faces = resolution.faces;
-        }
-    }
-
-    let index = program()
-        .and_then(|program| version_at(&program).map(|version| (program, version)))
-        .map_err(|err| err.to_string())
-        .and_then(|(program, version)| {
-            ensure_custom_index(&program, &version, font_family, &font_faces)
-        });
-    match index {
-        Ok(Some(path)) => profile
-            .args
-            .extend(["-I".to_owned(), path.display().to_string()]),
-        Ok(None) => profile.warnings.push(WebWarning::BrowserClientSkipped(
-            "stock ttyd index has no </head> or </body> marker".to_owned(),
-        )),
-        Err(err) => profile.warnings.push(WebWarning::BrowserClientSkipped(err)),
-    }
-    profile
-}
-
-fn ensure_custom_index(
+fn spawn_spec(
     program: &Path,
-    ttyd_version: &str,
-    family: Option<&str>,
-    faces: &[FontFace],
-) -> std::result::Result<Option<PathBuf>, String> {
-    let key = custom_index_key(ttyd_version, family, faces);
-    let path = paths::cache_home()
-        .join(INDEX_CACHE_DIR)
-        .join(format!("index-{key}.html"));
-    if path.is_file() {
-        return Ok(Some(path));
-    }
-
-    let stock = fetch_stock_index(program)?;
-    let Some(rendered) = inject_client_profile(&stock, family, faces) else {
-        return Ok(None);
-    };
-    atomic::write_cache_bytes_atomically(&path, rendered.as_bytes()).map_err(|err| {
-        format!(
-            "could not cache generated ttyd index `{}`: {err}",
-            path.display()
-        )
-    })?;
-    Ok(Some(path))
-}
-
-fn fetch_stock_index(program: &Path) -> std::result::Result<String, String> {
-    let port = choose_ephemeral_port().map_err(|err| err.to_string())?;
-    let secret = random_secret();
-    let spec = CommandSpec::new(program.display().to_string())
-        .args(["-c", &format!("rimz:{secret}"), "-i", "127.0.0.1", "-p"])
-        .arg(port.to_string())
-        .arg("sh");
-    let pid = spawn_detached(spec).map_err(|err| err.to_string())?;
-    let record = DaemonRecord { pid, port };
-    if !wait_for_port(port, START_TIMEOUT) {
-        terminate_record(&record);
-        return Err(format!(
-            "stock ttyd did not accept connections on 127.0.0.1:{port} within 5 seconds"
-        ));
-    }
-
-    let fetched = get_stock_index(port, &secret);
-    terminate_record(&record);
-    fetched
-}
-
-fn get_stock_index(port: u16, secret: &str) -> std::result::Result<String, String> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(STOCK_INDEX_TIMEOUT))
-        .build()
-        .new_agent();
-    let credentials = base64::engine::general_purpose::STANDARD.encode(format!("rimz:{secret}"));
-    let url = format!("http://127.0.0.1:{port}/");
-    let mut response = agent
-        .get(&url)
-        .header("Authorization", format!("Basic {credentials}"))
-        .call()
-        .map_err(|err| format!("could not fetch stock ttyd index: {err}"))?;
-    if response.status().as_u16() != 200 {
-        return Err(format!(
-            "stock ttyd index returned HTTP {}",
-            response.status().as_u16()
-        ));
-    }
-    let bytes = response
-        .body_mut()
-        .with_config()
-        .limit(STOCK_INDEX_MAX_BYTES)
-        .read_to_vec()
-        .map_err(|err| format!("could not read stock ttyd index: {err}"))?;
-    String::from_utf8(bytes).map_err(|err| format!("stock ttyd index is not UTF-8: {err}"))
-}
-
-fn custom_index_key(ttyd_version: &str, family: Option<&str>, faces: &[FontFace]) -> String {
-    let mut hasher = Sha256::new();
-    hash_index_part(&mut hasher, CUSTOM_INDEX_SCHEMA.as_bytes());
-    hash_index_part(&mut hasher, ttyd_version.as_bytes());
-    hash_index_part(&mut hasher, family.unwrap_or_default().as_bytes());
-    for face in faces {
-        hash_index_part(&mut hasher, face.extension.as_bytes());
-        hash_index_part(&mut hasher, &face.weight.to_le_bytes());
-        hash_index_part(&mut hasher, &Sha256::digest(&face.bytes));
-    }
-    hex::encode(&hasher.finalize()[..16])
-}
-
-fn hash_index_part(hasher: &mut Sha256, value: &[u8]) {
-    hasher.update((value.len() as u64).to_le_bytes());
-    hasher.update(value);
-}
-
-fn inject_client_profile(stock: &str, family: Option<&str>, faces: &[FontFace]) -> Option<String> {
-    let head_marker = stock.find("</head>")?;
-    let body_marker = stock.rfind("</body>")?;
-    if body_marker < head_marker {
-        return None;
-    }
-
-    let mut style = String::from("<style id=\"rimz-web-style\">");
-    let css_family = family.map(css_string);
-    if let Some(family) = css_family.as_deref() {
-        for face in faces {
-            let payload = base64::engine::general_purpose::STANDARD.encode(&face.bytes);
-            style.push_str(&format!(
-                "@font-face{{font-family:\"{family}\";font-style:normal;font-weight:{};font-display:block;src:url(data:font/{};base64,{payload})}}",
-                face.weight, face.extension
-            ));
-        }
-    }
-    let overlay_family = css_family.map_or_else(
-        || "monospace".to_owned(),
-        |family| format!("\"{family}\",monospace"),
-    );
-    style.push_str(&format!(
-        ".xterm .rimz-overlay{{top:50% !important;left:50% !important;transform:translate(-50%,-50%);padding:10px 18px !important;border-radius:10px !important;background:rgba(13,15,20,.78) !important;color:#e6e8ee !important;font:500 13px/1.4 {overlay_family} !important;letter-spacing:.04em;border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 32px rgba(0,0,0,.45);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}}"
-    ));
-    style.push_str("</style>");
-    let bootstrap = client_bootstrap(family);
-
-    let mut rendered = String::with_capacity(stock.len() + style.len() + bootstrap.len());
-    rendered.push_str(&stock[..head_marker]);
-    rendered.push_str(&style);
-    rendered.push_str(&stock[head_marker..body_marker]);
-    rendered.push_str(&bootstrap);
-    rendered.push_str(&stock[body_marker..]);
-    Some(rendered)
-}
-
-fn client_bootstrap(family: Option<&str>) -> String {
-    let family = family.map_or_else(|| "null".to_owned(), js_string);
-    format!(
-        r#"<script id="rimz-web-client">(()=>{{
-"use strict";
-const fontFamily={family};
-const waitForTerminal=()=>new Promise(resolve=>{{
-  let attempts=0;
-  const find=()=>{{
-    if(window.term&&window.term.element)resolve(window.term);
-    else if(attempts++<1200)window.setTimeout(find,25);
-  }};
-  find();
-}});
-const loadFont=fontFamily&&document.fonts
-  ?Promise.all([400,700].map(weight=>document.fonts.load(`${{weight}} 13px ${{JSON.stringify(fontFamily)}}`))).catch(()=>{{}})
-  :Promise.resolve();
-waitForTerminal().then(term=>{{
-  const sendInput=data=>{{
-    if(typeof term.input==="function"){{term.input(data,true);return true;}}
-    const core=term._core&&term._core.coreService;
-    if(core&&typeof core.triggerDataEvent==="function"){{core.triggerDataEvent(data,true);return true;}}
-    return false;
-  }};
-  const writeClipboard=text=>{{
-    if(!text)return;
-    try{{navigator.clipboard.writeText(text).catch(()=>{{}});}}catch(_){{}}
-  }};
-  const altKeyChar=event=>{{
-    if(/^Key[A-Z]$/.test(event.code)){{
-      const ch=event.code.slice(3);
-      return event.shiftKey?ch:ch.toLowerCase();
-    }}
-    if(/^Digit[0-9]$/.test(event.code)&&!event.shiftKey)return event.code.slice(5);
-    return null;
-  }};
-  const keyHandler=event=>{{
-    if(event.type==="keydown"&&event.altKey&&!event.ctrlKey&&!event.metaKey){{
-      const ch=altKeyChar(event);
-      if(ch&&sendInput("\u001b"+ch)){{event.preventDefault();event.stopPropagation();return false;}}
-    }}
-    if(event.type!=="keydown"||event.key!=="Enter"||!event.shiftKey||event.altKey||event.ctrlKey||event.metaKey)return true;
-    if(!sendInput("\u001b[13;2u"))return true;
-    event.preventDefault();
-    event.stopPropagation();
-    return false;
-  }};
-  term.parser.registerOscHandler(52,data=>{{
-    const semi=data.indexOf(";");
-    if(semi<0)return true;
-    const payload=data.slice(semi+1);
-    if(payload==="?")return true;
-    try{{
-      const bytes=Uint8Array.from(atob(payload),ch=>ch.charCodeAt(0));
-      const text=new TextDecoder().decode(bytes);
-      writeClipboard(text);
-    }}catch(_){{}}
-    return true;
-  }});
-  term.onSelectionChange(()=>writeClipboard(term.getSelection()));
-  const updateOverlay=node=>{{
-    const element=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
-    if(!element)return;
-    let overlay=element.closest(".rimz-overlay");
-    if(element.tagName==="DIV"&&element.style.borderRadius==="15px"){{
-      element.classList.add("rimz-overlay");
-      overlay=element;
-    }}
-    if(overlay&&overlay.textContent==="Press ⏎ to Reconnect")overlay.textContent="Press Enter to reconnect";
-  }};
-  new MutationObserver(records=>{{
-    for(const record of records){{
-      updateOverlay(record.target);
-      for(const node of record.addedNodes)updateOverlay(node);
-    }}
-  }}).observe(term.element,{{childList:true,subtree:true}});
-  const install=()=>{{
-    term.options.cursorBlink=false;
-    term.attachCustomKeyEventHandler(keyHandler);
-  }};
-  install();
-  const reset=term.reset.bind(term);
-  term.reset=(...args)=>{{const result=reset(...args);install();return result;}};
-  if(fontFamily)loadFont.then(()=>{{
-    const configured=`${{fontFamily}},monospace`;
-    term.options.fontFamily="monospace";
-    window.requestAnimationFrame(()=>{{
-      term.options.fontFamily=configured;
-      term.clearTextureAtlas();
-      term.refresh(0,term.rows-1);
-      if(typeof term.fit==="function")term.fit();
-    }});
-  }});
-}});
-}})();</script>"#
-    )
-}
-
-fn css_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '<' => escaped.push_str("\\3c "),
-            '\n' => escaped.push_str("\\a "),
-            '\r' => escaped.push_str("\\d "),
-            '\0' => escaped.push_str("\\fffd "),
-            ch => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
-fn js_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\u{08}' => escaped.push_str("\\b"),
-            '\u{0c}' => escaped.push_str("\\f"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            '<' => escaped.push_str("\\u003c"),
-            '\u{2028}' => escaped.push_str("\\u2028"),
-            '\u{2029}' => escaped.push_str("\\u2029"),
-            ch if ch <= '\u{1f}' => {
-                const HEX: &[u8; 16] = b"0123456789abcdef";
-                let value = ch as usize;
-                escaped.push_str("\\u00");
-                escaped.push(HEX[value >> 4] as char);
-                escaped.push(HEX[value & 0x0f] as char);
-            }
-            ch => escaped.push(ch),
-        }
-    }
-    escaped.push('"');
-    escaped
-}
-
-fn spawn_spec(port: u16, secret: &str, extra_args: &[String]) -> Result<CommandSpec> {
+    port: u16,
+    secret: &str,
+    extra_args: &[String],
+) -> Result<CommandSpec> {
     Ok(spawn_spec_for(
-        &program()?,
+        program,
         &std::env::current_exe().map_err(|source| WebErr::Io {
             path: PathBuf::from("/proc/self/exe"),
             source,
@@ -964,76 +625,6 @@ mod tests {
             .position(|arg| arg == "/opt/rimz/bin/rimz")
             .expect("shim argv");
         assert_eq!(&spec.args[shim - extra.len()..shim], extra);
-    }
-
-    #[test]
-    fn browser_safety_options_survive_disabled_web() {
-        let mut config = MachineConfig::default();
-        config.web.enabled = false;
-        let profile = client_profile(&config);
-        assert_eq!(
-            profile.args,
-            ["-t", "macOptionIsMeta=true", "-t", "cursorBlink=false"]
-        );
-        assert!(profile.warnings.is_empty());
-    }
-
-    #[test]
-    fn custom_index_injects_fonts_and_browser_behavior_at_document_edges() {
-        let faces = vec![FontFace {
-            bytes: b"font bytes".to_vec(),
-            extension: "woff2".to_owned(),
-            weight: 400,
-        }];
-        let family = "RimZ \"Font\" </style></script>\n";
-        let key = custom_index_key("ttyd 1.7.7", Some(family), &faces);
-        assert_eq!(key, custom_index_key("ttyd 1.7.7", Some(family), &faces));
-        assert_ne!(key, custom_index_key("ttyd 1.7.8", Some(family), &faces));
-        assert_ne!(key, custom_index_key("ttyd 1.7.7", None, &faces));
-
-        let rendered = inject_client_profile(
-            "<html><head><title>ttyd</title></head><body></body></html>",
-            Some(family),
-            &faces,
-        )
-        .expect("document markers");
-        assert!(
-            rendered.contains("font-family:\"RimZ \\\"Font\\\" \\3c /style>\\3c /script>\\a \"")
-        );
-        assert!(rendered.contains("data:font/woff2;base64,Zm9udCBieXRlcw=="));
-        assert!(rendered.contains("font-display:block"));
-        assert!(
-            rendered.contains(
-                "const fontFamily=\"RimZ \\\"Font\\\" \\u003c/style>\\u003c/script>\\n\""
-            )
-        );
-        assert!(rendered.contains("term.options.cursorBlink=false"));
-        assert!(rendered.contains("term.attachCustomKeyEventHandler(keyHandler)"));
-        assert!(rendered.contains("registerOscHandler(52"));
-        assert!(rendered.contains("onSelectionChange"));
-        assert!(rendered.contains("event.altKey"));
-        assert!(rendered.contains("/^Digit[0-9]$/.test(event.code)&&!event.shiftKey"));
-        assert!(rendered.contains("element.classList.add(\"rimz-overlay\")"));
-        assert!(rendered.contains("Press Enter to reconnect"));
-        assert!(rendered.contains("sendInput(\"\\u001b[13;2u\")"));
-        assert!(rendered.contains("term.clearTextureAtlas()"));
-        assert!(
-            rendered
-                .contains("font:500 13px/1.4 \"RimZ \\\"Font\\\" \\3c /style>\\3c /script>\\a \"")
-        );
-        let style = rendered.find("rimz-web-style").unwrap();
-        let overlay_rule = rendered.find(".xterm .rimz-overlay").unwrap();
-        let head = rendered.find("</head>").unwrap();
-        assert!(style < overlay_rule && overlay_rule < head);
-        assert!(rendered.find("rimz-web-client").unwrap() < rendered.find("</body>").unwrap());
-        let default_style =
-            inject_client_profile("<html><head></head><body></body></html>", None, &faces)
-                .expect("document markers");
-        assert!(default_style.contains("font:500 13px/1.4 monospace !important"));
-        assert_eq!(
-            inject_client_profile("<html></html>", Some("font"), &faces),
-            None
-        );
     }
 
     #[test]

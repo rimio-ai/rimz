@@ -3,14 +3,74 @@
 //! The CLI owns process I/O and supervision. This module keeps shell quoting
 //! and argv construction testable beside the existing remote attach builders.
 
+use std::io;
+use std::net::TcpListener;
+use std::ops::RangeInclusive;
 use std::path::Path;
 
 use crate::mux::CommandSpec;
+use crate::web::WebOpenPayload;
 
 use super::{
     REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV, RemoteSpec, RemoteTarget,
     client_size_env_setup, quote_remote_path, remote_exec_snippet, sh_quote, ssh_program,
 };
+
+const LOCAL_PORT_RANGE: RangeInclusive<u16> = 8300..=8399;
+
+pub fn choose_local_port(session: &str, override_port: Option<u16>) -> io::Result<u16> {
+    if let Some(port) = override_port {
+        probe_local_port(port)?;
+        return Ok(port);
+    }
+    let preferred = derive_port(session, &LOCAL_PORT_RANGE);
+    for port in port_scan(preferred, &LOCAL_PORT_RANGE) {
+        if probe_local_port(port).is_ok() {
+            return Ok(port);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AddrNotAvailable,
+        "no free local web tunnel port in 8300..8399",
+    ))
+}
+
+pub fn local_url(remote: &WebOpenPayload, local_port: u16) -> String {
+    format!(
+        "http://127.0.0.1:{local_port}/?arg={}",
+        encode_query_value(&remote.session)
+    )
+}
+
+fn derive_port(session: &str, range: &RangeInclusive<u16>) -> u16 {
+    let span = u32::from(*range.end()) - u32::from(*range.start()) + 1;
+    let offset = crc32fast::hash(session.as_bytes()) % span;
+    // CRC modulo span bounds the offset to the inclusive u16 port range.
+    *range.start() + u16::try_from(offset).expect("CRC offset fits in port range")
+}
+
+fn port_scan(preferred: u16, range: &RangeInclusive<u16>) -> impl Iterator<Item = u16> + use<> {
+    let start = *range.start();
+    let end = *range.end();
+    (preferred..=end).chain(start..preferred)
+}
+
+fn probe_local_port(port: u16) -> io::Result<()> {
+    TcpListener::bind(("127.0.0.1", port)).map(|_| ())
+}
+
+fn encode_query_value(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(char::from(byte));
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WebPrepOptions {
@@ -136,6 +196,44 @@ mod tests {
 
     fn parse(input: &str) -> RemoteTarget {
         RemoteTarget::parse(input).expect("target parses")
+    }
+
+    #[test]
+    fn local_port_derivation_is_stable_and_in_range() {
+        let first = derive_port("rimz-project-a1b2c3", &LOCAL_PORT_RANGE);
+        assert_eq!(first, derive_port("rimz-project-a1b2c3", &LOCAL_PORT_RANGE));
+        assert!(LOCAL_PORT_RANGE.contains(&first));
+    }
+
+    #[test]
+    fn local_port_scan_wraps_at_the_range_end() {
+        assert_eq!(
+            port_scan(8398, &LOCAL_PORT_RANGE)
+                .take(4)
+                .collect::<Vec<_>>(),
+            [8398, 8399, 8300, 8301]
+        );
+    }
+
+    #[test]
+    fn explicit_local_port_collision_fails() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind fixture");
+        let port = listener.local_addr().expect("fixture address").port();
+        assert_eq!(
+            choose_local_port("rimz-project-a1b2c3", Some(port))
+                .expect_err("occupied explicit port")
+                .kind(),
+            io::ErrorKind::AddrInUse
+        );
+    }
+
+    #[test]
+    fn local_url_percent_encodes_the_ttyd_session_argument() {
+        let payload = WebOpenPayload::for_session("rimz/a b", "https://remote", 8200, None);
+        assert_eq!(
+            local_url(&payload, 8301),
+            "http://127.0.0.1:8301/?arg=rimz%2Fa%20b"
+        );
     }
 
     #[test]

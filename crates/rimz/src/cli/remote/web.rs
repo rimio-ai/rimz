@@ -161,7 +161,7 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
     let (payload, credential) = parse_web_payload(&prep)?;
     let mut previous_credential = None;
     render_web_credential(remote, &credential, &mut previous_credential, true);
-    let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
+    let local_port = rimz::remote::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
     let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
     let mut tunnel = RemoteTunnel::start(&spec, remote.target.host_display())?;
@@ -171,7 +171,7 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
             bail!("web tunnel exited before local port accepted connections");
         }
     }
-    let url = rimz::web::local_tunnel_url(&payload, local_port);
+    let url = rimz::remote::web::local_url(&payload, local_port);
     writeln!(std::io::stdout().lock(), "{url}")?;
     super::super::open_browser_best_effort(&url);
     report_web_tunnel_up(remote.target.host_display(), false);
@@ -287,7 +287,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         let local_port = match local_port {
             Some(port) => port,
             None => {
-                let port = rimz::web::choose_local_port(&payload.session, remote.web.port)
+                let port = rimz::remote::web::choose_local_port(&payload.session, remote.web.port)
                     .context("choosing local web tunnel port")?;
                 local_port = Some(port);
                 port
@@ -349,7 +349,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         held_alt.release();
         render_web_credential(remote, &credential, &mut last_credential, first_round);
         if first_round {
-            let url = rimz::web::local_tunnel_url(&payload, local_port);
+            let url = rimz::remote::web::local_url(&payload, local_port);
             writeln!(std::io::stdout().lock(), "{url}")?;
             super::super::open_browser_best_effort(&url);
             report_web_tunnel_up(host, true);

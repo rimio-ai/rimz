@@ -98,6 +98,15 @@ impl TestRoom {
     }
 }
 
+#[test]
+fn existing_session_attach_has_no_creation_or_options_tail() {
+    let spec = ZellijBackend::new().attach_existing_command("rimz-test");
+
+    assert_eq!(spec.args, ["attach", "rimz-test"]);
+    assert!(!spec.args.iter().any(|arg| arg == "--create"));
+    assert!(!spec.args.iter().any(|arg| arg == "options"));
+}
+
 #[cfg(unix)]
 fn terminal_pane(
     id: u64,

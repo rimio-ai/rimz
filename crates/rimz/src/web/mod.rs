@@ -1,22 +1,21 @@
 //! Browser access through one machine-wide ttyd daemon.
 
 use std::io;
-use std::net::TcpListener;
-use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::config::MachineConfig;
+use crate::ids::MuxName;
+use crate::mux::CommandSpec;
+use crate::room::session::{LiveSessions, workspace_record_for_session};
 use crate::store::atomic;
 
-mod colors;
-mod fonts;
 mod ttyd;
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
-pub const LOCAL_PORT_RANGE: RangeInclusive<u16> = 8300..=8399;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebErr {
@@ -60,6 +59,25 @@ pub enum WebErr {
     TtydReadOnlyCredential,
     #[error("ttyd credential `{name}` does not exist (the single credential is `rimz`)")]
     TtydCredentialNotFound { name: String },
+    #[error(
+        "{mux} session `{session}` is not addressable after web preparation. Run `rimz reset` from the workspace, then retry `rimz web open`."
+    )]
+    SessionNotAddressable { mux: MuxName, session: String },
+    #[error(
+        "{mux} session `{session}` is not addressable after web preparation: {detail}. Run `rimz reset` from the workspace, then retry `rimz web open`."
+    )]
+    SessionAddressabilityProbe {
+        mux: MuxName,
+        session: String,
+        detail: String,
+    },
+    #[error("{0}")]
+    InvalidSession(String),
+    #[error("reading RimZ workspace records: {source}")]
+    WorkspaceRecords {
+        #[source]
+        source: io::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, WebErr>;
@@ -127,28 +145,9 @@ pub struct WebAccessOutcome {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebDaemonOutcome {
-    pub record: DaemonRecord,
-    pub credential: WebCredential,
-    pub warnings: Vec<WebWarning>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DaemonRecord {
     pub pid: u32,
     pub port: u16,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WebStopOutcome {
-    pub stopped: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CredentialCommand {
-    Create { read_only: bool },
-    List,
-    Revoke { name: String },
-    RevokeAll,
+    pub warnings: Vec<WebWarning>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,16 +157,10 @@ pub struct CredentialSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CredentialOutcome {
-    Rotated {
-        credential: WebCredential,
-        restarted_instances: usize,
-        warnings: Vec<WebWarning>,
-    },
-    Listed(Vec<CredentialSummary>),
-    Revoked {
-        stopped_instances: usize,
-    },
+pub struct CredentialRotation {
+    pub credential: WebCredential,
+    pub restarted: bool,
+    pub warnings: Vec<WebWarning>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,24 +178,64 @@ pub fn open_session(
     config: &MachineConfig,
     may_start: bool,
 ) -> Result<WebAccessOutcome> {
-    ttyd::open_session(session, config, may_start)
-}
-
-pub fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
-    ttyd::inspect_session(session, config)
-}
-
-pub fn ensure_daemon(config: &MachineConfig) -> Result<WebDaemonOutcome> {
-    let (record, credential, warnings) = ttyd::ensure_daemon(config)?;
-    Ok(WebDaemonOutcome {
-        record,
-        credential,
-        warnings,
+    let daemon = ttyd::open_daemon(config, may_start)?;
+    let base_url = normalized_base_url(config.web.base_url.as_deref(), daemon.port);
+    Ok(WebAccessOutcome {
+        payload: WebOpenPayload::for_session(
+            session,
+            base_url,
+            daemon.port,
+            Some(daemon.credential),
+        ),
+        warnings: daemon.warnings,
     })
 }
 
-pub fn credential(command: CredentialCommand, config: &MachineConfig) -> Result<CredentialOutcome> {
-    ttyd::credential(command, config)
+pub fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
+    let daemon = ttyd::inspect_daemon(config)?;
+    let base_url = normalized_base_url(config.web.base_url.as_deref(), daemon.port);
+    Ok(WebOpenPayload::for_session(
+        session,
+        base_url,
+        daemon.port,
+        daemon.credential,
+    ))
+}
+
+pub fn ensure_daemon(config: &MachineConfig) -> Result<WebDaemonOutcome> {
+    let daemon = ttyd::ensure_daemon(config)?;
+    Ok(WebDaemonOutcome {
+        pid: daemon.pid,
+        port: daemon.port,
+        warnings: daemon.warnings,
+    })
+}
+
+pub fn credential_summary() -> Result<Option<CredentialSummary>> {
+    ttyd::credential_summary()
+}
+
+pub fn rotate_credential(config: &MachineConfig, read_only: bool) -> Result<CredentialRotation> {
+    if read_only {
+        return Err(WebErr::TtydReadOnlyCredential);
+    }
+    let rotation = ttyd::rotate_credential(config)?;
+    Ok(CredentialRotation {
+        credential: rotation.credential,
+        restarted: rotation.restarted,
+        warnings: rotation.warnings,
+    })
+}
+
+pub fn revoke_credential(name: Option<&str>) -> Result<bool> {
+    if let Some(name) = name
+        && name != "rimz"
+    {
+        return Err(WebErr::TtydCredentialNotFound {
+            name: name.to_owned(),
+        });
+    }
+    ttyd::revoke_credential()
 }
 
 pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
@@ -215,10 +248,99 @@ pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
     })
 }
 
-pub fn stop_all() -> Result<WebStopOutcome> {
-    Ok(WebStopOutcome {
-        stopped: usize::from(ttyd::stop_daemon()?),
-    })
+pub fn stop_daemon() -> Result<bool> {
+    ttyd::stop_daemon()
+}
+
+const WEB_ADDRESSABLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub fn ensure_session_addressable(mux: MuxName, session: &str) -> Result<()> {
+    let backend = crate::mux::backend_for(mux);
+    let deadline = Instant::now() + web_addressable_timeout();
+    let mut last_error = None;
+    loop {
+        match backend.list_sessions() {
+            Ok(sessions) if sessions.iter().any(|name| name == session) => return Ok(()),
+            Ok(_) if Instant::now() >= deadline => {
+                return Err(last_error.map_or_else(
+                    || WebErr::SessionNotAddressable {
+                        mux,
+                        session: session.to_owned(),
+                    },
+                    |detail| WebErr::SessionAddressabilityProbe {
+                        mux,
+                        session: session.to_owned(),
+                        detail,
+                    },
+                ));
+            }
+            Err(err) if Instant::now() >= deadline => {
+                return Err(WebErr::SessionAddressabilityProbe {
+                    mux,
+                    session: session.to_owned(),
+                    detail: err.to_string(),
+                });
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Ok(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
+pub fn existing_session_attach_command(session: Option<&str>) -> Result<CommandSpec> {
+    let live = LiveSessions::probe();
+    let target = session
+        .filter(|session| !session.is_empty())
+        .and_then(|session| {
+            workspace_record_for_session(session)
+                .ok()
+                .flatten()
+                .and_then(|_| live.mux_of(session).map(|mux| (session, mux)))
+        });
+    let Some((session, mux)) = target else {
+        return Err(WebErr::InvalidSession(invalid_session_message(
+            session, &live,
+        )?));
+    };
+    Ok(crate::mux::backend_for(mux).attach_existing_command(session))
+}
+
+fn invalid_session_message(session: Option<&str>, live: &LiveSessions) -> Result<String> {
+    let mut sessions = crate::workspace::known_workspaces()
+        .map_err(|source| WebErr::WorkspaceRecords { source })?
+        .into_iter()
+        .filter_map(|workspace| {
+            live.mux_of(&workspace.session_name)
+                .map(|mux| format!("  {} ({mux})", workspace.session_name))
+        })
+        .collect::<Vec<_>>();
+    sessions.sort();
+    let requested = session.map_or_else(
+        || "no session was provided".to_owned(),
+        |session| format!("session `{session}` is not a live RimZ room"),
+    );
+    let listing = if sessions.is_empty() {
+        "  (none)".to_owned()
+    } else {
+        sessions.join("\n")
+    };
+    Ok(format!("{requested}\n\nLive RimZ sessions:\n{listing}"))
+}
+
+fn web_addressable_timeout() -> Duration {
+    let Some(value) =
+        std::env::var_os("RIMZ_TEST_WEB_ADDRESSABLE_MS").filter(|value| !value.is_empty())
+    else {
+        return WEB_ADDRESSABLE_TIMEOUT;
+    };
+    value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(WEB_ADDRESSABLE_TIMEOUT)
 }
 
 pub fn ttyd_diagnostic() -> Result<TtydDiagnostic> {
@@ -227,47 +349,9 @@ pub fn ttyd_diagnostic() -> Result<TtydDiagnostic> {
     Ok(TtydDiagnostic { path, version })
 }
 
-pub fn join_session_url(base_url: &str, session: &str) -> String {
+fn join_session_url(base_url: &str, session: &str) -> String {
     let base = base_url.trim_end_matches('/');
     format!("{base}/?arg={}", encode_query_value(session))
-}
-
-pub fn local_tunnel_url(remote: &WebOpenPayload, local_port: u16) -> String {
-    join_session_url(&format!("http://127.0.0.1:{local_port}"), &remote.session)
-}
-
-pub fn derive_port(session: &str, range: &RangeInclusive<u16>) -> u16 {
-    let span = u32::from(*range.end()) - u32::from(*range.start()) + 1;
-    let offset = crc32fast::hash(session.as_bytes()) % span;
-    // Modulo span bounds offset to the inclusive u16 port range.
-    *range.start() + u16::try_from(offset).expect("offset fits in port range")
-}
-
-pub fn derive_local_port(session: &str) -> u16 {
-    derive_port(session, &LOCAL_PORT_RANGE)
-}
-
-pub fn choose_local_port(session: &str, override_port: Option<u16>) -> io::Result<u16> {
-    if let Some(port) = override_port {
-        probe_local_port(port)?;
-        return Ok(port);
-    }
-    let preferred = derive_local_port(session);
-    for port in port_scan(preferred, &LOCAL_PORT_RANGE) {
-        if probe_local_port(port).is_ok() {
-            return Ok(port);
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AddrNotAvailable,
-        "no free local web tunnel port in 8300..8399",
-    ))
-}
-
-pub fn port_scan(preferred: u16, range: &RangeInclusive<u16>) -> impl Iterator<Item = u16> + use<> {
-    let start = *range.start();
-    let end = *range.end();
-    (preferred..=end).chain(start..preferred)
 }
 
 fn normalized_base_url(configured: Option<&str>, port: u16) -> String {
@@ -276,10 +360,6 @@ fn normalized_base_url(configured: Option<&str>, port: u16) -> String {
         .filter(|url| !url.is_empty())
         .map(|url| url.trim_end_matches('/').to_owned())
         .unwrap_or_else(|| format!("http://127.0.0.1:{port}"))
-}
-
-fn probe_local_port(port: u16) -> io::Result<()> {
-    TcpListener::bind(("127.0.0.1", port)).map(|_| ())
 }
 
 fn encode_query_value(value: &str) -> String {
@@ -335,12 +415,5 @@ mod tests {
         let parsed: WebOpenPayload = serde_json::from_slice(&json).expect("parse");
         assert_eq!(parsed, payload);
         assert!(parsed.version_ok());
-    }
-
-    #[test]
-    fn local_port_derivation_is_stable_and_in_range() {
-        let first = derive_local_port("rimz-project-a1b2c3");
-        assert_eq!(first, derive_local_port("rimz-project-a1b2c3"));
-        assert!(LOCAL_PORT_RANGE.contains(&first));
     }
 }
