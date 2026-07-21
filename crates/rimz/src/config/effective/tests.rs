@@ -34,6 +34,27 @@ fn write_project_config(dir: &tempfile::TempDir, text: &str) {
     std::fs::write(config_dir.join("config.toml"), text).expect("write config");
 }
 
+#[test]
+fn diagnosis_reaches_through_a_project_trust_parse_error() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[profiles.planner]\nagent = \"claude\"\nagent = \"codex\"\n",
+    );
+
+    let Err(error) = load(&AgentsConfig::default(), project.path(), config.path()) else {
+        panic!("duplicate project key must fail");
+    };
+    let diagnosis = error.diagnosis().expect("nested trust diagnosis");
+
+    assert_eq!(diagnosis.line(), Some(3));
+    assert_eq!(
+        diagnosis.problem(),
+        "`agent` is defined more than once in the same table"
+    );
+}
+
 fn role(role: &str, profile: &str) -> RoleBinding {
     RoleBinding {
         role: role.to_owned(),

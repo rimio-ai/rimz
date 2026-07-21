@@ -354,6 +354,31 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
 }
 
 #[test]
+fn doctor_classifies_an_unparseable_project_config() {
+    let env = Env::new();
+    let path = env.project_root.join(".rimz/config.toml");
+    env.write_config(
+        &env.project_root,
+        "[profiles.planner]\nagent = \"claude\"\nagent = \"codex\"\n",
+    );
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+
+    assert_eq!(
+        report["trust"]["unavailable"]["error"],
+        format!(
+            "line 3: `agent` is defined more than once in the same table; fix: remove the extra `agent` at {}:3, then re-run",
+            path.display()
+        )
+    );
+}
+
+#[test]
 fn doctor_reports_duplicate_mux_binaries() {
     let env = Env::new();
     let first_dir = stub_mux_version(&env, "mux-one", "zellij", "--version", "zellij 0.44.3-a");

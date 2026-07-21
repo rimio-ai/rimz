@@ -842,8 +842,14 @@ fn recover<T>(result: Result<Option<T>>) -> Option<T> {
     match result {
         Ok(opt) => opt,
         Err(err) => {
+            let (config, detail) = err
+                .diagnosis()
+                .map(|diagnosis| (diagnosis.path().display().to_string(), diagnosis.summary()))
+                .unwrap_or_default();
             tracing::warn!(
                 error = %err,
+                config = %config,
+                detail = %detail,
                 "per-machine config unreadable; using built-in defaults for this file",
             );
             None

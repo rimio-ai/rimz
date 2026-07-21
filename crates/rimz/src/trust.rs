@@ -72,6 +72,18 @@ pub enum TrustErr {
     Atomic(#[from] atomic::AtomicErr),
 }
 
+impl TrustErr {
+    /// The classified TOML failure for a project-trust file.
+    pub fn diagnosis(&self) -> Option<&ConfigFileDiagnosis> {
+        match self {
+            Self::ConfigParse { diagnosis, .. }
+            | Self::RecordParse { diagnosis, .. }
+            | Self::BirthPromptParse { diagnosis, .. } => Some(diagnosis),
+            _ => None,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, TrustErr>;
 
 /// Trust state for a project workspace. Derived from the executable-surface

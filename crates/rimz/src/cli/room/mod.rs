@@ -478,10 +478,18 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         writeln!(out, "Opening the room...")?;
         match rimz::config::MachineConfig::load() {
             Ok(config) => machine_config = std::sync::Arc::new(config),
-            Err(err) => tracing::warn!(
-                error = %err,
-                "first-run config reload failed; using startup config for this room"
-            ),
+            Err(err) => {
+                let (config, detail) = err
+                    .diagnosis()
+                    .map(|diagnosis| (diagnosis.path().display().to_string(), diagnosis.summary()))
+                    .unwrap_or_default();
+                tracing::warn!(
+                    error = %err,
+                    config = %config,
+                    detail = %detail,
+                    "first-run config reload failed; using startup config for this room"
+                );
+            }
         }
     }
 
@@ -701,7 +709,16 @@ fn prompt_project_trust(project_root: &Path) {
         Ok(Some(offer)) => offer,
         Ok(None) => return,
         Err(err) => {
-            tracing::warn!(error = %err, "trust birth prompt skipped");
+            let (config, detail) = err
+                .diagnosis()
+                .map(|diagnosis| (diagnosis.path().display().to_string(), diagnosis.summary()))
+                .unwrap_or_default();
+            tracing::warn!(
+                error = %err,
+                config = %config,
+                detail = %detail,
+                "trust birth prompt skipped"
+            );
             return;
         }
     };
@@ -718,7 +735,18 @@ fn prompt_project_trust(project_root: &Path) {
                     tracing::warn!(error = %err, "trust grant notice failed");
                 }
             }
-            Err(err) => tracing::warn!(error = %err, "trust grant from birth prompt failed"),
+            Err(err) => {
+                let (config, detail) = err
+                    .diagnosis()
+                    .map(|diagnosis| (diagnosis.path().display().to_string(), diagnosis.summary()))
+                    .unwrap_or_default();
+                tracing::warn!(
+                    error = %err,
+                    config = %config,
+                    detail = %detail,
+                    "trust grant from birth prompt failed"
+                );
+            }
         },
         Ok(false) => {
             if let Err(err) = rimz::trust::dismiss_birth_prompt_offer(project_root, &offer) {

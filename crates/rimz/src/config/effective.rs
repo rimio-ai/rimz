@@ -50,6 +50,17 @@ pub enum EffectiveConfigErr {
     },
 }
 
+impl EffectiveConfigErr {
+    /// The classified TOML failure carried directly or through project trust.
+    pub fn diagnosis(&self) -> Option<&ConfigFileDiagnosis> {
+        match self {
+            Self::Trust(source) => source.diagnosis(),
+            Self::Parse { diagnosis, .. } => Some(diagnosis),
+            _ => None,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, EffectiveConfigErr>;
 
 #[derive(Debug, thiserror::Error)]

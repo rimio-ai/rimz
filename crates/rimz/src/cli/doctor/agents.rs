@@ -141,7 +141,7 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
             granted_at: report.granted_at.map(|at| at.to_string()),
         }),
         Err(err) => Probe::Unavailable {
-            error: err.to_string(),
+            error: super::config_file_error_detail(&err, err.diagnosis()),
         },
     }
 }

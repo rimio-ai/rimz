@@ -309,7 +309,16 @@ fn effective_teams_and_profiles(
     match crate::config::effective::load(&machine.agents, project_root, &config_home()) {
         Ok(launch) => (launch.teams, launch.profiles),
         Err(err) => {
-            tracing::warn!(error = %err, "effective agent config unavailable; team resume uses machine config only");
+            let (config, detail) = err
+                .diagnosis()
+                .map(|diagnosis| (diagnosis.path().display().to_string(), diagnosis.summary()))
+                .unwrap_or_default();
+            tracing::warn!(
+                error = %err,
+                config = %config,
+                detail = %detail,
+                "effective agent config unavailable; team resume uses machine config only"
+            );
             (
                 machine.agents.teams.clone(),
                 machine.agents.profiles.clone(),

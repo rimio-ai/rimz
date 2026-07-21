@@ -95,14 +95,17 @@ fn collect_machine_config() -> model::MachineConfigHealth {
         .into_iter()
         .map(|err| model::MachineConfigProblem {
             path: err.path().display().to_string(),
-            error: config_error_detail(&err),
+            error: config_file_error_detail(&err, err.diagnosis()),
         })
         .collect();
     model::MachineConfigHealth { broken_files }
 }
 
-fn config_error_detail(err: &rimz::config::ConfigErr) -> String {
-    err.diagnosis()
+fn config_file_error_detail(
+    err: &(dyn std::error::Error + 'static),
+    diagnosis: Option<&rimz::config::ConfigFileDiagnosis>,
+) -> String {
+    diagnosis
         .map(|diagnosis| format!("{}; fix: {}", diagnosis.summary(), diagnosis.fix()))
         .unwrap_or_else(|| ui::one_line_error(err))
 }
