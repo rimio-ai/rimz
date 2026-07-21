@@ -124,7 +124,7 @@ fn resolve_custom(source: &str) -> Result<FontFace, String> {
                 ));
             }
         };
-        validate_size(source, &bytes)?;
+        validate_size(source, bytes.len() as u64)?;
         return Ok(FontFace {
             bytes,
             extension,
@@ -134,11 +134,14 @@ fn resolve_custom(source: &str) -> Result<FontFace, String> {
     if source.contains("://") {
         return Err(format!("font URL must use https: `{source}`"));
     }
-    let path = PathBuf::from(source);
+    let path = expand_home(Path::new(source));
     let extension = extension_from_path(&path)?;
+    let size = fs::metadata(&path)
+        .map_err(|err| format!("could not inspect font `{}`: {err}", path.display()))?
+        .len();
+    validate_size(source, size)?;
     let bytes = fs::read(&path)
         .map_err(|err| format!("could not read font `{}`: {err}", path.display()))?;
-    validate_size(source, &bytes)?;
     Ok(FontFace {
         bytes,
         extension,
@@ -257,8 +260,8 @@ fn extension_from_path(path: &Path) -> Result<String, String> {
     }
 }
 
-fn validate_size(source: &str, bytes: &[u8]) -> Result<(), String> {
-    if bytes.len() as u64 <= MAX_FONT_BYTES {
+fn validate_size(source: &str, size: u64) -> Result<(), String> {
+    if size <= MAX_FONT_BYTES {
         Ok(())
     } else {
         Err(format!(
@@ -266,6 +269,21 @@ fn validate_size(source: &str, bytes: &[u8]) -> Result<(), String> {
             MAX_FONT_BYTES / 1024 / 1024
         ))
     }
+}
+
+fn expand_home(path: &Path) -> PathBuf {
+    let raw = path.as_os_str().to_string_lossy();
+    if raw == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("~"));
+    }
+    if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    }
+    path.to_path_buf()
 }
 
 fn font_cache_dir() -> PathBuf {

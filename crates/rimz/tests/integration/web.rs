@@ -648,16 +648,15 @@ fn tmux_open_rotate_revoke_reopen_and_stop() {
 #[test]
 fn tmux_custom_font_generates_and_uses_an_inlined_index() {
     let fixture = TmuxWebFixture::new("ttyd-custom-font.log");
-    let font = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/dummy-font.woff2")
-        .canonicalize()
-        .expect("dummy font path");
+    let font = fixture.env.home_root.join("custom-font.woff2");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dummy-font.woff2"),
+        &font,
+    )
+    .expect("copy dummy font under sandbox HOME");
     write_machine_config(
         &fixture.env,
-        &format!(
-            "[web.tmux]\nfont = \"RimZ Test Font\"\nfont_source = \"{}\"\n",
-            font.display()
-        ),
+        "[web.tmux]\nfont = \"RimZ Test Font\"\nfont_source = \"~/custom-font.woff2\"\n",
     );
 
     let open = fixture
