@@ -1,0 +1,2223 @@
+---
+source: crates/rimz/src/cli/surface_tests.rs
+expression: rendered
+---
+rimz
+    --attach  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-attach  [action=set-true takes=0..=0]
+    --no-resume  [action=set-true takes=0..=0]
+    --print  [action=set-true takes=0..=0]
+    --refresh-ms <REFRESH_MS>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    -V, --version  [action=version takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents
+    <passthrough>  [action=append takes=1..=inf]
+    <prompt>  [action=set takes=1..=1]
+    <spec>  [action=set takes=1..=1]
+    --append-system-prompt-file <PATH>  [action=set takes=1..=1]
+    --ask  [action=set-true takes=0..=0]
+    --bg  [action=set-true takes=0..=0]
+    --budget <AMOUNT[/day]>  [action=set takes=1..=1]
+    --channel <NAME>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --description <TEXT>  [action=set takes=1..=1]
+    --effort <LEVEL>  [action=set takes=1..=1]
+    --from-pr <PR>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --input-format <FORMAT>  [action=set takes=1..=1 values=text|stream-json]
+    --json  [action=set-true takes=0..=0]
+    --keep  [action=set-true takes=0..=0]
+    --max-attempts <N>  [action=set takes=1..=1]
+    --max-turns <N>  [action=set takes=1..=1]
+    --model <MODEL>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    -n, --name <NAME>  [action=set takes=1..=1]
+    --new-pane  [action=set-true takes=0..=0]
+    --new-tab  [action=set-true takes=0..=0]
+    --output-format <FORMAT>  [action=set takes=1..=1 values=text|json|stream-json]
+    -p, --print  [action=set-true takes=0..=0]
+    --resume  [action=set-true takes=0..=0 long-aliases=continue]
+    --retries <N>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --stdin  [action=set-true takes=0..=0]
+    --system-prompt-file <PATH>  [action=set takes=1..=1]
+    --timeout <TIMEOUT>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --verify <CMD>  [action=set takes=1..=1]
+    -w, --worktree <NAME>  [action=set takes=0..=1]
+    --yolo  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents auto-continue [hidden]
+    --agent-id <AGENT_ID>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --kind <KIND>  [action=set takes=1..=1 required]
+    --label <LABEL>  [action=set takes=1..=1]
+    --message-id <MESSAGE_ID>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --pane <PANE>  [action=set takes=1..=1 required]
+    --parked-since <PARKED_SINCE>  [action=set takes=1..=1]
+    --reason <REASON>  [action=set takes=1..=1 required]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --text <TEXT>  [action=set takes=1..=1 required]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents auto-redeem [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --kind <KIND>  [action=set takes=1..=1 required]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --reason <REASON>  [action=set takes=1..=1 required]
+    --request-id <REQUEST_ID>  [action=set takes=1..=1 required]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents budget
+    <reference>  [action=set takes=1..=1 required]
+    <value>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-continue  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents budget-park [hidden]
+    --agent-id <AGENT_ID>  [action=set takes=1..=1 required]
+    --at-cost <AT_COST>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --kind <KIND>  [action=set takes=1..=1 required]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --pane <PANE>  [action=set takes=1..=1 required]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents check
+    <kind>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --replay <JSONL>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --spend-file <PATH>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents exec [hidden]
+    <kind>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --request <JSON>  [action=set takes=1..=1 required hidden]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --worktree-path <WORKTREE_PATH>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents focus
+    <reference>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents fork
+    <reference>  [action=set takes=1..=1 required]
+    --bg  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    -n, --name <NAME>  [action=set takes=1..=1]
+    --new-pane  [action=set-true takes=0..=0]
+    --new-tab  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents help
+
+rimz agents help auto-continue [hidden]
+
+rimz agents help auto-redeem [hidden]
+
+rimz agents help budget
+
+rimz agents help budget-park [hidden]
+
+rimz agents help check
+
+rimz agents help exec [hidden]
+
+rimz agents help focus
+
+rimz agents help fork
+
+rimz agents help help
+
+rimz agents help history
+
+rimz agents help list
+
+rimz agents help logs
+
+rimz agents help refresh
+
+rimz agents help refresh-context [hidden]
+
+rimz agents help refresh-usage [hidden]
+
+rimz agents help register
+
+rimz agents help restart
+
+rimz agents help resume
+
+rimz agents help show
+
+rimz agents help stop
+
+rimz agents help top
+
+rimz agents help wait
+
+rimz agents history
+    <reference>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    -n, --tail <TAIL>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents list (aliases: ls, ps)
+    <scope>  [action=set takes=1..=1]
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents logs
+    <reference>  [action=set takes=1..=1 required]
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -f, --follow  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    -n, --tail <TAIL>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents refresh
+    <reference>  [action=set takes=1..=1]
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents refresh-context [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --kind <KIND>  [action=set takes=1..=1 required]
+    --model <MODEL>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --server-url <SERVER_URL>  [action=set takes=1..=1]
+    --session-id <SESSION_ID>  [action=set takes=1..=1 required]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents refresh-usage [hidden]
+    --claim-id <CLAIM_ID>  [action=set takes=1..=1 required hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --kind <KIND>  [action=set takes=1..=1 required]
+    --merge-windows  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents register
+    <kind>  [action=set takes=1..=1]
+    --check  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents restart
+    <reference>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents resume
+    <scope>  [action=set takes=1..=1]
+    --bg  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --from-pr <PR>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents show (aliases: inspect)
+    <reference>  [action=set takes=1..=1 required]
+    --ansi  [action=set-true takes=0..=0]
+    --capture  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents stop
+    <reference>  [action=set takes=1..=1 required]
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents top
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --interval <INTERVAL>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --once  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents wait
+    <references>  [action=append takes=1..=inf required]
+    --any  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --from-start  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --stream  [action=set-true takes=0..=0]
+    --timeout <TIMEOUT>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz answer
+    <selectors>  [action=append takes=1..=inf]
+    <target>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json <FILE>  [action=set takes=0..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-wait  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --text <TEXT>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --wait <DURATION>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz asks
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz asks help
+
+rimz asks help help
+
+rimz asks help list
+
+rimz asks help show
+
+rimz asks list
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz asks show
+    <target>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz attach
+    <workspace>  [action=set takes=1..=1]
+    --attach  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-attach  [action=set-true takes=0..=0]
+    --no-resume  [action=set-true takes=0..=0]
+    --print  [action=set-true takes=0..=0]
+    --refresh-ms <REFRESH_MS>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz budget
+    <value>  [action=set takes=1..=1]
+    --account <KIND>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-continue  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz channel
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz channel help
+
+rimz channel help help
+
+rimz channel help list
+
+rimz channel help new
+
+rimz channel help rm
+
+rimz channel list
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz channel new
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz channel rm (aliases: remove)
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz codex [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz codex app-server [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz codex app-server help
+
+rimz codex app-server help help
+
+rimz codex app-server help serve
+
+rimz codex app-server serve
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz codex help
+
+rimz codex help app-server [hidden]
+
+rimz codex help app-server serve
+
+rimz codex help help
+
+rimz config
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz config get
+    <key>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz config help
+
+rimz config help get
+
+rimz config help help
+
+rimz config help init
+
+rimz config help path
+
+rimz config help set
+
+rimz config init
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --force  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --print  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz config path
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz config set
+    <key>  [action=set takes=1..=1 required]
+    <value>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz coverage
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz daemon [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz daemon content [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --slot <SLOT>  [action=set takes=1..=1 required]
+    --tmux  [action=set-true takes=0..=0 global]
+    --worktree-root <WORKTREE_ROOT>  [action=set takes=1..=1 required]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz daemon help
+
+rimz daemon help content [hidden]
+
+rimz daemon help help
+
+rimz doctor
+    --audit  [action=set-true takes=0..=0]
+    --clear  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --output <PATH>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz gc
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --dry-run  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --older-than <OLDER_THAN>  [action=set takes=1..=1 default=24h]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz help
+
+rimz help agents
+
+rimz help agents auto-continue [hidden]
+
+rimz help agents auto-redeem [hidden]
+
+rimz help agents budget
+
+rimz help agents budget-park [hidden]
+
+rimz help agents check
+
+rimz help agents exec [hidden]
+
+rimz help agents focus
+
+rimz help agents fork
+
+rimz help agents history
+
+rimz help agents list
+
+rimz help agents logs
+
+rimz help agents refresh
+
+rimz help agents refresh-context [hidden]
+
+rimz help agents refresh-usage [hidden]
+
+rimz help agents register
+
+rimz help agents restart
+
+rimz help agents resume
+
+rimz help agents show
+
+rimz help agents stop
+
+rimz help agents top
+
+rimz help agents wait
+
+rimz help answer
+
+rimz help asks
+
+rimz help asks list
+
+rimz help asks show
+
+rimz help attach
+
+rimz help budget
+
+rimz help channel
+
+rimz help channel list
+
+rimz help channel new
+
+rimz help channel rm
+
+rimz help codex [hidden]
+
+rimz help codex app-server [hidden]
+
+rimz help codex app-server serve
+
+rimz help config
+
+rimz help config get
+
+rimz help config init
+
+rimz help config path
+
+rimz help config set
+
+rimz help coverage
+
+rimz help daemon [hidden]
+
+rimz help daemon content [hidden]
+
+rimz help doctor
+
+rimz help gc
+
+rimz help help
+
+rimz help hooks
+
+rimz help hooks feed [hidden]
+
+rimz help hooks install
+
+rimz help hooks uninstall
+
+rimz help list
+
+rimz help list-pets
+
+rimz help list-themes
+
+rimz help loop
+
+rimz help loop add
+
+rimz help loop fire
+
+rimz help loop list
+
+rimz help loop logs
+
+rimz help loop pause
+
+rimz help loop remove
+
+rimz help loop rename
+
+rimz help loop resume
+
+rimz help loop run [hidden]
+
+rimz help loop show
+
+rimz help loop stop
+
+rimz help loop watch
+
+rimz help message
+
+rimz help message cancel
+
+rimz help message clear
+
+rimz help message deliver [hidden]
+
+rimz help message edit
+
+rimz help message list
+
+rimz help message requeue
+
+rimz help message show
+
+rimz help message steer
+
+rimz help message sweep [hidden]
+
+rimz help pane
+
+rimz help pane bandwidth
+
+rimz help pane capture
+
+rimz help pane detach
+
+rimz help pane focus
+
+rimz help pane list
+
+rimz help pane send
+
+rimz help pane split
+
+rimz help ping
+
+rimz help providers
+
+rimz help reload
+
+rimz help remote
+
+rimz help remote add
+
+rimz help remote connect
+
+rimz help remote link-stats [hidden]
+
+rimz help remote link-stats ingest
+
+rimz help remote list
+
+rimz help remote rename
+
+rimz help remote reset
+
+rimz help remote rm
+
+rimz help remote setup
+
+rimz help remote update
+
+rimz help reset
+
+rimz help setup
+
+rimz help sidebar [hidden]
+
+rimz help sidebar fixture [hidden]
+
+rimz help sidebar focus [hidden]
+
+rimz help sidebar gallery [hidden]
+
+rimz help sidebar gallery-render [hidden]
+
+rimz help sidebar mark-read [hidden]
+
+rimz help sidebar mark-unread [hidden]
+
+rimz help sidebar notify-test [hidden]
+
+rimz help sidebar record-focus-repair [hidden]
+
+rimz help sidebar render
+
+rimz help sidebar repair
+
+rimz help sidebar serve
+
+rimz help sidebar snapshot
+
+rimz help sidebar wake [hidden]
+
+rimz help start
+
+rimz help stats
+
+rimz help statusline [hidden]
+
+rimz help statusline feed [hidden]
+
+rimz help transcript
+
+rimz help trust
+
+rimz help trust grant
+
+rimz help trust revoke
+
+rimz help trust status
+
+rimz help uninstall
+
+rimz help update
+
+rimz help web
+
+rimz help web open
+
+rimz help web start
+
+rimz help web status
+
+rimz help web stop
+
+rimz help web token
+
+rimz help web token create
+
+rimz help web token ensure [hidden]
+
+rimz help web token list
+
+rimz help web token revoke
+
+rimz help web token revoke-all
+
+rimz help web url
+
+rimz help workspace
+
+rimz help workspace migrate
+
+rimz help workspace resolve
+
+rimz help workspace rotate-events
+
+rimz help worktree
+
+rimz help worktree cleanup [hidden]
+
+rimz help worktree list
+
+rimz help worktree new
+
+rimz help worktree remove
+
+rimz hooks
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz hooks feed [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --event <EVENT>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --source <SOURCE>  [action=set takes=1..=1 required]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz hooks help
+
+rimz hooks help feed [hidden]
+
+rimz hooks help help
+
+rimz hooks help install
+
+rimz hooks help uninstall
+
+rimz hooks install
+    <agent>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --dry-run  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz hooks uninstall
+    <agent>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz list
+    -a, --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz list-pets
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz list-themes
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop add
+    <name>  [action=set takes=1..=1 required]
+    --agent <AGENT>  [action=set takes=1..=1]
+    --at <AT>  [action=set takes=1..=1]
+    --budget <AMOUNT[/day]>  [action=set takes=1..=1]
+    --budget-per-day <AMOUNT>  [action=set takes=1..=1]
+    --check <CMD>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --cron <CRON>  [action=set takes=1..=1]
+    --effort <EFFORT>  [action=set takes=1..=1]
+    --every <EVERY>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --in <DUR>  [action=set takes=1..=1]
+    --max-attempts <N>  [action=set takes=1..=1]
+    --max-strikes <N>  [action=set takes=1..=1]
+    --mode <MODE>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --on <fail|success>  [action=set takes=1..=1]
+    --project  [action=set-true takes=0..=0]
+    --prompt <PROMPT>  [action=set takes=1..=1]
+    --prompt-file <PATH>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 default=.]
+    --surplus <RATIO>  [action=set takes=1..=1]
+    --surplus-after <DUR>  [action=set takes=1..=1]
+    --system-prompt-file <PATH>  [action=set takes=1..=1]
+    --timeout <TIMEOUT>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --until <DUR>  [action=set takes=1..=1]
+    --verify <CMD>  [action=set takes=1..=1]
+    --wake <ADDRESS>  [action=set takes=1..=1]
+    --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop fire
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --keep  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop help
+
+rimz loop help add
+
+rimz loop help fire
+
+rimz loop help help
+
+rimz loop help list
+
+rimz loop help logs
+
+rimz loop help pause
+
+rimz loop help remove
+
+rimz loop help rename
+
+rimz loop help resume
+
+rimz loop help run [hidden]
+
+rimz loop help show
+
+rimz loop help stop
+
+rimz loop help watch
+
+rimz loop list
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop logs
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --failed  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    -n, --runs <RUNS>  [action=set takes=1..=1 default=10]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop pause
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --for <DUR>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop remove
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop rename
+    <name>  [action=set takes=1..=1 required]
+    <new_name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop resume
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop run [hidden]
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop show
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    -n, --runs <RUNS>  [action=set takes=1..=1 default=10]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop stop
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz loop watch
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --hold  [action=set-true takes=0..=0 hidden]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message (aliases: msg)
+    <target>  [action=set takes=1..=1]
+    <text>  [action=set takes=1..=1]
+    --after <ADDR>  [action=append takes=1..=1]
+    --all  [action=set-true takes=0..=0]
+    --any  [action=set-true takes=0..=0]
+    --channel <NAME>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --create  [action=set-true takes=0..=0]
+    --file <PATH>  [action=set takes=1..=1]
+    --force  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-enter  [action=set-true takes=0..=0]
+    --no-from  [action=set-true takes=0..=0]
+    --on <ON>  [action=set takes=1..=1 default=done]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --schedule <DUR|HH:MM>  [action=set takes=1..=1]
+    --smart-compact <PCT|TOKENS>  [action=set takes=1..=1]
+    --stdin  [action=set-true takes=0..=0]
+    --steer  [action=set-true takes=0..=0]
+    --tmux  [action=set-true takes=0..=0 global]
+    --wait <DURATION>  [action=set takes=0..=1]
+    --when <'ADDR STATUS DUR'>  [action=append takes=1..=1]
+    --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message cancel (aliases: remove)
+    <message_ids>  [action=append takes=1..=inf]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message clear
+    <target>  [action=set takes=1..=1]
+    --channel <NAME>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message deliver [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --message-id <MESSAGE_ID>  [action=set takes=1..=1 required]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message edit
+    <message_id>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --enter  [action=set-true takes=0..=0]
+    --file <PATH>  [action=set takes=1..=1]
+    --force  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-enter  [action=set-true takes=0..=0]
+    --no-force  [action=set-true takes=0..=0]
+    --no-schedule  [action=set-true takes=0..=0]
+    --no-smart-compact  [action=set-true takes=0..=0]
+    --on <ON>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --schedule <DUR|HH:MM>  [action=set takes=1..=1]
+    --smart-compact <PCT|TOKENS>  [action=set takes=1..=1]
+    --text <TEXT>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message help
+
+rimz message help cancel
+
+rimz message help clear
+
+rimz message help deliver [hidden]
+
+rimz message help edit
+
+rimz message help help
+
+rimz message help list
+
+rimz message help requeue
+
+rimz message help show
+
+rimz message help steer
+
+rimz message help sweep [hidden]
+
+rimz message list
+    <target>  [action=set takes=1..=1]
+    --all  [action=set-true takes=0..=0]
+    --channel <NAME>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --limit <N>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --status <STATUS>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message requeue
+    <message_id>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --enter  [action=set-true takes=0..=0]
+    --file <PATH>  [action=set takes=1..=1]
+    --force  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-enter  [action=set-true takes=0..=0]
+    --no-force  [action=set-true takes=0..=0]
+    --no-schedule  [action=set-true takes=0..=0]
+    --no-smart-compact  [action=set-true takes=0..=0]
+    --on <ON>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --schedule <DUR|HH:MM>  [action=set takes=1..=1]
+    --smart-compact <PCT|TOKENS>  [action=set takes=1..=1]
+    --text <TEXT>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message show (aliases: status)
+    <message_id>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message steer
+    <message_id>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --force  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz message sweep [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane bandwidth
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --secs <SECS>  [action=set takes=1..=1 default=5]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane capture
+    <target>  [action=set takes=1..=1 required]
+    --ansi  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --lines <LINES>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane detach
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane focus
+    <target>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --pane-process-start <PANE_PROCESS_START>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane help
+
+rimz pane help bandwidth
+
+rimz pane help capture
+
+rimz pane help detach
+
+rimz pane help focus
+
+rimz pane help help
+
+rimz pane help list
+
+rimz pane help send
+
+rimz pane help split
+
+rimz pane list
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane send
+    <target>  [action=set takes=1..=1 required]
+    <text>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --enter  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --key <KEY>  [action=append takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane split
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz ping
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz providers
+    <kind>  [action=set takes=1..=1]
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --refresh  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz reload
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --repair  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote add
+    <name>  [action=set takes=1..=1 required]
+    <target>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-auto-forward  [action=set-true takes=0..=0]
+    --no-reconnect  [action=set-true takes=0..=0]
+    --no-resume  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote connect
+    <alias_or_target>  [action=set takes=1..=1 required]
+    --attach  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --force-version  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-attach  [action=set-true takes=0..=0]
+    --no-auto-forward  [action=set-true takes=0..=0]
+    --no-reconnect  [action=set-true takes=0..=0]
+    --print  [action=set-true takes=0..=0]
+    --reset  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --web  [action=set-true takes=0..=0]
+    --web-port <WEB_PORT>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote help
+
+rimz remote help add
+
+rimz remote help connect
+
+rimz remote help help
+
+rimz remote help link-stats [hidden]
+
+rimz remote help link-stats ingest
+
+rimz remote help list
+
+rimz remote help rename
+
+rimz remote help reset
+
+rimz remote help rm
+
+rimz remote help setup
+
+rimz remote help update
+
+rimz remote link-stats [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote link-stats help
+
+rimz remote link-stats help help
+
+rimz remote link-stats help ingest
+
+rimz remote link-stats ingest
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --dir <DIR>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session <SESSION>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote list (aliases: ls)
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote rename
+    <new>  [action=set takes=1..=1 required]
+    <old>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote reset
+    <alias_or_target>  [action=set takes=1..=1 required]
+    --attach  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --force-version  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-attach  [action=set-true takes=0..=0]
+    --no-auto-forward  [action=set-true takes=0..=0]
+    --no-reconnect  [action=set-true takes=0..=0]
+    --print  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --web  [action=set-true takes=0..=0]
+    --web-port <WEB_PORT>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote rm
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote setup
+    <alias_or_host>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote update
+    <name>  [action=set takes=1..=1 required]
+    <target>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-auto-forward  [action=set-true takes=0..=0]
+    --no-reconnect  [action=set-true takes=0..=0]
+    --no-resume  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz reset
+    <path>  [action=set takes=1..=1 default=.]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --hard  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-start  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --yes  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz setup
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --yes  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar fixture [hidden]
+    <state>  [action=set takes=1..=1 required values=empty|fleet|provider|cockpit|focus|economy|reach]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --height <HEIGHT>  [action=set takes=1..=1 default=34]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --theme-mode <THEME_MODE>  [action=set takes=1..=1]
+    --theme-scheme <THEME_SCHEME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --watch  [action=set-true takes=0..=0]
+    --width <WIDTH>  [action=set takes=1..=1 default=54]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar focus [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --toggle  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar gallery [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --pets  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar gallery-render [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --pets  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar help
+
+rimz sidebar help fixture [hidden]
+
+rimz sidebar help focus [hidden]
+
+rimz sidebar help gallery [hidden]
+
+rimz sidebar help gallery-render [hidden]
+
+rimz sidebar help help
+
+rimz sidebar help mark-read [hidden]
+
+rimz sidebar help mark-unread [hidden]
+
+rimz sidebar help notify-test [hidden]
+
+rimz sidebar help record-focus-repair [hidden]
+
+rimz sidebar help render
+
+rimz sidebar help repair
+
+rimz sidebar help serve
+
+rimz sidebar help snapshot
+
+rimz sidebar help wake [hidden]
+
+rimz sidebar mark-read [hidden]
+    <target>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar mark-unread [hidden]
+    <target>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar notify-test [hidden]
+    <target>  [action=set takes=1..=1 required]
+    --body <BODY>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --force-bell  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --kind <KIND>  [action=set takes=1..=1 default=waiting]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-command  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --title <TITLE>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar record-focus-repair [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --record-json <RECORD_JSON>  [action=set takes=1..=1 required]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar render
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --height <HEIGHT>  [action=set takes=1..=1 default=24]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --width <WIDTH>  [action=set takes=1..=1 default=80]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar repair
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar serve
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1]
+    --refresh-ms <REFRESH_MS>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tick-seconds <TICK_SECONDS>  [action=set takes=1..=1 default=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar snapshot
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --exclude-pane-id <EXCLUDE_PANE_ID>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --min-pane-cache-ms <MIN_PANE_CACHE_MS>  [action=set takes=1..=1 hidden]
+    --mux <MUX>  [action=set takes=1..=1]
+    --no-produce  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar wake [hidden]
+    --command-arg <COMMAND_ARGS>  [action=append takes=1..=1 hidden]
+    --focused-pane-id <FOCUSED_PANE_IDS>  [action=append takes=1..=1 hidden]
+    --plugin-commands-failed <PLUGIN_COMMANDS_FAILED>  [action=set takes=1..=1 hidden]
+    --unfocused-pane-id <UNFOCUSED_PANE_IDS>  [action=append takes=1..=1 hidden]
+    --active-tab <ACTIVE_TAB>  [action=set takes=1..=1 hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --focus-clients <FOCUS_CLIENTS>  [action=set takes=1..=1 hidden]
+    --focus-generation <FOCUS_GENERATION>  [action=set takes=1..=1 hidden]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --pane-id <PANE_ID>  [action=set takes=1..=1]
+    --plugin-build <PLUGIN_BUILD>  [action=set takes=1..=1 hidden]
+    --plugin-commands <PLUGIN_COMMANDS>  [action=set takes=1..=1 hidden]
+    --plugin-commands-succeeded <PLUGIN_COMMANDS_SUCCEEDED>  [action=set takes=1..=1 hidden]
+    --plugin-id <PLUGIN_ID>  [action=set takes=1..=1 hidden]
+    --plugin-loaded-at-ms <PLUGIN_LOADED_AT_MS>  [action=set takes=1..=1 hidden]
+    --plugin-mem-pages <PLUGIN_MEM_PAGES>  [action=set takes=1..=1 hidden]
+    --plugin-other-failures <PLUGIN_OTHER_FAILURES>  [action=set takes=1..=1 hidden]
+    --plugin-stale-writer-rejections <PLUGIN_STALE_WRITER_REJECTIONS>  [action=set takes=1..=1 hidden]
+    --plugin-telemetry <PLUGIN_TELEMETRY>  [action=set takes=1..=1 hidden]
+    --plugin-topology-failures <PLUGIN_TOPOLOGY_FAILURES>  [action=set takes=1..=1 hidden]
+    --plugin-uptime-ms <PLUGIN_UPTIME_MS>  [action=set takes=1..=1 hidden]
+    --plugin-zellij-version <PLUGIN_ZELLIJ_VERSION>  [action=set takes=1..=1 hidden]
+    --reason <REASON>  [action=set takes=1..=1 required values=panes-changed|pane-opened|pane-closed|focus-stranded|switch-settled|command-changed|focus-changed|alive]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --topology <TOPOLOGY>  [action=append takes=1..=1 hidden]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz start
+    <path>  [action=set takes=1..=1 default=.]
+    --attach  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-attach  [action=set-true takes=0..=0]
+    --no-resume  [action=set-true takes=0..=0]
+    --print  [action=set-true takes=0..=0]
+    --refresh-ms <REFRESH_MS>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz stats
+    --assists  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --dollars  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --hold  [action=set-true takes=0..=0 hidden]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --refresh  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz statusline [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz statusline feed [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --source <SOURCE>  [action=set takes=1..=1 required]
+    --subagent  [action=set-true takes=0..=0]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz statusline help
+
+rimz statusline help feed [hidden]
+
+rimz statusline help help
+
+rimz transcript
+    <target>  [action=set takes=1..=1]
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --flat  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    -n, --last <LAST>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <WORKTREE>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz trust
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0 global]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz trust grant
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0 global]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz trust help
+
+rimz trust help grant
+
+rimz trust help help
+
+rimz trust help revoke
+
+rimz trust help status
+
+rimz trust revoke
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0 global]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz trust status
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0 global]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz uninstall
+    --all  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --config  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --keep-binary  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --state  [action=set-true takes=0..=0]
+    --tmux  [action=set-true takes=0..=0 global]
+    --yes  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz update
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --version <TAG>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web help
+
+rimz web help help
+
+rimz web help open
+
+rimz web help start
+
+rimz web help status
+
+rimz web help stop
+
+rimz web help token
+
+rimz web help token create
+
+rimz web help token ensure [hidden]
+
+rimz web help token list
+
+rimz web help token revoke
+
+rimz web help token revoke-all
+
+rimz web help url
+
+rimz web open
+    <path>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --confirm-resume  [action=set-true takes=0..=0 hidden]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --no-resume  [action=set-true takes=0..=0]
+    --no-start  [action=set-true takes=0..=0]
+    --print  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session <SESSION>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web start
+    --cert <CERT>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --daemonize  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --ip <IP>  [action=set takes=1..=1]
+    --key <KEY>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --port <PORT>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web status
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web stop
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web token
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web token create
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --read-only  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web token ensure [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web token help
+
+rimz web token help create
+
+rimz web token help ensure [hidden]
+
+rimz web token help help
+
+rimz web token help list
+
+rimz web token help revoke
+
+rimz web token help revoke-all
+
+rimz web token list
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web token revoke
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web token revoke-all
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web url
+    <path>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session <SESSION>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz workspace
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz workspace help
+
+rimz workspace help help
+
+rimz workspace help migrate
+
+rimz workspace help resolve
+
+rimz workspace help rotate-events
+
+rimz workspace migrate
+    <new_root>  [action=set takes=1..=1 required]
+    <old_root>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz workspace resolve
+    <path>  [action=set takes=1..=1 default=.]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz workspace rotate-events
+    --archive-older-than <ARCHIVE_OLDER_THAN>  [action=set takes=1..=1 default=14d]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --max-bytes <MAX_BYTES>  [action=set takes=1..=1 default=67108864]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz worktree
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz worktree cleanup [hidden]
+    <path>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --non-interactive  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz worktree help
+
+rimz worktree help cleanup [hidden]
+
+rimz worktree help help
+
+rimz worktree help list
+
+rimz worktree help new
+
+rimz worktree help remove
+
+rimz worktree list
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz worktree new
+    <name>  [action=set takes=1..=1]
+    --base <BASE>  [action=set takes=1..=1]
+    --branch <BRANCH>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --from-pr <PR>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz worktree remove
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --force  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]

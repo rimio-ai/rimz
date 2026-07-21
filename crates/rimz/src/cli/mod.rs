@@ -648,6 +648,12 @@ pub(crate) fn alive_snapshot(store: &Store, session: &str) -> Result<rimz::Sideb
     ))
 }
 
+// The shipped flag surface, pinned as a snapshot. `help.rs` already guards the
+// visible subcommand list; this covers the flags under each one.
+#[cfg(test)]
+#[path = "surface_tests.rs"]
+mod surface_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
