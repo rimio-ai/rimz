@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::config::{CheckOn, Team};
+use crate::config::{CheckOn, ConfigFileDiagnosis, Team};
 use crate::harness::run::PermissionMode;
 use crate::ids::WorkspaceId;
 use crate::store::atomic::{self, write_bytes_atomically};
@@ -38,23 +38,23 @@ pub enum TrustErr {
         #[source]
         source: std::io::Error,
     },
-    #[error("parsing project config at {path}: {source}")]
+    #[error("cannot load {path} — the file has a TOML error")]
     ConfigParse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        diagnosis: Box<ConfigFileDiagnosis>,
     },
-    #[error("parsing trust record at {path}: {source}")]
+    #[error("cannot load {path} — the file has a TOML error")]
     RecordParse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        diagnosis: Box<ConfigFileDiagnosis>,
     },
-    #[error("parsing birth prompt dismissal at {path}: {source}")]
+    #[error("cannot load {path} — the file has a TOML error")]
     BirthPromptParse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        diagnosis: Box<ConfigFileDiagnosis>,
     },
     #[error("parsing stored surface json in trust record at {path}: {source}")]
     RecordSurfaceJson {
@@ -467,7 +467,7 @@ fn read_project_config(path: &Path) -> Result<Option<ProjectConfig>> {
             let config =
                 toml::from_str::<ProjectConfig>(&text).map_err(|source| TrustErr::ConfigParse {
                     path: path.to_path_buf(),
-                    source,
+                    diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, &text, &source)),
                 })?;
             Ok(Some(config))
         }
@@ -499,7 +499,7 @@ fn read_trust_record(path: &Path) -> Result<Option<TrustRecord>> {
             let record =
                 toml::from_str::<TrustRecord>(&text).map_err(|source| TrustErr::RecordParse {
                     path: path.to_path_buf(),
-                    source,
+                    diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, &text, &source)),
                 })?;
             Ok(Some(record))
         }
@@ -517,7 +517,7 @@ fn read_birth_prompt_dismissal(path: &Path) -> Result<Option<BirthPromptDismissa
             let record = toml::from_str::<BirthPromptDismissal>(&text).map_err(|source| {
                 TrustErr::BirthPromptParse {
                     path: path.to_path_buf(),
-                    source,
+                    diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, &text, &source)),
                 }
             })?;
             Ok(Some(record))
@@ -1208,9 +1208,9 @@ mod tests {
 
         let err = status_with_roots(dir.path(), config.path()).expect_err("status must fail");
         match err {
-            TrustErr::RecordParse { path, source } => {
+            TrustErr::RecordParse { path, diagnosis } => {
                 assert_eq!(path, record_path);
-                let rendered = source.to_string();
+                let rendered = diagnosis.to_string();
                 assert!(
                     rendered.contains("missing field `surface_json`"),
                     "{rendered}"

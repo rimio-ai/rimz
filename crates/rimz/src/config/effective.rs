@@ -4,7 +4,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::config::{AgentsConfig, CommandsConfig, ProfilesConfig, TaskEntry, Tasks, TeamsConfig};
+use crate::config::{
+    AgentsConfig, CommandsConfig, ConfigFileDiagnosis, ProfilesConfig, TaskEntry, Tasks,
+    TeamsConfig,
+};
 use crate::harness::schedule::{self, ScheduleErr};
 use crate::harness::spec::{self as agents_spec, LayoutErr};
 use crate::trust::{self, TrustState};
@@ -21,11 +24,11 @@ pub enum EffectiveConfigErr {
         #[source]
         source: std::io::Error,
     },
-    #[error("parsing project config at {path}: {source}")]
+    #[error("cannot load {path} — the file has a TOML error")]
     Parse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        diagnosis: Box<ConfigFileDiagnosis>,
     },
     #[error("invalid project agents config at {path}: {source}")]
     Agents {
@@ -118,7 +121,10 @@ pub fn load(
     let mut repo =
         repo_config_from_value(&repo_value).map_err(|source| EffectiveConfigErr::Parse {
             path: config_path.clone(),
-            source,
+            diagnosis: Box::new(ConfigFileDiagnosis::spanless(
+                &config_path,
+                source.message(),
+            )),
         })?;
     let config_dir = config_path.parent().unwrap_or(project_root);
     agents_spec::resolve_prompt_paths(&mut repo.profiles, &mut repo.teams, config_dir);
@@ -213,7 +219,7 @@ pub fn project_tasks_from_value(
             .try_into()
             .map_err(|source| EffectiveConfigErr::Parse {
                 path: config_path.to_path_buf(),
-                source,
+                diagnosis: Box::new(ConfigFileDiagnosis::spanless(config_path, source.message())),
             })?;
     let config_dir = config_path.parent().unwrap_or(project_root);
     for (name, entry) in &mut tasks.0 {
@@ -313,7 +319,7 @@ fn read_repo_value(path: &Path) -> Result<Option<toml::Value>> {
             .map(Some)
             .map_err(|source| EffectiveConfigErr::Parse {
                 path: path.to_path_buf(),
-                source,
+                diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, &text, &source)),
             }),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(source) => Err(EffectiveConfigErr::Io {

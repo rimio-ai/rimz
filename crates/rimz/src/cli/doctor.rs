@@ -95,10 +95,16 @@ fn collect_machine_config() -> model::MachineConfigHealth {
         .into_iter()
         .map(|err| model::MachineConfigProblem {
             path: err.path().display().to_string(),
-            error: ui::one_line_error(&err),
+            error: config_error_detail(&err),
         })
         .collect();
     model::MachineConfigHealth { broken_files }
+}
+
+fn config_error_detail(err: &rimz::config::ConfigErr) -> String {
+    err.diagnosis()
+        .map(|diagnosis| format!("{}; fix: {}", diagnosis.summary(), diagnosis.fix()))
+        .unwrap_or_else(|| ui::one_line_error(err))
 }
 
 /// The loop tasks from config plus transient instance state. Read-only and

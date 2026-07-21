@@ -20,6 +20,47 @@ fn explicit_file_registry_preserves_path_and_template_order() {
     assert_eq!(ordered[3].template(), MachineConfig::template_loop());
 }
 
+#[test]
+fn set_classifies_a_duplicate_key_in_the_existing_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[resume]\nauto_continue = false\nauto_continue = true\n",
+    )
+    .expect("write duplicate config");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+
+    let error = editor
+        .set("remote_control.claude", "true")
+        .expect_err("duplicate key blocks editing");
+
+    match error {
+        ConfigEditErr::DocumentParse {
+            path: error_path,
+            diagnosis,
+        } => {
+            assert_eq!(error_path, path);
+            assert_eq!(diagnosis.line(), Some(3));
+            assert_eq!(
+                diagnosis.problem(),
+                "`auto_continue` is defined more than once in the same table"
+            );
+            assert_eq!(
+                diagnosis.fix(),
+                format!(
+                    "remove the extra `auto_continue` at {}:3, then re-run",
+                    path.display()
+                )
+            );
+        }
+        other => panic!("expected document parse error, got {other:?}"),
+    }
+}
+
 const LEGACY_SET_KEYS: &[&str] = &[
     "agents.worktree.dir",
     "agents.worktree.base",

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::ConfigFileDiagnosis;
 use crate::ids::MuxName;
 use crate::remote::{RemoteTarget, RemoteTargetError};
 use crate::store::atomic;
@@ -34,11 +35,11 @@ pub enum AliasErr {
         #[source]
         source: std::io::Error,
     },
-    #[error("parsing remote aliases at {path}: {source}")]
+    #[error("cannot load {path} — the file has a TOML error")]
     Parse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        diagnosis: Box<ConfigFileDiagnosis>,
     },
     #[error("serializing remote aliases: {0}")]
     Serialize(#[from] toml::ser::Error),
@@ -120,7 +121,7 @@ impl RemoteAliases {
             Ok(text) => {
                 let parsed: Self = toml::from_str(&text).map_err(|source| AliasErr::Parse {
                     path: path.to_path_buf(),
-                    source,
+                    diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, &text, &source)),
                 })?;
                 Ok(parsed.validated()?.sorted())
             }

@@ -33,6 +33,7 @@ mod animation;
 mod attention;
 mod color;
 mod daemon;
+mod diagnosis;
 mod display;
 mod edit;
 pub mod effective;
@@ -66,6 +67,7 @@ pub use color::{
     ColorDepth, PaletteRole, Semantic, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex,
 };
 pub use daemon::{DaemonConfig, DaemonPane};
+pub use diagnosis::ConfigFileDiagnosis;
 pub use display::{
     BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
     DisplayConfig, HighlightStepsConfig, PixelMode, ProviderTabsMode, ScrollbarMode,
@@ -252,11 +254,11 @@ pub enum ConfigErr {
         #[source]
         source: std::io::Error,
     },
-    #[error("parsing per-machine config at {path}: {source}")]
+    #[error("cannot load {path} — the file has a TOML error")]
     Parse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        diagnosis: Box<ConfigFileDiagnosis>,
     },
     #[error("invalid per-machine agents config at {path}: {source}")]
     Agents {
@@ -306,12 +308,20 @@ impl ConfigErr {
     /// reporting a value error rather than a broken file.
     pub fn validation_message(&self) -> String {
         match self {
-            Self::Parse { source, .. } => source.message().to_owned(),
+            Self::Parse { diagnosis, .. } => diagnosis.raw_message().to_owned(),
             Self::Agents { source, .. } => source.to_string(),
             Self::Notifications { source, .. } => source.to_string(),
             Self::Loop { source, .. } => source.to_string(),
             Self::AccountBudget { source, .. } => source.to_string(),
             Self::Io { .. } | Self::RemovedTable { .. } => self.to_string(),
+        }
+    }
+
+    /// The classified TOML failure, when this error came from parsing a file.
+    pub fn diagnosis(&self) -> Option<&ConfigFileDiagnosis> {
+        match self {
+            Self::Parse { diagnosis, .. } => Some(diagnosis),
+            _ => None,
         }
     }
 }
@@ -844,7 +854,7 @@ fn recover<T>(result: Result<Option<T>>) -> Option<T> {
 fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
     toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
-        source,
+        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })
 }
 
@@ -869,7 +879,7 @@ where
 {
     let deserializer = toml::Deserializer::parse(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
-        source,
+        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
     let mut ignored = Vec::new();
     let _ = serde_ignored::deserialize::<_, _, T>(deserializer, |path| {
@@ -877,7 +887,7 @@ where
     })
     .map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
-        source,
+        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
     Ok(ignored)
 }
@@ -885,7 +895,7 @@ where
 fn parse_theme_text(path: &Path, text: &str) -> Result<ThemeConfig> {
     let mut file: ThemeFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
-        source,
+        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
     file.theme.colors = file.colors;
     Ok(file.theme)
@@ -895,7 +905,7 @@ fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsConfig> {
     check_removed_agents_tables(path, text)?;
     let mut file: AgentsFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
-        source,
+        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
     resolve_agents_prompt_paths(&mut file.agents.profiles, &mut file.agents.teams, path);
     Ok(file.agents)
@@ -904,7 +914,7 @@ fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsConfig> {
 fn parse_loop_text(path: &Path, text: &str) -> Result<LoopConfig> {
     let loop_: LoopConfig = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
-        source,
+        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
     loop_.validate_budgets().map_err(|source| ConfigErr::Loop {
         path: path.to_path_buf(),
@@ -954,7 +964,7 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
 fn parse_agents_fragment_text(path: &Path, text: &str) -> Result<AgentsFragment> {
     let mut file: AgentsFragmentFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
-        source,
+        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
     resolve_agents_prompt_paths(&mut file.agents.profiles, &mut file.agents.teams, path);
     Ok(file.agents)

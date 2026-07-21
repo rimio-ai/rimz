@@ -926,7 +926,7 @@ pub(super) fn collect_remote_control(
         Ok(config) => config.remote_control,
         Err(err) => {
             return model::RemoteControl::Unavailable {
-                error: err.to_string(),
+                error: super::config_error_detail(&err),
             };
         }
     };

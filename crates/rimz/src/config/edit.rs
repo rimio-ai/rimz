@@ -7,8 +7,9 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Val
 use crate::store::atomic::write_bytes_atomically;
 
 use super::{
-    AnimationRole, GlyphRole, MachineConfig, MachineConfigFile, MachineConfigFileKind,
-    MachineConfigFiles, is_named_glyph_set, validate_glyph_cells, validate_glyph_source,
+    AnimationRole, ConfigFileDiagnosis, GlyphRole, MachineConfig, MachineConfigFile,
+    MachineConfigFileKind, MachineConfigFiles, is_named_glyph_set, validate_glyph_cells,
+    validate_glyph_source,
 };
 
 type Result<T> = std::result::Result<T, ConfigEditErr>;
@@ -32,11 +33,11 @@ pub enum ConfigEditErr {
         #[source]
         source: std::io::Error,
     },
-    #[error("parsing {path}: {source}")]
+    #[error("cannot edit {path} — the file has a TOML error")]
     DocumentParse {
         path: PathBuf,
         #[source]
-        source: toml_edit::TomlError,
+        diagnosis: Box<ConfigFileDiagnosis>,
     },
     #[error("parsing shipped config template: {source}")]
     TemplateParse {
@@ -136,7 +137,11 @@ impl ConfigEditor {
             text.parse::<DocumentMut>()
                 .map_err(|source| ConfigEditErr::DocumentParse {
                     path: file.path().to_path_buf(),
-                    source,
+                    diagnosis: Box::new(ConfigFileDiagnosis::from_toml_edit(
+                        file.path(),
+                        &text,
+                        &source,
+                    )),
                 })?;
         apply_logical_key(
             &mut doc,
@@ -185,7 +190,9 @@ impl ConfigEditor {
             Err(error) => {
                 return Ok(FileMergeOutcome {
                     path: path.to_path_buf(),
-                    action: MergeAction::LeftUnparseable { error },
+                    action: MergeAction::LeftUnparseable {
+                        diagnosis: ConfigFileDiagnosis::from_toml_edit(path, &old_text, &error),
+                    },
                     skipped: Vec::new(),
                 });
             }
@@ -234,7 +241,7 @@ pub struct FileMergeOutcome {
 pub enum MergeAction {
     Wrote,
     Merged { kept: usize },
-    LeftUnparseable { error: toml_edit::TomlError },
+    LeftUnparseable { diagnosis: ConfigFileDiagnosis },
 }
 
 #[derive(Debug)]
@@ -577,7 +584,7 @@ fn reject_if_ignored(
 ) -> Result<()> {
     let ignored = match MachineConfig::parse_text_unknown_keys(path, &doc.to_string()) {
         Ok(ignored) => ignored,
-        Err(err) if err.to_string().contains("unknown field") => {
+        Err(err) if err.validation_message().contains("unknown field") => {
             return Err(ConfigEditErr::UnknownKey {
                 key: logical.join("."),
             });
@@ -609,7 +616,7 @@ fn is_known_get_key(files: &MachineConfigFiles, path: &[String]) -> Result<bool>
     set_document_value(&mut doc, &doc_key, Value::from("__rimz_probe__"))?;
     let ignored = match MachineConfig::parse_text_unknown_keys(file.path(), &doc.to_string()) {
         Ok(ignored) => ignored,
-        Err(err) if err.to_string().contains("unknown field") => return Ok(false),
+        Err(err) if err.validation_message().contains("unknown field") => return Ok(false),
         Err(_) => return Ok(true),
     };
     let document_key = doc_key.join(".");

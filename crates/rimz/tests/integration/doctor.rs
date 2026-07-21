@@ -314,16 +314,21 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
         .expect("broken files array");
     assert_eq!(broken.len(), 1, "one broken config file: {broken:?}");
     assert_eq!(broken[0]["path"], path.display().to_string());
-    assert!(
-        broken[0]["error"]
-            .as_str()
-            .expect("error string")
-            .contains("duplicate key")
-            && broken[0]["error"]
-                .as_str()
-                .expect("error string")
-                .contains("max_cols"),
-        "precise parse error: {broken:?}",
+    assert_eq!(
+        broken[0]["error"],
+        format!(
+            "line 3: `max_cols` is defined more than once in the same table; fix: remove the extra `max_cols` at {}:3, then re-run",
+            path.display()
+        ),
+        "classified parse error: {broken:?}",
+    );
+    assert_eq!(report["remote_control"]["state"], "unavailable");
+    assert_eq!(
+        report["remote_control"]["error"],
+        format!(
+            "line 3: `max_cols` is defined more than once in the same table; fix: remove the extra `max_cols` at {}:3, then re-run",
+            path.display()
+        )
     );
 
     let output = env.rimz().arg("doctor").output().expect("spawn doctor");
@@ -335,8 +340,16 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
     assert!(stdout.contains("MACHINE CONFIG"), "{stdout}");
     assert!(stdout.contains("theme.toml is unparseable"), "{stdout}");
     assert!(
-        stdout.contains("duplicate key") && stdout.contains("max_cols"),
+        stdout.contains("line 3: `max_cols` is defined more than once"),
         "{stdout}",
+    );
+    let remote = stdout
+        .lines()
+        .find(|line| line.contains("config unavailable"))
+        .expect("remote-control config failure");
+    assert!(
+        remote.contains("fix: remove the extra `max_cols`"),
+        "{remote}"
     );
 }
 

@@ -583,6 +583,32 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
 }
 
 #[test]
+fn config_set_reports_a_duplicate_key_with_its_fix() {
+    let env = Env::new();
+    let path = machine_config_path(&env);
+    write_machine_file(
+        &path,
+        "[resume]\nauto_continue = false\nauto_continue = true\n",
+    );
+
+    let output = env
+        .rimz()
+        .args(["config", "set", "remote_control.claude", "true"])
+        .output()
+        .expect("run config set");
+
+    assert!(!output.status.success(), "duplicate key blocks editing");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("utf8 stderr"),
+        format!(
+            "error: cannot edit {} — the file has a TOML error\n  3 | auto_continue = true\n    | `auto_continue` is defined more than once in the same table\n  fix: remove the extra `auto_continue` at {}:3, then re-run\n",
+            path.display(),
+            path.display(),
+        )
+    );
+}
+
+#[test]
 fn setup_without_tty_reports_and_writes_nothing() {
     let env = Env::new();
 
@@ -852,8 +878,9 @@ fn setup_yes_leaves_unparseable_config_untouched() {
             "Left {} untouched - unparseable:",
             path.display()
         )))
-        .stdout(contains("duplicate key"))
-        .stdout(contains("max_cols"))
+        .stdout(contains(
+            "line 3: `max_cols` is defined more than once in the same table",
+        ))
         .stdout(contains("fix the file and rerun rimz setup"));
 
     assert_eq!(

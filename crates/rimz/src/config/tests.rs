@@ -155,11 +155,11 @@ fn broken_machine_files_reports_only_the_unparseable_file() {
 
     assert_eq!(errors.len(), 1, "only theme.toml is broken: {errors:?}");
     match &errors[0] {
-        ConfigErr::Parse { path, source } => {
+        ConfigErr::Parse { path, diagnosis } => {
             assert_eq!(path, &dir.path().join(THEME_FILE));
-            let detail = source.to_string();
+            let detail = diagnosis.to_string();
             assert!(
-                detail.contains("duplicate key") && detail.contains("max_cols"),
+                detail.contains("defined more than once") && detail.contains("max_cols"),
                 "precise duplicate-key error: {detail}",
             );
         }

@@ -204,11 +204,11 @@ fn render_merge_report(report: &MergeReport) -> Result<()> {
                     file.path.display()
                 ))?;
             }
-            MergeAction::LeftUnparseable { ref error } => {
+            MergeAction::LeftUnparseable { ref diagnosis } => {
                 print_line(&format!(
                     "Left {} untouched - unparseable: {}; fix the file and rerun rimz setup",
                     file.path.display(),
-                    render::one_line(&error.to_string()),
+                    diagnosis.summary(),
                 ))?;
             }
         }

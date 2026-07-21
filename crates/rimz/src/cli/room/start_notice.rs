@@ -15,7 +15,9 @@ fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
     let path = render::home_relative(&err.path().display().to_string());
     format!(
         "{path} is unparseable — every setting in it is ignored and built-in defaults apply: {}; fix the file, then restart",
-        render::one_line_error(err),
+        err.diagnosis()
+            .map(rimz::config::ConfigFileDiagnosis::summary)
+            .unwrap_or_else(|| render::one_line_error(err)),
     )
 }
 
@@ -276,9 +278,10 @@ mod tests {
             notice.contains("/tmp/theme.toml is unparseable"),
             "{notice}"
         );
+        assert!(notice.contains("line 3"), "{notice}");
         assert!(
-            notice.contains("duplicate key") && notice.contains("max_cols"),
-            "{notice}",
+            notice.contains("`max_cols` is defined more than once"),
+            "{notice}"
         );
         assert!(notice.contains("built-in defaults apply"), "{notice}");
     }
