@@ -54,7 +54,9 @@ Styling is fixed when the room's ttyd process starts. After changing these field
 
 The browser terminal keeps a steady cursor instead of xterm's rapid blink. Shift+Enter reaches the agent as a soft newline through tmux's extended-key path, matching Alt+Enter and native terminal clients.
 
-On macOS, ttyd treats Option as Meta before the browser composes characters. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`; these input fixes remain active when client styling is disabled.
+Copying in tmux copy mode or selecting browser-native text with Shift-drag writes the selection to the system clipboard.
+
+On macOS, ttyd treats Option as Meta and RimZ intercepts letter and digit chords before the browser starts dead-key composition. Chords such as `alt+,` and `alt+.` therefore reach tmux instead of becoming `≤` and `≥`, while chords such as `alt+n` create no trailing composed character; these input fixes remain active when client styling is disabled.
 
 ## Open a remote room
 

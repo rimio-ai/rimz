@@ -32,7 +32,7 @@ const START_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
-const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v2";
+const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v3";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct TtydCredential {
@@ -534,9 +534,9 @@ fn inject_client_profile(stock: &str, family: Option<&str>, faces: &[FontFace]) 
         return None;
     }
 
-    let mut style = String::from("<style id=\"rimz-web-fonts\">");
-    if let Some(family) = family {
-        let family = css_string(family);
+    let mut style = String::from("<style id=\"rimz-web-style\">");
+    let css_family = family.map(css_string);
+    if let Some(family) = css_family.as_deref() {
         for face in faces {
             let payload = base64::engine::general_purpose::STANDARD.encode(&face.bytes);
             style.push_str(&format!(
@@ -545,6 +545,13 @@ fn inject_client_profile(stock: &str, family: Option<&str>, faces: &[FontFace]) 
             ));
         }
     }
+    let overlay_family = css_family.map_or_else(
+        || "monospace".to_owned(),
+        |family| format!("\"{family}\",monospace"),
+    );
+    style.push_str(&format!(
+        ".xterm .rimz-overlay{{top:50% !important;left:50% !important;transform:translate(-50%,-50%);padding:10px 18px !important;border-radius:10px !important;background:rgba(13,15,20,.78) !important;color:#e6e8ee !important;font:500 13px/1.4 {overlay_family} !important;letter-spacing:.04em;border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 32px rgba(0,0,0,.45);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}}"
+    ));
     style.push_str("</style>");
     let bootstrap = client_bootstrap(family);
 
@@ -581,13 +588,57 @@ waitForTerminal().then(term=>{{
     if(core&&typeof core.triggerDataEvent==="function"){{core.triggerDataEvent(data,true);return true;}}
     return false;
   }};
+  const altKeyChar=event=>{{
+    if(/^Key[A-Z]$/.test(event.code)){{
+      const ch=event.code.slice(3);
+      return event.shiftKey?ch:ch.toLowerCase();
+    }}
+    if(/^Digit[0-9]$/.test(event.code))return event.code.slice(5);
+    return null;
+  }};
   const keyHandler=event=>{{
+    if(event.type==="keydown"&&event.altKey&&!event.ctrlKey&&!event.metaKey){{
+      const ch=altKeyChar(event);
+      if(ch&&sendInput("\u001b"+ch)){{event.preventDefault();event.stopPropagation();return false;}}
+    }}
     if(event.type!=="keydown"||event.key!=="Enter"||!event.shiftKey||event.altKey||event.ctrlKey||event.metaKey)return true;
     if(!sendInput("\u001b[13;2u"))return true;
     event.preventDefault();
     event.stopPropagation();
     return false;
   }};
+  term.parser.registerOscHandler(52,data=>{{
+    const semi=data.indexOf(";");
+    if(semi<0)return true;
+    const payload=data.slice(semi+1);
+    if(payload==="?")return true;
+    try{{
+      const bytes=Uint8Array.from(atob(payload),ch=>ch.charCodeAt(0));
+      const text=new TextDecoder().decode(bytes);
+      if(text)navigator.clipboard.writeText(text).catch(()=>{{}});
+    }}catch(_){{}}
+    return true;
+  }});
+  term.onSelectionChange(()=>{{
+    const selection=term.getSelection();
+    if(selection)navigator.clipboard.writeText(selection).catch(()=>{{}});
+  }});
+  const updateOverlay=node=>{{
+    const element=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
+    if(!element)return;
+    let overlay=element.closest(".rimz-overlay");
+    if(element.tagName==="DIV"&&element.style.borderRadius==="15px"){{
+      element.classList.add("rimz-overlay");
+      overlay=element;
+    }}
+    if(overlay&&overlay.textContent==="Press ⏎ to Reconnect")overlay.textContent="Press Enter to reconnect";
+  }};
+  new MutationObserver(records=>{{
+    for(const record of records){{
+      updateOverlay(record.target);
+      for(const node of record.addedNodes)updateOverlay(node);
+    }}
+  }}).observe(term.element,{{childList:true,subtree:true}});
   const install=()=>{{
     term.options.cursorBlink=false;
     term.attachCustomKeyEventHandler(keyHandler);
@@ -918,9 +969,21 @@ mod tests {
         );
         assert!(rendered.contains("term.options.cursorBlink=false"));
         assert!(rendered.contains("term.attachCustomKeyEventHandler(keyHandler)"));
+        assert!(rendered.contains("registerOscHandler(52"));
+        assert!(rendered.contains("onSelectionChange"));
+        assert!(rendered.contains("event.altKey"));
+        assert!(rendered.contains("element.classList.add(\"rimz-overlay\")"));
+        assert!(rendered.contains("Press Enter to reconnect"));
         assert!(rendered.contains("sendInput(\"\\u001b[13;2u\")"));
         assert!(rendered.contains("term.clearTextureAtlas()"));
-        assert!(rendered.find("rimz-web-fonts").unwrap() < rendered.find("</head>").unwrap());
+        assert!(
+            rendered
+                .contains("font:500 13px/1.4 \"RimZ \\\"Font\\\" \\3c /style>\\3c /script>\\a \"")
+        );
+        let style = rendered.find("rimz-web-style").unwrap();
+        let overlay_rule = rendered.find(".xterm .rimz-overlay").unwrap();
+        let head = rendered.find("</head>").unwrap();
+        assert!(style < overlay_rule && overlay_rule < head);
         assert!(rendered.find("rimz-web-client").unwrap() < rendered.find("</body>").unwrap());
         assert_eq!(
             inject_client_profile("<html></html>", Some("font"), &faces),
