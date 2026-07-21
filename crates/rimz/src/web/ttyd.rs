@@ -270,6 +270,7 @@ fn rotate_credential(config: &MachineConfig) -> Result<(TtydCredential, usize, V
     }
     let profile = client_profile(config);
     let credential = mint_credential()?;
+    let instances = inventory()?;
     stop_instances(&instances)?;
     for instance in &instances {
         start_instance_with_profile(&instance.session, &credential, &profile)?;
