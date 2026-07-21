@@ -588,6 +588,52 @@ fn merge_uncomments_optional_example_under_its_section() {
 }
 
 #[test]
+fn merge_skips_keys_inside_commented_table_examples() {
+    let mut doc = MachineConfig::template_agents()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let mut skipped = Vec::new();
+    let kept = apply_merge_keys(
+        std::path::Path::new("agents.toml"),
+        &mut doc,
+        vec![PendingKey {
+            logical: parse_key("agents.teams.peer.leader").expect("key"),
+            value: Value::from("codex"),
+        }],
+        &mut skipped,
+        std::path::Path::new("missing-agents-home"),
+        std::path::Path::new("config.toml"),
+    );
+
+    assert_eq!(kept, 1);
+    assert!(skipped.is_empty());
+    let rendered = doc.to_string();
+    let peer = rendered.find("[agents.teams.peer]").expect("peer team");
+    let leader = rendered.find("leader = \"codex\"").expect("peer leader");
+    let review = rendered
+        .find("## [agents.teams.review]")
+        .expect("review example");
+    assert!(peer < leader && leader < review, "{rendered}");
+    assert!(
+        rendered.contains("## [agents.teams.review]\n## leader = \"planner\""),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn uncomment_accepts_active_header_with_trailing_comment() {
+    let text = "[notifications] # local choices\n# desktop = \"auto\" # delivery mode\n";
+    let key = parse_key("notifications.desktop").expect("key");
+
+    let rendered = uncomment_template_default(text, &key).expect("matching default");
+
+    assert_eq!(
+        rendered,
+        "[notifications] # local choices\ndesktop = \"auto\" # delivery mode\n"
+    );
+}
+
+#[test]
 fn failed_merge_keeps_template_default_commented() {
     let mut doc = MachineConfig::template_core()
         .parse::<DocumentMut>()

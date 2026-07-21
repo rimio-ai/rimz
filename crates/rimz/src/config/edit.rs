@@ -378,6 +378,7 @@ fn apply_merge_keys(
 fn uncomment_template_default(text: &str, doc_key: &[String]) -> Option<String> {
     let (leaf, parents) = doc_key.split_last()?;
     let mut section = Vec::new();
+    let mut inside_commented_table = false;
     let mut rendered = String::with_capacity(text.len());
     let mut matched = false;
 
@@ -390,18 +391,21 @@ fn uncomment_template_default(text: &str, doc_key: &[String]) -> Option<String> 
             (line, "")
         };
         let trimmed = content.trim_start();
-
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            let header = trimmed.trim_start_matches('[').trim_end_matches(']');
-            section = header.split('.').map(str::trim).collect();
-        }
-
         let uncommented = trimmed
             .strip_prefix('#')
             .map(|line| line.trim_start_matches('#'))
             .map(|line| line.strip_prefix(' ').unwrap_or(line));
+
+        if let Some(header) = template_table_header(trimmed) {
+            section = header.split('.').map(str::trim).collect();
+            inside_commented_table = false;
+        } else if uncommented.and_then(template_table_header).is_some() {
+            inside_commented_table = true;
+        }
+
         let target = uncommented.filter(|line| {
             !matched
+                && !inside_commented_table
                 && section
                     .iter()
                     .copied()
@@ -422,6 +426,18 @@ fn uncomment_template_default(text: &str, doc_key: &[String]) -> Option<String> 
     }
 
     matched.then_some(rendered)
+}
+
+fn template_table_header(line: &str) -> Option<&str> {
+    let line = line
+        .split_once('#')
+        .map_or(line, |(before, _)| before)
+        .trim();
+    if !line.starts_with('[') || !line.ends_with(']') {
+        return None;
+    }
+    let header = line.trim_start_matches('[').trim_end_matches(']');
+    (!header.is_empty()).then_some(header)
 }
 
 fn walk_table(
