@@ -28,7 +28,7 @@ pub(crate) fn brew_formula(root: &Path) -> Result<()> {
         .with_context(|| format!("reading {}", checksums_path.display()))?;
 
     let formula = render_formula(&FormulaInputs {
-        version: strip_leading_v(&version),
+        intel_version: strip_leading_v(&version),
         homepage: &homepage,
         base_url: base_url.trim_end_matches('/'),
         arm_sha: &parse_digest(&checksums, ARM_ARCHIVE)?,
@@ -42,7 +42,7 @@ fn required_env(key: &str) -> Result<String> {
 }
 
 struct FormulaInputs<'a> {
-    version: &'a str,
+    intel_version: &'a str,
     homepage: &'a str,
     base_url: &'a str,
     arm_sha: &'a str,
@@ -61,17 +61,16 @@ fn parse_digest(checksums: &str, archive: &str) -> Result<String> {
         .with_context(|| format!("SHA256SUMS has no entry for {archive}"))
 }
 
-/// Strip the `v` tag prefix so the formula pins a bare Homebrew version.
+/// Strip the `v` tag prefix for Intel's explicit Homebrew version.
 fn strip_leading_v(version: &str) -> &str {
     version.strip_prefix('v').unwrap_or(version)
 }
 
 fn render_formula(inputs: &FormulaInputs<'_>) -> String {
     format!(
-        r#"class Rimz < Formula
+        r##"class Rimz < Formula
   desc "Routes your attention across a fleet of coding agents"
   homepage "{homepage}"
-  version "{version}"
   license "MIT"
 
   on_macos do
@@ -81,6 +80,7 @@ fn render_formula(inputs: &FormulaInputs<'_>) -> String {
     end
     on_intel do
       url "{base_url}/rimz-x86_64-apple-darwin.tar.gz"
+      version "{intel_version}"
       sha256 "{intel_sha}"
     end
   end
@@ -90,13 +90,13 @@ fn render_formula(inputs: &FormulaInputs<'_>) -> String {
   end
 
   test do
-    system bin/"rimz", "--version"
+    assert_match version.to_s, shell_output("#{{bin}}/rimz --version")
   end
 end
-"#,
+"##,
         homepage = inputs.homepage,
         base_url = inputs.base_url,
-        version = inputs.version,
+        intel_version = inputs.intel_version,
         arm_sha = inputs.arm_sha,
         intel_sha = inputs.intel_sha,
     )
@@ -137,7 +137,7 @@ c33333333333333333333333333333333333333333333333333333333333333c  rimz-x86_64-un
 
     fn sample_formula() -> String {
         render_formula(&FormulaInputs {
-            version: "1.2.3",
+            intel_version: "1.2.3",
             homepage: "https://host.example/rimz/rimz",
             base_url: "https://host.example/rimz/rimz/releases/download/v1.2.3",
             arm_sha: "aaaa",
@@ -145,27 +145,20 @@ c33333333333333333333333333333333333333333333333333333333333333c  rimz-x86_64-un
         })
     }
 
-    /// Both architectures resolve one pinned version. Homebrew tries
+    /// Intel needs an explicit version. Homebrew tries
     /// filename patterns before URL patterns, and the underscore in
     /// `x86_64` matches a stem rule that captures `64-apple-darwin` as the
     /// version — the same value on every release, so Intel upgrades would
-    /// never fire. Apple Silicon has no underscore and falls through to the
-    /// URL rule, which needs at least two dot-separated numbers in the tag,
-    /// so a tag like `v1` would leave it with no version at all. A top-level
-    /// pin keeps both arches off those heuristics.
+    /// never fire. Apple Silicon derives the correct version from the release
+    /// URL and rejects an explicit top-level version as redundant.
     #[test]
-    fn render_formula_pins_one_version_outside_the_arch_blocks() {
+    fn render_formula_pins_only_the_intel_version() {
         let formula = sample_formula();
         assert_eq!(formula.matches("version \"").count(), 1);
-        assert!(formula.contains("version \"1.2.3\""));
-        assert!(
-            formula.contains("homepage \"https://host.example/rimz/rimz\"\n  version \"1.2.3\"")
-        );
-        assert!(formula.contains("on_arm do\n      url"));
-        assert!(formula.contains("on_intel do\n      url"));
-        // The pin sits above `on_macos`, so neither arch block carries one.
         let (_, arch_blocks) = formula.split_once("on_macos do").expect("on_macos block");
-        assert!(!arch_blocks.contains("version \""));
+        let (arm_block, intel_block) = arch_blocks.split_once("on_intel do").expect("Intel block");
+        assert!(!arm_block.contains("version \""));
+        assert!(intel_block.contains("version \"1.2.3\""));
     }
 
     #[test]
@@ -180,5 +173,8 @@ c33333333333333333333333333333333333333333333333333333333333333c  rimz-x86_64-un
         ));
         assert!(formula.contains("sha256 \"aaaa\""));
         assert!(formula.contains("sha256 \"bbbb\""));
+        assert!(
+            formula.contains("assert_match version.to_s, shell_output(\"#{bin}/rimz --version\")")
+        );
     }
 }
