@@ -1,6 +1,6 @@
 # Loops
 
-> `rimz loop` is cron for your agents. A task is a name, a schedule, and one action: an agent turn in a real pane, a wake to an agent that is already running, or a shell command that guards either. It fires while the room is open. This page starts from a single scheduled turn and builds up to a fleet that works through the night. The clock, the state files, and the run log underneath are in [loops.md](../internals/harness/loops.md).
+> `rimz loop` is cron for your agents. A task is a name, a schedule, and one action: an agent turn in a real pane, a wake to an agent that is already running, or a shell command that guards either. It fires while the room is open. The clock, the state files, and the run log underneath are in [loops.md](../internals/harness/loops.md).
 
 ## Why rimz loop
 
@@ -8,18 +8,16 @@ You already run things on a clock. Cron lines and systemd timers drive your main
 
 But cron and a hand-rolled `while` loop only know one move: start a fresh process and walk away. That scheduled `claude -p` is invisible, so it hangs in silence the first time it stops for a permission prompt (the headless gap [scripting](./scripting.md#why-rimz-agents--p) opens with). It fires whether or not there is anything to do, spending a whole agent turn to re-check a world that has not changed. And it cannot hand work to an agent you already have running; every run is a brand-new process starting from an empty context.
 
-`rimz loop` is the same clock with the room behind it. A task is a name, a schedule, and an action — a fresh turn or a wake — with two shell-command gates that wrap either one:
+`rimz loop` is the same clock with the room behind it. A task is a name, a schedule, and one action (a fresh turn or a wake), plus two shell-command gates that wrap either one:
 
-- `--agent` starts a new agent for the turn: a fresh supervised pane that runs the prompt once and cleans up. Reach for it when the work should begin from a clean context each time.
+- `--agent` starts a new agent for the turn: a fresh supervised pane that runs the prompt once and cleans up.
 - `--wake` hands the prompt to an agent you already have running and waiting, so the work resumes in that same conversation with all of its context, rather than in a cold new process.
 - `--check` runs a shell command before the action and spends a turn only on its result, so a scheduled agent never starts just to find nothing to do.
 - `--verify` runs a shell command after a spawned agent turn and re-prompts that same session until the task is actually done.
 
 Whichever action fires, the turn is a full room citizen: a live card in the sidebar, a permission question that routes to you instead of hanging the job, and a line in the run log that `rimz loop show` summarizes and `rimz loop logs` opens in full.
 
-One rule governs every schedule: a task repeats only when `--every` or `--cron` says so. A bare time (`--at 07:00` or `--in 30m`) fires once and then removes itself. And `rimz loop add` prints back exactly what it armed: the action, the schedule in plain words, and the concrete next fire time. You read the schedule instead of guessing at it.
-
-The next sections take those actions one at a time — scheduling a fresh turn, waking an agent you already have, guarding a turn with a check — then put the provider's weekly surplus to work. Each opens with what the action is for, then how far it goes. The rest of the page is the machinery behind them, and how it all stacks.
+One rule governs every schedule: a task repeats only when `--every` or `--cron` says so. A bare time (`--at 07:00` or `--in 30m`) fires once and then removes itself. `rimz loop add` prints back exactly what it armed: the action, the schedule in plain words, and the concrete next fire time.
 
 ## Schedule a fresh turn
 
@@ -46,7 +44,7 @@ rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:
 
 Every weekday at 07:00 the task runs one lowest-effort turn, and the window runs 07:00 to 12:00. (Claude's ping pins Sonnet, so a flagship account does not prime at the flagship rate.) You sit down at 9:00 against an almost untouched budget, the reset lands at noon instead of mid-afternoon, and the next window carries you to 17:00. Same subscription, same limits. The resets just stop landing in the middle of your deep work.
 
-The ping is cheap insurance, not a wasted turn. Before it fires, RimZ reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex.
+The ping stays cheap even on a day you never needed it. Before it fires, RimZ reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex.
 
 A `<kind>-ping` exists only where the adapter has a low-cost priming command RimZ has verified, which today means `claude-ping`, `codex-ping`, `qwen-ping`, and `kimi-ping`. Any other kind is refused when you add the task, so a provider without one fails at `rimz loop add` rather than quietly burning a full-price turn every morning.
 
@@ -61,10 +59,11 @@ rimz loop add prime --agent claude-ping --prompt ping --every reset
 To keep the longest window running for every supported provider without defining each task, enable the machine-level loop flag:
 
 ```toml
+# ~/.config/rimz/loop.toml
 auto-ping = true
 ```
 
-RimZ synthesizes a visible `autoping-<kind>` reset task for each ping-capable adapter in every open project room. When an authoritative provider reading says the longest window is down, the task retries within an hour; immediately before each ping, RimZ checks the provider's OAuth usage API again and skips if the window has started elsewhere. An officially cleared limit — full bars with no active reset countdown — enters the same retry path, while a logged-out provider or unknown reading stays idle.
+RimZ synthesizes a visible `autoping-<kind>` reset task for each ping-capable adapter in every open project room. When an authoritative provider reading says the longest window is down, the task retries within an hour; immediately before each ping, RimZ checks the provider's OAuth usage API again and skips if the window has started elsewhere. An officially cleared limit (full bars, no active reset countdown) enters the same retry path, while a logged-out provider or unknown reading stays idle.
 
 Pause one generated provider with `rimz loop pause autoping-<kind>`, or disable all generated pings with `rimz config set loop.auto-ping false`. Generated rows have no stored task definition to remove or rename; define a task with the same name when you want an explicit replacement.
 
@@ -108,7 +107,7 @@ A `--check` with no agent action is still worth having. It is a scheduled comman
 
 ## Soak up the weekly surplus
 
-The weekly subscription window expires whether you use it or not: whatever is left on the `7d` bar at the weekly reset is capacity you paid for and gave back. A recurring background task can absorb it — refactoring, filling test gaps, dependency triage are all real work with no deadline — but scheduled blindly it drains the same window your daytime sessions run on. The task should fire only when the week is ahead of pace.
+The weekly subscription window expires whether you use it or not: whatever is left on the `7d` bar at the weekly reset is capacity you paid for and gave back. A recurring background task can absorb it: refactoring, filling test gaps, and dependency triage are all real work with no deadline. Scheduled blindly, though, that task drains the same window your daytime sessions run on. It should fire only when the week is ahead of pace.
 
 `--surplus` is that condition. Before each fire, RimZ reads the provider's longest pacing window and computes forward headroom, how far ahead of the sustainable pace the window is running: `1.0x` is exactly on pace, and `1.5x` means half again as much budget remains as the clock requires. Which window counts as the pacing window is per provider, and the headroom model, a worked example, and the fail-closed rules live in [budgets → spend the provider surplus](./budget.md#spend-the-provider-surplus).
 
@@ -117,7 +116,7 @@ rimz loop add refactor-soak --agent claude --prompt "Refactor the next rough mod
     --every 4h --surplus 1.5x --surplus-after 3d
 ```
 
-`--surplus 1.5x` opens the gate only at that headroom or above; `--surplus-after 3d` keeps the task quiet until three days of the window have elapsed, so an untouched early week is not spent before your own heavy days land (used alone, it still requires `1.0x`). The gate guards `--agent` and `--wake` actions alike and runs before any `--check` guard, so a closed gate runs nothing and costs nothing: the fire records `surplus skipped` without adding a strike, and the recurring schedule keeps polling until real surplus appears. An account without a window reading — an API key, or a window that has not started — keeps the gate closed.
+`--surplus 1.5x` opens the gate only at that headroom or above; `--surplus-after 3d` keeps the task quiet until three days of the window have elapsed, so an untouched early week is not spent before your own heavy days land (used alone, it still requires `1.0x`). The gate guards `--agent` and `--wake` actions alike and runs before any `--check` guard, so a closed gate runs nothing and costs nothing: the fire records `surplus skipped` without adding a strike, and the recurring schedule keeps polling until real surplus appears. An account without a window reading (an API key, or a window that has not started) keeps the gate closed.
 
 ## What a task does on your machine
 
@@ -133,29 +132,33 @@ A scheduled `--agent` fire lands in the `rimzd` loop zone: the runtime column's 
 
 A fire leaves two things behind: whatever the task did (one transient supervised pane for `--agent`, one delivered message for `--wake`), and one line of run history. A successful budget-window ping also records the refreshed shortest and longest window reset outcome on that line. `rimz loop show <name>` gives that history a health verdict and, for check-gated work, a separate agent-run rollup; `rimz loop logs <name>` prints the complete stored forensics. Everything reverses in one move. `rimz loop remove <name>` deletes the entry; a project removal shows the surface diff and offers the refreshed grant in a terminal, or prints the review and approve commands elsewhere. Both files are plain TOML you can read and edit by hand.
 
-## Built-in recovery
+## Keep the fleet moving
 
-**Repeated failures pause the task.** Three consecutive failed fires auto-pause any task indefinitely, display `paused · 3 strikes` in `rimz loop list`, and fire notification handlers with kind `loop_paused`. A completed or delivered turn still counts when its check shows the world remains broken; a healthy check or successful turn resets the counter. Inspect with `rimz loop show`, then use `rimz loop resume <name>` to clear the strikes and re-arm the schedule. Set `--max-strikes <N>` per task to change the threshold, or `--max-strikes 0` to disable auto-pause; `rimz loop fire` remains available while paused for a manual test.
+An unattended agent stops for reasons that need no judgment from you. The provider's five-hour budget window empties mid-turn. The API sheds load and drops the stream. The context window fills one step short of the finish. A spent Codex account sits on reset credits that expire unused. Each stop has a known fix: wait for the reset, retry in a few minutes, compact, redeem a credit. A stock CLI leaves every one of them to whoever is watching, and overnight that is nobody, so a fleet's worth of work waits behind interruptions you would clear in seconds at the keyboard.
 
-Two opt-in settings keep a live agent working through the interruptions that would otherwise park it (stop it mid-task and leave it waiting for someone to resume it). Both are off by default, and each switches on with one `rimz config set`.
+RimZ ships those reflexes built in. Switched on, the room recognizes each stop from the provider's own evidence, applies the fix at the moment it can work, and the agent carries on in the same session with all of its context, exactly as if you had typed the resume yourself. The five-hour wall then costs the fleet minutes instead of the night, and by morning `rimz stats` shows every automatic assist as a durable record of what recovered itself and what genuinely needed you. Each setting is off by default and switches on with one `rimz config set`.
 
 ```sh
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
-rimz config set resume.auto_redeem true       # spend useful Codex reset credits automatically
+rimz config set resume.auto_redeem true       # spend Codex reset credits when they buy real time
 rimz config set harness.smart_compact 200k    # compact before a message once context passes 200k tokens (or "70%")
 ```
 
-**Auto-continue** picks a certified parked turn back up on its own. A provider-owned per-turn failure marker proves why the turn stopped; an authoritative account window then supplies the reset clock for a rate-limit or spend-limit park, while a certified transient overload or API error uses a lengthening backoff ramp. An exhausted window, error message, or stalled pane cannot arm recovery by itself. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running.
+**Auto-continue resumes a parked agent the moment resuming can succeed.** A turn that dies on a rate limit or an API failure parks its agent: the card shows `⏸`, and the work waits for someone to type `continue`. Auto-continue is that someone. It acts only on provider-certified evidence, the agent's own per-turn failure marker naming the cause, so an error-shaped pane, an exhausted budget bar, or a stalled screen keeps the row parked for you rather than arming a blind retry.
 
-That certified failure marker is what makes recovery a per-provider capability rather than a global switch: an agent whose adapter exposes no marker RimZ trusts keeps its error stops terminal, and a loop fire records the ordinary failure. [Agent support](../reference/agent-support.md#notes-on-the-alpha-and-experimental-set) states it per agent. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [providers.md → Auto-continue](../internals/agents/providers.md#auto-continue).
+The certified cause then picks the clock. A rate-limit or spend-limit park waits for the account window's reset and resumes the instant capacity returns; a transient overload or API error retries on a lengthening ramp, first after three minutes, then every five. Each attempt types the configured nudge (`continue` by default) into the agent's live pane through the same path as a steer message. After twelve unanswered attempts, roughly an hour, the row goes `failed` and routes to you like any other actionable card.
 
-**Auto-redeem pairs with auto-continue** to carry Codex work through a spent long window: a useful or doomed reset credit restores the account capacity, then the existing certified recovery path wakes the parked turn.
+Because the certified marker comes from each agent's adapter, auto-continue is a per-provider capability: an agent without a marker RimZ trusts keeps its error stops terminal. [Agent support](../reference/agent-support.md#notes-on-the-alpha-and-experimental-set) states it per agent; the ramp and retry keys are in [configuration.md → Resume](./configuration.md#resume), and the decision logic is [providers.md → Auto-continue](../internals/agents/providers.md#auto-continue).
+
+**Auto-redeem spends Codex reset credits at the moment they buy the most.** A Codex plan grants reset credits, and each one instantly refills a spent usage window. Their value is all timing: redeemed just before the window's natural reset, a credit buys minutes; redeemed the moment a spent window blocks a night of work, it buys hours. Credits also expire, so RimZ rescues one within thirty minutes of expiry whether or not you opt in, rather than letting capacity you paid for vanish. `auto_redeem` adds the judgment call: when a window is spent and its natural reset is still at least `auto_redeem_min_gain` away (twelve hours by default), it redeems a credit now and recovers those hours, and when several credits near expiry it paces the redemptions so each one captures a full window of work. Every redemption then hands off to auto-continue, because recovered capacity is certified evidence and the parked turns wake on it. The verdict and pacing model are in [providers.md → Auto-redeem](../internals/agents/providers.md#auto-redeem).
+
+**Smart compaction clears the filling context window.** Past the threshold, RimZ submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
+
+Two brakes keep hands-off bounded.
 
 **Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. For check-gated work, `rimz loop show` separates the agent attempts from cheap check passes and totals their costs across the recorded history; other tasks retain the last-run and rolling ten-run average cost. Fresh input/output tokens stay visible per run. The room-fleet and provider-account daily caps gate the same fires before launch, and a spent provider quota records the same `budget skipped` result before the task's `--check` command or pane exists. The whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
 
-**Smart compaction** rides the same loop. Past the threshold, RimZ submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
-
-Turn both on and an adapter with certified failure evidence keeps a long-running agent's footing through the five-hour wall, a flaky API, and a filling context window, with no babysitter process watching it.
+**Repeated failures pause the task.** Three consecutive failed fires auto-pause any task indefinitely, display `paused · 3 strikes` in `rimz loop list`, and fire notification handlers with kind `loop_paused`. A completed or delivered turn still counts when its check shows the world remains broken; a healthy check or successful turn resets the counter. Inspect with `rimz loop show`, then use `rimz loop resume <name>` to clear the strikes and re-arm the schedule. Set `--max-strikes <N>` per task to change the threshold, or `--max-strikes 0` to disable auto-pause; `rimz loop fire` remains available while paused for a manual test.
 
 ## Every schedule shape
 
@@ -199,17 +202,17 @@ Run mechanics (exit codes, output formats, `wait --stream`) are in [scripting.md
 
 ## The permission posture for unattended runs
 
-An unattended run has to answer permission prompts without you, and two patterns compose. The posture you pick is the guardrail layer of the harness, a constraint that the room and the agent's own prompts enforce.
+An unattended run has to answer permission prompts without you. Two patterns cover it, and they compose.
 
 **Answer in the agent's own UI** to keep the full record. A [handler that acts](./notifications.md#handlers-that-act-not-just-alert) sends the answer with `rimz pane send`, leaving the prompt, the answer, and the tool run all in the agent's transcript, exactly as if you had typed it. Prefer this path when handled decisions belong on the record.
 
-**Use the agent's bypass flag** for runs where you accept the tradeoff. `rimz agents <kind> "<prompt>" -p --yolo` passes the adapter's bypass flag (`claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`), while `--ask` keeps the provider's prompts in place. RimZ still observes sessions, completions, and failures through lifecycle hooks; the tradeoff is that the agent skips permission events at the source, so RimZ's durable record holds what other hooks report rather than a per-decision audit trail.
+**Use the agent's bypass flag** when the run cannot afford to stop. `rimz agents <kind> "<prompt>" -p --yolo` passes the adapter's bypass flag (`claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`), while `--ask` keeps the provider's prompts in place. RimZ still observes sessions, completions, and failures through lifecycle hooks, but the agent skips permission events at the source, so the durable record holds what other hooks report rather than a per-decision audit trail. Reserve the flag for runs where you accept that missing trail.
 
-Reserve the bypass flag for runs where you accept the missing per-decision trail, and keep the guardrails visible: trust grants, notification handlers, and the posture itself are product behavior, covered in [security.md](./security.md).
+The guardrails around either posture stay visible: trust grants, notification handlers, and the posture itself are product behavior, covered in [security.md](./security.md).
 
 ## A fleet that works nights
 
-A hands-off room composes four layers, from least to most involved: [built-in recovery](#built-in-recovery) keeps one agent alive through rate limits with no schedule at all; a scheduled turn puts work on a clock; a [check guard](#guard-a-turn-with-a-check) fires that turn only when a condition trips; and a [notification handler](./notifications.md) catches what none of them can decide alone. Reach for the lowest layer that solves the problem, and stack them when the job needs it.
+A hands-off room composes four layers, from least to most involved: [the recovery reflexes](#keep-the-fleet-moving) keep one agent alive through rate limits with no schedule at all; a scheduled turn puts work on a clock; a [check guard](#guard-a-turn-with-a-check) fires that turn only when a condition trips; and a [notification handler](./notifications.md) catches what none of them can decide alone. Reach for the lowest layer that solves the problem, and stack them when the job needs it.
 
 [Scripting](./scripting.md) turns an agent into a shell command, and a loop puts that command on a clock. Because a scheduled turn is a full room citizen, it reaches every other primitive: `-p` subagents, teams, worktrees, messages. Stacked, they turn routine work into standing tasks.
 
@@ -227,17 +230,17 @@ rimz loop add nightly --agent claude --worktree nightly --timeout 4h --budget 5 
 run a codex -p subagent in its own worktree, review its diff, and open a PR."
 ```
 
-The nightly task is one scheduled turn, but its prompt hands the agent the room's own tools: it fans work out with [`-p` subagents](./scripting.md#agents-scripting-agents), isolates each fix in a [worktree](./worktrees.md), and could as easily launch a [team](./teams.md) and brief it over [messages](./messaging.md). The unit of automation stops being a prompt you type and becomes a standing cycle that checks, acts, and re-arms itself.
+The nightly task is one scheduled turn, but its prompt hands the agent the room's own tools: it fans work out with [`-p` subagents](./scripting.md#agents-scripting-agents), isolates each fix in a [worktree](./worktrees.md), and could as easily launch a [team](./teams.md) and brief it over [messages](./messaging.md).
 
-The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#built-in-recovery) carries certified recoverable runs over rate limits, checks fire agent turns only when there is work, every fire appears in `rimz loop show` and stays inspectable through `rimz loop logs`, a question or failure trips a [notification handler](./notifications.md) that reaches your phone, and the [permission posture](#the-permission-posture-for-unattended-runs) is a per-task choice rather than a global switch. Leave the room open, detached on your workstation or on a server you reach with [`rimz remote`](./remote.md), and by morning `rimz loop list` and the PR queue show what the night produced.
+Leave the room open, detached on your workstation or on a server you reach with [`rimz remote`](./remote.md), and the night runs on the pieces already described: [auto-continue](#keep-the-fleet-moving) carries certified recoverable runs over rate limits, a question or failure trips a [notification handler](./notifications.md) that reaches your phone, and the [permission posture](#the-permission-posture-for-unattended-runs) stays a per-task choice. By morning `rimz loop list` and the PR queue show what the night produced.
 
 ## See also
 
-- [Scripting agents](./scripting.md) — the supervised-run mechanics every scheduled `--agent` task rides on: exit codes, `--output-format`, `wait --stream`.
-- [Budgets](./budget.md) — the dollar caps that bound hands-off work, and the surplus gate's headroom model.
-- [Notifications](./notifications.md) — the push routes and acting handlers that catch what a loop cannot handle alone.
-- [Messaging](./messaging.md) — the delivery path `--wake` uses, `--schedule` for one-off reminders, and smart compaction in full.
-- [Loop CLI](../reference/cli/loop.md) — every flag on `add`, `fire`, `list`, `show`, `rename`, and `remove`.
-- [Configuration](./configuration.md) — the `[resume]` and `[harness]` keys, and the `loop.toml` shape.
-- [Security and trust](./security.md) — the safety posture for bypass flags and project trust.
-- [loops.md](../internals/harness/loops.md) — the clock, state files, and run log underneath.
+- [Scripting agents](./scripting.md): the supervised-run mechanics every scheduled `--agent` task rides on, including exit codes, `--output-format`, and `wait --stream`.
+- [Budgets](./budget.md): the dollar caps that bound hands-off work, and the surplus gate's headroom model.
+- [Notifications](./notifications.md): the push routes and acting handlers that catch what a loop cannot handle alone.
+- [Messaging](./messaging.md): the delivery path `--wake` uses, `--schedule` for one-off reminders, and smart compaction in full.
+- [Loop CLI](../reference/cli/loop.md): every flag on `add`, `fire`, `list`, `show`, `rename`, and `remove`.
+- [Configuration](./configuration.md): the `[resume]` and `[harness]` keys, and the `loop.toml` shape.
+- [Security and trust](./security.md): the safety posture for bypass flags and project trust.
+- [loops.md](../internals/harness/loops.md): the clock, state files, and run log underneath.
