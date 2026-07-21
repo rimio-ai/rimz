@@ -114,7 +114,7 @@ fn fatal_session_message_keeps_major_version_refusal_hard() {
 }
 
 #[test]
-fn plain_retry_wait_omits_the_internet_checkpoint() {
+fn plain_ui_omits_the_internet_checkpoint() {
     let ui = OutageUi::plain_lines(ConnectStage::Recovery, "dev-box");
 
     assert_eq!(internet_probe_for_wait(&ui), None);

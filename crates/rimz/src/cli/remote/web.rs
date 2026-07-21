@@ -227,6 +227,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         WaitOutcome::Interrupted => return Ok(()),
     };
     let mut held_alt = HeldAlternateScreen::new(initial_held_alt);
+    let mut first_prep = true;
     let mut first_round = true;
     let mut local_port = None;
     let mut last_credential = None;
@@ -238,7 +239,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         let prep = run_web_prep(
             &rimz::remote::web::web_prep_spec(
                 &remote.target,
-                web_prep_options(remote, client_size, first_round),
+                web_prep_options(remote, client_size, first_prep),
                 round_control,
             ),
             "preparing remote web access",
@@ -246,7 +247,10 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
             remote.origin.as_str(),
         )?;
         let prep = match prep {
-            WebPrepOutcome::Ready(prep) => prep,
+            WebPrepOutcome::Ready(prep) => {
+                first_prep = false;
+                prep
+            }
             WebPrepOutcome::TransportFailure => {
                 match web_exit_action(
                     settle_web_exit(
@@ -301,6 +305,9 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         let port_ready = match tunnel.wait_until_ready(local_port)? {
             PortWait::Ready => true,
             PortWait::Exited(exit_code) => {
+                if exit_code == Some(0) {
+                    bail!("web tunnel exited before local port accepted connections");
+                }
                 match web_exit_action(
                     settle_web_exit(&mut reconnect, exit_code, master_confirmed, false),
                     host,
@@ -417,11 +424,11 @@ fn wait_for_web_recovery(
 fn web_prep_options(
     remote: &RemoteConnect,
     client_size: Option<(u16, u16)>,
-    initial_round: bool,
+    initial_prep: bool,
 ) -> rimz::remote::web::WebPrepOptions {
     rimz::remote::web::WebPrepOptions {
-        confirm_resume: initial_round && std::io::stdin().is_terminal(),
-        no_resume: initial_round && remote.no_resume,
+        confirm_resume: initial_prep && std::io::stdin().is_terminal(),
+        no_resume: initial_prep && remote.no_resume,
         force_version: remote.force_version,
         client_size,
     }

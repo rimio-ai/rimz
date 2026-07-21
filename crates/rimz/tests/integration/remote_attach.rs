@@ -1338,6 +1338,30 @@ fn remote_web_fatal_exit_before_readiness_emits_no_url() {
 }
 
 #[test]
+fn remote_web_clean_exit_before_readiness_is_an_error() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("tunnel.plan");
+    let port = reserve_local_port();
+    std::fs::write(&plan, "0\n").expect("write tunnel plan");
+
+    let out = remote_web_command(&env, &log, port)
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
+        .bounded_output()
+        .expect("run clean remote web tunnel exit before readiness");
+
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty(), "URL must not precede readiness");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("web tunnel exited before local port accepted connections"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(tunnel_invocation_count(&log), 1);
+}
+
+#[test]
 fn remote_alias_update_drives_connect_and_reset() {
     let env = Env::new();
 
