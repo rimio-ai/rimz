@@ -123,6 +123,30 @@ pub(super) fn parse_floating_pane_ids(stdout: &[u8]) -> Vec<PaneId> {
         .collect()
 }
 
+pub(super) fn parse_terminal_features(stdout: &[u8]) -> Vec<(u32, String)> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(2, char::is_whitespace);
+            let option = fields.next()?;
+            let value = fields.next()?.trim();
+            let index = option
+                .strip_prefix("terminal-features[")?
+                .strip_suffix(']')?
+                .parse()
+                .ok()?;
+            if value.is_empty() {
+                return None;
+            }
+            let value = value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .unwrap_or(value);
+            Some((index, value.to_owned()))
+        })
+        .collect()
+}
+
 pub(super) fn parse_new_window_ids(stdout: &[u8]) -> Result<(String, String)> {
     let raw = String::from_utf8_lossy(stdout);
     let mut cols = raw.split_whitespace();
@@ -256,6 +280,20 @@ mod tests {
         assert_eq!(
             parse_floating_pane_ids(b"%1,0\n%2,1\n%3,\nmalformed\n@4,1\n"),
             vec![PaneId::from_parts(MuxName::Tmux, "%2")],
+        );
+    }
+
+    #[test]
+    fn parse_terminal_features_reads_bare_and_quoted_values() {
+        assert_eq!(
+            parse_terminal_features(
+                b"terminal-features[3] *:sync\n\
+                  terminal-features[17] \"*:extkeys\"\n\
+                  terminal-features[bad] *:sync\n\
+                  terminal-features[19]\n\
+                  unrelated[20] *:sync\n",
+            ),
+            vec![(3, "*:sync".to_owned()), (17, "*:extkeys".to_owned())],
         );
     }
 

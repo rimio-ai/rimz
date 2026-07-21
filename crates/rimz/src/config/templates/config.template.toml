@@ -129,7 +129,7 @@ allow_passthrough = true
 set_clipboard = "on"                  # "on", "external", or "off"
 extended_keys = true                  # Shift+Enter / Alt+Enter as soft newlines; on tmux 3.5.x this trades clean multiline paste (use Ctrl+J, or tmux 3.6+)
 extended_keys_format = "csi-u"        # "csi-u" or "xterm"
-escape_time_ms = 0
+escape_time_ms = 10                     # tmux 3.5+ default; 0 can misparse split ESC sequences over SSH
 renumber_windows = true
 aggressive_resize = true
 

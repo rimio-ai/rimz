@@ -1121,7 +1121,7 @@ fn tmux_room_options_parse_and_defaults_are_agent_friendly() {
         defaults.tmux.extended_keys_format,
         TmuxExtendedKeysFormat::CsiU,
     );
-    assert_eq!(defaults.tmux.escape_time_ms, 0);
+    assert_eq!(defaults.tmux.escape_time_ms, 10);
     assert!(defaults.tmux.renumber_windows);
     assert!(defaults.tmux.aggressive_resize);
     assert_eq!(defaults.tmux.pane_border_status, None);

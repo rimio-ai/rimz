@@ -8,7 +8,7 @@ Four self-contained modules, so you adopt what you want by adding `source-file` 
 
 | Module | Carries |
 | --- | --- |
-| [`agents.conf`](./tmux/agents.conf) | the behaviors agent TUIs rely on: true color, no escape lag, long scrollback, focus events, passthrough, OSC52 clipboard, Shift+Enter/Alt+Enter soft newlines |
+| [`agents.conf`](./tmux/agents.conf) | the behaviors agent TUIs rely on: true color, reliable Escape handling, long scrollback, focus events, passthrough, OSC52 clipboard, Shift+Enter/Alt+Enter soft newlines |
 | [`quality-of-life.conf`](./tmux/quality-of-life.conf) | vi copy-mode with a working first-drag yank, stable window names, current-directory splits along the pane's longer edge |
 | [`zellij-keys.conf`](./tmux/zellij-keys.conf) | opt-in no-prefix Alt chords matching Zellij's locked mode; shadows the shell's Alt keys |
 | [`theme-tokyonight.conf`](./tmux/theme-tokyonight.conf) | titled pane frames and a Powerline status bar in RimZ's default TokyoNight Night palette; assumes a Nerd Font |

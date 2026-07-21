@@ -135,16 +135,48 @@ pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, Str
     opts
 }
 
-/// Server options RimZ appends so the user's existing array entries survive.
-/// `*:sync` enables atomic redraws, and `*:extkeys` asks the outer terminal to
-/// send modified keys.
-pub(super) fn tmux_server_append_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
-    let mut opts = Vec::new();
-    opts.push(("terminal-features", "*:sync".to_owned()));
-    if config.extended_keys {
-        opts.push(("terminal-features", "*:extkeys".to_owned()));
-    }
-    opts
+/// Idempotent `terminal-features` writes plus repair commands for entries
+/// leaked by RimZ's former append path.
+pub(super) fn tmux_terminal_features_commands(
+    config: &TmuxConfig,
+    current: &[(u32, String)],
+) -> Vec<Vec<String>> {
+    let mut commands: Vec<Vec<String>> = current
+        .iter()
+        .filter(|(index, value)| {
+            !matches!(index, 240 | 241) && matches!(value.as_str(), "*:sync" | "*:extkeys")
+        })
+        .map(|(index, _)| {
+            vec![
+                "set-option".to_owned(),
+                "-su".to_owned(),
+                format!("terminal-features[{index}]"),
+            ]
+        })
+        .collect();
+    // Fixed high indices keep repeated writes idempotent and clear of the
+    // user's entries, matching the `user-keys[240]` convention above.
+    commands.push(vec![
+        "set-option".to_owned(),
+        "-s".to_owned(),
+        "terminal-features[240]".to_owned(),
+        "*:sync".to_owned(),
+    ]);
+    commands.push(if config.extended_keys {
+        vec![
+            "set-option".to_owned(),
+            "-s".to_owned(),
+            "terminal-features[241]".to_owned(),
+            "*:extkeys".to_owned(),
+        ]
+    } else {
+        vec![
+            "set-option".to_owned(),
+            "-su".to_owned(),
+            "terminal-features[241]".to_owned(),
+        ]
+    });
+    commands
 }
 
 pub(super) fn tmux_extended_key_bindings(config: &TmuxConfig) -> Vec<Vec<String>> {
@@ -395,15 +427,15 @@ mod tests {
                 ("set-clipboard", "on".to_owned()),
                 ("extended-keys", "on".to_owned()),
                 ("extended-keys-format", "csi-u".to_owned()),
-                ("escape-time", "0".to_owned()),
+                ("escape-time", "10".to_owned()),
                 ("user-keys[240]", "\u{1b}[27u".to_owned()),
             ],
         );
         assert_eq!(
-            tmux_server_append_options(&config),
+            tmux_terminal_features_commands(&config, &[]),
             vec![
-                ("terminal-features", "*:sync".to_owned()),
-                ("terminal-features", "*:extkeys".to_owned()),
+                vec!["set-option", "-s", "terminal-features[240]", "*:sync"],
+                vec!["set-option", "-s", "terminal-features[241]", "*:extkeys"],
             ],
         );
         assert_eq!(
@@ -460,8 +492,35 @@ mod tests {
                 .all(|(key, _)| *key != "user-keys[240]"),
         );
         assert_eq!(
-            tmux_server_append_options(&config),
-            vec![("terminal-features", "*:sync".to_owned())],
+            tmux_terminal_features_commands(&config, &[]),
+            vec![
+                vec!["set-option", "-s", "terminal-features[240]", "*:sync"],
+                vec!["set-option", "-su", "terminal-features[241]"],
+            ],
+        );
+
+        let current = vec![
+            (2, "xterm*:RGB".to_owned()),
+            (8, "*:sync".to_owned()),
+            (9, "*:extkeys".to_owned()),
+            (240, "*:sync".to_owned()),
+            (241, "*:extkeys".to_owned()),
+        ];
+        assert_eq!(
+            tmux_terminal_features_commands(&TmuxConfig::default(), &current),
+            vec![
+                vec!["set-option", "-su", "terminal-features[8]"],
+                vec!["set-option", "-su", "terminal-features[9]"],
+                vec!["set-option", "-s", "terminal-features[240]", "*:sync"],
+                vec!["set-option", "-s", "terminal-features[241]", "*:extkeys"],
+            ],
+        );
+        assert_eq!(
+            tmux_terminal_features_commands(&TmuxConfig::default(), &current[3..]),
+            vec![
+                vec!["set-option", "-s", "terminal-features[240]", "*:sync"],
+                vec!["set-option", "-s", "terminal-features[241]", "*:extkeys"],
+            ],
         );
     }
 }
