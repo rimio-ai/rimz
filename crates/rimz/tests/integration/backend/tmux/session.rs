@@ -2,6 +2,17 @@
 
 use super::support::*;
 
+fn terminal_feature_count(stdout: &str, feature: &str) -> usize {
+    stdout
+        .lines()
+        .filter(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .is_some_and(|value| value.trim_matches('"') == feature)
+        })
+        .count()
+}
+
 #[test]
 fn ensure_session_applies_room_contract() {
     require_tmux!();
@@ -55,7 +66,7 @@ fn ensure_session_applies_room_contract() {
         )
     };
     server.backend.ensure_session(&opts).expect("ensure");
-    assert_eq!(server.show_option(&["-s"], "escape-time"), "0");
+    assert_eq!(server.show_option(&["-s"], "escape-time"), "10");
     assert_eq!(server.show_option(&["-s"], "extended-keys"), "on");
     let terminal_features = server.show_option(&["-s"], "terminal-features");
     assert!(
@@ -170,6 +181,13 @@ fn ensure_session_applies_room_contract() {
         format!("{}\nfalse\n", runtime.copilot_otel_path().display()),
     );
 
+    server.tmux(&["set-option", "-sa", "terminal-features", "*:sync"]);
+    let leaked_features = server.stdout(&["show-options", "-s", "terminal-features"]);
+    assert_eq!(
+        terminal_feature_count(&leaked_features, "*:sync"),
+        2,
+        "the fixture must contain the stale append entry: {leaked_features}",
+    );
     let mut reasserted = opts;
     reasserted
         .extra_env
@@ -178,6 +196,17 @@ fn ensure_session_applies_room_contract() {
         .backend
         .ensure_session(&reasserted)
         .expect("reassert existing session env");
+    let repaired_features = server.stdout(&["show-options", "-s", "terminal-features"]);
+    assert_eq!(
+        terminal_feature_count(&repaired_features, "*:sync"),
+        1,
+        "repeat ensure must purge stale sync entries: {repaired_features}",
+    );
+    assert_eq!(
+        terminal_feature_count(&repaired_features, "*:extkeys"),
+        1,
+        "repeat ensure must keep one extkeys entry: {repaired_features}",
+    );
     assert_eq!(
         show_session_environment(&server, "rimz-options", "RIMZ_TEST_REASSERT"),
         "RIMZ_TEST_REASSERT=after-birth",

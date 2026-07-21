@@ -20,6 +20,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 ### Fixed
 
 - Scheduled loop wakes honor the `[harness] smart_compact` default, so unattended prompts compact first at the configured context threshold.
+- tmux rooms stop accumulating duplicate `*:sync` and `*:extkeys` terminal features; the next room start cleans existing duplicates, and the Escape disambiguation delay now defaults to tmux's upstream 10ms for reliable input over SSH.
 - A remote browser tunnel that accepts connections and then loses SSH with exit 255 now reconnects immediately instead of reporting that it was never established.
 - `rimz loop add`, `remove`, and `rename` on project tasks keep project trust when the workspace was already trusted, so your own task edit needs no re-review.
 - Interrupting a Claude subagent no longer leaves its finished parent pinned to `running` in the sidebar; the next parent tool or turn boundary closes the interrupted child from Claude's durable transcript marker.

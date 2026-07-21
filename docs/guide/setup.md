@@ -208,7 +208,7 @@ set -ga terminal-features ",*:RGB,*:usstyle,*:clipboard"
 # Behaviors a modern TUI agent relies on.
 set -g  mouse on                 # scroll, select panes, resize
 set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
-set -sg escape-time 0            # no ESC lag in helix, nvim, fzf, agent TUIs
+set -sg escape-time 10           # upstream 3.5+ default; safely joins split ESC sequences
 set -ga terminal-features ",*:sync"   # atomic redraws for tmux sessions outside RimZ
 set -g  focus-events on          # editors and agents see focus changes
 set -g  allow-passthrough on     # let desktop notifications pass through tmux
@@ -222,6 +222,6 @@ bind-key -n M-Enter send-keys Escape "[13;3u"
 set -g  set-clipboard on         # yank into the host clipboard over OSC52
 ```
 
-Three of these earn a note; the block's comments carry the rest. `escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. The extended-keys trio plus the modified-Enter bindings let an agent's composer receive Shift+Enter and Alt+Enter as soft newlines while plain Enter still submits — on tmux 3.5.x this trades clean multiline paste while extended keys are active (use Ctrl+J or tmux 3.6+ for both); the `user-keys` pair keeps plain Esc clean on terminals such as Ghostty that answer the extended-keys request with modifier-less CSI-u. `allow-passthrough on` lets the desktop-notification bytes RimZ emits reach your terminal.
+Three of these earn a note; the block's comments carry the rest. `escape-time 10` gives tmux a short window to join an ESC byte with the rest of its sequence, avoiding split-ESC misparses over SSH while keeping the delay imperceptible. The extended-keys trio plus the modified-Enter bindings let an agent's composer receive Shift+Enter and Alt+Enter as soft newlines while plain Enter still submits — on tmux 3.5.x this trades clean multiline paste while extended keys are active (use Ctrl+J or tmux 3.6+ for both); the `user-keys` pair keeps plain Esc clean on terminals such as Ghostty that answer the extended-keys request with modifier-less CSI-u. `allow-passthrough on` lets the desktop-notification bytes RimZ emits reach your terminal.
 
 Copy-mode, stable window names, titled pane borders, smart splits, Zellij-parity keys, and the themed status bar continue in [Zellij and tmux baselines](./multiplexer.md#tmux).

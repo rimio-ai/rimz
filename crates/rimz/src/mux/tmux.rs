@@ -22,9 +22,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use options::{
-    tmux_extended_key_bindings, tmux_server_append_options, tmux_server_options,
-    tmux_session_options, tmux_window_options,
+    tmux_extended_key_bindings, tmux_server_options, tmux_session_options,
+    tmux_terminal_features_commands, tmux_window_options,
 };
+use parse::parse_terminal_features;
 
 use super::{CommandSpec, MuxBackend, MuxErr, Result};
 use crate::config::TmuxConfig;
@@ -420,6 +421,10 @@ impl TmuxBackend {
 
     /// Apply RimZ's tmux room options.
     pub(super) fn apply_room_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
+        let terminal_features = self
+            .cmd()
+            .args(["show-options", "-s", "terminal-features"])
+            .run()?;
         let mut commands: Vec<Vec<String>> = Vec::new();
         for (key, value) in tmux_server_options(config) {
             commands.push(vec![
@@ -429,16 +434,12 @@ impl TmuxBackend {
                 value,
             ]);
         }
-        // Re-appending `*:sync` / `*:extkeys` is idempotent for tmux and
-        // preserves user entries.
-        for (key, value) in tmux_server_append_options(config) {
-            commands.push(vec![
-                "set-option".to_owned(),
-                "-as".to_owned(),
-                key.to_owned(),
-                value,
-            ]);
-        }
+        // tmux appends duplicate array entries, so fixed indices make these
+        // writes idempotent while the repair commands purge leaked strays.
+        commands.extend(tmux_terminal_features_commands(
+            config,
+            &parse_terminal_features(&terminal_features.stdout),
+        ));
         for (key, value) in tmux_session_options(config) {
             commands.push(vec![
                 "set-option".to_owned(),

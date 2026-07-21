@@ -579,8 +579,8 @@ Session birth proves the property rather than assuming it: it reads the birth pa
 
 The batch also does four things the option list alone does not express:
 
-- appends `*:sync` to `terminal-features` unconditionally, for atomic redraws in pixel pets and TUIs,
-- appends `*:extkeys` whenever extended keys are enabled,
+- writes `*:sync` at the fixed `terminal-features[240]` index for atomic redraws in pixel pets and TUIs, purging exact `*:sync`/`*:extkeys` entries leaked at other indices by the former append path,
+- writes `*:extkeys` at `terminal-features[241]` whenever extended keys are enabled and unsets that index when they are disabled,
 - registers root-table `S-Enter` and `M-Enter` bindings that inject the configured modified-Enter sequence, so agents receive soft newlines even when they do not request modifyOtherKeys,
 - names `ESC[27u` as `user-keys[240]` and binds it to Escape, because tmux passes that modifier-less form into panes verbatim.
 

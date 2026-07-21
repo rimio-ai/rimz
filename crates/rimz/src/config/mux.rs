@@ -171,7 +171,7 @@ impl Default for TmuxConfig {
             set_clipboard: TmuxSetClipboard::On,
             extended_keys: true,
             extended_keys_format: TmuxExtendedKeysFormat::CsiU,
-            escape_time_ms: 0,
+            escape_time_ms: 10,
             renumber_windows: true,
             aggressive_resize: true,
             pane_border_status: None,
