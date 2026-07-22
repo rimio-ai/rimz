@@ -161,6 +161,7 @@ fn adapter_matches_program(
     let definition = adapter.spec();
     let label = crate::proc::command::basename(program.program);
     definition.launches_as(label)
+        || (!program.from_launcher && definition.runs_as(label))
         || (program.from_launcher
             && crate::proc::command::agent_script_path_names_kind(program.program, definition.kind))
 }
@@ -304,6 +305,8 @@ mod tests {
         );
         assert!(command_may_be_agent_kind("agent", "cursor"));
         assert!(!command_may_be_agent_kind("agent", "grok"));
+        assert!(command_may_be_agent_kind("kiro-cli-chat", "kiro"));
+        assert_eq!(command_agent_kind_candidate("kiro-cli-chat"), Some("kiro"));
     }
 
     #[test]
