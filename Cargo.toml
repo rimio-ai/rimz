@@ -116,6 +116,9 @@ similar = { version = "2", features = ["unicode"] }
 # background fetch and an xtask, with no async-runtime drag.
 ureq = "3"
 url = "2"
+# The web gate rewrites authenticated HTTP request heads before proxying ttyd;
+# `httparse` keeps that trust-boundary parser structured and allocation-light.
+httparse = "1"
 # Codex app-server daemon control sockets speak RFC6455 WebSocket over a Unix
 # stream. `tungstenite` supplies the handshake, framing, ping/pong, close, and
 # fragmentation state machine over any `Read + Write`; hand-rolling that would

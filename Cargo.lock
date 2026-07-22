@@ -3155,6 +3155,7 @@ dependencies = [
  "foldhash",
  "glob",
  "hex",
+ "httparse",
  "image-webp",
  "insta",
  "jiff",

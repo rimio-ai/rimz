@@ -19,6 +19,7 @@ apt install ttyd         # Debian or Ubuntu
 rimz web            # ensure the room and shared daemon, print URL + credential, open browser
 rimz web url        # print an existing room's URL without requiring the daemon
 rimz web start      # start the machine-wide daemon without targeting a room
+rimz web restart    # restart it with the current binary and config
 rimz web status     # report the daemon's pid and configured port
 rimz web stop       # stop the daemon
 ```
@@ -46,13 +47,12 @@ A browser tab kept open while RimZ upgrades can retain the previous compatibilit
 Appearance is fixed when the shared daemon starts. After changing `[theme]` or web styling, run:
 
 ```sh
-rimz web stop
-rimz web start
+rimz web restart
 ```
 
 ## Behind a reverse proxy
 
-A reverse proxy can terminate HTTPS and let an Authentik forward-auth decision identify the user, but ttyd must trust that decision instead of showing its own Basic-Auth prompt. Set Authentik's Traefik forward-auth middleware to return `X-Authentik-Username` in its auth response headers, attach that middleware to the router serving RimZ, and make the proxy overwrite or remove any client-supplied copy of that header before forwarding.
+A reverse proxy can terminate HTTPS and let an Authentik forward-auth decision identify the user while ttyd keeps its machine-wide Basic Auth behind that public edge. Set Authentik's Traefik forward-auth middleware to return `X-Authentik-Username` in its auth response headers, attach that middleware to the router serving RimZ, and make the proxy overwrite or remove any client-supplied copy of that header before forwarding.
 
 Point RimZ at the public URL and name the header the proxy injects:
 
@@ -72,18 +72,17 @@ interface = "0.0.0.0"
 trusted_proxies = ["172.18.0.0/16"]
 ```
 
-RimZ starts ttyd on an ephemeral loopback port, starts a small TCP gate on `0.0.0.0:8200`, and forwards only loopback or configured source CIDRs. Use the proxy host's address or subnet for a proxy on another LAN or VPC host. Keep the host firewall restricted to the same sources; `trusted_proxies` sees the TCP peer address, so configure the CIDR for the address that actually reaches RimZ after container and host networking.
+RimZ starts Basic-authenticated ttyd on an ephemeral loopback port and a small authorization gate on `0.0.0.0:8200`. The gate accepts only loopback or configured source CIDRs, requires a non-empty `X-Authentik-Username` on every HTTP request, strips client-supplied `Authorization`, and presents ttyd's Basic credential upstream. Use the proxy host's address or subnet for a proxy on another LAN or VPC host. Keep the host firewall restricted to the same sources; `trusted_proxies` sees the TCP peer address, so configure the CIDR for the address that actually reaches RimZ after container and host networking.
 
 Restart after changing the auth or listener shape:
 
 ```sh
-rimz web stop
-rimz web start
+rimz web restart
 ```
 
-ttyd accepts any non-empty value in the configured header. A client that reaches ttyd can forge it and receive a shell, so make the authenticating proxy the only non-loopback source that can reach the port. The gate always admits loopback, and header auth on a multi-user host therefore lets another local user present the header; use host-level user isolation when local users are outside the trust boundary.
+The gate accepts any non-empty value in the configured header after validating the peer address, so make the authenticating proxy the only non-loopback source that can reach the port. An empty `trusted_proxies` list accepts only a proxy connecting from loopback. The gate admits loopback as a source but still requires the header there; the private ttyd listener separately requires Basic Auth.
 
-`rimz remote connect --web` stops with the public URL in this mode because an SSH tunnel cannot inject the trusted header. Open the `base_url` route through the authenticating proxy instead.
+The trusted-header decision applies only at the public gate. `rimz remote connect --web` tunnels through SSH directly to the private ttyd listener and uses the printed machine credential, so it works the same way in Basic and trusted-header configurations.
 
 ## Open a remote room
 
@@ -92,7 +91,7 @@ rimz remote connect dev --web
 rimz remote connect dev --web --web-port 8443
 ```
 
-With Basic Auth, RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the credential. It then forwards a local loopback port to the remote configured port and opens `http://127.0.0.1:<local-port>/?arg=<session>`. Trusted-header rooms use their reverse-proxy URL instead, as described above.
+RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the credential plus the private tunnel target. It then forwards a local loopback port to the remote ttyd listener and opens `http://127.0.0.1:<local-port>/?arg=<session>`. This path is uniform whether the remote public edge uses Basic or trusted-header auth.
 
 The tunnel stays in the foreground and follows the normal remote recovery policy. Recovery repeats prep, so a stopped daemon comes back and a rotated credential is printed again; the local URL stays stable. Without `--web-port`, the local port derives from the session in 8300–8399 and scans forward when busy.
 
@@ -105,11 +104,9 @@ rimz web token revoke rimz
 rimz web token revoke-all
 ```
 
-One credential named `rimz` serves the whole machine. `create` rotates it and restarts the live daemon. Either revoke command stops the daemon and clears the credential.
+One credential named `rimz` serves the whole machine in every auth mode. `create` rotates it and restarts the live daemon and gate. Either revoke command stops the daemon and clears the credential.
 
 ttyd read-only mode belongs to the whole process, so `rimz web token create --read-only` is rejected rather than presenting a misleading per-user permission.
-
-Trusted-header mode leaves the credential file idle. `token create` refuses and names the `auth_header` setting to unset; list and revoke remain available, and revoke still stops the daemon and clears an existing credential file.
 
 Treat the password like an SSH private key. It stays out of the URL, logs, events, and workspace records.
 
@@ -128,7 +125,7 @@ font = "JetBrainsMono Nerd Font Mono"
 style_client = true
 ```
 
-`interface` and `port` select the exact listener. `base_url` changes the prefix RimZ prints when a reverse proxy fronts ttyd; the `/?arg=<session>` query remains. `auth_header` replaces Basic Auth with a proxy-injected identity header, and non-empty `trusted_proxies` restricts source addresses through the TCP gate.
+`interface` and `port` select the exact public listener. `base_url` changes the prefix RimZ prints when a reverse proxy fronts RimZ; the `/?arg=<session>` query remains. `auth_header` puts a proxy-validated identity header at the authorization gate while ttyd retains Basic Auth, and non-empty `trusted_proxies` admits those source addresses to the gate.
 
 ## Security boundary
 
@@ -139,7 +136,7 @@ The one machine credential authenticates the shared listener, so it grants acces
 The browser session is shell access as the serving user, and terminal output can contain secrets. Treat either the credential or trusted-header boundary as machine-wide shell access. Put HTTPS and rate limiting in front before exposing the listener beyond loopback:
 
 ```text
-browser -> HTTPS authenticating proxy -> source-address gate -> loopback ttyd
+browser -> HTTPS authenticating proxy -> authorization gate -> Basic-authenticated loopback ttyd
 ```
 
 ## See also

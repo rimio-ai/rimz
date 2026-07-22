@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../DESIGN.md) and [multiplexers.md](./multiplexers.md) for the commitments this doc extends.
 
-RimZ serves every local Zellij and tmux room through one authenticated ttyd daemon, with a loopback listener by default and an optional source-address gate for reverse proxies.
+RimZ serves every local Zellij and tmux room through one Basic-authenticated ttyd daemon, with a loopback listener by default and an authorization gate for trusted-header reverse proxies.
 
 ## Contract
 
@@ -14,17 +14,17 @@ The store, hooks, sidebar, and wake paths are unchanged for a browser client, an
 
 ## Daemon
 
-Basic Auth uses this structurally fixed argv:
+ttyd uses this structurally fixed authentication argv in every mode:
 
 ```text
 ttyd -W -O -a -c rimz:<secret> -i 127.0.0.1 -p <port> [-t <client-option>...] [-I <custom-index>] <current-rimz-exe> web exec
 ```
 
-Trusted-header auth replaces `-c rimz:<secret>` with `-H <header>`. `-W` enables input, `-O` enforces origin checks, `-a` appends URL `arg` values to the command, and `-i` selects the configured IP listener.
+`-W` enables input, `-O` enforces origin checks, `-a` appends URL `arg` values to the command, and `-i` selects ttyd's listener. Trusted-header authentication changes the edge in front of ttyd; it never changes ttyd's Basic-authenticated core.
 
-An empty `trusted_proxies` list binds ttyd directly to `<interface>:<port>`. A non-empty list starts ttyd first on `127.0.0.1:<ephemeral>`, waits for that upstream, starts the hidden detached `rimz web gate` process on the configured listener, waits for the public listener, and only then writes daemon state. Startup tears down every process already started when a later step fails.
+Basic mode with an empty `trusted_proxies` list binds ttyd directly to `<interface>:<port>`. A non-empty list or trusted-header mode starts ttyd first on `127.0.0.1:<ephemeral>`, waits for that upstream, starts the hidden detached `rimz web gate` process on the configured listener, waits for the public listener, and only then writes daemon state. Startup tears down every process already started when a later step fails.
 
-The gate parses the configured bare IPs and IPv4 or IPv6 CIDRs before any process change. It accepts loopback peers and peers inside a matching same-family CIDR, drops every other connection, and splices accepted TCP streams to ttyd without parsing HTTP or reading pane data.
+The gate parses the configured bare IPs and IPv4 or IPv6 CIDRs before any process change. It accepts loopback peers and peers inside a matching same-family CIDR and drops every other connection. Basic mode splices accepted TCP streams unchanged. Trusted-header mode parses each HTTP request head, requires the configured header to be present and non-empty, removes any client `Authorization`, and injects `Authorization: Basic <machine-credential>` before forwarding; a missing header receives 401, request bodies with `Content-Length` pass unchanged, chunked requests close, keep-alive requests are checked independently, and a WebSocket upgrade switches to a raw splice. Responses pass unchanged.
 
 Room URLs have the shape `<base>/?arg=<percent-encoded-session>`. ttyd appends the decoded session to the hidden shim as `rimz web exec <session>`.
 
@@ -32,23 +32,23 @@ The shim accepts only a session with a durable RimZ workspace record and a match
 
 The ttyd binary resolves from `RIMZ_TTYD_BIN`, then `PATH`. A missing binary reports the Homebrew and apt install fix. `interface` must parse as an IP address, each trusted proxy must parse as an IP or CIDR, and an occupied configured listener returns a typed error that points to `[web] port`.
 
-RimZ spawns ttyd and the optional gate with null stdio and their own process groups, then writes `$XDG_STATE_HOME/rimz/web-ttyd.json` with `pid`, `port`, `interface`, `auth`, `trusted_proxies`, optional `gate: {pid, upstream_port}`, and optional `pixel_protocol`. `pixel_protocol` is present only when the live daemon serves a generated page with RimZ's current pixel compatibility layer. Old `{pid, port}` records deserialize as Basic Auth on loopback without a gate or pixel capability. The record is live only while ttyd is the recorded process, the optional gate is a recorded `rimz web gate` process, and the configured listener accepts a connection; readers remove stale records.
+RimZ spawns ttyd and the optional gate with null stdio and their own process groups, then writes `$XDG_STATE_HOME/rimz/web-ttyd.json` with `pid`, `port`, `interface`, `auth`, `trusted_proxies`, `basic_upstream`, optional `gate: {pid, upstream_port}`, and optional `pixel_protocol`. `basic_upstream` proves that ttyd uses the layered Basic-auth contract, and `pixel_protocol` is present only when the live daemon serves a generated page with RimZ's current pixel compatibility layer. Records written before `basic_upstream` deserialize it as false and are replaced before reuse. The record is live only while ttyd is the recorded process, the optional gate is a recorded `rimz web gate` process, and the configured listener accepts a connection; readers remove stale records.
 
-The desired listener, auth mode, and proxy list participate in daemon reuse. Any drift stops the old processes and starts the desired shape; Basic mode also requires the credential file before reuse.
+The desired listener, auth mode, proxy list, gate presence, and Basic-upstream marker participate in daemon reuse. Any drift stops the old processes and starts the desired shape, and every mode requires the credential file before reuse.
 
 State transitions hold `$XDG_STATE_HOME/rimz/web-ttyd.lock`, so concurrent room starts converge on one process and credential rotation cannot race stale-record cleanup.
 
 The first shared-daemon start after an upgrade consumes the old `$XDG_STATE_HOME/rimz/web-ttyd/` per-session records. RimZ sends SIGTERM only when a recorded pid still names `ttyd`, then removes the legacy directory; malformed records, recycled pids, and cleanup errors are debug diagnostics and do not block the new daemon.
 
-`rimz web stop` sends SIGTERM to the gate and ttyd, waits one second while refreshing the process table, uses SIGKILL for a survivor, waits for the public listener to close, and removes the record.
+`rimz web restart` performs the same stop under the daemon lock when a daemon is online and always starts a fresh process with the current binary and browser profile. `rimz web stop` sends SIGTERM to the gate and ttyd, waits one second while refreshing the process table, uses SIGKILL for a survivor, waits for the public listener to close, and removes the record.
 
 ## Credential and browser client
 
-In Basic mode, the one credential named `rimz` lives at `$XDG_STATE_HOME/rimz/web-ttyd-credential.json`, mode 0600, with `name`, `created_at`, and `secret`.
+The one credential named `rimz` lives at `$XDG_STATE_HOME/rimz/web-ttyd-credential.json`, mode 0600, with `name`, `created_at`, and `secret`. ttyd requires it in every auth mode, and a trusted-header gate reads the file at startup to precompute the injected Basic authorization value; the secret stays off gate argv.
 
 Rotation stops and restarts the one live daemon so the old secret stops working immediately. Revocation stops the daemon and removes the credential. ttyd read-only mode is process-wide, so RimZ rejects read-only credential creation.
 
-Trusted-header mode neither reads nor mints the credential, and its JSON payload omits `credential`. `rimz web token create` refuses while `auth_header` is set and tells the user to unset it to return to Basic Auth; list and revoke retain their normal file behavior.
+Credential creation, rotation, listing, and revocation have the same behavior in Basic and trusted-header modes. Rotation restarts both ttyd and its gate, so the gate's startup read receives the new secret.
 
 The daemon always passes `macOptionIsMeta=true` and `cursorBlink=false`. With `style_client = true`, it also projects the shared theme into xterm.js options and resolves the configured font.
 
@@ -64,9 +64,9 @@ The tmux capability probe accepts an `xterm-256color` rendering client when its 
 
 ## Commands and room start
 
-`rimz web open` resolves or births the room, confirms the session is addressable, ensures the shared daemon, and returns its URL and auth mode plus a credential in Basic mode. `--no-start` requires an already-live daemon.
+`rimz web open` resolves or births the room, confirms the session is addressable, ensures the shared daemon, and returns its URL, auth mode, credential, and tunnel target. `--no-start` requires an already-live daemon.
 
-`rimz web url` reads the room identity, existing credential, and live daemon state without changing the daemon or credential. It uses the live port when the daemon runs and the configured port otherwise; its v2 JSON omits `credential` when none exists. `start`, `status`, and `stop` act on the one machine daemon and need no room target.
+`rimz web url` reads the room identity, existing credential, and live daemon state without changing the daemon or credential. It uses the live port when the daemon runs and the configured port otherwise; its v2 JSON omits `credential` when none exists. `start`, `restart`, `status`, and `stop` act on the one machine daemon and need no room target. `rimz reload` restarts the daemon when it is online so a newly installed build supplies its current browser client; an offline daemon stays offline, and a restart failure warns without failing reload.
 
 After a normal `rimz start` makes the room ready, `[web] enabled = true` asks RimZ to ensure the daemon. This path is deliberately best-effort: missing ttyd, a port collision, or a start failure prints a warning and never refuses the room.
 
@@ -76,15 +76,15 @@ After a normal `rimz start` makes the room ready, `[web] enabled = true` asks Ri
 
 `enabled` defaults to true, `interface` defaults to `127.0.0.1`, `port` defaults to 8200, and an absent `base_url` resolves to `http://127.0.0.1:<port>`. A reverse proxy can set `base_url` to its public prefix; RimZ appends `/?arg=<session>`.
 
-A non-empty trimmed `auth_header` selects trusted-header auth, while an empty or absent value selects Basic Auth. `trusted_proxies` is empty by default; setting it enables the gate even in Basic mode. Trusted-header auth on a non-loopback interface without the gate returns a warning that names the CIDR or firewall fixes.
+A non-empty trimmed `auth_header` selects trusted-header auth and always enables the gate, while an empty or absent value selects direct Basic Auth unless `trusted_proxies` enables the gate. `trusted_proxies` is empty by default. Trusted-header auth on a non-loopback interface with an empty allowlist warns that only loopback proxies can connect and names the CIDR fix for a proxy on another host.
 
 The section is per-machine and stays outside the trust hash because no field executes a command. `font_source` is a read-only local path or HTTPS URL.
 
 ## Remote rooms
 
-Remote prep is one non-PTY `rimz web open --print --json` call. Its additive `rimz.web.v2` payload includes `auth: {mode: "basic"}` or `auth: {mode: "trusted_header", header: "<name>"}`; missing `auth` defaults to Basic for older v2 peers, and Basic payloads include `credential: {username, secret}`.
+Remote prep is one non-PTY `rimz web open --print --json` call. Its additive `rimz.web.v2` payload includes `auth: {mode: "basic"}` or `auth: {mode: "trusted_header", header: "<name>"}`, `credential: {username, secret}`, and `tunnel_port`. Missing `auth` defaults to Basic and missing `tunnel_port` falls back to `port` for older v2 peers.
 
-The local side checks the exact schema, prints the returned Basic-Auth credential, chooses a local port, and forwards it to `127.0.0.1:<remote-port>`. There is no second token-provisioning SSH call. A trusted-header payload fails before tunnel setup and directs the user to its reverse-proxy URL because an SSH port forward cannot inject the required header.
+The local side checks the exact schema, prints the returned Basic-Auth credential, chooses a local port, and forwards it to `127.0.0.1:<tunnel_port>`. For a gated daemon, this lands directly on ttyd's loopback Basic-authenticated upstream; for a direct daemon, `tunnel_port` equals the public `port`. There is no second token-provisioning SSH call. A legacy trusted-header payload without a credential still fails before tunnel setup and directs the user to its reverse-proxy URL.
 
 The local port derives from the session in 8300–8399 and scans on collision. Recovery repeats prep so it can rebirth the room, restart the daemon, discover a changed port, and print a changed secret while keeping the local URL stable. Version skew uses the existing remote-upgrade diagnostic; v1 payloads are not accepted.
 
@@ -92,9 +92,9 @@ The local port derives from the session in 8300–8399 and scans on collision. R
 
 The default listener binds to loopback and requires Basic Auth.
 
-ttyd treats a configured auth header as proof of authentication when it is present and non-empty; it does not validate the value or filter source addresses. Any client that reaches an ungated listener can spoof the header and receive a shell, so a non-loopback trusted-header listener uses `trusted_proxies` or an equivalent firewall boundary that admits only the authenticating proxy.
+The gate treats a configured auth header as proof of the public proxy's authentication only after the peer address passes the loopback-or-allowlist check. It strips client authorization and presents the machine credential to ttyd itself, so ttyd never trusts a public identity header.
 
-The gate always trusts loopback because local processes can already reach its loopback ttyd upstream. On a multi-user host, any local user who can connect and supply the configured header can reach the shell as the RimZ-serving user; use host-level user isolation when that boundary matters.
+The source gate always admits loopback, but trusted-header authorization still requires the configured header there; loopback carries no header-auth bypass. The private ttyd upstream remains protected by Basic Auth. Use host-level user isolation when another local user can read the serving user's credential file or execute as that user.
 
 Credentials stay out of URLs, logs, store events, and workspace records. The v2 credential appears only in explicit JSON output that reports a saved credential and the human stderr relay.
 

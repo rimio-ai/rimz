@@ -163,7 +163,8 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
     render_web_credential(remote, &credential, &mut previous_credential, true);
     let local_port = rimz::remote::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
-    let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
+    let spec =
+        rimz::remote::web::web_tunnel_spec(&remote.target, local_port, tunnel_port(&payload));
     let mut tunnel = RemoteTunnel::start(&spec, remote.target.host_display())?;
     match tunnel.wait_until_ready(local_port)? {
         PortWait::Ready => {}
@@ -296,7 +297,11 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         let mut tunnel = if round_control.is_some() {
             None
         } else {
-            let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
+            let spec = rimz::remote::web::web_tunnel_spec(
+                &remote.target,
+                local_port,
+                tunnel_port(&payload),
+            );
             Some(RemoteTunnel::start(&spec, host)?)
         };
         let readiness = match (round_control, tunnel.as_mut()) {
@@ -304,7 +309,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
                 &rimz::remote::web::web_control_forward_spec(
                     &remote.target,
                     local_port,
-                    payload.port,
+                    tunnel_port(&payload),
                     control,
                 ),
                 host,
@@ -461,7 +466,9 @@ fn parse_web_payload(
             payload.version
         );
     }
-    if let rimz::web::WebAuth::TrustedHeader { .. } = &payload.auth {
+    if matches!(&payload.auth, rimz::web::WebAuth::TrustedHeader { .. })
+        && payload.credential.is_none()
+    {
         bail!(
             "the remote serves browser access behind a reverse proxy (trusted-header auth) — open `{}` directly; no SSH tunnel applies",
             payload.url
@@ -472,6 +479,10 @@ fn parse_web_payload(
         .clone()
         .context("remote `rimz web open --json` omitted the ttyd credential")?;
     Ok((payload, credential))
+}
+
+fn tunnel_port(payload: &rimz::web::WebOpenPayload) -> u16 {
+    payload.tunnel_port.unwrap_or(payload.port)
 }
 
 fn render_web_credential(
@@ -610,7 +621,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn trusted_header_payload_refuses_an_ssh_tunnel() {
+    fn legacy_trusted_header_payload_refuses_an_ssh_tunnel() {
         let bytes = br#"{
             "version":"rimz.web.v2",
             "url":"https://devbox.example/rimz/?arg=room",
@@ -625,6 +636,35 @@ mod tests {
             message.contains("open `https://devbox.example/rimz/?arg=room` directly"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn trusted_header_payload_with_a_credential_tunnels_to_its_upstream_port() {
+        let bytes = br#"{
+            "version":"rimz.web.v2",
+            "url":"https://devbox.example/rimz/?arg=room",
+            "session":"room",
+            "port":8200,
+            "tunnel_port":41820,
+            "auth":{"mode":"trusted_header","header":"X-Forwarded-User"},
+            "credential":{"username":"rimz","secret":"secret"}
+        }"#;
+        let (payload, credential) = parse_web_payload(bytes).expect("trusted-header tunnel");
+        assert_eq!(credential.username, "rimz");
+        assert_eq!(tunnel_port(&payload), 41820);
+    }
+
+    #[test]
+    fn legacy_basic_payload_tunnels_to_its_public_port() {
+        let bytes = br#"{
+            "version":"rimz.web.v2",
+            "url":"http://127.0.0.1:8200/?arg=room",
+            "session":"room",
+            "port":8200,
+            "credential":{"username":"rimz","secret":"secret"}
+        }"#;
+        let (payload, _) = parse_web_payload(bytes).expect("legacy Basic tunnel");
+        assert_eq!(tunnel_port(&payload), 8200);
     }
 
     #[test]

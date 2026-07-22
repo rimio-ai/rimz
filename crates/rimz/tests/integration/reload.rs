@@ -6,6 +6,8 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::os::unix::net::UnixDatagram;
+use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -40,6 +42,77 @@ fn standalone_sidebar_repair_does_not_stage_a_build() {
         !env.state_root().join("rimz/builds").exists(),
         "standalone structural repair must not publish an upgrade generation",
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn reload_restarts_an_online_web_daemon_and_leaves_an_offline_one_offline() {
+    let env = Env::new();
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind web port")
+        .local_addr()
+        .expect("web address")
+        .port();
+    let config = env.config_root().join("rimz/config.toml");
+    std::fs::create_dir_all(config.parent().expect("config parent")).expect("mkdir config");
+    std::fs::write(
+        &config,
+        format!("[web]\nport = {port}\nstyle_client = false\n"),
+    )
+    .expect("write config");
+    let bin_dir = env.home_root.join("reload-web-bin");
+    std::fs::create_dir_all(&bin_dir).expect("mkdir web bin");
+    let ttyd = bin_dir.join("ttyd");
+    std::os::unix::fs::symlink(
+        crate::common::cargo_bin("ttyd-trace", env!("CARGO_BIN_EXE_ttyd-trace")),
+        &ttyd,
+    )
+    .expect("link ttyd shim");
+    let log = env.project_root.join("reload-web.log");
+    let daemon_path = env.state_root().join("rimz/web-ttyd.json");
+    let command = || web_command(&env, &bin_dir, &ttyd, &log);
+
+    let offline = command().arg("reload").output().expect("reload offline");
+    assert!(offline.status.success(), "{:?}", offline.stderr);
+    assert!(!daemon_path.exists(), "reload started an offline daemon");
+
+    let start = command()
+        .args(["web", "start"])
+        .output()
+        .expect("start web daemon");
+    assert!(start.status.success(), "{:?}", start.stderr);
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("daemon record before reload"))
+            .expect("daemon JSON before reload");
+
+    let online = command().arg("reload").output().expect("reload online");
+    assert!(online.status.success(), "{:?}", online.stderr);
+    assert!(
+        String::from_utf8_lossy(&online.stdout).contains("Restarted the shared web daemon."),
+        "{}",
+        String::from_utf8_lossy(&online.stdout)
+    );
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("daemon record after reload"))
+            .expect("daemon JSON after reload");
+    assert_ne!(before["pid"], after["pid"], "reload reused the web daemon");
+
+    let stop = command()
+        .args(["web", "stop"])
+        .output()
+        .expect("stop web daemon");
+    assert!(stop.status.success(), "{:?}", stop.stderr);
+}
+
+#[cfg(unix)]
+fn web_command(env: &Env, bin_dir: &Path, ttyd: &Path, log: &Path) -> Command {
+    let mut command = env.rimz();
+    command
+        .env("PATH", bin_dir)
+        .env("RIMZ_TTYD_BIN", ttyd)
+        .env("RIMZ_TEST_TTYD_LOG", log)
+        .env("RIMZ_WEB_FONTS_OFFLINE", "1");
+    command
 }
 
 #[test]

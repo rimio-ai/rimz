@@ -141,6 +141,7 @@ crc32fast.workspace = true
 dotenvy.workspace = true
 glob.workspace = true
 hex.workspace = true
+httparse.workspace = true
 md5.workspace = true
 image-webp.workspace = true
 jiff.workspace = true

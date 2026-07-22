@@ -27,6 +27,8 @@ enum WebSubcmd {
     Status(WebStatusArgs),
     /// Start the shared ttyd daemon.
     Start,
+    /// Restart the shared ttyd daemon and apply the current config.
+    Restart,
     /// Stop the shared ttyd daemon.
     Stop,
     /// Manage the machine-wide browser credential.
@@ -47,8 +49,10 @@ enum WebSubcmd {
         listen: SocketAddr,
         #[arg(long)]
         upstream: SocketAddr,
-        #[arg(long = "allow", required = true)]
+        #[arg(long = "allow")]
         allow: Vec<String>,
+        #[arg(long)]
+        auth_header: Option<String>,
     },
 }
 
@@ -127,6 +131,7 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
         WebSubcmd::Url(args) => url(args, globals),
         WebSubcmd::Status(args) => status(args),
         WebSubcmd::Start => start(),
+        WebSubcmd::Restart => restart(),
         WebSubcmd::Stop => stop(),
         WebSubcmd::Token { command } => token(command),
         WebSubcmd::Exec { session } => exec(session.as_deref()),
@@ -134,7 +139,18 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
             listen,
             upstream,
             allow,
-        } => rimz::web::serve_gate(listen, upstream, &allow).map_err(Into::into),
+            auth_header,
+        } => {
+            let auth = auth_header
+                .map(|header_name| -> rimz::web::Result<_> {
+                    Ok(rimz::web::GateAuth {
+                        header_name,
+                        authorization: rimz::web::gate_authorization()?,
+                    })
+                })
+                .transpose()?;
+            rimz::web::serve_gate(listen, upstream, &allow, auth).map_err(Into::into)
+        }
     }
 }
 
@@ -159,21 +175,19 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         return crate::cli::render::json(&outcome.payload);
     }
     print_url(&outcome.payload.url)?;
-    match &outcome.payload.auth {
-        WebAuth::Basic => write_web_credential(
-            outcome
-                .payload
-                .credential
-                .as_ref()
-                .context("shared ttyd daemon returned no credential")?,
-        ),
-        WebAuth::TrustedHeader { header } => {
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "rimz: authentication is delegated to the reverse proxy (trusted header `{header}`)"
-            );
-        }
+    if let WebAuth::TrustedHeader { header } = &outcome.payload.auth {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "rimz: authentication is delegated to the reverse proxy (trusted header `{header}`)"
+        );
     }
+    write_web_credential(
+        outcome
+            .payload
+            .credential
+            .as_ref()
+            .context("shared ttyd daemon returned no credential")?,
+    );
     if !args.print {
         open_browser_best_effort(&outcome.payload.url);
     }
@@ -226,6 +240,24 @@ fn start() -> Result<()> {
         listener_display(&outcome.interface, outcome.port),
         outcome.pid
     )?;
+    Ok(())
+}
+
+fn restart() -> Result<()> {
+    let outcome = rimz::web::restart_daemon(&machine_config())?;
+    crate::cli::render::web_warnings(&outcome.warnings);
+    writeln!(
+        std::io::stdout().lock(),
+        "ttyd: online on {} (pid {})",
+        listener_display(&outcome.interface, outcome.port),
+        outcome.pid
+    )?;
+    if !outcome.was_online {
+        writeln!(
+            std::io::stdout().lock(),
+            "ttyd: was offline; started a fresh daemon"
+        )?;
+    }
     Ok(())
 }
 
@@ -285,7 +317,7 @@ fn exec(session: Option<&str>) -> Result<()> {
 fn write_web_credential(credential: &WebCredential) {
     let _ = writeln!(
         std::io::stderr().lock(),
-        "ttyd basic auth for this machine (browser will show a Basic-Auth prompt): user {}, password {}",
+        "ttyd basic auth for this machine: user {}, password {}",
         credential.username,
         credential.secret
     );
