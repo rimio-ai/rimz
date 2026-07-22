@@ -16,6 +16,7 @@ const UNAUTHORIZED: &[u8] =
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GateAuth {
     pub header_name: String,
+    pub allowed_users: Vec<String>,
     pub authorization: String,
 }
 
@@ -442,13 +443,33 @@ fn rewrite_request_head(head: &[u8], auth: &GateAuth) -> RequestAction {
     else {
         return RequestAction::Close;
     };
-    let mut trusted = false;
+    let mut identity_header_count = 0_usize;
+    let mut identity = None;
+    for header in request.headers.iter() {
+        if header.name.eq_ignore_ascii_case(&auth.header_name) {
+            identity_header_count += 1;
+            if identity_header_count == 1 {
+                identity = Some(trim_ascii(header.value));
+            }
+        }
+    }
+    let Some(identity) = identity else {
+        return RequestAction::Unauthorized;
+    };
+    if identity_header_count != 1
+        || identity.is_empty()
+        || (!auth.allowed_users.is_empty()
+            && !auth
+                .allowed_users
+                .iter()
+                .any(|allowed| allowed.as_bytes() == identity))
+    {
+        return RequestAction::Unauthorized;
+    }
+
     let mut content_length = None;
     let mut upgrade = false;
     for header in request.headers.iter() {
-        if header.name.eq_ignore_ascii_case(&auth.header_name) {
-            trusted |= !trim_ascii(header.value).is_empty();
-        }
         if header.name.eq_ignore_ascii_case("Transfer-Encoding")
             && header_tokens(header.value).any(|token| token.eq_ignore_ascii_case(b"chunked"))
         {
@@ -471,9 +492,6 @@ fn rewrite_request_head(head: &[u8], auth: &GateAuth) -> RequestAction {
         {
             upgrade = true;
         }
-    }
-    if !trusted {
-        return RequestAction::Unauthorized;
     }
 
     let mut rewritten = Vec::with_capacity(head.len() + auth.authorization.len() + 24);
@@ -541,6 +559,7 @@ mod tests {
     fn auth() -> GateAuth {
         GateAuth {
             header_name: "X-Forwarded-User".to_owned(),
+            allowed_users: Vec::new(),
             authorization: "Basic cmltejphYmNk".to_owned(),
         }
     }
@@ -615,6 +634,37 @@ mod tests {
             ),
             RequestAction::Close
         );
+    }
+
+    #[test]
+    fn trusted_header_enforces_the_user_allowlist_and_single_occurrence() {
+        let mut allowlisted = auth();
+        allowlisted.allowed_users = vec!["alice".to_owned()];
+
+        assert!(matches!(
+            rewrite_request_head(
+                b"GET / HTTP/1.1\r\nX-Forwarded-User:  alice \t\r\n\r\n",
+                &allowlisted,
+            ),
+            RequestAction::Forward { .. }
+        ));
+        assert_eq!(
+            rewrite_request_head(
+                b"GET / HTTP/1.1\r\nX-Forwarded-User: Alice\r\n\r\n",
+                &allowlisted,
+            ),
+            RequestAction::Unauthorized
+        );
+
+        for auth in [auth(), allowlisted] {
+            assert_eq!(
+                rewrite_request_head(
+                    b"GET / HTTP/1.1\r\nX-Forwarded-User: alice\r\nX-Forwarded-User: alice\r\n\r\n",
+                    &auth,
+                ),
+                RequestAction::Unauthorized
+            );
+        }
     }
 
     #[test]

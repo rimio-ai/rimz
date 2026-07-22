@@ -218,6 +218,25 @@ fn web_open_disabled_fails_before_room_side_effects() {
     assert!(!log.exists(), "disabled web should not invoke ttyd");
 }
 
+#[test]
+fn auth_users_without_auth_header_refuses_start() {
+    let env = Env::new();
+    write_machine_config(&env, "[web]\nauth_users = [\"alice\"]\n");
+
+    let output = env
+        .rimz()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("reject auth users without a header");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("set [web] auth_header or remove [web] auth_users"),
+        "{stderr}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn offline_url_and_status_use_configured_shared_port_without_spawning() {
@@ -823,7 +842,7 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
     write_machine_config(
         &fixture.env,
         &format!(
-            "[web]\nport = {}\nauth_header = \"X-Authentik-Username\"\nstyle_client = false\n",
+            "[web]\nport = {}\nauth_header = \"X-Authentik-Username\"\nauth_users = [\"alice\"]\nstyle_client = false\n",
             fixture.web_port
         ),
     );
@@ -885,6 +904,11 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
         gate_process
             .cmdline
             .contains("--auth-header X-Authentik-Username"),
+        "{}",
+        gate_process.cmdline
+    );
+    assert!(
+        gate_process.cmdline.contains("--auth-user alice"),
         "{}",
         gate_process.cmdline
     );

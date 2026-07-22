@@ -83,6 +83,14 @@ pub enum WebErr {
     )]
     InvalidInterface { value: String },
     #[error(
+        "[web] auth_users requires trusted-header authentication; set [web] auth_header or remove [web] auth_users"
+    )]
+    AuthUsersRequireHeader,
+    #[error(
+        "[web] auth_users contains an empty username; remove it or set it to the IdP's canonical username"
+    )]
+    EmptyAuthUser,
+    #[error(
         "[web] trusted proxy `{value}` is invalid: {reason}; use an IP address or CIDR in `rimz config path`"
     )]
     InvalidTrustedProxy { value: String, reason: String },

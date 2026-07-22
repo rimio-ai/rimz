@@ -43,6 +43,8 @@ pub(super) struct DaemonRecord {
     pub(super) interface: String,
     #[serde(default)]
     pub(super) auth: WebAuth,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) auth_users: Vec<String>,
     #[serde(default)]
     pub(super) trusted_proxies: Vec<String>,
     #[serde(default)]
@@ -66,6 +68,7 @@ impl DaemonRecord {
             port,
             interface: default_interface(),
             auth: WebAuth::Basic,
+            auth_users: Vec::new(),
             trusted_proxies: Vec::new(),
             gate: None,
             basic_upstream: true,
@@ -79,6 +82,7 @@ struct DaemonSpec {
     port: u16,
     interface: String,
     auth: WebAuth,
+    auth_users: Vec<String>,
     trusted_proxies: Vec<String>,
 }
 
@@ -288,10 +292,24 @@ fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
     for value in &config.web.trusted_proxies {
         Cidr::parse(value)?;
     }
+    let auth = auth_from_config(config);
+    if !config.web.auth_users.is_empty() && !matches!(auth, WebAuth::TrustedHeader { .. }) {
+        return Err(WebErr::AuthUsersRequireHeader);
+    }
+    let auth_users = config
+        .web
+        .auth_users
+        .iter()
+        .map(|user| user.trim().to_owned())
+        .collect::<Vec<_>>();
+    if auth_users.iter().any(String::is_empty) {
+        return Err(WebErr::EmptyAuthUser);
+    }
     Ok(DaemonSpec {
         port: config.web.port,
         interface,
-        auth: auth_from_config(config),
+        auth,
+        auth_users,
         trusted_proxies: config.web.trusted_proxies.clone(),
     })
 }
@@ -301,6 +319,7 @@ fn record_matches(record: &DaemonRecord, desired: &DaemonSpec) -> bool {
         && record.port == desired.port
         && record.interface == desired.interface
         && record.auth == desired.auth
+        && record.auth_users == desired.auth_users
         && record.trusted_proxies == desired.trusted_proxies
         && record.gate.is_some() == gated(desired)
         && record
@@ -478,6 +497,7 @@ fn start_daemon_with_profile(
             ttyd_address,
             &desired.trusted_proxies,
             &desired.auth,
+            &desired.auth_users,
         ) {
             Ok(pid) => pid,
             Err(err) => {
@@ -497,6 +517,7 @@ fn start_daemon_with_profile(
         port: desired.port,
         interface: desired.interface.clone(),
         auth: desired.auth.clone(),
+        auth_users: desired.auth_users.clone(),
         trusted_proxies: desired.trusted_proxies.clone(),
         gate,
         basic_upstream: true,
@@ -521,6 +542,7 @@ fn spawn_gate(
     upstream: SocketAddr,
     allow: &[String],
     auth: &WebAuth,
+    auth_users: &[String],
 ) -> Result<u32> {
     let exe = std::env::current_exe().map_err(|source| WebErr::Io {
         path: PathBuf::from("/proc/self/exe"),
@@ -536,6 +558,9 @@ fn spawn_gate(
     }
     if let WebAuth::TrustedHeader { header } = auth {
         spec = spec.arg("--auth-header").arg(header.clone());
+    }
+    for user in auth_users {
+        spec = spec.arg("--auth-user").arg(user.clone());
     }
     spawn_detached(spec)
 }
@@ -1082,6 +1107,7 @@ mod tests {
             auth: WebAuth::TrustedHeader {
                 header: "X-Forwarded-User".to_owned(),
             },
+            auth_users: vec!["alice".to_owned()],
             trusted_proxies: vec!["10.0.0.0/8".to_owned()],
             gate: Some(GateRecord {
                 pid: u32::MAX - 1,
@@ -1100,6 +1126,7 @@ mod tests {
             serde_json::from_str(r#"{"pid":42,"port":8200}"#).expect("old record");
         assert_eq!(daemon.pid, 42);
         assert_eq!(daemon.auth, WebAuth::Basic);
+        assert!(daemon.auth_users.is_empty());
         assert!(daemon.gate.is_none());
         assert!(!daemon.basic_upstream);
     }
@@ -1122,6 +1149,30 @@ mod tests {
     }
 
     #[test]
+    fn desired_spec_validates_and_trims_auth_users() {
+        let mut config = MachineConfig::default();
+        config.web.auth_users = vec!["alice".to_owned()];
+        assert!(matches!(
+            desired_spec(&config),
+            Err(WebErr::AuthUsersRequireHeader)
+        ));
+
+        config.web.auth_header = Some(" \t ".to_owned());
+        assert!(matches!(
+            desired_spec(&config),
+            Err(WebErr::AuthUsersRequireHeader)
+        ));
+
+        config.web.auth_header = Some("X-Forwarded-User".to_owned());
+        config.web.auth_users = vec![" \t ".to_owned()];
+        assert!(matches!(desired_spec(&config), Err(WebErr::EmptyAuthUser)));
+
+        config.web.auth_users = vec![" alice ".to_owned(), "bob".to_owned()];
+        let desired = desired_spec(&config).expect("valid auth users");
+        assert_eq!(desired.auth_users, ["alice", "bob"]);
+    }
+
+    #[test]
     fn non_loopback_trusted_header_auth_warns_without_a_proxy_allowlist() {
         let spec = DaemonSpec {
             port: 8200,
@@ -1129,6 +1180,7 @@ mod tests {
             auth: WebAuth::TrustedHeader {
                 header: "X-Forwarded-User".to_owned(),
             },
+            auth_users: Vec::new(),
             trusted_proxies: Vec::new(),
         };
         assert!(matches!(
@@ -1160,6 +1212,9 @@ mod tests {
         daemon.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL);
         assert!(record_matches(&daemon, &desired));
         daemon.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL - 1);
+        assert!(!record_matches(&daemon, &desired));
+        daemon.pixel_protocol = None;
+        daemon.auth_users.push("alice".to_owned());
         assert!(!record_matches(&daemon, &desired));
     }
 

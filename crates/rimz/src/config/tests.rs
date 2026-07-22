@@ -111,6 +111,7 @@ fn assert_web_config(config: &MachineConfig) {
         Some("https://watch.example/rimz")
     );
     assert_eq!(config.web.auth_header.as_deref(), Some("X-Forwarded-User"));
+    assert_eq!(config.web.auth_users, ["alice", "bob"]);
     assert_eq!(config.web.trusted_proxies, ["10.0.0.0/8", "fd00::/8"]);
     assert_eq!(config.web.font, "FiraCode Nerd Font Mono");
     assert_eq!(config.web.font_source.as_deref(), Some("/tmp/font.woff2"));
@@ -1624,6 +1625,7 @@ fn web_enabled_defaults_on_and_parses_off() {
     assert_eq!(WebPrefs::default().share_port, 8201);
     assert_eq!(WebPrefs::default().interface, "127.0.0.1");
     assert!(WebPrefs::default().auth_header.is_none());
+    assert!(WebPrefs::default().auth_users.is_empty());
     assert!(WebPrefs::default().trusted_proxies.is_empty());
 
     let dir = tempdir().expect("tempdir");
@@ -1649,6 +1651,7 @@ fn scalar_sections_parse_non_default_values() {
              base_url = \"https://devbox.example/rimz\"\n\
              share_base_url = \"https://watch.example/rimz\"\n\
              auth_header = \"X-Forwarded-User\"\n\
+             auth_users = [\"alice\", \"bob\"]\n\
              trusted_proxies = [\"10.0.0.0/8\", \"fd00::/8\"]\n\
              font = \"FiraCode Nerd Font Mono\"\n\
              font_source = \"/tmp/font.woff2\"\n\
@@ -1668,4 +1671,14 @@ fn scalar_sections_parse_non_default_values() {
         let config = load_no_fragments(&write(&dir, text)).expect("load");
         assert_config(&config);
     }
+}
+
+#[test]
+fn web_auth_users_round_trip() {
+    let prefs: WebPrefs = toml::from_str("auth_users = [\"alice\", \"bob\"]\n").expect("parse");
+    let encoded = toml::to_string(&prefs).expect("serialize");
+    let round_tripped: WebPrefs = toml::from_str(&encoded).expect("parse serialized prefs");
+
+    assert_eq!(round_tripped, prefs);
+    assert_eq!(round_tripped.auth_users, ["alice", "bob"]);
 }

@@ -24,7 +24,7 @@ ttyd -W -O -a -c rimz:<secret> -i 127.0.0.1 -p <port> [-t <client-option>...] [-
 
 Basic mode with an empty `trusted_proxies` list binds ttyd directly to `<interface>:<port>`. A non-empty list or trusted-header mode starts ttyd first on `127.0.0.1:<ephemeral>`, waits for that upstream, starts the hidden detached `rimz web gate` process on the configured listener, waits for the public listener, and only then writes daemon state. Startup tears down every process already started when a later step fails.
 
-The gate parses the configured bare IPs and IPv4 or IPv6 CIDRs before any process change. It accepts loopback peers and peers inside a matching same-family CIDR and drops every other connection. Basic mode splices accepted TCP streams unchanged. Trusted-header mode parses each HTTP request head, requires the configured header to be present and non-empty, removes any client `Authorization`, and injects `Authorization: Basic <machine-credential>` before forwarding; a missing header receives 401, request bodies with `Content-Length` pass unchanged, chunked requests close, keep-alive requests are checked independently, and a WebSocket upgrade switches to a raw splice. Responses pass unchanged.
+The gate parses the configured bare IPs and IPv4 or IPv6 CIDRs before any process change. It accepts loopback peers and peers inside a matching same-family CIDR and drops every other connection. Basic mode splices accepted TCP streams unchanged. Trusted-header mode parses each HTTP request head, requires exactly one occurrence of the configured header with a non-empty trimmed value, optionally requires a byte-exact case-sensitive match in `auth_users`, removes any client `Authorization`, and injects `Authorization: Basic <machine-credential>` before forwarding; a rejected identity receives 401, request bodies with `Content-Length` pass unchanged, chunked requests close, keep-alive requests are checked independently, and a WebSocket upgrade switches to a raw splice. Responses pass unchanged.
 
 Room URLs have the shape `<base>/?arg=<percent-encoded-session>`. ttyd appends the decoded session to the hidden shim as `rimz web exec <session>`.
 
@@ -32,11 +32,11 @@ The shim accepts only a session with a durable RimZ workspace record and a match
 
 A missing, unknown, or stopped target on terminal stdio opens the themed session manager. It joins durable workspace records with one live mux probe, filters by session name, and attaches the selected room as an inherited-stdio child after releasing raw input while preserving the alternate screen; when that child ends, a fresh probe returns the browser tab to the list. The agent counts and attention tally read through `PublishedSnapshotReader`, keeping one incremental consumer cursor per live session and degrading an unreadable snapshot to an unenriched row. Non-terminal stdio prints the same live-session listing and exits 1.
 
-The ttyd binary resolves from `RIMZ_TTYD_BIN`, then `PATH`. A missing binary reports the Homebrew and apt install fix. `interface` must parse as an IP address, each trusted proxy must parse as an IP or CIDR, and an occupied configured listener returns a typed error that points to `[web] port`.
+The ttyd binary resolves from `RIMZ_TTYD_BIN`, then `PATH`. A missing binary reports the Homebrew and apt install fix. `interface` must parse as an IP address, each trusted proxy must parse as an IP or CIDR, `auth_users` requires a non-empty `auth_header`, and every user must remain non-empty after trimming. These config preconditions fail before process changes with a typed error that names the fix, and an occupied configured listener returns a typed error that points to `[web] port`.
 
-RimZ spawns ttyd and the optional gate with null stdio and their own process groups, then writes `$XDG_STATE_HOME/rimz/web-ttyd.json` with `pid`, `port`, `interface`, `auth`, `trusted_proxies`, `basic_upstream`, optional `gate: {pid, upstream_port}`, and optional `pixel_protocol`. `basic_upstream` proves that ttyd uses the layered Basic-auth contract, and `pixel_protocol` is present only when the live daemon serves a generated page with RimZ's current pixel compatibility layer. Records written before `basic_upstream` deserialize it as false and are replaced before reuse. The record is live only while ttyd is the recorded process, the optional gate is a recorded `rimz web gate` process, and the configured listener accepts a connection; readers remove stale records.
+RimZ spawns ttyd and the optional gate with null stdio and their own process groups, then writes `$XDG_STATE_HOME/rimz/web-ttyd.json` with `pid`, `port`, `interface`, `auth`, `auth_users`, `trusted_proxies`, `basic_upstream`, optional `gate: {pid, upstream_port}`, and optional `pixel_protocol`. `basic_upstream` proves that ttyd uses the layered Basic-auth contract, and `pixel_protocol` is present only when the live daemon serves a generated page with RimZ's current pixel compatibility layer. Records written before `basic_upstream` deserialize it as false and are replaced before reuse; records without `auth_users` default to an empty allowlist. The record is live only while ttyd is the recorded process, the optional gate is a recorded `rimz web gate` process, and the configured listener accepts a connection; readers remove stale records.
 
-The desired listener, auth mode, proxy list, gate presence, and Basic-upstream marker participate in daemon reuse. Any drift stops the old processes and starts the desired shape, and every mode requires the credential file before reuse.
+The desired listener, auth mode, user allowlist, proxy list, gate presence, and Basic-upstream marker participate in daemon reuse. Any drift stops the old processes and starts the desired shape, and every mode requires the credential file before reuse.
 
 State transitions hold `$XDG_STATE_HOME/rimz/web-ttyd.lock`, so concurrent room starts converge on one process and credential rotation cannot race stale-record cleanup.
 
@@ -52,7 +52,7 @@ The read-only surface uses a second ttyd process with structurally separate argv
 ttyd -O -a -i <interface> -p <share_port> [-t <client-option>...] [-I <custom-index>] <current-rimz-exe> web exec --share
 ```
 
-The missing `-W` makes ttyd 1.7 and later drop client input, and the missing `-c` makes the viewer URL unauthenticated. `auth_header`, `trusted_proxies`, the authorization gate, credentials, and remote `--web` forwarding apply only to the writable daemon. The broadcast process receives the same theme, font, reconnect fixes, and pixel-compatible custom index.
+The missing `-W` makes ttyd 1.7 and later drop client input, and the missing `-c` makes the viewer URL unauthenticated. `auth_header`, `auth_users`, `trusted_proxies`, the authorization gate, credentials, and remote `--web` forwarding apply only to the writable daemon. The broadcast process receives the same theme, font, reconnect fixes, and pixel-compatible custom index.
 
 `$XDG_STATE_HOME/rimz/web-share.json` stores `{ "sessions": [...] }` through temp-file plus rename. `share` validates a durable workspace record and live mux session before adding one sorted session and ensuring the daemon. The hidden share shim re-reads the file for every connection, repeats the record and liveness checks, and returns the single `this room is not shared` error for missing, unknown, unshared, and dead targets without listing other rooms.
 
@@ -92,11 +92,11 @@ After a normal `rimz start` makes the room ready, `[web] enabled = true` asks Ri
 
 ## Configuration
 
-`[web]` carries `enabled`, `interface`, `port`, `share_port`, `base_url`, `share_base_url`, `auth_header`, `trusted_proxies`, `font`, `font_source`, and `style_client`.
+`[web]` carries `enabled`, `interface`, `port`, `share_port`, `base_url`, `share_base_url`, `auth_header`, `auth_users`, `trusted_proxies`, `font`, `font_source`, and `style_client`.
 
 `enabled` defaults to true, `interface` defaults to `127.0.0.1`, `port` defaults to 8200, and `share_port` defaults to 8201. Absent base URLs resolve to `http://127.0.0.1:<respective-port>`; a reverse proxy can set either public prefix, and RimZ appends `/?arg=<session>`.
 
-A non-empty trimmed `auth_header` selects trusted-header auth and always enables the gate, while an empty or absent value selects direct Basic Auth unless `trusted_proxies` enables the gate. `trusted_proxies` is empty by default. Trusted-header auth on a non-loopback interface with an empty allowlist warns that only loopback proxies can connect and names the CIDR fix for a proxy on another host.
+A non-empty trimmed `auth_header` selects trusted-header auth and always enables the gate, while an empty or absent value selects direct Basic Auth unless `trusted_proxies` enables the gate. `auth_users` defaults empty and permits any single non-empty identity; a non-empty list requires trusted-header mode and matches the request's trimmed identity byte-for-byte against entries trimmed during spec construction. `trusted_proxies` is empty by default. Trusted-header auth on a non-loopback interface with an empty proxy allowlist warns that only loopback proxies can connect and names the CIDR fix for a proxy on another host.
 
 The section is per-machine and stays outside the trust hash because no field executes a command. `font_source` is a read-only local path or HTTPS URL.
 
