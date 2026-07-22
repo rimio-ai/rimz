@@ -53,7 +53,6 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
     wait_for_pane_count(xdg.path(), &workspace.session_name, 2);
 
     let _client = AttachedClient::attach(xdg.path(), &workspace.session_name, 160, 40);
-    wait_for_attached_client(xdg.path(), &workspace.session_name);
 
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("zellij-agent-ready");

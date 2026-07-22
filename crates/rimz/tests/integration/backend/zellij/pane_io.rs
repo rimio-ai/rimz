@@ -41,7 +41,6 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         .expect("work pane id");
 
     let mut client = AttachedClient::attach(xdg.path(), &name, 200, 50);
-    wait_for_attached_client(xdg.path(), &name);
     focus_attached_client_pane_until(xdg.path(), &name, work_id, "fixture work pane", || {
         client.press_alt('l')
     });
@@ -181,8 +180,8 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
     create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
-    let _client = AttachedClient::attach(xdg.path(), &name, 120, 40);
-    wait_for_attached_client(xdg.path(), &name);
+    let mut client = AttachedClient::attach(xdg.path(), &name, 120, 40);
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
     let first = wait_for_pane_count(xdg.path(), &name, 1)[0].clone();
     scoped_zellij(xdg.path())
         .args([
@@ -211,13 +210,18 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
         .into_iter()
         .find(|pane| pane.pane_id != first.pane_id && pane.pane_id != target.pane_id)
         .expect("new tab pane");
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    wait_for_focused_client_pane(&backend, &name, &active_tab_pane.pane_id);
     let active_tab_pane_id = active_tab_pane
         .pane_id
         .creation_ordinal()
-        .expect("numeric new tab pane id")
-        .to_string();
+        .expect("numeric new tab pane id");
+    focus_attached_client_pane_until(
+        xdg.path(),
+        &name,
+        active_tab_pane_id,
+        "new tab pane",
+        || client.go_to_tab(2),
+    );
+    let active_tab_pane_id = active_tab_pane_id.to_string();
     let moved = scoped_zellij(xdg.path())
         .env("ZELLIJ_PANE_ID", active_tab_pane_id)
         .args(["--session", &name, "action", "move-tab", "left"])

@@ -480,7 +480,6 @@ fn presence_identity_transition_keeps_global_background_updates() {
         xdg: xdg.path().to_path_buf(),
     };
     let mut client = AttachedClient::attach(xdg.path(), &name, 160, 45);
-    wait_for_attached_client(xdg.path(), &name);
 
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
@@ -696,7 +695,6 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     wait_for_pane_count(xdg.path(), &name, 2);
 
     let mut client = AttachedClient::attach(xdg.path(), &name, 160, 45);
-    wait_for_attached_client(xdg.path(), &name);
     let birth_sidebar = raw_sidebar_pane(xdg.path(), &name);
     let birth_work = expect_list_panes(xdg.path(), &name)
         .panes

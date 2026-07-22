@@ -44,7 +44,6 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     wait_for_pane_count(xdg.path(), &name, 2);
 
     let mut client = AttachedClient::attach(xdg.path(), &name, 200, 50);
-    wait_for_attached_client(xdg.path(), &name);
 
     let source_tab = "focus source";
     let input_log = cwd.path().join("source-input.log");
@@ -154,7 +153,6 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
     let _client = AttachedClient::attach(xdg.path(), &name, 220, 40);
-    wait_for_attached_client(xdg.path(), &name);
 
     let tab_name = "sidebar gallery";
     let work_pane = || PaneCmd {
@@ -226,7 +224,6 @@ fn native_focused_split_preserves_docked_sidebar() {
     let client_columns: u16 = 380;
     let client_rows: u16 = 46;
     let mut client = AttachedClient::attach(xdg.path(), &name, client_columns, client_rows);
-    wait_for_attached_client(xdg.path(), &name);
     write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
     let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
     let work_pane = || PaneCmd {
@@ -249,7 +246,9 @@ fn native_focused_split_preserves_docked_sidebar() {
             sidebar: sidebar.clone(),
         })
         .expect("open backend split tab layout");
-    let work = wait_for_named_work_pane_count(xdg.path(), &name, split_tab, 3);
+    let work = wait_for_named_work_pane_state(xdg.path(), &name, split_tab, 3, |work| {
+        work.iter().map(|pane| pane.x + pane.columns).max() == Some(u64::from(client_columns))
+    });
     let focused_before = work[1];
     let focused_before_id =
         PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", focused_before.id));
@@ -284,22 +283,26 @@ fn native_focused_split_preserves_docked_sidebar() {
         let work_stays_right_of_sidebar = work
             .iter()
             .all(|pane| pane.x >= sidebar_before.x + sidebar_before.columns);
-        let sidebar_unchanged = named_sidebar_pane_geometry(xdg.path(), &name, split_tab)
-            .ok()
-            .flatten()
-            .is_some_and(|sidebar| {
-                sidebar.x == sidebar_before.x
-                    && sidebar.y == sidebar_before.y
-                    && sidebar.columns == sidebar_before.columns
-                    && sidebar.rows == sidebar_before.rows
-            });
         let focused_pane_was_split = work
             .iter()
             .filter(|pane| focused_bounds_hold_two_panes(pane))
             .count()
             == 2;
-        work_stays_right_of_sidebar && sidebar_unchanged && focused_pane_was_split
+        work_stays_right_of_sidebar && focused_pane_was_split
     });
+    poll_until(
+        Duration::from_secs(30),
+        || named_sidebar_pane_geometry(xdg.path(), &name, split_tab),
+        |sidebar| {
+            sidebar.is_some_and(|sidebar| {
+                sidebar.x == sidebar_before.x
+                    && sidebar.y == sidebar_before.y
+                    && sidebar.columns == sidebar_before.columns
+                    && sidebar.rows == sidebar_before.rows
+            })
+        },
+        &format!("unchanged sidebar geometry in {name}/{split_tab}"),
+    );
     assert_eq!(
         split
             .iter()

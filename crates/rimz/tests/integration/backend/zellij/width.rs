@@ -22,7 +22,6 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
     let _client = AttachedClient::attach(xdg.path(), &name, 120, 40);
-    wait_for_attached_client(xdg.path(), &name);
     let listed = raw_sidebar_pane(xdg.path(), &name);
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", listed.id));
     let initial = listed.pane_columns;
@@ -142,7 +141,6 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     // is only 210 columns wide. The detached percentage seed therefore lands
     // near 44 columns while the live narrow-view target is 52.
     let _client = AttachedClient::attach(xdg.path(), &name, 210, 60);
-    wait_for_attached_client(xdg.path(), &name);
     write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
     let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
     assert!(
