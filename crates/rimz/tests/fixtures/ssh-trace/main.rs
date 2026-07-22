@@ -37,7 +37,7 @@ fn main() {
     }
 
     if is_control_check(&argv) {
-        exit_control_check();
+        exit_control_check(&argv);
     }
 
     if is_forward_control(&argv) {
@@ -61,14 +61,14 @@ fn main() {
     }
 
     if argv.iter().any(|arg| arg == "-M") {
-        run_control_master();
+        run_control_master(&argv);
     }
 
     if argv.iter().any(|arg| arg == "-N") {
         run_web_tunnel(&argv);
     }
 
-    publish_control_master_if_requested();
+    publish_control_master_if_requested(&argv);
     wait_for_probe_if_requested(&log_path);
     record_and_enter_raw_tty_if_requested();
 
@@ -173,7 +173,7 @@ fn run_web_control_forward() -> ! {
     exit_from_plan("RIMZ_TEST_SSH_TUNNEL_PLAN");
 }
 
-fn run_control_master() -> ! {
+fn run_control_master(argv: &[String]) -> ! {
     if let Ok(stderr) = env::var("RIMZ_TEST_SSH_MASTER_STDERR") {
         let mut stream = std::io::stderr().lock();
         stream
@@ -189,7 +189,7 @@ fn run_control_master() -> ! {
         .map(|value| value != 0)
         .unwrap_or(true);
     if publish_ready {
-        publish_control_master_if_requested();
+        publish_control_master_if_requested(argv);
     }
     if let Ok(ms) = env::var("RIMZ_TEST_SSH_MASTER_EXIT_MS")
         && let Ok(ms) = ms.parse::<u64>()
@@ -246,9 +246,9 @@ fn is_forward_control(argv: &[String]) -> bool {
         .any(|args| args[0] == "-O" && matches!(args[1].as_str(), "forward" | "cancel"))
 }
 
-fn exit_control_check() -> ! {
-    let ready = env::var_os("RIMZ_TEST_CONTROL_MASTER_READY")
-        .map(|path| std::path::PathBuf::from(path).exists())
+fn exit_control_check(argv: &[String]) -> ! {
+    let ready = control_master_marker(argv)
+        .map(|path| path.exists())
         .unwrap_or(true);
     std::process::exit(if ready { 0 } else { 255 });
 }
@@ -266,8 +266,8 @@ fn record_probe_before_master_if_needed() {
     }
 }
 
-fn publish_control_master_if_requested() {
-    let Some(path) = env::var_os("RIMZ_TEST_CONTROL_MASTER_READY") else {
+fn publish_control_master_if_requested(argv: &[String]) {
+    let Some(path) = control_master_marker(argv) else {
         return;
     };
     if let Ok(ms) = env::var("RIMZ_TEST_CONTROL_MASTER_READY_DELAY_MS")
@@ -276,6 +276,25 @@ fn publish_control_master_if_requested() {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
     std::fs::write(path, b"ready").expect("publish control-master marker");
+}
+
+/// Use an explicit test marker when one is configured. Otherwise mirror
+/// OpenSSH's socket lifecycle at the `ControlPath` itself: successful shim
+/// masters publish it, `ssh -O check` observes it, and the supervisor removes
+/// it when the owning master guard ends. This keeps a fast failed master from
+/// looking established merely because the check process won a scheduler race.
+fn control_master_marker(argv: &[String]) -> Option<std::path::PathBuf> {
+    if let Some(path) = env::var_os("RIMZ_TEST_CONTROL_MASTER_READY") {
+        return Some(path.into());
+    }
+    argv.windows(2)
+        .find(|args| args[0] == "-S")
+        .map(|args| std::path::PathBuf::from(&args[1]))
+        .or_else(|| {
+            argv.iter()
+                .find_map(|arg| arg.strip_prefix("ControlPath="))
+                .map(std::path::PathBuf::from)
+        })
 }
 
 fn wait_for_probe_if_requested(log_path: &std::ffi::OsStr) {
