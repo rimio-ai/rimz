@@ -86,8 +86,10 @@ pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };
 pub use lifecycle::{
-    AskKind, LifecycleSignal, LifecycleSignalKind, LifecycleState, Transition, TransitionKind,
-    TurnPhase, step,
+    AskKind, CONDITION_CHECKPOINT, DELIVERY_CHECKPOINT, LIFECYCLE_EVENT_VERSION, LifecycleEvent,
+    LifecycleFollowBatch, LifecycleFollowErr, LifecycleFollower, LifecycleSignal,
+    LifecycleSignalKind, LifecycleState, LifecycleTransition, SignalSet, Transition,
+    TransitionKind, TurnPhase, step,
 };
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};

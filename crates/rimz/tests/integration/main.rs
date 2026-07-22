@@ -21,6 +21,7 @@ mod coverage;
 #[cfg(unix)]
 mod daemon_content;
 mod doctor;
+mod events;
 mod examples;
 mod gc;
 mod hooks;

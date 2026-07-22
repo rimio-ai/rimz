@@ -14,6 +14,7 @@ mod coverage;
 mod ctx;
 mod daemon;
 mod doctor;
+mod events;
 mod first_run;
 mod gc;
 mod help;
@@ -133,6 +134,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
         Some(Subcmd::Transcript(args)) => transcript::run(args, &globals),
         Some(Subcmd::Doctor(args)) => doctor::run(args, &globals),
+        Some(Subcmd::Events(args)) => events::run(args, &globals),
         Some(Subcmd::Setup(args)) => setup::run(args, &globals),
         Some(Subcmd::Ping) => doctor::ping(),
         Some(Subcmd::Start(args)) => room::start(args, &globals),
@@ -528,6 +530,8 @@ enum Subcmd {
     Trust(trust::TrustArgs),
     /// Inspect agent or channel conversation transcripts.
     Transcript(transcript::TranscriptArgs),
+    /// Stream durable agent lifecycle transitions.
+    Events(events::EventsArgs),
     /// Environment and backend report.
     Doctor(doctor::DoctorArgs),
     /// First-run setup report and default config bootstrap.

@@ -7,6 +7,7 @@ mod context;
 mod delivery;
 mod identity;
 mod observe;
+mod reactors;
 mod transcript;
 
 use context::*;
@@ -15,6 +16,7 @@ use identity::{
     agent_identity_env, env_run_id, validate_agent_name_env, validate_non_empty_identity_env,
 };
 use observe::{record_derived_lifecycle_observation, record_lifecycle_observation};
+use reactors::ReactorCtx;
 use transcript::*;
 
 pub(super) use identity::fill_root_launch_identity;
@@ -32,10 +34,19 @@ pub(crate) fn handle_lifecycle_hook(
     let recorded =
         record_lifecycle_observation(workspace, store, agent, decoded, ingress_owner, globals);
     let event_name = decoded.event_name().to_owned();
-    if recorded.as_ref().is_some_and(|recorded| {
+    let mut events = recorded
+        .as_ref()
+        .map(|recorded| recorded.events.clone())
+        .unwrap_or_default();
+    let (derived_events, derived_rotation_due) = if recorded.as_ref().is_some_and(|recorded| {
         recorded.observation.agent_id.is_some() && recorded.observation.parent_agent_id.is_none()
-    }) && derive_subagent_lifecycle(workspace, store, agent, ingress_owner, globals)
-    {
+    }) {
+        derive_subagent_lifecycle(workspace, store, agent, ingress_owner, globals)
+    } else {
+        (Vec::new(), false)
+    };
+    events.extend(derived_events);
+    if derived_rotation_due {
         spawn_auto_rotation(workspace);
     }
     let assistant_message =
@@ -95,12 +106,13 @@ pub(crate) fn handle_lifecycle_hook(
             },
         });
     }
+    let mut run_completion = None;
     if let Some(recorded) = recorded.as_ref() {
         let assistant_message =
             assistant_message_for_lifecycle(recorded, env_run_id().is_some(), || {
                 decoded.final_message().map(ToOwned::to_owned)
             });
-        record_run_lifecycle(
+        run_completion = record_run_lifecycle(
             store,
             agent,
             &event_name,
@@ -137,43 +149,21 @@ pub(crate) fn handle_lifecycle_hook(
                 "lifecycle: failed to record transcript entry",
             );
         }
-        if recorded.observation.signal == LifecycleSignal::Ended
-            && let Some(agent_id) = agent_id
-        {
-            let kind = agent.spec().kind_id();
-            if let Err(err) = store.archive_messages_watching_card(
-                &kind,
-                &agent_id,
-                recorded.observation.agent_name.as_deref(),
-                &workspace.session_name,
-            ) {
-                warn!(
-                    error = %err,
-                    kind = agent.spec().kind,
-                    agent_id = %agent_id,
-                    "lifecycle: failed to archive messages watching ended agent",
-                );
-            }
-            if let Err(err) = store.archive_messages_for_card(
-                &kind,
-                &agent_id,
-                recorded.observation.agent_name.as_deref(),
-                "receiver ended",
-                &workspace.session_name,
-            ) {
-                warn!(
-                    error = %err,
-                    kind = agent.spec().kind,
-                    agent_id = %agent_id,
-                    "lifecycle: failed to archive receiver messages",
-                );
-            }
-        }
-        spawn_queue_delivery_if_checkpoint(workspace, store, agent, recorded);
         if recorded.rotation_due {
             spawn_auto_rotation(workspace);
         }
     }
+    reactors::dispatch(
+        &ReactorCtx {
+            workspace,
+            store,
+            primary_event_id: recorded
+                .as_ref()
+                .and_then(|recorded| recorded.primary_event_id.as_ref()),
+            run_completion: run_completion.as_ref(),
+        },
+        &events,
+    );
     Ok(())
 }
 
@@ -200,10 +190,10 @@ fn derive_subagent_lifecycle(
     agent: &AgentDefinition,
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
-) -> bool {
+) -> (Vec<rimz::agents::LifecycleEvent>, bool) {
     let observations = agent.derive_subagent_observations(&workspace.worktree_root);
     if observations.is_empty() {
-        return false;
+        return (Vec::new(), false);
     }
     let snapshot = match store.snapshot_cached() {
         Ok(snapshot) => snapshot,
@@ -213,11 +203,12 @@ fn derive_subagent_lifecycle(
                 error = %err,
                 "lifecycle: skipped derived subagents because the prior rollup was unreadable",
             );
-            return false;
+            return (Vec::new(), false);
         }
     };
     let kind = agent.spec().kind;
     let mut rotation_due = false;
+    let mut events = Vec::new();
     for observation in observations {
         let (Some(child_id), Some(parent_id)) = (
             observation.agent_id.as_ref(),
@@ -260,8 +251,9 @@ fn derive_subagent_lifecycle(
             globals,
         );
         rotation_due |= recorded.rotation_due;
+        events.extend(recorded.events);
     }
-    rotation_due
+    (events, rotation_due)
 }
 
 fn user_input_state_root(_store: &Store) -> Option<&std::path::Path> {
@@ -276,6 +268,8 @@ fn user_input_state_root(_store: &Store) -> Option<&std::path::Path> {
 struct RecordedLifecycle {
     model_hint: Option<String>,
     observation: AgentLifecycleObservation,
+    primary_event_id: Option<rimz::ids::EventId>,
+    events: Vec<rimz::agents::LifecycleEvent>,
     rotation_due: bool,
     waiting_cleared: bool,
 }
@@ -328,10 +322,8 @@ fn record_run_lifecycle(
     event_name: &str,
     recorded: &RecordedLifecycle,
     assistant_message: Option<&str>,
-) {
-    let Some(run_id) = env_run_id() else {
-        return;
-    };
+) -> Option<rimz::harness::run::RunRecord> {
+    let run_id = env_run_id()?;
     match rimz::harness::run::record_lifecycle(
         store.paths(),
         &run_id,
@@ -376,17 +368,9 @@ fn record_run_lifecycle(
                 token_totals.map(|totals| totals.output),
             )
             .unwrap_or(record);
-            if let Err(err) = rimz::store::wakeup::wake_run(store.runtime_paths(), &record) {
-                warn!(
-                    agent = agent.spec().kind,
-                    event = %event_name,
-                    run_id = %run_id,
-                    error = %err,
-                    "lifecycle: failed to wake the completed run",
-                );
-            }
+            Some(record)
         }
-        Ok(None) => {}
+        Ok(None) => None,
         Err(err) => {
             warn!(
                 agent = agent.spec().kind,
@@ -395,6 +379,7 @@ fn record_run_lifecycle(
                 error = %err,
                 "lifecycle: failed to update the supervised run",
             );
+            None
         }
     }
 }
@@ -554,6 +539,8 @@ mod tests {
         RecordedLifecycle {
             model_hint: None,
             observation,
+            primary_event_id: None,
+            events: Vec::new(),
             rotation_due: false,
             waiting_cleared: false,
         }
@@ -599,6 +586,8 @@ mod tests {
             &RecordedLifecycle {
                 model_hint: None,
                 observation: compact_observation,
+                primary_event_id: None,
+                events: Vec::new(),
                 rotation_due: false,
                 waiting_cleared: false,
             },
@@ -632,6 +621,8 @@ mod tests {
             &RecordedLifecycle {
                 model_hint: None,
                 observation: real_observation,
+                primary_event_id: None,
+                events: Vec::new(),
                 rotation_due: false,
                 waiting_cleared: false,
             },

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::agents::lifecycle::{self, LifecycleSignal, Transition, TransitionKind};
+use crate::agents::lifecycle::{self, LifecycleEvent, LifecycleSignal, Transition, TransitionKind};
 use crate::agents::{AgentLifecycleObservation, AgentState, AgentStatus, SpawnedSubagent};
 use crate::ids::{AgentKind, AgentSessionId, EventId, WorkspaceId};
 use crate::store::event::EventEnvelope;
@@ -44,6 +44,8 @@ pub struct DerivedLifecycleOutcome {
     pub event_name: &'static str,
     pub signal: LifecycleSignal,
     pub event_id: EventId,
+    pub agent_name: Option<String>,
+    pub prior_status: Option<AgentStatus>,
     pub transition: Transition,
 }
 
@@ -55,6 +57,7 @@ pub struct AgentLifecycleReceipt {
     pub append: LifecycleAppendOutcome,
     pub primary_event_id: Option<EventId>,
     pub derived: Vec<DerivedLifecycleOutcome>,
+    pub events: Vec<LifecycleEvent>,
     pub rotation_due: bool,
 }
 
@@ -117,6 +120,15 @@ impl Store {
             );
             txn.append_batch(&envelopes)?;
 
+            let events = lifecycle_events_from_commit(
+                &intent,
+                prior_status,
+                transition,
+                primary_event_id.as_ref(),
+                &derived,
+                &envelopes,
+            );
+
             let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
             if envelopes.is_empty() {
                 return Ok(AgentLifecycleReceipt {
@@ -126,6 +138,7 @@ impl Store {
                     append,
                     primary_event_id,
                     derived,
+                    events,
                     rotation_due: false,
                 });
             }
@@ -137,6 +150,7 @@ impl Store {
                     append,
                     primary_event_id,
                     derived,
+                    events,
                     rotation_due: false,
                 });
             };
@@ -153,6 +167,7 @@ impl Store {
                 append,
                 primary_event_id,
                 derived,
+                events,
                 rotation_due,
             })
         })
@@ -259,6 +274,56 @@ fn derive_lifecycle_events(
     outcomes
 }
 
+fn lifecycle_events_from_commit(
+    intent: &AgentLifecycleIntent<'_>,
+    prior_status: Option<AgentStatus>,
+    transition: Option<Transition>,
+    primary_event_id: Option<&EventId>,
+    derived: &[DerivedLifecycleOutcome],
+    envelopes: &[EventEnvelope],
+) -> Vec<LifecycleEvent> {
+    let mut events = Vec::with_capacity(envelopes.len());
+    if let (Some(event_id), Some(agent_id), Some(transition)) = (
+        primary_event_id,
+        intent.observation.agent_id.as_ref(),
+        transition,
+    ) && let Some(envelope) = envelopes
+        .iter()
+        .find(|envelope| envelope.event_id == *event_id)
+    {
+        events.push(LifecycleEvent::new(
+            envelope.event_id.clone(),
+            envelope.timestamp,
+            envelope.workspace_id.clone(),
+            intent.agent_kind.clone(),
+            agent_id.clone(),
+            intent.observation.agent_name.clone(),
+            intent.observation.parent_agent_id.clone(),
+            intent.observation.signal.clone(),
+            prior_status,
+            transition,
+        ));
+    }
+    events.extend(derived.iter().filter_map(|derived| {
+        let envelope = envelopes
+            .iter()
+            .find(|envelope| envelope.event_id == derived.event_id)?;
+        Some(LifecycleEvent::new(
+            envelope.event_id.clone(),
+            envelope.timestamp,
+            envelope.workspace_id.clone(),
+            intent.agent_kind.clone(),
+            derived.agent_id.clone(),
+            derived.agent_name.clone(),
+            derived.parent_agent_id.clone(),
+            derived.signal.clone(),
+            derived.prior_status,
+            derived.transition,
+        ))
+    }));
+    events
+}
+
 fn find_agent<'a>(
     agents: &'a [AgentState],
     kind: &AgentKind,
@@ -314,12 +379,16 @@ fn append_adoption(
         },
         |primary| lifecycle::step(Some(&primary.next), None, &observation.signal),
     );
+    let prior_status = primary_transition
+        .map(|primary| primary.next.status)
+        .or_else(|| child_state.map(|state| state.status));
     push_derived(
         workspace_id,
         intent,
         "SubagentAdopted",
         observation,
         DerivedLifecycleKind::Adoption,
+        prior_status,
         transition,
         envelopes,
         outcomes,
@@ -374,12 +443,14 @@ fn append_reconciliation(
     observation.signal = LifecycleSignal::SubagentStopped { errored };
     let transition = lifecycle_transition(agents, &intent.agent_kind, &observation)
         .expect("derived reconciliation has child identity");
+    let prior_status = Some(child_state.status);
     push_derived(
         workspace_id,
         intent,
         "SubagentReconciled",
         observation,
         DerivedLifecycleKind::Reconciliation,
+        prior_status,
         transition,
         envelopes,
         outcomes,
@@ -393,6 +464,7 @@ fn push_derived(
     event_name: &'static str,
     observation: AgentLifecycleObservation,
     kind: DerivedLifecycleKind,
+    prior_status: Option<AgentStatus>,
     transition: Transition,
     envelopes: &mut Vec<EventEnvelope>,
     outcomes: &mut Vec<DerivedLifecycleOutcome>,
@@ -402,6 +474,7 @@ fn push_derived(
         .clone()
         .expect("derived lifecycle event has child identity");
     let parent_agent_id = observation.parent_agent_id.clone();
+    let agent_name = observation.agent_name.clone();
     let signal = observation.signal.clone();
     let envelope = EventEnvelope::agent_lifecycle(
         workspace_id.clone(),
@@ -419,6 +492,8 @@ fn push_derived(
         event_name,
         signal,
         event_id,
+        agent_name,
+        prior_status,
         transition,
     });
 }
@@ -621,6 +696,8 @@ mod tests {
             })
             .expect("append lifecycle event");
         assert_eq!(appended.append, LifecycleAppendOutcome::Appended);
+        assert_eq!(appended.events.len(), 1);
+        assert_eq!(appended.events[0].signal, LifecycleSignal::TurnStarted);
 
         let proof = observation(LifecycleSignal::ToolUsed {
             mutates: false,
@@ -640,6 +717,7 @@ mod tests {
             })
             .expect("suppress proof-only event");
         assert_eq!(suppressed.append, LifecycleAppendOutcome::Suppressed);
+        assert!(suppressed.events.is_empty());
         assert_eq!(
             std::fs::metadata(&store.paths().events_log)
                 .map(|meta| meta.len())
@@ -756,6 +834,10 @@ mod tests {
         let receipt = append("SubagentStart", &observed);
         assert_eq!(receipt.derived.len(), 1);
         assert_eq!(receipt.derived[0].kind, DerivedLifecycleKind::Adoption);
+        assert_eq!(receipt.events.len(), 2);
+        assert_eq!(receipt.events[0].prior_status, Some(AgentStatus::Idle));
+        assert_eq!(receipt.events[1].prior_status, Some(AgentStatus::Running));
+        assert_eq!(receipt.events[1].parent_agent_id.as_deref(), Some("root"));
         let events = store.read_events().unwrap();
         let names = events[events.len() - 2..]
             .iter()

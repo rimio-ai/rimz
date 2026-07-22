@@ -9,6 +9,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 ### Added
 
 - Layout cells accept any executable on PATH as a raw command pane, while configured commands and profiles keep precedence over same-named binaries. → [fleet](./docs/guide/fleet.md#compose-a-layout)
+- `rimz events follow` streams versioned agent lifecycle transitions as JSON Lines, with current-generation replay and gap-free handoff across event-log rotation. → [events](./docs/reference/cli/events.md)
 
 ### Changed
 
