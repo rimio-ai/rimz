@@ -24,7 +24,7 @@ use crate::web::WebWarning;
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
-const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v4";
+const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v5";
 
 const OFFLINE_ENV: &str = "RIMZ_WEB_FONTS_OFFLINE";
 const FONT_CACHE_DIR: &str = "rimz/web-fonts";
@@ -866,6 +866,9 @@ mod tests {
         assert!(rendered.contains("installPixelLayer(term)"));
         assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
         assert!(rendered.contains("const RIMZ_PIXEL_DIACRITICS=[\"̅\",\"̍\",\"̎\""));
+        assert!(rendered.contains("const PLACEHOLDER_OVERHANG_COLS=3"));
+        assert!(rendered.contains("const fittedImageRect="));
+        assert!(rendered.contains("if(placement.rows>1)"));
         assert!(!rendered.contains("@font-face"));
     }
 
@@ -907,14 +910,14 @@ mod tests {
             weight: 400,
         }];
         let family = "RimZ \"Font\" </style></script>\n";
-        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v4");
+        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v5");
         let key = custom_index_key("ttyd 1.7.7", Some(family), &faces);
         assert_eq!(key, custom_index_key("ttyd 1.7.7", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.8", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.7", None, &faces));
         assert_ne!(
             key,
-            custom_index_key_with_schema("rimz.ttyd-index.v3", "ttyd 1.7.7", Some(family), &faces)
+            custom_index_key_with_schema("rimz.ttyd-index.v4", "ttyd 1.7.7", Some(family), &faces)
         );
 
         let rendered = inject_client_profile(
