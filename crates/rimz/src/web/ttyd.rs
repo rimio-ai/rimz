@@ -299,6 +299,9 @@ fn record_matches(record: &DaemonRecord, desired: &DaemonSpec) -> bool {
         && record.auth == desired.auth
         && record.trusted_proxies == desired.trusted_proxies
         && record.gate.is_some() == !desired.trusted_proxies.is_empty()
+        && record
+            .pixel_protocol
+            .is_none_or(|protocol| protocol == crate::web::TTYD_PIXEL_PROTOCOL)
 }
 
 fn auth_warnings(desired: &DaemonSpec) -> Vec<WebWarning> {
@@ -1090,6 +1093,19 @@ mod tests {
         assert_eq!(daemon.pid, 42);
         assert_eq!(daemon.port, 8200);
         assert_eq!(daemon.pixel_protocol, None);
+    }
+
+    #[test]
+    fn daemon_reuse_requires_the_current_pixel_protocol() {
+        let config = MachineConfig::default();
+        let desired = desired_spec(&config).expect("desired daemon");
+        let mut daemon = DaemonRecord::basic_loopback(42, config.web.port);
+
+        assert!(record_matches(&daemon, &desired));
+        daemon.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL);
+        assert!(record_matches(&daemon, &desired));
+        daemon.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL - 1);
+        assert!(!record_matches(&daemon, &desired));
     }
 
     #[test]

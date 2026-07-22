@@ -385,7 +385,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     let daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("read capable daemon record"))
             .expect("parse capable daemon record");
-    assert_eq!(daemon["pixel_protocol"], 1);
+    assert_eq!(daemon["pixel_protocol"], 2);
     let credential_before = std::fs::read(&credential_path).expect("credential before bad revoke");
     let daemon_before = std::fs::read(&daemon_path).expect("daemon before bad revoke");
     let bad_revoke = fixture

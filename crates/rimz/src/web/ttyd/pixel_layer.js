@@ -5,6 +5,9 @@ const installPixelLayer=term=>{
   const MAX_APC_BYTES=8*1024*1024;
   const MAX_IMAGE_BYTES=4*1024*1024;
   const MAX_IMAGES=128;
+  // xterm advances the Kitty placeholder by one cell, while browser fallback
+  // fonts can rasterize its noncharacter plus two diacritics across three more.
+  const PLACEHOLDER_OVERHANG_COLS=3;
   const encoder=new TextEncoder();
   const decoder=new TextDecoder();
   const diacriticIndexes=new Map(RIMZ_PIXEL_DIACRITICS.map((value,index)=>[value.codePointAt(0),index]));
@@ -214,6 +217,19 @@ const installPixelLayer=term=>{
       height:cell&&cell.height||rect.height/Math.max(1,term.rows),
     };
   };
+  const fittedImageRect=(image,placement,size,x,y)=>{
+    const boxWidth=placement.cols*size.width;
+    const boxHeight=placement.rows*size.height;
+    const scale=Math.min(boxWidth/image.width,boxHeight/image.height);
+    const width=image.width*scale;
+    const height=image.height*scale;
+    return {
+      x:x+(boxWidth-width)/2,
+      y:y+boxHeight-height,
+      width,
+      height,
+    };
+  };
   const draw=()=>{
     const rect=resizeCanvas();
     context.clearRect(0,0,rect.width,rect.height);
@@ -223,6 +239,7 @@ const installPixelLayer=term=>{
     const theme=term.options.theme||{};
     const viewportElement=term.element.querySelector(".xterm-viewport");
     const background=theme.background||(viewportElement&&getComputedStyle(viewportElement).backgroundColor)||"#000";
+    const fittedImages=new Map();
     for(let row=0;row<term.rows;row++){
       const line=buffer.getLine(viewport+row);
       if(!line)continue;
@@ -240,11 +257,26 @@ const installPixelLayer=term=>{
         const id=cell.getFgColor()&0xffffff;
         const placement=placements.get(id);
         const image=images.get(id);
-        if(!placement||!image||sourceRow===undefined||sourceCol===undefined||sourceRow>=placement.rows||sourceCol>=placement.cols)continue;
+        if(!placement||sourceRow===undefined||sourceCol===undefined||sourceRow>=placement.rows||sourceCol>=placement.cols)continue;
+        if(placement.rows>1){
+          if(sourceCol===placement.cols-1){
+            context.fillRect(x+size.width,y,size.width*PLACEHOLDER_OVERHANG_COLS,size.height);
+          }
+          if(!image)continue;
+          const originX=x-sourceCol*size.width;
+          const originY=y-sourceRow*size.height;
+          fittedImages.set(`${id}:${originX}:${originY}`,{image,placement,x:originX,y:originY});
+          continue;
+        }
+        if(!image)continue;
         const sourceWidth=image.width/placement.cols;
         const sourceHeight=image.height/placement.rows;
         context.drawImage(image,sourceCol*sourceWidth,sourceRow*sourceHeight,sourceWidth,sourceHeight,x,y,size.width,size.height);
       }
+    }
+    for(const {image,placement,x,y} of fittedImages.values()){
+      const fitted=fittedImageRect(image,placement,size,x,y);
+      context.drawImage(image,fitted.x,fitted.y,fitted.width,fitted.height);
     }
   };
   let drawQueued=false;
