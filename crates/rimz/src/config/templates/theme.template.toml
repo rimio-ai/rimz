@@ -289,7 +289,7 @@
 ## over = "◉"
 
 [theme.glyphs.nerd_font.worktree]
-## branch = ""
+## branch = ""
 ## merge = ""
 ## ahead = "⇡"
 ## behind = "⇣"

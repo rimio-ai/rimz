@@ -16,6 +16,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 ### Changed
 
 - Default launch tab titles list the first three cells in layout order instead of only the first agent kind. → [fleet](./docs/guide/fleet.md#compose-a-layout)
+- Nerd Font worktree headers use the Powerline branch glyph. → [theme](./docs/guide/theme.md#glyphs)
 
 ### Fixed
 

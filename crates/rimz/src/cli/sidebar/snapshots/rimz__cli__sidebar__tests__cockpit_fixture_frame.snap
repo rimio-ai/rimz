@@ -10,13 +10,13 @@ expression: strip_sgr(&ansi)
   2    1    2    1                      ⢿ 5    2
  ↑ 2 need you
 
-▎ pricing-refresh  #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1180 -430🮇
+▎ pricing-refresh  #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1180 -430🮇
 ▌ codex · GPT 5.5 · xhigh · 272k               $4.82▐
 ▌  approve pricing cache write                       ▐
 ▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺─────────────────   58%▐
 ▌  󰿦 158k · 󱥸 151k  6k  19k                   󰪠 18m▐
 
-  main                     ⇡3 ⇣1  +1840 -620   main
+  main                     ⇡3 ⇣1  +1840 -620   main
  ⢄ claude · Opus 4.8 · xhigh · 1m               $8.64
    stabilize render diff
    󰕰 ━━━━━━━━━━━━━━━━╺━╺───────────────────────   24%
