@@ -23,6 +23,7 @@ pub use gate::GateAuth;
 pub use sessions::{LiveRoom, live_rooms};
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
+pub const TTYD_SESSION_OSC: u16 = 7717;
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
 
 pub(crate) fn pixel_daemon_records() -> Vec<(u32, u32)> {

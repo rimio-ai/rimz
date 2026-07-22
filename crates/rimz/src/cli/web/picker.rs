@@ -1,7 +1,7 @@
 //! Interactive live-room picker for ttyd browser sessions.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -14,16 +14,17 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 use ratatui::{Frame, Terminal};
-use rimz::config::{MachineConfig, ThemeConfig, ThemeProviderStyle};
+use rimz::config::{GlyphRole, MachineConfig, ThemeConfig, ThemeProviderStyle};
 use rimz::ids::{AgentKind, MuxName};
 use rimz::sidebar::consumer::PublishedSnapshotReader;
-use rimz::theme::{Palette, Tone, resolve_provider_brand};
+use rimz::theme::{Palette, Tone, resolve_provider_brand, theme_glyphs};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
-use rimz::{RuntimePaths, StatePaths};
+use rimz::{RuntimePaths, SpendWindow, StatePaths};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const EVENT_POLL: Duration = Duration::from_millis(250);
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
+const CARD_HEIGHT: usize = 3;
 
 pub(super) fn available() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
@@ -84,12 +85,14 @@ pub(super) fn run(rejected_session: Option<&str>) -> Result<bool> {
                     .context("web session picker lost its terminal guard")?
                     .release_keep_screen()
                     .context("releasing the web session picker")?;
+                write_session_sync(Some(&session))?;
                 let spec = rimz::mux::backend_for(mux).attach_existing_command(&session);
                 let outcome = spec.to_command().spawn().and_then(|mut child| child.wait());
                 guard = Some(
                     TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)
                         .context("restoring the web session picker")?,
                 );
+                write_session_sync(None)?;
                 terminal.clear()?;
                 match outcome {
                     Ok(status) if status.success() => picker.notice = None,
@@ -110,6 +113,21 @@ pub(super) fn run(rejected_session: Option<&str>) -> Result<bool> {
     }
 }
 
+fn session_sync_osc(session: Option<&str>) -> String {
+    format!(
+        "\x1b]{};rimz-session={}\x07",
+        rimz::web::TTYD_SESSION_OSC,
+        session.unwrap_or_default()
+    )
+}
+
+fn write_session_sync(session: Option<&str>) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(session_sync_osc(session).as_bytes())?;
+    stdout.flush()?;
+    Ok(())
+}
+
 fn exit_status_label(status: std::process::ExitStatus) -> String {
     status
         .code()
@@ -128,16 +146,16 @@ fn probe_rows(
     Ok(rooms
         .into_iter()
         .map(|room| {
-            let agents = agents_for_room(&room, readers);
-            RoomRow { room, agents }
+            let stats = stats_for_room(&room, readers);
+            RoomRow { room, stats }
         })
         .collect())
 }
 
-fn agents_for_room(
+fn stats_for_room(
     room: &rimz::web::LiveRoom,
     readers: &mut BTreeMap<String, PublishedSnapshotReader>,
-) -> Option<RoomAgents> {
+) -> Option<RoomStats> {
     if !readers.contains_key(&room.session_name) {
         let runtime = RuntimePaths::for_workspace(room.workspace_id.clone()).ok()?;
         readers.insert(
@@ -147,13 +165,31 @@ fn agents_for_room(
     }
     let state = StatePaths::for_workspace(room.workspace_id.clone()).ok()?;
     let snapshot = readers.get_mut(&room.session_name)?.read(&state).ok()?;
-    Some(RoomAgents::from_snapshot(&snapshot))
+    Some(RoomStats::from_snapshot(&snapshot))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RoomAgents {
     by_kind: Vec<(AgentKind, usize)>,
     attention: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RoomStats {
+    agents: RoomAgents,
+    headline: SpendWindow,
+}
+
+impl RoomStats {
+    fn from_snapshot(snapshot: &rimz::SidebarSnapshot) -> Self {
+        Self {
+            agents: RoomAgents::from_snapshot(snapshot),
+            headline: snapshot
+                .workspace_value_tally
+                .as_ref()
+                .map_or_else(SpendWindow::default, |tally| tally.headline),
+        }
+    }
 }
 
 impl RoomAgents {
@@ -205,10 +241,10 @@ fn digits(value: usize) -> usize {
     value.checked_ilog10().map_or(1, |power| power as usize + 1)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct RoomRow {
     room: rimz::web::LiveRoom,
-    agents: Option<RoomAgents>,
+    stats: Option<RoomStats>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,7 +275,8 @@ impl Picker {
         }
     }
 
-    fn apply_probe(&mut self, rows: Vec<RoomRow>) {
+    fn apply_probe(&mut self, mut rows: Vec<RoomRow>) {
+        rows.sort_by_cached_key(|row| (repo_name(&row.room), row.room.project_root.clone()));
         self.rows = rows;
         self.normalize_selection();
     }
@@ -249,7 +286,9 @@ impl Picker {
         self.rows
             .iter()
             .filter(|row| {
-                filter.is_empty() || row.room.session_name.to_lowercase().contains(&filter)
+                filter.is_empty()
+                    || repo_name(&row.room).to_lowercase().contains(&filter)
+                    || room_path(&row.room).to_lowercase().contains(&filter)
             })
             .collect()
     }
@@ -351,6 +390,9 @@ impl Picker {
 struct PickerTheme {
     palette: Palette,
     providers: BTreeMap<String, ThemeProviderStyle>,
+    workspace_glyph: String,
+    sessions_glyph: String,
+    tokens_glyph: String,
     no_color: bool,
 }
 
@@ -362,9 +404,13 @@ impl PickerTheme {
 
     fn resolve(theme: &ThemeConfig, truecolor: bool, no_color: bool) -> Self {
         let depth = theme.effective_theme_mode().depth(truecolor);
+        let glyph = theme_glyphs(theme);
         Self {
             palette: Palette::resolve(theme, depth),
             providers: theme.providers.clone(),
+            workspace_glyph: glyph(GlyphRole::CockpitWorkspace),
+            sessions_glyph: glyph(GlyphRole::CockpitSessions),
+            tokens_glyph: glyph(GlyphRole::TokensTotal),
             no_color,
         }
     }
@@ -509,74 +555,129 @@ fn render_rooms(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme,
                 .position(|row| row.room.session_name == selected)
         })
         .unwrap_or(0);
-    let capacity = usize::from(area.height);
+    let capacity = (usize::from(area.height) / CARD_HEIGHT).max(1);
     let start = selected_index.saturating_add(1).saturating_sub(capacity);
     let shown = &visible[start..visible.len().min(start + capacity)];
-    let name_width = shown
-        .iter()
-        .map(|row| UnicodeWidthStr::width(row.room.session_name.as_str()))
-        .max()
-        .unwrap_or(0)
-        .min(28);
-    let items = shown
-        .iter()
-        .map(|row| {
-            let selected = picker.selected.as_deref() == Some(row.room.session_name.as_str());
-            let mut item = ListItem::new(Line::from(room_spans(
-                row,
-                selected,
-                name_width,
-                usize::from(area.width),
-                theme,
-            )));
-            if selected {
-                item = item.style(theme.selected());
-            }
-            item
-        })
-        .collect::<Vec<_>>();
+    let mut items = Vec::with_capacity(shown.len().saturating_mul(CARD_HEIGHT));
+    for (index, row) in shown.iter().enumerate() {
+        let selected = picker.selected.as_deref() == Some(row.room.session_name.as_str());
+        let [identity, stats] = room_lines(row, selected, usize::from(area.width), theme);
+        let mut item = ListItem::new(vec![identity, stats]);
+        if selected {
+            item = item.style(theme.selected());
+        }
+        items.push(item);
+        if index + 1 < shown.len() {
+            items.push(ListItem::new(""));
+        }
+    }
     frame.render_widget(List::new(items).style(theme.body()), area);
-    let hit_rows = shown
-        .iter()
-        .enumerate()
-        .filter_map(|(index, row)| {
-            let index = u16::try_from(index).ok()?;
-            Some((area.y.saturating_add(index), row.room.session_name.clone()))
-        })
-        .collect::<Vec<_>>();
+    let mut hit_rows = Vec::with_capacity(shown.len().saturating_mul(2));
+    for (index, row) in shown.iter().enumerate() {
+        let Ok(offset) = u16::try_from(index.saturating_mul(CARD_HEIGHT)) else {
+            continue;
+        };
+        let first = area.y.saturating_add(offset);
+        for hit in [first, first.saturating_add(1)] {
+            if hit < area.bottom() {
+                hit_rows.push((hit, row.room.session_name.clone()));
+            }
+        }
+    }
     picker.hit_rows.extend(hit_rows);
 }
 
-fn room_spans(
+fn room_lines(
     row: &RoomRow,
     selected: bool,
-    name_width: usize,
     total_width: usize,
     theme: &PickerTheme,
-) -> Vec<Span<'static>> {
+) -> [Line<'static>; 2] {
     let prefix = if selected { "▸ " } else { "  " };
-    let name = pad_right(
-        &truncate_width(&row.room.session_name, name_width),
-        name_width,
-    );
-    let mux = format!("{:<7}", row.room.mux.as_str());
-    let agents_width = row.agents.as_ref().map_or(1, RoomAgents::width);
-    let fixed_width = 2 + name_width + 2 + 7 + 2 + 2 + agents_width;
-    let path_width = total_width.saturating_sub(fixed_width);
-    let path = truncate_width(
-        &crate::cli::render::home_relative(&row.room.project_root.to_string_lossy()),
-        path_width,
-    );
-    let mut spans = vec![
+    let workspace = format!("{} ", theme.workspace_glyph);
+    let fixed_width = UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(workspace.as_str());
+    let available = total_width.saturating_sub(fixed_width);
+    let repo = repo_name(&row.room);
+    let repo_width = UnicodeWidthStr::width(repo.as_str());
+    let path = room_path(&row.room);
+    let (repo, gap, path) = if repo_width >= available {
+        (truncate_width(&repo, available), 0, String::new())
+    } else {
+        let path = truncate_left_width(&path, available.saturating_sub(repo_width + 1));
+        let gap = available.saturating_sub(repo_width + UnicodeWidthStr::width(path.as_str()));
+        (repo, gap, path)
+    };
+    let mut identity = vec![
         Span::styled(prefix.to_owned(), theme.accent()),
-        Span::styled(name, theme.body().add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        Span::styled(mux, theme.meta()),
-        Span::raw("  "),
-        Span::styled(pad_right(&path, path_width), theme.muted()),
-        Span::raw("  "),
+        Span::styled(workspace, theme.accent()),
+        Span::styled(repo, theme.body().add_modifier(Modifier::BOLD)),
     ];
-    push_agent_spans(&mut spans, row.agents.as_ref(), theme);
+    if !path.is_empty() {
+        identity.push(Span::raw(" ".repeat(gap)));
+        identity.push(Span::styled(path, theme.muted()));
+    }
+
+    let mut stats = vec![Span::raw("  ")];
+    let Some(room_stats) = row.stats.as_ref() else {
+        stats.push(Span::styled("–", theme.muted()));
+        return [Line::from(identity), Line::from(stats)];
+    };
+    let mut agents = Vec::new();
+    push_agent_spans(&mut agents, Some(&room_stats.agents), theme);
+    let agents_width = room_stats.agents.width();
+    let metric_sets = [
+        metric_spans(room_stats, true, true, theme),
+        metric_spans(room_stats, true, false, theme),
+        metric_spans(room_stats, false, false, theme),
+    ];
+    let metrics = metric_sets
+        .into_iter()
+        .find(|metrics| 2 + agents_width + 1 + spans_width(metrics) <= total_width)
+        .unwrap_or_else(|| metric_spans(room_stats, false, false, theme));
+    let metrics_width = spans_width(&metrics);
+    let agents_max = total_width.saturating_sub(2 + metrics_width + 1);
+    let agents = truncate_spans_width(agents, agents_max);
+    let gap = total_width.saturating_sub(2 + spans_width(&agents) + metrics_width);
+    stats.extend(agents);
+    stats.push(Span::raw(" ".repeat(gap)));
+    stats.extend(metrics);
+    [Line::from(identity), Line::from(stats)]
+}
+
+fn metric_spans(
+    stats: &RoomStats,
+    show_sessions: bool,
+    show_tokens: bool,
+    theme: &PickerTheme,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if show_sessions {
+        spans.push(Span::styled(theme.sessions_glyph.clone(), theme.meta()));
+        spans.push(Span::styled(
+            format!(" {}", stats.headline.sessions),
+            theme.body(),
+        ));
+    }
+    if show_tokens {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(theme.tokens_glyph.clone(), theme.meta()));
+        spans.push(Span::styled(
+            format!(
+                " {}",
+                rimz::theme::fmt::compact_count(stats.headline.tokens)
+            ),
+            theme.body(),
+        ));
+    }
+    if !spans.is_empty() {
+        spans.push(Span::raw("  "));
+    }
+    spans.push(Span::styled(
+        rimz::theme::fmt::dollars2(stats.headline.usd),
+        theme.body(),
+    ));
     spans
 }
 
@@ -606,9 +707,44 @@ fn push_agent_spans(
     }
 }
 
-fn pad_right(text: &str, width: usize) -> String {
-    let padding = width.saturating_sub(UnicodeWidthStr::width(text));
-    format!("{text}{}", " ".repeat(padding))
+fn repo_name(room: &rimz::web::LiveRoom) -> String {
+    rimz::worktree::normalize_path_lexical(&room.project_root)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map_or_else(|| room.session_name.clone(), str::to_owned)
+}
+
+fn room_path(room: &rimz::web::LiveRoom) -> String {
+    crate::cli::render::home_relative(&room.project_root.to_string_lossy())
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn truncate_spans_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Span<'static>> {
+    let mut remaining = max_width;
+    let mut truncated = Vec::new();
+    for span in spans {
+        let width = UnicodeWidthStr::width(span.content.as_ref());
+        if width <= remaining {
+            remaining -= width;
+            truncated.push(span);
+            continue;
+        }
+        if remaining > 0 {
+            truncated.push(Span::styled(
+                truncate_width(span.content.as_ref(), remaining),
+                span.style,
+            ));
+        }
+        break;
+    }
+    truncated
 }
 
 fn truncate_width(text: &str, max_width: usize) -> String {
@@ -631,6 +767,28 @@ fn truncate_width(text: &str, max_width: usize) -> String {
     }
     out.push('…');
     out
+}
+
+fn truncate_left_width(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_owned();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let content_width = max_width.saturating_sub(1);
+    let mut width = 0;
+    let mut suffix = Vec::new();
+    for character in text.chars().rev() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width + character_width > content_width {
+            break;
+        }
+        width += character_width;
+        suffix.push(character);
+    }
+    let suffix = suffix.into_iter().rev().collect::<String>();
+    format!("…{suffix}")
 }
 
 #[cfg(test)]

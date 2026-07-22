@@ -9,7 +9,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 ### Added
 
 - `rimz web share` serves an explicitly allowlisted live room through a second no-auth, input-blocked ttyd daemon; `unshare` revokes live viewers, tmux attaches ignore viewer size, and status reports both browser surfaces. → [web](./docs/guide/web.md#share-a-read-only-broadcast)
-- The web daemon's base URL opens a themed live-session manager with filtering, mouse and keyboard selection, per-provider agent counts, and attention markers; detaching from one room returns to the list to switch rooms in the same browser tab. → [web](./docs/guide/web.md#session-manager)
+- The web daemon's base URL opens a themed live-session manager with cockpit-style repository cards, per-provider attention and usage totals, and mouse or keyboard selection; reconnects and refreshes stay with the attached room, while detaching makes the list the reconnect target again. → [web](./docs/guide/web.md#session-manager)
 - Layout cells accept any executable on PATH as a raw command pane, while configured commands and profiles keep precedence over same-named binaries. → [fleet](./docs/guide/fleet.md#compose-a-layout)
 - `rimz events follow` streams versioned agent lifecycle transitions as JSON Lines, with current-generation replay and gap-free handoff across event-log rotation. → [events](./docs/reference/cli/events.md)
 

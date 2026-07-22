@@ -272,6 +272,7 @@ fn client_bootstrap(family: Option<&str>) -> String {
         .expect("serializing the static pixel diacritic table cannot fail");
     let pixel_layer = include_str!("pixel_layer.js");
     let pixel_protocol = crate::web::TTYD_PIXEL_PROTOCOL;
+    let session_osc = crate::web::TTYD_SESSION_OSC;
     let placeholder = u32::from(PLACEHOLDER);
     format!(
         r#"<script id="rimz-web-client">(()=>{{
@@ -281,6 +282,21 @@ const RIMZ_PIXEL_PROTOCOL={pixel_protocol};
 const RIMZ_PIXEL_PLACEHOLDER={placeholder};
 const RIMZ_PIXEL_DIACRITICS={diacritics};
 {pixel_layer}
+const NativeWebSocket=window.WebSocket;
+window.WebSocket=class extends NativeWebSocket{{
+  constructor(url,protocols){{
+    let target=url;
+    try{{
+      const parsed=new URL(url,window.location.href);
+      if(parsed.host===window.location.host&&parsed.pathname.endsWith("/ws")){{
+        parsed.search=window.location.search;
+        target=parsed;
+      }}
+    }}catch(_){{}}
+    if(protocols===undefined)super(target);
+    else super(target,protocols);
+  }}
+}};
 const waitForTerminal=()=>new Promise(resolve=>{{
   let attempts=0;
   const find=()=>{{
@@ -334,6 +350,16 @@ waitForTerminal().then(term=>{{
       const text=new TextDecoder().decode(bytes);
       writeClipboard(text);
     }}catch(_){{}}
+    return true;
+  }});
+  term.parser.registerOscHandler({session_osc},data=>{{
+    const prefix="rimz-session=";
+    if(!data.startsWith(prefix))return false;
+    const value=data.slice(prefix.length);
+    const url=new URL(window.location.href);
+    if(value)url.searchParams.set("arg",value);
+    else url.searchParams.delete("arg");
+    window.history.replaceState(null,"",url);
     return true;
   }});
   const steadyStyles={{0:"block",1:"block",2:"block",3:"underline",4:"underline",5:"bar",6:"bar"}};
@@ -1029,6 +1055,11 @@ mod tests {
         assert!(rendered.contains("compositionend"));
         assert!(rendered.contains("textarea.value=\"\""));
         assert!(rendered.contains("registerOscHandler(52"));
+        assert!(rendered.contains("registerOscHandler(7717"));
+        assert!(rendered.contains("const prefix=\"rimz-session=\""));
+        assert!(rendered.contains("window.history.replaceState"));
+        assert!(rendered.contains("window.WebSocket=class extends NativeWebSocket"));
+        assert!(rendered.contains("parsed.search=window.location.search"));
         assert!(rendered.contains("onSelectionChange"));
         assert!(rendered.contains("event.altKey"));
         assert!(rendered.contains("/^Digit[0-9]$/.test(event.code)&&!event.shiftKey"));
