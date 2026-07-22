@@ -51,6 +51,7 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
   const frameQueue = [];
   const resizeObservers = [];
   const bitmapRequests = [];
+  const writes = [];
   const handlers = {};
   const lines = [];
   const blankCell = { getChars: () => "", getFgColor: () => 0 };
@@ -87,7 +88,11 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
     options: {},
     element: { querySelector: (selector) => selector === ".xterm-screen" ? screen : null },
     buffer: { active: { viewportY: 0, getLine: (row) => lines[row] } },
-    write(data, callback) { if (callback) callback(); return data; },
+    write(data, callback) {
+      writes.push(data instanceof Uint8Array ? data.slice() : data);
+      if (callback) callback();
+      return data;
+    },
     reset() {},
     onRender(callback) { handlers.render = callback; },
     onScroll(callback) { handlers.scroll = callback; },
@@ -135,6 +140,7 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
     await settle();
   };
   const takeOps = () => ops.splice(0);
+  const takeWrites = () => writes.splice(0);
 
   pumpFrames();
   takeOps();
@@ -153,12 +159,44 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
     resolveNext,
     rejectNext,
     takeOps,
+    takeWrites,
   };
 }
 
 const draws = (ops) => ops.filter(({ op }) => op === "drawImage");
 const clips = (ops) => ops.filter(({ op }) => op === "clip");
 const assertNoFills = (ops) => assert.equal(ops.filter(({ op }) => op === "fillRect").length, 0);
+
+async function placeholderGlyphsAreInvisibleToXterm() {
+  const harness = createHarness({ cols: 4, rows: 2 });
+  const base = String.fromCodePoint(config.placeholder);
+  const cluster = base + config.diacritics[0] + config.diacritics[1];
+  const decoder = new TextDecoder();
+
+  harness.term.write(`A${cluster}B`);
+  let writes = harness.takeWrites();
+  assert.equal(writes.length, 1);
+  assert.equal(
+    decoder.decode(writes[0]),
+    `A\x1b[8m${cluster}\x1b[28mB`,
+    "the placeholder cluster is hidden while neighboring text remains visible",
+  );
+
+  const encoded = new TextEncoder().encode(cluster);
+  for (let boundary = 1; boundary < encoded.length; boundary++) {
+    const split = createHarness({ cols: 4, rows: 2 });
+    split.term.write(encoded.subarray(0, boundary));
+    assert.equal(split.takeWrites().length, 0, `split ${boundary} was forwarded early`);
+    split.term.write(encoded.subarray(boundary));
+    writes = split.takeWrites();
+    assert.equal(writes.length, 1);
+    assert.equal(
+      decoder.decode(writes[0]),
+      `\x1b[8m${cluster}\x1b[28m`,
+      `placeholder suppression survives websocket split ${boundary}`,
+    );
+  }
+}
 
 async function petStopsAtPaneBorder() {
   const harness = createHarness({ cols: 20, rows: 11 });
@@ -303,7 +341,8 @@ async function repeatedRenderReplacesFrame() {
   }
 }
 
-for (const scenario of [
+const scenarios = [
+  placeholderGlyphsAreInvisibleToXterm,
   petStopsAtPaneBorder,
   petPreservesAspect,
   decodeLifecycle,
@@ -311,7 +350,9 @@ for (const scenario of [
   partialPlacementKeepsLogicalOrigin,
   resizeAndScrollFollowViewport,
   repeatedRenderReplacesFrame,
-]) {
+];
+
+for (const scenario of scenarios) {
   try {
     await scenario();
   } catch (error) {
@@ -320,4 +361,4 @@ for (const scenario of [
   }
 }
 
-console.log("pixel layer harness: 7 scenarios passed");
+console.log(`pixel layer harness: ${scenarios.length} scenarios passed`);
