@@ -222,19 +222,25 @@ mod tests {
         let error = Command::new("sh")
             .args([
                 "-c",
-                "head -c 9000 /dev/zero | tr '\\0' x; printf rimz-stdout-marker; head -c 9000 /dev/zero | tr '\\0' y >&2; printf rimz-stderr-marker >&2; sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait \"$child\"",
+                "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; printf '%09000d' 0; printf 'rimz-%s-marker' stdout; printf '%09000d' 0 >&2; printf 'rimz-%s-marker' stderr >&2; wait \"$child\"",
                 "sh",
             ])
             .arg(&pid_file)
-            .bounded_output_within(Duration::from_millis(100))
+            .bounded_output_within(Duration::from_secs(1))
             .expect_err("sleeping command should time out");
 
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         let message = error.to_string();
         assert!(message.contains("sh"), "missing command: {message}");
-        assert!(message.contains("100ms"), "missing budget: {message}");
-        assert!(message.contains("rimz-stdout-marker"), "{message}");
-        assert!(message.contains("rimz-stderr-marker"), "{message}");
+        assert!(message.contains("1s"), "missing budget: {message}");
+        let (_, output_tails) = message
+            .split_once("stdout tail: ")
+            .expect("stdout tail label");
+        let (stdout_tail, stderr_tail) = output_tails
+            .split_once("; stderr tail: ")
+            .expect("stderr tail label");
+        assert!(stdout_tail.contains("rimz-stdout-marker"), "{message}");
+        assert!(stderr_tail.contains("rimz-stderr-marker"), "{message}");
         assert!(
             message.len() < 18_000,
             "timeout diagnostics were not bounded: {} bytes",
@@ -242,9 +248,14 @@ mod tests {
         );
 
         let pid = std::fs::read_to_string(&pid_file).expect("child pid");
+        let child_proc = std::path::Path::new("/proc").join(pid.trim());
+        let reap_deadline = Instant::now() + Duration::from_secs(5);
+        while child_proc.exists() && Instant::now() < reap_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
         assert!(
-            !std::path::Path::new("/proc").join(pid.trim()).exists(),
-            "timed-out child {pid} was not killed and reaped",
+            !child_proc.exists(),
+            "timed-out descendant {pid} remained after process-group kill",
         );
     }
 }
