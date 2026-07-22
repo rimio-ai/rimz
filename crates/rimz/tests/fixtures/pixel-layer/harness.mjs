@@ -167,35 +167,57 @@ const draws = (ops) => ops.filter(({ op }) => op === "drawImage");
 const clips = (ops) => ops.filter(({ op }) => op === "clip");
 const assertNoFills = (ops) => assert.equal(ops.filter(({ op }) => op === "fillRect").length, 0);
 
-async function placeholderGlyphsAreInvisibleToXterm() {
+async function placeholderClustersAreConcealedSafely() {
   const harness = createHarness({ cols: 4, rows: 2 });
   const base = String.fromCodePoint(config.placeholder);
-  const cluster = base + config.diacritics[0] + config.diacritics[1];
   const decoder = new TextDecoder();
+  const clusters = [
+    base + config.diacritics[0] + config.diacritics[1],
+    base + config.diacritics.at(-2) + config.diacritics.at(-1),
+  ];
 
-  harness.term.write(`A${cluster}B`);
-  let writes = harness.takeWrites();
-  assert.equal(writes.length, 1);
-  assert.equal(
-    decoder.decode(writes[0]),
-    `A\x1b[8m${cluster}\x1b[28mB`,
-    "the placeholder cluster is hidden while neighboring text remains visible",
-  );
-
-  const encoded = new TextEncoder().encode(cluster);
-  for (let boundary = 1; boundary < encoded.length; boundary++) {
-    const split = createHarness({ cols: 4, rows: 2 });
-    split.term.write(encoded.subarray(0, boundary));
-    assert.equal(split.takeWrites().length, 0, `split ${boundary} was forwarded early`);
-    split.term.write(encoded.subarray(boundary));
-    writes = split.takeWrites();
+  for (const cluster of clusters) {
+    harness.term.write(`A${cluster}B`);
+    let writes = harness.takeWrites();
     assert.equal(writes.length, 1);
     assert.equal(
       decoder.decode(writes[0]),
-      `\x1b[8m${cluster}\x1b[28m`,
-      `placeholder suppression survives websocket split ${boundary}`,
+      `A\x1b[8m${cluster}\x1b[28mB`,
+      "the placeholder cluster is hidden while neighboring text remains visible",
     );
+
+    const encoded = new TextEncoder().encode(cluster);
+    for (let boundary = 1; boundary < encoded.length; boundary++) {
+      const split = createHarness({ cols: 4, rows: 2 });
+      split.term.write(encoded.subarray(0, boundary));
+      assert.equal(split.takeWrites().length, 0, `split ${boundary} was forwarded early`);
+      split.term.write(encoded.subarray(boundary));
+      writes = split.takeWrites();
+      assert.equal(writes.length, 1);
+      assert.equal(
+        decoder.decode(writes[0]),
+        `\x1b[8m${cluster}\x1b[28m`,
+        `placeholder suppression survives websocket split ${boundary}`,
+      );
+    }
   }
+
+  const adjacent = createHarness({ cols: 4, rows: 2 });
+  adjacent.term.write(clusters.join(""));
+  assert.equal(
+    decoder.decode(adjacent.takeWrites()[0]),
+    `\x1b[8m${clusters.join("")}\x1b[28m`,
+    "one conceal pair covers adjacent placeholder cells",
+  );
+
+  const malformed = createHarness({ cols: 4, rows: 2 });
+  const literal = `${base}${config.diacritics[0]}\x1b[31mX`;
+  malformed.term.write(literal);
+  assert.equal(
+    decoder.decode(malformed.takeWrites()[0]),
+    literal,
+    "a non-protocol placeholder cannot conceal or consume following terminal controls",
+  );
 }
 
 async function petStopsAtPaneBorder() {
@@ -342,7 +364,7 @@ async function repeatedRenderReplacesFrame() {
 }
 
 const scenarios = [
-  placeholderGlyphsAreInvisibleToXterm,
+  placeholderClustersAreConcealedSafely,
   petStopsAtPaneBorder,
   petPreservesAspect,
   decodeLifecycle,

@@ -196,8 +196,20 @@ fn custom_index_key_with_schema(
     family: Option<&str>,
     faces: &[FontFace],
 ) -> String {
+    let bootstrap = client_bootstrap(family);
+    custom_index_key_with_bootstrap(schema, &bootstrap, ttyd_version, family, faces)
+}
+
+fn custom_index_key_with_bootstrap(
+    schema: &str,
+    bootstrap: &str,
+    ttyd_version: &str,
+    family: Option<&str>,
+    faces: &[FontFace],
+) -> String {
     let mut hasher = Sha256::new();
     hash_index_part(&mut hasher, schema.as_bytes());
+    hash_index_part(&mut hasher, bootstrap.as_bytes());
     hash_index_part(&mut hasher, ttyd_version.as_bytes());
     hash_index_part(&mut hasher, family.unwrap_or_default().as_bytes());
     for face in faces {
@@ -924,6 +936,30 @@ mod tests {
         assert_ne!(
             key,
             custom_index_key_with_schema("rimz.ttyd-index.v6", "ttyd 1.7.7", Some(family), &faces)
+        );
+
+        let bootstrap = client_bootstrap(Some(family));
+        let mut changed_bootstrap = bootstrap.clone();
+        changed_bootstrap.push_str("// changed");
+        assert_eq!(
+            key,
+            custom_index_key_with_bootstrap(
+                CUSTOM_INDEX_SCHEMA,
+                &bootstrap,
+                "ttyd 1.7.7",
+                Some(family),
+                &faces,
+            )
+        );
+        assert_ne!(
+            key,
+            custom_index_key_with_bootstrap(
+                CUSTOM_INDEX_SCHEMA,
+                &changed_bootstrap,
+                "ttyd 1.7.7",
+                Some(family),
+                &faces,
+            )
         );
 
         let rendered = inject_client_profile(

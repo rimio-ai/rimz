@@ -5,6 +5,8 @@ const installPixelLayer=term=>{
   const MAX_APC_BYTES=8*1024*1024;
   const MAX_IMAGE_BYTES=4*1024*1024;
   const MAX_IMAGES=128;
+  const UTF8_MASKS=[0,0x7f,0x1f,0x0f,0x07];
+  const UTF8_MINIMUMS=[0,0,0x80,0x800,0x10000];
   const encoder=new TextEncoder();
   const decoder=new TextDecoder();
   const placeholderBytes=encoder.encode(String.fromCodePoint(RIMZ_PIXEL_PLACEHOLDER));
@@ -212,6 +214,19 @@ const installPixelLayer=term=>{
     return joinBytes(output);
   };
   const utf8Width=byte=>byte<0x80?1:byte<0xe0?2:byte<0xf0?3:4;
+  const readUtf8=(input,offset)=>{
+    const width=utf8Width(input[offset]);
+    const end=offset+width;
+    if(end>input.length)return null;
+    let value=input[offset]&UTF8_MASKS[width];
+    for(let index=offset+1;index<end;index++){
+      const byte=input[index];
+      if((byte&0xc0)!==0x80)return {end,value:-1};
+      value=(value<<6)|(byte&0x3f);
+    }
+    if(value<UTF8_MINIMUMS[width]||value>0x10ffff||(value>=0xd800&&value<=0xdfff))value=-1;
+    return {end,value};
+  };
   // xterm keeps the Kitty image id in each placeholder cell's foreground, but
   // its WebGL renderer paints a colored fallback glyph for U+10EEEE. Mark the
   // complete base + row + column cluster invisible before xterm parses it.
@@ -223,39 +238,55 @@ const installPixelLayer=term=>{
     const output=[];
     let literalStart=0;
     let offset=0;
+    let concealed=false;
+    const restore=()=>{
+      if(!concealed)return;
+      output.push(showGlyph);
+      concealed=false;
+    };
+    const pushLiteral=(start,end)=>{
+      if(start>=end)return;
+      restore();
+      output.push(input.subarray(start,end));
+    };
     while(offset<input.length){
       if(input[offset]!==placeholderBytes[0]){offset++;continue;}
       let matched=1;
       while(matched<placeholderBytes.length&&offset+matched<input.length&&input[offset+matched]===placeholderBytes[matched])matched++;
       if(matched===placeholderBytes.length){
         let clusterEnd=offset+placeholderBytes.length;
+        let valid=true;
         for(let mark=0;mark<2;mark++){
           if(clusterEnd>=input.length){clusterEnd=-1;break;}
-          const end=clusterEnd+utf8Width(input[clusterEnd]);
-          if(end>input.length){clusterEnd=-1;break;}
-          clusterEnd=end;
+          const decoded=readUtf8(input,clusterEnd);
+          if(!decoded){clusterEnd=-1;break;}
+          if(!diacriticIndexes.has(decoded.value)){valid=false;break;}
+          clusterEnd=decoded.end;
         }
         if(clusterEnd<0){
-          if(offset>literalStart)output.push(input.subarray(literalStart,offset));
+          pushLiteral(literalStart,offset);
           placeholderCarry=input.slice(offset);
           literalStart=input.length;
           break;
         }
-        if(offset>literalStart)output.push(input.subarray(literalStart,offset));
-        output.push(hideGlyph,input.subarray(offset,clusterEnd),showGlyph);
+        if(!valid){offset+=placeholderBytes.length;continue;}
+        pushLiteral(literalStart,offset);
+        if(!concealed){output.push(hideGlyph);concealed=true;}
+        output.push(input.subarray(offset,clusterEnd));
         offset=clusterEnd;
         literalStart=offset;
         continue;
       }
       if(offset+matched===input.length){
-        if(offset>literalStart)output.push(input.subarray(literalStart,offset));
+        pushLiteral(literalStart,offset);
         placeholderCarry=input.slice(offset);
         literalStart=input.length;
         break;
       }
       offset++;
     }
-    if(literalStart<input.length)output.push(input.subarray(literalStart));
+    pushLiteral(literalStart,input.length);
+    restore();
     return joinBytes(output);
   };
 
