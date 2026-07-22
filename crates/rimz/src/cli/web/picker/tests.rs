@@ -276,6 +276,15 @@ fn session_and_money_metrics_use_cockpit_color_roles() {
 }
 
 #[test]
+fn banner_lines_have_uniform_width() {
+    assert!(
+        BANNER
+            .iter()
+            .all(|line| UnicodeWidthStr::width(*line) == 30)
+    );
+}
+
+#[test]
 fn filter_matches_displayed_repo_name_and_path_then_attaches() {
     let mut picker = Picker::new(None);
     picker.apply_probe(rows(), now());
@@ -428,8 +437,8 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
 
                                        ██████╗ ██╗███╗   ███╗███████╗
                                        ██╔══██╗██║████╗ ████║╚══███╔╝
-                                        ██████╔╝██║██╔████╔██║  ███╔╝
-                                        ██╔══██╗██║██║╚██╔╝██║ ███╔╝
+                                       ██████╔╝██║██╔████╔██║  ███╔╝
+                                       ██╔══██╗██║██║╚██╔╝██║ ███╔╝
                                        ██║  ██║██║██║ ╚═╝ ██║███████╗
                                        ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚══════╝
 
@@ -457,8 +466,8 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
 
                                        ██████╗ ██╗███╗   ███╗███████╗
                                        ██╔══██╗██║████╗ ████║╚══███╔╝
-                                        ██████╔╝██║██╔████╔██║  ███╔╝
-                                        ██╔══██╗██║██║╚██╔╝██║ ███╔╝
+                                       ██████╔╝██║██╔████╔██║  ███╔╝
+                                       ██╔══██╗██║██║╚██╔╝██║ ███╔╝
                                        ██║  ██║██║██║ ╚═╝ ██║███████╗
                                        ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚══════╝
 
@@ -479,8 +488,8 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
 
                                        ██████╗ ██╗███╗   ███╗███████╗
                                        ██╔══██╗██║████╗ ████║╚══███╔╝
-                                        ██████╔╝██║██╔████╔██║  ███╔╝
-                                        ██╔══██╗██║██║╚██╔╝██║ ███╔╝
+                                       ██████╔╝██║██╔████╔██║  ███╔╝
+                                       ██╔══██╗██║██║╚██╔╝██║ ███╔╝
                                        ██║  ██║██║██║ ╚═╝ ██║███████╗
                                        ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚══════╝
 
@@ -501,8 +510,8 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
 
                                        ██████╗ ██╗███╗   ███╗███████╗
                                        ██╔══██╗██║████╗ ████║╚══███╔╝
-                                        ██████╔╝██║██╔████╔██║  ███╔╝
-                                        ██╔══██╗██║██║╚██╔╝██║ ███╔╝
+                                       ██████╔╝██║██╔████╔██║  ███╔╝
+                                       ██╔══██╗██║██║╚██╔╝██║ ███╔╝
                                        ██║  ██║██║██║ ╚═╝ ██║███████╗
                                        ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚══════╝
 
