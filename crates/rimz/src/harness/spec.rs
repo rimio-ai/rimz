@@ -64,10 +64,6 @@ impl LayoutSpec {
     pub fn agent_kinds(&self) -> impl Iterator<Item = &str> {
         self.agent_cells().map(|cell| cell.kind.as_str())
     }
-
-    pub fn first_agent_kind(&self) -> Option<&str> {
-        self.agent_kinds().next()
-    }
 }
 
 /// Borrowed structural layout grammar before cells acquire launch semantics.
