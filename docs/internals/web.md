@@ -32,7 +32,7 @@ The shim accepts only a session with a durable RimZ workspace record and a match
 
 The ttyd binary resolves from `RIMZ_TTYD_BIN`, then `PATH`. A missing binary reports the Homebrew and apt install fix. `interface` must parse as an IP address, each trusted proxy must parse as an IP or CIDR, and an occupied configured listener returns a typed error that points to `[web] port`.
 
-RimZ spawns ttyd and the optional gate with null stdio and their own process groups, then writes `$XDG_STATE_HOME/rimz/web-ttyd.json` with `pid`, `port`, `interface`, `auth`, `trusted_proxies`, and optional `gate: {pid, upstream_port}`. Old `{pid, port}` records deserialize as Basic Auth on loopback without a gate. The record is live only while ttyd is the recorded process, the optional gate is a recorded `rimz web gate` process, and the configured listener accepts a connection; readers remove stale records.
+RimZ spawns ttyd and the optional gate with null stdio and their own process groups, then writes `$XDG_STATE_HOME/rimz/web-ttyd.json` with `pid`, `port`, `interface`, `auth`, `trusted_proxies`, optional `gate: {pid, upstream_port}`, and optional `pixel_protocol`. `pixel_protocol` is present only when the live daemon serves a generated page with RimZ's current pixel compatibility layer. Old `{pid, port}` records deserialize as Basic Auth on loopback without a gate or pixel capability. The record is live only while ttyd is the recorded process, the optional gate is a recorded `rimz web gate` process, and the configured listener accepts a connection; readers remove stale records.
 
 The desired listener, auth mode, and proxy list participate in daemon reuse. Any drift stops the old processes and starts the desired shape; Basic mode also requires the credential file before reuse.
 
@@ -56,7 +56,11 @@ The built-in Nerd Font families use SHA-256-pinned regular and bold faces. HTTPS
 
 ttyd serves no additional static route, so RimZ caches a generated index under `$XDG_CACHE_HOME/rimz/web-ttyd`. A cache miss starts a throwaway loopback ttyd on an ephemeral port, fetches its stock `/` page with temporary Basic Auth, stops it, and injects the font faces plus the compatibility bootstrap.
 
-The bootstrap refreshes xterm after fonts load, keeps the cursor steady across reconnects and app-emitted blink sequences while preserving requested cursor shapes, preserves Shift+Enter and macOS Meta chords, bridges OSC 52 and browser selections to the clipboard, and restyles disconnect and resize overlays. It guards blinking DECSCUSR styles and DEC mode 12 at the xterm parser. A font or index failure warns and falls back without blocking the daemon.
+The bootstrap refreshes xterm after fonts load, keeps the cursor steady across reconnects and app-emitted blink sequences while preserving requested cursor shapes, preserves Shift+Enter and macOS Meta chords, bridges OSC 52 and browser selections to the clipboard, restyles disconnect and resize overlays, and installs a bounded Kitty graphics compatibility layer. It guards blinking DECSCUSR styles and DEC mode 12 at the xterm parser. A font or index failure warns and falls back without blocking the daemon.
+
+The pixel layer consumes RimZ's transmit, virtual-placement, and delete subset before xterm parses it, retains at most 128 decoded PNGs by image id, and paints slices onto a DPR-scaled overlay canvas. Each redraw scans xterm's visible buffer for U+10EEEE placeholder cells, reads their row and column combining marks plus the RGB image id, and therefore follows scroll, resize, reconnect, and tmux client switches without a second state channel.
+
+The tmux capability probe accepts an `xterm-256color` rendering client when its pid ancestry reaches the live ttyd pid recorded with the current `pixel_protocol`. Stock-page fallback omits the field and stays sextant-capable only. A browser tab kept open across a RimZ upgrade can retain the previous page generation against the replacement daemon; reload the page to converge it.
 
 ## Commands and room start
 

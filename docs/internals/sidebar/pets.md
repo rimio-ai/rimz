@@ -125,16 +125,16 @@ The two tiers keep different things in memory. Cell tier renders all 72 grids on
 | --- | --- | --- |
 | `sextant` | nothing | `Cell` |
 | `pixel` | pixel transport | `Pixel`, else `Cell` |
-| `auto` (default) | pixel transport **and** a kitty-capable terminal | `Pixel`, else `Cell` |
+| `auto` (default) | pixel transport **and** kitty-capable rendering clients | `Pixel`, else `Cell` |
 
 `effective_render_tier` then folds in this frame's reality: `[theme.display] pixel = "off"` forces `Cell` outright, and a resolved pixel tier downgrades to `Cell` when there is no provider block to ride beside or the body is suppressed. A cell tier always passes through unchanged, so `sextant` stays sextant.
 
 Capabilities come from [`pixel/probe.rs`](../../../crates/rimz/src/sidebar_pane/pixel/probe.rs) as two independent facts:
 
 - **Pixel transport.** Inside tmux: version 3.6 or newer *and* `allow-passthrough` set to `on` or `all` on the pane (falling back to the session). Standalone: always available. Zellij: never.
-- **Kitty terminal.** Inside tmux: every rendering client's terminfo is `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty`, with control-mode clients excluded. Standalone: `$TERM` matches the same list.
+- **Kitty clients.** Inside tmux: every rendering client either advertises `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty`, or descends from the live ttyd daemon serving RimZ's current pixel compatibility protocol; control-mode clients are excluded. Standalone: `$TERM` matches the native-terminal list.
 
-Live re-probes fold failures onto the previous reading — a command that fails keeps the last known fact rather than flapping the tier — and every runtime probe only reads. One startup command writes: it raises the sidebar's own pane from `allow-passthrough on` to `all`, so graphics transmitted while the window is hidden still reach the terminal. A pane already at `all`, and a user's explicit `off`, stay as they are.
+Live re-probes fold failures onto the previous reading — a command that fails keeps the last known fact rather than flapping the tier — and every runtime probe only reads. Resize re-probes immediately; a ten-second tmux backstop covers equal-size browser attaches and detaches. One startup command writes: it raises the sidebar's own pane from `allow-passthrough on` to `all`, so graphics transmitted while the window is hidden still reach the terminal. A pane already at `all`, and a user's explicit `off`, stay as they are.
 
 Sextant is the downgrade target because it is the portable baseline. Capability misses, Zellij, `NO_COLOR`, a suppressed body, and a dashboard with no provider column all converge on it.
 
