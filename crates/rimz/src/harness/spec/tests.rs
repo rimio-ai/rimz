@@ -124,6 +124,43 @@ fn parses_layout_shape_and_command_precedence() {
 }
 
 #[test]
+fn path_executables_are_last_resort_layout_cells() {
+    let spec = parse_layout_spec("sh,claude", &no_profiles(), &no_commands()).expect("layout");
+    assert!(matches!(
+        &spec.columns[0].rows[0],
+        Cell::Command { argv } if argv == &["sh"]
+    ));
+    assert_eq!(agent_at(&spec, 1, 0).kind.as_str(), "claude");
+
+    let configured_command =
+        parse_layout_spec("sh", &no_profiles(), &commands([("sh", "echo shadowed")]))
+            .expect("configured command");
+    assert!(matches!(
+        &configured_command.columns[0].rows[0],
+        Cell::Command { argv } if argv == &["echo", "shadowed"]
+    ));
+
+    let configured_profile =
+        parse_layout_spec("sh", &profiles([("sh", profile("claude"))]), &no_commands())
+            .expect("configured profile");
+    assert!(matches!(
+        agent_at(&configured_profile, 0, 0),
+        AgentCell { kind, launch: crate::agents::LaunchParams { profile, .. }, .. }
+            if kind.as_str() == "claude" && profile.as_deref() == Some("sh")
+    ));
+
+    assert!(matches!(
+        parse_layout_spec(
+            "definitely-not-a-binary-xyz,claude",
+            &no_profiles(),
+            &no_commands()
+        ),
+        Err(LayoutErr::UnknownCell { cell, .. })
+            if cell == "definitely-not-a-binary-xyz"
+    ));
+}
+
+#[test]
 fn structural_layout_grammar_table() {
     let cases = [
         (
@@ -240,7 +277,7 @@ fn known_spec_tokens_require_parseable_layouts() {
     for raw in ["claude/codex", "claude:planner"] {
         assert!(is_known_spec_token(raw, &profiles, &commands, &teams));
     }
-    for raw in ["https://example.invalid", "claude: fix the bug"] {
+    for raw in ["sh", "https://example.invalid", "claude: fix the bug"] {
         assert!(!is_known_spec_token(raw, &profiles, &commands, &teams));
     }
 }
@@ -277,6 +314,19 @@ fn resolve_spec_dispatches_default_inline_peer_and_team() {
             .agent_kinds()
             .collect::<Vec<_>>(),
         vec!["claude", "codex"]
+    );
+    assert_eq!(
+        resolve_spec(Some("sh"), &profiles, &no_commands(), &teams),
+        Ok(LayoutSpec::single(Cell::Command {
+            argv: vec!["sh".to_owned()]
+        }))
+    );
+    assert_eq!(
+        resolve_spec(Some("sh:role"), &profiles, &no_commands(), &teams),
+        Err(LayoutErr::RoleOnCommandCell {
+            cell: "sh".to_owned(),
+            role: "role".to_owned(),
+        })
     );
     assert_eq!(
         resolve_spec(Some("stacked"), &profiles, &no_commands(), &teams)
@@ -1009,33 +1059,70 @@ fn prompt_leader_selects_or_rejects_targets() {
 }
 
 #[test]
-fn default_tab_title_uses_launch_identity_precedence() {
-    let agent = parse_layout_spec("term,codex", &no_profiles(), &no_commands()).expect("agent");
+fn default_tab_title_uses_launch_identity_and_layout_order() {
+    let layout = parse_layout_spec("term,codex", &no_profiles(), &no_commands()).expect("layout");
+    let single = parse_layout_spec("claude", &no_profiles(), &no_commands()).expect("agent");
     let terminal = LayoutSpec::single(Cell::shell());
+    let command = parse_layout_spec(
+        "vim,claude",
+        &no_profiles(),
+        &commands([("vim", "/usr/bin/nvim -p")]),
+    )
+    .expect("command layout");
+    let profile = parse_layout_spec(
+        "planner",
+        &profiles([("planner", profile("claude"))]),
+        &no_commands(),
+    )
+    .expect("profile");
+    let capped = parse_layout_spec("claude,codex,pi,claude", &no_profiles(), &no_commands())
+        .expect("four-cell layout");
 
     for (spec, cwd, worktree, team, expected) in [
         (
-            &agent,
+            &layout,
             Path::new("/code/wt/tab-name"),
             Some("tab-name"),
             Some("forge"),
             "#tab-name",
         ),
         (
-            &agent,
+            &layout,
             Path::new("/code/query-engine"),
             None,
             Some("forge"),
             "team:forge",
         ),
         (
-            &agent,
+            &layout,
             Path::new("/code/query-engine"),
             None,
             None,
-            "codex:query-engine",
+            "term+codex:query-engine",
         ),
+        (&single, Path::new("/code/main"), None, None, "claude:main"),
         (&terminal, Path::new("/code/main"), None, None, "term:main"),
+        (
+            &command,
+            Path::new("/code/main"),
+            None,
+            None,
+            "nvim+claude:main",
+        ),
+        (
+            &profile,
+            Path::new("/code/main"),
+            None,
+            None,
+            "planner:main",
+        ),
+        (
+            &capped,
+            Path::new("/code/main"),
+            None,
+            None,
+            "claude+codex+pi+…:main",
+        ),
     ] {
         assert_eq!(default_tab_title(spec, cwd, worktree, team), expected);
     }

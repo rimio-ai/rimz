@@ -374,7 +374,7 @@ A profile may be named like a kind: `[agents.profiles.claude]` overrides the bas
 
 #### Commands
 
-`[agents.commands]` entries are bare strings, shell-split and run as raw command panes. They are launch shortcuts, not agents, so they take no profile fields and answer to no `@` handle. A command may shadow a cell word like `claude` to set a local default for that word.
+`[agents.commands]` entries are bare strings, shell-split and run as raw command panes. They are launch shortcuts, not agents, so they take no profile fields and answer to no `@` handle. An unconfigured cell word falls back to an executable with that name on PATH; a command entry may shadow that binary or a cell word like `claude` to set a local default for the word.
 
 #### Teams
 
@@ -389,6 +389,7 @@ An inline spec like `rimz agents "claude,codex+term"` keeps the same shape gramm
 3. built-in `term`,
 4. registered agent kinds,
 5. adapter-supported virtual `<kind>-<mode>` cells (`claude-auto`, `codex-ask`, `codex-yolo`, …).
+6. executables found on PATH.
 
 The [agents CLI reference](../reference/cli/agents.md) lists the built-in virtual cells in full.
 
