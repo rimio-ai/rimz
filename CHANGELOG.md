@@ -8,6 +8,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ### Fixed
 
+- Browser cursors stay steady when terminal apps request a blinking cursor. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Homebrew upgrades through `rimz update` and the install script refresh formula data first, so a stale tap no longer skips a released build. → [installation](./docs/guide/installation.md)
 - Queued `done`-gated messages deliver when an agent's clean turn parks on background work instead of waiting for the background process to exit. → [messaging](./docs/guide/messaging.md)
 

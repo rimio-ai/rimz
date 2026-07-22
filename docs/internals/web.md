@@ -48,7 +48,7 @@ The built-in Nerd Font families use SHA-256-pinned regular and bold faces. HTTPS
 
 ttyd serves no additional static route, so RimZ caches a generated index under `$XDG_CACHE_HOME/rimz/web-ttyd`. A cache miss starts a throwaway loopback ttyd on an ephemeral port, fetches its stock `/` page with temporary Basic Auth, stops it, and injects the font faces plus the compatibility bootstrap.
 
-The bootstrap refreshes xterm after fonts load, keeps the cursor steady across reconnects, preserves Shift+Enter and macOS Meta chords, bridges OSC 52 and browser selections to the clipboard, and restyles disconnect and resize overlays. A font or index failure warns and falls back without blocking the daemon.
+The bootstrap refreshes xterm after fonts load, keeps the cursor steady across reconnects and app-emitted blink sequences while preserving requested cursor shapes, preserves Shift+Enter and macOS Meta chords, bridges OSC 52 and browser selections to the clipboard, and restyles disconnect and resize overlays. It guards blinking DECSCUSR styles and DEC mode 12 at the xterm parser. A font or index failure warns and falls back without blocking the daemon.
 
 ## Commands and room start
 
