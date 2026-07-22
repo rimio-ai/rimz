@@ -31,7 +31,7 @@ rimz web stop       # stop both browser daemons
 
 RimZ resolves or births the room first, confirms that its mux session is live, and ensures one ttyd daemon bound to `127.0.0.1:8200` by default. Every Zellij and tmux room on the machine shares that process.
 
-The printed route is `http://127.0.0.1:8200/?arg=<session>`. ttyd passes the selected session to a hidden RimZ shim, which accepts only a live session backed by a RimZ workspace record and attaches with the correct mux command. Changing the URL argument cannot run an arbitrary command.
+The printed route is `http://127.0.0.1:8200/?room=<session>`. ttyd passes the selected session to a hidden RimZ shim, which accepts only a live session backed by a RimZ workspace record and attaches with the correct mux command. Changing the URL argument cannot run an arbitrary command. Links from older releases that use `?arg=` still attach to the same exact session.
 
 The browser shows a Basic-Auth prompt. Use the printed user `rimz` and password. Add `--no-start` when a supervisor owns ttyd and the command should fail rather than start it.
 
@@ -49,7 +49,7 @@ rimz web unshare --session rimz-project-a1b2c3
 rimz web unshare --all
 ```
 
-`share` requires an already-live RimZ room, adds only that room to a durable allowlist, starts a second ttyd daemon on `127.0.0.1:8201` by default, and prints its viewer URL. The viewer daemon has no Basic-Auth prompt and drops all browser input; it cannot reach another live room by changing `?arg=` because its shim accepts only allowlisted sessions and gives the same generic refusal for unknown, stopped, and unshared names.
+`share` requires an already-live RimZ room, adds only that room to a durable allowlist, starts a second ttyd daemon on `127.0.0.1:8201` by default, and prints its viewer URL. The viewer daemon has no Basic-Auth prompt and drops all browser input; it cannot reach another live room by changing `?room=` because its shim accepts only allowlisted sessions and gives the same generic refusal for unknown, stopped, and unshared names.
 
 The viewer link is deliberately unauthenticated. Keep the listener on loopback for local viewing, or put HTTPS and any desired viewer authentication in a reverse proxy before exposing it. Set `share_base_url` to the proxy's public prefix; `auth_header`, `auth_users`, and `trusted_proxies` govern only the writable listener. A shared room on a non-loopback `interface` prints a warning that anyone who can reach `share_port` can watch.
 
@@ -59,15 +59,15 @@ tmux viewers attach read-only and with `ignore-size`, so they cannot type or res
 
 ## Session manager
 
-Open the base address without `?arg=` to choose among every live RimZ room on the machine. An unknown or stopped session argument opens the same switcher with a notice; a valid argument continues to attach directly.
+Open the base address without `?room=` to choose among every live RimZ room on the machine. An unknown or stopped session argument opens the same switcher with a notice; a valid argument continues to attach directly.
 
-The switcher centers its room cards beneath a RIMZ banner when the terminal has space and falls back to a compact full-frame list on small screens. Rooms with prompt activity in the last 24 hours lead, newest prompt first; the rest follow by the most recent room start or attach.
+The switcher centers its room cards in a fixed 24-row panel beneath a RIMZ banner when the terminal has space, using 40% of the terminal width within its 58- to 84-column bounds. Empty rows keep the box stable when only a few rooms are live; small screens fall back to a compact full-frame list. Rooms with prompt activity in the last 24 hours lead, newest prompt first; the rest follow by the most recent room start or attach.
 
 Use ↑/↓ or j/k and the mouse wheel to move, Enter or a second click on the selected card to attach, and printable keys to filter repository names and paths. Backspace edits the filter, Esc clears it before quitting, and Ctrl-C quits immediately.
 
 Each two-line card leads with the repository name and path, then shows live root-agent counts by provider. The red `●` count marks agents that need attention; `◎`, `◇`, and `$` show the headline session count, tokens, and spend from `[sidebar] spend_window`. An unreadable room snapshot leaves the stats line at `–` until the next probe.
 
-After attachment, the browser address gains that room's `?arg=` target. A dropped connection or page refresh reconnects directly into the same room; leaving through the mux detach key clears the target, returns to the live session list, and makes that list the reconnect destination again.
+After attachment, the browser address gains that room's `?room=` target and the tab reads `<repo> · RimZ`; the live-session list uses plain `RimZ`. A dropped connection or page refresh reconnects directly into the same room; leaving through the mux detach key clears the target and title, returns to the live session list, and makes that list the reconnect destination again.
 
 ## Browser appearance and input
 
@@ -130,7 +130,7 @@ rimz remote connect dev --web
 rimz remote connect dev --web --web-port 8443
 ```
 
-RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the credential plus the private tunnel target. It opens an ephemeral SSH forward to the remote ttyd listener, then serves `http://127.0.0.1:<local-port>/?arg=<session>` through a local relay that injects the credential into page and WebSocket requests. The browser receives no password prompt, and Safari works despite WebKit omitting Basic credentials from WebSocket upgrades. This path is uniform whether the remote public edge uses Basic or trusted-header auth.
+RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the credential plus the private tunnel target. It opens an ephemeral SSH forward to the remote ttyd listener, then serves `http://127.0.0.1:<local-port>/?room=<session>` through a local relay that injects the credential into page and WebSocket requests. The browser receives no password prompt, and Safari works despite WebKit omitting Basic credentials from WebSocket upgrades. This path is uniform whether the remote public edge uses Basic or trusted-header auth.
 
 The tunnel stays in the foreground and follows the normal remote recovery policy. Recovery repeats prep, so a stopped daemon comes back and a rotated credential reaches the relay; the local URL stays stable. Without `--web-port`, the local port derives from the session in 8300–8399 and scans forward when busy.
 
@@ -167,7 +167,7 @@ font = "JetBrainsMono Nerd Font Mono"
 style_client = true
 ```
 
-`interface` selects the bind address for both daemons; `port` selects the writable listener and `share_port` selects the read-only broadcast listener. `base_url` and `share_base_url` change the respective prefixes RimZ prints when a reverse proxy fronts RimZ; the `/?arg=<session>` query remains. `auth_header` puts a proxy-validated identity header at the writable authorization gate while ttyd retains Basic Auth, `auth_users` optionally restricts its exact canonical values, and non-empty `trusted_proxies` admits those source addresses to that gate.
+`interface` selects the bind address for both daemons; `port` selects the writable listener and `share_port` selects the read-only broadcast listener. `base_url` and `share_base_url` change the respective prefixes RimZ prints when a reverse proxy fronts RimZ; the `/?room=<session>` query remains. `auth_header` puts a proxy-validated identity header at the writable authorization gate while ttyd retains Basic Auth, `auth_users` optionally restricts its exact canonical values, and non-empty `trusted_proxies` admits those source addresses to that gate.
 
 ## Security boundary
 

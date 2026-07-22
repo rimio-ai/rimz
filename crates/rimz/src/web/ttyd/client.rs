@@ -24,7 +24,7 @@ use crate::web::WebWarning;
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
-const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v9";
+const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v10";
 
 const OFFLINE_ENV: &str = "RIMZ_WEB_FONTS_OFFLINE";
 const FONT_CACHE_DIR: &str = "rimz/web-fonts";
@@ -45,6 +45,8 @@ pub(in crate::web) fn profile(config: &MachineConfig, ttyd_program: &Path) -> Cl
             "macOptionIsMeta=true".to_owned(),
             "-t".to_owned(),
             "cursorBlink=false".to_owned(),
+            "-t".to_owned(),
+            "titleFixed=RimZ".to_owned(),
         ],
         warnings: Vec::new(),
         pixel_protocol: None,
@@ -289,7 +291,11 @@ window.WebSocket=class extends NativeWebSocket{{
     try{{
       const parsed=new URL(url,window.location.href);
       if(parsed.host===window.location.host&&parsed.pathname.endsWith("/ws")){{
-        parsed.search=window.location.search;
+        const search=new URLSearchParams(window.location.search);
+        if(search.has("room")){{
+          parsed.search="";
+          parsed.searchParams.set("arg",search.get("room"));
+        }}else parsed.search=window.location.search;
         target=parsed;
       }}
     }}catch(_){{}}
@@ -353,13 +359,22 @@ waitForTerminal().then(term=>{{
     return true;
   }});
   term.parser.registerOscHandler({session_osc},data=>{{
-    const prefix="rimz-session=";
-    if(!data.startsWith(prefix))return false;
-    const value=data.slice(prefix.length);
-    const url=new URL(window.location.href);
-    if(value)url.searchParams.set("arg",value);
-    else url.searchParams.delete("arg");
-    window.history.replaceState(null,"",url);
+    const sessionPrefix="rimz-session=";
+    if(data.startsWith(sessionPrefix)){{
+      const value=data.slice(sessionPrefix.length);
+      const url=new URL(window.location.href);
+      url.searchParams.delete("arg");
+      if(value)url.searchParams.set("room",value);
+      else url.searchParams.delete("room");
+      window.history.replaceState(null,"",url);
+      return true;
+    }}
+    const namePrefix="rimz-name=";
+    if(!data.startsWith(namePrefix))return false;
+    const value=data.slice(namePrefix.length);
+    let name=value;
+    try{{name=decodeURIComponent(value);}}catch(_){{}}
+    document.title=name?name+" · RimZ":"RimZ";
     return true;
   }});
   const optionsService=term._core&&term._core.optionsService;
@@ -940,7 +955,14 @@ mod tests {
         let profile = profile(&config, Path::new("/missing-ttyd"));
         assert_eq!(
             profile.args,
-            ["-t", "macOptionIsMeta=true", "-t", "cursorBlink=false"]
+            [
+                "-t",
+                "macOptionIsMeta=true",
+                "-t",
+                "cursorBlink=false",
+                "-t",
+                "titleFixed=RimZ",
+            ]
         );
         assert!(profile.warnings.is_empty());
         assert_eq!(profile.pixel_protocol, None);
@@ -976,6 +998,12 @@ mod tests {
         assert!(!rendered.contains("fillRect"));
         assert!(rendered.contains("const fittedImageRect="));
         assert!(rendered.contains("if(placement.rows>1)"));
+        assert!(rendered.contains("const sessionPrefix=\"rimz-session=\""));
+        assert!(rendered.contains("const namePrefix=\"rimz-name=\""));
+        assert!(rendered.contains("url.searchParams.delete(\"arg\")"));
+        assert!(rendered.contains("url.searchParams.set(\"room\",value)"));
+        assert!(rendered.contains("document.title=name?name+\" · RimZ\":\"RimZ\""));
+        assert!(rendered.contains("parsed.searchParams.set(\"arg\",search.get(\"room\"))"));
         assert!(!rendered.contains("rimz-pixel-blank"));
         assert!(!rendered.contains("data:font/woff2"));
     }
@@ -1018,14 +1046,14 @@ mod tests {
             weight: 400,
         }];
         let family = "RimZ \"Font\" </style></script>\n";
-        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v9");
+        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v10");
         let key = custom_index_key("ttyd 1.7.7", Some(family), &faces);
         assert_eq!(key, custom_index_key("ttyd 1.7.7", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.8", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.7", None, &faces));
         assert_ne!(
             key,
-            custom_index_key_with_schema("rimz.ttyd-index.v8", "ttyd 1.7.7", Some(family), &faces)
+            custom_index_key_with_schema("rimz.ttyd-index.v9", "ttyd 1.7.7", Some(family), &faces)
         );
 
         let bootstrap = client_bootstrap(Some(family));
@@ -1086,10 +1114,19 @@ mod tests {
         assert!(rendered.contains("term.modes.mouseTrackingMode!==\"none\""));
         assert!(rendered.contains("registerOscHandler(52"));
         assert!(rendered.contains("registerOscHandler(7717"));
-        assert!(rendered.contains("const prefix=\"rimz-session=\""));
+        assert!(rendered.contains("const sessionPrefix=\"rimz-session=\""));
+        assert!(rendered.contains("const namePrefix=\"rimz-name=\""));
+        assert!(rendered.contains("url.searchParams.delete(\"arg\")"));
+        assert!(rendered.contains("url.searchParams.set(\"room\",value)"));
+        assert!(rendered.contains("url.searchParams.delete(\"room\")"));
+        assert!(rendered.contains("decodeURIComponent(value)"));
+        assert!(rendered.contains("document.title=name?name+\" · RimZ\":\"RimZ\""));
         assert!(rendered.contains("window.history.replaceState"));
         assert!(rendered.contains("window.WebSocket=class extends NativeWebSocket"));
-        assert!(rendered.contains("parsed.search=window.location.search"));
+        assert!(rendered.contains("const search=new URLSearchParams(window.location.search)"));
+        assert!(rendered.contains("if(search.has(\"room\"))"));
+        assert!(rendered.contains("parsed.searchParams.set(\"arg\",search.get(\"room\"))"));
+        assert!(rendered.contains("else parsed.search=window.location.search"));
         assert!(rendered.contains("onSelectionChange"));
         assert!(rendered.contains("event.altKey"));
         assert!(rendered.contains("/^Digit[0-9]$/.test(event.code)&&!event.shiftKey"));

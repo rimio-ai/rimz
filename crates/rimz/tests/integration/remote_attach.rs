@@ -1257,7 +1257,7 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     );
     assert!(!browser_log.exists(), "browser waits for tunnel readiness");
 
-    let url = format!("http://127.0.0.1:{port}/?arg=rimz-project-a1b2c3");
+    let url = format!("http://127.0.0.1:{port}/?room=rimz-project-a1b2c3");
     let browser = wait_for_notify_log(&browser_log, &[&url]);
     assert_eq!(browser.trim(), url);
     assert!(
@@ -1315,7 +1315,7 @@ fn remote_web_relay_injects_auth_for_http_and_safari_websockets() {
         .expect("spawn remote web relay");
 
     wait_for_tunnel_invocation(&mut child, &log);
-    let url = format!("http://127.0.0.1:{port}/?arg=rimz-project-a1b2c3");
+    let url = format!("http://127.0.0.1:{port}/?room=rimz-project-a1b2c3");
     wait_for_notify_log(&stdout_path, &[&url]);
     assert_ne!(tunnel_forward_ports(&log), [port]);
 

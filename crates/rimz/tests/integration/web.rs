@@ -273,7 +273,7 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
     assert_eq!(
         url["url"],
         format!(
-            "https://devbox.example/rimz/?arg={}",
+            "https://devbox.example/rimz/?room={}",
             fixture.workspace.session_name
         )
     );
@@ -480,7 +480,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         assert_eq!(
             payload["url"],
             format!(
-                "http://127.0.0.1:{}/?arg={}",
+                "http://127.0.0.1:{}/?room={}",
                 fixture.web_port, workspace.session_name
             )
         );
@@ -664,7 +664,7 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
     assert_eq!(
         first_payload["url"],
         format!(
-            "https://watch.example/rimz/?arg={}",
+            "https://watch.example/rimz/?room={}",
             fixture.workspace.session_name
         )
     );
@@ -734,6 +734,13 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
         .bounded_output()
         .expect("run read-only attach shim");
     assert_success(&attach, "read-only attach shim");
+    assert_eq!(
+        String::from_utf8_lossy(&attach.stdout),
+        format!(
+            "\x1b]7717;rimz-session={}\x07\x1b]7717;rimz-name=project\x07",
+            fixture.workspace.session_name
+        )
+    );
     let tmux_log = std::fs::read_to_string(&fixture.tmux_log).expect("tmux attach log");
     assert!(
         tmux_log.contains(&format!(
@@ -1536,7 +1543,7 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
     assert_eq!(
         payload["url"],
         format!(
-            "http://127.0.0.1:{web_port}/?arg={}",
+            "http://127.0.0.1:{web_port}/?room={}",
             workspace.session_name
         )
     );

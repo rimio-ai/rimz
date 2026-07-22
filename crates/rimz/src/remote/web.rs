@@ -41,8 +41,8 @@ pub fn reserve_forward_port() -> io::Result<u16> {
 
 pub fn local_url(remote: &WebOpenPayload, local_port: u16) -> String {
     format!(
-        "http://127.0.0.1:{local_port}/?arg={}",
-        encode_query_value(&remote.session)
+        "http://127.0.0.1:{local_port}/?room={}",
+        crate::web::encode_query_value(&remote.session)
     )
 }
 
@@ -57,19 +57,6 @@ fn port_scan(preferred: u16, range: &RangeInclusive<u16>) -> impl Iterator<Item 
     let start = *range.start();
     let end = *range.end();
     (preferred..=end).chain(start..preferred)
-}
-
-fn encode_query_value(value: &str) -> String {
-    let mut out = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(char::from(byte));
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -259,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn local_url_percent_encodes_the_ttyd_session_argument() {
+    fn local_url_percent_encodes_the_browser_room() {
         let payload = WebOpenPayload::for_session(
             "rimz/a b",
             "https://remote",
@@ -270,7 +257,7 @@ mod tests {
         );
         assert_eq!(
             local_url(&payload, 8301),
-            "http://127.0.0.1:8301/?arg=rimz%2Fa%20b"
+            "http://127.0.0.1:8301/?room=rimz%2Fa%20b"
         );
     }
 

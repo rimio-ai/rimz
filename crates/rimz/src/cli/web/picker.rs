@@ -3,6 +3,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -28,7 +29,8 @@ const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const CARD_HEIGHT: usize = 3;
 const PROMPT_RECENCY_WINDOW_SECS: i64 = 24 * 60 * 60;
 const PANEL_MIN_WIDTH: u16 = 58;
-const PANEL_MAX_WIDTH: u16 = 96;
+const PANEL_MAX_WIDTH: u16 = 84;
+const PANEL_TARGET_HEIGHT: u16 = 24;
 const BANNER_GAP: u16 = 1;
 const HELP_HEIGHT: u16 = 1;
 const MIN_BLOCK_HEIGHT: u16 = 5;
@@ -78,15 +80,20 @@ pub(super) fn run(
     let mut picker = Picker::new(rejected_session);
     let mut readers = BTreeMap::new();
     let mut next_probe = Instant::now();
-    let mut initial_attach =
-        initial_attach.map(|(session, spec)| (session.to_owned(), spec.clone()));
+    let mut initial_attach = initial_attach.map(|(session, spec)| {
+        (
+            session.to_owned(),
+            session_display_name(session),
+            spec.clone(),
+        )
+    });
 
     if initial_attach.is_none() {
         write_session_sync(None)?;
     }
 
     loop {
-        let (session, spec) = if let Some(initial_attach) = initial_attach.take() {
+        let (session, display_name, spec) = if let Some(initial_attach) = initial_attach.take() {
             initial_attach
         } else {
             if Instant::now() >= next_probe {
@@ -106,9 +113,9 @@ pub(super) fn run(
             };
             match action {
                 Action::Quit => return Ok(true),
-                Action::Attach(session, mux) => {
+                Action::Attach(session, display_name, mux) => {
                     let spec = rimz::mux::backend_for(mux).attach_existing_command(&session);
-                    (session, spec)
+                    (session, display_name, spec)
                 }
             }
         };
@@ -118,7 +125,7 @@ pub(super) fn run(
             .context("web session picker lost its terminal guard")?
             .handoff_keep_screen()
             .context("handing off the web session picker")?;
-        write_session_sync(Some(&session))?;
+        write_session_sync(Some((&session, &display_name)))?;
         let outcome = spec.to_command().spawn().and_then(|mut child| child.wait());
         guard = Some(
             TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)
@@ -142,17 +149,20 @@ pub(super) fn run(
     }
 }
 
-fn session_sync_osc(session: Option<&str>) -> String {
+fn session_sync_osc(target: Option<(&str, &str)>) -> String {
+    let (session, display_name) = target.unwrap_or_default();
     format!(
-        "\x1b]{};rimz-session={}\x07",
+        "\x1b]{};rimz-session={}\x07\x1b]{};rimz-name={}\x07",
         rimz::web::TTYD_SESSION_OSC,
-        session.unwrap_or_default()
+        session,
+        rimz::web::TTYD_SESSION_OSC,
+        rimz::web::encode_query_value(display_name)
     )
 }
 
-fn write_session_sync(session: Option<&str>) -> Result<()> {
+pub(super) fn write_session_sync(target: Option<(&str, &str)>) -> Result<()> {
     let mut stdout = io::stdout().lock();
-    stdout.write_all(session_sync_osc(session).as_bytes())?;
+    stdout.write_all(session_sync_osc(target).as_bytes())?;
     stdout.flush()?;
     Ok(())
 }
@@ -283,7 +293,7 @@ struct RoomRow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Action {
-    Attach(String, MuxName),
+    Attach(String, String, MuxName),
     Quit,
 }
 
@@ -380,7 +390,11 @@ impl Picker {
             .visible()
             .into_iter()
             .find(|row| row.room.session_name == selected)?;
-        Some(Action::Attach(row.room.session_name.clone(), row.room.mux))
+        Some(Action::Attach(
+            row.room.session_name.clone(),
+            repo_name(&row.room),
+            row.room.mux,
+        ))
     }
 
     fn handle_event(&mut self, event: Event) -> Option<Action> {
@@ -530,7 +544,7 @@ fn render(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme) {
     let panel_width = if area.width < PANEL_MIN_WIDTH {
         area.width
     } else {
-        (area.width / 2)
+        (area.width.saturating_mul(2) / 5)
             .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
             .min(area.width)
     };
@@ -547,20 +561,10 @@ fn render(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme) {
         return;
     }
 
-    let visible = picker.visible().len();
-    let list_height = if visible == 0 {
-        1
-    } else {
-        visible.saturating_mul(CARD_HEIGHT).saturating_sub(1)
-    };
-    let desired_block_height =
-        u16::try_from(2usize + usize::from(picker.notice.is_some()) + list_height + 1)
-            .unwrap_or(u16::MAX)
-            .max(MIN_BLOCK_HEIGHT);
     let max_block_height = area
         .height
         .saturating_sub(banner_height + BANNER_GAP + HELP_HEIGHT);
-    let block_height = desired_block_height.min(max_block_height);
+    let block_height = PANEL_TARGET_HEIGHT.clamp(MIN_BLOCK_HEIGHT, max_block_height);
     let stack_height = banner_height + BANNER_GAP + block_height + HELP_HEIGHT;
     let top = area.height.saturating_sub(stack_height) / 3;
     let panel_x = area.x + area.width.saturating_sub(panel_width) / 2;
@@ -870,11 +874,23 @@ fn push_agent_spans(
 }
 
 fn repo_name(room: &rimz::web::LiveRoom) -> String {
-    rimz::worktree::normalize_path_lexical(&room.project_root)
+    repo_display_name(&room.project_root).unwrap_or_else(|| room.session_name.clone())
+}
+
+fn repo_display_name(project_root: &Path) -> Option<String> {
+    rimz::worktree::normalize_path_lexical(project_root)
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
-        .map_or_else(|| room.session_name.clone(), str::to_owned)
+        .map(str::to_owned)
+}
+
+pub(super) fn session_display_name(session: &str) -> String {
+    rimz::room::session::workspace_record_for_session(session)
+        .ok()
+        .flatten()
+        .and_then(|record| repo_display_name(&record.project_root))
+        .unwrap_or_else(|| session.to_owned())
 }
 
 fn room_path(room: &rimz::web::LiveRoom) -> String {
