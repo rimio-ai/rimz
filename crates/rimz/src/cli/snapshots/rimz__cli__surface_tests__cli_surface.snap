@@ -911,6 +911,8 @@ rimz help web gate [hidden]
 
 rimz help web open
 
+rimz help web restart
+
 rimz help web start
 
 rimz help web status
@@ -2009,7 +2011,8 @@ rimz web exec [hidden]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz web gate [hidden]
-    --allow <ALLOW>  [action=append takes=1..=1 required]
+    --allow <ALLOW>  [action=append takes=1..=1]
+    --auth-header <AUTH_HEADER>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
     --listen <LISTEN>  [action=set takes=1..=1 required]
@@ -2028,6 +2031,8 @@ rimz web help gate [hidden]
 rimz web help help
 
 rimz web help open
+
+rimz web help restart
 
 rimz web help start
 
@@ -2059,6 +2064,14 @@ rimz web open
     --print  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
     --session <SESSION>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz web restart
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 

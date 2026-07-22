@@ -8,7 +8,10 @@
 //! invokes the independent `rimz sidebar repair` orchestration. Held
 //! `rimz stats --refresh` dashboards re-exec in place
 //! before room enumeration. Workspaces whose session is gone have their
-//! leftovers swept. Every step is best-effort and run-once.
+//! leftovers swept. An online shared web daemon restarts onto the new build.
+//! Every step is best-effort and run-once.
+
+use std::io::Write as _;
 
 use anyhow::Result;
 use clap::Args;
@@ -26,15 +29,25 @@ pub struct ReloadArgs {
 
 pub fn run(args: ReloadArgs, globals: &GlobalFlags) -> Result<()> {
     let outcome = reload_user_sidebars()?;
-    report(&outcome)?;
+    let web_restarted = match rimz::web::restart_if_online(&super::machine_config()) {
+        Ok(Some(web)) => {
+            render::web_warnings(&web.warnings);
+            true
+        }
+        Ok(None) => false,
+        Err(err) => {
+            let _ = writeln!(std::io::stderr().lock(), "rimz: warning: {err}");
+            false
+        }
+    };
+    report(&outcome, web_restarted)?;
     if args.repair {
         super::sidebar::repair(globals)?;
     }
     Ok(())
 }
 
-fn report(outcome: &ReloadOutcome) -> Result<()> {
-    use std::io::Write;
+fn report(outcome: &ReloadOutcome, web_restarted: bool) -> Result<()> {
     let mut out = render::out();
     // Each tally reads at a glance: the count carries the accent, the verb stays plain.
     let n = |count: usize, noun: &str| {
@@ -43,9 +56,7 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
     if outcome.sessions == 0 && outcome.dead_swept == 0 && outcome.stats_reloaded == 0 {
         writeln!(out, "No running sidebars to reload.")?;
         writeln!(out, "Launch one with `rimz start` or `rimz attach`.")?;
-        return Ok(());
-    }
-    if outcome.reexeced > 0 {
+    } else if outcome.reexeced > 0 {
         writeln!(
             out,
             "Reloaded {} across {}.",
@@ -115,6 +126,9 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             "Swept {} from stopped sessions.",
             n(outcome.dead_swept, "leftover process"),
         )?;
+    }
+    if web_restarted {
+        writeln!(out, "Restarted the shared web daemon.")?;
     }
     Ok(())
 }

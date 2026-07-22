@@ -303,6 +303,73 @@ fn offline_token_operations_keep_one_singular_credential() {
 
 #[cfg(unix)]
 #[test]
+fn web_restart_starts_offline_and_replaces_online_daemons_with_the_current_profile() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-restart.log");
+    write_machine_config(
+        &fixture.env,
+        &format!("[web]\nport = {}\nstyle_client = false\n", fixture.web_port),
+    );
+
+    let offline = fixture
+        .command()
+        .args(["web", "restart"])
+        .bounded_output()
+        .expect("restart offline web daemon");
+    assert_success(&offline, "offline web restart");
+    let stdout = String::from_utf8_lossy(&offline.stdout);
+    assert!(stdout.contains("ttyd: was offline; started a fresh daemon"));
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("initial daemon record"))
+            .expect("initial daemon JSON");
+
+    write_machine_config(
+        &fixture.env,
+        &format!("[web]\nport = {}\nstyle_client = true\n", fixture.web_port),
+    );
+    let online = fixture
+        .command()
+        .args(["web", "restart"])
+        .bounded_output()
+        .expect("restart online web daemon");
+    assert_success(&online, "online web restart");
+    assert!(
+        !String::from_utf8_lossy(&online.stdout).contains("was offline"),
+        "{}",
+        String::from_utf8_lossy(&online.stdout)
+    );
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("replacement daemon record"))
+            .expect("replacement daemon JSON");
+    assert_ne!(before["pid"], after["pid"], "restart reused the daemon");
+    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read restart log");
+    let daemon_lines = log
+        .lines()
+        .filter(|line| line.contains("\tweb\texec"))
+        .collect::<Vec<_>>();
+    assert_eq!(daemon_lines.len(), 2, "{log}");
+    assert!(
+        !daemon_lines[0].contains("fontFamily="),
+        "{}",
+        daemon_lines[0]
+    );
+    assert!(
+        daemon_lines[1].contains("fontFamily="),
+        "{}",
+        daemon_lines[1]
+    );
+
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop restarted daemon");
+    assert_success(&stop, "stop restarted daemon");
+}
+
+#[cfg(unix)]
+#[test]
 fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     let _guard = daemon_test_guard();
     let fixture = WebFixture::new("ttyd-shared.log");
@@ -487,7 +554,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
 
 #[cfg(unix)]
 #[test]
-fn trusted_header_open_omits_basic_auth_and_config_drift_restarts() {
+fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
     let _guard = daemon_test_guard();
     let fixture = WebFixture::new("ttyd-trusted-header.log");
     write_machine_config(
@@ -513,7 +580,7 @@ fn trusted_header_open_omits_basic_auth_and_config_drift_restarts() {
         ),
         "{stderr}"
     );
-    assert!(!stderr.contains("password"), "{stderr}");
+    assert!(stderr.contains("user rimz, password "), "{stderr}");
 
     let json = fixture
         .command()
@@ -525,14 +592,38 @@ fn trusted_header_open_omits_basic_auth_and_config_drift_restarts() {
     let payload = success_json(&json, "trusted-header JSON open");
     assert_eq!(payload["auth"]["mode"], "trusted_header");
     assert_eq!(payload["auth"]["header"], "X-Authentik-Username");
-    assert!(payload.get("credential").is_none());
+    assert_eq!(payload["credential"]["username"], "rimz");
     assert!(
-        !fixture
+        fixture
             .env
             .state_root()
             .join("rimz/web-ttyd-credential.json")
             .exists(),
-        "trusted-header mode minted a Basic-Auth credential"
+        "trusted-header mode did not mint its upstream credential"
+    );
+
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("trusted-header daemon record"))
+            .expect("trusted-header daemon JSON");
+    assert_eq!(record["basic_upstream"], true);
+    let initial_pid = record["pid"].as_u64().expect("initial ttyd pid");
+    let gate_pid = record["gate"]["pid"].as_u64().expect("gate pid") as u32;
+    let upstream_port = record["gate"]["upstream_port"]
+        .as_u64()
+        .expect("upstream port");
+    assert_ne!(upstream_port, u64::from(fixture.web_port));
+    assert_eq!(payload["tunnel_port"], upstream_port);
+    let gate_process = rimz::proc::list_processes()
+        .into_iter()
+        .find(|process| process.pid == gate_pid)
+        .expect("live trusted-header gate");
+    assert!(
+        gate_process
+            .cmdline
+            .contains("--auth-header X-Authentik-Username"),
+        "{}",
+        gate_process.cmdline
     );
 
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read trusted-header log");
@@ -540,29 +631,43 @@ fn trusted_header_open_omits_basic_auth_and_config_drift_restarts() {
         .lines()
         .find(|line| line.contains("\tweb\texec"))
         .expect("trusted-header daemon argv");
-    assert!(
-        daemon_argv.contains("\t-H\tX-Authentik-Username\t"),
-        "{daemon_argv}"
-    );
-    assert!(!daemon_argv.contains("\t-c\t"), "{daemon_argv}");
+    assert!(daemon_argv.contains("\t-c\trimz:"), "{daemon_argv}");
+    assert!(!daemon_argv.contains("\t-H\t"), "{daemon_argv}");
+
+    record
+        .as_object_mut()
+        .expect("daemon object")
+        .remove("basic_upstream");
+    std::fs::write(
+        &daemon_path,
+        serde_json::to_vec(&record).expect("serialize stale record"),
+    )
+    .expect("write stale daemon record");
+    let migrate = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("migrate stale trusted-header record");
+    assert_success(&migrate, "stale trusted-header migration");
+    let migrated: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("migrated daemon record"))
+            .expect("migrated daemon JSON");
+    assert_ne!(migrated["pid"], initial_pid, "stale record reused ttyd");
+    assert_eq!(migrated["basic_upstream"], true);
 
     let token = fixture
         .command()
         .args(["web", "token", "create"])
         .bounded_output()
-        .expect("refuse trusted-header credential rotation");
-    assert!(!token.status.success());
+        .expect("rotate trusted-header credential");
+    assert_success(&token, "trusted-header credential rotation");
     let stderr = String::from_utf8_lossy(&token.stderr);
+    assert!(stderr.contains("user rimz, password "), "{stderr}");
     assert!(
-        stderr.contains("credential rotation is disabled"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("unset it to return to Basic Auth"),
-        "{stderr}"
+        String::from_utf8_lossy(&token.stdout)
+            .contains("rotated ttyd credential and restarted 1 daemon(s)")
     );
 
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
     let before: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("trusted-header daemon record"))
             .expect("trusted-header daemon JSON");
@@ -623,6 +728,18 @@ fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
         .as_u64()
         .expect("upstream port") as u16;
     assert_ne!(upstream_port, fixture.web_port);
+
+    let url = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "url", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .arg("--json")
+        .bounded_output()
+        .expect("inspect gated web payload");
+    let payload = success_json(&url, "gated web payload");
+    assert_eq!(payload["port"], fixture.web_port);
+    assert_eq!(payload["tunnel_port"], upstream_port);
+    assert_eq!(payload["credential"]["username"], "rimz");
 
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read gated ttyd log");
     let daemon_argv = log

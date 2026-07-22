@@ -17,6 +17,8 @@ use crate::store::atomic;
 mod gate;
 mod ttyd;
 
+pub use gate::GateAuth;
+
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 2;
 
@@ -62,10 +64,6 @@ pub enum WebErr {
         "ttyd read-only access is per process, not per credential; read-only credentials are not supported"
     )]
     TtydReadOnlyCredential,
-    #[error(
-        "credential rotation is disabled while `[web] auth_header` is set; unset it to return to Basic Auth"
-    )]
-    TrustedHeaderCredential,
     #[error(
         "[web] interface `{value}` is not an IP address; set it to an IPv4 or IPv6 address in `rimz config path`"
     )]
@@ -128,6 +126,8 @@ pub struct WebOpenPayload {
     pub session: String,
     pub port: u16,
     #[serde(default)]
+    pub tunnel_port: Option<u16>,
+    #[serde(default)]
     pub auth: WebAuth,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<WebCredential>,
@@ -138,6 +138,7 @@ impl WebOpenPayload {
         session: impl Into<String>,
         base_url: impl Into<String>,
         port: u16,
+        tunnel_port: Option<u16>,
         auth: WebAuth,
         credential: Option<WebCredential>,
     ) -> Self {
@@ -149,6 +150,7 @@ impl WebOpenPayload {
             url,
             session,
             port,
+            tunnel_port,
             auth,
             credential,
         }
@@ -191,6 +193,15 @@ pub struct WebDaemonOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebRestartOutcome {
+    pub pid: u32,
+    pub interface: String,
+    pub port: u16,
+    pub was_online: bool,
+    pub warnings: Vec<WebWarning>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CredentialSummary {
     pub name: String,
     pub created_at: Timestamp,
@@ -225,8 +236,9 @@ pub fn open_session(
             session,
             base_url,
             daemon.port,
+            Some(daemon.tunnel_port),
             daemon.auth,
-            daemon.credential,
+            Some(daemon.credential),
         ),
         warnings: daemon.warnings,
     })
@@ -239,6 +251,7 @@ pub fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenP
         session,
         base_url,
         daemon.port,
+        daemon.tunnel_port,
         daemon.auth,
         daemon.credential,
     ))
@@ -251,6 +264,28 @@ pub fn ensure_daemon(config: &MachineConfig) -> Result<WebDaemonOutcome> {
         interface: daemon.interface,
         port: daemon.port,
         warnings: daemon.warnings,
+    })
+}
+
+pub fn restart_daemon(config: &MachineConfig) -> Result<WebRestartOutcome> {
+    let (daemon, was_online) = ttyd::restart_daemon(config)?;
+    Ok(WebRestartOutcome {
+        pid: daemon.pid,
+        interface: daemon.interface,
+        port: daemon.port,
+        was_online,
+        warnings: daemon.warnings,
+    })
+}
+
+pub fn restart_if_online(config: &MachineConfig) -> Result<Option<WebDaemonOutcome>> {
+    ttyd::restart_if_online(config).map(|daemon| {
+        daemon.map(|daemon| WebDaemonOutcome {
+            pid: daemon.pid,
+            interface: daemon.interface,
+            port: daemon.port,
+            warnings: daemon.warnings,
+        })
     })
 }
 
@@ -270,12 +305,21 @@ pub fn rotate_credential(config: &MachineConfig, read_only: bool) -> Result<Cred
     })
 }
 
-pub fn serve_gate(listen: SocketAddr, upstream: SocketAddr, allow: &[String]) -> Result<()> {
+pub fn gate_authorization() -> Result<String> {
+    ttyd::authorization_header()
+}
+
+pub fn serve_gate(
+    listen: SocketAddr,
+    upstream: SocketAddr,
+    allow: &[String],
+    auth: Option<GateAuth>,
+) -> Result<()> {
     let allow = allow
         .iter()
         .map(|value| gate::Cidr::parse(value))
         .collect::<Result<Vec<_>>>()?;
-    gate::serve(listen, upstream, allow)
+    gate::serve(listen, upstream, allow, auth)
 }
 
 pub fn revoke_credential(name: Option<&str>) -> Result<bool> {
@@ -440,6 +484,7 @@ mod tests {
             "rimz-test-a1b2c3",
             "http://127.0.0.1:8200/",
             8200,
+            Some(8200),
             WebAuth::Basic,
             Some(WebCredential {
                 username: "rimz".to_owned(),
@@ -460,11 +505,13 @@ mod tests {
         assert_eq!(parsed, payload);
         assert!(parsed.version_ok());
         assert_eq!(parsed.auth, WebAuth::Basic);
+        assert_eq!(parsed.tunnel_port, Some(8200));
 
         let basic: WebOpenPayload = serde_json::from_str(
             r#"{"version":"rimz.web.v2","url":"http://localhost","session":"rimz-test","port":8200}"#,
         )
         .expect("old v2 payload");
         assert_eq!(basic.auth, WebAuth::Basic);
+        assert_eq!(basic.tunnel_port, None);
     }
 }

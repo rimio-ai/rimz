@@ -233,6 +233,7 @@ mod tests {
             "rimz/a b",
             "https://remote",
             8200,
+            Some(8200),
             crate::web::WebAuth::Basic,
             None,
         );
