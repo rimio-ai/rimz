@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 /// Browser-access preferences for the machine-wide ttyd daemon.
 ///
 /// These are per-machine preferences: the interface and port select the
-/// writable and broadcast listeners, trusted-header authentication and proxy
-/// CIDRs constrain writable access, base URLs can name private hostnames or
-/// reverse-proxy paths, font sources name read-only paths or HTTPS URLs, and no
-/// field executes a command. The section therefore stays outside the project
-/// trust hash.
+/// writable and broadcast listeners, trusted-header authentication, user
+/// allowlists, and proxy CIDRs constrain writable access, base URLs can name
+/// private hostnames or reverse-proxy paths, font sources name read-only paths
+/// or HTTPS URLs, and no field executes a command. The section therefore stays
+/// outside the project trust hash.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WebPrefs {
@@ -21,6 +21,8 @@ pub struct WebPrefs {
     pub share_base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auth_users: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trusted_proxies: Vec<String>,
     pub font: String,
@@ -39,6 +41,7 @@ impl Default for WebPrefs {
             base_url: None,
             share_base_url: None,
             auth_header: None,
+            auth_users: Vec::new(),
             trusted_proxies: Vec::new(),
             font: "JetBrainsMono Nerd Font Mono".to_owned(),
             font_source: None,

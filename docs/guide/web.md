@@ -48,7 +48,7 @@ rimz web unshare --all
 
 `share` requires an already-live RimZ room, adds only that room to a durable allowlist, starts a second ttyd daemon on `127.0.0.1:8201` by default, and prints its viewer URL. The viewer daemon has no Basic-Auth prompt and drops all browser input; it cannot reach another live room by changing `?arg=` because its shim accepts only allowlisted sessions and gives the same generic refusal for unknown, stopped, and unshared names.
 
-The viewer link is deliberately unauthenticated. Keep the listener on loopback for local viewing, or put HTTPS and any desired viewer authentication in a reverse proxy before exposing it. Set `share_base_url` to the proxy's public prefix; `auth_header` and `trusted_proxies` govern only the writable listener. A shared room on a non-loopback `interface` prints a warning that anyone who can reach `share_port` can watch.
+The viewer link is deliberately unauthenticated. Keep the listener on loopback for local viewing, or put HTTPS and any desired viewer authentication in a reverse proxy before exposing it. Set `share_base_url` to the proxy's public prefix; `auth_header`, `auth_users`, and `trusted_proxies` govern only the writable listener. A shared room on a non-loopback `interface` prints a warning that anyone who can reach `share_port` can watch.
 
 `unshare` restarts the broadcast daemon while other rooms remain shared, which disconnects every existing viewer and lets still-shared tabs reconnect. Removing the last room or using `--all` stops the daemon. The allowlist survives `rimz web stop`; `rimz web status` shows both its retained sessions and whether the broadcast daemon is online.
 
@@ -82,12 +82,15 @@ rimz web restart
 
 A reverse proxy can terminate HTTPS and let an Authentik forward-auth decision identify the user while ttyd keeps its machine-wide Basic Auth behind that public edge. Set Authentik's Traefik forward-auth middleware to return `X-Authentik-Username` in its auth response headers, attach that middleware to the router serving RimZ, and make the proxy overwrite or remove any client-supplied copy of that header before forwarding.
 
+Bind an Authentik access policy to the RimZ application as the primary control over who reaches the proxy. RimZ's `auth_users` allowlist adds defense in depth at the writable terminal itself; list each allowed identity with the exact canonical username spelling Authentik emits.
+
 Point RimZ at the public URL and name the header the proxy injects:
 
 ```toml
 [web]
 base_url = "https://shell.example.com/rimz"
 auth_header = "X-Authentik-Username"
+auth_users = ["alice"]
 ```
 
 When Traefik runs on the same host and reaches the host through a Docker bridge, expose the listener and admit only that bridge CIDR:
@@ -96,11 +99,12 @@ When Traefik runs on the same host and reaches the host through a Docker bridge,
 [web]
 base_url = "https://shell.example.com/rimz"
 auth_header = "X-Authentik-Username"
+auth_users = ["alice"]
 interface = "0.0.0.0"
 trusted_proxies = ["172.18.0.0/16"]
 ```
 
-RimZ starts Basic-authenticated ttyd on an ephemeral loopback port and a small authorization gate on `0.0.0.0:8200`. The gate accepts only loopback or configured source CIDRs, requires a non-empty `X-Authentik-Username` on every HTTP request, strips client-supplied `Authorization`, and presents ttyd's Basic credential upstream. Use the proxy host's address or subnet for a proxy on another LAN or VPC host. Keep the host firewall restricted to the same sources; `trusted_proxies` sees the TCP peer address, so configure the CIDR for the address that actually reaches RimZ after container and host networking.
+RimZ starts Basic-authenticated ttyd on an ephemeral loopback port and a small authorization gate on `0.0.0.0:8200`. The gate accepts only loopback or configured source CIDRs, requires exactly one non-empty `X-Authentik-Username` on every HTTP request, matches its trimmed value byte-for-byte and case-sensitively against `auth_users`, strips client-supplied `Authorization`, and presents ttyd's Basic credential upstream. An empty or absent `auth_users` allows any single non-empty identity for compatibility. Use the proxy host's address or subnet for a proxy on another LAN or VPC host. Keep the host firewall restricted to the same sources; `trusted_proxies` sees the TCP peer address, so configure the CIDR for the address that actually reaches RimZ after container and host networking.
 
 Restart after changing the auth or listener shape:
 
@@ -108,7 +112,7 @@ Restart after changing the auth or listener shape:
 rimz web restart
 ```
 
-The gate accepts any non-empty value in the configured header after validating the peer address, so make the authenticating proxy the only non-loopback source that can reach the port. An empty `trusted_proxies` list accepts only a proxy connecting from loopback. The gate admits loopback as a source but still requires the header there; the private ttyd listener separately requires Basic Auth.
+The gate rejects missing, empty, duplicated, and non-allowlisted identity headers after validating the peer address. An empty `trusted_proxies` list accepts only a proxy connecting from loopback. The gate admits loopback as a source but still requires exactly one identity header there; the private ttyd listener separately requires Basic Auth.
 
 The trusted-header decision applies only at the public gate. `rimz remote connect --web` tunnels through SSH directly to the private ttyd listener and uses the printed machine credential, so it works the same way in Basic and trusted-header configurations.
 
@@ -149,13 +153,14 @@ interface = "127.0.0.1"
 # base_url = "https://devbox.example/rimz"
 # share_base_url = "https://watch.example/rimz"
 # auth_header = "X-Authentik-Username"
+# auth_users = ["alice"]
 # trusted_proxies = ["172.18.0.0/16"]
 font = "JetBrainsMono Nerd Font Mono"
 # font_source = "/path/to/font.woff2"
 style_client = true
 ```
 
-`interface` selects the bind address for both daemons; `port` selects the writable listener and `share_port` selects the read-only broadcast listener. `base_url` and `share_base_url` change the respective prefixes RimZ prints when a reverse proxy fronts RimZ; the `/?arg=<session>` query remains. `auth_header` puts a proxy-validated identity header at the writable authorization gate while ttyd retains Basic Auth, and non-empty `trusted_proxies` admits those source addresses to that gate.
+`interface` selects the bind address for both daemons; `port` selects the writable listener and `share_port` selects the read-only broadcast listener. `base_url` and `share_base_url` change the respective prefixes RimZ prints when a reverse proxy fronts RimZ; the `/?arg=<session>` query remains. `auth_header` puts a proxy-validated identity header at the writable authorization gate while ttyd retains Basic Auth, `auth_users` optionally restricts its exact canonical values, and non-empty `trusted_proxies` admits those source addresses to that gate.
 
 ## Security boundary
 

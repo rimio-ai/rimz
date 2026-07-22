@@ -61,6 +61,8 @@ enum WebSubcmd {
         allow: Vec<String>,
         #[arg(long)]
         auth_header: Option<String>,
+        #[arg(long = "auth-user")]
+        auth_users: Vec<String>,
     },
 }
 
@@ -179,11 +181,13 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
             upstream,
             allow,
             auth_header,
+            auth_users,
         } => {
             let auth = auth_header
                 .map(|header_name| -> rimz::web::Result<_> {
                     Ok(rimz::web::GateAuth {
                         header_name,
+                        allowed_users: auth_users,
                         authorization: rimz::web::gate_authorization()?,
                     })
                 })

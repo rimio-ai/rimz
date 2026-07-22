@@ -71,6 +71,7 @@ fn template_covers_serialized_default_leaves() {
 
     let allowed_template_only = BTreeSet::from([
         "web.auth_header".to_owned(),
+        "web.auth_users".to_owned(),
         "web.base_url".to_owned(),
         "web.font_source".to_owned(),
         "web.share_base_url".to_owned(),

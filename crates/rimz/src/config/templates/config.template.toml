@@ -84,7 +84,8 @@
 # interface = "127.0.0.1"             # listener IP; use a non-loopback address only with a firewall or trusted_proxies
 ## base_url = "https://devbox.example/rimz" # public URL when a reverse proxy fronts ttyd
 ## share_base_url = "https://watch.example/rimz" # public URL when a reverse proxy fronts read-only broadcasts
-## auth_header = "X-Authentik-Username" # delegate auth to a proxy that injects this trusted header; disables Basic Auth
+## auth_header = "X-Authentik-Username" # delegate public auth to a proxy that injects this trusted header
+## auth_users = ["alice"]               # optional exact-match allowlist for the proxy's canonical usernames
 ## trusted_proxies = ["172.18.0.0/16"] # source CIDRs allowed to reach ttyd; loopback is always allowed
 # font = "JetBrainsMono Nerd Font Mono" # browser terminal font; built-in JetBrainsMono and CaskaydiaCove Nerd Font Mono presets download automatically
 ## font_source = "/path/to/font.woff2" # optional local font file or https URL; declared under the configured font family
