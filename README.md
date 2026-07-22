@@ -46,7 +46,7 @@ That same small footprint carries the primitives **harness engineering** and **l
 
 ## Project status
 
-RimZ is **alpha software**, moving fast. Expect rough edges and the occasional bug, and expect the surface to shift: commands, flags, config keys, and output formats can change between releases while the design settles. The [changelog](./CHANGELOG.md) records what moved in each release.
+RimZ is **beta software**: the basic features work smoothly for daily use, and it is still moving fast. Expect the occasional rough edge, and expect the surface to keep shifting while the design settles — commands, flags, config keys, and output formats can change between releases. The [changelog](./CHANGELOG.md) records what moved in each release.
 
 It is also heavily used, on itself. RimZ is built with RimZ: the fleet behind this repository routinely runs 50–100 concurrent agents across 10–30 parallel worktrees and PRs, and a single room stays responsive with 100+ agents from multiple providers working at once. Driven through teams and loops, most of the routine engineering here — features, bug fixes, CI repair — already flows through the harness with little hand-holding.
 

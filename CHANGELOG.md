@@ -1,10 +1,14 @@
 # Changelog
 
-What changed in each RimZ release, written for the people who run it. Every release is a git tag: `v0.4.1` tags the `0.4.1` workspace version, `v0.4` tags `0.4.0`, `v0.3` tags `0.3.0`. Each heading links to that release's full diff.
+What changed in each RimZ release, written for the people who run it. Every release is a git tag: `v0.4.2` tags the `0.4.2` workspace version, `v0.4.1` tags `0.4.1`, `v0.4` tags `0.4.0`. Each heading links to that release's full diff.
 
-RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output formats can change between releases while the design settles, so read the "Changed" section of a release before upgrading. Entries describe what you can do differently; the reasoning behind a change lives in the linked guide.
+RimZ is beta software on the 0.x line. Commands, flags, config keys, and output formats can change between releases while the design settles, so read the "Changed" section of a release before upgrading. Entries describe what you can do differently; the reasoning behind a change lives in the linked guide.
 
 ## Unreleased
+
+## [0.4.2] (2026-07-22)
+
+The browser gets a real front door: the web daemon's base URL opens a themed live-session manager that lists and ranks your rooms, and `rimz web share` broadcasts a room read-only through a second, input-blocked daemon. Around it, agent lifecycle transitions stream as JSON Lines, layout cells accept any executable on PATH, the sidebar shows branch CI before a pull request exists, and a broad pass steadies browser fonts, cursors, input, and remote tunnel auth.
 
 ### Added
 
@@ -178,6 +182,7 @@ What shipped:
 - Theming and pets: bundled palettes, color-depth and slot overrides, custom themes, provider branding, and an animated companion on the provider dashboard. → [theme](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
 - `rimz doctor`, `rimz setup`, hook install and uninstall, project trust, and a documented reset and GC path. → [troubleshooting](./docs/guide/troubleshooting.md) · [security](./docs/guide/security.md)
 
+[0.4.2]: https://github.com/rimio-ai/rimz/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/rimio-ai/rimz/compare/v0.4...v0.4.1
 [0.4.0]: https://github.com/rimio-ai/rimz/compare/v0.3...v0.4
 [0.3.0]: https://github.com/rimio-ai/rimz/compare/v0.2...v0.3
