@@ -313,7 +313,7 @@ fn empty_close_suppresses_widened_paint_until_exit() {
 fn resize_reprobe_adopts_probed_pet_render_caps() {
     let enabled = PixelRenderCaps {
         pixel_transport: true,
-        kitty_term: true,
+        kitty_clients: true,
     };
 
     for (label, initial, probed) in [
@@ -348,4 +348,34 @@ fn resize_reprobe_adopts_probed_pet_render_caps() {
         );
         assert_eq!(rig.state.paint.caps(), probed, "{label}");
     }
+}
+
+#[test]
+fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
+    let mut rig = Rig::new();
+    let enabled = PixelRenderCaps {
+        pixel_transport: true,
+        kitty_clients: true,
+    };
+    let stale = std::time::Instant::now() + std::time::Duration::from_secs(11);
+
+    assert!(rig.state.refresh_pet_render_caps_if_stale_with(
+        crate::MuxName::Tmux,
+        "rimz-test",
+        stale,
+        |_, _, _| enabled,
+    ));
+    assert_eq!(rig.state.paint.caps(), enabled);
+    assert!(!rig.state.refresh_pet_render_caps_if_stale_with(
+        crate::MuxName::Tmux,
+        "rimz-test",
+        stale,
+        |_, _, _| panic!("fresh caps must not re-probe"),
+    ));
+    assert!(!rig.state.refresh_pet_render_caps_if_stale_with(
+        crate::MuxName::Zellij,
+        "rimz-test",
+        stale + std::time::Duration::from_secs(11),
+        |_, _, _| panic!("Zellij caps must not re-probe"),
+    ));
 }

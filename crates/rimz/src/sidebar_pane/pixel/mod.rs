@@ -18,7 +18,7 @@ pub(crate) const BEGIN_SYNC: &[u8] = b"\x1b[?2026h";
 pub(crate) const END_SYNC: &[u8] = b"\x1b[?2026l";
 const CHUNK_SIZE: usize = 4096;
 pub(crate) const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
-const PLACEHOLDER: char = '\u{10eeee}';
+pub(crate) const PLACEHOLDER: char = '\u{10eeee}';
 pub(crate) const RESIDENT_REFRESH_MS: u64 = 2000;
 pub(crate) const MIN_RESEND_SPACING_MS: u64 = 250;
 
@@ -206,7 +206,7 @@ pub(crate) struct ImageRequest<K, C> {
 }
 
 // Kitty's complete rowcolumn-diacritics list, derived from Unicode 6.0.
-const ROW_COLUMN_DIACRITICS: [char; 297] = [
+pub(crate) const ROW_COLUMN_DIACRITICS: [char; 297] = [
     '\u{0305}',
     '\u{030d}',
     '\u{030e}',

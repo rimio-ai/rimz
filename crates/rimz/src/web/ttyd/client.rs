@@ -18,6 +18,7 @@ use super::{
     DaemonRecord, START_TIMEOUT, choose_ephemeral_port, random_secret, spawn_detached,
     terminate_record, version_at, wait_for_port,
 };
+use crate::sidebar_pane::pixel::{PLACEHOLDER, ROW_COLUMN_DIACRITICS};
 use crate::web::WebWarning;
 
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
@@ -34,6 +35,7 @@ const MAX_FONT_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) struct ClientProfile {
     pub(super) args: Vec<String>,
     pub(super) warnings: Vec<WebWarning>,
+    pub(super) pixel_protocol: Option<u32>,
 }
 
 pub(super) fn profile(config: &MachineConfig, ttyd_program: &Path) -> ClientProfile {
@@ -45,6 +47,7 @@ pub(super) fn profile(config: &MachineConfig, ttyd_program: &Path) -> ClientProf
             "cursorBlink=false".to_owned(),
         ],
         warnings: Vec::new(),
+        pixel_protocol: None,
     };
     if !config.web.enabled {
         return profile;
@@ -89,16 +92,23 @@ pub(super) fn profile(config: &MachineConfig, ttyd_program: &Path) -> ClientProf
     let index = version_at(ttyd_program)
         .map_err(|err| err.to_string())
         .and_then(|version| ensure_custom_index(ttyd_program, &version, font_family, &font_faces));
+    apply_custom_index(&mut profile, index);
+    profile
+}
+
+fn apply_custom_index(profile: &mut ClientProfile, index: Result<Option<PathBuf>, String>) {
     match index {
-        Ok(Some(path)) => profile
-            .args
-            .extend(["-I".to_owned(), path.display().to_string()]),
+        Ok(Some(path)) => {
+            profile
+                .args
+                .extend(["-I".to_owned(), path.display().to_string()]);
+            profile.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL);
+        }
         Ok(None) => profile.warnings.push(WebWarning::BrowserClientSkipped(
             "stock ttyd index has no </head> or </body> marker".to_owned(),
         )),
         Err(err) => profile.warnings.push(WebWarning::BrowserClientSkipped(err)),
     }
-    profile
 }
 
 fn ensure_custom_index(
@@ -177,8 +187,17 @@ fn get_stock_index(port: u16, secret: &str) -> Result<String, String> {
 }
 
 fn custom_index_key(ttyd_version: &str, family: Option<&str>, faces: &[FontFace]) -> String {
+    custom_index_key_with_schema(CUSTOM_INDEX_SCHEMA, ttyd_version, family, faces)
+}
+
+fn custom_index_key_with_schema(
+    schema: &str,
+    ttyd_version: &str,
+    family: Option<&str>,
+    faces: &[FontFace],
+) -> String {
     let mut hasher = Sha256::new();
-    hash_index_part(&mut hasher, CUSTOM_INDEX_SCHEMA.as_bytes());
+    hash_index_part(&mut hasher, schema.as_bytes());
     hash_index_part(&mut hasher, ttyd_version.as_bytes());
     hash_index_part(&mut hasher, family.unwrap_or_default().as_bytes());
     for face in faces {
@@ -233,10 +252,23 @@ fn inject_client_profile(stock: &str, family: Option<&str>, faces: &[FontFace]) 
 
 fn client_bootstrap(family: Option<&str>) -> String {
     let family = family.map_or_else(|| "null".to_owned(), js_string);
+    let diacritics = ROW_COLUMN_DIACRITICS
+        .iter()
+        .map(char::to_string)
+        .collect::<Vec<_>>();
+    let diacritics = serde_json::to_string(&diacritics)
+        .expect("serializing the static pixel diacritic table cannot fail");
+    let pixel_layer = include_str!("pixel_layer.js");
+    let pixel_protocol = crate::web::TTYD_PIXEL_PROTOCOL;
+    let placeholder = u32::from(PLACEHOLDER);
     format!(
         r#"<script id="rimz-web-client">(()=>{{
 "use strict";
 const fontFamily={family};
+const RIMZ_PIXEL_PROTOCOL={pixel_protocol};
+const RIMZ_PIXEL_PLACEHOLDER={placeholder};
+const RIMZ_PIXEL_DIACRITICS={diacritics};
+{pixel_layer}
 const waitForTerminal=()=>new Promise(resolve=>{{
   let attempts=0;
   const find=()=>{{
@@ -249,6 +281,7 @@ const loadFont=fontFamily&&document.fonts
   ?Promise.all([400,700].map(weight=>document.fonts.load(`${{weight}} 13px ${{JSON.stringify(fontFamily)}}`))).catch(()=>{{}})
   :Promise.resolve();
 waitForTerminal().then(term=>{{
+  installPixelLayer(term);
   const sendInput=data=>{{
     if(typeof term.input==="function"){{term.input(data,true);return true;}}
     const core=term._core&&term._core.coreService;
@@ -819,6 +852,7 @@ mod tests {
             ["-t", "macOptionIsMeta=true", "-t", "cursorBlink=false"]
         );
         assert!(profile.warnings.is_empty());
+        assert_eq!(profile.pixel_protocol, None);
     }
 
     #[test]
@@ -828,7 +862,41 @@ mod tests {
         assert!(rendered.contains("rimz-web-client"));
         assert!(rendered.contains("term.options.cursorBlink=false"));
         assert!(rendered.contains("registerCsiHandler({intermediates:\" \",final:\"q\"}"));
+        assert!(rendered.contains("const installPixelLayer=term=>"));
+        assert!(rendered.contains("installPixelLayer(term)"));
+        assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
+        assert!(rendered.contains("const RIMZ_PIXEL_DIACRITICS=[\"̅\",\"̍\",\"̎\""));
         assert!(!rendered.contains("@font-face"));
+    }
+
+    #[test]
+    fn pixel_protocol_requires_a_generated_custom_index() {
+        let base = || ClientProfile {
+            args: Vec::new(),
+            warnings: Vec::new(),
+            pixel_protocol: None,
+        };
+
+        let mut capable = base();
+        apply_custom_index(&mut capable, Ok(Some(PathBuf::from("/cache/index.html"))));
+        assert_eq!(
+            capable.args,
+            ["-I".to_owned(), "/cache/index.html".to_owned()]
+        );
+        assert_eq!(
+            capable.pixel_protocol,
+            Some(crate::web::TTYD_PIXEL_PROTOCOL)
+        );
+
+        let mut markerless = base();
+        apply_custom_index(&mut markerless, Ok(None));
+        assert_eq!(markerless.pixel_protocol, None);
+        assert_eq!(markerless.warnings.len(), 1);
+
+        let mut failed = base();
+        apply_custom_index(&mut failed, Err("fetch failed".to_owned()));
+        assert_eq!(failed.pixel_protocol, None);
+        assert_eq!(failed.warnings.len(), 1);
     }
 
     #[test]
@@ -844,6 +912,10 @@ mod tests {
         assert_eq!(key, custom_index_key("ttyd 1.7.7", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.8", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.7", None, &faces));
+        assert_ne!(
+            key,
+            custom_index_key_with_schema("rimz.ttyd-index.v3", "ttyd 1.7.7", Some(family), &faces)
+        );
 
         let rendered = inject_client_profile(
             "<html><head><title>ttyd</title></head><body></body></html>",

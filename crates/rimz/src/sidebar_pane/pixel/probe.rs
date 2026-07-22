@@ -11,7 +11,13 @@ const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PixelRenderCaps {
     pub pixel_transport: bool,
-    pub kitty_term: bool,
+    pub kitty_clients: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RenderingClient {
+    termname: String,
+    pid: u32,
 }
 
 pub(crate) fn detect(mux: MuxName, session_name: &str, prev: PixelRenderCaps) -> PixelRenderCaps {
@@ -26,8 +32,10 @@ trait Probe {
     fn tmux_version(&self) -> io::Result<String>;
     fn tmux_allow_passthrough(&self, target: &str) -> io::Result<String>;
     fn tmux_set_pane_passthrough_all(&self, pane: &str) -> io::Result<()>;
-    fn tmux_client_termnames(&self, session_name: &str) -> io::Result<Vec<String>>;
+    fn tmux_rendering_clients(&self, session_name: &str) -> io::Result<Vec<RenderingClient>>;
     fn tmux_session_name(&self) -> io::Result<String>;
+    fn processes(&self) -> Vec<crate::proc::ProcInfo>;
+    fn pixel_daemon_record(&self) -> Option<(u32, u32)>;
     fn env_var(&self, key: &str) -> Option<String>;
 }
 
@@ -72,9 +80,9 @@ fn detect_env_with(probe: &impl Probe) -> (PixelRenderCaps, bool) {
 }
 
 fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PixelRenderCaps) -> PixelRenderCaps {
-    let kitty_term = match probe.tmux_client_termnames(session_name) {
-        Ok(termnames) if !termnames.is_empty() => termnames_allowed(&termnames),
-        _ => prev.kitty_term,
+    let kitty_clients = match probe.tmux_rendering_clients(session_name) {
+        Ok(clients) if !clients.is_empty() => rendering_clients_allowed(&clients, probe),
+        _ => prev.kitty_clients,
     };
     let passthrough_target = probe
         .env_var("TMUX_PANE")
@@ -94,7 +102,7 @@ fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PixelRenderCaps) ->
     };
     PixelRenderCaps {
         pixel_transport,
-        kitty_term,
+        kitty_clients,
     }
 }
 
@@ -105,7 +113,7 @@ fn detect_zellij(_probe: &impl Probe) -> PixelRenderCaps {
 fn detect_standalone(probe: &impl Probe) -> PixelRenderCaps {
     PixelRenderCaps {
         pixel_transport: true,
-        kitty_term: standalone_term_allowed(probe),
+        kitty_clients: standalone_term_allowed(probe),
     }
 }
 
@@ -141,19 +149,27 @@ impl Probe for LiveProbe {
         run_tmux(["set-option", "-p", "-t", pane, "allow-passthrough", "all"]).map(|_| ())
     }
 
-    fn tmux_client_termnames(&self, session_name: &str) -> io::Result<Vec<String>> {
+    fn tmux_rendering_clients(&self, session_name: &str) -> io::Result<Vec<RenderingClient>> {
         run_tmux([
             "list-clients",
             "-t",
             session_name,
             "-F",
-            "#{client_control_mode} #{client_termname}",
+            "#{client_control_mode} #{client_termname} #{client_pid}",
         ])
-        .map(|out| rendering_termnames(&out))
+        .map(|out| rendering_clients(&out))
     }
 
     fn tmux_session_name(&self) -> io::Result<String> {
         run_tmux(["display-message", "-p", "#{session_name}"])
+    }
+
+    fn processes(&self) -> Vec<crate::proc::ProcInfo> {
+        crate::proc::list_processes()
+    }
+
+    fn pixel_daemon_record(&self) -> Option<(u32, u32)> {
+        crate::web::pixel_daemon_record()
     }
 
     fn env_var(&self, key: &str) -> Option<String> {
@@ -169,16 +185,59 @@ fn run_tmux<const N: usize>(args: [&str; N]) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn termnames_allowed(termnames: &[String]) -> bool {
-    termnames.iter().all(|termname| termname_allowed(termname))
+fn rendering_clients_allowed(clients: &[RenderingClient], probe: &impl Probe) -> bool {
+    if clients
+        .iter()
+        .all(|client| termname_allowed(&client.termname))
+    {
+        return true;
+    }
+    let Some((daemon_pid, protocol)) = probe.pixel_daemon_record() else {
+        return false;
+    };
+    if protocol != crate::web::TTYD_PIXEL_PROTOCOL {
+        return false;
+    }
+    let processes = probe.processes();
+    let daemon_live = processes.iter().any(|process| {
+        process.pid == daemon_pid && crate::proc::command::program_label(&process.cmdline) == "ttyd"
+    });
+    daemon_live
+        && clients.iter().all(|client| {
+            termname_allowed(&client.termname) || descends_from(client.pid, daemon_pid, &processes)
+        })
 }
 
-fn rendering_termnames(list_clients_output: &str) -> Vec<String> {
+fn descends_from(pid: u32, ancestor: u32, processes: &[crate::proc::ProcInfo]) -> bool {
+    let mut current = pid;
+    for _ in 0..4 {
+        let Some(process) = processes.iter().find(|process| process.pid == current) else {
+            return false;
+        };
+        if process.ppid == ancestor {
+            return true;
+        }
+        if process.ppid == current {
+            return false;
+        }
+        current = process.ppid;
+    }
+    false
+}
+
+fn rendering_clients(list_clients_output: &str) -> Vec<RenderingClient> {
     list_clients_output
         .lines()
         .filter_map(|line| {
-            let (control_mode, termname) = line.split_once(' ')?;
-            (control_mode.trim() != "1").then(|| termname.trim().to_owned())
+            let mut fields = line.split_whitespace();
+            let control_mode = fields.next()?;
+            if control_mode == "1" {
+                return None;
+            }
+            Some(RenderingClient {
+                termname: fields.next().unwrap_or_default().to_owned(),
+                pid: fields.next().and_then(|pid| pid.parse().ok()).unwrap_or(0),
+            })
         })
         .collect()
 }
@@ -191,467 +250,4 @@ fn termname_allowed(termname: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::collections::BTreeMap;
-
-    const TEST_SESSION: &str = "rimz-test";
-
-    struct FakeProbe {
-        version: Option<String>,
-        allow_passthrough: Option<String>,
-        expected_session: String,
-        termnames: Option<Vec<String>>,
-        session_name: Option<String>,
-        env: BTreeMap<String, String>,
-        passthrough_targets: RefCell<Vec<String>>,
-        passthrough_all_panes: RefCell<Vec<String>>,
-    }
-
-    impl FakeProbe {
-        fn ok() -> Self {
-            Self {
-                version: Some("tmux 3.6b".to_owned()),
-                allow_passthrough: Some("on".to_owned()),
-                expected_session: TEST_SESSION.to_owned(),
-                termnames: Some(vec!["xterm-ghostty".to_owned()]),
-                session_name: Some(TEST_SESSION.to_owned()),
-                env: BTreeMap::new(),
-                passthrough_targets: RefCell::new(Vec::new()),
-                passthrough_all_panes: RefCell::new(Vec::new()),
-            }
-        }
-
-        fn with_env(mut self, key: &str, value: &str) -> Self {
-            self.env.insert(key.to_owned(), value.to_owned());
-            self
-        }
-    }
-
-    impl Probe for FakeProbe {
-        fn tmux_version(&self) -> io::Result<String> {
-            self.version
-                .clone()
-                .ok_or_else(|| io::Error::other("tmux version unavailable"))
-        }
-
-        fn tmux_allow_passthrough(&self, target: &str) -> io::Result<String> {
-            self.passthrough_targets
-                .borrow_mut()
-                .push(target.to_owned());
-            self.allow_passthrough
-                .clone()
-                .ok_or_else(|| io::Error::other("tmux passthrough unavailable"))
-        }
-
-        fn tmux_set_pane_passthrough_all(&self, pane: &str) -> io::Result<()> {
-            self.passthrough_all_panes
-                .borrow_mut()
-                .push(pane.to_owned());
-            Ok(())
-        }
-
-        fn tmux_client_termnames(&self, session_name: &str) -> io::Result<Vec<String>> {
-            assert_eq!(session_name, self.expected_session);
-            self.termnames
-                .clone()
-                .ok_or_else(|| io::Error::other("tmux termnames unavailable"))
-        }
-
-        fn tmux_session_name(&self) -> io::Result<String> {
-            self.session_name
-                .clone()
-                .ok_or_else(|| io::Error::other("tmux session unavailable"))
-        }
-
-        fn env_var(&self, key: &str) -> Option<String> {
-            self.env.get(key).cloned()
-        }
-    }
-
-    #[test]
-    fn tmux_passthrough_probe_targets_own_pane_then_session() {
-        let own_pane = FakeProbe::ok().with_env("TMUX_PANE", "%7");
-        detect_with(
-            MuxName::Tmux,
-            TEST_SESSION,
-            PixelRenderCaps::default(),
-            &own_pane,
-        );
-        assert_eq!(&*own_pane.passthrough_targets.borrow(), &["%7"]);
-
-        let session = FakeProbe::ok();
-        detect_with(
-            MuxName::Tmux,
-            TEST_SESSION,
-            PixelRenderCaps::default(),
-            &session,
-        );
-        assert_eq!(
-            &*session.passthrough_targets.borrow(),
-            &[TEST_SESSION.to_owned()]
-        );
-    }
-
-    #[test]
-    fn tmux_sidebar_escalates_own_inherited_passthrough() {
-        let probe = FakeProbe::ok().with_env("TMUX_PANE", "%7");
-
-        escalate_with(&probe).expect("escalation");
-
-        assert_eq!(&*probe.passthrough_targets.borrow(), &["%7"]);
-        assert_eq!(&*probe.passthrough_all_panes.borrow(), &["%7"]);
-    }
-
-    #[test]
-    fn tmux_sidebar_preserves_all_off_and_missing_pane() {
-        for allow_passthrough in ["all", "off"] {
-            let probe = FakeProbe {
-                allow_passthrough: Some(allow_passthrough.to_owned()),
-                ..FakeProbe::ok().with_env("TMUX_PANE", "%7")
-            };
-
-            escalate_with(&probe).expect("no-op");
-
-            assert_eq!(&*probe.passthrough_targets.borrow(), &["%7"]);
-            assert!(probe.passthrough_all_panes.borrow().is_empty());
-        }
-
-        let missing_pane = FakeProbe::ok();
-        escalate_with(&missing_pane).expect("no-op");
-        assert!(missing_pane.passthrough_targets.borrow().is_empty());
-        assert!(missing_pane.passthrough_all_panes.borrow().is_empty());
-    }
-
-    #[test]
-    fn tmux_pixel_gate_requires_version_passthrough_and_allowed_termname() {
-        assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &FakeProbe::ok()
-            ),
-            PixelRenderCaps {
-                pixel_transport: true,
-                kitty_term: true,
-            }
-        );
-
-        assert_eq!(
-            detect_with(
-                MuxName::Zellij,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &FakeProbe::ok().with_env("TERM", "xterm-ghostty")
-            ),
-            PixelRenderCaps::default()
-        );
-
-        let old = FakeProbe {
-            version: Some("tmux 3.5a".to_owned()),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &old
-            ),
-            PixelRenderCaps {
-                pixel_transport: false,
-                kitty_term: true,
-            }
-        );
-
-        let off = FakeProbe {
-            allow_passthrough: Some("off".to_owned()),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &off
-            ),
-            PixelRenderCaps {
-                pixel_transport: false,
-                kitty_term: true,
-            }
-        );
-
-        let all = FakeProbe {
-            allow_passthrough: Some("all\n".to_owned()),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &all
-            ),
-            PixelRenderCaps {
-                pixel_transport: true,
-                kitty_term: true,
-            }
-        );
-
-        let unsupported_term = FakeProbe {
-            termnames: Some(vec!["screen-256color".to_owned()]),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &unsupported_term
-            ),
-            PixelRenderCaps {
-                pixel_transport: true,
-                kitty_term: false,
-            }
-        );
-
-        let unattached = FakeProbe {
-            termnames: Some(Vec::new()),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &unattached
-            ),
-            PixelRenderCaps {
-                pixel_transport: true,
-                kitty_term: false,
-            }
-        );
-    }
-
-    #[test]
-    fn tmux_probe_failures_keep_previous_fact_values() {
-        let prev = PixelRenderCaps {
-            pixel_transport: true,
-            kitty_term: true,
-        };
-
-        let version_error = FakeProbe {
-            version: None,
-            termnames: Some(vec!["screen-256color".to_owned()]),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, prev, &version_error),
-            PixelRenderCaps {
-                pixel_transport: true,
-                kitty_term: false,
-            }
-        );
-
-        let passthrough_error = FakeProbe {
-            allow_passthrough: None,
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, prev, &passthrough_error),
-            prev
-        );
-
-        let term_error = FakeProbe {
-            termnames: None,
-            allow_passthrough: Some("off".to_owned()),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, prev, &term_error),
-            PixelRenderCaps {
-                pixel_transport: false,
-                kitty_term: true,
-            }
-        );
-    }
-
-    #[test]
-    fn tmux_empty_rendering_client_list_keeps_previous_kitty_fact() {
-        let prev = PixelRenderCaps {
-            pixel_transport: false,
-            kitty_term: true,
-        };
-        let unattached = FakeProbe {
-            termnames: Some(Vec::new()),
-            ..FakeProbe::ok()
-        };
-
-        assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, prev, &unattached),
-            PixelRenderCaps {
-                pixel_transport: true,
-                kitty_term: true,
-            }
-        );
-    }
-
-    #[test]
-    fn tmux_successful_probe_overrides_previous_facts() {
-        let prev = PixelRenderCaps {
-            pixel_transport: true,
-            kitty_term: true,
-        };
-        let unsupported = FakeProbe {
-            version: Some("tmux 3.5a".to_owned()),
-            allow_passthrough: Some("off".to_owned()),
-            termnames: Some(vec!["screen-256color".to_owned()]),
-            ..FakeProbe::ok()
-        };
-
-        assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, prev, &unsupported),
-            PixelRenderCaps::default()
-        );
-        assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &FakeProbe::ok()
-            ),
-            PixelRenderCaps {
-                pixel_transport: true,
-                kitty_term: true,
-            }
-        );
-    }
-
-    #[test]
-    fn termname_gate_filters_control_clients_and_requires_all_to_match() {
-        for termname in [
-            "xterm-ghostty",
-            "ghostty",
-            "xterm-kitty",
-            "kitty",
-            "XTERM-KITTY",
-        ] {
-            let probe = FakeProbe {
-                termnames: Some(vec![termname.to_owned()]),
-                ..FakeProbe::ok()
-            };
-
-            assert!(
-                detect_with(
-                    MuxName::Tmux,
-                    TEST_SESSION,
-                    PixelRenderCaps::default(),
-                    &probe
-                )
-                .kitty_term,
-                "{termname} should enable pixels"
-            );
-        }
-
-        let allowed = FakeProbe {
-            termnames: Some(vec!["xterm-ghostty".to_owned(), "kitty".to_owned()]),
-            ..FakeProbe::ok()
-        };
-        assert!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &allowed
-            )
-            .kitty_term
-        );
-
-        let mixed = FakeProbe {
-            termnames: Some(vec![
-                "xterm-ghostty".to_owned(),
-                "screen-256color".to_owned(),
-            ]),
-            ..FakeProbe::ok()
-        };
-        assert!(
-            !detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &mixed
-            )
-            .kitty_term
-        );
-
-        assert_eq!(
-            rendering_termnames("0 xterm-ghostty\n1 tmux-256color"),
-            vec!["xterm-ghostty".to_owned()]
-        );
-
-        let probe = FakeProbe {
-            termnames: Some(rendering_termnames("0 xterm-ghostty\n1 tmux-256color")),
-            ..FakeProbe::ok()
-        };
-        assert!(
-            detect_with(
-                MuxName::Tmux,
-                TEST_SESSION,
-                PixelRenderCaps::default(),
-                &probe
-            )
-            .kitty_term
-        );
-    }
-
-    #[test]
-    fn standalone_env_detects_native_kitty_and_wrap_mode() {
-        let plain = FakeProbe::ok().with_env("TERM", "xterm-kitty");
-        assert_eq!(
-            detect_env_with(&plain),
-            (
-                PixelRenderCaps {
-                    pixel_transport: true,
-                    kitty_term: true,
-                },
-                false
-            )
-        );
-
-        let tmux = FakeProbe::ok()
-            .with_env("TMUX", "/tmp/tmux-1000/default,123,0")
-            .with_env("TERM", "screen-256color");
-        assert_eq!(
-            detect_env_with(&tmux),
-            (
-                PixelRenderCaps {
-                    pixel_transport: true,
-                    kitty_term: true,
-                },
-                true
-            )
-        );
-
-        let zellij = FakeProbe::ok()
-            .with_env("ZELLIJ", "1")
-            .with_env("TERM", "xterm-kitty");
-        assert_eq!(
-            detect_env_with(&zellij),
-            (PixelRenderCaps::default(), false)
-        );
-
-        let unsupported = FakeProbe::ok().with_env("TERM", "xterm-256color");
-        assert_eq!(
-            detect_env_with(&unsupported),
-            (
-                PixelRenderCaps {
-                    pixel_transport: true,
-                    kitty_term: false,
-                },
-                false
-            )
-        );
-    }
-}
+mod tests;

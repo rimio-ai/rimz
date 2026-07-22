@@ -1,6 +1,7 @@
 //! Paint one sidebar frame, including pixel-pet image residency.
 
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -15,11 +16,14 @@ use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, detect_pixel_render_caps};
 use crate::sidebar_pane::render::{self, UiState};
 
+const CAPS_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+
 pub(super) struct FramePainter {
     assets: PetAssets,
     painter: PixelPainter,
     meter_painter: MeterPainter,
     caps: PixelRenderCaps,
+    last_caps_refresh: Instant,
     probed_aspect: Option<CellAspect>,
 }
 
@@ -32,6 +36,7 @@ impl FramePainter {
             painter,
             meter_painter,
             caps,
+            last_caps_refresh: Instant::now(),
             probed_aspect: probe_cell_aspect(),
         }
     }
@@ -42,6 +47,7 @@ impl FramePainter {
             painter: PixelPainter::with_id_base(id_base, pixel_wrap),
             meter_painter: MeterPainter::new(pixel_wrap),
             caps,
+            last_caps_refresh: Instant::now(),
             probed_aspect: probe_cell_aspect(),
         }
     }
@@ -53,6 +59,7 @@ impl FramePainter {
             painter: PixelPainter::with_id_base(0x120000, pixel_wrap),
             meter_painter: MeterPainter::new(pixel_wrap),
             caps,
+            last_caps_refresh: Instant::now(),
             probed_aspect: None,
         }
     }
@@ -79,6 +86,34 @@ impl FramePainter {
         detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) {
         self.caps = detect(mux, session_name, self.caps);
+        self.last_caps_refresh = Instant::now();
+    }
+
+    pub(super) fn refresh_caps_if_stale(
+        &mut self,
+        mux: MuxName,
+        session_name: &str,
+        now: Instant,
+    ) -> bool {
+        self.refresh_caps_if_stale_with(mux, session_name, now, detect_pixel_render_caps)
+    }
+
+    pub(super) fn refresh_caps_if_stale_with(
+        &mut self,
+        mux: MuxName,
+        session_name: &str,
+        now: Instant,
+        detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
+    ) -> bool {
+        if mux != MuxName::Tmux
+            || now.saturating_duration_since(self.last_caps_refresh) < CAPS_REFRESH_INTERVAL
+        {
+            return false;
+        }
+        let previous = self.caps;
+        self.caps = detect(mux, session_name, previous);
+        self.last_caps_refresh = now;
+        self.caps != previous
     }
 
     pub(super) fn refresh_view(
@@ -129,7 +164,7 @@ impl FramePainter {
             self.painter.release_process_payload();
         }
         let meter_enabled = self.caps.pixel_transport
-            && self.caps.kitty_term
+            && self.caps.kitty_clients
             && snapshot.theme.display.pixel == PixelMode::Auto;
         if meter_enabled {
             ui.meter_pixels

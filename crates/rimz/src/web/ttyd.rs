@@ -46,6 +46,8 @@ pub(super) struct DaemonRecord {
     pub(super) trusted_proxies: Vec<String>,
     #[serde(default)]
     pub(super) gate: Option<GateRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) pixel_protocol: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +65,7 @@ impl DaemonRecord {
             auth: WebAuth::Basic,
             trusted_proxies: Vec::new(),
             gate: None,
+            pixel_protocol: None,
         }
     }
 }
@@ -481,6 +484,7 @@ fn start_daemon_with_profile(
         auth: desired.auth.clone(),
         trusted_proxies: desired.trusted_proxies.clone(),
         gate,
+        pixel_protocol: profile.pixel_protocol,
     };
     let public_address = record_public_address(&record)?;
     if !wait_for_address(public_address, START_TIMEOUT) {
@@ -558,6 +562,12 @@ pub(super) fn revoke_credential() -> Result<bool> {
 pub(super) fn daemon_status() -> Result<Option<DaemonRecord>> {
     let _guard = acquire_daemon_lock()?;
     daemon_status_locked()
+}
+
+pub(crate) fn pixel_daemon_record() -> Option<(u32, u32)> {
+    let bytes = fs::read(daemon_path()).ok()?;
+    let record = serde_json::from_slice::<DaemonRecord>(&bytes).ok()?;
+    record.pixel_protocol.map(|protocol| (record.pid, protocol))
 }
 
 fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
@@ -1026,6 +1036,7 @@ mod tests {
                 pid: u32::MAX - 1,
                 upstream_port: 41820,
             }),
+            pixel_protocol: Some(crate::web::TTYD_PIXEL_PROTOCOL),
         };
         write_daemon_at(&path, &daemon).expect("write daemon state");
         assert_eq!(read_json_optional(&path).expect("read state"), Some(daemon));
@@ -1069,6 +1080,16 @@ mod tests {
             auth_warnings(&spec).as_slice(),
             [WebWarning::HeaderAuthUnprotected(message)] if message.contains("trusted_proxies")
         ));
+    }
+
+    #[test]
+    fn pre_pixel_daemon_state_deserializes_without_protocol() {
+        let daemon = serde_json::from_str::<DaemonRecord>(r#"{"pid":42,"port":8200}"#)
+            .expect("legacy daemon state");
+
+        assert_eq!(daemon.pid, 42);
+        assert_eq!(daemon.port, 8200);
+        assert_eq!(daemon.pixel_protocol, None);
     }
 
     #[test]

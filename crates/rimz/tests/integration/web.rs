@@ -382,6 +382,10 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         .state_root()
         .join("rimz/web-ttyd-credential.json");
     let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let daemon: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("read capable daemon record"))
+            .expect("parse capable daemon record");
+    assert_eq!(daemon["pixel_protocol"], 1);
     let credential_before = std::fs::read(&credential_path).expect("credential before bad revoke");
     let daemon_before = std::fs::read(&daemon_path).expect("daemon before bad revoke");
     let bad_revoke = fixture
@@ -722,6 +726,45 @@ fn stale_gated_daemon_terminates_its_surviving_gate_and_can_restart() {
         .bounded_output()
         .expect("stop recovered gated daemon");
     assert_success(&stop, "stop recovered gated daemon");
+}
+
+#[cfg(unix)]
+#[test]
+fn markerless_stock_index_keeps_daemon_pixel_incapable() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-markerless.log");
+    let open = fixture
+        .command()
+        .env(
+            "RIMZ_TEST_TTYD_INDEX",
+            "<html><body>markerless</body></html>",
+        )
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("open web with markerless stock page");
+    success_json(&open, "markerless web open");
+
+    let daemon: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.env.state_root().join("rimz/web-ttyd.json"))
+            .expect("read markerless daemon record"),
+    )
+    .expect("parse markerless daemon record");
+    assert!(daemon.get("pixel_protocol").is_none(), "{daemon}");
+    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read markerless ttyd log");
+    let daemon_argv = log
+        .lines()
+        .find(|line| line.contains("\tweb\texec"))
+        .expect("markerless daemon argv");
+    assert!(!daemon_argv.contains("\t-I\t"), "{daemon_argv}");
+
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop markerless daemon");
+    assert_success(&stop, "stop markerless daemon");
 }
 
 #[cfg(unix)]

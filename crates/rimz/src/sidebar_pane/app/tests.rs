@@ -361,7 +361,7 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
     let mut painter = paint::FramePainter::new(
         PixelRenderCaps {
             pixel_transport: true,
-            kitty_term: true,
+            kitty_clients: true,
         },
         false,
     );
