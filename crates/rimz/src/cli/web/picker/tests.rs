@@ -52,6 +52,43 @@ fn rows() -> Vec<RoomRow> {
 }
 
 #[test]
+fn room_agents_count_only_pane_bound_root_sessions() {
+    let now = jiff::Timestamp::UNIX_EPOCH;
+    let mut live = rimz::testkit::agent_state("codex", "live", now);
+    live.status = rimz::agents::AgentStatus::Waiting;
+    let mut departed = rimz::testkit::agent_state("claude", "departed", now);
+    departed.status = rimz::agents::AgentStatus::Failed;
+    departed.ended_at = Some(now);
+    let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(Path::new("/repo")),
+        vec![live.clone(), departed],
+        now,
+    );
+    snapshot.agent_panes.push(rimz::PaneAgent {
+        kind: live.kind.clone(),
+        kind_ordinal: None,
+        name: None,
+        name_explicit: false,
+        profile: None,
+        role: None,
+        channel: None,
+        agent_id: Some(live.agent_id),
+        pane_id: rimz::PaneId::from_parts(MuxName::Zellij, "%1"),
+        pane_pid: None,
+        worktree_path: None,
+        worktree_branch: None,
+    });
+
+    assert_eq!(
+        RoomAgents::from_snapshot(&snapshot),
+        RoomAgents {
+            by_kind: vec![(AgentKind::new_unchecked("codex"), 1)],
+            attention: 1,
+        }
+    );
+}
+
+#[test]
 fn filter_narrows_rows_and_enter_attaches_the_visible_selection() {
     let mut picker = Picker::new(None);
     picker.apply_probe(rows());
