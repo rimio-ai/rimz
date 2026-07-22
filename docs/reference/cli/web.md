@@ -31,7 +31,7 @@ rimz web token revoke-all
 
 `url` requires an existing workspace record and inspects its route without birthing a room, starting the daemon, or creating a credential. A live daemon's port wins over a changed configured port; offline inspection uses `[web] port`. JSON output includes the saved credential when one exists and omits `credential` otherwise.
 
-`share` requires an existing live room, adds it to the broadcast allowlist, ensures the no-auth read-only daemon, and opens the viewer URL unless `--print` is present. Its JSON payload is `{"version":"rimz.web.share.v1","url":"http://127.0.0.1:8201/?arg=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8201}`.
+`share` requires an existing live room, adds it to the broadcast allowlist, ensures the no-auth read-only daemon, and opens the viewer URL unless `--print` is present. Its JSON payload is `{"version":"rimz.web.share.v1","url":"http://127.0.0.1:8201/?room=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8201}`.
 
 `unshare` resolves a path to its session without requiring the room to remain live, or accepts an exact `--session`; `--all` conflicts with both target forms. Revoking one of several rooms restarts the broadcast daemon to disconnect existing viewers, while revoking the last room stops it.
 
@@ -40,7 +40,7 @@ rimz web token revoke-all
 The JSON `open` payload is:
 
 ```json
-{"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?arg=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8200,"tunnel_port":8200,"auth":{"mode":"basic"},"credential":{"username":"rimz","secret":"..."}}
+{"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?room=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8200,"tunnel_port":8200,"auth":{"mode":"basic"},"credential":{"username":"rimz","secret":"..."}}
 ```
 
 The `url --json` payload has the same fields, with optional `credential` and `tunnel_port` while the daemon is offline. Trusted-header payloads use `"auth":{"mode":"trusted_header","header":"X-Authentik-Username"}` and still carry the Basic credential for the private ttyd upstream. A gated daemon reports that upstream as `tunnel_port`; a direct daemon reports the public `port` in both fields.

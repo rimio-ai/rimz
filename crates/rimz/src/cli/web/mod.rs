@@ -447,20 +447,20 @@ fn render_revoked(stopped: bool) -> Result<()> {
 fn exec(session: Option<&str>, share: bool) -> Result<()> {
     if share {
         let spec = rimz::web::share_attach_command(session)?;
-        return room::exec_attach_command(&spec);
+        return exec_session_attach(&spec, session);
     }
     match rimz::web::existing_session_attach_command(session) {
         Ok(spec) if picker::available() => {
             let Some(session) = session.filter(|session| !session.is_empty()) else {
-                return room::exec_attach_command(&spec);
+                return exec_session_attach(&spec, session);
             };
             if picker::run(None, Some((session, &spec)))? {
                 Ok(())
             } else {
-                room::exec_attach_command(&spec)
+                exec_session_attach(&spec, Some(session))
             }
         }
-        Ok(spec) => room::exec_attach_command(&spec),
+        Ok(spec) => exec_session_attach(&spec, session),
         Err(rimz::web::WebErr::InvalidSession(message)) if picker::available() => {
             if picker::run(session, None)? {
                 Ok(())
@@ -470,6 +470,15 @@ fn exec(session: Option<&str>, share: bool) -> Result<()> {
         }
         Err(err) => Err(err.into()),
     }
+}
+
+fn exec_session_attach(spec: &rimz::mux::CommandSpec, session: Option<&str>) -> Result<()> {
+    let session = session
+        .filter(|session| !session.is_empty())
+        .context("validated browser attach lost its session target")?;
+    let display_name = picker::session_display_name(session);
+    picker::write_session_sync(Some((session, &display_name)))?;
+    room::exec_attach_command(spec)
 }
 
 fn ensure_web_enabled(config: &rimz::config::MachineConfig) -> Result<()> {

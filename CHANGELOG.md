@@ -16,6 +16,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ### Changed
 
+- Browser tabs use `RimZ` for the session list and `<repo> · RimZ` after attachment, printed room links use the clearer `?room=` query while legacy `?arg=` links keep working, and the session manager uses a fixed 24-row box at 40% width. → [web](./docs/guide/web.md#session-manager)
 - The web session manager centers its room list beneath a RIMZ banner, matches cockpit session and money colors, and ranks recent prompt activity ahead of the most recently used rooms. → [web](./docs/guide/web.md#session-manager)
 - Browser access requires ttyd 1.7.5 or newer, establishing one xterm.js baseline for the injected compatibility layer; explicit web commands fail with the upgrade fix, while normal room start keeps browser startup best-effort. → [web](./docs/guide/web.md#install-ttyd-on-the-serving-machine)
 - Trusted-header browser access accepts an optional `[web] auth_users` identity allowlist and rejects duplicated identity headers; entries match the proxy's trimmed canonical username exactly and case-sensitively. → [web](./docs/guide/web.md#behind-a-reverse-proxy)

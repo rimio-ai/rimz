@@ -166,10 +166,13 @@ fn room_agents_count_only_pane_bound_root_sessions() {
 #[test]
 fn session_sync_osc_sets_and_clears_the_browser_target() {
     assert_eq!(
-        session_sync_osc(Some("rimz-docs-a1b2c3")),
-        "\x1b]7717;rimz-session=rimz-docs-a1b2c3\x07"
+        session_sync_osc(Some(("rimz-docs-a1b2c3", "docs & notes"))),
+        "\x1b]7717;rimz-session=rimz-docs-a1b2c3\x07\x1b]7717;rimz-name=docs%20%26%20notes\x07"
     );
-    assert_eq!(session_sync_osc(None), "\x1b]7717;rimz-session=\x07");
+    assert_eq!(
+        session_sync_osc(None),
+        "\x1b]7717;rimz-session=\x07\x1b]7717;rimz-name=\x07"
+    );
 }
 
 #[test]
@@ -309,7 +312,11 @@ fn filter_matches_displayed_repo_name_and_path_then_attaches() {
     assert_eq!(picker.selected.as_deref(), Some("rimz-infra"));
     assert_eq!(
         picker.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)),
-        Some(Action::Attach("rimz-infra".to_owned(), MuxName::Tmux))
+        Some(Action::Attach(
+            "rimz-infra".to_owned(),
+            "infra".to_owned(),
+            MuxName::Tmux,
+        ))
     );
 
     picker.filter = "repo/docs".to_owned();
@@ -376,12 +383,12 @@ fn wheel_moves_selection_and_both_card_lines_are_clickable() {
     assert_eq!(
         picker.hit_rows,
         BTreeMap::from([
-            (11, "rimz-docs".to_owned()),
-            (12, "rimz-docs".to_owned()),
-            (14, "rimz-infra".to_owned()),
-            (15, "rimz-infra".to_owned()),
-            (17, "rimz-quiet".to_owned()),
-            (18, "rimz-quiet".to_owned()),
+            (8, "rimz-docs".to_owned()),
+            (9, "rimz-docs".to_owned()),
+            (11, "rimz-infra".to_owned()),
+            (12, "rimz-infra".to_owned()),
+            (14, "rimz-quiet".to_owned()),
+            (15, "rimz-quiet".to_owned()),
         ])
     );
 
@@ -396,14 +403,18 @@ fn wheel_moves_selection_and_both_card_lines_are_clickable() {
     let click = Event::Mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 2,
-        row: 12,
+        row: 9,
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(picker.handle_event(click.clone()), None);
     assert_eq!(picker.selected.as_deref(), Some("rimz-docs"));
     assert_eq!(
         picker.handle_event(click),
-        Some(Action::Attach("rimz-docs".to_owned(), MuxName::Zellij))
+        Some(Action::Attach(
+            "rimz-docs".to_owned(),
+            "docs".to_owned(),
+            MuxName::Zellij,
+        ))
     );
 }
 
@@ -432,9 +443,6 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
 
     insta::assert_snapshot!(rendered, @r###"
     POPULATED
-
-
-
                                        ██████╗ ██╗███╗   ███╗███████╗
                                        ██╔══██╗██║████╗ ████║╚══███╔╝
                                        ██████╔╝██║██╔████╔██║  ███╔╝
@@ -451,19 +459,20 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │   ⌘ quiet                                  /repo/quiet │
                          │   –                                                    │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
                          │ filter: _                                              │
                          ╰────────────────────────────────────────────────────────╯
                               ↑↓ select · ⏎ attach · type to filter · esc quit
 
-
-
-
-
-
-
     FILTERED
-
-
                                        ██████╗ ██╗███╗   ███╗███████╗
                                        ██╔══██╗██║████╗ ████║╚══███╔╝
                                        ██████╔╝██║██╔████╔██║  ███╔╝
@@ -474,18 +483,18 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          ╭ sessions ──────────────────────────────────────────────╮
                          │ ▸ ⌘ quiet                                  /repo/quiet │
                          │   –                                                    │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
                          │ filter: quiet_                                         │
                          ╰────────────────────────────────────────────────────────╯
                               ↑↓ select · ⏎ attach · type to filter · esc quit
 
-
-
-
-
-
     EMPTY
-
-
                                        ██████╗ ██╗███╗   ███╗███████╗
                                        ██╔══██╗██║████╗ ████║╚══███╔╝
                                        ██████╔╝██║██╔████╔██║  ███╔╝
@@ -496,18 +505,18 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          ╭ sessions ──────────────────────────────────────────────╮
                          │ No live RimZ sessions — run `rimz start` in a project  │
                          │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
                          │ filter: _                                              │
                          ╰────────────────────────────────────────────────────────╯
                               ↑↓ select · ⏎ attach · type to filter · esc quit
 
-
-
-
-
-
     NOTICE
-
-
                                        ██████╗ ██╗███╗   ███╗███████╗
                                        ██╔══██╗██║████╗ ████║╚══███╔╝
                                        ██████╔╝██║██╔████╔██║  ███╔╝
@@ -525,15 +534,17 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │   ⌘ quiet                                  /repo/quiet │
                          │   –                                                    │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
+                         │                                                        │
                          │ filter: _                                              │
                          ╰────────────────────────────────────────────────────────╯
                               ↑↓ select · ⏎ attach · type to filter · esc quit
-
-
-
-
-
-
 
     DEGRADED
     ╭ RimZ ── sessions ────────────────────╮

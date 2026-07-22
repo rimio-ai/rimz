@@ -606,7 +606,7 @@ pub fn ttyd_diagnostic() -> Result<TtydDiagnostic> {
 
 fn join_session_url(base_url: &str, session: &str) -> String {
     let base = base_url.trim_end_matches('/');
-    format!("{base}/?arg={}", encode_query_value(session))
+    format!("{base}/?room={}", encode_query_value(session))
 }
 
 fn normalized_base_url(configured: Option<&str>, port: u16) -> String {
@@ -617,7 +617,8 @@ fn normalized_base_url(configured: Option<&str>, port: u16) -> String {
         .unwrap_or_else(|| format!("http://127.0.0.1:{port}"))
 }
 
-fn encode_query_value(value: &str) -> String {
+#[doc(hidden)]
+pub fn encode_query_value(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
         match byte {
@@ -635,14 +636,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn joins_base_url_and_session_as_ttyd_argument() {
+    fn joins_base_url_and_session_as_browser_room() {
         assert_eq!(
             join_session_url("http://127.0.0.1:8200", "rimz-terrain-a1b2c3"),
-            "http://127.0.0.1:8200/?arg=rimz-terrain-a1b2c3"
+            "http://127.0.0.1:8200/?room=rimz-terrain-a1b2c3"
         );
         assert_eq!(
             join_session_url("https://devbox.example/rimz/", "rimz/a b"),
-            "https://devbox.example/rimz/?arg=rimz%2Fa%20b"
+            "https://devbox.example/rimz/?room=rimz%2Fa%20b"
         );
     }
 
@@ -659,7 +660,7 @@ mod tests {
                 secret: "secret".to_owned(),
             }),
         );
-        assert_eq!(payload.url, "http://127.0.0.1:8200/?arg=rimz-test-a1b2c3");
+        assert_eq!(payload.url, "http://127.0.0.1:8200/?room=rimz-test-a1b2c3");
         assert_eq!(
             payload
                 .credential

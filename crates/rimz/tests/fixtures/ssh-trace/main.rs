@@ -123,7 +123,7 @@ fn exit_web_prep() -> ! {
         stream.flush().expect("flush prep stderr");
     }
     let output = env::var("RIMZ_TEST_SSH_WEB_PREP_OUTPUT").unwrap_or_else(|_| {
-        r#"{"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?arg=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8200,"credential":{"username":"rimz","secret":"test-web-token"}}"#.to_owned()
+        r#"{"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?room=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8200,"credential":{"username":"rimz","secret":"test-web-token"}}"#.to_owned()
     });
     let mut stdout = std::io::stdout().lock();
     stdout

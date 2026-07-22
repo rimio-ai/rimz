@@ -44,7 +44,7 @@ The details that matter in practice:
 1. Runs remote `rimz web open --print --json` over a prep connection, asking the recovery prompt there when your terminal is interactive.
 2. Reads the shared ttyd port and Basic-Auth credential from that prep response and prints the credential on stderr.
 3. Starts a supervised SSH local-forward tunnel to the remote ttyd port.
-4. Prints the bare `http://127.0.0.1:<port>/?arg=<session>` URL and opens your local browser best-effort.
+4. Prints the bare `http://127.0.0.1:<port>/?room=<session>` URL and opens your local browser best-effort.
 5. Stays in the foreground until Ctrl-C, which tears the tunnel down.
 
 `--web-port <port>` pins the local browser origin; otherwise RimZ derives a stable port from the session name in `8300..8399`. The room itself is [`rimz web`](./web.md).
