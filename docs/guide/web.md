@@ -2,6 +2,11 @@
 
 A terminal attach works well while you have the right terminal open. When you need the same room from a browser, RimZ can put its existing Zellij or tmux session behind one local ttyd address without moving the room, agents, or state into another service.
 
+<p align="center">
+  <img src="../rimz-forge.png" alt="A RimZ room in the browser: the sidebar triaging a forge team beside the planner, coder, and reviewer panes" width="100%">
+  <br/><sub>The same room, in a browser tab: sidebar, agent panes, theme, and pixel rendering all carry over.</sub>
+</p>
+
 ## Install ttyd on the serving machine
 
 Both Zellij and tmux browser rooms require [ttyd](https://github.com/tsl0922/ttyd) 1.7.5 or newer:
@@ -39,6 +44,23 @@ Safari can load this direct local page but cannot attach the terminal because We
 
 With `[web] enabled = true`, every normal `rimz start` also asks for the shared daemon after the room is ready. A missing or pre-1.7.5 binary, occupied port, or daemon error warns on stderr and leaves the room usable in the terminal.
 
+## Session manager
+
+Open the base address without `?room=` to choose among every live RimZ room on the machine. An unknown or stopped session argument opens the same switcher with a notice; a valid argument continues to attach directly.
+
+<p align="center">
+  <img src="../rimz-sessions.png" alt="The session manager: a RIMZ banner over a bordered sessions box, one card per live room with repository name, path, provider agent counts, session count, tokens, and spend" width="720">
+  <br/><sub>Every live room as a card: provider agent counts on the left, sessions, tokens, and spend on the right.</sub>
+</p>
+
+The switcher centers its room cards in a fixed 24-row panel beneath a RIMZ banner when the terminal has space, using 40% of the terminal width within its 58- to 84-column bounds. Empty rows keep the box stable when only a few rooms are live; small screens fall back to a compact full-frame list. Rooms with prompt activity in the last 24 hours lead, newest prompt first; the rest follow by the most recent room start or attach.
+
+Use ↑/↓ or j/k and the mouse wheel to move, Enter or a second click on the selected card to attach, and printable keys to filter repository names and paths. Backspace edits the filter, Esc clears it before quitting, and Ctrl-C quits immediately.
+
+Each two-line card leads with the repository name and path, then shows live root-agent counts by provider. The red `●` count marks agents that need attention; `◎`, `◇`, and `$` show the headline session count, tokens, and spend from `[sidebar] spend_window`. An unreadable room snapshot leaves the stats line at `–` until the next probe.
+
+After attachment, the browser address gains that room's `?room=` target and the tab reads `<repo> · RimZ`; the live-session list uses plain `RimZ`. A dropped connection or page refresh reconnects directly into the same room; leaving through the mux detach key clears the target and title, returns to the live session list, and makes that list the reconnect destination again.
+
 ## Share a read-only broadcast
 
 ```sh
@@ -56,18 +78,6 @@ The viewer link is deliberately unauthenticated. Keep the listener on loopback f
 `unshare` restarts the broadcast daemon while other rooms remain shared, which disconnects every existing viewer and lets still-shared tabs reconnect. Removing the last room or using `--all` stops the daemon. The allowlist survives `rimz web stop`; `rimz web status` shows both its retained sessions and whether the broadcast daemon is online.
 
 tmux viewers attach read-only and with `ignore-size`, so they cannot type or resize the presenter's layout. Zellij has no read-only or size-isolated attach mode: ttyd still blocks viewer input, but a viewer window resize can influence the shared Zellij session geometry.
-
-## Session manager
-
-Open the base address without `?room=` to choose among every live RimZ room on the machine. An unknown or stopped session argument opens the same switcher with a notice; a valid argument continues to attach directly.
-
-The switcher centers its room cards in a fixed 24-row panel beneath a RIMZ banner when the terminal has space, using 40% of the terminal width within its 58- to 84-column bounds. Empty rows keep the box stable when only a few rooms are live; small screens fall back to a compact full-frame list. Rooms with prompt activity in the last 24 hours lead, newest prompt first; the rest follow by the most recent room start or attach.
-
-Use ↑/↓ or j/k and the mouse wheel to move, Enter or a second click on the selected card to attach, and printable keys to filter repository names and paths. Backspace edits the filter, Esc clears it before quitting, and Ctrl-C quits immediately.
-
-Each two-line card leads with the repository name and path, then shows live root-agent counts by provider. The red `●` count marks agents that need attention; `◎`, `◇`, and `$` show the headline session count, tokens, and spend from `[sidebar] spend_window`. An unreadable room snapshot leaves the stats line at `–` until the next probe.
-
-After attachment, the browser address gains that room's `?room=` target and the tab reads `<repo> · RimZ`; the live-session list uses plain `RimZ`. A dropped connection or page refresh reconnects directly into the same room; leaving through the mux detach key clears the target and title, returns to the live session list, and makes that list the reconnect destination again.
 
 ## Browser appearance and input
 
