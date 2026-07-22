@@ -178,7 +178,12 @@ impl LifecycleFollower {
                 transition,
             ));
             let open_ask_key = match &observation.signal {
-                LifecycleSignal::AwaitingInput { native_key, .. } => native_key.clone(),
+                LifecycleSignal::AwaitingInput {
+                    ask_id: Some(_),
+                    native_key,
+                    ..
+                } => native_key.clone(),
+                LifecycleSignal::AwaitingInput { ask_id: None, .. } => None,
                 _ if transition.next.status != crate::agents::AgentStatus::Waiting => None,
                 _ => prior.and_then(|state| state.open_ask_key.clone()),
             };
@@ -281,5 +286,37 @@ mod tests {
             Some(crate::agents::AgentStatus::Running)
         );
         assert_eq!(batch.events[0].status, crate::agents::AgentStatus::Success);
+    }
+
+    #[test]
+    fn adapter_ask_without_id_does_not_hold_a_sibling_tool_waiting() {
+        let (_dir, store, paths) = fixture();
+        append(&store, LifecycleSignal::Registered);
+        append(&store, LifecycleSignal::TurnStarted);
+        append(
+            &store,
+            LifecycleSignal::AwaitingInput {
+                kind: crate::agents::AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: Some("ask-call".to_owned()),
+            },
+        );
+        append(
+            &store,
+            LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+                native_key: Some("sibling-call".to_owned()),
+            },
+        );
+
+        let mut follower = LifecycleFollower::open(paths, true).unwrap();
+        let events = follower.poll().unwrap().events;
+        let tool = events.last().unwrap();
+        assert_eq!(tool.prior_status, Some(crate::agents::AgentStatus::Waiting));
+        assert_eq!(tool.status, crate::agents::AgentStatus::Running);
+        assert_eq!(tool.transition, crate::agents::LifecycleTransition::Normal);
+        assert!(tool.waiting_cleared);
     }
 }
