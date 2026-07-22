@@ -6,6 +6,14 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ## Unreleased
 
+### Added
+
+- Layout cells accept any executable on PATH as a raw command pane, while configured commands and profiles keep precedence over same-named binaries. → [fleet](./docs/guide/fleet.md#compose-a-layout)
+
+### Changed
+
+- Default launch tab titles list the first three cells in layout order instead of only the first agent kind. → [fleet](./docs/guide/fleet.md#compose-a-layout)
+
 ### Fixed
 
 - Browser cursors stay steady when terminal apps request a blinking cursor. → [web](./docs/guide/web.md#browser-appearance-and-input)

@@ -1,13 +1,13 @@
 //! Backend-neutral agent layout IR plus team/profile/command resolution.
 //!
 //! Commas split columns, plus signs tile rows within a column, slashes stack
-//! rows within a column, and each cell is a profile, a command, or a built-in
-//! cell. Agent cells optionally carry a `:role` suffix for an ad-hoc role
-//! handle. Named teams compile to one column per role unless they declare an
-//! explicit role-first layout shape. Built-ins provide `term`, every registered
-//! agent kind, and `<kind>-<mode>` virtual variants; per-machine
-//! `[agents.profiles]` entries can specialize agent cells and `[agents.commands]`
-//! entries provide raw command panes.
+//! rows within a column, and each cell is a profile, a configured command, a
+//! PATH executable, or a built-in cell. Agent cells optionally carry a `:role`
+//! suffix for an ad-hoc role handle. Named teams compile to one column per role
+//! unless they declare an explicit role-first layout shape. Built-ins provide
+//! `term`, every registered agent kind, and `<kind>-<mode>` virtual variants;
+//! per-machine `[agents.profiles]` entries can specialize agent cells and
+//! `[agents.commands]` entries provide raw command panes.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -213,7 +213,7 @@ pub enum LayoutErr {
     #[error("a layout column uses `+` (tile) or `/` (stack), not both: `{column}`")]
     MixedRowOperators { column: String },
     #[error(
-        "unknown layout cell `{cell}`; define it under [agents.profiles] or [agents.commands], or use one of: {valid}"
+        "unknown layout cell `{cell}`; define it under [agents.profiles] or [agents.commands], install it on PATH, or use one of: {valid}"
     )]
     UnknownCell { cell: String, valid: String },
     #[error(
@@ -492,6 +492,16 @@ pub fn resolve_spec(
     }
     if raw == "peer" {
         return parse_layout_spec_validated(BUILTIN_PEER, profiles, commands);
+    }
+    if let Some(cell) = path_command_cell(raw) {
+        return Ok(LayoutSpec::single(cell));
+    }
+    let (cell, role) = split_inline_role(raw, profiles, commands);
+    if let Some(role) = role.filter(|_| path_command_cell(cell).is_some()) {
+        return Err(LayoutErr::RoleOnCommandCell {
+            cell: cell.to_owned(),
+            role: role.to_owned(),
+        });
     }
     Err(LayoutErr::UnknownTeam {
         team: raw.to_owned(),
@@ -823,7 +833,7 @@ fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
 
 /// The default tab title for a launch. Worktree launches use the `#channel`
 /// spelling shared with agent addresses; a named-team launch uses
-/// `team:<name>`; otherwise the title is the first agent kind (or `term`)
+/// `team:<name>`; otherwise the title lists up to three cells in layout order
 /// over the cwd basename.
 pub fn default_tab_title(
     spec: &LayoutSpec,
@@ -837,8 +847,34 @@ pub fn default_tab_title(
     if let Some(team) = team.filter(|team| !team.is_empty()) {
         return format!("team:{team}");
     }
-    let kind = spec.first_agent_kind().unwrap_or("term");
-    crate::harness::resume::build_label(kind, None, cwd)
+    let tokens = spec
+        .columns
+        .iter()
+        .flat_map(|column| &column.rows)
+        .map(|cell| match cell {
+            Cell::Agent(cell) => {
+                Cow::Borrowed(cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str()))
+            }
+            Cell::Command { argv } => argv.first().map_or(Cow::Borrowed("term"), |program| {
+                Path::new(program).file_name().map_or_else(
+                    || Cow::Borrowed(program.as_str()),
+                    |name| name.to_string_lossy(),
+                )
+            }),
+        })
+        .collect::<Vec<_>>();
+    let mut title = tokens
+        .iter()
+        .take(3)
+        .map(Cow::as_ref)
+        .collect::<Vec<_>>()
+        .join("+");
+    if title.is_empty() {
+        title.push_str("term");
+    } else if tokens.len() > 3 {
+        title.push_str("+…");
+    }
+    crate::harness::resume::build_label(&title, None, cwd)
 }
 
 pub fn is_known_spec_token(
@@ -994,9 +1030,21 @@ fn parse_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -
     if let Some(cell) = virtual_agent_cell(raw, profiles)? {
         return Ok(cell);
     }
+    if let Some(cell) = path_command_cell(raw) {
+        return Ok(cell);
+    }
     Err(LayoutErr::UnknownCell {
         cell: raw.to_owned(),
         valid: valid_cells(profiles, commands),
+    })
+}
+
+/// Last-resort cell resolution: a bare word that is executable on PATH
+/// launches as a raw command pane.
+fn path_command_cell(raw: &str) -> Option<Cell> {
+    which::which(raw).ok()?;
+    Some(Cell::Command {
+        argv: vec![raw.to_owned()],
     })
 }
 
