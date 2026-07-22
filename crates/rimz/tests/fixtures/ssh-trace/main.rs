@@ -18,7 +18,7 @@
 
 use std::env;
 use std::fs::OpenOptions;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 fn main() {
     let log_path = env::var_os("RIMZ_TEST_SSH_LOG").expect("RIMZ_TEST_SSH_LOG unset");
@@ -143,7 +143,9 @@ fn run_web_tunnel(argv: &[String]) -> ! {
     {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
-    let _listener = env::var_os("RIMZ_TEST_SSH_TUNNEL_LISTEN").map(|_| {
+    let mut listener = (env::var_os("RIMZ_TEST_SSH_TUNNEL_LISTEN").is_some()
+        || env::var_os("RIMZ_TEST_SSH_TUNNEL_HTTP_LOG").is_some())
+    .then(|| {
         let forwarding = argv
             .windows(2)
             .find(|args| args[0] == "-L")
@@ -156,12 +158,69 @@ fn run_web_tunnel(argv: &[String]) -> ! {
             .expect("-L forwarding has a local port");
         std::net::TcpListener::bind(("127.0.0.1", local_port)).expect("bind tunnel listener")
     });
+    if let Some(log) = env::var_os("RIMZ_TEST_SSH_TUNNEL_HTTP_LOG") {
+        let listener = listener.take().expect("HTTP tunnel listener");
+        std::thread::spawn(move || serve_web_tunnel(listener, std::path::Path::new(&log)));
+    }
+    let _listener = listener;
     if let Ok(ms) = env::var("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS")
         && let Ok(ms) = ms.parse::<u64>()
     {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
     exit_from_plan("RIMZ_TEST_SSH_TUNNEL_PLAN");
+}
+
+fn serve_web_tunnel(listener: std::net::TcpListener, log: &std::path::Path) {
+    for connection in listener.incoming() {
+        let Ok(mut stream) = connection else {
+            return;
+        };
+        let Some(head) = read_http_head(&mut stream) else {
+            continue;
+        };
+        let mut output = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .expect("open tunnel HTTP log");
+        output.write_all(&head).expect("log tunnel request");
+        output.write_all(b"\n---\n").expect("separate requests");
+
+        if head
+            .windows(b"Upgrade: websocket".len())
+            .any(|window| window.eq_ignore_ascii_case(b"Upgrade: websocket"))
+        {
+            stream
+                .write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nserver-frame")
+                .expect("write upgrade response");
+            let mut frame = [0_u8; 12];
+            stream.read_exact(&mut frame).expect("read client frame");
+            output.write_all(&frame).expect("log client frame");
+            output.write_all(b"\n---\n").expect("separate client frame");
+        } else {
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .expect("write HTTP response");
+        }
+    }
+}
+
+fn read_http_head(stream: &mut impl Read) -> Option<Vec<u8>> {
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while head.len() < 64 * 1024 {
+        match stream.read(&mut byte) {
+            Ok(0) | Err(_) => return None,
+            Ok(_) => {
+                head.push(byte[0]);
+                if head.ends_with(b"\r\n\r\n") {
+                    return Some(head);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn run_web_control_forward() -> ! {

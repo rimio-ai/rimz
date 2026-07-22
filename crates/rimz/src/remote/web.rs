@@ -18,21 +18,25 @@ use super::{
 
 const LOCAL_PORT_RANGE: RangeInclusive<u16> = 8300..=8399;
 
-pub fn choose_local_port(session: &str, override_port: Option<u16>) -> io::Result<u16> {
+pub fn bind_local_relay(session: &str, override_port: Option<u16>) -> io::Result<TcpListener> {
     if let Some(port) = override_port {
-        probe_local_port(port)?;
-        return Ok(port);
+        return TcpListener::bind(("127.0.0.1", port));
     }
     let preferred = derive_port(session, &LOCAL_PORT_RANGE);
     for port in port_scan(preferred, &LOCAL_PORT_RANGE) {
-        if probe_local_port(port).is_ok() {
-            return Ok(port);
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+            return Ok(listener);
         }
     }
     Err(io::Error::new(
         io::ErrorKind::AddrNotAvailable,
         "no free local web tunnel port in 8300..8399",
     ))
+}
+
+pub fn reserve_forward_port() -> io::Result<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    Ok(listener.local_addr()?.port())
 }
 
 pub fn local_url(remote: &WebOpenPayload, local_port: u16) -> String {
@@ -53,10 +57,6 @@ fn port_scan(preferred: u16, range: &RangeInclusive<u16>) -> impl Iterator<Item 
     let start = *range.start();
     let end = *range.end();
     (preferred..=end).chain(start..preferred)
-}
-
-fn probe_local_port(port: u16) -> io::Result<()> {
-    TcpListener::bind(("127.0.0.1", port)).map(|_| ())
 }
 
 fn encode_query_value(value: &str) -> String {
@@ -220,11 +220,42 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind fixture");
         let port = listener.local_addr().expect("fixture address").port();
         assert_eq!(
-            choose_local_port("rimz-project-a1b2c3", Some(port))
+            bind_local_relay("rimz-project-a1b2c3", Some(port))
                 .expect_err("occupied explicit port")
                 .kind(),
             io::ErrorKind::AddrInUse
         );
+    }
+
+    #[test]
+    fn local_relay_binding_retains_the_selected_port() {
+        let listener = bind_local_relay("rimz-project-a1b2c3", None).expect("bind relay");
+        let port = listener.local_addr().expect("relay address").port();
+        assert!(LOCAL_PORT_RANGE.contains(&port));
+        assert_eq!(
+            TcpListener::bind(("127.0.0.1", port))
+                .expect_err("relay keeps its listener")
+                .kind(),
+            io::ErrorKind::AddrInUse
+        );
+    }
+
+    #[test]
+    fn local_relay_binding_scans_past_the_preferred_port() {
+        let session = "rimz-project-a1b2c3";
+        let preferred = derive_port(session, &LOCAL_PORT_RANGE);
+        let occupied = TcpListener::bind(("127.0.0.1", preferred)).expect("occupy preferred port");
+        let listener = bind_local_relay(session, None).expect("scan for relay port");
+        assert_ne!(
+            listener.local_addr().expect("relay address").port(),
+            occupied.local_addr().expect("occupied address").port()
+        );
+    }
+
+    #[test]
+    fn forward_port_reservation_returns_a_reusable_loopback_port() {
+        let port = reserve_forward_port().expect("reserve forward port");
+        TcpListener::bind(("127.0.0.1", port)).expect("reserved port is released");
     }
 
     #[test]

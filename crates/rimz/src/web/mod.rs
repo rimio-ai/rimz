@@ -1,10 +1,12 @@
 //! Browser access through one machine-wide ttyd daemon.
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +21,7 @@ mod sessions;
 mod share;
 mod ttyd;
 
-pub use gate::GateAuth;
+pub use gate::{GateAuth, RelayTarget};
 pub use sessions::{LiveRoom, live_rooms};
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
@@ -130,6 +132,15 @@ pub type Result<T> = std::result::Result<T, WebErr>;
 pub struct WebCredential {
     pub username: String,
     pub secret: String,
+}
+
+impl WebCredential {
+    pub fn authorization(&self) -> String {
+        format!(
+            "Basic {}",
+            STANDARD.encode(format!("{}:{}", self.username, self.secret))
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -387,6 +398,10 @@ pub fn serve_gate(
         .map(|value| gate::Cidr::parse(value))
         .collect::<Result<Vec<_>>>()?;
     gate::serve(listen, upstream, allow, auth)
+}
+
+pub fn serve_tunnel_relay(listener: TcpListener, target: Arc<Mutex<RelayTarget>>) -> Result<()> {
+    gate::serve_tunnel(listener, target)
 }
 
 pub fn revoke_credential(name: Option<&str>) -> Result<bool> {
@@ -655,6 +670,14 @@ mod tests {
         assert!(parsed.version_ok());
         assert_eq!(parsed.auth, WebAuth::Basic);
         assert_eq!(parsed.tunnel_port, Some(8200));
+        assert_eq!(
+            parsed
+                .credential
+                .as_ref()
+                .expect("credential")
+                .authorization(),
+            "Basic cmltejpzZWNyZXQ="
+        );
 
         let basic: WebOpenPayload = serde_json::from_str(
             r#"{"version":"rimz.web.v2","url":"http://localhost","session":"rimz-test","port":8200}"#,
