@@ -1,8 +1,7 @@
 //! Interactive live-room picker for ttyd browser sessions.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{self, IsTerminal};
-use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -86,13 +85,7 @@ pub(super) fn run(rejected_session: Option<&str>) -> Result<bool> {
                     .release_keep_screen()
                     .context("releasing the web session picker")?;
                 let spec = rimz::mux::backend_for(mux).attach_existing_command(&session);
-                let outcome = spec
-                    .to_command()
-                    .stdin(Stdio::inherit())
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .spawn()
-                    .and_then(|mut child| child.wait());
+                let outcome = spec.to_command().spawn().and_then(|mut child| child.wait());
                 guard = Some(
                     TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)
                         .context("restoring the web session picker")?,
@@ -165,9 +158,17 @@ struct RoomAgents {
 
 impl RoomAgents {
     fn from_snapshot(snapshot: &rimz::SidebarSnapshot) -> Self {
+        let live_agent_ids = snapshot
+            .agent_panes
+            .iter()
+            .filter_map(|pane_agent| pane_agent.agent_id.as_ref())
+            .collect::<HashSet<_>>();
         let mut by_kind = BTreeMap::new();
         let mut attention = 0;
-        for agent in snapshot.root_agents() {
+        for agent in snapshot
+            .root_agents()
+            .filter(|agent| live_agent_ids.contains(&agent.agent_id))
+        {
             *by_kind.entry(agent.kind.clone()).or_insert(0) += 1;
             attention += usize::from(agent.effective_status().is_attention());
         }
