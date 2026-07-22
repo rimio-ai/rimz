@@ -54,6 +54,14 @@ The viewer link is deliberately unauthenticated. Keep the listener on loopback f
 
 tmux viewers attach read-only and with `ignore-size`, so they cannot type or resize the presenter's layout. Zellij has no read-only or size-isolated attach mode: ttyd still blocks viewer input, but a viewer window resize can influence the shared Zellij session geometry.
 
+## Session manager
+
+Open the base address without `?arg=` to choose among every live RimZ room on the machine. An unknown or stopped session argument opens the same switcher with a notice; a valid argument continues to attach directly.
+
+Use ↑/↓ or j/k and the mouse wheel to move, Enter or a second click on the selected row to attach, and printable keys to filter session names. Backspace edits the filter, Esc clears it before quitting, and Ctrl-C quits immediately.
+
+Each row shows its multiplexer and project path plus live root-agent counts by provider. The red `●` count marks agents that need attention. Leaving a room through its mux detach key returns to the live session list so the same browser tab can attach elsewhere.
+
 ## Browser appearance and input
 
 RimZ gives ttyd the active theme and configured browser font when the daemon starts. `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` are built-in presets: RimZ downloads verified regular and bold faces and caches them under `$XDG_CACHE_HOME/rimz/web-fonts`.
@@ -153,7 +161,7 @@ style_client = true
 
 By default, RimZ invokes ttyd with write access, origin checks, mandatory Basic Auth, and an explicit loopback bind.
 
-The one machine credential authenticates the shared listener, so it grants access to every live RimZ room on that machine rather than only the room named in the first URL. An authenticated client can submit another session argument, and a missing or rejected argument lists the live RimZ rooms. A remote `--web` tunnel forwards this same machine-wide surface through its local port.
+The one machine credential authenticates the shared listener, so it grants access to every live RimZ room on that machine rather than only the room named in the first URL. An authenticated client can submit another session argument, and a missing or rejected argument opens the live-room session manager. A remote `--web` tunnel forwards this same machine-wide surface through its local port.
 
 The broadcast listener is a separate process without `-W` or `-c`: ttyd drops input and admits connections without authentication, while RimZ's per-connection shim limits attachment to the durable room allowlist and never lists other rooms. Its output can still contain secrets. Bind it to loopback or place it behind a reverse proxy and firewall before public exposure.
 
