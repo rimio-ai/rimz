@@ -7,6 +7,9 @@ const installPixelLayer=term=>{
   const MAX_IMAGES=128;
   const encoder=new TextEncoder();
   const decoder=new TextDecoder();
+  const placeholderBytes=encoder.encode(String.fromCodePoint(RIMZ_PIXEL_PLACEHOLDER));
+  const hideGlyph=encoder.encode("\x1b[8m");
+  const showGlyph=encoder.encode("\x1b[28m");
   const diacriticIndexes=new Map(RIMZ_PIXEL_DIACRITICS.map((value,index)=>[value.codePointAt(0),index]));
   const images=new Map();
   const placements=new Map();
@@ -16,6 +19,7 @@ const installPixelLayer=term=>{
   let carry=new Uint8Array();
   let dropping=false;
   let dropSawEscape=false;
+  let placeholderCarry=new Uint8Array();
 
   const canvas=document.createElement("canvas");
   canvas.className="rimz-pixel-layer";
@@ -207,6 +211,53 @@ const installPixelLayer=term=>{
     }
     return joinBytes(output);
   };
+  const utf8Width=byte=>byte<0x80?1:byte<0xe0?2:byte<0xf0?3:4;
+  // xterm keeps the Kitty image id in each placeholder cell's foreground, but
+  // its WebGL renderer paints a colored fallback glyph for U+10EEEE. Mark the
+  // complete base + row + column cluster invisible before xterm parses it.
+  // Keeping one SGR state across the three codepoints lets xterm combine them
+  // into one cell; CSI 28 then restores following text without changing color.
+  const suppressPlaceholderGlyphs=chunk=>{
+    const input=placeholderCarry.length?joinBytes([placeholderCarry,chunk]):chunk;
+    placeholderCarry=new Uint8Array();
+    const output=[];
+    let literalStart=0;
+    let offset=0;
+    while(offset<input.length){
+      if(input[offset]!==placeholderBytes[0]){offset++;continue;}
+      let matched=1;
+      while(matched<placeholderBytes.length&&offset+matched<input.length&&input[offset+matched]===placeholderBytes[matched])matched++;
+      if(matched===placeholderBytes.length){
+        let clusterEnd=offset+placeholderBytes.length;
+        for(let mark=0;mark<2;mark++){
+          if(clusterEnd>=input.length){clusterEnd=-1;break;}
+          const end=clusterEnd+utf8Width(input[clusterEnd]);
+          if(end>input.length){clusterEnd=-1;break;}
+          clusterEnd=end;
+        }
+        if(clusterEnd<0){
+          if(offset>literalStart)output.push(input.subarray(literalStart,offset));
+          placeholderCarry=input.slice(offset);
+          literalStart=input.length;
+          break;
+        }
+        if(offset>literalStart)output.push(input.subarray(literalStart,offset));
+        output.push(hideGlyph,input.subarray(offset,clusterEnd),showGlyph);
+        offset=clusterEnd;
+        literalStart=offset;
+        continue;
+      }
+      if(offset+matched===input.length){
+        if(offset>literalStart)output.push(input.subarray(literalStart,offset));
+        placeholderCarry=input.slice(offset);
+        literalStart=input.length;
+        break;
+      }
+      offset++;
+    }
+    if(literalStart<input.length)output.push(input.subarray(literalStart));
+    return joinBytes(output);
+  };
 
   const cellSize=rect=>({
     width:rect.width/Math.max(1,term.cols),
@@ -295,7 +346,7 @@ const installPixelLayer=term=>{
   term.write=(data,callback)=>{
     const bytes=typeof data==="string"?encoder.encode(data):data;
     if(!(bytes instanceof Uint8Array))return write(data,callback);
-    const forwarded=scan(bytes);
+    const forwarded=suppressPlaceholderGlyphs(scan(bytes));
     if(forwarded.length)return write(forwarded,callback);
     if(typeof callback==="function")queueMicrotask(callback);
   };

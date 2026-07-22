@@ -24,9 +24,7 @@ use crate::web::WebWarning;
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
-const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v6";
-const PIXEL_BLANK_FONT_FAMILY: &str = "rimz-pixel-blank";
-const PIXEL_BLANK_FONT: &[u8] = include_bytes!("pixel_blank.ttf");
+const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v7";
 
 const OFFLINE_ENV: &str = "RIMZ_WEB_FONTS_OFFLINE";
 const FONT_CACHE_DIR: &str = "rimz/web-fonts";
@@ -223,11 +221,6 @@ fn inject_client_profile(stock: &str, family: Option<&str>, faces: &[FontFace]) 
     }
 
     let mut style = String::from("<style id=\"rimz-web-style\">");
-    let pixel_font = base64::engine::general_purpose::STANDARD.encode(PIXEL_BLANK_FONT);
-    style.push_str(&format!(
-        "@font-face{{font-family:\"{PIXEL_BLANK_FONT_FAMILY}\";font-style:normal;font-weight:400;font-display:block;src:url(data:font/ttf;base64,{pixel_font});unicode-range:{}}}",
-        pixel_blank_unicode_range()
-    ));
     let css_family = family.map(css_string);
     if let Some(family) = css_family.as_deref() {
         for face in faces {
@@ -284,16 +277,10 @@ const waitForTerminal=()=>new Promise(resolve=>{{
   }};
   find();
 }});
-const pixelFontFamily="{PIXEL_BLANK_FONT_FAMILY}";
-const withPixelFont=value=>`${{pixelFontFamily}},${{value||"monospace"}}`;
-const pixelFontLoad=document.fonts
-  ?document.fonts.load(`13px ${{pixelFontFamily}}`).catch(()=>{{}})
-  :Promise.resolve();
 const loadFont=fontFamily&&document.fonts
   ?Promise.all([400,700].map(weight=>document.fonts.load(`${{weight}} 13px ${{JSON.stringify(fontFamily)}}`))).catch(()=>{{}})
   :Promise.resolve();
-Promise.all([waitForTerminal(),pixelFontLoad]).then(([term])=>{{
-  term.options.fontFamily=withPixelFont(term.options.fontFamily);
+waitForTerminal().then(term=>{{
   installPixelLayer(term);
   const sendInput=data=>{{
     if(typeof term.input==="function"){{term.input(data,true);return true;}}
@@ -372,8 +359,8 @@ Promise.all([waitForTerminal(),pixelFontLoad]).then(([term])=>{{
   const reset=term.reset.bind(term);
   term.reset=(...args)=>{{const result=reset(...args);install();return result;}};
   if(fontFamily)loadFont.then(()=>{{
-    const configured=withPixelFont(`${{fontFamily}},monospace`);
-    term.options.fontFamily=withPixelFont("monospace");
+    const configured=`${{fontFamily}},monospace`;
+    term.options.fontFamily="monospace";
     window.requestAnimationFrame(()=>{{
       term.options.fontFamily=configured;
       term.clearTextureAtlas();
@@ -384,39 +371,6 @@ Promise.all([waitForTerminal(),pixelFontLoad]).then(([term])=>{{
 }});
 }})();</script>"#
     )
-}
-
-fn pixel_blank_unicode_range() -> String {
-    let mut codepoints = ROW_COLUMN_DIACRITICS
-        .iter()
-        .map(|value| u32::from(*value))
-        .chain(std::iter::once(u32::from(PLACEHOLDER)))
-        .collect::<Vec<_>>();
-    codepoints.sort_unstable();
-    codepoints.dedup();
-
-    let mut ranges = Vec::new();
-    let mut start = codepoints[0];
-    let mut end = start;
-    for codepoint in codepoints.into_iter().skip(1) {
-        if codepoint == end + 1 {
-            end = codepoint;
-            continue;
-        }
-        ranges.push(css_unicode_range(start, end));
-        start = codepoint;
-        end = codepoint;
-    }
-    ranges.push(css_unicode_range(start, end));
-    ranges.join(",")
-}
-
-fn css_unicode_range(start: u32, end: u32) -> String {
-    if start == end {
-        format!("U+{start:X}")
-    } else {
-        format!("U+{start:X}-{end:X}")
-    }
 }
 
 fn css_string(value: &str) -> String {
@@ -912,101 +866,16 @@ mod tests {
         assert!(rendered.contains("installPixelLayer(term)"));
         assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
         assert!(rendered.contains("const RIMZ_PIXEL_DIACRITICS=[\"̅\",\"̍\",\"̎\""));
-        assert!(rendered.contains("font-family:\"rimz-pixel-blank\""));
-        assert!(rendered.contains("data:font/ttf;base64,"));
-        assert!(rendered.contains("unicode-range:U+305,U+30D-30E"));
-        assert!(
-            rendered.contains("term.options.fontFamily=withPixelFont(term.options.fontFamily)")
-        );
+        assert!(rendered.contains("const suppressPlaceholderGlyphs=chunk=>"));
+        assert!(rendered.contains("const hideGlyph=encoder.encode(\"\\x1b[8m\")"));
+        assert!(rendered.contains("const showGlyph=encoder.encode(\"\\x1b[28m\")"));
         assert!(rendered.contains("term.onRender(draw)"));
         assert!(!rendered.contains("PLACEHOLDER_OVERHANG_COLS"));
         assert!(!rendered.contains("fillRect"));
         assert!(rendered.contains("const fittedImageRect="));
         assert!(rendered.contains("if(placement.rows>1)"));
+        assert!(!rendered.contains("rimz-pixel-blank"));
         assert!(!rendered.contains("data:font/woff2"));
-    }
-
-    #[test]
-    fn pixel_blank_font_range_tracks_the_placeholder_protocol() {
-        let actual = pixel_blank_unicode_range()
-            .split(',')
-            .flat_map(|range| {
-                let range = range.strip_prefix("U+").expect("CSS unicode range prefix");
-                let (start, end) = range.split_once('-').unwrap_or((range, range));
-                let start = u32::from_str_radix(start, 16).expect("range start");
-                let end = u32::from_str_radix(end, 16).expect("range end");
-                start..=end
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        let expected = ROW_COLUMN_DIACRITICS
-            .iter()
-            .map(|value| u32::from(*value))
-            .chain(std::iter::once(u32::from(PLACEHOLDER)))
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn pixel_blank_font_cmap_covers_the_placeholder_protocol() {
-        let u16_at = |offset: usize| {
-            u16::from_be_bytes(
-                PIXEL_BLANK_FONT[offset..offset + 2]
-                    .try_into()
-                    .expect("u16 bytes"),
-            )
-        };
-        let u32_at = |offset: usize| {
-            u32::from_be_bytes(
-                PIXEL_BLANK_FONT[offset..offset + 4]
-                    .try_into()
-                    .expect("u32 bytes"),
-            )
-        };
-        let table_count = usize::from(u16_at(4));
-        let cmap_offset = (0..table_count)
-            .map(|index| 12 + index * 16)
-            .find(|offset| &PIXEL_BLANK_FONT[*offset..*offset + 4] == b"cmap")
-            .map(|offset| u32_at(offset + 8) as usize)
-            .expect("cmap table");
-        let subtable_count = usize::from(u16_at(cmap_offset + 2));
-        let format_12 = (0..subtable_count)
-            .map(|index| cmap_offset + 4 + index * 8)
-            .map(|record| cmap_offset + u32_at(record + 4) as usize)
-            .find(|offset| u16_at(*offset) == 12)
-            .expect("format 12 cmap");
-        let group_count = u32_at(format_12 + 12) as usize;
-        let groups = (0..group_count)
-            .map(|index| {
-                let offset = format_12 + 16 + index * 12;
-                (u32_at(offset), u32_at(offset + 4), u32_at(offset + 8))
-            })
-            .collect::<Vec<_>>();
-        let expected = ROW_COLUMN_DIACRITICS
-            .iter()
-            .map(|value| u32::from(*value))
-            .chain(std::iter::once(u32::from(PLACEHOLDER)))
-            .collect::<std::collections::BTreeSet<_>>();
-        for codepoint in &expected {
-            let (_, start, glyph) = groups
-                .iter()
-                .find_map(|(start, end, glyph)| {
-                    (*start <= *codepoint && *codepoint <= *end).then_some((end, start, glyph))
-                })
-                .unwrap_or_else(|| panic!("U+{codepoint:04X} missing from blank font cmap"));
-            assert_ne!(
-                *glyph + (*codepoint - *start),
-                0,
-                "blank glyph must be defined"
-            );
-        }
-        assert_eq!(
-            groups
-                .iter()
-                .map(|(start, end, _)| end - start + 1)
-                .sum::<u32>() as usize,
-            expected.len(),
-            "blank font cmap contains an unexpected codepoint"
-        );
     }
 
     #[test]
@@ -1047,14 +916,14 @@ mod tests {
             weight: 400,
         }];
         let family = "RimZ \"Font\" </style></script>\n";
-        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v6");
+        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v7");
         let key = custom_index_key("ttyd 1.7.7", Some(family), &faces);
         assert_eq!(key, custom_index_key("ttyd 1.7.7", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.8", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.7", None, &faces));
         assert_ne!(
             key,
-            custom_index_key_with_schema("rimz.ttyd-index.v5", "ttyd 1.7.7", Some(family), &faces)
+            custom_index_key_with_schema("rimz.ttyd-index.v6", "ttyd 1.7.7", Some(family), &faces)
         );
 
         let rendered = inject_client_profile(
@@ -1067,7 +936,7 @@ mod tests {
             rendered.contains("font-family:\"RimZ \\\"Font\\\" \\3c /style>\\3c /script>\\a \"")
         );
         assert!(rendered.contains("data:font/woff2;base64,Zm9udCBieXRlcw=="));
-        assert!(rendered.contains("data:font/ttf;base64,"));
+        assert!(!rendered.contains("data:font/ttf;base64,"));
         assert!(rendered.contains("font-display:block"));
         assert!(
             rendered.contains(
