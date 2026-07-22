@@ -46,6 +46,44 @@ fn zellij_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
 
+#[test]
+fn ttyd_pixel_layer_clips_real_draws_to_placeholder_cells() {
+    let version = Command::new("node")
+        .arg("--version")
+        .output()
+        .unwrap_or_else(|err| {
+            panic!("Node.js 26 or newer is required for the ttyd pixel-layer tests: {err}")
+        });
+    assert_success(&version, "inspect Node.js version");
+    let version_text = String::from_utf8_lossy(&version.stdout);
+    let major = version_text
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or_else(|| panic!("could not parse Node.js version `{}`", version_text.trim()));
+    assert!(
+        major >= 26,
+        "Node.js 26 or newer is required for the ttyd pixel-layer tests; found {}",
+        version_text.trim()
+    );
+
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("node")
+        .arg(crate_root.join("tests/fixtures/pixel-layer/harness.mjs"))
+        .arg(crate_root.join("src/web/ttyd/pixel_layer.js"))
+        .arg(rimz::testkit::pixel_layer_config_json())
+        .output()
+        .expect("run ttyd pixel-layer Node harness");
+    assert!(
+        output.status.success(),
+        "ttyd pixel-layer Node harness failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn materialized_room_panes_json() -> &'static str {
     r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#
 }
@@ -464,7 +502,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     let daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("read capable daemon record"))
             .expect("parse capable daemon record");
-    assert_eq!(daemon["pixel_protocol"], 2);
+    assert_eq!(daemon["pixel_protocol"], 3);
     let credential_before = std::fs::read(&credential_path).expect("credential before bad revoke");
     let daemon_before = std::fs::read(&daemon_path).expect("daemon before bad revoke");
     let bad_revoke = fixture

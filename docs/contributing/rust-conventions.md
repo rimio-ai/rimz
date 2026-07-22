@@ -217,6 +217,8 @@ Rules:
 
 The stable channel is pinned in `rust-toolchain.toml`; the workspace is edition 2024 and no `Cargo.toml` carries `rust-version`. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`. Required targets: `wasm32-wasip1` (the Zellij presence plugin) plus `aarch64-apple-darwin` and `x86_64-apple-darwin` (the [release cross-builds](#release-packaging)). rustup provisions all of them from the pin; `ci/Dockerfile` mirrors the list for CI.
 
+Node.js 26 or newer is a development prerequisite for the gate-tier ttyd pixel-layer harness. The CI image supplies the same major version, and the integration test fails at entry with the install requirement when `node` is missing or older.
+
 Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines only the `xtask` alias, so source installs use each host's platform linker. CI provides `mold` on Linux through the `rimz-ci` image and runs link-heavy compile/test gates through `mold -run`; contributors may opt into mold in their user Cargo config for faster relinks of the link-heavy integration-test binary.
 
 Install `sccache` (`cargo install sccache --locked`) for a content-addressed local compile cache shared across checkouts and worktrees. Xtask detects it on `PATH` and sets `RUSTC_WRAPPER=sccache` plus `CARGO_INCREMENTAL=0` for the Cargo compile commands it launches. Put `rustc-wrapper = "sccache"` and `incremental = false` under `[build]` in `~/.cargo/config.toml` to cover direct Cargo commands and the initial `cargo xtask` build; `sccache --show-stats` reports cache effectiveness. `RIMZ_SCCACHE=off` keeps incremental enabled for heavy single-crate iteration through xtask; `RIMZ_SCCACHE=on` requests cache routing and warns when `sccache` is missing.
