@@ -196,6 +196,10 @@ impl MuxBackend for FakeBackend {
         CommandSpec::new("fake").arg(name)
     }
 
+    fn attach_readonly_command(&self, name: &str) -> CommandSpec {
+        CommandSpec::new("fake").arg(name)
+    }
+
     fn detach(&self, _name: &str) -> rimz::mux::Result<()> {
         Ok(())
     }

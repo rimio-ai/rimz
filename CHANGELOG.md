@@ -8,6 +8,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ### Added
 
+- `rimz web share` serves an explicitly allowlisted live room through a second no-auth, input-blocked ttyd daemon; `unshare` revokes live viewers, tmux attaches ignore viewer size, and status reports both browser surfaces. → [web](./docs/guide/web.md#share-a-read-only-broadcast)
 - Layout cells accept any executable on PATH as a raw command pane, while configured commands and profiles keep precedence over same-named binaries. → [fleet](./docs/guide/fleet.md#compose-a-layout)
 - `rimz events follow` streams versioned agent lifecycle transitions as JSON Lines, with current-generation replay and gap-free handoff across event-log rotation. → [events](./docs/reference/cli/events.md)
 

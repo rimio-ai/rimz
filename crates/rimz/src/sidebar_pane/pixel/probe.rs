@@ -35,7 +35,7 @@ trait Probe {
     fn tmux_rendering_clients(&self, session_name: &str) -> io::Result<Vec<RenderingClient>>;
     fn tmux_session_name(&self) -> io::Result<String>;
     fn processes(&self) -> Vec<crate::proc::ProcInfo>;
-    fn pixel_daemon_record(&self) -> Option<(u32, u32)>;
+    fn pixel_daemon_records(&self) -> Vec<(u32, u32)>;
     fn env_var(&self, key: &str) -> Option<String>;
 }
 
@@ -168,8 +168,8 @@ impl Probe for LiveProbe {
         crate::proc::list_processes()
     }
 
-    fn pixel_daemon_record(&self) -> Option<(u32, u32)> {
-        crate::web::pixel_daemon_record()
+    fn pixel_daemon_records(&self) -> Vec<(u32, u32)> {
+        crate::web::pixel_daemon_records()
     }
 
     fn env_var(&self, key: &str) -> Option<String> {
@@ -192,19 +192,25 @@ fn rendering_clients_allowed(clients: &[RenderingClient], probe: &impl Probe) ->
     {
         return true;
     }
-    let Some((daemon_pid, protocol)) = probe.pixel_daemon_record() else {
-        return false;
-    };
-    if protocol != crate::web::TTYD_PIXEL_PROTOCOL {
-        return false;
-    }
     let processes = probe.processes();
-    let daemon_live = processes.iter().any(|process| {
-        process.pid == daemon_pid && crate::proc::command::program_label(&process.cmdline) == "ttyd"
-    });
-    daemon_live
+    let daemons = probe
+        .pixel_daemon_records()
+        .into_iter()
+        .filter(|(_, protocol)| *protocol == crate::web::TTYD_PIXEL_PROTOCOL)
+        .map(|(pid, _)| pid)
+        .filter(|pid| {
+            processes.iter().any(|process| {
+                process.pid == *pid
+                    && crate::proc::command::program_label(&process.cmdline) == "ttyd"
+            })
+        })
+        .collect::<Vec<_>>();
+    !daemons.is_empty()
         && clients.iter().all(|client| {
-            termname_allowed(&client.termname) || descends_from(client.pid, daemon_pid, &processes)
+            termname_allowed(&client.termname)
+                || daemons
+                    .iter()
+                    .any(|daemon| descends_from(client.pid, *daemon, &processes))
         })
 }
 

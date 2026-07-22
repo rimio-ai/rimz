@@ -30,11 +30,15 @@ pub struct ReloadArgs {
 pub fn run(args: ReloadArgs, globals: &GlobalFlags) -> Result<()> {
     let outcome = reload_user_sidebars()?;
     let web_restarted = match rimz::web::restart_if_online(&super::machine_config()) {
-        Ok(Some(web)) => {
-            render::web_warnings(&web.warnings);
-            true
+        Ok(web) => {
+            if let Some(writable) = &web.writable {
+                render::web_warnings(&writable.warnings);
+            }
+            if let Some(share) = &web.share {
+                render::web_warnings(&share.warnings);
+            }
+            web.writable.is_some() || web.share.is_some()
         }
-        Ok(None) => false,
         Err(err) => {
             let _ = writeln!(std::io::stderr().lock(), "rimz: warning: {err}");
             false

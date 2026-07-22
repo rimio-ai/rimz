@@ -15,6 +15,7 @@ use crate::room::session::{LiveSessions, workspace_record_for_session};
 use crate::store::atomic;
 
 mod gate;
+mod share;
 mod ttyd;
 
 pub use gate::GateAuth;
@@ -22,8 +23,11 @@ pub use gate::GateAuth;
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 2;
 
-pub(crate) fn pixel_daemon_record() -> Option<(u32, u32)> {
-    ttyd::pixel_daemon_record()
+pub(crate) fn pixel_daemon_records() -> Vec<(u32, u32)> {
+    [ttyd::pixel_daemon_record(), share::pixel_daemon_record()]
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -61,7 +65,15 @@ pub enum WebErr {
     )]
     ConfiguredPortInUse { port: u16 },
     #[error(
-        "ttyd read-only access is per process, not per credential; read-only credentials are not supported"
+        "[web] share_port {port} is already in use by another process; choose a free port in `rimz config path`"
+    )]
+    ConfiguredSharePortInUse { port: u16 },
+    #[error(
+        "the read-only broadcast ttyd daemon did not accept connections on {address} within 5 seconds"
+    )]
+    ShareStartTimeout { address: SocketAddr },
+    #[error(
+        "ttyd read-only access is per process, not per credential; use `rimz web share` for a read-only broadcast"
     )]
     TtydReadOnlyCredential,
     #[error(
@@ -168,6 +180,26 @@ pub struct WebStatusPayload {
     pub pid: Option<u32>,
     pub interface: String,
     pub port: u16,
+    #[serde(default)]
+    pub share: WebShareStatus,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebShareStatus {
+    pub online: bool,
+    pub pid: Option<u32>,
+    pub interface: String,
+    pub port: u16,
+    #[serde(default)]
+    pub sessions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSharePayload {
+    pub version: String,
+    pub url: String,
+    pub session: String,
+    pub port: u16,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,6 +208,7 @@ pub enum WebWarning {
     BrowserFontSkipped(String),
     BrowserThemeSkipped(String),
     HeaderAuthUnprotected(String),
+    BroadcastUnauthenticated(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,12 +226,33 @@ pub struct WebDaemonOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebShareOutcome {
+    pub payload: WebSharePayload,
+    pub changed: bool,
+    pub warnings: Vec<WebWarning>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebUnshareOutcome {
+    pub changed: bool,
+    pub sessions: Vec<String>,
+    pub daemon: Option<WebDaemonOutcome>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebRestartOutcome {
     pub pid: u32,
     pub interface: String,
     pub port: u16,
     pub was_online: bool,
     pub warnings: Vec<WebWarning>,
+    pub share: Option<WebDaemonOutcome>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebReloadOutcome {
+    pub writable: Option<WebDaemonOutcome>,
+    pub share: Option<WebDaemonOutcome>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -269,24 +323,26 @@ pub fn ensure_daemon(config: &MachineConfig) -> Result<WebDaemonOutcome> {
 
 pub fn restart_daemon(config: &MachineConfig) -> Result<WebRestartOutcome> {
     let (daemon, was_online) = ttyd::restart_daemon(config)?;
+    let share = share::restart_if_shared(config)?.map(share_daemon_outcome);
     Ok(WebRestartOutcome {
         pid: daemon.pid,
         interface: daemon.interface,
         port: daemon.port,
         was_online,
         warnings: daemon.warnings,
+        share,
     })
 }
 
-pub fn restart_if_online(config: &MachineConfig) -> Result<Option<WebDaemonOutcome>> {
-    ttyd::restart_if_online(config).map(|daemon| {
-        daemon.map(|daemon| WebDaemonOutcome {
-            pid: daemon.pid,
-            interface: daemon.interface,
-            port: daemon.port,
-            warnings: daemon.warnings,
-        })
-    })
+pub fn restart_if_online(config: &MachineConfig) -> Result<WebReloadOutcome> {
+    let writable = ttyd::restart_if_online(config)?.map(|daemon| WebDaemonOutcome {
+        pid: daemon.pid,
+        interface: daemon.interface,
+        port: daemon.port,
+        warnings: daemon.warnings,
+    });
+    let share = share::restart_if_online(config)?.map(share_daemon_outcome);
+    Ok(WebReloadOutcome { writable, share })
 }
 
 pub fn credential_summary() -> Result<Option<CredentialSummary>> {
@@ -335,6 +391,8 @@ pub fn revoke_credential(name: Option<&str>) -> Result<bool> {
 
 pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
     let daemon = ttyd::daemon_status()?;
+    let share_daemon = share::daemon_status()?;
+    let shared_sessions = share::sessions()?;
     Ok(WebStatusPayload {
         version: WEB_SCHEMA_VERSION.to_owned(),
         online: daemon.is_some(),
@@ -344,11 +402,83 @@ pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
             |record| record.interface.clone(),
         ),
         port: daemon.map_or(config.web.port, |record| record.port),
+        share: WebShareStatus {
+            online: share_daemon.is_some(),
+            pid: share_daemon.as_ref().map(|record| record.pid),
+            interface: share_daemon.as_ref().map_or_else(
+                || config.web.interface.clone(),
+                |record| record.interface.clone(),
+            ),
+            port: share_daemon.map_or(config.web.share_port, |record| record.port),
+            sessions: shared_sessions,
+        },
     })
 }
 
-pub fn stop_daemon() -> Result<bool> {
-    ttyd::stop_daemon()
+pub fn stop_daemons() -> Result<usize> {
+    Ok(usize::from(ttyd::stop_daemon()?) + usize::from(share::stop_daemon()?))
+}
+
+pub fn share_session(session: &str, config: &MachineConfig) -> Result<WebShareOutcome> {
+    if live_session_target(Some(session)).is_none() {
+        return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
+    }
+    let (daemon, changed) = share::add_session(session, config)?;
+    let base_url = normalized_base_url(config.web.share_base_url.as_deref(), daemon.record.port);
+    Ok(WebShareOutcome {
+        payload: WebSharePayload {
+            version: "rimz.web.share.v1".to_owned(),
+            url: join_session_url(&base_url, session),
+            session: session.to_owned(),
+            port: daemon.record.port,
+        },
+        changed,
+        warnings: daemon.warnings,
+    })
+}
+
+pub fn unshare_session(session: &str, config: &MachineConfig) -> Result<WebUnshareOutcome> {
+    let mutation = share::remove_session(session, config)?;
+    Ok(WebUnshareOutcome {
+        changed: mutation.changed,
+        sessions: mutation.sessions,
+        daemon: mutation.daemon.map(share_daemon_outcome),
+    })
+}
+
+pub fn unshare_all(config: &MachineConfig) -> Result<WebUnshareOutcome> {
+    let mutation = share::remove_all(config)?;
+    Ok(WebUnshareOutcome {
+        changed: mutation.changed,
+        sessions: mutation.sessions,
+        daemon: mutation.daemon.map(share_daemon_outcome),
+    })
+}
+
+pub fn shared_sessions() -> Result<Vec<String>> {
+    share::sessions()
+}
+
+pub fn share_attach_command(session: Option<&str>) -> Result<CommandSpec> {
+    let Some(session) = session.filter(|session| !session.is_empty()) else {
+        return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
+    };
+    if !share::contains(session)? {
+        return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
+    }
+    let Some((session, mux)) = live_session_target(Some(session)) else {
+        return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
+    };
+    Ok(crate::mux::backend_for(mux).attach_readonly_command(session))
+}
+
+fn share_daemon_outcome(daemon: share::RunningDaemon) -> WebDaemonOutcome {
+    WebDaemonOutcome {
+        pid: daemon.record.pid,
+        interface: daemon.record.interface,
+        port: daemon.record.port,
+        warnings: daemon.warnings,
+    }
 }
 
 const WEB_ADDRESSABLE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -379,20 +509,32 @@ pub fn ensure_session_addressable(mux: MuxName, session: &str) -> Result<()> {
 
 pub fn existing_session_attach_command(session: Option<&str>) -> Result<CommandSpec> {
     let live = LiveSessions::probe();
-    let target = session
-        .filter(|session| !session.is_empty())
-        .and_then(|session| {
-            workspace_record_for_session(session)
-                .ok()
-                .flatten()
-                .and_then(|_| live.mux_of(session).map(|mux| (session, mux)))
-        });
+    let target = live_session_target_with_probe(session, &live);
     let Some((session, mux)) = target else {
         return Err(WebErr::InvalidSession(invalid_session_message(
             session, &live,
         )?));
     };
     Ok(crate::mux::backend_for(mux).attach_existing_command(session))
+}
+
+fn live_session_target(session: Option<&str>) -> Option<(&str, MuxName)> {
+    let live = LiveSessions::probe();
+    live_session_target_with_probe(session, &live)
+}
+
+fn live_session_target_with_probe<'a>(
+    session: Option<&'a str>,
+    live: &LiveSessions,
+) -> Option<(&'a str, MuxName)> {
+    session
+        .filter(|session| !session.is_empty())
+        .and_then(|session| {
+            workspace_record_for_session(session)
+                .ok()
+                .flatten()
+                .and_then(|_| live.mux_of(session).map(|mux| (session, mux)))
+        })
 }
 
 fn invalid_session_message(session: Option<&str>, live: &LiveSessions) -> Result<String> {
@@ -513,5 +655,34 @@ mod tests {
         .expect("old v2 payload");
         assert_eq!(basic.auth, WebAuth::Basic);
         assert_eq!(basic.tunnel_port, None);
+    }
+
+    #[test]
+    fn status_share_block_is_additive_to_v2() {
+        let old: WebStatusPayload = serde_json::from_str(
+            r#"{"version":"rimz.web.v2","online":false,"pid":null,"interface":"127.0.0.1","port":8200}"#,
+        )
+        .expect("old status payload");
+        assert_eq!(old.share, WebShareStatus::default());
+
+        let status = WebStatusPayload {
+            version: WEB_SCHEMA_VERSION.to_owned(),
+            online: true,
+            pid: Some(10),
+            interface: "127.0.0.1".to_owned(),
+            port: 8200,
+            share: WebShareStatus {
+                online: true,
+                pid: Some(20),
+                interface: "127.0.0.1".to_owned(),
+                port: 8201,
+                sessions: vec!["rimz-test".to_owned()],
+            },
+        };
+        let roundtrip = serde_json::from_slice::<WebStatusPayload>(
+            &serde_json::to_vec(&status).expect("serialize status"),
+        )
+        .expect("parse status");
+        assert_eq!(roundtrip, status);
     }
 }

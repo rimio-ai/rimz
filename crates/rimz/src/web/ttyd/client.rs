@@ -32,13 +32,13 @@ const FONT_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_FONT_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct ClientProfile {
-    pub(super) args: Vec<String>,
-    pub(super) warnings: Vec<WebWarning>,
-    pub(super) pixel_protocol: Option<u32>,
+pub(in crate::web) struct ClientProfile {
+    pub(in crate::web) args: Vec<String>,
+    pub(in crate::web) warnings: Vec<WebWarning>,
+    pub(in crate::web) pixel_protocol: Option<u32>,
 }
 
-pub(super) fn profile(config: &MachineConfig, ttyd_program: &Path) -> ClientProfile {
+pub(in crate::web) fn profile(config: &MachineConfig, ttyd_program: &Path) -> ClientProfile {
     let mut profile = ClientProfile {
         args: vec![
             "-t".to_owned(),

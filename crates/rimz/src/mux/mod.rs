@@ -787,6 +787,9 @@ pub trait MuxBackend: Send + Sync {
     fn attach_command(&self, name: &str, config: &crate::config::MultiplexerConfig) -> CommandSpec;
     /// Attach to a live session without creating a missing session.
     fn attach_existing_command(&self, name: &str) -> CommandSpec;
+    /// Attach a browser broadcast client without granting mux input where the
+    /// backend supports that distinction.
+    fn attach_readonly_command(&self, name: &str) -> CommandSpec;
     fn detach(&self, name: &str) -> Result<()>;
     /// Force-remove a session by name. A missing session is success — the goal
     /// state is "no session by that name", so callers can retire a stale or

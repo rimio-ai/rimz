@@ -107,6 +107,13 @@ fn existing_session_attach_has_no_creation_or_options_tail() {
     assert!(!spec.args.iter().any(|arg| arg == "options"));
 }
 
+#[test]
+fn readonly_attach_relies_on_the_broadcast_ttyd_input_boundary() {
+    let spec = ZellijBackend::new().attach_readonly_command("rimz-test");
+
+    assert_eq!(spec.args, ["attach", "rimz-test"]);
+}
+
 #[cfg(unix)]
 fn terminal_pane(
     id: u64,

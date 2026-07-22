@@ -1,4 +1,4 @@
-//! `rimz web` — browser access through the shared ttyd daemon.
+//! `rimz web` — writable browser access and read-only room broadcasts.
 
 use std::io::Write as _;
 use std::net::SocketAddr;
@@ -23,6 +23,10 @@ enum WebSubcmd {
     Open(WebOpenArgs),
     /// Print the current workspace's web URL without starting the daemon.
     Url(WebUrlArgs),
+    /// Share one live room as an unauthenticated read-only broadcast.
+    Share(WebShareArgs),
+    /// Stop sharing one room or every room.
+    Unshare(WebUnshareArgs),
     /// Report the shared ttyd daemon's status.
     Status(WebStatusArgs),
     /// Start the shared ttyd daemon.
@@ -41,6 +45,8 @@ enum WebSubcmd {
     Exec {
         #[arg(value_name = "SESSION")]
         session: Option<String>,
+        #[arg(long)]
+        share: bool,
     },
     /// Restrict and forward connections to the shared ttyd daemon.
     #[command(hide = true)]
@@ -95,6 +101,35 @@ struct WebUrlArgs {
 }
 
 #[derive(Debug, Args)]
+struct WebShareArgs {
+    /// Workspace path. Defaults to the current directory.
+    #[arg(value_name = "PATH")]
+    path: Option<PathBuf>,
+    /// Existing live RimZ session to share instead of resolving a path.
+    #[arg(long, conflicts_with = "path")]
+    session: Option<String>,
+    /// Print the URL without launching a browser.
+    #[arg(long)]
+    print: bool,
+    /// Emit the versioned `rimz.web.share.v1` payload.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct WebUnshareArgs {
+    /// Workspace path. Defaults to the current directory.
+    #[arg(value_name = "PATH", conflicts_with = "session")]
+    path: Option<PathBuf>,
+    /// RimZ session name to stop sharing.
+    #[arg(long)]
+    session: Option<String>,
+    /// Stop sharing every room.
+    #[arg(long, conflicts_with_all = ["path", "session"])]
+    all: bool,
+}
+
+#[derive(Debug, Args)]
 struct WebStatusArgs {
     /// Emit JSON.
     #[arg(long)]
@@ -129,12 +164,14 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
     })) {
         WebSubcmd::Open(args) => open(args, globals),
         WebSubcmd::Url(args) => url(args, globals),
+        WebSubcmd::Share(args) => share(args, globals),
+        WebSubcmd::Unshare(args) => unshare(args, globals),
         WebSubcmd::Status(args) => status(args),
         WebSubcmd::Start => start(),
         WebSubcmd::Restart => restart(),
         WebSubcmd::Stop => stop(),
         WebSubcmd::Token { command } => token(command),
-        WebSubcmd::Exec { session } => exec(session.as_deref()),
+        WebSubcmd::Exec { session, share } => exec(session.as_deref(), share),
         WebSubcmd::Gate {
             listen,
             upstream,
@@ -209,6 +246,66 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
+fn share(args: WebShareArgs, globals: &GlobalFlags) -> Result<()> {
+    let config = machine_config();
+    ensure_web_enabled(&config)?;
+    let context = if let Some(session) = args.session {
+        room::web_room_for_session(&session, globals)?
+    } else {
+        let path = args.path.unwrap_or_else(|| PathBuf::from("."));
+        room::existing_web_room_for_path(&path, globals)?
+    };
+    let outcome = rimz::web::share_session(context.session_name(), &config)?;
+    crate::cli::render::web_warnings(&outcome.warnings);
+    if args.json {
+        return crate::cli::render::json(&outcome.payload);
+    }
+    print_url(&outcome.payload.url)?;
+    if !args.print {
+        open_browser_best_effort(&outcome.payload.url);
+    }
+    Ok(())
+}
+
+fn unshare(args: WebUnshareArgs, globals: &GlobalFlags) -> Result<()> {
+    let config = machine_config();
+    if args.all {
+        let outcome = rimz::web::unshare_all(&config)?;
+        writeln!(
+            std::io::stdout().lock(),
+            "{}",
+            if outcome.changed {
+                "stopped sharing all rooms"
+            } else {
+                "no rooms were shared"
+            }
+        )?;
+        return Ok(());
+    }
+    let session = if let Some(session) = args.session {
+        session
+    } else {
+        let path = args.path.unwrap_or_else(|| PathBuf::from("."));
+        rimz::WorkspaceResolver::resolve(&path, globals.root.clone())
+            .with_context(|| format!("resolving workspace at {}", path.display()))?
+            .session_name
+    };
+    let outcome = rimz::web::unshare_session(&session, &config)?;
+    if let Some(daemon) = &outcome.daemon {
+        crate::cli::render::web_warnings(&daemon.warnings);
+    }
+    writeln!(
+        std::io::stdout().lock(),
+        "{}",
+        if outcome.changed {
+            format!("stopped sharing `{session}`")
+        } else {
+            format!("`{session}` was not shared")
+        }
+    )?;
+    Ok(())
+}
+
 fn status(args: WebStatusArgs) -> Result<()> {
     let status = rimz::web::status(&machine_config())?;
     if args.json {
@@ -226,6 +323,29 @@ fn status(args: WebStatusArgs) -> Result<()> {
             stdout,
             "ttyd: offline (configured listener {})",
             listener_display(&status.interface, status.port)
+        )?;
+    }
+    if let Some(pid) = status.share.pid {
+        let sessions = if status.share.sessions.is_empty() {
+            "(none)".to_owned()
+        } else {
+            status.share.sessions.join(", ")
+        };
+        writeln!(
+            stdout,
+            "share: online on {} (pid {pid}), sharing: {sessions}",
+            listener_display(&status.share.interface, status.share.port)
+        )?;
+    } else {
+        writeln!(
+            stdout,
+            "share: offline (configured listener {}), sharing: {}",
+            listener_display(&status.share.interface, status.share.port),
+            if status.share.sessions.is_empty() {
+                "(none)".to_owned()
+            } else {
+                status.share.sessions.join(", ")
+            }
         )?;
     }
     Ok(())
@@ -258,11 +378,20 @@ fn restart() -> Result<()> {
             "ttyd: was offline; started a fresh daemon"
         )?;
     }
+    if let Some(share) = outcome.share {
+        crate::cli::render::web_warnings(&share.warnings);
+        writeln!(
+            std::io::stdout().lock(),
+            "share: online on {} (pid {})",
+            listener_display(&share.interface, share.port),
+            share.pid
+        )?;
+    }
     Ok(())
 }
 
 fn stop() -> Result<()> {
-    let stopped = usize::from(rimz::web::stop_daemon()?);
+    let stopped = rimz::web::stop_daemons()?;
     writeln!(
         std::io::stdout().lock(),
         "stopped {} ttyd daemon{}",
@@ -309,9 +438,22 @@ fn render_revoked(stopped: bool) -> Result<()> {
     Ok(())
 }
 
-fn exec(session: Option<&str>) -> Result<()> {
-    let spec = rimz::web::existing_session_attach_command(session)?;
+fn exec(session: Option<&str>, share: bool) -> Result<()> {
+    let spec = if share {
+        rimz::web::share_attach_command(session)?
+    } else {
+        rimz::web::existing_session_attach_command(session)?
+    };
     room::exec_attach_command(&spec)
+}
+
+fn ensure_web_enabled(config: &rimz::config::MachineConfig) -> Result<()> {
+    if !config.web.enabled {
+        bail!(
+            "Browser access is disabled: set `[web] enabled = true` in the RimZ config on the machine serving this room (`rimz config path`) to allow browser sharing."
+        );
+    }
+    Ok(())
 }
 
 fn write_web_credential(credential: &WebCredential) {

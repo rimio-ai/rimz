@@ -187,6 +187,19 @@ impl MuxBackend for TmuxBackend {
         self.cmd().args(["attach", "-t", name])
     }
 
+    fn attach_readonly_command(&self, name: &str) -> CommandSpec {
+        let mut spec = self.cmd().args(["attach", "-t", name, "-r"]);
+        if self
+            .version()
+            .ok()
+            .and_then(|raw| super::parse_version(&raw))
+            .is_some_and(|version| version >= (3, 2, 0))
+        {
+            spec = spec.args(["-f", "ignore-size"]);
+        }
+        spec
+    }
+
     fn detach(&self, name: &str) -> Result<()> {
         self.cmd()
             .args(["detach-client", "-s", name])

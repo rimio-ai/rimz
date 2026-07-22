@@ -87,6 +87,10 @@ pub(crate) fn web_warnings(warnings: &[rimz::web::WebWarning]) {
                 let _ = writeln!(stderr, "rimz: warning: {detail}");
                 None
             }
+            rimz::web::WebWarning::BroadcastUnauthenticated(detail) => {
+                let _ = writeln!(stderr, "rimz: warning: {detail}");
+                None
+            }
         };
         if let Some((surface, detail)) = skipped {
             let _ = writeln!(stderr, "rimz: skipping {surface}: {detail}");

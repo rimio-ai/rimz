@@ -456,6 +456,11 @@ impl MuxBackend for ZellijBackend {
         self.cmd().args(["attach", name])
     }
 
+    fn attach_readonly_command(&self, name: &str) -> CommandSpec {
+        // Zellij has no read-only attach; broadcast ttyd drops all client input.
+        self.attach_existing_command(name)
+    }
+
     fn detach(&self, _name: &str) -> Result<()> {
         self.cmd().args(["action", "detach"]).run().map(|_| ())
     }
