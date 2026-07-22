@@ -18,6 +18,7 @@ A follow-up to 0.4.0: one shared daemon serves browser access for Zellij and tmu
 
 ### Added
 
+- Browser rooms can delegate authentication to a reverse proxy through `[web] auth_header`, bind a configured IP through `[web] interface`, and restrict non-loopback clients to `[web] trusted_proxies` through a source-address gate. → [web](./docs/guide/web.md#behind-a-reverse-proxy)
 - Sidebar worktree PR badges open their pull request through terminal hyperlinks, including across SSH and browser attaches. → [sidebar](./docs/guide/sidebar.md#the-agent-cards)
 - First-run setup asks whether to enable auto-continue and automatic Codex reset-credit redemption together, defaulting yes. → [loops](./docs/guide/loops.md)
 - Browser rooms provision a verified JetBrainsMono or CaskaydiaCove Nerd Font, refresh xterm after the face loads so icons render instead of blocks, accept a local or HTTPS custom font, and use the active RimZ terminal colors. The browser cursor stays steady, Shift+Enter reaches agents as a soft newline, tmux copy-mode yanks and Shift-drag selections reach the system clipboard, disconnect and resize popups use a dark-glass style, and macOS Option chords reach tmux without leaking composed characters. → [web](./docs/guide/web.md#browser-appearance-and-input)

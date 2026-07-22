@@ -1,3 +1,4 @@
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -472,6 +473,178 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         String::from_utf8_lossy(&stop.stdout),
         "revoked ttyd credential and stopped 1 daemon(s)\n"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn trusted_header_open_omits_basic_auth_and_config_drift_restarts() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-trusted-header.log");
+    write_machine_config(
+        &fixture.env,
+        &format!(
+            "[web]\nport = {}\nauth_header = \"X-Authentik-Username\"\nstyle_client = false\n",
+            fixture.web_port
+        ),
+    );
+
+    let human = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--print"])
+        .bounded_output()
+        .expect("open trusted-header daemon");
+    assert_success(&human, "trusted-header web open");
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(
+        stderr.contains(
+            "authentication is delegated to the reverse proxy (trusted header `X-Authentik-Username`)"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("password"), "{stderr}");
+
+    let json = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("inspect trusted-header daemon");
+    let payload = success_json(&json, "trusted-header JSON open");
+    assert_eq!(payload["auth"]["mode"], "trusted_header");
+    assert_eq!(payload["auth"]["header"], "X-Authentik-Username");
+    assert!(payload.get("credential").is_none());
+    assert!(
+        !fixture
+            .env
+            .state_root()
+            .join("rimz/web-ttyd-credential.json")
+            .exists(),
+        "trusted-header mode minted a Basic-Auth credential"
+    );
+
+    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read trusted-header log");
+    let daemon_argv = log
+        .lines()
+        .find(|line| line.contains("\tweb\texec"))
+        .expect("trusted-header daemon argv");
+    assert!(
+        daemon_argv.contains("\t-H\tX-Authentik-Username\t"),
+        "{daemon_argv}"
+    );
+    assert!(!daemon_argv.contains("\t-c\t"), "{daemon_argv}");
+
+    let token = fixture
+        .command()
+        .args(["web", "token", "create"])
+        .bounded_output()
+        .expect("refuse trusted-header credential rotation");
+    assert!(!token.status.success());
+    let stderr = String::from_utf8_lossy(&token.stderr);
+    assert!(
+        stderr.contains("credential rotation is disabled"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("unset it to return to Basic Auth"),
+        "{stderr}"
+    );
+
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("trusted-header daemon record"))
+            .expect("trusted-header daemon JSON");
+    write_machine_config(
+        &fixture.env,
+        &format!("[web]\nport = {}\nstyle_client = false\n", fixture.web_port),
+    );
+    let basic = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("restart daemon in Basic-Auth mode");
+    let payload = success_json(&basic, "Basic-Auth restart");
+    assert_eq!(payload["auth"]["mode"], "basic");
+    assert_eq!(payload["credential"]["username"], "rimz");
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("Basic daemon record"))
+            .expect("Basic daemon JSON");
+    assert_ne!(before["pid"], after["pid"], "auth drift reused the daemon");
+
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop restarted daemon");
+    assert_success(&stop, "stop restarted daemon");
+}
+
+#[cfg(unix)]
+#[test]
+fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-trusted-proxy.log");
+    write_machine_config(
+        &fixture.env,
+        &format!(
+            "[web]\nport = {}\ntrusted_proxies = [\"192.0.2.0/24\"]\nstyle_client = false\n",
+            fixture.web_port
+        ),
+    );
+
+    let start = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("start trusted-proxy gate");
+    assert_success(&start, "trusted-proxy gate start");
+
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("gated daemon record"))
+            .expect("gated daemon JSON");
+    let ttyd_pid = record["pid"].as_u64().expect("ttyd pid") as u32;
+    let gate_pid = record["gate"]["pid"].as_u64().expect("gate pid") as u32;
+    let upstream_port = record["gate"]["upstream_port"]
+        .as_u64()
+        .expect("upstream port") as u16;
+    assert_ne!(upstream_port, fixture.web_port);
+
+    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read gated ttyd log");
+    let daemon_argv = log
+        .lines()
+        .find(|line| line.contains("\tweb\texec"))
+        .expect("gated daemon argv");
+    assert!(daemon_argv.contains("\t-i\t127.0.0.1\t"), "{daemon_argv}");
+    assert!(
+        daemon_argv.contains(&format!("\t-p\t{upstream_port}\t")),
+        "{daemon_argv}"
+    );
+
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", fixture.web_port))
+        .expect("connect through gate");
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .expect("write through gate");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read through gate");
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response:?}");
+
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop gated daemon");
+    assert_success(&stop, "stop gated daemon");
+    let live = rimz::proc::list_processes();
+    assert!(!live.iter().any(|process| process.pid == ttyd_pid));
+    assert!(!live.iter().any(|process| process.pid == gate_pid));
 }
 
 #[cfg(unix)]

@@ -1,6 +1,7 @@
 //! `rimz web` — browser access through the shared ttyd daemon.
 
 use std::io::Write as _;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -8,7 +9,7 @@ use clap::{Args, Subcommand};
 
 use super::{GlobalFlags, machine_config, open_browser_best_effort};
 use crate::cli::room;
-use rimz::web::WebCredential;
+use rimz::web::{WebAuth, WebCredential};
 
 #[derive(Debug, Args)]
 pub struct WebArgs {
@@ -38,6 +39,16 @@ enum WebSubcmd {
     Exec {
         #[arg(value_name = "SESSION")]
         session: Option<String>,
+    },
+    /// Restrict and forward connections to the shared ttyd daemon.
+    #[command(hide = true)]
+    Gate {
+        #[arg(long)]
+        listen: SocketAddr,
+        #[arg(long)]
+        upstream: SocketAddr,
+        #[arg(long = "allow", required = true)]
+        allow: Vec<String>,
     },
 }
 
@@ -119,6 +130,11 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
         WebSubcmd::Stop => stop(),
         WebSubcmd::Token { command } => token(command),
         WebSubcmd::Exec { session } => exec(session.as_deref()),
+        WebSubcmd::Gate {
+            listen,
+            upstream,
+            allow,
+        } => rimz::web::serve_gate(listen, upstream, &allow).map_err(Into::into),
     }
 }
 
@@ -143,13 +159,21 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         return crate::cli::render::json(&outcome.payload);
     }
     print_url(&outcome.payload.url)?;
-    write_web_credential(
-        outcome
-            .payload
-            .credential
-            .as_ref()
-            .context("shared ttyd daemon returned no credential")?,
-    );
+    match &outcome.payload.auth {
+        WebAuth::Basic => write_web_credential(
+            outcome
+                .payload
+                .credential
+                .as_ref()
+                .context("shared ttyd daemon returned no credential")?,
+        ),
+        WebAuth::TrustedHeader { header } => {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: authentication is delegated to the reverse proxy (trusted header `{header}`)"
+            );
+        }
+    }
     if !args.print {
         open_browser_best_effort(&outcome.payload.url);
     }
@@ -180,11 +204,15 @@ fn status(args: WebStatusArgs) -> Result<()> {
     if let Some(pid) = status.pid {
         writeln!(
             stdout,
-            "ttyd: online on 127.0.0.1:{} (pid {pid})",
-            status.port
+            "ttyd: online on {} (pid {pid})",
+            listener_display(&status.interface, status.port)
         )?;
     } else {
-        writeln!(stdout, "ttyd: offline (configured port {})", status.port)?;
+        writeln!(
+            stdout,
+            "ttyd: offline (configured listener {})",
+            listener_display(&status.interface, status.port)
+        )?;
     }
     Ok(())
 }
@@ -194,8 +222,8 @@ fn start() -> Result<()> {
     crate::cli::render::web_warnings(&outcome.warnings);
     writeln!(
         std::io::stdout().lock(),
-        "ttyd: online on 127.0.0.1:{} (pid {})",
-        outcome.port,
+        "ttyd: online on {} (pid {})",
+        listener_display(&outcome.interface, outcome.port),
         outcome.pid
     )?;
     Ok(())
@@ -266,4 +294,11 @@ fn write_web_credential(credential: &WebCredential) {
 fn print_url(url: &str) -> Result<()> {
     writeln!(std::io::stdout().lock(), "{url}")?;
     Ok(())
+}
+
+fn listener_display(interface: &str, port: u16) -> String {
+    interface.parse::<std::net::IpAddr>().map_or_else(
+        |_| format!("{interface}:{port}"),
+        |ip| SocketAddr::new(ip, port).to_string(),
+    )
 }

@@ -56,6 +56,16 @@ On Zellij, RimZ loads a small presence plugin into each session so the sidebar l
 
 The plugin's code, argv, and configuration are all RimZ-owned, never your `config.kdl`, and it ships no pane content anywhere. The grant lives in Zellij's own permission store, where its plugin manager can revoke it; revoking stops pane discovery until you restore it, and `rimz doctor` names the fix.
 
+### Browser listener
+
+Browser access defaults to a loopback ttyd listener with one machine-wide Basic-Auth credential. That credential reaches every live RimZ room on the machine and grants a shell as the serving user, so handle it like a machine-wide SSH key.
+
+`[web] auth_header` delegates the decision to an authenticating reverse proxy. ttyd treats any non-empty value in that header as authenticated; the proxy strips client-supplied copies, injects its own value after authentication, and remains the only non-loopback source that can reach the listener.
+
+`[web] trusted_proxies` places a TCP source-address gate before ttyd for this boundary. The gate admits matching IPv4 or IPv6 CIDRs and always admits loopback, then forwards raw TCP to a loopback ttyd process. Pair the CIDRs with the host firewall, and account for the source address produced by container or host networking. On a multi-user host, loopback remains inside the trusted boundary, so use host-level user isolation when another local user must not present the configured header.
+
+The [web guide](./web.md#behind-a-reverse-proxy) configures Traefik and Authentik for this path.
+
 ## What leaves your machine
 
 RimZ keeps your work local. Your prompts, transcripts, pane text, file paths, and credentials stay on the box. The network calls RimZ makes reuse logins you already hold and reach only services you already use:

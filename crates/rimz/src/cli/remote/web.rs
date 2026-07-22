@@ -461,6 +461,12 @@ fn parse_web_payload(
             payload.version
         );
     }
+    if let rimz::web::WebAuth::TrustedHeader { .. } = &payload.auth {
+        bail!(
+            "the remote serves browser access behind a reverse proxy (trusted-header auth) — open `{}` directly; no SSH tunnel applies",
+            payload.url
+        );
+    }
     let credential = payload
         .credential
         .clone()
@@ -602,6 +608,24 @@ fn report_web_tunnel_up(host: &str, reconnect: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trusted_header_payload_refuses_an_ssh_tunnel() {
+        let bytes = br#"{
+            "version":"rimz.web.v2",
+            "url":"https://devbox.example/rimz/?arg=room",
+            "session":"room",
+            "port":8200,
+            "auth":{"mode":"trusted_header","header":"X-Forwarded-User"}
+        }"#;
+        let err = parse_web_payload(bytes).expect_err("trusted-header tunnel refusal");
+        let message = err.to_string();
+        assert!(message.contains("behind a reverse proxy"), "{message}");
+        assert!(
+            message.contains("open `https://devbox.example/rimz/?arg=room` directly"),
+            "{message}"
+        );
+    }
 
     #[test]
     fn web_exit_settlement_uses_master_or_port_establishment() {
