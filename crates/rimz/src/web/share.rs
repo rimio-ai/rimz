@@ -196,18 +196,20 @@ fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
 }
 
 fn ensure_daemon_locked(config: &MachineConfig, desired: &DaemonSpec) -> Result<RunningDaemon> {
+    let program = ttyd::required_program()?;
     let daemon = daemon_status_locked()?;
     if let Some(record) = daemon.as_ref()
         && record_matches(record, desired)
     {
         return Ok(running_daemon(record.clone(), desired, Vec::new()));
     }
-    start_fresh_locked(config, desired, daemon)
+    start_fresh_locked_with_program(config, desired, daemon, &program)
 }
 
 fn restart_daemon_locked(config: &MachineConfig, desired: &DaemonSpec) -> Result<RunningDaemon> {
+    let program = ttyd::required_program()?;
     let daemon = daemon_status_locked()?;
-    start_fresh_locked(config, desired, daemon)
+    start_fresh_locked_with_program(config, desired, daemon, &program)
 }
 
 fn start_fresh_locked(
@@ -215,14 +217,23 @@ fn start_fresh_locked(
     desired: &DaemonSpec,
     daemon: Option<DaemonRecord>,
 ) -> Result<RunningDaemon> {
-    let program = ttyd::program()?;
+    let program = ttyd::required_program()?;
+    start_fresh_locked_with_program(config, desired, daemon, &program)
+}
+
+fn start_fresh_locked_with_program(
+    config: &MachineConfig,
+    desired: &DaemonSpec,
+    daemon: Option<DaemonRecord>,
+    program: &Path,
+) -> Result<RunningDaemon> {
     let address = ttyd::socket_address(&desired.interface, desired.port)?;
     if daemon.as_ref().is_none_or(|record| {
         ttyd::socket_address(&record.interface, record.port).ok() != Some(address)
     }) {
         ensure_share_port_available(address)?;
     }
-    let profile = ttyd::client::profile(config, &program);
+    let profile = ttyd::client::profile(config, program);
     if let Some(record) = daemon {
         stop_record(&record)?;
     }
@@ -233,7 +244,7 @@ fn start_fresh_locked(
         .map_err(|_| WebErr::InvalidInterface {
             value: desired.interface.clone(),
         })?;
-    let spec = spawn_spec(&program, interface, desired.port, &profile.args)?;
+    let spec = spawn_spec(program, interface, desired.port, &profile.args)?;
     let pid = ttyd::spawn_detached(spec)?;
     let probe = ttyd::probe_address(address);
     if !ttyd::wait_for_address(probe, START_TIMEOUT) {

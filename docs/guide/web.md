@@ -4,14 +4,15 @@ A terminal attach works well while you have the right terminal open. When you ne
 
 ## Install ttyd on the serving machine
 
-Both Zellij and tmux browser rooms use [ttyd](https://github.com/tsl0922/ttyd):
+Both Zellij and tmux browser rooms require [ttyd](https://github.com/tsl0922/ttyd) 1.7.5 or newer:
 
 ```sh
 brew install ttyd        # macOS or Linuxbrew
-apt install ttyd         # Debian or Ubuntu
+apt install ttyd         # when the configured repository provides 1.7.5+
+ttyd --version
 ```
 
-`rimz doctor` reports the resolved ttyd path and version. A normal `rimz start` still opens the terminal room when ttyd is absent; it prints the install fix because browser startup is best-effort.
+Run `brew upgrade ttyd` when Homebrew has an older build. On Debian or Ubuntu, check the apt candidate before installing and use a current repository or the ttyd release page when the distribution package is below 1.7.5. `rimz doctor` reports the resolved ttyd path and version. An explicit web command refuses a missing or older binary with this upgrade fix; a normal `rimz start` still opens the terminal room and prints the warning because browser startup is best-effort.
 
 ## Serve a local room
 
@@ -36,7 +37,7 @@ The browser shows a Basic-Auth prompt. Use the printed user `rimz` and password.
 
 Safari can load this direct local page but cannot attach the terminal because WebKit omits Basic credentials from WebSocket upgrades. Use `rimz remote connect --web`, put a trusted-header reverse proxy in front, or open the direct local URL in Chrome. The remote tunnel injects the credential locally and supports Safari without changing the always-on daemon topology.
 
-With `[web] enabled = true`, every normal `rimz start` also asks for the shared daemon after the room is ready. A missing binary, occupied port, or daemon error warns on stderr and leaves the room usable in the terminal.
+With `[web] enabled = true`, every normal `rimz start` also asks for the shared daemon after the room is ready. A missing or pre-1.7.5 binary, occupied port, or daemon error warns on stderr and leaves the room usable in the terminal.
 
 ## Share a read-only broadcast
 
@@ -74,7 +75,7 @@ RimZ gives ttyd the active theme and configured browser font when the daemon sta
 
 Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL. A family with no preset and no source asks the browser to resolve an installed font. `style_client = false` keeps ttyd's browser colors while retaining keyboard, cursor, clipboard, and reconnect fixes.
 
-The compatibility layer keeps the cursor steady when terminal apps request blinking while preserving their requested cursor shapes, preserves Shift+Enter and macOS Option-as-Meta input, sends tmux copy-mode yanks and Shift-drag selections to the clipboard, refreshes xterm after a downloaded font loads, and renders pixel pets plus the pixel context meter in qualifying tmux rooms. Missing font bytes warn and fall back to monospace. Zellij rooms, tmux below 3.6, disabled passthrough, a stock-page fallback, or any attached plain terminal use sextant cell art instead.
+The compatibility layer keeps the cursor steady when terminal apps request blinking while preserving their requested cursor shapes, preserves Shift+Enter and macOS Option-as-Meta input, keeps residual wheel motion from becoming arrow keys during attach transitions, sends tmux copy-mode yanks and Shift-drag selections to the clipboard, refreshes xterm after a downloaded font loads, and renders pixel pets plus the pixel context meter in qualifying tmux rooms. Missing font bytes warn and fall back to monospace. Zellij rooms, tmux below 3.6, disabled passthrough, a stock-page fallback, or any attached plain terminal use sextant cell art instead.
 
 A browser tab kept open while RimZ upgrades can retain the previous compatibility page until it reloads. Reload that tab after an upgrade to converge it with the new shared daemon.
 

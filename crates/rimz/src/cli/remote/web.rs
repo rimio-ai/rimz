@@ -16,7 +16,7 @@ use anyhow::{Context, Result, bail};
 use rimz::remote::recovery::{ConnectStage, HandoffStage};
 
 use super::RemoteConnect;
-use super::outage_ui::{OutageUi, leave_alternate_screen};
+use super::outage_ui::{OutageUi, release_handoff_screen};
 use super::supervisor::{OutageState, WaitOutcome};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -123,7 +123,7 @@ impl HeldAlternateScreen {
 
     fn release(&mut self) {
         if std::mem::take(&mut self.0) {
-            leave_alternate_screen();
+            release_handoff_screen();
         }
     }
 }

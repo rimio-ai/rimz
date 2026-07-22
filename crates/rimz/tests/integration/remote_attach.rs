@@ -859,6 +859,16 @@ fn recovery_panel_checks_the_configured_http_204_endpoint() {
         output.contains("✓  Internet"),
         "HTTP 204 settles the checkpoint as reachable: {output}"
     );
+    let mouse_on = output
+        .find("\x1b[?1000h\x1b[?1006h")
+        .expect("recovery panel enables click and wheel reporting");
+    let mouse_off = output
+        .rfind("\x1b[?1006l\x1b[?1000l")
+        .expect("handoff cleanup disables click and wheel reporting");
+    assert!(
+        mouse_on < mouse_off,
+        "mouse reporting remains owned until handoff cleanup: {output:?}"
+    );
 }
 
 #[test]

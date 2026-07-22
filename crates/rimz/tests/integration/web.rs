@@ -42,6 +42,21 @@ fn ttyd_shim() -> PathBuf {
     crate::common::cargo_bin("ttyd-trace", env!("CARGO_BIN_EXE_ttyd-trace"))
 }
 
+#[cfg(unix)]
+fn write_ttyd_version_shim(path: &Path, version: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    std::fs::write(
+        path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'ttyd version %s\\n' '{version}'\n  exit 0\nfi\nexit 99\n"
+        ),
+    )
+    .expect("write ttyd version shim");
+    let permissions = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("chmod ttyd version shim");
+}
+
 fn zellij_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
@@ -1570,6 +1585,30 @@ fn configured_port_owned_by_another_process_names_the_fix() {
 
 #[cfg(unix)]
 #[test]
+fn web_start_rejects_ttyd_below_the_browser_minimum() {
+    let env = Env::new();
+    let ttyd = env.project_root.join("ttyd-old");
+    write_ttyd_version_shim(&ttyd, "1.7.4");
+    let output = env
+        .rimz()
+        .args(["web", "start"])
+        .env("RIMZ_TTYD_BIN", ttyd)
+        .bounded_output()
+        .expect("reject old ttyd");
+
+    assert!(
+        !output.status.success(),
+        "old ttyd should fail explicit web start"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("ttyd 1.7.4 is too old"), "{stderr}");
+    assert!(stderr.contains("requires ttyd 1.7.5 or newer"), "{stderr}");
+    assert!(stderr.contains("brew upgrade ttyd"), "{stderr}");
+    assert!(stderr.contains("apt repository"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
 fn room_start_warns_when_browser_daemon_cannot_start() {
     let fixture = WebFixture::new("ttyd-best-effort.log");
     let output = fixture
@@ -1585,4 +1624,27 @@ fn room_start_warns_when_browser_daemon_cannot_start() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn room_start_warns_without_failing_when_ttyd_is_too_old() {
+    let fixture = WebFixture::new("ttyd-too-old.log");
+    let ttyd = fixture.env.project_root.join("ttyd-old");
+    write_ttyd_version_shim(&ttyd, "1.7.4");
+    let output = fixture
+        .command()
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .env("RIMZ_TTYD_BIN", ttyd)
+        .bounded_output()
+        .expect("start room with old ttyd");
+
+    assert_success(&output, "room start with old ttyd");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("browser daemon was not started"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("ttyd 1.7.4 is too old"), "{stderr}");
+    assert!(stderr.contains("requires ttyd 1.7.5 or newer"), "{stderr}");
 }

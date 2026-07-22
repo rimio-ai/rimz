@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use ratatui::crossterm::cursor::MoveTo;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::queue;
 use ratatui::crossterm::style::{
     Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor,
 };
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
-use ratatui::crossterm::{execute, queue};
 use rimz::remote::reachability::FooterPhase;
 use rimz::remote::recovery::{
     ConnectStage, RecoveryFrame, RecoveryPanel, RecoveryStage, StageStatus,
@@ -220,7 +220,11 @@ impl OutagePanel {
     fn new() -> io::Result<Self> {
         Ok(Self {
             guard: Some(TerminalModeGuard::enable(
-                MouseCapture::Off,
+                // Ghostty and xterm.js both translate wheel motion into arrow
+                // keys on an alternate screen without mouse reporting. Keep
+                // reports enabled while the panel drains input and through the
+                // attach handoff so scroll momentum cannot reach the new pane.
+                MouseCapture::Stdout,
                 Screen::Alternate,
             )?),
             frame_index: 0,
@@ -306,7 +310,7 @@ impl OutagePanel {
             stdout.flush()?;
         }
         if let Some(guard) = self.guard.take() {
-            guard.release_keep_screen()?;
+            guard.handoff_keep_screen()?;
         }
         Ok(())
     }
@@ -479,8 +483,8 @@ fn success_detail(row: &rimz::remote::recovery::StageFrame) -> String {
     row.detail.clone()
 }
 
-pub(super) fn leave_alternate_screen() {
-    let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen);
+pub(super) fn release_handoff_screen() {
+    rimz::tui::finish_handoff(MouseCapture::Stdout, Screen::Alternate);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -38,9 +38,13 @@ pub(crate) fn pixel_daemon_records() -> Vec<(u32, u32)> {
 #[derive(Debug, thiserror::Error)]
 pub enum WebErr {
     #[error(
-        "ttyd is required for browser access; install it with `brew install ttyd` or `apt install ttyd`"
+        "ttyd {minimum} or newer is required for browser access; install it with `brew install ttyd` or from an apt repository that provides ttyd {minimum}+"
     )]
-    MissingTtyd,
+    MissingTtyd { minimum: String },
+    #[error(
+        "ttyd {found} is too old for browser access; RimZ requires ttyd {minimum} or newer; run `brew upgrade ttyd` or install ttyd {minimum}+ from a current apt repository or the ttyd release page"
+    )]
+    TtydTooOld { found: String, minimum: String },
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,

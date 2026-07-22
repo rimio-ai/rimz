@@ -116,8 +116,8 @@ pub(super) fn run(
         guard
             .take()
             .context("web session picker lost its terminal guard")?
-            .release_keep_screen()
-            .context("releasing the web session picker")?;
+            .handoff_keep_screen()
+            .context("handing off the web session picker")?;
         write_session_sync(Some(&session))?;
         let outcome = spec.to_command().spawn().and_then(|mut child| child.wait());
         guard = Some(

@@ -104,9 +104,9 @@ Open a fresh terminal window that is not attached to Zellij or tmux, then run `r
 
 RimZ needs Zellij 0.44+ or tmux 3.5+ on the machine, and pixel-perfect pets add tmux 3.6+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.0 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
 
-### ttyd is missing or a browser room will not start
+### ttyd is missing, too old, or a browser room will not start
 
-Browser access for both Zellij and tmux requires ttyd on the serving machine. Install it with `brew install ttyd` or `apt install ttyd`.
+Browser access for both Zellij and tmux requires ttyd 1.7.5 or newer on the serving machine. Run `ttyd --version`; use `brew install ttyd` or `brew upgrade ttyd` with Homebrew, and on Debian or Ubuntu install from a current apt repository or the ttyd release page when `apt` offers an older build. Explicit web commands refuse an older version, while normal room start prints the same fix and keeps the terminal room running.
 
 If ttyd is installed but `rimz web open` times out, run `rimz web status`, then `rimz web stop` and open again. Check that the exact `[web] port` (default `8200`) is available on loopback and change it when another process owns that port.
 
@@ -178,9 +178,9 @@ After an upgrade, `rimz start` and `rimz attach` also warn when a live room stil
 
 `rimz reload` runs from anywhere and leaves stopped sessions stopped. Agent version drift and its exact effects are in [agent support](../reference/agent-support.md).
 
-### Scroll wheel sends arrow keys (Ghostty)
+### Scroll wheel sends arrow keys
 
-A Ghostty tab exposed to mouse-mode churn from an older RimZ build can wedge into converting wheel ticks to arrow keys. Run `reset` once at a shell prompt or open a new Ghostty tab; current RimZ keeps the outer mouse mode constant so the state does not recur.
+A Ghostty tab exposed to mouse-mode churn from an older RimZ build can wedge into converting wheel ticks to arrow keys. Run `reset` once at a shell prompt or open a new Ghostty tab; current RimZ keeps the outer mouse mode constant and holds mouse reporting through SSH and browser attach transitions. Its ttyd page also suppresses xterm's wheel-to-arrow fallback during a transition where no application owns the mouse. Reload an older browser tab after upgrading so it picks up that client layer.
 
 ### Garbled terminal after a remote link death
 

@@ -1,5 +1,6 @@
 //! Shared ttyd daemon for browser access to every RimZ room.
 
+use std::fmt;
 use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
@@ -26,6 +27,30 @@ const DAEMON_FILE: &str = "web-ttyd.json";
 const DAEMON_LOCK_FILE: &str = "web-ttyd.lock";
 const LEGACY_INSTANCE_DIR: &str = "web-ttyd";
 const START_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const MIN_TTYD_VERSION: TtydVersion = TtydVersion::new(1, 7, 5);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct TtydVersion {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+impl TtydVersion {
+    const fn new(major: u32, minor: u32, patch: u32) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+
+impl fmt::Display for TtydVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct TtydCredential {
@@ -116,14 +141,16 @@ struct LegacyTtydInstance {
 }
 
 pub(super) fn preflight() -> Result<()> {
-    program().map(|_| ())
+    required_program().map(|_| ())
 }
 
 pub(super) fn program() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os(TTYD_BIN_ENV) {
         return Ok(PathBuf::from(path));
     }
-    which::which("ttyd").map_err(|_| WebErr::MissingTtyd)
+    which::which("ttyd").map_err(|_| WebErr::MissingTtyd {
+        minimum: MIN_TTYD_VERSION.to_string(),
+    })
 }
 
 pub(super) fn version_at(program: &Path) -> Result<String> {
@@ -140,6 +167,53 @@ pub(super) fn version_at(program: &Path) -> Result<String> {
         &output.stdout
     };
     Ok(String::from_utf8_lossy(text).trim().to_owned())
+}
+
+pub(super) fn required_program() -> Result<PathBuf> {
+    let program = program()?;
+    let reported = version_at(&program)?;
+    require_supported_version(&reported)?;
+    Ok(program)
+}
+
+fn require_supported_version(reported: &str) -> Result<TtydVersion> {
+    let Some(found) = parse_version(reported) else {
+        return Err(WebErr::TtydTooOld {
+            found: reported.to_owned(),
+            minimum: MIN_TTYD_VERSION.to_string(),
+        });
+    };
+    if found < MIN_TTYD_VERSION {
+        return Err(WebErr::TtydTooOld {
+            found: found.to_string(),
+            minimum: MIN_TTYD_VERSION.to_string(),
+        });
+    }
+    Ok(found)
+}
+
+fn parse_version(reported: &str) -> Option<TtydVersion> {
+    let version = reported
+        .trim()
+        .strip_prefix("ttyd version ")?
+        .split_whitespace()
+        .next()?;
+    let mut components = version.splitn(3, '.');
+    let major = components.next()?.parse().ok()?;
+    let minor = components.next()?.parse().ok()?;
+    let patch_and_suffix = components.next()?;
+    let patch_len = patch_and_suffix
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .count();
+    if patch_len == 0 {
+        return None;
+    }
+    let (patch, suffix) = patch_and_suffix.split_at(patch_len);
+    if !suffix.is_empty() && !matches!(suffix.as_bytes().first(), Some(b'-' | b'+')) {
+        return None;
+    }
+    Some(TtydVersion::new(major, minor, patch.parse().ok()?))
 }
 
 pub(super) fn open_daemon(config: &MachineConfig, may_start: bool) -> Result<RunningDaemon> {
@@ -218,6 +292,7 @@ fn clear_credential() -> Result<bool> {
 
 pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<RunningDaemon> {
     let desired = desired_spec(config)?;
+    let program = required_program()?;
     let _guard = acquire_daemon_lock()?;
     reap_legacy_instances();
     let daemon = daemon_status_locked()?;
@@ -231,7 +306,7 @@ pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<RunningDaemon> {
             auth_warnings(&desired),
         ));
     }
-    let prepared = prepare_fresh_start(config, &desired, daemon.as_ref())?;
+    let prepared = prepare_fresh_start(config, &desired, daemon.as_ref(), program)?;
     let credential = ensure_credential()?;
     start_fresh_locked(&desired, daemon, credential, prepared)
 }
@@ -575,7 +650,8 @@ fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation
             warnings: Vec::new(),
         });
     };
-    let prepared = prepare_fresh_start(config, &desired, Some(&daemon))?;
+    let program = required_program()?;
+    let prepared = prepare_fresh_start(config, &desired, Some(&daemon), program)?;
     let credential = mint_credential()?;
     let running = start_fresh_locked(&desired, Some(daemon), credential.clone(), prepared)?;
     Ok(CredentialRotation {
@@ -587,11 +663,12 @@ fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation
 
 pub(super) fn restart_daemon(config: &MachineConfig) -> Result<(RunningDaemon, bool)> {
     let desired = desired_spec(config)?;
+    let program = required_program()?;
     let _guard = acquire_daemon_lock()?;
     reap_legacy_instances();
     let daemon = daemon_status_locked()?;
     let was_online = daemon.is_some();
-    let prepared = prepare_fresh_start(config, &desired, daemon.as_ref())?;
+    let prepared = prepare_fresh_start(config, &desired, daemon.as_ref(), program)?;
     let credential = ensure_credential()?;
     start_fresh_locked(&desired, daemon, credential, prepared).map(|daemon| (daemon, was_online))
 }
@@ -603,7 +680,8 @@ pub(super) fn restart_if_online(config: &MachineConfig) -> Result<Option<Running
         return Ok(None);
     };
     let desired = desired_spec(config)?;
-    let prepared = prepare_fresh_start(config, &desired, Some(&daemon))?;
+    let program = required_program()?;
+    let prepared = prepare_fresh_start(config, &desired, Some(&daemon), program)?;
     let credential = ensure_credential()?;
     start_fresh_locked(&desired, Some(daemon), credential, prepared).map(Some)
 }
@@ -614,8 +692,8 @@ fn prepare_fresh_start(
     config: &MachineConfig,
     desired: &DaemonSpec,
     daemon: Option<&DaemonRecord>,
+    program: PathBuf,
 ) -> Result<FreshStart> {
-    let program = program()?;
     let public_address = socket_address(&desired.interface, desired.port)?;
     if daemon.is_none_or(|record| {
         socket_address(&record.interface, record.port).ok() != Some(public_address)
@@ -975,6 +1053,35 @@ mod tests {
             name: "rimz".to_owned(),
             created_at: Timestamp::from_second(1_700_000_000).expect("timestamp"),
             secret: "secret".to_owned(),
+        }
+    }
+
+    #[test]
+    fn ttyd_version_gate_accepts_the_minimum_and_rejects_the_previous_patch() {
+        assert!(matches!(
+            require_supported_version("ttyd version 1.7.4"),
+            Err(WebErr::TtydTooOld { found, minimum })
+                if found == "1.7.4" && minimum == "1.7.5"
+        ));
+        assert_eq!(
+            require_supported_version("ttyd version 1.7.5").expect("minimum ttyd version"),
+            MIN_TTYD_VERSION
+        );
+        assert_eq!(
+            require_supported_version("ttyd version 1.7.7-1+deb13u1")
+                .expect("packaged ttyd version"),
+            TtydVersion::new(1, 7, 7)
+        );
+    }
+
+    #[test]
+    fn malformed_ttyd_versions_fail_with_the_reported_value() {
+        for reported in ["", "ttyd 1.7.7", "ttyd version 1.7", "ttyd version current"] {
+            assert!(matches!(
+                require_supported_version(reported),
+                Err(WebErr::TtydTooOld { found, minimum })
+                    if found == reported && minimum == "1.7.5"
+            ));
         }
     }
 
