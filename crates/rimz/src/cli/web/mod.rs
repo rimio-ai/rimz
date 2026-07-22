@@ -450,9 +450,19 @@ fn exec(session: Option<&str>, share: bool) -> Result<()> {
         return room::exec_attach_command(&spec);
     }
     match rimz::web::existing_session_attach_command(session) {
+        Ok(spec) if picker::available() => {
+            let Some(session) = session.filter(|session| !session.is_empty()) else {
+                return room::exec_attach_command(&spec);
+            };
+            if picker::run(None, Some((session, &spec)))? {
+                Ok(())
+            } else {
+                room::exec_attach_command(&spec)
+            }
+        }
         Ok(spec) => room::exec_attach_command(&spec),
         Err(rimz::web::WebErr::InvalidSession(message)) if picker::available() => {
-            if picker::run(session)? {
+            if picker::run(session, None)? {
                 Ok(())
             } else {
                 Err(anyhow::anyhow!(message))

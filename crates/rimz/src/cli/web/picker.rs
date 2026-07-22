@@ -30,9 +30,12 @@ pub(super) fn available() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
-/// `false` means terminal setup failed before the picker painted, so the caller
-/// can preserve the plain invalid-session error as a useful fallback.
-pub(super) fn run(rejected_session: Option<&str>) -> Result<bool> {
+/// `false` means terminal setup failed before the picker took over, so the
+/// caller can preserve its direct-attach or invalid-session fallback.
+pub(super) fn run(
+    rejected_session: Option<&str>,
+    initial_attach: Option<(&str, &rimz::mux::CommandSpec)>,
+) -> Result<bool> {
     let guard = match TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate) {
         Ok(guard) => guard,
         Err(err) => {
@@ -60,56 +63,67 @@ pub(super) fn run(rejected_session: Option<&str>) -> Result<bool> {
     let mut picker = Picker::new(rejected_session);
     let mut readers = BTreeMap::new();
     let mut next_probe = Instant::now();
+    let mut initial_attach =
+        initial_attach.map(|(session, spec)| (session.to_owned(), spec.clone()));
+
+    if initial_attach.is_none() {
+        write_session_sync(None)?;
+    }
 
     loop {
-        if Instant::now() >= next_probe {
-            match probe_rows(&mut readers) {
-                Ok(rows) => picker.apply_probe(rows),
-                Err(err) => picker.notice = Some(format!("could not read live rooms: {err}")),
-            }
-            next_probe = Instant::now() + PROBE_INTERVAL;
-        }
-
-        terminal.draw(|frame| render(frame, &mut picker, &theme))?;
-        if !event::poll(EVENT_POLL)? {
-            continue;
-        }
-        let Some(action) = picker.handle_event(event::read()?) else {
-            continue;
-        };
-        match action {
-            Action::Quit => return Ok(true),
-            Action::Attach(session, mux) => {
-                guard
-                    .take()
-                    .context("web session picker lost its terminal guard")?
-                    .release_keep_screen()
-                    .context("releasing the web session picker")?;
-                write_session_sync(Some(&session))?;
-                let spec = rimz::mux::backend_for(mux).attach_existing_command(&session);
-                let outcome = spec.to_command().spawn().and_then(|mut child| child.wait());
-                guard = Some(
-                    TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)
-                        .context("restoring the web session picker")?,
-                );
-                write_session_sync(None)?;
-                terminal.clear()?;
-                match outcome {
-                    Ok(status) if status.success() => picker.notice = None,
-                    Ok(status) => {
-                        picker.notice = Some(format!(
-                            "session `{session}` attach exited with {}",
-                            exit_status_label(status)
-                        ));
-                    }
-                    Err(err) => {
-                        picker.notice =
-                            Some(format!("could not attach session `{session}`: {err}"));
-                    }
+        let (session, spec) = if let Some(initial_attach) = initial_attach.take() {
+            initial_attach
+        } else {
+            if Instant::now() >= next_probe {
+                match probe_rows(&mut readers) {
+                    Ok(rows) => picker.apply_probe(rows),
+                    Err(err) => picker.notice = Some(format!("could not read live rooms: {err}")),
                 }
-                next_probe = Instant::now();
+                next_probe = Instant::now() + PROBE_INTERVAL;
+            }
+
+            terminal.draw(|frame| render(frame, &mut picker, &theme))?;
+            if !event::poll(EVENT_POLL)? {
+                continue;
+            }
+            let Some(action) = picker.handle_event(event::read()?) else {
+                continue;
+            };
+            match action {
+                Action::Quit => return Ok(true),
+                Action::Attach(session, mux) => {
+                    let spec = rimz::mux::backend_for(mux).attach_existing_command(&session);
+                    (session, spec)
+                }
+            }
+        };
+
+        guard
+            .take()
+            .context("web session picker lost its terminal guard")?
+            .release_keep_screen()
+            .context("releasing the web session picker")?;
+        write_session_sync(Some(&session))?;
+        let outcome = spec.to_command().spawn().and_then(|mut child| child.wait());
+        guard = Some(
+            TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)
+                .context("restoring the web session picker")?,
+        );
+        write_session_sync(None)?;
+        terminal.clear()?;
+        match outcome {
+            Ok(status) if status.success() => picker.notice = None,
+            Ok(status) => {
+                picker.notice = Some(format!(
+                    "session `{session}` attach exited with {}",
+                    exit_status_label(status)
+                ));
+            }
+            Err(err) => {
+                picker.notice = Some(format!("could not attach session `{session}`: {err}"));
             }
         }
+        next_probe = Instant::now();
     }
 }
 
