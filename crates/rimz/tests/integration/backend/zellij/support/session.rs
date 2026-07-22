@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -21,6 +21,9 @@ pub(in crate::backend::zellij) const LIST_PANES_JSON_RETRY_DELAY: Duration =
     Duration::from_millis(50);
 pub(in crate::backend::zellij) const DUMP_LAYOUT_ATTEMPTS: u32 = 10;
 pub(in crate::backend::zellij) const DUMP_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+const ATTACHED_CLIENT_REGISTRATION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
+const ATTACHED_CLIENT_OUTPUT_TAIL_BYTES: usize = 8 * 1024;
 
 pub(in crate::backend::zellij) fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
     LayoutColumn {
@@ -253,14 +256,34 @@ impl Drop for ZellijSession {
 /// geometry (a background birth is tiny until a client attaches). Drop kills
 /// the client; session teardown stays with [`ScopedSessionCleanup`].
 pub(in crate::backend::zellij) struct AttachedClient {
+    xdg: PathBuf,
+    name: String,
+    cols: u16,
+    rows: u16,
+    lineage: Option<String>,
+    create: bool,
+    output_tail: Arc<Mutex<Vec<u8>>>,
+    process: AttachedClientProcess,
+}
+
+struct AttachedClientProcess {
     _master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
+impl AttachedClientProcess {
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 impl AttachedClient {
     pub(in crate::backend::zellij) fn attach(xdg: &Path, name: &str, cols: u16, rows: u16) -> Self {
-        Self::attach_inner(xdg, name, cols, rows, None, false)
+        let mut client = Self::attach_inner(xdg, name, cols, rows, None, false);
+        client.wait_until_registered();
+        client
     }
 
     /// Attach carrying a remote lineage, under the exact `attach --create
@@ -285,6 +308,37 @@ impl AttachedClient {
         lineage: Option<&str>,
         create: bool,
     ) -> Self {
+        let output_tail = Arc::new(Mutex::new(Vec::new()));
+        let process = Self::spawn_process(
+            xdg,
+            name,
+            cols,
+            rows,
+            lineage,
+            create,
+            Arc::clone(&output_tail),
+        );
+        Self {
+            xdg: xdg.to_path_buf(),
+            name: name.to_owned(),
+            cols,
+            rows,
+            lineage: lineage.map(str::to_owned),
+            create,
+            output_tail,
+            process,
+        }
+    }
+
+    fn spawn_process(
+        xdg: &Path,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        lineage: Option<&str>,
+        create: bool,
+        output_tail: Arc<Mutex<Vec<u8>>>,
+    ) -> AttachedClientProcess {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -316,61 +370,170 @@ impl AttachedClient {
         drop(pair.slave);
         let writer = pair.master.take_writer().expect("PTY writer");
         // Drain the PTY in the background so the kernel buffer never fills and
-        // stalls the client; the thread exits with the PTY on drop.
+        // stalls the client. Keep a bounded tail so registration failures name
+        // what the attach process reported instead of timing out silently.
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => return,
-                    Ok(_) => continue,
+                    Ok(read) => {
+                        let mut tail = output_tail
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        tail.extend_from_slice(&buf[..read]);
+                        let excess = tail.len().saturating_sub(ATTACHED_CLIENT_OUTPUT_TAIL_BYTES);
+                        if excess > 0 {
+                            tail.drain(..excess);
+                        }
+                    }
                 }
             }
         });
-        Self {
+        AttachedClientProcess {
             _master: pair.master,
             writer,
             child,
         }
     }
 
+    fn respawn(&mut self) {
+        self.process.stop();
+        self.process = Self::spawn_process(
+            &self.xdg,
+            &self.name,
+            self.cols,
+            self.rows,
+            self.lineage.as_deref(),
+            self.create,
+            Arc::clone(&self.output_tail),
+        );
+    }
+
+    fn wait_until_registered(&mut self) {
+        let deadline = Instant::now() + SPAWN_TIMEOUT;
+        let mut attempt_started = Instant::now();
+        let mut attempts = 1;
+        let mut consecutive_matches = 0;
+        let mut last_view = Vec::new();
+        let mut last_error = String::new();
+        let mut last_exit_status = None;
+        let backend = ZellijBackend::with_runtime_dir(&self.xdg);
+
+        loop {
+            if let Some(status) = self.exit_status() {
+                last_exit_status = Some(status.to_string());
+                if Instant::now() >= deadline {
+                    break;
+                }
+                self.respawn();
+                attempts += 1;
+                attempt_started = Instant::now();
+                consecutive_matches = 0;
+                continue;
+            }
+
+            match super::client::client_viewed_panes(&backend, &self.name) {
+                Ok(view) if !view.is_empty() => {
+                    last_view = view;
+                    last_error.clear();
+                    consecutive_matches += 1;
+                    if consecutive_matches == 2 {
+                        return;
+                    }
+                }
+                Ok(view) => {
+                    last_view = view;
+                    last_error.clear();
+                    consecutive_matches = 0;
+                }
+                Err(err) => {
+                    last_error = err;
+                    consecutive_matches = 0;
+                }
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            if now.duration_since(attempt_started) >= ATTACHED_CLIENT_REGISTRATION_ATTEMPT_TIMEOUT {
+                self.respawn();
+                attempts += 1;
+                attempt_started = Instant::now();
+                consecutive_matches = 0;
+                continue;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let child_exit_status = self
+            .exit_status()
+            .map(|status| status.to_string())
+            .unwrap_or_else(|| "running".to_owned());
+        let output_tail = self.output_tail();
+        panic!(
+            "attached client for {} did not register within {:?}; attempts: {attempts}; last view: {last_view:?}; last error: {last_error}; child exit status: {child_exit_status}; last exited attempt: {last_exit_status:?}; PTY output tail: {output_tail:?}",
+            self.name, SPAWN_TIMEOUT,
+        );
+    }
+
+    fn output_tail(&self) -> String {
+        let tail = self
+            .output_tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        String::from_utf8_lossy(&tail).into_owned()
+    }
+
     pub(in crate::backend::zellij) fn press_alt(&mut self, key: char) {
-        self.writer
+        self.process
+            .writer
             .write_all(&[0x1b, key as u8])
             .expect("write alt key");
-        self.writer.flush().expect("flush alt key");
+        self.process.writer.flush().expect("flush alt key");
     }
 
     pub(in crate::backend::zellij) fn pid(&self) -> u32 {
-        self.child.process_id().expect("attached client process id")
+        self.process
+            .child
+            .process_id()
+            .expect("attached client process id")
     }
 
     /// The client's exit status once it has stopped, and `None` while it runs.
     /// A wait that depends on this client being registered with the server can
     /// end the moment the client is gone.
     pub(in crate::backend::zellij) fn exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
-        self.child.try_wait().ok().flatten()
+        self.process.child.try_wait().ok().flatten()
     }
 
     pub(in crate::backend::zellij) fn go_to_tab(&mut self, tab: u8) {
         assert!((1..=9).contains(&tab), "test helper supports tabs 1-9");
-        self.writer
+        self.process
+            .writer
             .write_all(&[0x14, b'0' + tab])
             .expect("write tab-mode key sequence");
-        self.writer.flush().expect("flush tab-mode key sequence");
+        self.process
+            .writer
+            .flush()
+            .expect("flush tab-mode key sequence");
     }
 
     pub(in crate::backend::zellij) fn send_line(&mut self, line: &str) {
-        self.writer.write_all(line.as_bytes()).expect("write line");
-        self.writer.write_all(b"\r").expect("write enter");
-        self.writer.flush().expect("flush line");
+        self.process
+            .writer
+            .write_all(line.as_bytes())
+            .expect("write line");
+        self.process.writer.write_all(b"\r").expect("write enter");
+        self.process.writer.flush().expect("flush line");
     }
 }
 
 impl Drop for AttachedClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.process.stop();
     }
 }
 

@@ -122,7 +122,6 @@ fn open_sidebar_births_native_layout_and_template() {
         .map(|pane| pane.tab_id)
         .expect("initial work tab");
     let mut client = AttachedClient::attach(xdg.path(), &name, 120, 40);
-    wait_for_attached_client(xdg.path(), &name);
     wait_for_focused_client_pane(&backend, &name, &work_pane);
     let initial_work_id = work_pane.creation_ordinal().expect("initial work pane id");
     assert_client_input_reaches_pane(
@@ -188,10 +187,13 @@ fn open_sidebar_births_native_layout_and_template() {
         .find(|pane| pane.tab_id == new_tab_id && pane.is_live_terminal() && !pane.is_sidebar())
         .map(|pane| pane.id)
         .expect("new tab work pane");
-    client.go_to_tab(2);
-    let new_work_pane =
-        rimz::PaneId::from_parts(rimz::MuxName::Zellij, format!("terminal_{new_work}"));
-    wait_for_focused_client_pane(&backend, &name, &new_work_pane);
+    focus_attached_client_pane_until(
+        xdg.path(),
+        &name,
+        new_work,
+        "new-tab template work pane",
+        || client.go_to_tab(2),
+    );
     assert_client_input_reaches_pane(
         xdg.path(),
         &name,

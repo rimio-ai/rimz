@@ -140,7 +140,6 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
         "reload preservation",
     );
     let _client = AttachedClient::attach(xdg.path(), &name, 180, 50);
-    wait_for_attached_client(xdg.path(), &name);
     wait_for_pane_count(xdg.path(), &name, 6);
 
     let project_root = PathBuf::from(format!("/tmp/rimz-{name}"));
@@ -388,7 +387,6 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     // trip the tolerant width trigger — at 240 columns it lands at ~120.
     let mut client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
     let xdg = xdg_dir.path().to_path_buf();
-    wait_for_attached_client(&xdg, &name);
     let before = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = before.id;
     let before_work = work_pane_geometry(&xdg, &name);
@@ -513,7 +511,6 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
 
     let mut client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
     let xdg = xdg_dir.path().to_path_buf();
-    wait_for_attached_client(&xdg, &name);
 
     let before = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = before.id;
@@ -564,6 +561,13 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         &name,
         sidebar_id,
         "the renderer pane survives the nested-row repair",
+    );
+    focus_attached_client_pane_until(
+        &xdg,
+        &name,
+        original_id,
+        "original work pane after nested repair",
+        || client.press_alt('l'),
     );
     assert_client_input_reaches_pane(
         &xdg,
@@ -633,7 +637,6 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
 
     let _client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
     let xdg = xdg_dir.path().to_path_buf();
-    wait_for_attached_client(&xdg, &name);
 
     let before_sidebar = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = before_sidebar.id;
@@ -736,7 +739,6 @@ fn reconcile_add_docks_sidebar_in_wide_tab() {
 
     let mut client = AttachedClient::attach(xdg_dir.path(), &name, 360, 60);
     let xdg = xdg_dir.path().to_path_buf();
-    wait_for_attached_client(&xdg, &name);
     let before = work_pane_geometry(&xdg, &name);
     let before_ids: BTreeSet<u64> = before.iter().map(|pane| pane.id).collect();
     let leftmost_x = before
@@ -827,7 +829,6 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
 
     let _client = AttachedClient::attach(xdg_dir.path(), &name, 160, 60);
     let xdg = xdg_dir.path().to_path_buf();
-    wait_for_attached_client(&xdg, &name);
     let down = scoped_zellij(&xdg)
         .args([
             "--session",

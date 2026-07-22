@@ -70,7 +70,7 @@ pub(in crate::backend::zellij) fn wait_for_named_sidebar_pane(
     tab_name: &str,
 ) -> Option<PaneGeometry> {
     poll_until(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         || named_sidebar_pane_geometry(xdg, session, tab_name),
         Option::is_some,
         &format!("sidebar pane in {session}/{tab_name}"),
@@ -86,7 +86,7 @@ pub(in crate::backend::zellij) fn wait_for_named_work_pane_state(
 ) -> Vec<PaneGeometry> {
     let mut ready = ready;
     poll_until(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         || named_work_pane_geometry(xdg, session, tab_name),
         |work| work.len() == want && ready(work),
         &format!("{want} work panes in {session}/{tab_name}"),

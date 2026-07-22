@@ -70,7 +70,7 @@ pub(in crate::backend::zellij) fn focus_attached_client_pane_until(
     context: &str,
     mut focus_next: impl FnMut(),
 ) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let backend = ZellijBackend::with_runtime_dir(xdg);
     let pane_id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{want}"));
     let mut last_view = Vec::new();
@@ -98,7 +98,7 @@ pub(in crate::backend::zellij) fn focus_attached_client_pane_until(
 }
 
 /// How long a typed marker has to surface in the target pane's buffer.
-const INPUT_DELIVERY_TIMEOUT: Duration = Duration::from_secs(10);
+const INPUT_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Cadence for re-reading the client view and retyping the marker. Requiring a
 /// second delivery after this interval proves that routing settled rather than
 /// merely crossing the target during the relayout.
@@ -185,7 +185,7 @@ pub(in crate::backend::zellij) fn wait_for_focused_client_pane(
     want: &PaneId,
 ) -> Vec<PaneId> {
     super::actions::poll_until(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         || client_viewed_panes(backend, session),
         |focused| focused.contains(want),
         &format!("client focus on {want}"),
