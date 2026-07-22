@@ -2,7 +2,7 @@
 
 > Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [cursor-reference.md](../../externals/agent-adapter/cursor-reference.md).
 
-Cursor runs as `agent` or its `cursor-agent` alias; `cursor` names the IDE and is intentionally outside binary discovery. RimZ installs additive user hooks in `~/.cursor/hooks.json` and a managed command statusline in `~/.cursor/cli-config.json`, launches the resolved CLI path, and keys every session on `conversation_id`. User hooks run from `~/.cursor`, so ingress accepts a nonempty absolute `CURSOR_PROJECT_DIR` as the participant start path before the shared verified-pin and `WorkspaceResolver` flow; an absent, empty, or relative value falls back to `.`.
+Cursor runs as `agent` or its `cursor-agent` alias; `cursor` names the IDE and is intentionally outside binary discovery. RimZ installs additive user hooks in `~/.cursor/hooks.json` and a managed command statusline in `~/.cursor/cli-config.json`, launches a verified resolved path or the provider-unique `cursor-agent` alias, and keys every session on `conversation_id`. User hooks run from `~/.cursor`, so ingress accepts a nonempty absolute `CURSOR_PROJECT_DIR` as the participant start path before the shared verified-pin and `WorkspaceResolver` flow; an absent, empty, or relative value falls back to `.`.
 
 ## Hooks and lifecycle
 
@@ -53,7 +53,7 @@ RimZ maps Ask to Cursor's default launch, Plan to `--mode=plan`, Auto to `--auto
 
 Fresh and supervised launches remain ordinary interactive positional argv: the launcher opens the real interactive CLI in a pane and supplies the initial prompt after `--`, and does not pass `-p` or `--print`. Cursor's native headless `--print` transport is separate and outside the hook-driven coverage contract.
 
-The shared command classifier reads adapter `bin_names`, so both stock entrypoints (`agent` and `cursor-agent`) produce Cursor presence before the first session hook; this is the first built-in whose executable basename differs from its kind. The installed Linux binary reports `MainThread` as its kernel `comm`, so hook attribution continues to use the installer-stamped `$PPID` and durable pane/session stamps rather than treating that generic runtime label as Cursor identity.
+Binary discovery accepts `cursor-agent` by its provider-unique name and accepts `agent` only after its zero-padded date-build version banner proves Cursor identity. Basename-only command and process classification abstains on `agent`, so another provider's colliding alias never creates Cursor presence; a Cursor session launched under that name binds to its pane through the first native hook, and source-known liveness retains that binding afterward. The installed Linux binary reports `MainThread` as its kernel `comm`, so hook attribution continues to use the installer-stamped `$PPID` and durable pane/session stamps rather than treating that generic runtime label as Cursor identity.
 
 ## Context and transcript
 

@@ -206,6 +206,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     // launcher process name beside its own.
     process_names: &["codex", "node"],
     bin_names: &["codex"],
+    bin_identity: None,
     extra_bin_dirs: &[],
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,

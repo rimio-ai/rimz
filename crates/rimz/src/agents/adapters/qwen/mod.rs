@@ -44,6 +44,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
     aliases: &[],
     display_name: "Qwen Code",
     bin_names: &["qwen"],
+    bin_identity: None,
     brand: Brand {
         emblem: None,
         color: 99,

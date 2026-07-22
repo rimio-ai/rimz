@@ -834,7 +834,11 @@ fn cursor_user_hook_uses_project_dir_for_pinned_worktree_attribution() {
         "the verified pin routes the hook into the room store"
     );
 
-    let snapshot = env.snapshot_json_with_panes(&[tmux_pane("%0", "agent", &env.project_root)]);
+    // This hook fixture carries no TMUX_PANE stamp, so use Cursor's
+    // provider-unique alias for the lazy cwd bind. The generic `agent` basename
+    // deliberately requires native hook ownership before it can bind a pane.
+    let snapshot =
+        env.snapshot_json_with_panes(&[tmux_pane("%0", "cursor-agent", &env.project_root)]);
     let agent = snapshot["agents"]
         .as_array()
         .unwrap()
@@ -1134,7 +1138,8 @@ fn cursor_concurrent_subagents_fold_independently_without_context_sidecars() {
         "model_id": "parent-model",
     }));
 
-    let snapshot = env.snapshot_json_with_panes(&[tmux_pane("%0", "agent", &env.project_root)]);
+    let snapshot =
+        env.snapshot_json_with_panes(&[tmux_pane("%0", "cursor-agent", &env.project_root)]);
     let agents = snapshot["agents"].as_array().expect("agents");
     assert_eq!(agents.len(), 3, "one parent and two children: {agents:?}");
     for (id, task, model, branch, status, transcript) in [

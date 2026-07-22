@@ -114,6 +114,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
     default_model: None,
     process_names: &["pi"],
     bin_names: &["pi"],
+    bin_identity: None,
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {

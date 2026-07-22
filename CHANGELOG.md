@@ -19,6 +19,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ### Fixed
 
+- Cursor binary discovery verifies the generic `agent` executable before claiming it, launches only a verified path or the provider-unique `cursor-agent` alias, and leaves ambiguous process basenames unattributed until a native hook binds the pane. → [Cursor adapter](./docs/internals/agents/cursor.md#launch-and-resume)
 - Browser authentication now keeps ttyd behind machine-wide Basic Auth while the public gate validates trusted proxy headers and injects that credential upstream; remote `--web` tunnels work through either auth mode, `rimz web restart` applies the current browser profile, and `rimz reload` refreshes an online web daemon after upgrades. → [web](./docs/guide/web.md)
 - Browser cursors stay steady when terminal apps request a blinking cursor. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Pixel pets and the pixel context meter render as true pixels in ttyd browser attaches for qualifying tmux rooms; pets keep their native proportions, leave tmux borders and neighboring panes intact, and suppress placeholder glyphs before xterm paints them, while mixed or unsupported clients continue to fall back to sextant cell art. → [pets](./docs/guide/pets.md#crisp-pixels-and-cell-art)

@@ -193,6 +193,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
     default_model: None,
     process_names: &["agy"],
     bin_names: &["agy"],
+    bin_identity: None,
     extra_bin_dirs: &[".local/bin"],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {

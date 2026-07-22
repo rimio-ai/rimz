@@ -92,6 +92,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
     default_model: None,
     process_names: &["opencode", "bun"],
     bin_names: &["opencode"],
+    bin_identity: None,
     extra_bin_dirs: &[".opencode/bin"],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {

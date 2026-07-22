@@ -40,7 +40,7 @@ impl LocalSessionInputs {
     pub fn from_panes(panes: &[PaneRef]) -> Self {
         let mut by_kind = BTreeMap::<AgentKind, BTreeSet<PathBuf>>::new();
         for pane in panes {
-            let Some(kind) = crate::store::snapshot::pane_agent_kind(pane) else {
+            let Some(kind) = candidate_pane_agent_kind(pane) else {
                 continue;
             };
             let Some(adapter) = crate::agents::find_definition(kind) else {
@@ -105,6 +105,27 @@ impl LocalSessionInputs {
             })
             .collect()
     }
+}
+
+/// Candidate identity feeds only provider-local discovery. Its observations
+/// still require an exact durable or resume binding before they can affect a
+/// card, so admitting an ambiguous basename here preserves hook-bound Cursor
+/// enrichment without turning that basename into pane presence or routing.
+fn candidate_pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
+    pane.spawn_command
+        .as_deref()
+        .and_then(crate::agents::registry::command_agent_kind_candidate)
+        .or_else(|| {
+            pane.command
+                .as_deref()
+                .and_then(crate::agents::registry::command_agent_kind_candidate)
+        })
+        .or_else(|| {
+            pane.hosted_agent_kind
+                .as_ref()
+                .and_then(|kind| crate::agents::spec_by_kind(kind.as_str()))
+                .map(|definition| definition.kind)
+        })
 }
 
 fn normalize_observations(observations: &mut Vec<LocalSessionObservation>) {

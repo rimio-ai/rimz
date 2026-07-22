@@ -110,6 +110,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
     default_model: None,
     process_names: &["kimi", "kimi-code"],
     bin_names: &["kimi"],
+    bin_identity: None,
     extra_bin_dirs: &[".kimi-code/bin"],
     thread_key: ThreadKey::SessionDir,
     launch: super::LaunchSpec {

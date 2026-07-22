@@ -90,6 +90,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
     default_model: None,
     process_names: &["copilot", "node"],
     bin_names: &["copilot"],
+    bin_identity: None,
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {

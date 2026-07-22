@@ -42,6 +42,38 @@ fn version_parser_preserves_the_cursor_date_build_token() {
     );
 }
 
+#[test]
+fn agent_identity_accepts_cursor_and_rejects_grok_alias() {
+    assert!(agent_binary_is_cursor("2026.07.17-3e2a980\n", ""));
+    assert!(agent_binary_is_cursor("", "2026.07.17-3e2a980\n"));
+    assert!(!agent_binary_is_cursor(
+        "grok 0.2.106 (bde89716f6) [stable]",
+        ""
+    ));
+    assert!(!agent_binary_is_cursor("", ""));
+
+    let identity = CursorAdapter
+        .spec()
+        .ambiguous_bin_identity("agent")
+        .expect("cursor's `agent` name is ambiguous");
+    assert!((identity.verify)("2026.07.17-3e2a980", ""));
+    assert!(
+        CursorAdapter
+            .spec()
+            .ambiguous_bin_identity("cursor-agent")
+            .is_none()
+    );
+}
+
+#[test]
+fn cursor_launch_fallback_never_reuses_the_ambiguous_agent_name() {
+    assert_eq!(cursor_launch_binary(None), "cursor-agent");
+    assert_eq!(
+        cursor_launch_binary(Some(PathBuf::from("/opt/cursor/agent"))),
+        "/opt/cursor/agent"
+    );
+}
+
 struct CursorAskFixture {
     _dir: tempfile::TempDir,
     home: PathBuf,
