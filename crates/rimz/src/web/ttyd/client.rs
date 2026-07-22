@@ -23,7 +23,7 @@ use crate::web::WebWarning;
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
-const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v3";
+const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v4";
 
 const OFFLINE_ENV: &str = "RIMZ_WEB_FONTS_OFFLINE";
 const FONT_CACHE_DIR: &str = "rimz/web-fonts";
@@ -290,6 +290,17 @@ waitForTerminal().then(term=>{{
     }}catch(_){{}}
     return true;
   }});
+  const steadyStyles={{0:"block",1:"block",2:"block",3:"underline",4:"underline",5:"bar",6:"bar"}};
+  term.parser.registerCsiHandler({{intermediates:" ",final:"q"}},params=>{{
+    const style=steadyStyles[params[0]||0];
+    if(!style)return true;
+    if(term.options.cursorStyle!==style)term.options.cursorStyle=style;
+    if(term.options.cursorBlink)term.options.cursorBlink=false;
+    return true;
+  }});
+  const swallowBlinkMode=params=>params.length===1&&params[0]===12;
+  term.parser.registerCsiHandler({{prefix:"?",final:"h"}},swallowBlinkMode);
+  term.parser.registerCsiHandler({{prefix:"?",final:"l"}},swallowBlinkMode);
   term.onSelectionChange(()=>writeClipboard(term.getSelection()));
   const updateOverlay=node=>{{
     const element=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
@@ -816,6 +827,7 @@ mod tests {
             .expect("document markers");
         assert!(rendered.contains("rimz-web-client"));
         assert!(rendered.contains("term.options.cursorBlink=false"));
+        assert!(rendered.contains("registerCsiHandler({intermediates:\" \",final:\"q\"}"));
         assert!(!rendered.contains("@font-face"));
     }
 
@@ -827,6 +839,7 @@ mod tests {
             weight: 400,
         }];
         let family = "RimZ \"Font\" </style></script>\n";
+        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v4");
         let key = custom_index_key("ttyd 1.7.7", Some(family), &faces);
         assert_eq!(key, custom_index_key("ttyd 1.7.7", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.8", Some(family), &faces));
@@ -849,6 +862,19 @@ mod tests {
             )
         );
         assert!(rendered.contains("term.options.cursorBlink=false"));
+        assert!(rendered.contains(
+            "const steadyStyles={0:\"block\",1:\"block\",2:\"block\",3:\"underline\",4:\"underline\",5:\"bar\",6:\"bar\"}"
+        ));
+        assert!(rendered.contains("registerCsiHandler({intermediates:\" \",final:\"q\"}"));
+        assert!(
+            rendered.contains("if(term.options.cursorStyle!==style)term.options.cursorStyle=style")
+        );
+        assert!(rendered.contains("if(term.options.cursorBlink)term.options.cursorBlink=false"));
+        assert!(
+            rendered.contains("const swallowBlinkMode=params=>params.length===1&&params[0]===12")
+        );
+        assert!(rendered.contains("registerCsiHandler({prefix:\"?\",final:\"h\"}"));
+        assert!(rendered.contains("registerCsiHandler({prefix:\"?\",final:\"l\"}"));
         assert!(rendered.contains("term.attachCustomKeyEventHandler(keyHandler)"));
         assert!(rendered.contains("registerOscHandler(52"));
         assert!(rendered.contains("onSelectionChange"));

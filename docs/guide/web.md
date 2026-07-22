@@ -39,7 +39,7 @@ RimZ gives ttyd the active theme and configured browser font when the daemon sta
 
 Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL. A family with no preset and no source asks the browser to resolve an installed font. `style_client = false` keeps ttyd's browser colors while retaining keyboard, cursor, clipboard, and reconnect fixes.
 
-The compatibility layer keeps the cursor steady, preserves Shift+Enter and macOS Option-as-Meta input, sends tmux copy-mode yanks and Shift-drag selections to the clipboard, and refreshes xterm after a downloaded font loads. Missing font bytes warn and fall back to monospace.
+The compatibility layer keeps the cursor steady when terminal apps request blinking while preserving their requested cursor shapes, preserves Shift+Enter and macOS Option-as-Meta input, sends tmux copy-mode yanks and Shift-drag selections to the clipboard, and refreshes xterm after a downloaded font loads. Missing font bytes warn and fall back to monospace.
 
 Appearance is fixed when the shared daemon starts. After changing `[theme]` or web styling, run:
 
