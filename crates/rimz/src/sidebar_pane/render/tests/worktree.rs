@@ -257,6 +257,30 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
 }
 
 #[test]
+fn render_branch_ci_without_a_pr_badge() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = pristine_worktree_with_pr_state(None);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+
+    let lines = group_lines(&snapshot, &theme, 0);
+    let header = &lines[0];
+    let ci = header
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == " ✓")
+        .expect("branch CI span");
+
+    assert_eq!(
+        ci.style,
+        theme.styled(Component::PrCiPassing, Modifier::empty())
+    );
+    assert!(
+        header.spans.iter().all(|span| !span.content.contains('#')),
+        "a branch verdict carries no invented PR badge"
+    );
+}
+
+#[test]
 fn render_pr_badge_leads_with_ci_glyph() {
     let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(888);
@@ -362,6 +386,26 @@ fn render_pr_badge_yields_to_the_name_at_extreme_width() {
 
     assert!(!text.contains("#91"), "badge drops first: {text:?}");
     assert!(!text.contains('✓'), "CI drops with its badge: {text:?}");
+    assert!(
+        text.contains('…'),
+        "the clipped name keeps the label slot: {text:?}"
+    );
+}
+
+#[test]
+fn render_bare_branch_ci_yields_to_the_name_at_extreme_width() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = pristine_worktree_with_pr_state(None);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+
+    let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
+    let text = header
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(!text.contains('✓'), "branch CI drops first: {text:?}");
     assert!(
         text.contains('…'),
         "the clipped name keeps the label slot: {text:?}"

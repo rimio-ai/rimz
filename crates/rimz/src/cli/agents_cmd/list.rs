@@ -188,11 +188,15 @@ fn group_header_cells(
     {
         cells.push(render::cell(format!("· {team} team")).fg(render::palette::meta()));
     }
-    if let Some(pr) = group_pr(snapshot, &group.key)
-        && let Some(number) = pr.pr_number
-    {
-        cells.push(render::cell(format!("#{number}")).fg(render::palette::accent()));
-        if pr.pr_state == Some(rimz::WorktreePrState::Open)
+    if let Some(pr) = group_pr(snapshot, &group.key) {
+        if let Some(number) = pr.pr_number {
+            cells.push(render::cell(format!("#{number}")).fg(render::palette::accent()));
+        }
+        if (pr.pr_state.is_none()
+            || matches!(
+                pr.pr_state,
+                Some(rimz::WorktreePrState::Open | rimz::WorktreePrState::Merged)
+            ))
             && let Some(ci) = pr.pr_ci
         {
             let (role, style) = match ci {

@@ -284,7 +284,39 @@ fn assign_states_re_resolves_mismatched_and_legacy_branch_links() {
 }
 
 #[test]
-fn build_targets_excludes_main_and_the_resolved_trunk() {
+fn trunk_targets_never_attach_pr_links() {
+    let mut trunk = target("/repo/main", "main");
+    trunk.trunk = true;
+    let prior = BTreeMap::from([(
+        trunk.path.clone(),
+        PrLink {
+            branch: Some("main".to_owned()),
+            state: WorktreePrState::Open,
+            number: Some(91),
+            url: None,
+            ci: Some(WorktreePrCi::Passing),
+            merge_sha: None,
+        },
+    )]);
+    let open = BTreeMap::from([(
+        "main".to_owned(),
+        forge::PrCandidate {
+            number: 92,
+            state: WorktreePrState::Open,
+            ci: Some(WorktreePrCi::Failing),
+            merge_sha: None,
+        },
+    )]);
+
+    let assigned = assign_states(std::slice::from_ref(&trunk), &open, &prior);
+
+    assert!(assigned.states.is_empty());
+    assert!(assigned.transitions.is_empty());
+    assert!(carry_prior_states(&[trunk], &prior).is_empty());
+}
+
+#[test]
+fn build_targets_marks_main_and_the_resolved_trunk() {
     let repo = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
         Command::new("git")
@@ -316,13 +348,14 @@ fn build_targets_excludes_main_and_the_resolved_trunk() {
     ]));
     let path = repo.path().display().to_string();
 
-    assert!(build_targets(std::slice::from_ref(&path), &DiffStatsCache::default()).is_empty());
+    let targets = build_targets(std::slice::from_ref(&path), &DiffStatsCache::default());
+    assert_eq!(targets.len(), 1);
+    assert!(targets[0].trunk);
 
     assert!(git(&["checkout", "-q", "-b", "feature"]));
-    assert_eq!(
-        build_targets(std::slice::from_ref(&path), &DiffStatsCache::default()).len(),
-        1
-    );
+    let targets = build_targets(std::slice::from_ref(&path), &DiffStatsCache::default());
+    assert_eq!(targets.len(), 1);
+    assert!(!targets[0].trunk);
 
     let mut diff_cache = DiffStatsCache::default();
     diff_cache.entries.insert(
@@ -332,7 +365,9 @@ fn build_targets_excludes_main_and_the_resolved_trunk() {
             ..DiffStatsCacheEntry::default()
         },
     );
-    assert!(build_targets(&[path], &diff_cache).is_empty());
+    let targets = build_targets(&[path], &diff_cache);
+    assert_eq!(targets.len(), 1);
+    assert!(targets[0].trunk);
 }
 
 #[test]
@@ -382,11 +417,65 @@ fn legacy_cache_defaults_and_leaves_repos_due() {
     let groups = group_targets(vec![target("/repo/a", "a")]);
 
     assert!(cache.states.is_empty());
+    assert!(cache.branch_ci.is_empty());
     assert!(cache.repos.is_empty());
     assert!(cache.head_seen.is_empty());
     assert!(
         due_repo_keys(&groups, &cache, &BTreeSet::new(), &BTreeSet::new(), 1_000)
             .contains("gh:github.com:org/repo")
+    );
+}
+
+#[test]
+fn branch_ci_cache_round_trips_and_defaults_for_old_files() {
+    let cache = PrStateCache {
+        branch_ci: BTreeMap::from([("/repo/main".to_owned(), WorktreePrCi::Passing)]),
+        ..PrStateCache::default()
+    };
+    let encoded = serde_json::to_vec(&cache).unwrap();
+    let decoded: PrStateCache = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded.branch_ci, cache.branch_ci);
+
+    let old: PrStateCache = serde_json::from_str(r#"{"states":{},"repos":{}}"#).unwrap();
+    assert!(old.branch_ci.is_empty());
+}
+
+#[test]
+fn old_unsupported_cache_reclassifies_trunk_without_waiting_for_ttl() {
+    let cache: PrStateCache = serde_json::from_str(
+        r#"{
+            "states": {},
+            "repos": {"<unsupported>": {"refreshed_at_ms": 999999, "ok": true}},
+            "head_seen": {"/repo/main": "sha"},
+            "path_repos": {"/repo/main": "<unsupported>"}
+        }"#,
+    )
+    .unwrap();
+    let needed = vec!["/repo/main".to_owned()];
+    let mut diff = DiffStatsCache::default();
+    diff.entries.insert(
+        needed[0].clone(),
+        DiffStatsCacheEntry {
+            branch: Some("main".to_owned()),
+            trunk: Some("origin/main".to_owned()),
+            head_sha: Some("sha".to_owned()),
+            ..DiffStatsCacheEntry::default()
+        },
+    );
+
+    assert!(!cache.path_repos.contains_key(&needed[0]));
+    assert!(!cache.repos.contains_key(UNSUPPORTED_REPO_KEY));
+    assert!(
+        cached_due_repo_keys(
+            &cache,
+            &needed,
+            &diff,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            1_000,
+        )
+        .is_none(),
+        "the missing classification forces target assembly immediately"
     );
 }
 
@@ -448,6 +537,27 @@ fn pending_ci_keeps_repo_on_hot_ttl() {
                 .contains(&repo_key)
         );
     }
+
+    cache.states.clear();
+    cache
+        .branch_ci
+        .insert(needed[0].clone(), WorktreePrCi::Pending);
+    assert!(
+        cached_due_repo_keys(
+            &cache,
+            &needed,
+            &DiffStatsCache::default(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            now_ms,
+        )
+        .unwrap()
+        .contains(&repo_key)
+    );
+    assert!(
+        due_repo_keys(&groups, &cache, &BTreeSet::new(), &BTreeSet::new(), now_ms)
+            .contains(&repo_key)
+    );
 }
 
 #[test]
@@ -547,6 +657,9 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
         },
     );
     cache
+        .branch_ci
+        .insert("/repo/a".to_owned(), WorktreePrCi::Passing);
+    cache
         .path_repos
         .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());
     cache
@@ -573,6 +686,7 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
     let cache = reconcile_target_bookkeeping(cache, &needed, &diff, &target_paths, 1_000);
 
     assert!(!cache.states.contains_key("/repo/a"));
+    assert!(!cache.branch_ci.contains_key("/repo/a"));
     assert_eq!(
         cache.path_repos.get("/repo/a").map(String::as_str),
         Some(UNSUPPORTED_REPO_KEY)
@@ -594,6 +708,30 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
         &diff,
         &target_paths
     ));
+}
+
+#[test]
+fn reconcile_prunes_stale_branch_ci_paths() {
+    let cache = PrStateCache {
+        branch_ci: BTreeMap::from([
+            ("/repo/a".to_owned(), WorktreePrCi::Passing),
+            ("/repo/stale".to_owned(), WorktreePrCi::Failing),
+        ]),
+        ..PrStateCache::default()
+    };
+
+    let cache = reconcile_target_bookkeeping(
+        cache,
+        &["/repo/a".to_owned()],
+        &DiffStatsCache::default(),
+        &BTreeSet::from(["/repo/a".to_owned()]),
+        1_000,
+    );
+
+    assert_eq!(
+        cache.branch_ci,
+        BTreeMap::from([("/repo/a".to_owned(), WorktreePrCi::Passing)])
+    );
 }
 
 #[test]
@@ -689,6 +827,7 @@ fn target(path: &str, branch: &str) -> Target {
     Target {
         path: path.to_owned(),
         branch: branch.to_owned(),
+        trunk: false,
         forge_cli: ForgeCli::Gh,
         repo_key: "gh:github.com:org/repo".to_owned(),
         repo_slug: Some("org/repo".to_owned()),
