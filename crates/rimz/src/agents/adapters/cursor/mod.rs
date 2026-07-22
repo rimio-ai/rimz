@@ -288,19 +288,7 @@ pub(super) const RIMZ_HOOK_COMMAND: &str =
 pub(super) const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source cursor";
 const RIMZ_STATUS_LINE_COMMAND: &str = "rimz statusline feed --source cursor";
 const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source cursor";
-const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
-    super::managed_statusline::ManagedStatusLineSpec {
-        key_path: &["statusLine"],
-        command: RIMZ_STATUS_LINE_COMMAND,
-        command_marker: RIMZ_STATUS_LINE_MARKER,
-        rendering_options: super::managed_statusline::RenderingOptions::Only(&[
-            "padding",
-            "updateIntervalMs",
-            "timeoutMs",
-        ]),
-        wrap_policy: super::managed_statusline::WrapPolicy::Any,
-        required_for_install: false,
-    };
+pub(super) const RETAINED_RENDERING_KEYS: &[&str] = &["padding", "updateIntervalMs", "timeoutMs"];
 
 #[derive(Clone, Debug, Default)]
 pub struct CursorAdapter;
