@@ -706,13 +706,16 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         })
         .map(|pane| PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id)))
         .expect("birth work pane");
-    if !client_viewed_panes(&backend, &name)
-        .expect("birth client view")
-        .contains(&birth_work)
-    {
-        client.press_alt('l');
-        wait_for_focused_client_pane(&backend, &name, &birth_work);
-    }
+    let birth_work_ordinal = birth_work
+        .creation_ordinal()
+        .expect("numeric birth work pane id");
+    focus_attached_client_pane_until(
+        xdg.path(),
+        &name,
+        birth_work_ordinal,
+        "birth work pane",
+        || client.press_alt('l'),
+    );
 
     let target_tab = "switch target";
     let input_log = cwd.path().join("routed-input.log");
@@ -742,13 +745,26 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let target_work = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_work.id));
     let target_sidebar =
         PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_sidebar.id));
-    client.go_to_tab(2);
-    wait_for_focused_client_pane(&backend, &name, &target_work);
+    let target_work_ordinal = target_work
+        .creation_ordinal()
+        .expect("numeric target work pane id");
+    focus_attached_client_pane_until(
+        xdg.path(),
+        &name,
+        target_work_ordinal,
+        "target work pane",
+        || client.go_to_tab(2),
+    );
 
     strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
 
-    client.go_to_tab(1);
-    wait_for_focused_client_pane(&backend, &name, &birth_work);
+    focus_attached_client_pane_until(
+        xdg.path(),
+        &name,
+        birth_work_ordinal,
+        "birth work pane before switch repair",
+        || client.go_to_tab(1),
+    );
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);
     let repairs_before = accepted_focus_repairs(xdg.path(), &target_work);
@@ -786,8 +802,13 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     }));
 
     strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
-    client.go_to_tab(1);
-    wait_for_focused_client_pane(&backend, &name, &birth_work);
+    focus_attached_client_pane_until(
+        xdg.path(),
+        &name,
+        birth_work_ordinal,
+        "birth work pane before presence reload",
+        || client.go_to_tab(1),
+    );
     let pokes_before_reload = poke_lines(&poke_log).len();
     let room_bin = rimz::StatePaths::under(sidebar.workspace_id.clone(), xdg.path())
         .expect("room state paths")
@@ -827,8 +848,13 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     );
 
     strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
-    client.go_to_tab(1);
-    wait_for_focused_client_pane(&backend, &name, &birth_work);
+    focus_attached_client_pane_until(
+        xdg.path(),
+        &name,
+        birth_work_ordinal,
+        "birth work pane before detach",
+        || client.go_to_tab(1),
+    );
     let actions_before = focus_action_count(&trace_log);
     client.go_to_tab(2);
     drop(client);
