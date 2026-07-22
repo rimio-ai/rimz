@@ -1,6 +1,6 @@
 //! Source-address and trusted-header authorization gate for shared ttyd.
 
-use std::io::{self, BufRead, BufReader, Read as _, Write as _};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
 
@@ -8,6 +8,7 @@ use super::{Result, WebErr};
 
 const MAX_REQUEST_HEAD: usize = 64 * 1024;
 const MAX_HEADERS: usize = 128;
+const MAX_CHUNK_LINE: usize = 8 * 1024;
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const UNAUTHORIZED: &[u8] =
     b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -145,6 +146,7 @@ enum RequestAction {
     Forward {
         head: Vec<u8>,
         content_length: u64,
+        head_request: bool,
         upgrade: bool,
     },
     Unauthorized,
@@ -154,16 +156,11 @@ enum RequestAction {
 fn relay_authorized(mut client: TcpStream, mut upstream: TcpStream, auth: &GateAuth) {
     let _ = client.set_nodelay(true);
     let _ = upstream.set_nodelay(true);
-    let (Ok(client_read), Ok(mut upstream_read), Ok(mut client_write)) =
-        (client.try_clone(), upstream.try_clone(), client.try_clone())
-    else {
+    let (Ok(client_read), Ok(upstream_read)) = (client.try_clone(), upstream.try_clone()) else {
         return;
     };
     let mut client_read = BufReader::new(client_read);
-    std::thread::spawn(move || {
-        let _ = io::copy(&mut upstream_read, &mut client_write);
-        let _ = client_write.shutdown(Shutdown::Write);
-    });
+    let mut upstream_read = BufReader::new(upstream_read);
 
     loop {
         let action = match read_request_head(&mut client_read) {
@@ -174,6 +171,7 @@ fn relay_authorized(mut client: TcpStream, mut upstream: TcpStream, auth: &GateA
         let RequestAction::Forward {
             head,
             content_length,
+            head_request,
             upgrade,
         } = action
         else {
@@ -184,21 +182,221 @@ fn relay_authorized(mut client: TcpStream, mut upstream: TcpStream, auth: &GateA
             break;
         };
         if upstream.write_all(&head).is_err()
-            || io::copy(
-                &mut client_read.by_ref().take(content_length),
-                &mut upstream,
-            )
-            .is_err()
+            || copy_exact(&mut client_read, &mut upstream, content_length).is_err()
         {
             break;
         }
-        if upgrade {
-            let _ = io::copy(&mut client_read, &mut upstream);
-            break;
+        match relay_response(&mut upstream_read, &mut client, head_request, upgrade) {
+            Ok(ResponseAction::NextRequest) => {}
+            Ok(ResponseAction::Upgrade) => {
+                splice_buffered(client_read, upstream_read, client, upstream);
+                return;
+            }
+            Ok(ResponseAction::Close) | Err(_) => break,
         }
     }
     let _ = upstream.shutdown(Shutdown::Write);
     let _ = client.shutdown(Shutdown::Read);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResponseAction {
+    NextRequest,
+    Upgrade,
+    Close,
+}
+
+fn relay_response(
+    upstream: &mut impl BufRead,
+    client: &mut impl Write,
+    head_request: bool,
+    upgrade_request: bool,
+) -> io::Result<ResponseAction> {
+    loop {
+        let Some(head) = read_request_head(upstream)? else {
+            return Ok(ResponseAction::Close);
+        };
+        let response = parse_response_head(&head)?;
+        client.write_all(&head)?;
+        if response.status == 101 {
+            return Ok(if upgrade_request {
+                ResponseAction::Upgrade
+            } else {
+                ResponseAction::Close
+            });
+        }
+        if (100..200).contains(&response.status) {
+            continue;
+        }
+
+        let no_body = head_request || matches!(response.status, 204 | 304);
+        if !no_body {
+            if response.chunked {
+                relay_chunked(upstream, client)?;
+            } else if let Some(content_length) = response.content_length {
+                copy_exact(upstream, client, content_length)?;
+            } else {
+                io::copy(upstream, client)?;
+                return Ok(ResponseAction::Close);
+            }
+        }
+        return Ok(if response.connection_close {
+            ResponseAction::Close
+        } else {
+            ResponseAction::NextRequest
+        });
+    }
+}
+
+struct ResponseHead {
+    status: u16,
+    content_length: Option<u64>,
+    chunked: bool,
+    connection_close: bool,
+}
+
+fn parse_response_head(head: &[u8]) -> io::Result<ResponseHead> {
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut response = httparse::Response::new(&mut headers);
+    let httparse::Status::Complete(parsed_len) = response
+        .parse(head)
+        .map_err(|err| invalid_http(format!("invalid HTTP response: {err}")))?
+    else {
+        return Err(invalid_http("incomplete HTTP response"));
+    };
+    if parsed_len != head.len() {
+        return Err(invalid_http("HTTP response head has trailing bytes"));
+    }
+    let status = response
+        .code
+        .ok_or_else(|| invalid_http("HTTP response omitted its status"))?;
+    let mut content_length = None;
+    let mut chunked = false;
+    let mut transfer_encoded = false;
+    let mut connection_close = response.version == Some(0);
+    for header in response.headers.iter() {
+        if header.name.eq_ignore_ascii_case("Content-Length") {
+            let text = std::str::from_utf8(trim_ascii(header.value))
+                .map_err(|_| invalid_http("HTTP response Content-Length is not UTF-8"))?;
+            let value = text
+                .parse::<u64>()
+                .map_err(|_| invalid_http("HTTP response Content-Length is invalid"))?;
+            if content_length.is_some_and(|existing| existing != value) {
+                return Err(invalid_http(
+                    "HTTP response has conflicting Content-Length values",
+                ));
+            }
+            content_length = Some(value);
+        }
+        if header.name.eq_ignore_ascii_case("Transfer-Encoding") {
+            transfer_encoded = true;
+            chunked |=
+                header_tokens(header.value).any(|token| token.eq_ignore_ascii_case(b"chunked"));
+        }
+        if header.name.eq_ignore_ascii_case("Connection") {
+            for token in header_tokens(header.value) {
+                if token.eq_ignore_ascii_case(b"close") {
+                    connection_close = true;
+                } else if response.version == Some(0) && token.eq_ignore_ascii_case(b"keep-alive") {
+                    connection_close = false;
+                }
+            }
+        }
+    }
+    if transfer_encoded {
+        content_length = None;
+    }
+    Ok(ResponseHead {
+        status,
+        content_length,
+        chunked,
+        connection_close,
+    })
+}
+
+fn relay_chunked(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<()> {
+    loop {
+        let line = read_crlf_line(reader, MAX_CHUNK_LINE)?;
+        writer.write_all(&line)?;
+        let size = line
+            .strip_suffix(b"\r\n")
+            .and_then(|line| line.split(|byte| *byte == b';').next())
+            .and_then(|size| std::str::from_utf8(trim_ascii(size)).ok())
+            .and_then(|size| u64::from_str_radix(size, 16).ok())
+            .ok_or_else(|| invalid_http("HTTP response chunk size is invalid"))?;
+        if size == 0 {
+            loop {
+                let trailer = read_crlf_line(reader, MAX_REQUEST_HEAD)?;
+                writer.write_all(&trailer)?;
+                if trailer == b"\r\n" {
+                    return Ok(());
+                }
+            }
+        }
+        copy_exact(reader, writer, size)?;
+        let mut ending = [0_u8; 2];
+        reader.read_exact(&mut ending)?;
+        if ending != *b"\r\n" {
+            return Err(invalid_http("HTTP response chunk omitted its CRLF"));
+        }
+        writer.write_all(&ending)?;
+    }
+}
+
+fn read_crlf_line(reader: &mut impl BufRead, limit: usize) -> io::Result<Vec<u8>> {
+    let mut line = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "HTTP line ended before CRLF",
+            ));
+        }
+        let mut consumed = 0;
+        for byte in available {
+            if line.len() == limit {
+                return Err(invalid_http("HTTP line exceeds its size limit"));
+            }
+            line.push(*byte);
+            consumed += 1;
+            if line.ends_with(b"\r\n") {
+                reader.consume(consumed);
+                return Ok(line);
+            }
+        }
+        reader.consume(consumed);
+    }
+}
+
+fn copy_exact(reader: &mut impl Read, writer: &mut impl Write, length: u64) -> io::Result<()> {
+    let copied = io::copy(&mut reader.take(length), writer)?;
+    if copied == length {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("HTTP body ended after {copied} of {length} bytes"),
+        ))
+    }
+}
+
+fn invalid_http(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+fn splice_buffered(
+    mut client_read: impl Read + Send + 'static,
+    mut upstream_read: impl Read,
+    mut client_write: TcpStream,
+    mut upstream_write: TcpStream,
+) {
+    std::thread::spawn(move || {
+        let _ = io::copy(&mut client_read, &mut upstream_write);
+        let _ = upstream_write.shutdown(Shutdown::Write);
+    });
+    let _ = io::copy(&mut upstream_read, &mut client_write);
+    let _ = client_write.shutdown(Shutdown::Write);
 }
 
 fn read_request_head(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
@@ -292,6 +490,7 @@ fn rewrite_request_head(head: &[u8], auth: &GateAuth) -> RequestAction {
     RequestAction::Forward {
         head: rewritten,
         content_length: content_length.unwrap_or(0),
+        head_request: method.eq_ignore_ascii_case("HEAD"),
         upgrade,
     }
 }
@@ -390,6 +589,7 @@ mod tests {
         let RequestAction::Forward {
             head,
             content_length,
+            head_request,
             upgrade,
         } = rewrite_request_head(
             b"POST /x HTTP/1.1\r\nHost: local\r\nX-Forwarded-User: alice\r\nAuthorization: Bearer attacker\r\nContent-Length: 4\r\n\r\n",
@@ -401,6 +601,7 @@ mod tests {
         assert!(head.contains("Authorization: Basic cmltejphYmNk\r\n"));
         assert!(!head.contains("Bearer attacker"));
         assert_eq!(content_length, 4);
+        assert!(!head_request);
         assert!(!upgrade);
 
         assert_eq!(
@@ -414,6 +615,24 @@ mod tests {
             ),
             RequestAction::Close
         );
+    }
+
+    #[test]
+    fn chunked_response_framing_is_relayed_without_rewriting() {
+        let chunked = b"4\r\nWiki\r\n5;kind=test\r\npedia\r\n0\r\nTrailer: yes\r\n\r\n";
+        let mut input = BufReader::new(std::io::Cursor::new(
+            [chunked.as_slice(), b"next-response"].concat(),
+        ));
+        let mut output = Vec::new();
+
+        relay_chunked(&mut input, &mut output).expect("relay chunked body");
+
+        assert_eq!(output, chunked);
+        let mut remaining = String::new();
+        input
+            .read_to_string(&mut remaining)
+            .expect("read remaining response");
+        assert_eq!(remaining, "next-response");
     }
 
     #[test]
@@ -475,6 +694,58 @@ mod tests {
                 .expect("response head");
             assert!(response.starts_with(b"HTTP/1.1 204 No Content"));
         }
+        client.shutdown(Shutdown::Both).expect("close client");
+        upstream_thread.join().expect("upstream thread");
+        gate.join().expect("gate thread");
+    }
+
+    #[test]
+    fn rejected_websocket_upgrade_keeps_rewriting_requests() {
+        let (mut client, gate_client) = tcp_pair();
+        let (gate_upstream, mut upstream) = tcp_pair();
+        let gate =
+            std::thread::spawn(move || relay_authorized(gate_client, gate_upstream, &auth()));
+        let upstream_thread = std::thread::spawn(move || {
+            let mut reader = BufReader::new(upstream.try_clone().expect("clone upstream"));
+            let upgrade = read_request_head(&mut reader)
+                .expect("read upgrade request")
+                .expect("upgrade request");
+            assert!(
+                upgrade
+                    .windows(b"Upgrade: websocket".len())
+                    .any(|bytes| bytes == b"Upgrade: websocket")
+            );
+            upstream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .expect("reject upgrade");
+            let second = read_request_head(&mut reader)
+                .expect("read second request")
+                .expect("second request");
+            let second = String::from_utf8(second).expect("second request text");
+            assert!(second.starts_with("GET /two HTTP/1.1\r\n"), "{second}");
+            assert!(
+                second.contains("Authorization: Basic cmltejphYmNk\r\n"),
+                "{second}"
+            );
+            upstream
+                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .expect("write second response");
+        });
+        let mut reader = BufReader::new(client.try_clone().expect("clone client"));
+        client
+            .write_all(b"GET /ws HTTP/1.1\r\nHost: local\r\nX-Forwarded-User: alice\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+            .expect("write upgrade request");
+        let rejected = read_request_head(&mut reader)
+            .expect("read rejected upgrade")
+            .expect("rejected upgrade response");
+        assert!(rejected.starts_with(b"HTTP/1.1 200 OK"));
+        client
+            .write_all(b"GET /two HTTP/1.1\r\nHost: local\r\nX-Forwarded-User: alice\r\n\r\n")
+            .expect("write second request");
+        let response = read_request_head(&mut reader)
+            .expect("read second response")
+            .expect("second response");
+        assert!(response.starts_with(b"HTTP/1.1 204 No Content"));
         client.shutdown(Shutdown::Both).expect("close client");
         upstream_thread.join().expect("upstream thread");
         gate.join().expect("gate thread");
