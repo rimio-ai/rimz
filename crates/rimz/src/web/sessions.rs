@@ -14,6 +14,7 @@ pub struct LiveRoom {
     pub mux: MuxName,
     pub project_root: PathBuf,
     pub workspace_id: WorkspaceId,
+    pub updated_at: jiff::Timestamp,
 }
 
 pub fn live_rooms() -> Result<Vec<LiveRoom>> {
@@ -39,6 +40,7 @@ fn live_rooms_from(
                 mux,
                 project_root: workspace.project_root,
                 workspace_id: workspace.workspace_id,
+                updated_at: workspace.updated_at,
             })
         })
         .collect::<Vec<_>>();
@@ -54,13 +56,14 @@ mod tests {
 
     use super::*;
 
-    fn known(session: &str, root: &str) -> KnownWorkspace {
+    fn known(session: &str, root: &str, updated_at: i64) -> KnownWorkspace {
         KnownWorkspace {
             workspace_id: WorkspaceId::from_project_root(std::path::Path::new(root)),
             project_root: PathBuf::from(root),
             session_name: session.to_owned(),
             root_class: RootClass::Repo,
             rimz_bin: None,
+            updated_at: jiff::Timestamp::from_second(updated_at).unwrap(),
         }
     }
 
@@ -68,9 +71,9 @@ mod tests {
     fn live_room_join_filters_stopped_sessions_and_sorts_by_name() {
         let rooms = live_rooms_from(
             vec![
-                known("rimz-zulu", "/repo/zulu"),
-                known("rimz-stopped", "/repo/stopped"),
-                known("rimz-alpha", "/repo/alpha"),
+                known("rimz-zulu", "/repo/zulu", 30),
+                known("rimz-stopped", "/repo/stopped", 20),
+                known("rimz-alpha", "/repo/alpha", 10),
             ],
             |session| match session {
                 "rimz-alpha" => Some(MuxName::Tmux),
@@ -90,5 +93,9 @@ mod tests {
             ]
         );
         assert_eq!(rooms[0].project_root, PathBuf::from("/repo/alpha"));
+        assert_eq!(
+            rooms[0].updated_at,
+            jiff::Timestamp::from_second(10).unwrap()
+        );
     }
 }

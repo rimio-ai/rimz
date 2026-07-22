@@ -1159,6 +1159,7 @@ mod tests {
             session_name: workspace.session_name.clone(),
             root_class: workspace.root_class,
             rimz_bin: record.rimz_bin.clone(),
+            updated_at: record.updated_at,
         };
 
         let unreferenced = crate::store::paths::builds_dir_under(dir.path()).join("unused");

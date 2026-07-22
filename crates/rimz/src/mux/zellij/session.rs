@@ -195,6 +195,7 @@ impl ZellijBackend {
                 session_name: session.to_owned(),
                 root_class: workspace::RootClass::Directory,
                 rimz_bin: self.recorded_rimz_bin(workspace_id),
+                updated_at: jiff::Timestamp::now(),
             });
         }
         self.known_workspaces()

@@ -7,6 +7,7 @@ fn workspace() -> KnownWorkspace {
         session_name: "rimz-test".to_owned(),
         root_class: crate::workspace::RootClass::Directory,
         rimz_bin: None,
+        updated_at: jiff::Timestamp::UNIX_EPOCH,
     }
 }
 

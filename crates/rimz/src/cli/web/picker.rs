@@ -1,5 +1,6 @@
 //! Interactive live-room picker for ttyd browser sessions.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{self, IsTerminal, Write};
 use std::time::{Duration, Instant};
@@ -9,7 +10,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
@@ -17,7 +18,7 @@ use ratatui::{Frame, Terminal};
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig, ThemeProviderStyle};
 use rimz::ids::{AgentKind, MuxName};
 use rimz::sidebar::consumer::PublishedSnapshotReader;
-use rimz::theme::{Palette, Tone, resolve_provider_brand, theme_glyphs};
+use rimz::theme::{Identity, Palette, Tone, resolve_provider_brand, theme_glyphs};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use rimz::{RuntimePaths, SpendWindow, StatePaths};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -25,6 +26,20 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 const EVENT_POLL: Duration = Duration::from_millis(250);
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const CARD_HEIGHT: usize = 3;
+const PROMPT_RECENCY_WINDOW_SECS: i64 = 24 * 60 * 60;
+const PANEL_MIN_WIDTH: u16 = 58;
+const PANEL_MAX_WIDTH: u16 = 96;
+const BANNER_GAP: u16 = 1;
+const HELP_HEIGHT: u16 = 1;
+const MIN_BLOCK_HEIGHT: u16 = 5;
+const BANNER: [&str; 6] = [
+    "██████╗ ██╗███╗   ███╗███████╗",
+    "██╔══██╗██║████╗ ████║╚══███╔╝",
+    "██████╔╝██║██╔████╔██║  ███╔╝",
+    "██╔══██╗██║██║╚██╔╝██║ ███╔╝",
+    "██║  ██║██║██║ ╚═╝ ██║███████╗",
+    "╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚══════╝",
+];
 
 pub(super) fn available() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
@@ -76,7 +91,7 @@ pub(super) fn run(
         } else {
             if Instant::now() >= next_probe {
                 match probe_rows(&mut readers) {
-                    Ok(rows) => picker.apply_probe(rows),
+                    Ok(rows) => picker.apply_probe(rows, jiff::Timestamp::now()),
                     Err(err) => picker.notice = Some(format!("could not read live rooms: {err}")),
                 }
                 next_probe = Instant::now() + PROBE_INTERVAL;
@@ -192,6 +207,7 @@ struct RoomAgents {
 struct RoomStats {
     agents: RoomAgents,
     headline: SpendWindow,
+    last_prompt_at: Option<jiff::Timestamp>,
 }
 
 impl RoomStats {
@@ -202,6 +218,10 @@ impl RoomStats {
                 .workspace_value_tally
                 .as_ref()
                 .map_or_else(SpendWindow::default, |tally| tally.headline),
+            last_prompt_at: snapshot
+                .root_agents()
+                .filter_map(|agent| agent.turn_started_at)
+                .max(),
         }
     }
 }
@@ -289,8 +309,20 @@ impl Picker {
         }
     }
 
-    fn apply_probe(&mut self, mut rows: Vec<RoomRow>) {
-        rows.sort_by_cached_key(|row| (repo_name(&row.room), row.room.project_root.clone()));
+    fn apply_probe(&mut self, mut rows: Vec<RoomRow>, now: jiff::Timestamp) {
+        rows.sort_by_cached_key(|row| {
+            let recent = row
+                .stats
+                .as_ref()
+                .and_then(|stats| stats.last_prompt_at)
+                .filter(|at| now.duration_since(*at).as_secs() < PROMPT_RECENCY_WINDOW_SECS);
+            (
+                Reverse(recent),
+                Reverse(row.room.updated_at),
+                repo_name(&row.room),
+                row.room.project_root.clone(),
+            )
+        });
         self.rows = rows;
         self.normalize_selection();
     }
@@ -457,6 +489,10 @@ impl PickerTheme {
         self.style(self.palette.accent())
     }
 
+    fn money(&self) -> Style {
+        self.style(self.palette.identity(Identity::Money))
+    }
+
     fn alarm(&self) -> Style {
         self.style(self.palette.alarm())
     }
@@ -490,19 +526,128 @@ fn tone_color(tone: Tone) -> Color {
 
 fn render(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme) {
     let area = frame.area();
+    picker.hit_rows.clear();
+    let panel_width = if area.width < PANEL_MIN_WIDTH {
+        area.width
+    } else {
+        (area.width / 2)
+            .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
+            .min(area.width)
+    };
+    let banner_width = BANNER
+        .iter()
+        .map(|line| UnicodeWidthStr::width(*line))
+        .max()
+        .unwrap_or_default();
+    let banner_height = u16::try_from(BANNER.len()).unwrap_or_default();
+    let banner_fits = usize::from(panel_width) >= banner_width
+        && area.height >= banner_height + BANNER_GAP + MIN_BLOCK_HEIGHT + HELP_HEIGHT;
+    if !banner_fits {
+        render_picker_block(frame, picker, theme, area, true);
+        return;
+    }
+
+    let visible = picker.visible().len();
+    let list_height = if visible == 0 {
+        1
+    } else {
+        visible.saturating_mul(CARD_HEIGHT).saturating_sub(1)
+    };
+    let desired_block_height =
+        u16::try_from(2usize + usize::from(picker.notice.is_some()) + list_height + 1)
+            .unwrap_or(u16::MAX)
+            .max(MIN_BLOCK_HEIGHT);
+    let max_block_height = area
+        .height
+        .saturating_sub(banner_height + BANNER_GAP + HELP_HEIGHT);
+    let block_height = desired_block_height.min(max_block_height);
+    let stack_height = banner_height + BANNER_GAP + block_height + HELP_HEIGHT;
+    let top = area.height.saturating_sub(stack_height) / 3;
+    let panel_x = area.x + area.width.saturating_sub(panel_width) / 2;
+    let banner_area = Rect::new(panel_x, area.y + top, panel_width, banner_height);
+    let block_area = Rect::new(
+        panel_x,
+        banner_area.bottom() + BANNER_GAP,
+        panel_width,
+        block_height,
+    );
+    let help_area = Rect::new(panel_x, block_area.bottom(), panel_width, HELP_HEIGHT);
+
+    let banner = BANNER
+        .iter()
+        .map(|line| banner_line(line, theme))
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(banner).alignment(Alignment::Center),
+        banner_area,
+    );
+    render_picker_block(frame, picker, theme, block_area, false);
+    frame.render_widget(
+        Paragraph::new("↑↓ select · ⏎ attach · type to filter · esc quit")
+            .style(theme.faint())
+            .alignment(Alignment::Center),
+        help_area,
+    );
+}
+
+fn banner_line(line: &str, theme: &PickerTheme) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut blocks = None;
+    for character in line.chars() {
+        let is_block = character == '█';
+        if blocks.is_some_and(|current| current != is_block) {
+            let style = if blocks == Some(true) {
+                theme.accent()
+            } else {
+                theme.rule()
+            };
+            spans.push(Span::styled(std::mem::take(&mut run), style));
+        }
+        blocks = Some(is_block);
+        run.push(character);
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(
+            run,
+            if blocks == Some(true) {
+                theme.accent()
+            } else {
+                theme.rule()
+            },
+        ));
+    }
+    Line::from(spans)
+}
+
+fn render_picker_block(
+    frame: &mut Frame<'_>,
+    picker: &mut Picker,
+    theme: &PickerTheme,
+    area: Rect,
+    help_inside: bool,
+) {
+    let title = if help_inside {
+        Line::from(vec![
+            Span::styled(" RimZ ", theme.accent().add_modifier(Modifier::BOLD)),
+            Span::styled("── sessions ", theme.muted()),
+        ])
+    } else {
+        Line::from(Span::styled(" sessions ", theme.muted()))
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.rule())
-        .title(Line::from(vec![
-            Span::styled(" RimZ ", theme.accent().add_modifier(Modifier::BOLD)),
-            Span::styled("── sessions ", theme.muted()),
-        ]));
-    let inner = block.inner(area);
+        .title(title);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
-    picker.hit_rows.clear();
     if inner.width == 0 || inner.height == 0 {
         return;
+    }
+    if inner.width > 2 {
+        inner.x += 1;
+        inner.width -= 2;
     }
 
     let notice_height = u16::from(picker.notice.is_some());
@@ -513,7 +658,10 @@ fn render(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme) {
         );
     }
 
-    let controls_height = inner.height.saturating_sub(notice_height).min(2);
+    let controls_height = inner
+        .height
+        .saturating_sub(notice_height)
+        .min(if help_inside { 2 } else { 1 });
     let list_height = inner
         .height
         .saturating_sub(notice_height)
@@ -537,7 +685,7 @@ fn render(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme) {
             Rect::new(inner.x, filter_y, inner.width, 1),
         );
     }
-    if controls_height == 2 {
+    if help_inside && controls_height == 2 {
         frame.render_widget(
             Paragraph::new("↑↓ select · ⏎ attach · type to filter · esc quit").style(theme.faint()),
             Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
@@ -569,7 +717,7 @@ fn render_rooms(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme,
                 .position(|row| row.room.session_name == selected)
         })
         .unwrap_or(0);
-    let capacity = (usize::from(area.height) / CARD_HEIGHT).max(1);
+    let capacity = (usize::from(area.height).saturating_add(1) / CARD_HEIGHT).max(1);
     let start = selected_index.saturating_add(1).saturating_sub(capacity);
     let shown = &visible[start..visible.len().min(start + capacity)];
     let mut items = Vec::with_capacity(shown.len().saturating_mul(CARD_HEIGHT));
@@ -666,7 +814,7 @@ fn metric_spans(
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     if show_sessions {
-        spans.push(Span::styled(theme.sessions_glyph.clone(), theme.meta()));
+        spans.push(Span::styled(theme.sessions_glyph.clone(), theme.accent()));
         spans.push(Span::styled(
             format!(" {}", stats.headline.sessions),
             theme.body(),
@@ -690,7 +838,7 @@ fn metric_spans(
     }
     spans.push(Span::styled(
         rimz::theme::fmt::dollars2(stats.headline.usd),
-        theme.body(),
+        theme.money(),
     ));
     spans
 }
