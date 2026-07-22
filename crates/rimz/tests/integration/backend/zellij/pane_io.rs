@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
+use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, MuxBackend, NamedKey, PaneListOptions,
     PaneReadConsistency, SplitPaneOptions, SplitPlacement, SplitTarget, ZellijBackend,
@@ -16,34 +17,30 @@ use super::support::*;
 fn sidebar_focus_command_targets_session_from_outside_room() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("focuscmd");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("focuscmd");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let backend = ZellijBackend::with_runtime_dir(xdg);
     let opts = sidebar_opts(&name, cwd.path(), stub, 200);
-    publish_room_bin(xdg.path(), &opts);
+    publish_room_bin(xdg, &opts);
     backend.open_sidebar(&opts, None).expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
+    wait_for_pane_count(xdg, &name, 2);
 
-    let sidebar = raw_sidebar_pane(xdg.path(), &name);
+    let sidebar = raw_sidebar_pane(xdg, &name);
     let sidebar_id = sidebar.id;
     let tab_id = sidebar.tab_id;
-    let work_id = expect_list_panes(xdg.path(), &name)
+    let work_id = expect_list_panes(xdg, &name)
         .panes
         .iter()
         .find(|pane| !pane.is_plugin && pane.tab_id == tab_id && !pane.is_sidebar())
         .map(|pane| pane.id)
         .expect("work pane id");
 
-    let mut client = AttachedClient::attach(xdg.path(), &name, 200, 50);
-    focus_attached_client_pane_until(xdg.path(), &name, work_id, "fixture work pane", || {
-        client.press_alt('l')
-    });
+    let mut client = AttachedClient::attach(&room, 200, 50);
+    let work_pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{work_id}"));
+    client.press_alt_until('l', &work_pane, "fixture work pane");
 
     let env = Env::new();
     let workspace_root = std::path::PathBuf::from(format!("/tmp/rimz-{name}"));
@@ -53,7 +50,7 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         &workspace_root,
         &name,
     );
-    write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
+    write_topology_cache_from_list_panes(xdg, &opts.workspace_id, &name);
     let trace = TempDir::new().expect("zellij trace tempdir");
     let trace_log = trace.path().join("zellij.log");
     let shim = trace.path().join("zellij");
@@ -71,9 +68,9 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         .expect("chmod zellij trace shim");
     let output = env
         .rimz()
-        .env("XDG_RUNTIME_DIR", xdg.path())
-        .env("XDG_CACHE_HOME", xdg.path())
-        .env("TMPDIR", xdg.path())
+        .env("XDG_RUNTIME_DIR", xdg)
+        .env("XDG_CACHE_HOME", xdg)
+        .env("TMPDIR", xdg)
         .env("RIMZ_ZELLIJ_BIN", &shim)
         .args([
             "--mux",
@@ -104,18 +101,15 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
 fn split_pane_injects_env_vars() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("splitenv");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("splitenv");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let marker_file = cwd.path().join("rimz-env-marker");
 
     // Birth a live background session with one long-lived pane to split from.
-    create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
-    let target = wait_for_pane_count(xdg.path(), &name, 1)[0].pane_id.clone();
+    room.create_plain_background(cwd.path(), "60");
+    let target = wait_for_pane_count(xdg, &name, 1)[0].pane_id.clone();
     assert!(
         !target.raw().is_empty(),
         "session should have its working pane before the split",
@@ -123,7 +117,7 @@ fn split_pane_injects_env_vars() {
 
     let mut env = BTreeMap::new();
     env.insert("RIMZ_TEST_VAR".to_owned(), "marker-rimz-env".to_owned());
-    ZellijBackend::with_runtime_dir(xdg.path())
+    ZellijBackend::with_runtime_dir(xdg)
         .split_pane(SplitPaneOptions {
             target: SplitTarget::SessionPane {
                 session_name: name.clone(),
@@ -163,7 +157,7 @@ fn split_pane_injects_env_vars() {
         marker, "marker-rimz-env",
         "Zellij split pane missed the injected RIMZ_TEST_VAR",
     );
-    ZellijBackend::with_runtime_dir(xdg.path())
+    ZellijBackend::with_runtime_dir(xdg)
         .capture_pane(&target, Some(1), true)
         .expect("capture split target with scrollback and ANSI");
 }
@@ -172,18 +166,15 @@ fn split_pane_injects_env_vars() {
 fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("splittarget");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("splittarget");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
-    create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
-    let mut client = AttachedClient::attach(xdg.path(), &name, 120, 40);
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    let first = wait_for_pane_count(xdg.path(), &name, 1)[0].clone();
-    scoped_zellij(xdg.path())
+    room.create_plain_background(cwd.path(), "60");
+    let mut client = AttachedClient::attach(&room, 120, 40);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    let first = wait_for_pane_count(xdg, &name, 1)[0].clone();
+    room.command()
         .args([
             "--session",
             &name,
@@ -197,32 +188,27 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
         ])
         .bounded_output()
         .expect("second target pane");
-    let target = wait_for_pane_count(xdg.path(), &name, 2)
+    let target = wait_for_pane_count(xdg, &name, 2)
         .into_iter()
         .find(|pane| pane.pane_id != first.pane_id)
         .expect("second target pane");
-    ZellijBackend::with_runtime_dir(xdg.path())
+    ZellijBackend::with_runtime_dir(xdg)
         .focus_pane(&first.pane_id, Some(&name))
         .expect("focus first pane");
-    open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 2);
-    let active_tab_pane = wait_for_pane_count(xdg.path(), &name, 3)
+    open_new_tab(xdg, &name);
+    wait_for_tab_count(xdg, &name, 2);
+    let active_tab_pane = wait_for_pane_count(xdg, &name, 3)
         .into_iter()
         .find(|pane| pane.pane_id != first.pane_id && pane.pane_id != target.pane_id)
         .expect("new tab pane");
+    client.go_to_tab_until(2, &active_tab_pane.pane_id, "new tab pane");
     let active_tab_pane_id = active_tab_pane
         .pane_id
         .creation_ordinal()
-        .expect("numeric new tab pane id");
-    focus_attached_client_pane_until(
-        xdg.path(),
-        &name,
-        active_tab_pane_id,
-        "new tab pane",
-        || client.go_to_tab(2),
-    );
-    let active_tab_pane_id = active_tab_pane_id.to_string();
-    let moved = scoped_zellij(xdg.path())
+        .expect("numeric new tab pane id")
+        .to_string();
+    let moved = room
+        .command()
         .env("ZELLIJ_PANE_ID", active_tab_pane_id)
         .args(["--session", &name, "action", "move-tab", "left"])
         .bounded_output()
@@ -234,7 +220,7 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     );
     let target = poll_until(
         Duration::from_secs(10),
-        || Ok(expect_list_panes(xdg.path(), &name).pane_refs()),
+        || Ok(expect_list_panes(xdg, &name).pane_refs()),
         |panes| {
             panes
                 .iter()
@@ -256,7 +242,7 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     assert!(authoritative.panes.iter().any(|pane| {
         pane.pane_id == target.pane_id && pane.view_id.as_deref() == Some(first_tab.as_str())
     }));
-    let focused_before = wait_for_client_view_count(xdg.path(), &name, 1);
+    let focused_before = wait_for_human_client_count(&backend, &name, 1).viewed_panes;
     assert_eq!(
         focused_before.len(),
         1,
@@ -285,7 +271,7 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
 
     let panes = poll_until(
         Duration::from_secs(10),
-        || Ok(expect_list_panes(xdg.path(), &name).pane_refs()),
+        || Ok(expect_list_panes(xdg, &name).pane_refs()),
         |panes| {
             panes
                 .iter()
@@ -303,7 +289,7 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
         3,
         "targeted split should land beside the target pane, not in the focused tab: {panes:?}",
     );
-    let snapshot = expect_list_panes(xdg.path(), &name);
+    let snapshot = expect_list_panes(xdg, &name);
     let target_id = target
         .pane_id
         .creation_ordinal()
@@ -324,7 +310,8 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
         "stacked split should use the requested pane's column: {:?}",
         snapshot.panes,
     );
-    let focused_after = wait_for_focused_client_pane(&backend, &name, &focused_before[0]);
+    let focused_after =
+        client.wait_until_focused(&focused_before[0], "client focus after background split");
     assert_eq!(
         focused_after, focused_before,
         "targeting a background stack must not switch the attached client's tab",
@@ -339,12 +326,13 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
 fn paste_text_delivers_the_literal_payload() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    std::fs::write(xdg.path().join(".zshrc"), "# hermetic test shell\n")
+    let room = LiveZellijSession::new("paste");
+    let xdg = room.path();
+    std::fs::write(xdg.join(".zshrc"), "# hermetic test shell\n")
         .expect("write test shell profile");
-    let session = ZellijSession::attach_pty(xdg, unique_session_name("paste"), true);
-    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
-    let panes = wait_for_pane_count(session.xdg.path(), &session.name, 1);
+    let _client = AttachedClient::create_and_attach(&room, 80, 24);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    let panes = wait_for_pane_count(xdg, room.name(), 1);
     let pane_id = panes[0].pane_id.clone();
     let marker_dir = TempDir::new().expect("paste marker tempdir");
     let shell_ready = marker_dir.path().join("shell-ready");
@@ -415,9 +403,10 @@ fn paste_text_delivers_the_literal_payload() {
 fn semantic_answer_keys_reach_a_live_pane() {
     require_zellij!();
 
-    let session = ZellijSession::spawn(unique_session_name("answerkeys"));
-    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
-    let panes = wait_for_pane_count(session.xdg.path(), &session.name, 1);
+    let room = LiveZellijSession::new("answerkeys");
+    let _client = AttachedClient::create_and_attach(&room, 80, 24);
+    let backend = ZellijBackend::with_runtime_dir(room.path());
+    let panes = wait_for_pane_count(room.path(), room.name(), 1);
     let pane_id = panes[0].pane_id.clone();
     let marker_dir = TempDir::new().expect("marker dir");
     let key_bytes = marker_dir.path().join("named-key-bytes");
@@ -457,25 +446,13 @@ fn semantic_answer_keys_reach_a_live_pane() {
 fn client_view_tracks_the_attached_client() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("focus");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("focus");
+    let xdg = room.path();
+    let name = room.name().to_owned();
 
     // Birth a background session: it exists and answers actions, but has no
     // attached client yet.
-    let created = scoped_zellij(xdg.path())
-        .args(["attach", "--create-background", &name])
-        .bounded_output()
-        .expect("attach --create-background");
-    assert!(
-        created.status.success(),
-        "create-background failed: {}",
-        String::from_utf8_lossy(&created.stderr),
-    );
-    wait_until_session_ready(xdg.path(), &name);
+    room.create_background();
 
     // `--create-background` births the session without attaching, but the
     // bootstrap client that created it can still surface in `list-clients` for a
@@ -483,24 +460,24 @@ fn client_view_tracks_the_attached_client() {
     // roster drains, then assert the steady state: a background session with no
     // client focuses nothing. A real regression (a detached session that keeps a
     // focused client) never drains and still fails here.
-    let detached = wait_for_client_view_count(xdg.path(), &name, 0);
+    let detached = wait_for_human_client_count(room.backend(), &name, 0);
     assert!(
-        detached.is_empty(),
+        detached.viewed_panes.is_empty(),
         "a background session with no client focuses nothing: {detached:?}",
     );
 
-    // Attach a client; its focused terminal pane is now reported.
-    let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);
-    let focused = wait_for_client_view_count(xdg.path(), &name, 1);
-    let pane_id = wait_for_pane_count(xdg.path(), &name, 1)[0].pane_id.clone();
+    // Construction guarantees registration, so one immediate read is enough.
+    let client = AttachedClient::attach(&room, 200, 50);
+    let focused = client.view();
+    let pane_id = wait_for_pane_count(xdg, &name, 1)[0].pane_id.clone();
 
     assert_eq!(
-        focused.len(),
-        1,
-        "one attached client focuses one pane: {focused:?}",
+        focused.presence.human_clients, 1,
+        "one attached human client should be registered: {focused:?}",
     );
     assert_eq!(
-        focused[0], pane_id,
+        focused.viewed_panes,
+        vec![pane_id],
         "the attached client focuses the session's lone terminal pane: {focused:?}",
     );
 }

@@ -11,12 +11,9 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::workspace::WorkspaceResolver;
 
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{CommandTimeoutExt, Env, ROOM_WORKFLOW_TIMEOUT};
 
 const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
-/// Full room birth exercises several bounded mux probes and sidebar handoffs;
-/// keep its process ceiling distinct from the 10-second control-command bound.
-const START_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn zellij_trace_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
@@ -209,7 +206,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let mut birth_command = birth.rimz();
     configure_actionable_hooks(&mut birth_command, &birth, &birth_bin, &birth_trace, "");
     let birth_output = birth_command
-        .bounded_output_within(START_TIMEOUT)
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
         .expect("run absent-room start");
     assert!(
         birth_output.status.success(),
@@ -256,7 +253,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let mut live_command = live.rimz();
     configure_actionable_hooks(&mut live_command, &live, &live_bin, &live_trace, &sessions);
     let live_output = live_command
-        .bounded_output_within(START_TIMEOUT)
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
         .expect("run live-room start");
     assert!(
         live_output.status.success(),
@@ -339,7 +336,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
         let _ = reader.read_to_end(&mut output);
         output
     });
-    let deadline = Instant::now() + START_TIMEOUT;
+    let deadline = Instant::now() + ROOM_WORKFLOW_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll reconnect start") {
             break Some(status);
@@ -355,7 +352,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
     let output =
         String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
     let status = status.unwrap_or_else(|| {
-        panic!("reconnect start did not finish within {START_TIMEOUT:?}:\n{output}")
+        panic!("reconnect start did not finish within {ROOM_WORKFLOW_TIMEOUT:?}:\n{output}")
     });
     assert!(status.success(), "reconnect start failed: {output}");
     assert!(

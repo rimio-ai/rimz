@@ -75,7 +75,10 @@ fn profile_sink() -> &'static str {
 /// Maximum wall time for a mux control command in tests. Healthy control
 /// commands answer in milliseconds; this only catches wedged children.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// Full room workflows run several bounded mux probes and sidebar handoffs.
+pub const ROOM_WORKFLOW_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_STEP: Duration = Duration::from_millis(10);
+const TIMEOUT_OUTPUT_CONTEXT_BYTES: usize = 8 * 1024;
 
 pub trait CommandTimeoutExt {
     fn bounded_output(&mut self) -> io::Result<Output>;
@@ -94,6 +97,7 @@ impl CommandTimeoutExt for Command {
 
     fn bounded_output_within(&mut self, timeout: Duration) -> io::Result<Output> {
         let debug = format!("{self:?}");
+        isolate_process_group(self);
         let mut child = self
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -112,11 +116,11 @@ impl CommandTimeoutExt for Command {
                 });
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
+                kill_process_group(&mut child);
                 let _ = child.wait();
-                drop(stdout);
-                drop(stderr);
-                return Err(timeout_error(&debug, timeout));
+                let stdout = join_pipe(stdout);
+                let stderr = join_pipe(stderr);
+                return Err(timeout_error(&debug, timeout, &stdout, &stderr));
             }
             thread::sleep(POLL_STEP);
         }
@@ -124,6 +128,7 @@ impl CommandTimeoutExt for Command {
 
     fn bounded_status(&mut self) -> io::Result<ExitStatus> {
         let debug = format!("{self:?}");
+        isolate_process_group(self);
         let mut child = self
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -135,9 +140,9 @@ impl CommandTimeoutExt for Command {
                 return Ok(status);
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
+                kill_process_group(&mut child);
                 let _ = child.wait();
-                return Err(timeout_error(&debug, COMMAND_TIMEOUT));
+                return Err(timeout_error(&debug, COMMAND_TIMEOUT, &[], &[]));
             }
             thread::sleep(POLL_STEP);
         }
@@ -150,6 +155,27 @@ impl CommandTimeoutExt for Command {
         assert!(status.success(), "{label} exited with {status}");
         status
     }
+}
+
+fn isolate_process_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+
+        command.process_group(0);
+    }
+}
+
+fn kill_process_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{Signal, killpg};
+        use nix::unistd::Pid;
+
+        let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
 }
 
 fn drain_pipe<R>(mut pipe: R) -> thread::JoinHandle<Vec<u8>>
@@ -169,9 +195,56 @@ fn join_pipe(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-fn timeout_error(command: &str, timeout: Duration) -> io::Error {
+fn timeout_error(command: &str, timeout: Duration, stdout: &[u8], stderr: &[u8]) -> io::Error {
+    let stdout = lossy_tail(stdout);
+    let stderr = lossy_tail(stderr);
     io::Error::new(
         io::ErrorKind::TimedOut,
-        format!("{command} did not finish within {timeout:?}; killed"),
+        format!(
+            "{command} did not finish within {timeout:?}; killed; stdout tail: {stdout:?}; stderr tail: {stderr:?}"
+        ),
     )
+}
+
+fn lossy_tail(bytes: &[u8]) -> String {
+    let start = bytes.len().saturating_sub(TIMEOUT_OUTPUT_CONTEXT_BYTES);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_output_timeout_kills_reaps_and_keeps_both_output_streams() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let pid_file = tempdir.path().join("child.pid");
+        let error = Command::new("sh")
+            .args([
+                "-c",
+                "head -c 9000 /dev/zero | tr '\\0' x; printf rimz-stdout-marker; head -c 9000 /dev/zero | tr '\\0' y >&2; printf rimz-stderr-marker >&2; sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait \"$child\"",
+                "sh",
+            ])
+            .arg(&pid_file)
+            .bounded_output_within(Duration::from_millis(100))
+            .expect_err("sleeping command should time out");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let message = error.to_string();
+        assert!(message.contains("sh"), "missing command: {message}");
+        assert!(message.contains("100ms"), "missing budget: {message}");
+        assert!(message.contains("rimz-stdout-marker"), "{message}");
+        assert!(message.contains("rimz-stderr-marker"), "{message}");
+        assert!(
+            message.len() < 18_000,
+            "timeout diagnostics were not bounded: {} bytes",
+            message.len(),
+        );
+
+        let pid = std::fs::read_to_string(&pid_file).expect("child pid");
+        assert!(
+            !std::path::Path::new("/proc").join(pid.trim()).exists(),
+            "timed-out child {pid} was not killed and reaped",
+        );
+    }
 }

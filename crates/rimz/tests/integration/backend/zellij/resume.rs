@@ -6,7 +6,7 @@ use rimz::mux::{
     LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, SidebarWidth, TabOptions, ZellijBackend,
 };
 
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{CommandTimeoutExt, Env, ZellijNamespace};
 
 use super::support::*;
 
@@ -25,12 +25,10 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
     let before = plan_from_env(&env);
     assert_eq!(before.tabs.len(), 1, "seeded agent should be recoverable");
 
-    let xdg = scoped_runtime_dir();
-    let _cleanup = ScopedSessionCleanup {
-        name: workspace.session_name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let room =
+        LiveZellijSession::from_namespace(ZellijNamespace::new(), workspace.session_name.clone());
+    let xdg = room.path();
+    let backend = ZellijBackend::with_runtime_dir(xdg);
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = SidebarPaneOptions {
         session_name: workspace.session_name.clone(),
@@ -48,15 +46,15 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    publish_room_bin(xdg.path(), &sidebar);
+    publish_room_bin(xdg, &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &workspace.session_name, 2);
+    wait_for_pane_count(xdg, &workspace.session_name, 2);
 
-    let _client = AttachedClient::attach(xdg.path(), &workspace.session_name, 160, 40);
+    let _client = AttachedClient::attach(&room, 160, 40);
 
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("zellij-agent-ready");
-    let command = zellij_agent_exec_command(&env, xdg.path(), &agent_bin, &ready, agent_id);
+    let command = zellij_agent_exec_command(&env, xdg, &agent_bin, &ready, agent_id);
     let tab_name = "#rimz-zellij";
     backend
         .open_tab(&TabOptions {
@@ -71,15 +69,16 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         .expect("open agent tab");
     wait_for_path(&ready, "agent shim did not start");
 
-    close_all_sidebar_panes(xdg.path(), &workspace.session_name);
+    close_all_sidebar_panes(&room);
     assert!(
         wait_for_live_session(&backend, &workspace.session_name).contains(&workspace.session_name),
         "session should stay live after removing every sidebar",
     );
 
-    let work = wait_for_named_work_pane_count(xdg.path(), &workspace.session_name, tab_name, 1);
+    let work = wait_for_named_work_pane_count(xdg, &workspace.session_name, tab_name, 1);
     let pane_id = format!("terminal_{}", work[0].id);
-    let closed = scoped_zellij(xdg.path())
+    let closed = room
+        .command()
         .args([
             "--session",
             &workspace.session_name,
@@ -189,8 +188,8 @@ fn zellij_agent_exec_command(
     argv
 }
 
-fn close_all_sidebar_panes(xdg: &Path, session: &str) {
-    let panes = expect_list_panes(xdg, session);
+fn close_all_sidebar_panes(session: &LiveZellijSession) {
+    let panes = expect_list_panes(session.path(), session.name());
     let sidebar_ids: Vec<String> = panes
         .panes
         .iter()
@@ -203,10 +202,11 @@ fn close_all_sidebar_panes(xdg: &Path, session: &str) {
         "test setup should create at least one sidebar pane",
     );
     for pane_id in sidebar_ids {
-        let output = scoped_zellij(xdg)
+        let output = session
+            .command()
             .args([
                 "--session",
-                session,
+                session.name(),
                 "action",
                 "close-pane",
                 "--pane-id",
@@ -220,7 +220,7 @@ fn close_all_sidebar_panes(xdg: &Path, session: &str) {
             String::from_utf8_lossy(&output.stderr),
         );
     }
-    wait_for_no_sidebar_panes(xdg, session);
+    wait_for_no_sidebar_panes(session.path(), session.name());
 }
 
 fn wait_for_no_sidebar_panes(xdg: &Path, session: &str) {

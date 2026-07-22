@@ -57,12 +57,12 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
 fn open_background_view_creates_named_tab_idempotently() {
     require_zellij!();
 
-    let name = unique_session_name("bgview");
-    let xdg = scoped_runtime_dir();
+    let room = LiveZellijSession::new("bgview");
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
-    create_plain_background_session(xdg.path(), &name, cwd.path(), "120");
-    let session = ZellijSession::attach_existing(xdg, &name);
-    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
+    room.create_plain_background(cwd.path(), "120");
+    let _client = AttachedClient::attach(&room, 80, 24);
+    let backend = ZellijBackend::with_runtime_dir(room.path());
     let (_stub_dir, stub) = sidebar_command_stub();
 
     let opts = background_view_opts(&name, &stub);
@@ -70,7 +70,7 @@ fn open_background_view_creates_named_tab_idempotently() {
     let first = backend.open_background_view(&opts).expect("first launch");
     assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
     assert!(
-        wait_for_tab_named(session.xdg.path(), &name, "rimzd"),
+        wait_for_tab_named(&room, "rimzd"),
         "expected a rimzd tab after launch",
     );
 
@@ -90,12 +90,9 @@ fn open_background_view_creates_named_tab_idempotently() {
 fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("bgfirst");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("bgfirst");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
 
@@ -114,7 +111,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
             cwd: cwd.path().to_path_buf(),
         },
     };
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let backend = ZellijBackend::with_runtime_dir(xdg);
     let sidebar = SidebarPaneOptions {
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
@@ -131,25 +128,25 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    publish_room_bin(xdg.path(), &sidebar);
+    publish_room_bin(xdg, &sidebar);
     backend
         .open_sidebar(&sidebar, Some(&daemon))
         .expect("open_sidebar with daemon");
 
     assert!(
-        wait_for_tab_named(xdg.path(), &name, "rimzd"),
+        wait_for_tab_named(&room, "rimzd"),
         "expected a rimzd tab after birth",
     );
     assert!(
-        wait_for_first_tab(xdg.path(), &name, "rimzd"),
+        wait_for_first_tab(&room, "rimzd"),
         "daemon tab must lead the session; saw {:?}",
-        tab_names_in_order(xdg.path(), &name),
+        tab_names_in_order(&room),
     );
-    wait_for_tab_count(xdg.path(), &name, 2);
+    wait_for_tab_count(xdg, &name, 2);
     // Two tabs: the daemon tab and the working tab born beside it.
     let tab_names = poll_until(
         Duration::from_secs(10),
-        || Ok(tab_names_in_order(xdg.path(), &name)),
+        || Ok(tab_names_in_order(&room)),
         |names| names.len() >= 2,
         "daemon and working tab names",
     );
@@ -158,7 +155,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         2,
         "birth layout should produce exactly the daemon + working tabs: {tab_names:?}",
     );
-    let panes = wait_for_tab_pane_count(xdg.path(), &name, "rimzd", 4);
+    let panes = wait_for_tab_pane_count(xdg, &name, "rimzd", 4);
     assert_eq!(
         panes.len(),
         4,
@@ -167,9 +164,10 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
 }
 
 /// The session's tab names in tab order (`query-tab-names` prints one per line).
-fn tab_names_in_order(xdg: &Path, session: &str) -> Vec<String> {
-    let out = scoped_zellij(xdg)
-        .args(["--session", session, "action", "query-tab-names"])
+fn tab_names_in_order(session: &LiveZellijSession) -> Vec<String> {
+    let out = session
+        .command()
+        .args(["--session", session.name(), "action", "query-tab-names"])
         .bounded_output();
     out.ok()
         .filter(|out| out.status.success())
@@ -200,10 +198,10 @@ fn wait_for_tab_pane_count(xdg: &Path, session: &str, tab_name: &str, want: usiz
 }
 
 /// Poll until the session's first tab is `expected`, or time out.
-fn wait_for_first_tab(xdg: &Path, session: &str, expected: &str) -> bool {
+fn wait_for_first_tab(session: &LiveZellijSession, expected: &str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if tab_names_in_order(xdg, session).first().map(String::as_str) == Some(expected) {
+        if tab_names_in_order(session).first().map(String::as_str) == Some(expected) {
             return true;
         }
         if Instant::now() >= deadline {
@@ -214,11 +212,12 @@ fn wait_for_first_tab(xdg: &Path, session: &str, expected: &str) -> bool {
 }
 
 /// Poll `query-tab-names` until a tab named `tab_name` appears, or time out.
-fn wait_for_tab_named(xdg: &Path, session: &str, tab_name: &str) -> bool {
+fn wait_for_tab_named(session: &LiveZellijSession, tab_name: &str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let listed = scoped_zellij(xdg)
-            .args(["--session", session, "action", "query-tab-names"])
+        let listed = session
+            .command()
+            .args(["--session", session.name(), "action", "query-tab-names"])
             .bounded_output();
         if let Ok(out) = listed
             && out.status.success()

@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 
 use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, ZellijBackend};
 
-use crate::common::CommandTimeoutExt;
+use crate::common::{CommandTimeoutExt, ZellijNamespace};
 
 use super::panes::{PaneSnapshot, list_panes};
-use super::session::{DUMP_LAYOUT_ATTEMPTS, DUMP_LAYOUT_RETRY_DELAY, SPAWN_TIMEOUT, scoped_zellij};
+use super::session::{DUMP_LAYOUT_ATTEMPTS, DUMP_LAYOUT_RETRY_DELAY, SPAWN_TIMEOUT};
 
 pub(in crate::backend::zellij) fn poll_until<T: Debug>(
     timeout: Duration,
@@ -36,7 +36,7 @@ pub(in crate::backend::zellij) fn poll_until<T: Debug>(
 
 pub(in crate::backend::zellij) fn open_new_tab(xdg: &Path, session: &str) {
     let before = PaneSnapshot::expect(xdg, session).tab_ids();
-    let output = scoped_zellij(xdg)
+    let output = ZellijNamespace::command_at(xdg)
         .args(["--session", session, "action", "new-tab"])
         .bounded_output()
         .unwrap_or_else(|err| panic!("new-tab failed to run for {session}: {err}"));
@@ -60,7 +60,7 @@ pub(in crate::backend::zellij) fn spawn_sleep_pane(xdg: &Path, session: &str, cw
         .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
         .map(|pane| pane.id)
         .collect();
-    let output = scoped_zellij(xdg)
+    let output = ZellijNamespace::command_at(xdg)
         .args(["--session", session, "action", "new-pane", "--cwd"])
         .arg(cwd)
         .args(["--", "sleep", "600"])
@@ -95,7 +95,7 @@ pub(in crate::backend::zellij) fn new_tab_template_dump(xdg: &Path, session: &st
         if attempt > 0 {
             std::thread::sleep(DUMP_LAYOUT_RETRY_DELAY);
         }
-        let output = scoped_zellij(xdg)
+        let output = ZellijNamespace::command_at(xdg)
             .args(["--session", session, "action", "dump-layout"])
             .bounded_output()
             .unwrap_or_else(|err| panic!("dump-layout failed to run for {session}: {err}"));

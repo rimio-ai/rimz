@@ -9,33 +9,28 @@ use super::support::*;
 fn remote_lineage_reap_kills_only_the_matching_attached_client() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
+    let room = LiveZellijSession::new("reap");
+    let xdg = room.path();
     let cwd = tempfile::tempdir().expect("session cwd");
-    let name = unique_session_name("reap");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let name = room.name().to_owned();
     // Birth the session in the background and prove it answers actions before
     // any client attaches. A PTY `attach --create` births and attaches in one
     // unchecked step, and a starved host lets that client sit forever against a
     // server that never came up — the session under test has to exist on a
     // checked command.
-    create_plain_background_session(xdg.path(), &name, cwd.path(), "600");
-    wait_until_session_ready(xdg.path(), &name);
+    room.create_plain_background(cwd.path(), "600");
 
-    let mut client =
-        AttachedClient::attach_with_lineage(xdg.path(), &name, "0123456789abcdef", 120, 40);
-    wait_for_client_count(xdg.path(), &name, 1, &mut client);
+    let mut client = AttachedClient::attach_with_lineage(&room, "0123456789abcdef", 120, 40);
+    wait_for_client_count(xdg, &name, 1, &mut client);
     let client_pid = client.pid();
     wait_for_attached_lineage_client(client_pid, &name, "0123456789abcdef");
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let backend = ZellijBackend::with_runtime_dir(xdg);
 
     let other = zellij::reap_lineage_clients(&backend, &name, "fedcba9876543210")
         .expect("other-lineage reap");
     assert!(other.killed_pids.is_empty(), "other lineage: {other:?}");
     assert!(other.settled, "other lineage is a settled no-op: {other:?}");
-    wait_for_client_count(xdg.path(), &name, 1, &mut client);
+    wait_for_client_count(xdg, &name, 1, &mut client);
 
     let same = zellij::reap_lineage_clients(&backend, &name, "0123456789abcdef")
         .expect("same-lineage reap");

@@ -5,10 +5,10 @@ use rimz::ids::{MuxName, PaneId, ViewKind};
 use rimz::pane::PaneRef;
 use serde::Deserialize;
 
-use crate::common::CommandTimeoutExt;
+use crate::common::{CommandTimeoutExt, ZellijNamespace};
 
 use super::session::{
-    LIST_PANES_JSON_ATTEMPTS, LIST_PANES_JSON_RETRY_DELAY, LIST_PANES_JSON_TIMEOUT, scoped_zellij,
+    LIST_PANES_JSON_ATTEMPTS, LIST_PANES_JSON_RETRY_DELAY, LIST_PANES_JSON_TIMEOUT,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,7 +114,7 @@ impl PaneSnapshot {
     pub(in crate::backend::zellij) fn load(xdg: &Path, session: &str) -> Result<Self, String> {
         let mut last_error = "list-panes was not run".to_owned();
         for attempt in 0..LIST_PANES_JSON_ATTEMPTS {
-            match scoped_zellij(xdg)
+            match ZellijNamespace::command_at(xdg)
                 .args(["--session", session, "action", "list-panes", "-j", "-a"])
                 .bounded_output_within(LIST_PANES_JSON_TIMEOUT)
             {

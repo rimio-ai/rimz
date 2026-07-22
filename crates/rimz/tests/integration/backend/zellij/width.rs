@@ -8,21 +8,18 @@ use super::support::*;
 fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("widthstep");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("widthstep");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = sidebar_opts(&name, cwd.path(), stub, 120);
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    publish_room_bin(xdg.path(), &sidebar);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
-    let _client = AttachedClient::attach(xdg.path(), &name, 120, 40);
-    let listed = raw_sidebar_pane(xdg.path(), &name);
+    wait_for_pane_count(xdg, &name, 2);
+    let _client = AttachedClient::attach(&room, 120, 40);
+    let listed = raw_sidebar_pane(xdg, &name);
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", listed.id));
     let initial = listed.pane_columns;
     let initial_cols = u16::try_from(initial).expect("sidebar width fits u16");
@@ -31,7 +28,7 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
         .nudge_sidebar_width(&name, &pane, initial_cols, u16::MAX)
         .expect("widen sidebar");
     let wider = wait_for_sidebar_columns_matching(
-        xdg.path(),
+        xdg,
         &name,
         listed.id,
         |columns| columns > initial,
@@ -47,7 +44,7 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
         .nudge_sidebar_width(&name, &pane, wider_cols, 1)
         .expect("narrow sidebar");
     let narrower = wait_for_sidebar_columns_matching(
-        xdg.path(),
+        xdg,
         &name,
         listed.id,
         |columns| columns < wider,
@@ -75,15 +72,15 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
             sidebar: sidebar.clone(),
         })
         .expect("open explicit tab");
-    let explicit = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
-        .expect("explicit tab carries sidebar");
+    let explicit =
+        wait_for_named_sidebar_pane(xdg, &name, tab_name).expect("explicit tab carries sidebar");
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", explicit.id));
     let explicit_cols = u16::try_from(explicit.columns).expect("sidebar width fits u16");
     backend
         .nudge_sidebar_width(&name, &pane, explicit_cols, u16::MAX)
         .expect("widen explicit-layout sidebar");
     let resized = wait_for_sidebar_columns_matching(
-        xdg.path(),
+        xdg,
         &name,
         explicit.id,
         |columns| columns > explicit.columns,
@@ -122,93 +119,90 @@ fn wait_for_sidebar_columns_matching(
 fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("fixedw");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("fixedw");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
 
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = sidebar_opts(&name, cwd.path(), stub, 340);
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    publish_room_bin(xdg.path(), &sidebar);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
+    wait_for_pane_count(xdg, &name, 2);
 
     // The launch seed came from a 340-column terminal, but this attached client
     // is only 210 columns wide. The detached percentage seed therefore lands
     // near 44 columns while the live narrow-view target is 52.
-    let _client = AttachedClient::attach(xdg.path(), &name, 210, 60);
-    write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
-    let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
+    let _client = AttachedClient::attach(&room, 210, 60);
+    write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
+    let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[42..=46]),
+        wait_for_sidebar_columns(xdg, &name, &[42..=46]),
         "the capped launch seed rescales onto the smaller client, got {:?}",
-        sidebar_columns_by_tab(xdg.path(), &name),
+        sidebar_columns_by_tab(xdg, &name),
     );
 
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 52, 5),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 52, 5),
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57]),
+        wait_for_sidebar_columns(xdg, &name, &[47..=57]),
         "the birth pane converges near the smaller view's 52-column target, got {:?}",
-        sidebar_columns_by_tab(xdg.path(), &name),
+        sidebar_columns_by_tab(xdg, &name),
     );
 
     // A native tab inherits the 340-column launch probe's cap-aware 21% seed,
     // then live convergence applies the narrow-view policy.
-    open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 2);
+    open_new_tab(xdg, &name);
+    wait_for_tab_count(xdg, &name, 2);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57, 42..=46]),
+        wait_for_sidebar_columns(xdg, &name, &[47..=57, 42..=46]),
         "the native template births the new tab from the cap-aware launch seed, got {:?}",
-        sidebar_columns_by_tab(xdg.path(), &name),
+        sidebar_columns_by_tab(xdg, &name),
     );
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 52, 5),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 52, 5),
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57, 47..=57]),
+        wait_for_sidebar_columns(xdg, &name, &[47..=57, 47..=57]),
         "both tabs converge near the 25% live target, got {:?}",
-        sidebar_columns_by_tab(xdg.path(), &name),
+        sidebar_columns_by_tab(xdg, &name),
     );
 
     // Keep one tab active while the two converged tabs need the room override;
     // the launch-seeded tab is already within its tolerance.
-    open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 3);
+    open_new_tab(xdg, &name);
+    wait_for_tab_count(xdg, &name, 3);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57, 47..=57, 42..=46]),
+        wait_for_sidebar_columns(xdg, &name, &[47..=57, 47..=57, 42..=46]),
         "the new tab starts at the launch seed while converged tabs stay narrow, got {:?}",
-        sidebar_columns_by_tab(xdg.path(), &name),
+        sidebar_columns_by_tab(xdg, &name),
     );
 
     // A room override becomes the target for every existing tab, including
     // the two background tabs, and every future tab.
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 40, 5),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 5),
         2,
     );
     assert!(wait_for_sidebar_columns(
-        xdg.path(),
+        xdg,
         &name,
         &[35..=45, 35..=45, 35..=45]
     ));
-    open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 4);
+    open_new_tab(xdg, &name);
+    wait_for_tab_count(xdg, &name, 4);
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 40, 5),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 5),
         0,
     );
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[35..=45, 35..=45, 35..=45, 35..=45]),
+        wait_for_sidebar_columns(xdg, &name, &[35..=45, 35..=45, 35..=45, 35..=45]),
         "the override propagates to every tab, got {:?}",
-        sidebar_columns_by_tab(xdg.path(), &name),
+        sidebar_columns_by_tab(xdg, &name),
     );
 }
 
