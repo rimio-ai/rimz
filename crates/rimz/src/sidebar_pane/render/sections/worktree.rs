@@ -349,7 +349,7 @@ fn group_header(
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's CI marker leads its PR identity after the name, with the
+    // The worktree's branch/PR CI marker follows the name, then any linked PR
     // number in a steady link tone. Its git story pins right: live local
     // reconciling leads, then a PR verdict, then
     // the local trunk verdict; diverged/reconciling keeps the `⇡/⇣` commit delta
@@ -370,39 +370,33 @@ fn group_header(
         _ => group_git_spans(theme, group),
     };
     let right_width = spans_width(&right);
-    let badge = group
-        .pr_number
-        .map(|number| {
-            let ci = matches!(
-                group.pr_state,
-                Some(WorktreePrState::Open | WorktreePrState::Merged)
-            )
-            .then_some(group.pr_ci)
-            .flatten()
-            .map(|ci| {
-                let (role, component) = pr_ci_marker(ci);
-                (format!(" {}", theme.glyph(role)), component)
-            });
-            (format!(" #{number}"), ci)
-        })
-        .filter(|(badge, ci)| {
-            let badge_width = text_width(badge)
-                + ci.as_ref()
-                    .map(|(glyph, _)| text_width(glyph))
-                    .unwrap_or_default();
-            cw.saturating_sub(right_width.saturating_add(1)) > badge_width
-        });
-    let badge_width = badge
+    let ci = (group.pr_state.is_none()
+        || matches!(
+            group.pr_state,
+            Some(WorktreePrState::Open | WorktreePrState::Merged)
+        ))
+    .then_some(group.pr_ci)
+    .flatten()
+    .map(|ci| {
+        let (role, component) = pr_ci_marker(ci);
+        (format!(" {}", theme.glyph(role)), component)
+    });
+    let badge = group.pr_number.map(|number| format!(" #{number}"));
+    let identity_width = badge
         .as_ref()
-        .map(|(badge, ci)| {
-            text_width(badge)
-                + ci.as_ref()
-                    .map(|(glyph, _)| text_width(glyph))
-                    .unwrap_or_default()
-        })
-        .unwrap_or_default();
+        .map(|badge| text_width(badge))
+        .unwrap_or_default()
+        + ci.as_ref()
+            .map(|(glyph, _)| text_width(glyph))
+            .unwrap_or_default();
+    let (ci, badge, identity_width) =
+        if cw.saturating_sub(right_width.saturating_add(1)) > identity_width {
+            (ci, badge, identity_width)
+        } else {
+            (None, None, 0)
+        };
     let label_width = cw
-        .saturating_sub(right_width.saturating_add(1).saturating_add(badge_width))
+        .saturating_sub(right_width.saturating_add(1).saturating_add(identity_width))
         .max(1);
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
@@ -421,7 +415,7 @@ fn group_header(
         }
     };
     let left = ellipsize(&label_with_prefix, label_width);
-    let hyperlink = badge.as_ref().and_then(|(badge, ci)| {
+    let hyperlink = badge.as_ref().and_then(|badge| {
         let url = group.pr_url.as_ref()?;
         let badge_text = badge.trim_start();
         let badge_lead = text_width(badge).saturating_sub(text_width(badge_text));
@@ -443,7 +437,7 @@ fn group_header(
     // right-pinned stats, with plain space filling the gap. Sized to land the line
     // exactly on the content width — a space frames the dotted run from the text
     // on each side it touches.
-    let middle = cw.saturating_sub(text_width(&left) + badge_width + right_width);
+    let middle = cw.saturating_sub(text_width(&left) + identity_width + right_width);
     let fill = if sealed {
         match (right.is_empty(), middle) {
             (false, m) if m >= 2 => {
@@ -472,13 +466,13 @@ fn group_header(
         theme.styled(Component::WorktreeHeader, Modifier::BOLD)
     };
     let mut spans = vec![Span::styled(left, label_style)];
-    if let Some((badge, ci)) = badge {
-        if let Some((glyph, component)) = ci {
-            spans.push(Span::styled(
-                glyph,
-                theme.styled(component, Modifier::empty()),
-            ));
-        }
+    if let Some((glyph, component)) = ci {
+        spans.push(Span::styled(
+            glyph,
+            theme.styled(component, Modifier::empty()),
+        ));
+    }
+    if let Some(badge) = badge {
         spans.push(Span::styled(
             badge,
             theme.styled(Component::WorktreePrBadge, Modifier::empty()),

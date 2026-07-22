@@ -8,6 +8,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ### Added
 
+- Sidebar worktree headers show branch CI at the current HEAD commit even before a pull request exists, including on the trunk checkout. → [sidebar](./docs/guide/sidebar.md#the-agent-cards)
 - `rimz web share` serves an explicitly allowlisted live room through a second no-auth, input-blocked ttyd daemon; `unshare` revokes live viewers, tmux attaches ignore viewer size, and status reports both browser surfaces. → [web](./docs/guide/web.md#share-a-read-only-broadcast)
 - The web daemon's base URL opens a themed live-session manager with cockpit-style repository cards, per-provider attention and usage totals, and mouse or keyboard selection; reconnects and refreshes stay with the attached room, while detaching makes the list the reconnect target again. → [web](./docs/guide/web.md#session-manager)
 - Layout cells accept any executable on PATH as a raw command pane, while configured commands and profiles keep precedence over same-named binaries. → [fleet](./docs/guide/fleet.md#compose-a-layout)

@@ -64,6 +64,7 @@ pub struct RefreshedLanes {
     pub spending: SpendingCaches,
     pub accounts: BTreeMap<String, AgentAccount>,
     pub pr_states: BTreeMap<String, PrLink>,
+    pub branch_ci: BTreeMap<String, crate::WorktreePrCi>,
 }
 
 /// Process-local memo state owned by one long-lived cache producer.
@@ -261,12 +262,13 @@ pub fn refresh_heavy_lanes(
         config.sidebar.trunk.as_deref(),
         &mut state.git,
     );
-    let pr_states = produce_pr_states(base, runtime);
+    let pr_cache = produce_pr_states(base, runtime);
 
     RefreshedLanes {
         spending,
         accounts,
-        pr_states,
+        pr_states: pr_cache.states,
+        branch_ci: pr_cache.branch_ci,
     }
 }
 

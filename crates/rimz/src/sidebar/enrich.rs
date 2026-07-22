@@ -194,6 +194,7 @@ fn cached_git_backed_worktree_path<'a>(
 pub fn project_pr_state_map(
     snapshot: &mut SidebarSnapshot,
     states: &BTreeMap<String, PrLink>,
+    branch_ci: &BTreeMap<String, crate::WorktreePrCi>,
     diff_cache: &DiffStatsCache,
 ) {
     for group in &mut snapshot.worktree_groups {
@@ -206,26 +207,35 @@ pub fn project_pr_state_map(
         ) else {
             continue;
         };
-        if diff_cache.entries.get(path).is_some_and(|entry| {
+        let trunk = diff_cache.entries.get(path).is_some_and(|entry| {
             entry
                 .branch
                 .as_deref()
                 .is_some_and(|branch| is_trunk_branch(branch, entry.trunk.as_deref()))
-        }) {
+        });
+        if trunk {
+            group.pr_state = None;
+            group.pr_ci = branch_ci.get(path).copied();
+            group.pr_number = None;
+            group.pr_url = None;
             continue;
         }
-        group.pr_state = states.get(path).map(|link| link.state);
-        group.pr_ci = states
-            .get(path)
-            .filter(|link| {
-                matches!(
+        let link = states.get(path);
+        group.pr_state = link.map(|link| link.state);
+        group.pr_ci = match link {
+            Some(link)
+                if matches!(
                     link.state,
                     crate::WorktreePrState::Open | crate::WorktreePrState::Merged
-                )
-            })
-            .and_then(|link| link.ci);
+                ) =>
+            {
+                link.ci
+            }
+            Some(_) => None,
+            None => branch_ci.get(path).copied(),
+        };
         group.pr_url = None;
-        if let Some(link) = states.get(path)
+        if let Some(link) = link
             && let Some(number) = link.number
         {
             group.pr_number = Some(number);
@@ -240,7 +250,7 @@ pub(crate) fn project_cached_pr_states(
     diff_cache: &DiffStatsCache,
 ) {
     let cache = read_pr_state_cache(&runtime.pr_state_path());
-    project_pr_state_map(snapshot, &cache.states, diff_cache);
+    project_pr_state_map(snapshot, &cache.states, &cache.branch_ci, diff_cache);
 }
 
 pub(crate) fn classify_trunk_sync(
@@ -615,7 +625,7 @@ fn enrich_core(
     );
     project_diff_stats(&mut folded, &diff_cache);
     if let Some(lanes) = lanes {
-        project_pr_state_map(&mut folded, &lanes.pr_states, &diff_cache);
+        project_pr_state_map(&mut folded, &lanes.pr_states, &lanes.branch_ci, &diff_cache);
     } else {
         project_cached_pr_states(&mut folded, runtime, &diff_cache);
     }

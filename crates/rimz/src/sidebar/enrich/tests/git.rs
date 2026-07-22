@@ -16,6 +16,8 @@ fn pr_state_projection_uses_the_given_map() {
     snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())];
     snapshot.worktree_groups[0].pr_number = Some(69);
 
+    let branch_ci =
+        BTreeMap::from([(worktree.display().to_string(), crate::WorktreePrCi::Failing)]);
     let mut states = BTreeMap::new();
     states.insert(
         worktree.display().to_string(),
@@ -28,7 +30,12 @@ fn pr_state_projection_uses_the_given_map() {
             merge_sha: None,
         },
     );
-    project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
+    project_pr_state_map(
+        &mut snapshot,
+        &states,
+        &branch_ci,
+        &DiffStatsCache::default(),
+    );
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
         Some(crate::WorktreePrState::Closed)
@@ -51,7 +58,12 @@ fn pr_state_projection_uses_the_given_map() {
             merge_sha: None,
         },
     );
-    project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
+    project_pr_state_map(
+        &mut snapshot,
+        &states,
+        &branch_ci,
+        &DiffStatsCache::default(),
+    );
     assert_eq!(
         snapshot.worktree_groups[0].pr_ci,
         Some(crate::WorktreePrCi::Passing)
@@ -68,17 +80,31 @@ fn pr_state_projection_uses_the_given_map() {
             merge_sha: Some("merged-sha".to_owned()),
         },
     );
-    project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
+    project_pr_state_map(
+        &mut snapshot,
+        &states,
+        &branch_ci,
+        &DiffStatsCache::default(),
+    );
     assert_eq!(
         snapshot.worktree_groups[0].pr_ci,
         Some(crate::WorktreePrCi::Failing)
     );
 
     snapshot.worktree_groups[0].pr_number = Some(69);
-    project_pr_state_map(&mut snapshot, &BTreeMap::new(), &DiffStatsCache::default());
+    project_pr_state_map(
+        &mut snapshot,
+        &BTreeMap::new(),
+        &branch_ci,
+        &DiffStatsCache::default(),
+    );
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(69));
     assert_eq!(snapshot.worktree_groups[0].pr_url, None);
+    assert_eq!(
+        snapshot.worktree_groups[0].pr_ci,
+        Some(crate::WorktreePrCi::Failing)
+    );
 }
 
 #[test]
@@ -99,7 +125,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
             merge_sha: Some("merged-sha".to_owned()),
         },
     );
-    project_pr_state_map(&mut snapshot, &states, &diff_cache);
+    project_pr_state_map(&mut snapshot, &states, &BTreeMap::new(), &diff_cache);
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
         Some(crate::WorktreePrState::Merged)
@@ -122,12 +148,17 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
             merge_sha: Some("merged-sha".to_owned()),
         },
     );
-    project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
+    project_pr_state_map(
+        &mut snapshot,
+        &states,
+        &BTreeMap::new(),
+        &DiffStatsCache::default(),
+    );
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
 }
 
 #[test]
-fn pr_state_projection_excludes_trunk_and_keeps_feature_links() {
+fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
     let dir = tempfile::tempdir().unwrap();
     let trunk = dir.path().join("trunk");
     let feature = dir.path().join("feature");
@@ -174,12 +205,14 @@ fn pr_state_projection_excludes_trunk_and_keeps_feature_links() {
         },
     );
 
-    project_pr_state_map(&mut snapshot, &states, &diff_cache);
+    let branch_ci = BTreeMap::from([(trunk.display().to_string(), crate::WorktreePrCi::Passing)]);
+    project_pr_state_map(&mut snapshot, &states, &branch_ci, &diff_cache);
 
     let trunk = &snapshot.worktree_groups[0];
     assert_eq!(trunk.pr_state, None);
     assert_eq!(trunk.pr_number, None);
     assert_eq!(trunk.pr_url, None);
+    assert_eq!(trunk.pr_ci, Some(crate::WorktreePrCi::Passing));
     let feature = &snapshot.worktree_groups[1];
     assert_eq!(feature.pr_state, Some(crate::WorktreePrState::Merged));
     assert_eq!(feature.pr_number, Some(91));
