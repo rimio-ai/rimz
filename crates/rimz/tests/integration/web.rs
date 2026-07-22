@@ -649,6 +649,83 @@ fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
 
 #[cfg(unix)]
 #[test]
+fn stale_gated_daemon_terminates_its_surviving_gate_and_can_restart() {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-stale-gate.log");
+    write_machine_config(
+        &fixture.env,
+        &format!(
+            "[web]\nport = {}\ntrusted_proxies = [\"192.0.2.0/24\"]\nstyle_client = false\n",
+            fixture.web_port
+        ),
+    );
+    let start = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("start gated daemon");
+    assert_success(&start, "initial gated daemon start");
+
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("gated daemon record"))
+            .expect("gated daemon JSON");
+    let ttyd_pid = record["pid"].as_u64().expect("ttyd pid") as u32;
+    let gate_pid = record["gate"]["pid"].as_u64().expect("gate pid") as u32;
+    kill(
+        Pid::from_raw(i32::try_from(ttyd_pid).expect("test pid fits i32")),
+        Signal::SIGKILL,
+    )
+    .expect("kill ttyd fixture");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while rimz::proc::list_processes()
+        .iter()
+        .any(|process| process.pid == ttyd_pid)
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !rimz::proc::list_processes()
+            .iter()
+            .any(|process| process.pid == ttyd_pid),
+        "killed ttyd fixture remained live"
+    );
+
+    let status = fixture
+        .command()
+        .args(["web", "status", "--json"])
+        .bounded_output()
+        .expect("reconcile stale gated daemon");
+    let status = success_json(&status, "stale gated daemon status");
+    assert_eq!(status["online"], false);
+    assert!(!daemon_path.exists(), "stale daemon record survived");
+    assert!(
+        !rimz::proc::list_processes()
+            .iter()
+            .any(|process| process.pid == gate_pid),
+        "gate survived stale-record reconciliation"
+    );
+
+    let restart = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("restart after partial daemon death");
+    assert_success(&restart, "restart after partial daemon death");
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop recovered gated daemon");
+    assert_success(&stop, "stop recovered gated daemon");
+}
+
+#[cfg(unix)]
+#[test]
 fn concurrent_start_calls_create_one_shared_daemon() {
     let _guard = daemon_test_guard();
     let fixture = WebFixture::new("ttyd-concurrent.log");

@@ -450,11 +450,12 @@ fn start_daemon_with_profile(
         &profile.args,
     )?;
     let pid = spawn_detached(spec)?;
-    if !wait_for_address(ttyd_address, START_TIMEOUT) {
+    let ttyd_probe_address = probe_address(ttyd_address);
+    if !wait_for_address(ttyd_probe_address, START_TIMEOUT) {
         terminate_pids(&[pid]);
-        wait_for_address_close(ttyd_address, Duration::from_secs(1));
+        wait_for_address_close(ttyd_probe_address, Duration::from_secs(1));
         return Err(WebErr::TtydStartTimeout {
-            address: ttyd_address,
+            address: ttyd_probe_address,
         });
     }
     let gate = if gated {
@@ -579,6 +580,7 @@ fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
     if ttyd_live && gate_live && listening {
         return Ok(Some(record));
     }
+    terminate_live_record(&record, ttyd_live, gate_live);
     remove_optional(&path)?;
     Ok(None)
 }
@@ -613,20 +615,27 @@ fn stop_record(record: &DaemonRecord) -> Result<()> {
 }
 
 fn terminate_record(record: &DaemonRecord) {
+    terminate_live_record(record, true, record.gate.is_some());
+}
+
+fn terminate_live_record(record: &DaemonRecord, ttyd_live: bool, gate_live: bool) {
     #[cfg(unix)]
     {
-        let mut pids = record
-            .gate
-            .as_ref()
-            .map(|gate| gate.pid)
-            .into_iter()
-            .collect::<Vec<_>>();
-        pids.push(record.pid);
+        let mut pids = Vec::new();
+        if gate_live && let Some(gate) = &record.gate {
+            pids.push(gate.pid);
+        }
+        if ttyd_live {
+            pids.push(record.pid);
+        }
+        let terminated = !pids.is_empty();
         terminate_pids(&pids);
-        if let Ok(address) = record_public_address(record) {
+        if terminated && let Ok(address) = record_public_address(record) {
             wait_for_address_close(address, Duration::from_secs(1));
         }
     }
+    #[cfg(not(unix))]
+    let _ = (record, ttyd_live, gate_live);
 }
 
 #[cfg(unix)]
@@ -778,14 +787,20 @@ fn socket_address(interface: &str, port: u16) -> Result<SocketAddr> {
 }
 
 fn record_public_address(record: &DaemonRecord) -> Result<SocketAddr> {
-    let mut address = socket_address(&record.interface, record.port)?;
+    Ok(probe_address(socket_address(
+        &record.interface,
+        record.port,
+    )?))
+}
+
+fn probe_address(mut address: SocketAddr) -> SocketAddr {
     if address.ip().is_unspecified() {
         address.set_ip(match address.ip() {
             IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
             IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
         });
     }
-    Ok(address)
+    address
 }
 
 fn default_interface() -> String {
@@ -968,6 +983,18 @@ mod tests {
     fn ephemeral_port_is_bindable() {
         let port = choose_ephemeral_port().expect("ephemeral port");
         TcpListener::bind(("127.0.0.1", port)).expect("port released after selection");
+    }
+
+    #[test]
+    fn unspecified_listener_probes_use_the_matching_loopback_family() {
+        assert_eq!(
+            probe_address("0.0.0.0:8200".parse().expect("IPv4 socket")),
+            "127.0.0.1:8200".parse().expect("IPv4 loopback socket")
+        );
+        assert_eq!(
+            probe_address("[::]:8200".parse().expect("IPv6 socket")),
+            "[::1]:8200".parse().expect("IPv6 loopback socket")
+        );
     }
 
     #[test]
